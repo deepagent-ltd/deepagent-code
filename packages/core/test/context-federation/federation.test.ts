@@ -347,7 +347,11 @@ function add(
       ...(input.validUntil === undefined ? {} : { valid_until: input.validUntil }),
     },
   })
-  if (input.status !== "draft") store.setStatus(doc.id, input.status, documentRevision(doc))
+  if (input.status !== "draft")
+    store.commitGovernance(doc.id, documentRevision(doc), {
+      kind: input.status === "active" ? "approve" : "stage",
+      actor: { type: "human", id: "fixture-reviewer" },
+    })
   return store.get(doc.id)!
 }
 

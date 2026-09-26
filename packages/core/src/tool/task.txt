@@ -28,6 +28,7 @@ Parameters:
 - file_scope (optional): globs/directory prefixes the task expects to touch. Declare disjoint scopes for concurrent write-type tasks. A "Scope overlaps with active task ..." warning is non-blocking: two active sibling write tasks claimed intersecting scopes — sequence them, re-scope, or confirm the overlap is intentional. Real conflicts surface at pr_finalize merge time.
 - output_schema (optional): the final answer is validated strict JSON (reviewer/researcher get their named default). A schema that never validates fails the call; the raw turns stay in the child session.
 - task_id (optional): resume a prior subagent session — it must be a direct child of THIS session with the same agent type. Omit for a fresh start.
+- background (optional): admit a durable task and return its ID immediately. A completion notification arrives later; continue independent work while it runs.
 
 Guardrails (hard limits):
 - At most 8 new subagents per assistant message — split larger rounds across messages.

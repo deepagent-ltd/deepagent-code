@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
-import { Message, Model } from "@deepagent-code/llm"
-import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
+import { LLM, Message, Model } from "@deepagent-code/llm"
+import { Auth, LLMClient } from "@deepagent-code/llm/route"
+import { AnthropicMessages, OpenAIChat } from "@deepagent-code/llm/protocols"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { SessionMessage } from "@deepagent-code/core/session/message"
@@ -9,7 +10,7 @@ import { toLLMMessages } from "@deepagent-code/core/session/runner/to-llm-messag
 import { SessionV2 } from "@deepagent-code/core/session"
 import { LegacyWire } from "@deepagent-code/core/session/legacy-wire"
 import { ToolOutput } from "@deepagent-code/core/tool-output"
-import { DateTime } from "effect"
+import { DateTime, Effect, Schema } from "effect"
 
 const created = DateTime.makeUnsafe(0)
 const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
@@ -84,8 +85,11 @@ describe("toLLMMessages", () => {
         content: [
           { type: "text", text: "Inspect this image" },
           { type: "media", mediaType: "image/png", data: "data:image/png;base64,aGVsbG8=", filename: "hello.png" },
+          {
+            type: "text",
+            text: '<runtime-attachments provenance="session-prompt" instruction="context-only">\n{"agents":[{"name":"build"}],"references":[{"name":"docs","kind":"local","uri":"file:///docs"}]}\n</runtime-attachments>',
+          },
         ],
-        metadata: { agents: [{ name: "build" }], references: [reference] },
       }),
     )
     expect(messages.slice(2).map((message) => message.content)).toEqual([
@@ -110,6 +114,40 @@ Recent work
         },
       ],
     ])
+  })
+
+  test("renders durable agent and reference attachments in OpenAI and Anthropic request bodies", async () => {
+    const user = new SessionMessage.User({
+      id: id("wire-attachments"),
+      type: "user",
+      text: "Inspect @build and @docs",
+      agents: [new AgentAttachment({ name: "build" })],
+      references: [new ReferenceAttachment({ name: "docs", kind: "git", repository: "acme/docs", branch: "main" })],
+      metadata: { viewOnly: "preserved" },
+      time: { created },
+    })
+    for (const route of [
+      OpenAIChat.route.with({ endpoint: { baseURL: "https://openai.test/v1/" }, auth: Auth.bearer("test") }),
+      AnthropicMessages.route.with({
+        endpoint: { baseURL: "https://anthropic.test/v1/" },
+        auth: Auth.header("x-api-key", "test"),
+      }),
+    ]) {
+      const providerModel = route.model({ id: "model" })
+      const messages = toLLMMessages([user], providerModel)
+      const replay = Schema.decodeSync(SessionMessage.User)(Schema.encodeSync(SessionMessage.User)(user))
+      expect(messages).toEqual(toLLMMessages([replay], providerModel))
+      expect(messages[0]?.metadata).toEqual({ viewOnly: "preserved" })
+      const prepared = await Effect.runPromise(
+        LLMClient.prepare(LLM.request({ id: "req_attachments", model: providerModel, messages })),
+      )
+      const body = JSON.stringify(prepared.body)
+      expect(body).toContain("Inspect @build and @docs")
+      expect(body).toContain("runtime-attachments")
+      expect(body).toContain("acme/docs")
+      expect(body).toContain('\\"name\\":\\"build\\"')
+      expect(body).not.toContain("viewOnly")
+    }
   })
 
   test("replays durable tool media into canonical tool messages without structured base64", () => {
@@ -373,8 +411,7 @@ Recent work
         name: "edit",
         result: {
           type: "error",
-          value:
-            "The user rejected permission to use this specific tool call with the following feedback: use write",
+          value: "The user rejected permission to use this specific tool call with the following feedback: use write",
           metadata: { failureCode: "user_corrected_permission" },
         },
       },

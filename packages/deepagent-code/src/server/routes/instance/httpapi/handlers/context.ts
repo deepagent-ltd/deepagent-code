@@ -107,7 +107,7 @@ export function buildReadinessEnvelope(
     // sensitivity set a real context query may read.
     egress: { policyId: "v2:history-context", epoch: 0, graphs, sensitivities: ["public", "source_code", "secret_adjacent"] },
     agentPolicy: { agentId: session.agent ?? "default", autonomyCeiling: "medium", permitDegraded: true },
-    modelCapability: { modelId: "", providerId: "", protocol: "openai.responses", contextWindow: 0, structuredOutput: false },
+    modelCapability: { modelId: "", providerId: "", protocol: "openai.responses", structuredOutput: false },
     releasedKnowledge: { snapshotId: "", binding: "unavailable" },
     queryIntent: "search",
     query: "session context",

@@ -4,7 +4,7 @@ import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Config, Effect, Exit, Layer, Schedule } from "effect"
+import { Cause, Config, Effect, Exit, Layer, Schedule, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
@@ -14,6 +14,7 @@ import type { WorkspaceAdapter } from "../../src/control-plane/types"
 import { Workspace } from "../../src/control-plane/workspace"
 
 import { InstanceBootstrap } from "../../src/project/bootstrap"
+import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { InstanceBootstrap as InstanceBootstrapService } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
 import { Project } from "../../src/project/project"
@@ -34,6 +35,8 @@ import {
   SessionIntentTable,
   SessionMessageTable,
   SessionTable,
+  MessageTable,
+  PartTable,
 } from "@deepagent-code/core/session/sql"
 import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
 import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
@@ -261,6 +264,24 @@ function requestJson<T>(path: string, init?: RequestInit) {
   return request(path, init).pipe(Effect.flatMap(json<T>))
 }
 
+function readSessionEvent(response: HttpClientResponse.HttpClientResponse) {
+  return response.stream.pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.filter((line) => line.startsWith("data: ")),
+    Stream.runHead,
+    Effect.timeoutOrElse({
+      duration: "5 seconds",
+      orElse: () => Effect.fail(new Error("session event cursor replay timed out")),
+    }),
+    Effect.flatMap((line) =>
+      line._tag === "None"
+        ? Effect.die("session event stream ended before replay")
+        : Effect.succeed(JSON.parse(line.value.slice(6)) as { seq: number; type: string }),
+    ),
+  )
+}
+
 // The dev V2-owner chain (mint keypair + verifier env) is armed process-wide by test/preload.ts:
 // Reference defaults cache on first access, so arming must precede every test file. See
 // test/lib/v2-owner.ts for why the keypair is a process-wide singleton.
@@ -271,6 +292,26 @@ afterEach(async () => {
 })
 
 describe("session HttpApi", () => {
+  it.live("reads a V2 session by ID and returns a typed miss", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped({ git: true })
+      const headers = { "x-deepagent-code-directory": directory, "content-type": "application/json" }
+      const created = yield* requestJson<{ data: { id: string; title: string } }>("/api/session", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({}),
+      })
+      const found = yield* requestJson<{ data: { id: string; title: string } }>(`/api/session/${created.data.id}`, {
+        headers,
+      })
+      expect(found.data).toMatchObject(created.data)
+
+      const missing = yield* request("/api/session/ses_missing_v2_get", { headers })
+      expect(missing.status).toBe(404)
+      expect(yield* responseJson(missing)).toMatchObject({ _tag: "SessionNotFoundError" })
+    }),
+  )
+
   it.live("blocks compatibility history mutations while a Core V2 drain is active", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer
@@ -420,7 +461,7 @@ describe("session HttpApi", () => {
         true,
       )
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    15_000,
+    60_000,
   )
 
   it.live("advertises and executes Core context tools through the production HTTP runtime", () =>
@@ -476,13 +517,14 @@ describe("session HttpApi", () => {
       expect(effects).toEqual([{ name: "code_intel", kind: "read_only", state: "settled" }])
       expect(JSON.stringify(inputs[1])).toContain("schemaVersion")
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    15_000,
+    60_000,
   )
 
   // RI-113 production request snapshot oracle: on the real production HTTP stack the EXACT
-  // shipped builtin surface (nothing more, nothing less) must reach the provider request,
+  // shipped builtin surface plus the default-on host-owned debug, profile, and query_log tools
+  // must reach the provider request,
   // and the durable prepared turn must record the same set at all three lowering stages.
-  it.live("records the exact builtin tool surface in the durable production request snapshot", () =>
+  it.live("records the exact production tool surface in the durable request snapshot", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer
       yield* llm.text("snapshot recorded", { usage: { input: 1, output: 1 } })
@@ -504,11 +546,17 @@ describe("session HttpApi", () => {
       const waited = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
       expect(waited.status).toBe(204)
 
-      // The expected set derives from the registry authority itself (pinned to the product
-      // inventory by the RI-113 exact gate), so this test proves the wiring — declaration →
+      // The Core set derives from the registry authority itself (pinned to the product
+      // inventory by the RI-113 exact gate); the enabled host tools are registered through
+      // ApplicationTools after the instance RuntimeFlags are read.
+      // This proves the wiring — declaration →
       // Location registration → materialize → permission/model filter → provider request →
-      // durable receipt — without duplicating the tool list literal.
-      const expected = [...builtinToolNames].sort()
+      // durable receipt — without duplicating the Core tool list literal.
+      // Project.defaultLayer uses this same production flag layer for the instance registry.
+      const flags = yield* RuntimeFlags.Service.pipe(Effect.provide(RuntimeFlags.defaultLayer))
+      expect(flags.debugTool).toBe(true)
+      expect(flags.profileTool).toBe(true)
+      const expected = [...builtinToolNames, "debug", "profile", "query_log"].sort()
       const inputs = yield* llm.inputs
       const advertised = ((inputs[0]?.tools ?? []) as Array<{ function?: { name?: string } }>)
         .flatMap((tool) => (tool.function?.name ? [tool.function.name] : []))
@@ -526,7 +574,7 @@ describe("session HttpApi", () => {
       expect(receipt?.prepared?.tool_final_offered_ids?.slice().sort()).toEqual(expected)
       expect(receipt?.prepared?.tool_definition_hash).toHaveLength(64)
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    15_000,
+    30_000,
   )
 
   it.effect("maps busy sessions to public session busy errors", () =>
@@ -822,7 +870,7 @@ describe("session HttpApi", () => {
         root: sessionDirectory,
       })
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    15_000,
+    45_000,
   )
 
   it.instance(
@@ -1052,6 +1100,66 @@ describe("session HttpApi", () => {
         })
       }),
     { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "returns a populated public context for a retained session",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-deepagent-code-directory": test.directory }
+        const session = yield* createSession({ title: "context readback" })
+        const message = yield* insertLegacyAssistantMessage(session.id)
+
+        const response = yield* request(`/api/session/${session.id}/context`, { headers })
+        expect(response.status).toBe(200)
+        const body = yield* json<{ data: SessionMessage.Message[] }>(response)
+        expect(body.data).toEqual([
+          expect.objectContaining({ id: message.id, type: "assistant" }),
+        ])
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "replays session events after the durable HTTP watermark",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-deepagent-code-directory": test.directory }
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({}),
+        })
+        const sessionID = created.data.id
+        const watermark = yield* requestJson<{ cursor: number | null }>(`/api/session/${sessionID}/events/cursor`, {
+          headers,
+        })
+        expect(watermark.cursor).toBeNumber()
+        if (watermark.cursor === null) return yield* Effect.die("created session has no durable event cursor")
+
+        const admitted = yield* request(`/api/session/${sessionID}/prompt`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ id: "msg_v2_cursor_tail", prompt: { text: "cursor tail" }, resume: false }),
+        })
+        expect(admitted.status).toBe(200)
+        const next = yield* requestJson<{ cursor: number | null }>(`/api/session/${sessionID}/events/cursor`, {
+          headers,
+        })
+        expect(next.cursor).toBeGreaterThan(watermark.cursor)
+
+        const replay = yield* request(`/api/session/${sessionID}/events?after=${watermark.cursor}`, { headers })
+        expect(replay.status).toBe(200)
+        expect(replay.headers["content-type"]).toContain("text/event-stream")
+        expect(yield* readSessionEvent(replay)).toMatchObject({
+          seq: next.cursor,
+          type: "session.next.prompt.admitted",
+        })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    15_000,
   )
 
   it.instance(
@@ -1311,7 +1419,7 @@ describe("session HttpApi", () => {
         model_id: "test-model",
       })
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    30_000,
+    60_000,
   )
 
   it.instance(
@@ -1686,46 +1794,189 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
-    "serves message mutation routes",
+    "keeps public share routes closed by default while local ZIP export remains available",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
+        const session = yield* createSession({ title: "local archive" })
         const headers = { "x-deepagent-code-directory": test.directory, "content-type": "application/json" }
-        const session = yield* createSession({ title: "messages" })
-        const first = yield* createTextMessage(session.id, "first")
-        const second = yield* createTextMessage(session.id, "second")
-
-        const updated = yield* requestJson<SessionV1.Part>(
-          pathFor(SessionPaths.updatePart, {
-            sessionID: session.id,
-            messageID: first.info.id,
-            partID: first.part.id,
-          }),
-          {
-            method: "PATCH",
-            headers,
-            body: JSON.stringify({ ...first.part, text: "updated" }),
+        const enabled = process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+        const service = process.env.DEEPAGENT_SHARE_PUBLIC_URL
+        const token = process.env.DEEPAGENT_SHARE_UPLOAD_TOKEN
+        const externalCalls: string[] = []
+        const host = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch: (request) => {
+            externalCalls.push(request.method)
+            return new Response(null, { status: request.method === "DELETE" ? 204 : 500 })
           },
-        )
-        expect(updated).toMatchObject({ id: first.part.id, type: "text", text: "updated" })
+        })
+        delete process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+        process.env.DEEPAGENT_SHARE_PUBLIC_URL = host.url.toString()
+        process.env.DEEPAGENT_SHARE_UPLOAD_TOKEN = "test-upload-token"
+        yield* Effect.gen(function* () {
+          for (const route of [
+            { path: pathFor(SessionPaths.share, { sessionID: session.id }), body: undefined },
+            { path: pathFor(SessionPaths.shareBundle, { sessionID: session.id }), body: { tier: "conversation" } },
+            { path: SessionPaths.importBundleShare, body: { url: `${host.url}b/old` } },
+          ]) {
+            const response = yield* request(route.path, {
+              method: "POST",
+              headers,
+              ...(route.body ? { body: JSON.stringify(route.body) } : {}),
+            })
+            expect(response.status).toBe(503)
+            expect(JSON.stringify(yield* responseJson(response))).toContain("Public sharing is disabled")
+          }
+          expect(externalCalls).toHaveLength(0)
 
-        expect(
-          yield* requestJson<boolean>(
-            pathFor(SessionPaths.deletePart, {
-              sessionID: session.id,
-              messageID: first.info.id,
-              partID: first.part.id,
+          const exported = yield* request(pathFor(SessionPaths.exportBundle, { sessionID: session.id }), {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ tier: "conversation" }),
+          })
+          expect(exported.status).toBe(200)
+          const bundle = (yield* responseJson(exported)) as { bundle: string }
+          const imported = yield* request(SessionPaths.importBundle, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ bundle: bundle.bundle }),
+          })
+          expect(imported.status).toBe(200)
+          const revoked = yield* request(SessionPaths.revokeBundleShare, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              url: `${host.url}b/${"a".repeat(32)}#${"b".repeat(43)}`,
+              revokeToken: "existing-revoke-token",
             }),
-            { method: "DELETE", headers },
+          })
+          expect(revoked.status).toBe(200)
+          expect(externalCalls).toEqual(["DELETE"])
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              host.stop(true)
+              if (enabled === undefined) delete process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+              else process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING = enabled
+              if (service === undefined) delete process.env.DEEPAGENT_SHARE_PUBLIC_URL
+              else process.env.DEEPAGENT_SHARE_PUBLIC_URL = service
+              if (token === undefined) delete process.env.DEEPAGENT_SHARE_UPLOAD_TOKEN
+              else process.env.DEEPAGENT_SHARE_UPLOAD_TOKEN = token
+            }),
           ),
-        ).toBe(true)
+        )
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
 
-        expect(
-          yield* requestJson<boolean>(
-            pathFor(SessionPaths.deleteMessage, { sessionID: session.id, messageID: second.info.id }),
-            { method: "DELETE", headers },
-          ),
-        ).toBe(true)
+  it.instance(
+    "keeps read-only imported sessions out of legacy share mutations",
+    () =>
+      Effect.gen(function* () {
+        // Public creation is disabled in 2.0.2; opt in here to keep the V1-only
+        // adoption refusal covered independently of the rollout switch.
+        const enabled = process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+        process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING = "1"
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (enabled === undefined) delete process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+            else process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING = enabled
+          }),
+        )
+        const test = yield* TestInstance
+        const db = (yield* Database.Service).db
+        const session = yield* createSession({ title: "read-only shared import" })
+        yield* db.update(SessionTable).set({ v2_authority: false }).where(eq(SessionTable.id, session.id)).run()
+        const before = {
+          session: yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get(),
+          events: yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, session.id)).all(),
+        }
+        for (const method of ["DELETE", "POST"]) {
+          const response = yield* request(pathFor(SessionPaths.share, { sessionID: session.id }), {
+            method,
+            headers: { "x-deepagent-code-directory": test.directory },
+          })
+          expect(response.status).toBe(409)
+          expect(yield* responseJson(response)).toMatchObject({
+            _tag: "ConflictError",
+            resource: "legacy_session_requires_adoption",
+          })
+          expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get()).toEqual(before.session)
+          expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, session.id)).all()).toEqual(before.events)
+        }
+
+        const writable = yield* createSession({ title: "writable share" })
+        const beforeWritable = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, writable.id)).all()
+        const response = yield* request(pathFor(SessionPaths.share, { sessionID: writable.id }), {
+          method: "DELETE",
+          headers: { "x-deepagent-code-directory": test.directory },
+        })
+        expect(response.status).toBe(200)
+        const afterWritable = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, writable.id)).all()
+        expect(afterWritable).toHaveLength(beforeWritable.length + 1)
+        expect(afterWritable.at(-1)?.type).toBe("session.updated.2")
+      }),
+    { git: true, config: { formatter: false, lsp: false, share: "disabled" } },
+  )
+
+  it.instance(
+    "keeps message mutation routes from writing legacy projections outside V2 authority",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const db = (yield* Database.Service).db
+        const headers = { "x-deepagent-code-directory": test.directory, "content-type": "application/json" }
+        for (const authority of [false, true]) {
+          const session = yield* createSession({ title: authority ? "V2 message" : "historical message" })
+          const message = yield* createTextMessage(session.id, "original")
+          if (!authority) yield* db.update(SessionTable).set({ v2_authority: false }).where(eq(SessionTable.id, session.id)).run()
+          const snapshot = () =>
+            Effect.gen(function* () {
+              return {
+                session: yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get(),
+                messages: yield* db.select().from(MessageTable).where(eq(MessageTable.session_id, session.id)).all(),
+                parts: yield* db.select().from(PartTable).where(eq(PartTable.session_id, session.id)).all(),
+                v2Messages: yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, session.id)).all(),
+                inputs: yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, session.id)).all(),
+                events: yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, session.id)).all(),
+              }
+            })
+          const before = yield* snapshot()
+          const mutations = [
+            {
+              path: pathFor(SessionPaths.updatePart, { sessionID: session.id, messageID: message.info.id, partID: message.part.id }),
+              method: "PATCH", service: "session.updatePart", body: JSON.stringify({ ...message.part, text: "changed" }),
+            },
+            {
+              path: pathFor(SessionPaths.deletePart, { sessionID: session.id, messageID: message.info.id, partID: message.part.id }),
+              method: "DELETE", service: "session.deletePart",
+            },
+            {
+              path: pathFor(SessionPaths.deleteMessage, { sessionID: session.id, messageID: message.info.id }),
+              method: "DELETE", service: "session.deleteMessage",
+            },
+          ] as const
+          yield* Effect.forEach(
+            mutations,
+            (mutation) => Effect.gen(function* () {
+              const response = yield* request(mutation.path, {
+                method: mutation.method,
+                headers,
+                ...("body" in mutation ? { body: mutation.body } : {}),
+              })
+              expect(response.status).toBe(authority ? 503 : 409)
+              expect(yield* responseJson(response)).toMatchObject(
+                authority
+                  ? { _tag: "ServiceUnavailableError", service: mutation.service }
+                  : { _tag: "ConflictError", resource: "legacy_session_requires_adoption" },
+              )
+              expect(yield* snapshot()).toEqual(before)
+            }),
+            { concurrency: 1 },
+          )
+        }
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

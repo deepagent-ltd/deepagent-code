@@ -16,6 +16,7 @@
 // We also re-check live session status before resolving an idle event so a
 // delayed idle from an older turn cannot complete a newer busy turn.
 import type { Event, GlobalEvent, OpencodeClient } from "@deepagent-code/sdk"
+import { toV2Prompt } from "@deepagent-code/sdk"
 import { Context, Deferred, Effect, Exit, Layer, Scope, Stream } from "effect"
 import { makeRuntime } from "@/effect/run-service"
 import {
@@ -24,6 +25,7 @@ import {
   createSessionData,
   flushInterrupted,
   pickBlockerView,
+  permissionRequestFromV2,
   reduceSessionData,
   type SessionData,
 } from "./session-data"
@@ -480,7 +482,11 @@ function createLayer(input: StreamInput) {
         }
 
         const trackBlocker = (event: Event) => {
-          if (event.type !== "permission.asked" && event.type !== "permission.v2.asked" && event.type !== "question.asked") {
+          if (
+            event.type !== "permission.asked" &&
+            event.type !== "permission.v2.asked" &&
+            event.type !== "question.asked"
+          ) {
             return
           }
 
@@ -622,12 +628,29 @@ function createLayer(input: StreamInput) {
             }),
           ).pipe(Effect.flatMap((item) => (item.error ? Effect.fail(item.error) : Effect.succeed(item.data ?? []))))
 
-        const replayRequests = () =>
-          Effect.all(
+        const pendingPermissions = Effect.fn("RunStreamTransport.pendingPermissions")(function* () {
+          const [legacy, v2] = yield* Effect.all(
             [
               Effect.promise(() => input.sdk.permission.list()).pipe(
                 Effect.flatMap((item) => (item.error ? Effect.fail(item.error) : Effect.succeed(item.data ?? []))),
               ),
+              input.sdk.v2?.session?.permission?.list
+                ? Effect.promise(() => input.sdk.v2.session.permission.list({ sessionID: input.sessionID })).pipe(
+                    Effect.flatMap((item) =>
+                      item.error ? Effect.fail(item.error) : Effect.succeed(item.data?.data ?? []),
+                    ),
+                  )
+                : Effect.succeed([]),
+            ],
+            { concurrency: 2 },
+          )
+          return [...legacy, ...v2.map(permissionRequestFromV2)]
+        })
+
+        const replayRequests = () =>
+          Effect.all(
+            [
+              pendingPermissions(),
               Effect.promise(() => input.sdk.question.list()).pipe(
                 Effect.flatMap((item) => (item.error ? Effect.fail(item.error) : Effect.succeed(item.data ?? []))),
               ),
@@ -695,10 +718,7 @@ function createLayer(input: StreamInput) {
                 Effect.map((item) => item.data ?? []),
                 Effect.orElseSucceed(() => []),
               ),
-              Effect.promise(() => input.sdk.permission.list()).pipe(
-                Effect.map((item) => item.data ?? []),
-                Effect.orElseSucceed(() => []),
-              ),
+              pendingPermissions(),
               Effect.promise(() => input.sdk.question.list()).pipe(
                 Effect.map((item) => item.data ?? []),
                 Effect.orElseSucceed(() => []),
@@ -1008,9 +1028,7 @@ function createLayer(input: StreamInput) {
           input.trace?.write("replay.resize.start", {
             sessionID: input.sessionID,
           })
-          const source = yield* Effect.all([replayMessages(), replayRequests()], { concurrency: 2 }).pipe(
-            Effect.exit,
-          )
+          const source = yield* Effect.all([replayMessages(), replayRequests()], { concurrency: 2 }).pipe(Effect.exit)
           if (Exit.isFailure(source)) {
             input.trace?.write("replay.resize.abort", {
               sessionID: input.sessionID,
@@ -1323,9 +1341,17 @@ function createLayer(input: StreamInput) {
                   }).pipe(
                     Effect.andThen(
                       Effect.promise(() =>
-                        input.sdk.session.promptAsync(req, {
-                          signal: turn.signal,
-                        }),
+                        input.sdk.v2.session.prompt(
+                          {
+                            sessionID: req.sessionID,
+                            id: req.messageID,
+                            prompt: toV2Prompt(req),
+                          },
+                          {
+                            signal: turn.signal,
+                            throwOnError: true,
+                          },
+                        ),
                       ),
                     ),
                     Effect.tap(() =>

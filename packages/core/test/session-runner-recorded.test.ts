@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { HttpRecorder } from "@deepagent-code/http-recorder"
 import { HttpRecorderInternal } from "@deepagent-code/http-recorder/internal"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
@@ -21,6 +22,8 @@ import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/lo
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
+import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
+import { SessionActivityTable } from "@deepagent-code/core/context-federation/session-sql"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
@@ -36,6 +39,7 @@ import { SystemContextRegistry } from "@deepagent-code/core/system-context/regis
 import { SystemContext } from "@deepagent-code/core/system-context"
 import { SkillGuidance } from "@deepagent-code/core/skill/guidance"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { DeepAgentActivityAuthority } from "../src/deepagent"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Git } from "@deepagent-code/core/git"
 import { describe, expect } from "bun:test"
@@ -98,7 +102,7 @@ const model = OpenAIChat.route
   .model({ id: "deepseek-flash" })
 const models = SessionRunnerModel.layerWith(() => Effect.succeed({ model }))
 const systemContext = SystemContextRegistry.layer
-const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
+const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(projectLayer(database)))
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
 const catalog = Layer.succeed(
@@ -119,11 +123,20 @@ const catalog = Layer.succeed(
     },
   }),
 )
+// An unborn repository has no HEAD. Keep the transport fixture deterministic while forcing the
+// harder boundary where a patch was captured but HEAD disappeared before the revision was sealed.
+const gitWithoutHead = Layer.effect(
+  Git.Service,
+  Effect.gen(function* () {
+    const git = yield* Git.Service
+    return Git.Service.of({ ...git, patch: () => Effect.succeed(""), head: () => Effect.succeed(undefined) })
+  }),
+).pipe(Layer.provide(Git.defaultLayer))
 const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(ContextQueryAuthorization.defaultLayer),
   Layer.provide(Layer.succeed(ProductionV2Sources, {})),
   Layer.provide(FSUtil.defaultLayer),
-  Layer.provide(Git.defaultLayer),
+  Layer.provide(gitWithoutHead),
   Layer.provide(
     Layer.succeed(
       V2ProviderTurn.OwnerAuthorization,
@@ -133,10 +146,7 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(V2ProviderTurn.layer.pipe(Layer.provide(SessionProviderOwner.layer), Layer.provide(database))),
   Layer.provide(V2ToolEffect.layer.pipe(Layer.provide(database))),
   Layer.provide(
-    SessionContext.layer.pipe(
-      Layer.provide(SessionRunnerCanonical.degradedArtifactStore),
-      Layer.provide(database),
-    ),
+    SessionContext.layer.pipe(Layer.provide(SessionRunnerCanonical.degradedArtifactStore), Layer.provide(database)),
   ),
   Layer.provide(database),
   Layer.provide(store),
@@ -169,7 +179,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(store),
-  Layer.provide(Project.defaultLayer),
+  Layer.provide(projectLayer(database)),
   Layer.provide(execution),
 )
 const it = testEffect(
@@ -229,6 +239,7 @@ describe("SessionRunnerLLM recorded", () => {
           directory: "/project",
           title: "test",
           version: "test",
+          v2_authority: true,
         })
         .onConflictDoNothing()
         .run()
@@ -249,6 +260,31 @@ describe("SessionRunnerLLM recorded", () => {
       expect(messages[1]?.type === "assistant" ? messages[1].content : []).toMatchObject([
         { type: "text", text: "Hello!" },
       ])
+      const activity = yield* db
+        .select({ activityID: SessionActivityTable.activity_id })
+        .from(SessionActivityTable)
+        .where(eq(SessionActivityTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      const receipt = yield* db
+        .select({ receiptID: V2ProviderTurnReceiptTable.receipt_id })
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.activity_id, activity!.activityID))
+        .get()
+        .pipe(Effect.orDie)
+      const progress = yield* DeepAgentActivityAuthority.reconstruct({
+        activityKind: "v2",
+        activityID: activity!.activityID,
+      })
+      expect(progress.objective).toMatchObject({
+        objectiveText: "Say hello in one short sentence.",
+        enforcementState: "disabled",
+        state: "completed",
+      })
+      expect(progress.latestObservation).toMatchObject({
+        revision: 0,
+        idempotencyKey: `v2-provider-turn:${receipt?.receiptID}`,
+      })
       expect(
         (yield* db
           .select({ type: EventTable.type })

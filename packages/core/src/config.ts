@@ -26,6 +26,7 @@ import { ConfigVariable } from "./config/variable"
 import { Flag } from "./flag/flag"
 import { ConfigV1 } from "./v1/config/config"
 import { ConfigMigrateV1 } from "./v1/config/migrate"
+import { ConfigMCPV1 } from "./v1/config/mcp"
 
 export class Info extends Schema.Class<Info>("Config.Info")({
   $schema: Schema.optional(Schema.String).annotate({
@@ -61,8 +62,14 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   skills: Schema.String.pipe(Schema.Array, Schema.optional).annotate({
     description: "Additional paths or URLs to discover skills from",
   }),
+  instructions: Schema.String.pipe(Schema.Array, Schema.optional).annotate({
+    description: "Additional local paths or URLs to include in System Context",
+  }),
   commands: Schema.Record(Schema.String, ConfigCommand.Info).pipe(Schema.optional).annotate({
     description: "Named slash command definitions",
+  }),
+  mcp: Schema.Record(Schema.String, Schema.Union([ConfigMCPV1.Info, Schema.Struct({ enabled: Schema.Boolean })])).pipe(Schema.optional).annotate({
+    description: "MCP servers consumed by the application V2 MCP tool bridge",
   }),
   references: ConfigReference.Info.pipe(Schema.optional).annotate({
     description: "Named local directories or Git repositories available as external context",
@@ -88,7 +95,9 @@ export const RuntimeFieldConsumers = {
   tool_output: "ToolOutputStore",
   compaction: "SessionRunnerCompaction",
   skills: "ConfigSkillPlugin",
+  instructions: "ConfigInstructions",
   commands: "ConfigCommandPlugin",
+  mcp: "V2McpBridge",
   references: "ProjectReference",
   docs_sync: "ProjectDocsSync",
   experimental: "Policy",
@@ -141,11 +150,9 @@ export const layer = Layer.effect(
       if (!text) return
 
       const errors: ParseError[] = []
-      const input: unknown = parse(
-        yield* ConfigVariable.substitute({ text, path: filepath, filesystem: fs }),
-        errors,
-        { allowTrailingComma: true },
-      )
+      const input: unknown = parse(yield* ConfigVariable.substitute({ text, path: filepath, filesystem: fs }), errors, {
+        allowTrailingComma: true,
+      })
       if (errors.length)
         return yield* Effect.die(
           new Error(
@@ -172,15 +179,29 @@ export const layer = Layer.effect(
           filepath,
           stripped: leftover,
           note: "fields of removed features; no Core V2 consumer exists",
-        })      }
+        })
+      }
 
       // Disabled-compatibility fields are stripped in BOTH branches: an explicitly-disabled
       // value (formatter/lsp/snapshot/snapshots = false) is accepted regardless of which
       // generation's shape the file uses.
       const stripped = withoutRemovedFeatureFields(withoutDisabledCompatibilityFields(input))
-      const info = yield* (v1
-        ? decodeV1Info(stripped).pipe(Effect.map(ConfigMigrateV1.migrate), Effect.flatMap(decodeInfo))
-        : decodeInfo(stripped)
+      //
+      // D3 — `providers` (the Core V2 catalog schema) is stripped before the V1 decode too: a
+      // mixed file (V1 `provider` keys + V2 `providers`) classifies as V1, and decodeV1Info
+      // runs with onExcessProperty:"error" — the V2-only key would die the whole location
+      // config load. The V1 schema has no consumer for it; strip, decode V1, migrate, and the
+      // final decodeInfo re-admits it. (Files with NO V1 keys classify as V2 natively and keep
+      // the key untouched.)
+      let strippedInput = stripped
+      if (v1 && typeof stripped === "object" && stripped !== null && !Array.isArray(stripped) && "providers" in stripped) {
+        const { providers: _v2Providers, ...rest } = stripped as Record<string, unknown>
+        strippedInput = rest
+      }
+      const info = yield* (
+        v1
+          ? decodeV1Info(strippedInput).pipe(Effect.map(ConfigMigrateV1.migrate), Effect.flatMap(decodeInfo))
+          : decodeInfo(strippedInput)
       ).pipe(
         Effect.mapError((error) => new Error(`Invalid config in ${filepath}: ${error.message}`)),
         Effect.orDie,
@@ -257,22 +278,12 @@ export const layer = Layer.effect(
  * (type-level `satisfies`), and every refused key is NOT a schema field — nothing can be both
  * consumed and refused.
  */
-export const UNSUPPORTED_V1_RUNTIME_FIELDS = [
-  "snapshot",
-  "formatter",
-  "lsp",
-  "mcp",
-  "instructions",
-  "plugin",
-  "reference",
-] as const
+export const UNSUPPORTED_V1_RUNTIME_FIELDS = ["snapshot", "formatter", "lsp", "plugin", "reference"] as const
 
 export const UNSUPPORTED_V2_RUNTIME_FIELDS = [
   "snapshots",
   "formatter",
   "lsp",
-  "mcp",
-  "instructions",
   "plugins",
   "learning",
   "references",
@@ -293,7 +304,9 @@ function unsupportedRuntimeFields(input: unknown, v1: boolean) {
     ...fields
       .filter((key) => info[key] !== undefined)
       .filter((key) => !isDisabledCompatibilityField(key, info[key]))
-      .filter((key) => (key === "reference" || key === "references" ? !Flag.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES : true))
+      .filter((key) =>
+        key === "reference" || key === "references" ? !Flag.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES : true,
+      )
       .map((key) => unsupportedFieldLabel(key)),
   ]
 }
@@ -306,9 +319,7 @@ function isDisabledCompatibilityField(key: string, value: unknown) {
 
 function withoutDisabledCompatibilityFields(input: unknown) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input
-  return Object.fromEntries(
-    Object.entries(input).filter(([key, value]) => !isDisabledCompatibilityField(key, value)),
-  )
+  return Object.fromEntries(Object.entries(input).filter(([key, value]) => !isDisabledCompatibilityField(key, value)))
 }
 
 // Fields of features that were REMOVED entirely (share/autoupdate era). Unlike the

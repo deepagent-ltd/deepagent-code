@@ -3,6 +3,7 @@ export * as MigrationReport from "./migration-report"
 import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { count } from "drizzle-orm"
 import { Data, Effect } from "effect"
 import { Backup } from "@deepagent-code/core/database/backup"
 import { BackupVerify } from "@deepagent-code/core/database/backup-verify"
@@ -90,7 +91,7 @@ const writeJsonAtomic = (filePath: string, value: unknown) =>
   Effect.promise(async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     const tmp = `${filePath}.tmp-${Math.random().toString(36).slice(2)}`
-    await Bun.write(tmp, `${JSON.stringify(value, null, 2)}\n`)
+    await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`)
     await fs.rename(tmp, filePath)
   }).pipe(
     Effect.catchCause((cause) =>
@@ -105,7 +106,7 @@ const writeJsonAtomic = (filePath: string, value: unknown) =>
 
 /** Read + structurally validate the persisted report; a missing file is `undefined`. */
 export const read = Effect.fn("MigrationReport.read")(function* (reportPath: string) {
-  const text = yield* Effect.promise(() => Bun.file(reportPath).text()).pipe(
+  const text = yield* Effect.promise(() => fs.readFile(reportPath, "utf8")).pipe(
     Effect.catchCause(() => Effect.succeed(undefined)),
   )
   if (text === undefined) return undefined
@@ -136,8 +137,9 @@ const overallOf = (entries: readonly ReportEntry[]): CheckStatus =>
  * read as `another_process_active`. A genuinely foreign live holder still fails preflight.
  */
 const ownProcessHoldsLock = async (dbPath: string) => {
-  const meta = await Bun.file(path.join(`${dbPath}.runtime.lock`, "meta.json"))
-    .json()
+  const meta = await fs
+    .readFile(path.join(`${dbPath}.runtime.lock`, "meta.json"), "utf8")
+    .then((text) => JSON.parse(text))
     .catch(() => undefined)
   return (
     typeof meta === "object" &&
@@ -318,12 +320,12 @@ const mdReconciliationEntry = (reconciliation: MdExport.Reconciliation): ReportE
 
 const rowReconciliationOf = (db: DatabaseService, manifest: MdExport.Manifest | undefined) =>
   Effect.gen(function* () {
-    const sessions = yield* db.select({ id: SessionTable.id }).from(SessionTable).all().pipe(Effect.orDie)
-    const messages = yield* db.select({ id: SessionMessageTable.id }).from(SessionMessageTable).all().pipe(Effect.orDie)
+    const sessions = yield* db.select({ total: count() }).from(SessionTable).get().pipe(Effect.orDie)
+    const messages = yield* db.select({ total: count() }).from(SessionMessageTable).get().pipe(Effect.orDie)
     const rowReconciliation = {
-      sessionsInLibrary: sessions.length,
+      sessionsInLibrary: sessions?.total ?? 0,
       sessionsInManifest: manifest?.entries.length ?? 0,
-      messagesInLibrary: messages.length,
+      messagesInLibrary: messages?.total ?? 0,
       messagesInManifest: (manifest?.entries ?? []).reduce((sum, entry) => sum + entry.messageCount, 0),
     }
     return {

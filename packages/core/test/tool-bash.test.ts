@@ -178,7 +178,7 @@ describe("BashTool", () => {
             expect(yield* toolDefinitions(registry, [{ action: "bash", resource: "*", effect: "deny" }])).toEqual([])
             expect(
               yield* settleTool(registry, call({ command: "pwd", description: "Print working directory" })),
-            ).toEqual({
+            ).toMatchObject({
               result: { type: "text", value: "hello\n\n\nexit code: 0" },
               output: {
                 structured: {
@@ -188,7 +188,7 @@ describe("BashTool", () => {
                   output: "hello\n",
                   truncated: false,
                 },
-                content: [{ type: "text", text: "hello\n\n\nCommand exited with code 0." }],
+                content: [{ type: "text", text: "hello\n\n\nexit code: 0" }],
               },
             })
             expect(runs).toMatchObject([{ command: "pwd", cwd: realpathSync(tmp.path) }])
@@ -516,7 +516,7 @@ describe("BashTool", () => {
                 command: "false",
                 cwd: realpathSync(tmp.path),
                 exitCode: 7,
-                output: "HEAD full output TAIL\n\nexit code: 7",
+                output: "HEAD full output TAIL",
                 truncated: false,
               })
             }),

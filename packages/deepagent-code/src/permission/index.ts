@@ -75,7 +75,9 @@ export interface Interface {
     readonly terminalReason: string
   }) => Effect.Effect<
     boolean,
-    DeepAgentActivityAuthority.ConflictError | DeepAgentActivityAuthority.InvalidInputError | DeepAgentActivityAuthority.NotFoundError
+    | DeepAgentActivityAuthority.ConflictError
+    | DeepAgentActivityAuthority.InvalidInputError
+    | DeepAgentActivityAuthority.NotFoundError
   >
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
@@ -456,18 +458,22 @@ export const layerWith = (options: LayerOptions = {}) =>
         const savedRules = yield* durableRules(request.sessionID)
         const requestKind = request.permission === "doom_loop" && request.tool === undefined ? "no_progress" : "tool"
         let needsAsk = false
+        let denied = false
 
         for (const pattern of request.patterns) {
           const rule = evaluateDurable(request.permission, pattern, ruleset, owner.approved, savedRules)
           log.info("evaluated", { permission: request.permission, pattern, action: rule })
           if (rule.action === "deny") {
-            return yield* new PermissionV1.DeniedError({
-              ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
-            })
+            denied = true
+            continue
           }
           if (rule.action === "allow") continue
           needsAsk = true
         }
+        if (denied && requestKind !== "no_progress")
+          return yield* new PermissionV1.DeniedError({
+            ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
+          })
 
         const legacyActivity = yield* SessionPromptIntent.activeActivityForSession(request.sessionID).pipe(
           Effect.provideService(Database.Service, database),
@@ -584,6 +590,24 @@ export const layerWith = (options: LayerOptions = {}) =>
                 Effect.orDie,
               )
             : Effect.succeed(undefined)
+        if (denied) {
+          // A configured doom_loop deny is an automatic interruption, not a silent policy
+          // refusal. Keep the no-progress request and terminal decision durable so a retry or
+          // restart cannot resume the stalled activity without an explicit new admission.
+          if (activity) {
+            yield* requestDurable(info.always)
+            yield* DeepAgentActivityAuthority.decidePermission({
+              requestID: id,
+              idempotencyKey: `permission-decision:${id}:interrupted`,
+              decision: "interrupted",
+              actorType: "system",
+              actorID: "permission-policy",
+            }).pipe(Effect.provideService(Database.Service, database), Effect.orDie)
+          }
+          return yield* new PermissionV1.DeniedError({
+            ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
+          })
+        }
         if (!needsAsk) {
           yield* requestDurable(info.always)
           const existing = yield* DeepAgentActivityAuthority.permissionDecisionForRequest(id).pipe(

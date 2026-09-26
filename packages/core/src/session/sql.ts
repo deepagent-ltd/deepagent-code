@@ -58,6 +58,9 @@ export const SessionTable = sqliteTable(
     tokens_cache_read: integer().notNull().default(0),
     tokens_cache_write: integer().notNull().default(0),
     mutation_epoch: integer().notNull().default(0),
+    // A shared V1/V2 row is writable through V2 only after native creation or an audited adoption.
+    // The marker survives event compaction; row existence alone does not establish authority.
+    v2_authority: integer({ mode: "boolean" }).notNull().default(false),
     // Highest durable interrupt event admitted for this Session. Advisory wakes at or below this
     // aggregate sequence must remain suppressed across process restarts.
     interrupt_seq: integer(),
@@ -191,6 +194,7 @@ export const SessionInputTable = sqliteTable(
     prompt: text({ mode: "json" }).notNull().$type<Prompt>(),
     delivery: text().$type<SessionInput.Delivery>().notNull(),
     admitted_seq: integer().notNull(),
+    revert_epoch: integer(),
     promoted_seq: integer(),
     time_created: integer()
       .notNull()
@@ -692,6 +696,30 @@ export const TaskRunTable = sqliteTable(
       table.generation,
     ),
     index("task_run_goal_idx").on(table.goal_id, table.goal_tick_seq, table.goal_role, table.goal_ordinal),
+  ],
+)
+
+/** Durable event-subtask receipt. EventV2 aggregates may be pruned before this worktree's grace expires. */
+export const EventTaskWorkspaceTable = sqliteTable(
+  "event_task_workspace",
+  {
+    event_id: text().notNull(),
+    task_id: text().notNull(),
+    generation: integer().notNull(),
+    operation_key: text().notNull(),
+    repository_root: text().notNull(),
+    base_commit: text().notNull(),
+    branch: text().notNull(),
+    directory: text().notNull(),
+    state: text().$type<"pending" | "ready" | "failed" | "retained" | "reclaimed">().notNull(),
+    continuation_ref: text(),
+    error: text(),
+    time_created: integer().notNull(),
+    time_settled: integer(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.event_id, table.task_id, table.generation] }),
+    index("event_task_workspace_reclaim_idx").on(table.state, table.time_settled),
   ],
 )
 

@@ -15,6 +15,7 @@ type Msg = {
   baseDelayMs?: number
   maxDelayMs?: number
   holdMs?: number
+  clockSkewMs?: number
   ready?: string
   active?: string
   done?: string
@@ -270,6 +271,40 @@ describe("util.flock", () => {
     expect(hit).toBe(true)
     expect(await exists(breaker)).toBe(false)
   })
+
+  for (const withBreaker of [false, true]) {
+    test(`reclaims a stale ${withBreaker ? "breaker" : "lock"} when process time lags filesystem time`, async () => {
+      await using tmp = await tmpdir()
+      const dir = path.join(tmp.path, "locks")
+      const key = `flock:sleep-skew:${withBreaker}`
+      const lockDir = lock(dir, key)
+      const breaker = lockDir + ".breaker"
+      const ready = path.join(tmp.path, "ready")
+      await fs.mkdir(lockDir, { recursive: true })
+      const oldLock = new Date(Date.now() - (withBreaker ? 300_000 : 120_000))
+      await fs.utimes(lockDir, oldLock, oldLock)
+      if (withBreaker) {
+        await fs.mkdir(breaker)
+        const oldBreaker = new Date(Date.now() - 120_000)
+        await fs.utimes(breaker, oldBreaker, oldBreaker)
+      }
+
+      const out = await run({
+        key,
+        dir,
+        ready,
+        clockSkewMs: 180_000,
+        staleMs: 1_000,
+        timeoutMs: 500,
+        baseDelayMs: 10,
+        maxDelayMs: 10,
+      })
+      expect(out.code).toBe(0)
+      expect(out.stderr.toString()).toBe("")
+      expect(await exists(ready)).toBe(true)
+      expect(await exists(breaker)).toBe(false)
+    }, 5_000)
+  }
 
   test("fails clearly if lock dir is removed while held", async () => {
     await using tmp = await tmpdir()

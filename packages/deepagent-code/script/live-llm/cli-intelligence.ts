@@ -32,6 +32,11 @@ const artifact = await runLegacyLiveCases({
   modelMaxTokens: 1024,
   maxProviderTurns: 16,
 })
+await writeLiveArtifact(
+  { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
+  `${artifact.suite}-observed`,
+  artifact,
+)
 
 const observation = artifact.cases[0]
 assert(observation, "intelligence-draft-confirmation produced no observation")

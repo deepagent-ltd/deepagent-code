@@ -16,14 +16,15 @@ import type { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import type { Argv } from "yargs"
 import path from "path"
 import { pathToFileURL } from "url"
-import { Effect } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { UI } from "../ui"
 import { CliError, effectCmd } from "../effect-cmd"
 import { EOL } from "os"
 import { Filesystem } from "@/util/filesystem"
-import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@deepagent-code/sdk"
+import { createOpencodeClient, toV2Prompt, waitForV2PromptTerminal, type OpencodeClient, type ToolPart } from "@deepagent-code/sdk"
 import { FormatError, FormatUnknownError } from "../error"
 import { LegacyExecutionUnavailable } from "@/session/legacy-execution-zero"
+import { publicSharingEnabled } from "@/share/public-share-policy"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
 import { backgroundTask, createBackgroundSessions, createSessionTree, questionAnswers } from "./run/noninteractive"
 import { PERMISSION_MODES, permissionReplyFor, resolvePermissionMode, type PermissionMode } from "./run/permission-mode"
@@ -170,7 +171,7 @@ export const RunCommand = effectCmd({
       })
       .option("share", {
         type: "boolean",
-        describe: "share the session",
+        describe: "public sharing is unavailable in 2.0.2",
       })
       .option("model", {
         type: "string",
@@ -244,7 +245,8 @@ export const RunCommand = effectCmd({
       })
       .option("dangerously-skip-permissions", {
         type: "boolean",
-        describe: "alias for --permission-mode full-access: auto-approve permissions not explicitly denied (dangerous!)",
+        describe:
+          "alias for --permission-mode full-access: auto-approve permissions not explicitly denied (dangerous!)",
         default: false,
       })
       .option("permission-mode", {
@@ -359,9 +361,7 @@ export const RunCommand = effectCmd({
       // run 模式适配（F-15 收口）：dev 构建在进入任何 prompt 路径之前自举 V2 owner 授权 —
       // 守卫可能在 httpapi 图构建（图内 mint）之前被直连路径触发，入口处武装是唯一稳态。
       if (process.env.DEEPAGENT_CODE_V2_OWNER_DEV_MINT !== "0") {
-        const { bootstrapDevOwnerAuthorization } = await import(
-          "@deepagent-code/core/session/runner/v2-owner-dev-mint"
-        )
+        const { bootstrapDevOwnerAuthorization } = await import("@deepagent-code/core/session/runner/v2-owner-dev-mint")
         await bootstrapDevOwnerAuthorization()
       }
       const root = Filesystem.resolve(process.cwd())
@@ -379,6 +379,32 @@ export const RunCommand = effectCmd({
       const attachHeaders = args.attach
         ? ServerAuth.headers({ password: args.password, username: args.username })
         : undefined
+      const { Root } = await import("@/effect/root")
+      const localDigest = (await Root.compositionDigest()).digest
+      if (!args.attach) {
+        process.stderr.write(`[composition] digest=${localDigest.slice(0, 12)}${EOL}`)
+      } else {
+        const { CompositionDigest } = await import("@/effect/composition-digest")
+        const { MaintenancePaths } = await import("@/server/routes/instance/httpapi/groups/maintenance")
+        const remote = await Promise.resolve()
+          .then(() =>
+            fetch(new URL(MaintenancePaths.compositionDigest, args.attach), {
+              headers: attachHeaders,
+              signal: AbortSignal.timeout(3_000),
+            }),
+          )
+          .then(async (response) => {
+            if (!response.ok) return undefined
+            return Option.getOrUndefined(Schema.decodeUnknownOption(CompositionDigest.Record)(await response.json()))
+          })
+          .catch(() => undefined)
+        if (!remote) process.stderr.write(`[composition] warning: remote digest unavailable${EOL}`)
+        else if (remote.digest !== localDigest)
+          process.stderr.write(
+            `[composition] warning: attach digest differs local=${localDigest.slice(0, 12)} remote=${remote.digest.slice(0, 12)}${EOL}`,
+          )
+        else process.stderr.write(`[composition] digest=${localDigest.slice(0, 12)} remote=match${EOL}`)
+      }
       const attachSDK = (dir?: string) => {
         return createOpencodeClient({
           baseUrl: args.attach!,
@@ -533,6 +559,10 @@ export const RunCommand = effectCmd({
       }
 
       async function share(sdk: OpencodeClient, sessionID: string) {
+        if (!publicSharingEnabled()) {
+          if (args.share) UI.println(UI.Style.TEXT_DANGER_BOLD + "!  Public sharing is disabled in 2.0.2")
+          return
+        }
         const cfg = await sdk.config.get()
         if (!cfg.data) return
         if (cfg.data.share !== "auto" && !flags.autoShare && !args.share) return
@@ -812,7 +842,10 @@ export const RunCommand = effectCmd({
                       }
                     }
                     const output = String((part.state as { output?: unknown }).output ?? "")
-                    if (output.includes("No plan exists yet") || output.includes("blocked until the plan is re-synced")) {
+                    if (
+                      output.includes("No plan exists yet") ||
+                      output.includes("blocked until the plan is re-synced")
+                    ) {
                       trace.blocks++
                     }
                   }
@@ -1097,28 +1130,34 @@ export const RunCommand = effectCmd({
 
             const model = pick(args.model)
             const result = await runDeadline.race(
-              client.session.prompt({
+              client.v2.session.prompt({
                 sessionID,
-                agent,
-                model,
-                variant: args.variant,
-                parts: [...files, { type: "text", text: message }],
-              }),
-            )
-            if (result.error) {
-              if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
+                prompt: toV2Prompt({
+                  agent,
+                  model,
+                  variant: args.variant,
+                  parts: [...files, { type: "text", text: message }],
+                }),
+              }, { throwOnError: true }).then((admitted) =>
+                waitForV2PromptTerminal(client, { sessionID, messageID: admitted.data.data.id })),
+            ).then((data) => ({ data }), (error: unknown) => ({ error }))
+            if ("error" in result) {
+              if (result.error instanceof RunTimedOut) throw result.error
+              const message = formatRunError(result.error)
+              if (!emit("error", { error: message })) UI.error(message)
               process.exitCode = 1
               return
             }
-            if (result.data?.info.error) {
-              if (!emit("error", { error: result.data.info.error })) UI.error(formatRunError(result.data.info.error))
+            if (result.data.error) {
+              if (!emit("error", { error: result.data.error })) UI.error(formatRunError(result.data.error))
               process.exitCode = 1
             }
-            if (result.data?.info.finish === "unknown") {
+            if (result.data.finish === "unknown") {
               const incomplete = "Model stream ended without a successful finish reason"
               if (!emit("error", { error: incomplete })) UI.error(incomplete)
               process.exitCode = 1
             }
+            await events.stream.return?.(undefined)
             if (await runDeadline.race(loopTask)) process.exitCode = 1
             const responseError = await persistedAssistantError(client)
             if (responseError) {

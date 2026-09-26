@@ -5,6 +5,7 @@ import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { ToolOutputStore } from "@deepagent-code/core/tool-output-store"
+import { ToolArtifact } from "@deepagent-code/core/tool-artifact"
 import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { executeTool, settleTool, toolDefinitions } from "./lib/tool"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, SchemaGetter, SchemaIssue, Scope } from "effect"
@@ -12,9 +13,11 @@ import { testEffect } from "./lib/effect"
 
 const bounds: ToolOutputStore.BoundInput[] = []
 const retentionFailure = new ToolOutputStore.StorageError({ operation: "write", cause: new Error("disk full") })
+const artifactFailure = new ToolArtifact.Error({ reason: "too_large" })
 const outputStore = Layer.mock(ToolOutputStore.Service, {
   bound: (input) => {
     if (input.toolCallID === "call-retention-failure") return Effect.fail(retentionFailure)
+    if (input.toolCallID === "call-artifact-failure") return Effect.fail(artifactFailure)
     return Effect.sync(() => bounds.push(input)).pipe(
       Effect.as(
         input.toolCallID === "call-bounded"
@@ -53,6 +56,20 @@ const make = (permission?: string) => {
 }
 
 describe("ToolRegistry", () => {
+  it.effect("settles an artifact egress refusal as a typed tool result", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register({ echo: make() })
+      expect(yield* settleTool(service, call("echo", "call-artifact-failure"))).toEqual({
+        result: {
+          type: "error",
+          value: "Tool artifact unavailable: too_large",
+          metadata: { reason: "too_large" },
+        },
+      })
+    }),
+  )
+
   it.effect("filters disabled tools with edit aliases and ordered wildcard precedence", () =>
     Effect.gen(function* () {
       const service = yield* ToolRegistry.Service

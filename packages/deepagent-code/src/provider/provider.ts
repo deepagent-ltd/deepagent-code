@@ -1313,6 +1313,9 @@ export const layer = Layer.effect(
         // provider (e.g. a gateway forwarding "deepseek-chat") inherit context/reasoning/cost/modality
         // specs from the canonical catalog entry. Built once — the per-model loop below only looks up.
         const catalogIndex = buildCatalogIndex(modelsDev)
+        // D2 — official-id catalog bridging for renamed upstream entries (kimi-for-coding →
+        // kimi-code-plan-cn) lives in ModelsDev.mergeVendored: every consumer (this database,
+        // the V2 Catalog via ModelsDevPlugin, refresh) reads the bridged map from one place.
         const catalog = mapValues(modelsDev, fromModelsDevProvider)
         const database = mapValues(catalog, toPublicInfo)
         // "Official" is a fixed, curated set (openai/deepseek/anthropic/zhipuai/xai/google) — NOT the

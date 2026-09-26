@@ -157,6 +157,11 @@ export const PromptPrepareResult = Schema.Struct({
   goal: Schema.String,
   preview: Schema.String,
   intent_id: Schema.optional(Schema.String),
+  // D1: true when refinement failed server-side (weak model output, provider error) and the
+  // server fail-soft degraded to the direct path. A route:"general" result can ALSO be a plain
+  // general-chat classification (no failure involved), so without this flag the client cannot
+  // tell an intentional general route from a degraded one — the degrade stayed invisible.
+  degraded: Schema.optional(Schema.Boolean),
 })
 // A3 macro-round: the latest persisted next-round suggestion for human approval. `null` body when
 // no suggestion exists yet.
@@ -425,6 +430,15 @@ export const ContinuationResolutionPayload = Schema.Struct(
 export const ImportSnapshotPayload = Schema.Struct({
   bundle: Schema.String,
 })
+export const ExportBundlePayload = Schema.Struct({
+  tier: Schema.Literals(["conversation", "conversation_metadata", "session_logs"]),
+  archive: Schema.optional(Schema.Literal("zip")),
+  redact: Schema.optional(Schema.Boolean),
+})
+export const ImportBundlePayload = Schema.Struct({ bundle: Schema.String })
+export const ShareBundlePayload = Schema.Struct({ tier: Schema.Literals(["conversation", "conversation_metadata", "session_logs"]) })
+export const ImportBundleSharePayload = Schema.Struct({ url: Schema.String })
+export const RevokeBundleSharePayload = Schema.Struct({ url: Schema.String, revokeToken: Schema.String })
 export const ImportSnapshotResult = Schema.Struct({
   sessionID: Schema.String,
   messages: Schema.Number,
@@ -473,6 +487,12 @@ export const SessionPaths = {
   continuationResolution: `${root}/:sessionID/continuation-resolution`,
   exportSnapshot: `${root}/:sessionID/export`,
   importSnapshot: `${root}/import-snapshot`,
+  exportBundle: `${root}/:sessionID/export-bundle`,
+  exportBundleStream: `${root}/:sessionID/export-bundle-stream`,
+  importBundle: `${root}/import-bundle`,
+  shareBundle: `${root}/:sessionID/share-bundle`,
+  importBundleShare: `${root}/import-bundle-share`,
+  revokeBundleShare: `${root}/revoke-bundle-share`,
 } as const
 
 export const SessionApi = HttpApi.make("session")
@@ -647,7 +667,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Schema.Boolean, "Successfully deleted session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.delete",
@@ -660,7 +680,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: UpdatePayload,
           success: described(Session.Info, "Successfully updated session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.update",
@@ -686,7 +706,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Schema.Boolean, "Aborted session"),
-          error: [HttpApiError.BadRequest, ServiceUnavailableError],
+          error: [HttpApiError.BadRequest, ConflictError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.abort",
@@ -699,7 +719,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: InitPayload,
           success: described(Schema.Boolean, "200"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.init",
@@ -712,7 +732,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Session.Info, "Successfully shared session"),
-          error: [HttpApiError.InternalServerError, ApiNotFoundError],
+          error: [HttpApiError.InternalServerError, ApiNotFoundError, ConflictError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.share",
@@ -724,7 +744,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Session.Info, "Successfully unshared session"),
-          error: [HttpApiError.InternalServerError, ApiNotFoundError],
+          error: [HttpApiError.InternalServerError, ApiNotFoundError, ConflictError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.unshare",
@@ -737,7 +757,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: SummarizePayload,
           success: described(Schema.Boolean, "Summarized session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.summarize",
@@ -756,6 +776,7 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.prompt",
             summary: "Send message",
             description: "Create and send a new message to a session, streaming the AI response.",
+            deprecated: true,
           }),
         ),
         HttpApiEndpoint.post("promptPrepare", SessionPaths.promptPrepare, {
@@ -816,6 +837,7 @@ export const SessionApi = HttpApi.make("session")
             summary: "Send async message",
             description:
               "Durably admit a new message or steer, start session execution if needed, and return without waiting for model completion.",
+            deprecated: true,
           }),
         ),
         HttpApiEndpoint.post("command", SessionPaths.command, {
@@ -823,7 +845,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: CommandPayload,
           success: described(SessionV1.WithParts, "Created message"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.command",
@@ -836,7 +858,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: ShellPayload,
           success: described(SessionV1.WithParts, "Created message"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError, ServiceUnavailableError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError, SessionBusyError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.shell",
@@ -888,24 +910,25 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID, messageID: MessageID },
           query: WorkspaceRoutingQuery,
           success: described(Schema.Boolean, "Successfully deleted message"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ConflictError, SessionBusyError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.deleteMessage",
             summary: "Delete message",
-            description:
-              "Permanently delete a specific message and all of its parts from a session without reverting file changes.",
+            description: "Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.",
+            deprecated: true,
           }),
         ),
         HttpApiEndpoint.delete("deletePart", SessionPaths.deletePart, {
           params: { sessionID: SessionID, messageID: MessageID, partID: PartID },
           query: WorkspaceRoutingQuery,
           success: described(Schema.Boolean, "Successfully deleted part"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ConflictError, SessionBusyError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "part.delete",
-            description: "Delete a part from a message.",
+            description: "Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.",
+            deprecated: true,
           }),
         ),
         HttpApiEndpoint.patch("updatePart", SessionPaths.updatePart, {
@@ -913,11 +936,12 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: SessionV1.Part,
           success: described(SessionV1.Part, "Successfully updated part"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ConflictError, SessionBusyError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "part.update",
-            description: "Update a part in a message.",
+            description: "Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.",
+            deprecated: true,
           }),
         ),
         HttpApiEndpoint.get("contextDiagnostics", SessionPaths.contextDiagnostics, {
@@ -990,10 +1014,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           payload: ProviderResolutionCommandPayload,
-          success: described(
-            ProviderResolutionCommandResult,
-            "Unified provider-resolution command outcome",
-          ),
+          success: described(ProviderResolutionCommandResult, "Unified provider-resolution command outcome"),
           error: [HttpApiError.BadRequest, ApiNotFoundError, ConflictError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
@@ -1044,7 +1065,7 @@ export const SessionApi = HttpApi.make("session")
             summary: "Export a session snapshot",
             description:
               "Export the session's conversation (session + messages + parts) as a self-describing " +
-              "snapshot bundle (JSON). The bundle re-imports on another device as a fresh, continuable session.",
+              "snapshot bundle (JSON). The bundle re-imports on another device as a fresh, read-only archive.",
           }),
         ),
         HttpApiEndpoint.post("importSnapshot", SessionPaths.importSnapshot, {
@@ -1057,8 +1078,53 @@ export const SessionApi = HttpApi.make("session")
             summary: "Import a session snapshot",
             description:
               "Import a previously exported session bundle into the current instance as a fresh, " +
-              "continuable session (new IDs, re-rooted to the current project/directory).",
+              "read-only archive (new IDs, re-rooted to the current project/directory).",
           }),
+        ),
+        HttpApiEndpoint.post("exportBundle", SessionPaths.exportBundle, {
+          params: { sessionID: SessionID },
+          payload: ExportBundlePayload,
+          success: Schema.Struct({ bundle: Schema.String, archive: Schema.Literal("zip") }),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "session.exportBundle", summary: "Export a verified read-only session ZIP" }),
+        ),
+        HttpApiEndpoint.post("exportBundleStream", SessionPaths.exportBundleStream, {
+          params: { sessionID: SessionID },
+          payload: ExportBundlePayload,
+          success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "session.exportBundleStream", summary: "Stream ZIP export progress and result" }),
+        ),
+        HttpApiEndpoint.post("importBundle", SessionPaths.importBundle, {
+          payload: ImportBundlePayload,
+          success: ImportSnapshotResult,
+          error: [HttpApiError.BadRequest],
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "session.importBundle", summary: "Import a verified read-only session ZIP" }),
+        ),
+        HttpApiEndpoint.post("shareBundle", SessionPaths.shareBundle, {
+          params: { sessionID: SessionID },
+          payload: ShareBundlePayload,
+          success: Schema.Struct({ id: Schema.String, url: Schema.String, revokeToken: Schema.String, expiresAt: Schema.Number }),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "session.shareBundle", summary: "Upload a redacted session ZIP to the configured share host" }),
+        ),
+        HttpApiEndpoint.post("importBundleShare", SessionPaths.importBundleShare, {
+          payload: ImportBundleSharePayload,
+          success: ImportSnapshotResult,
+          error: [HttpApiError.BadRequest, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "session.importBundleShare", summary: "Import a verified ZIP from a share link" }),
+        ),
+        HttpApiEndpoint.post("revokeBundleShare", SessionPaths.revokeBundleShare, {
+          payload: RevokeBundleSharePayload,
+          success: Schema.Struct({ revoked: Schema.Boolean }),
+          error: [HttpApiError.BadRequest, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "session.revokeBundleShare", summary: "Revoke a session ZIP share" }),
         ),
       )
       .annotateMerge(

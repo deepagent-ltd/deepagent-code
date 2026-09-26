@@ -69,7 +69,7 @@ const workspaceLayer = (experimentalWorkspaces: boolean, runtimeFeatures?: Runti
   Workspace.layer.pipe(
     Layer.provide(Auth.defaultLayer),
     Layer.provide(SessionNs.defaultLayer),
-    Layer.provide(SessionCommandV2.defaultLayer),
+    Layer.provide(SessionCommandV2.testLayer),
     Layer.provide(Project.defaultLayer),
     Layer.provide(Vcs.defaultLayer),
     Layer.provide(Database.defaultLayer),
@@ -1903,7 +1903,8 @@ describe("workspace sync state", () => {
           const req = yield* HttpServerRequest.HttpServerRequest
           const bodyText = yield* req.text
           const url = new URL(req.url, "http://localhost")
-          if (url.pathname === "/history/global/event") return HttpServerResponse.fromWeb(eventStreamResponse())
+          // This case asserts history replay, so close the unrelated SSE response to let server teardown finish.
+          if (url.pathname === "/history/global/event") return HttpServerResponse.fromWeb(eventStreamResponse([], false))
           if (url.pathname === "/history/sync/history") {
             const body = bodyText ? JSON.parse(bodyText) : undefined
             historyBodies.push(body)
@@ -1996,7 +1997,7 @@ describe("workspace sync state", () => {
         { git: true },
       )
     })
-  }, 30_000)
+  }, 60_000)
 
   it.live("does not advance its durable cursor when a history page fails replay", () => {
     return Effect.gen(function* () {

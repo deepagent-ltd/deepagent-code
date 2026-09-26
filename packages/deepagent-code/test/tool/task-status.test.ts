@@ -37,7 +37,7 @@ const it = testEffect(
     SessionRunState.defaultLayer,
     SessionStatus.defaultLayer,
     Truncate.defaultLayer,
-    ToolRegistry.defaultLayer,
+    ToolRegistry.testLayer,
     Database.defaultLayer,
     RuntimeFlags.layer(),
   ),

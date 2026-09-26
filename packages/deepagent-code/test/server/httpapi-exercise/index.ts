@@ -641,6 +641,12 @@ const scenarios: Scenario[] = [
       check(body === true, "instance dispose should return true")
     }),
   http.protected
+    .post("/deepagent/learning/project-switch", "deepagent.projectSwitch")
+    .mutating()
+    .json(200, (body) => {
+      check(body === 0, "an untouched project has no settled learning generation to seal")
+    }),
+  http.protected
     .post("/log", "app.log")
     .global()
     .at(() => ({ path: "/log", body: { service: "httpapi-exercise", level: "info", message: "route coverage" } }))

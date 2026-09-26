@@ -34,7 +34,7 @@ const it = testEffect(
     SessionProjector.defaultLayer,
     SessionRunState.defaultLayer,
     SessionStatus.defaultLayer,
-    ToolRegistry.defaultLayer,
+    ToolRegistry.testLayer,
     Truncate.defaultLayer,
   ),
 )

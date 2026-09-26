@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { Provider as ModelsDevProvider } from "../src/models-dev"
 import { OFFICIAL_PROVIDER_IDS, isOfficialProvider } from "../src/provider-official"
-import { DEEPAGENT_MODEL_PROTOCOL, OFFICIAL_VENDORED_CATALOG } from "../src/models-dev"
+import { DEEPAGENT_MODEL_PROTOCOL, OFFICIAL_VENDORED_CATALOG, mergeVendored } from "../src/models-dev"
 import { Schema } from "effect"
 import { inputBudget, resolvedBuffer } from "../src/session/compaction"
 
@@ -101,4 +101,43 @@ test("auto-compaction triggers near the window limit, not at 10% of it", () => {
   expect(trigger).toBeGreaterThan(0.8 * window!)
   // The recorded ablation runs peak at ~193k prompt tokens; a run that size must NOT compact.
   expect(trigger).toBeGreaterThan(193_000)
+})
+
+// D2 — official-id catalog bridge must act at the ModelsDev merge choke point so BOTH the V1
+// provider database and the V2 Catalog (ModelsDevPlugin reads Service.get()) see the official
+// id; a consumer-side-only bridge leaves the V2 prompt path failing with
+// CatalogV2.ProviderNotFound.
+test("mergeVendored re-homes renamed catalog entries under their official id", () => {
+  const merged = mergeVendored({
+    "kimi-code-plan-cn": {
+      id: "kimi-code-plan-cn",
+      name: "Kimi For Coding (kimi.com)",
+      env: ["KIMI_API_KEY"],
+      npm: "@ai-sdk/openai-compatible",
+      api: "https://api.kimi.com/coding/v1",
+      models: {
+        "kimi-for-coding": {
+          id: "kimi-for-coding",
+          name: "Kimi For Coding",
+          limit: { context: 128_000 },
+        } as never,
+      },
+    } as never,
+  })
+
+  const bridged = merged["kimi-for-coding"]
+  expect(bridged).toBeDefined()
+  expect(bridged?.id).toBe("kimi-for-coding")
+  expect(bridged?.api).toBe("https://api.kimi.com/coding/v1")
+  expect(Object.keys(bridged?.models ?? {})).toContain("kimi-for-coding")
+  // The catalog entry stays available under its new id too.
+  expect(merged["kimi-code-plan-cn"]).toBeDefined()
+})
+
+test("mergeVendored never overwrites a native official entry with an alias", () => {
+  const merged = mergeVendored({
+    "kimi-for-coding": { id: "kimi-for-coding", name: "Native", env: [], models: {} } as never,
+    "kimi-code-plan-cn": { id: "kimi-code-plan-cn", name: "Renamed", env: [], models: {} } as never,
+  })
+  expect(merged["kimi-for-coding"]?.name).toBe("Native")
 })

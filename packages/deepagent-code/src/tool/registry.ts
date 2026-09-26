@@ -114,6 +114,7 @@ export interface Interface {
   readonly all: () => Effect.Effect<Tool.Def[]>
   /** Plugin + config-glob custom tools only (no builtins) — the V2 bridge surface. */
   readonly custom: () => Effect.Effect<Tool.Def[]>
+  readonly watchCustom?: (changed: () => Effect.Effect<void>) => Effect.Effect<() => void>
   readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef }>
   readonly tools: (model: {
     providerID: ProviderV2.ID
@@ -165,10 +166,7 @@ const layerWithFacades: Layer.Layer<
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
     const database = (yield* Database.Service).db
-    const coreV2OwnerQualified = yield* V2ProviderTurn.ownerQualified(
-      database,
-      V2ProviderTurn.ownerCampaignFromEnv(),
-    )
+    const coreV2OwnerQualified = yield* V2ProviderTurn.ownerQualified(database, V2ProviderTurn.ownerCampaignFromEnv())
     const federationReadiness = Option.getOrUndefined(yield* Effect.serviceOption(ContextFederationReadiness.Service))
     yield* EffectFlock.Service
 
@@ -455,6 +453,18 @@ const layerWithFacades: Layer.Layer<
       return [...s.custom] as Tool.Def[]
     })
 
+    const watchCustom = Effect.fn("ToolRegistry.watchCustom")(function* (changed: () => Effect.Effect<void>) {
+      return config.watch
+        ? yield* config.watch(() =>
+            Effect.gen(function* () {
+              yield* plugin.reload?.() ?? Effect.void
+              yield* InstanceState.invalidate(state)
+              yield* changed()
+            }),
+          )
+        : () => {}
+    })
+
     const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
       const items = (yield* agents.list()).filter((item) => item.mode !== "primary")
       const filtered = items.filter(
@@ -540,7 +550,7 @@ const layerWithFacades: Layer.Layer<
       return { task: s.task, read: s.read }
     })
 
-    return Service.of({ ids, all, custom, named, tools })
+    return Service.of({ ids, all, custom, watchCustom, named, tools })
   }),
 )
 
@@ -615,7 +625,7 @@ export const productionLayer = Layer.suspend(() =>
 )
 
 /** Standalone default. Production roots must provide one shared SessionV2 runtime to productionLayer. */
-export const defaultLayer = productionLayer.pipe(Layer.provide(SessionV2.liveLayer))
+export const testLayer = productionLayer.pipe(Layer.provide(SessionV2.liveLayer))
 
 function isZodType(value: unknown): value is z.ZodType {
   return typeof value === "object" && value !== null && "_zod" in value

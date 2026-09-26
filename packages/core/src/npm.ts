@@ -72,7 +72,10 @@ interface ArboristTree {
 // A registry 404 is deterministic for the life of a process (an unpublished package will not appear
 // mid-session), but config loading re-requests the same install on every instance boot. Cache 404s
 // per (directory, packages) so repeat requests skip the doomed network round-trip entirely.
+// Evict the oldest key after 1024 misses; an evicted key only costs a retry, while the
+// process-wide cache must not grow with every distinct workspace and package request.
 const notFound = new Set<string>()
+const NOT_FOUND_MAX = 1024
 
 function isNotFound(error: unknown): boolean {
   let current: unknown = error
@@ -218,6 +221,8 @@ export const layer = Layer.effect(
         Effect.tapError((error) =>
           error instanceof InstallFailedError && isNotFound(error.cause)
             ? Effect.sync(() => {
+                if (!notFound.has(missing) && notFound.size >= NOT_FOUND_MAX)
+                  notFound.delete(notFound.values().next().value!)
                 notFound.add(missing)
               })
             : Effect.void,

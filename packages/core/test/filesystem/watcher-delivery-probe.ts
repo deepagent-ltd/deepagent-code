@@ -1,3 +1,4 @@
+import { eventLayer } from "../fixture/event-layer"
 import { ConfigProvider, Deferred, Effect, Fiber, Layer, Option, Stream } from "effect"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -65,7 +66,7 @@ export async function watcherDelivers(): Promise<boolean> {
               Layer.provide(flagsLayer),
             ),
           ),
-          Effect.provide(Layer.mergeAll(FSUtil.defaultLayer, EventV2.defaultLayer)),
+          Effect.provide(Layer.mergeAll(FSUtil.defaultLayer, eventLayer())),
         ),
       ),
     )

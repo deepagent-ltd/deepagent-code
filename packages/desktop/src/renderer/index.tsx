@@ -177,6 +177,9 @@ const createPlatform = (): Platform => {
         defaultPath: opts?.defaultPath,
       })
     },
+    async saveFileDialog(input) {
+      return window.api.saveFileDialog(input)
+    },
 
     openLink(url: string) {
       window.api.openLink(url)
@@ -369,7 +372,6 @@ render(() => {
         list.push({
           displayName: "Local Server",
           type: "sidecar",
-          variant: "base",
           http: {
             url: data.url,
             username: data.username ?? undefined,

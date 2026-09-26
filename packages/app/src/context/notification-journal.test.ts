@@ -49,6 +49,32 @@ const fakeDrain = () => {
 }
 
 describe("notification journal subscription (durable drain)", async () => {
+  test("uses the active directory client for a directory-owned session cursor", async () => {
+    const global = fakeDrain()
+    const local = fakeDrain()
+    local.rows.set("ses-1", [{ id: "e1", seq: 1, type: "session.execution.succeeded", data: { sessionID: "ses-1" } }])
+    const selected: string[] = []
+    const idle: string[] = []
+    const journal = createNotificationJournalSubscription({
+      client: global.client,
+      clientFor: (directory) => {
+        selected.push(directory)
+        return local.client
+      },
+      currentDirectory: () => "/workspace",
+      sessionsOf: () => ["ses-1"],
+      handlers: { onIdle: (_directory, sessionID) => idle.push(sessionID), onError: () => {} },
+    })
+
+    journal.refresh()
+    await Bun.sleep(30)
+    expect(selected).toEqual(["/workspace"])
+    expect(global.drains).toHaveLength(0)
+    expect(local.drains.length).toBeGreaterThan(0)
+    expect(idle).toEqual(["ses-1"])
+    journal.dispose()
+  })
+
   test("subscribes the active directory sessions anchored at the watermark and routes idle/error", async () => {
     const fake = fakeDrain()
     fake.watermarks.set("ses-1", 7)

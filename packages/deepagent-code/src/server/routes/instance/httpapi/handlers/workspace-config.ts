@@ -11,25 +11,40 @@ export const workspaceConfigHandlers = HttpApiBuilder.group(InstanceHttpApi, "wo
   Effect.gen(function* () {
     const config = yield* WorkspaceConfig.Service
 
-    return handlers
-      // GET /workspace/:workspaceID/config/trusted-sources
-      // Returns the resolved trustedSources (DEFAULT_TRUSTED_SOURCES when the workspace has no config row).
-      .handle("getTrustedSources", (ctx) =>
-        Effect.gen(function* () {
-          const resolved = yield* config.get(ctx.params.workspaceID)
-          return { trustedSources: [...resolved.trustedSources] }
-        }),
-      )
-      // PUT /workspace/:workspaceID/config/trusted-sources
-      // Replaces the trustedSources list. EventSource validation is enforced by the schema (→ 400 on
-      // unknown values); the handler writes the validated array directly to WorkspaceConfig.
-      .handle("putTrustedSources", (ctx) =>
-        Effect.gen(function* () {
-          const resolved = yield* config.set(ctx.params.workspaceID, {
-            trustedSources: ctx.payload.trustedSources,
-          })
-          return { trustedSources: [...resolved.trustedSources] }
-        }),
-      )
+    return (
+      handlers
+        // GET /workspace/:workspaceID/config/trusted-sources
+        // Returns the resolved trustedSources (DEFAULT_TRUSTED_SOURCES when the workspace has no config row).
+        .handle("getTrustedSources", (ctx) =>
+          Effect.gen(function* () {
+            const resolved = yield* config.get(ctx.params.workspaceID)
+            return { trustedSources: [...resolved.trustedSources] }
+          }),
+        )
+        // PUT /workspace/:workspaceID/config/trusted-sources
+        // Replaces the trustedSources list. EventSource validation is enforced by the schema (→ 400 on
+        // unknown values); the handler writes the validated array directly to WorkspaceConfig.
+        .handle("putTrustedSources", (ctx) =>
+          Effect.gen(function* () {
+            const resolved = yield* config.set(ctx.params.workspaceID, {
+              trustedSources: ctx.payload.trustedSources,
+            })
+            return { trustedSources: [...resolved.trustedSources] }
+          }),
+        )
+        .handle("getExternalChannels", (ctx) =>
+          Effect.map(config.get(ctx.params.workspaceID), (resolved) => ({
+            externalChannels: [...resolved.externalChannels],
+          })),
+        )
+        .handle("putExternalChannels", (ctx) =>
+          Effect.map(
+            config.set(ctx.params.workspaceID, { externalChannels: ctx.payload.externalChannels }),
+            (resolved) => ({
+              externalChannels: [...resolved.externalChannels],
+            }),
+          ),
+        )
+    )
   }),
 )

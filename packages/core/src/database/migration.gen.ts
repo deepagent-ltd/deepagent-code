@@ -194,6 +194,16 @@ const modules = await Promise.all([
     import("./migration/20260922152631_execution_claim_token"),
     import("./migration/20260922182048_v2_task_call_admission"),
     import("./migration/20260922182457_recovery_command_exit"),
+    import("./migration/20260923170344_session_input_revert_epoch"),
+    import("./migration/20260923155709_proxy_gateway"),
+    import("./migration/20260923171305_proxy_permission_policy"),
+    import("./migration/20260923181940_learning_generation"),
+    import("./migration/20260923183309_v2_session_authority"),
+    import("./migration/20260923190000_event_task_workspace"),
+    import("./migration/20260923200145_long_context_checkpoint"),
+    import("./migration/20260924050000_consumer_receipt_terminal"),
+    import("./migration/20260924060000_provider_attempt_protocol_identity"),
+    import("./migration/20260924070000_im_send_request_fingerprint"),
 ])
 
 const bodyHashes = [
@@ -390,6 +400,16 @@ const bodyHashes = [
   "cba731ae20bfa9356b9de6ac496be374abc755ef2cc207ee772a066cc38e5a14",
   "8a79f700bda0be6b66d476c1d56d391af80de598542c8a0959b167bdd501caba",
   "1057f3124de185426f902411013e3fa0febd23e30a5b2f438a47d579400a3c91",
+  "fd4d04010592a3d0e8d220dd8dc2d8c400fc0dede1270f48e0bb722dc28550ce",
+  "88346e00d74120b960e0c3766beba025923e33bdfc6ab53e2488de51970fc14b",
+  "df16f488bfc4439d53f04d433c1ce6c5e4d0bc84ea30e7604ce7f0d4c8b4cb23",
+  "783acd2cb49357eac09f43bee7fdba3adac06a9e5dd33204b804cb696e9afe70",
+  "1371e358fddb5c485ba080ea5a9e20f7380e9c2b0478d0ff8935e3647f414e14",
+  "018822e938ce975029fb9d0647a1dd333f993cbc9131e4b329f7343ac4e17ac1",
+  "a23f41aa87d62be524ed24cf35799f56e847b6b9a0076077448fa3a85dbe8076",
+  "44acf2ac1ebf3ebe34383ce34da86108d6181d12dbcc3327873d67e50c484b21",
+  "6f54efbcabd413429fc12048668129666dfd51d24bebf188389b2f309b30d064",
+  "04c18841ee2d65e389e99d2dc43f1844833aaba38eeeeaffbf69bdf9613555af",
 ]
 
 export const migrations = modules.map((module, index) => ({

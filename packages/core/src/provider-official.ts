@@ -55,6 +55,27 @@ export const OFFICIAL_PROVIDER_IDS = [
   "google",
 ] as const
 
+/**
+ * Catalog-id bridge for official ids whose upstream models.dev entry was renamed out from under
+ * us. An official id that the fetched catalog no longer carries would silently no-op every
+ * key-store credential merge (mergeProvider finds no catalog match) — the user connects a key and
+ * nothing happens, with no error anywhere. Map each drifted official id to the catalog id that
+ * now serves the same endpoint; loader-side bridging (provider.ts) re-homes the catalog entry
+ * under the official id so credentials, picker identity, and auth writes all keep working.
+ */
+export const OFFICIAL_PROVIDER_CATALOG_ALIASES: Partial<Record<OfficialProviderID, string>> = {
+  // models.dev renamed the Kimi subscription faces (2026): kimi-for-coding → kimi-code-plan-cn.
+  // Both coding-plan entries serve api.kimi.com/coding/v1 with KIMI_API_KEY; the CN plane is the
+  // direct successor of the old id. The vendored self-hosted mirror tracks models.dev, so both
+  // sources carry the new ids.
+  "kimi-for-coding": "kimi-code-plan-cn",
+}
+
+/** The catalog id an official id resolves to: itself, or its alias when one is registered. */
+export function officialProviderCatalogID(providerID: string): string {
+  return OFFICIAL_PROVIDER_CATALOG_ALIASES[providerID as OfficialProviderID] ?? providerID
+}
+
 export type OfficialProviderID = (typeof OFFICIAL_PROVIDER_IDS)[number]
 
 export const OFFICIAL_PROVIDER_ID_SET = readonlySet(new Set<string>(OFFICIAL_PROVIDER_IDS))

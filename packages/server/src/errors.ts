@@ -1,3 +1,4 @@
+import { NonNegativeInt } from "@deepagent-code/core/schema"
 import { Schema } from "effect"
 
 export class InvalidRequestError extends Schema.TaggedErrorClass<InvalidRequestError>()(
@@ -21,6 +22,17 @@ export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()(
   {
     message: Schema.String,
     resource: Schema.optional(Schema.String),
+  },
+  { httpApiStatus: 409 },
+) {}
+
+export class StaleRevertEpochError extends Schema.TaggedErrorClass<StaleRevertEpochError>()(
+  "StaleRevertEpochError",
+  {
+    sessionID: Schema.String,
+    expected: NonNegativeInt,
+    actual: NonNegativeInt,
+    message: Schema.String,
   },
   { httpApiStatus: 409 },
 ) {}

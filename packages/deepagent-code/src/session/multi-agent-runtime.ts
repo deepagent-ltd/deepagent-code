@@ -14,6 +14,7 @@ import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { WorkspaceConcurrency } from "@deepagent-code/core/deepagent/workspace-concurrency"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { AgentExecution } from "@deepagent-code/core/deepagent/agent-execution"
+import { LockKeys } from "@deepagent-code/core/deepagent/lock-keys"
 import { FileLock } from "@deepagent-code/core/file-lock"
 import { Identifier } from "@deepagent-code/core/util/identifier"
 import type { SubagentTurnRunner, SubagentTurnResult } from "./goal-loop-wiring"
@@ -104,6 +105,13 @@ export interface EventV2AdmissionBridge {
     readonly request: EventDispatcher.DispatchRequest
     readonly scope: EventAdmissionWiring.AdmissionScope
   }) => Effect.Effect<void, unknown>
+  /** Registration-owned execution mode. An absent mode keeps the single-admission lane. */
+  readonly executionFor?: (eventType: string) => "single" | "dag" | undefined
+  /** Validates ingress and records a durable C5 receipt without prompting the event parent. */
+  readonly admitReceiptOnly?: (input: {
+    readonly request: EventDispatcher.DispatchRequest
+    readonly scope: EventAdmissionWiring.AdmissionScope
+  }) => Effect.Effect<void, unknown>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/MultiAgentRuntime") {}
@@ -123,11 +131,20 @@ export class EventV2AdmissionUnavailableError extends Error {
   }
 }
 
+/** A deferred DAG node keeps the bus delivery pending for a later durable re-drive. */
+export class EventDAGUnfinishedError extends Error {
+  readonly _tag = "MultiAgentRuntime.EventDAGUnfinishedError"
+  constructor(readonly eventID: DeepAgentEvent.ID) {
+    super(`event DAG ${eventID} has unfinished subtasks`)
+    this.name = "EventDAGUnfinishedError"
+  }
+}
+
 export interface LayerOptions {
   readonly runtimeFeatures?: RuntimeFeatureRegistry
-  // the one-turn runner (§C coordination library seam). v2w-j4 durable-only: production dispatch is
-  // V2-admission-only, so production wires NO runner — the legacy event turn runner is deleted. The
-  // §C coordination library (coordinate, deterministic tests) injects a runner; absent → fail closed.
+  /** Second execution lane, default OFF. OFF retains the existing admission-only dispatch. */
+  readonly dagCoordination?: boolean
+  // The one-turn runner for the DAG lane. Production injects the V2 runner; a missing runner fails closed.
   readonly runner?: SubagentTurnRunner
   // Deterministic partition seam. Production uses TaskPartitioner.partition with stable event IDs;
   // tests can inject a valid DAG to prove same-wave scheduling without duplicating scheduler logic.
@@ -185,7 +202,7 @@ export interface LayerOptions {
   // the durable execution table. Tests inject stable values to prove cross-runtime exclusion.
   readonly ownerID?: string
   readonly leaseMs?: number
-  // Production collaboration boundary. Called only after every DAG node is durably terminal and receives
+  // Production collaboration boundary. Called only after every DAG node completes successfully and receives
   // terminal leaf refs, so a serial fix -> test lineage becomes one PR while independent leaves stay separate.
   readonly onEventCompleted?: (input: {
     readonly event: DeepAgentEvent.Event
@@ -246,6 +263,7 @@ export const layerWith = (options: LayerOptions) =>
       const withExecutionLease = <A, E, R>(
         event: DeepAgentEvent.Event,
         record: AgentExecution.Record | undefined,
+        lockIDs: ReadonlyArray<string>,
         effect: Effect.Effect<A, E, R>,
       ): Effect.Effect<A, E, R> => {
         if (!execution || !record) return effect
@@ -259,8 +277,16 @@ export const layerWith = (options: LayerOptions) =>
             leaseMs,
           })
           .pipe(
-            Effect.flatMap((renewed) => (renewed ? Effect.void : Effect.die(new Error("execution_lease_lost")))),
-            Effect.repeat(Schedule.spaced(Duration.millis(Math.max(10, Math.floor(leaseMs / 3))))),
+            Effect.flatMap((renewed) => {
+              if (!renewed) return Effect.die(new Error("execution_lease_lost"))
+              if (fileLock && !lockIDs.every((id) => fileLock.renew(id))) return Effect.die(new Error("file_lock_lost"))
+              return Effect.void
+            }),
+            Effect.repeat(
+              Schedule.spaced(
+                Duration.millis(Math.max(10, Math.floor(Math.min(leaseMs, FileLock.AGENT_LOCK_TTL_MS) / 3))),
+              ),
+            ),
             Effect.flatMap(() => Effect.never),
           )
         return Effect.scoped(
@@ -415,6 +441,14 @@ export const layerWith = (options: LayerOptions) =>
                 readonly result: SubagentTurnResult
               }>
             > = []
+            const ready: Array<{
+              readonly subtask: TaskPartitioner.Subtask
+              readonly agent: AgentDescriptor
+              readonly capable: ReadonlyArray<AgentDescriptor>
+              readonly claim: ConflictArbiter.Claim
+              readonly executionRecord?: AgentExecution.Record
+              readonly dependencyRefs: ReadonlyArray<string>
+            }> = []
 
             for (const subtask of wave) {
               // §C2 DAG gate: every dependency must have COMPLETED this pass. A dep that was blocked or
@@ -696,8 +730,12 @@ export const layerWith = (options: LayerOptions) =>
                 : trustedSources == null
                   ? true
                   : SecurityGate.isTrustedSource(event.source, trustedSources)
-              const actorOk = yield* actorHasPermission(event, agent)
-              const runtimeOk = yield* runtimeAllowed(event, agent, subtask.capability)
+              const actorOk = yield* actorHasPermission(event, agent).pipe(
+                Effect.catchCause(() => Effect.succeed(false)),
+              )
+              const runtimeOk = yield* runtimeAllowed(event, agent, subtask.capability).pipe(
+                Effect.catchCause(() => Effect.succeed(false)),
+              )
               const security = SecurityGate.check({
                 eventSourceTrusted: sourceTrusted,
                 actorHasPermission: actorOk,
@@ -735,13 +773,57 @@ export const layerWith = (options: LayerOptions) =>
                 agentID: agent.id,
                 files: subtask.fileScope,
                 symbols,
-                priority: event.priority,
+                priority: options.dagCoordination ? (subtask.priority ?? event.priority) : event.priority,
+                ...(options.dagCoordination && subtask.diffSize != null ? { diffSize: subtask.diffSize } : {}),
                 origin:
-                  event.source === "im" || event.actorID != null
-                    ? "human"
-                    : event.source === "schedule"
-                      ? "schedule"
-                      : "system",
+                  options.dagCoordination && subtask.origin
+                    ? subtask.origin
+                    : event.source === "im" || event.actorID != null
+                      ? "human"
+                      : event.source === "schedule"
+                        ? "schedule"
+                        : "system",
+              }
+              ready.push({ subtask, agent, capable, claim, executionRecord, dependencyRefs })
+            }
+
+            // Gate first, then rank the eligible same-wave claims before acquiring any slot, lock or
+            // durable execution lease. Otherwise a later higher-ranked claim cannot displace a turn
+            // already admitted by partition order.
+            const ordered = options.dagCoordination
+              ? ready.toSorted((a, b) => ConflictArbiter.compare(a.claim, b.claim))
+              : ready
+            const tied = new Set<string>()
+            if (options.dagCoordination) {
+              for (const [index, candidate] of ordered.entries()) {
+                for (const other of ordered.slice(index + 1)) {
+                  if (!ConflictArbiter.conflicts(candidate.claim, other.claim)) continue
+                  if (ConflictArbiter.resolve([candidate.claim, other.claim]).type !== "needs_human") continue
+                  tied.add(candidate.subtask.id)
+                  tied.add(other.subtask.id)
+                }
+              }
+            }
+
+            for (const { subtask, agent, capable, claim, executionRecord, dependencyRefs } of ordered) {
+              const ambiguous = ordered.some(
+                (candidate) =>
+                  tied.has(candidate.subtask.id) &&
+                  candidate.subtask.id !== subtask.id &&
+                  ConflictArbiter.compare(candidate.claim, claim) <= 0 &&
+                  ConflictArbiter.conflicts(candidate.claim, claim),
+              )
+              if (tied.has(subtask.id) || ambiguous) {
+                outcomes.push({
+                  taskID: subtask.id,
+                  capability: subtask.capability,
+                  status: "deferred",
+                  agentID: agent.id,
+                  reason: tied.has(subtask.id) ? "conflict_needs_human" : "conflict_deferred",
+                })
+                retryable.add(subtask.id)
+                hasUnfinished = true
+                continue
               }
               // only claims NOT in this subtask's dependency chain are true concurrent conflicts.
               const deps = ancestorsOf(subtask.id)
@@ -800,6 +882,29 @@ export const layerWith = (options: LayerOptions) =>
                 continue
               }
 
+              const eventDir =
+                typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
+                  ? (event.payload as { directory: string }).directory
+                  : event.workspaceID && !event.workspaceID.startsWith("wrk")
+                    ? event.workspaceID
+                    : undefined
+              if (
+                options.dagCoordination &&
+                requiresWriteIsolation(subtask) &&
+                (!eventDir || !path.isAbsolute(eventDir))
+              ) {
+                outcomes.push({
+                  taskID: subtask.id,
+                  capability: subtask.capability,
+                  status: "deferred",
+                  agentID: agent.id,
+                  reason: "workspace_unresolvable",
+                })
+                retryable.add(subtask.id)
+                hasUnfinished = true
+                continue
+              }
+
               // §E2 concurrency cap — acquire a per-workspace execution slot. Over cap ⇒ DEFER (retryable
               // via the bus, not dropped), so a burst never runs more than the workspace's cap at once.
               const slot = concurrency ? yield* concurrency.acquire(event.workspaceID) : undefined
@@ -822,20 +927,16 @@ export const layerWith = (options: LayerOptions) =>
               // edit the same file. FAIL CLOSED: acquire === null ⇒ defer, never run.
               // §C3.2 physical isolation is enforced by the production runner. Write turns fail closed when
               // no worktree can be created; dependent turns receive the upstream durable ref below.
+              // Legacy coordinate() callers retain their rootless test behavior while the production
+              // DAG lane refuses write turns without an absolute filesystem root above.
+              const fileKeys =
+                claim.files.length === 0 && requiresWriteIsolation(subtask) && eventDir
+                  ? [LockKeys.fileLockKey(eventDir, ".")]
+                  : claim.files.map((file) => (eventDir ? LockKeys.fileLockKey(eventDir, file) : file))
               const acquiredLocks: string[] = []
               if (fileLock) {
-                // fileScope entries are repo-relative; resolve against the event's directory when it carries
-                // one (a NON-"wrk" workspaceID doubles as a directory), else lock on the raw scope string —
-                // lock keys only need to be CONSISTENT across subtasks of the same event, not real paths.
-                const eventDir =
-                  typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
-                    ? (event.payload as { directory: string }).directory
-                    : event.workspaceID && !event.workspaceID.startsWith("wrk")
-                      ? event.workspaceID
-                      : undefined
                 let contended = false
-                for (const file of subtask.fileScope) {
-                  const lockKey = eventDir ? path.resolve(eventDir, file) : file
+                for (const lockKey of fileKeys) {
                   const entry = fileLock.acquire(lockKey, "agent")
                   if (entry === null) {
                     contended = true
@@ -872,8 +973,8 @@ export const layerWith = (options: LayerOptions) =>
                     ownerID,
                     agentID: agent.id,
                     resources: [
-                      ...claim.files.map((file) => `file:${file}`),
-                      ...claim.symbols.map((symbol) => `symbol:${symbol}`),
+                      ...fileKeys.map(LockKeys.claimFileResource),
+                      ...claim.symbols.map((symbol) => LockKeys.claimSymbolResource(event.workspaceID, symbol)),
                     ],
                     leaseMs,
                   })
@@ -926,8 +1027,7 @@ export const layerWith = (options: LayerOptions) =>
 
               // §C4 starts only after deterministic admission. Effect.all below runs every admitted turn
               // in this DAG wave concurrently; the next wave waits for all of them to settle.
-              // v2w-j4 durable-only: production wires NO turn runner (dispatch never reaches §C — the
-              // V1 fallback is deleted); an absent runner fails the turn closed, never a silent no-op.
+              // Every admitted DAG turn uses the injected V2 runner; an absent runner fails closed.
               running.push(
                 emit(
                   event,
@@ -938,6 +1038,7 @@ export const layerWith = (options: LayerOptions) =>
                     withExecutionLease(
                       event,
                       executionLease,
+                      acquiredLocks,
                       runner
                         ? runner({
                             agentType: agent.name,
@@ -950,6 +1051,9 @@ export const layerWith = (options: LayerOptions) =>
                             ].join("\n\n"),
                             workspaceID: event.workspaceID,
                             parentSessionID: parentSessionIDFor(event.id),
+                            eventID: event.id,
+                            taskID: subtask.id,
+                            generation: executionLease?.generation ?? 0,
                             requiresWriteIsolation: requiresWriteIsolation(subtask),
                             ...(executionRecord?.continuationRef || dependencyRefs[0]
                               ? { baseRef: executionRecord?.continuationRef ?? dependencyRefs[0] }
@@ -993,7 +1097,9 @@ export const layerWith = (options: LayerOptions) =>
               )
             }
 
-            const settled = yield* Effect.all(running, { concurrency: 16 })
+            // WorkspaceConcurrency has admitted each runner against the workspace cap. This finite
+            // value starts every admitted turn without imposing a second, lower cap.
+            const settled = yield* Effect.all(running, { concurrency: Math.max(1, running.length) })
             for (const { subtask, agent, capable, lease, result } of settled) {
               if (result.ok) {
                 const artifacts = [
@@ -1053,7 +1159,8 @@ export const layerWith = (options: LayerOptions) =>
               }
 
               const reason = result.reason ?? "runner_failed"
-              const permanent = reason === "isolation_unavailable" || reason === "isolation_preservation_failed"
+              const permanent = reason === "isolation_unavailable" || reason === "isolation_preservation_failed" ||
+                reason === "admission_recovery_required"
               if (execution && lease) {
                 const alternate = permanent ? undefined : capable.find((candidate) => candidate.id !== agent.id)
                 if (alternate) {
@@ -1147,11 +1254,24 @@ export const layerWith = (options: LayerOptions) =>
             }
           }
 
-          if (!hasUnfinished && options.onEventCompleted) {
+          // A permanent block settles the event but does not validate its successful ancestors.
+          // Never send a partial DAG's write ref to PR collaboration as a review-ready change.
+          if (!hasUnfinished && p.subtasks.every((subtask) => completed.has(subtask.id)) && options.onEventCompleted) {
             const dependedOn = new Set(p.subtasks.flatMap((subtask) => subtask.dependsOn))
+            const ancestors = new Map<string, Set<string>>()
+            for (const subtask of p.subtasks)
+              ancestors.set(
+                subtask.id,
+                new Set(subtask.dependsOn.flatMap((id) => [id, ...(ancestors.get(id) ?? [])])),
+              )
+            const upstreamWrites = new Set(
+              p.subtasks.filter(requiresWriteIsolation).flatMap((subtask) => [...(ancestors.get(subtask.id) ?? [])]),
+            )
             const turns = p.subtasks.flatMap((subtask) => {
               const completedTurn = completedTurns.get(subtask.id)
-              if (dependedOn.has(subtask.id) || !completedTurn) return []
+              // A read-only review may follow the last write. Preserve that terminal write ref
+              // for PR admission even when the final DAG leaf itself has no continuation ref.
+              if ((dependedOn.has(subtask.id) && (!requiresWriteIsolation(subtask) || upstreamWrites.has(subtask.id))) || !completedTurn) return []
               return [{ task: subtask, ...completedTurn } satisfies CompletedTurn]
             })
             yield* options.onEventCompleted({ event, parentSessionID: parentSessionIDFor(event.id), turns })
@@ -1160,14 +1280,14 @@ export const layerWith = (options: LayerOptions) =>
           return { event, outcomes, hasUnfinished }
         })
 
-      // C5-04 — the V2 admission dispatch entry (BEFORE §C coordination per design §8.7). When the V2
-      // admission switch is ON and an `eventV2Admission` seam is provided, the event is admitted as
-      // durable bounded V2 session work instead of being partitioned into §C DAG subtasks. The runtime
-      // resolves the scope it can derive from the routed event (workspace/project/principal/session); the
-      // security namespace + the C5 mapping + the SessionV2.prompt adapter live in the injected bridge.
+      // The bridge validates every event and records C5 admission. The DAG lane writes an ingress receipt
+      // without prompting the parent; each child runner owns its own durable V2 prompt admission.
       // A resolution/admission refusal fails the dispatch so the dispatcher nacks → the retry pump
       // re-drives the event (never a silent drop), matching the V4 nack contract.
-      const dispatchV2 = (request: EventDispatcher.DispatchRequest): Effect.Effect<void, unknown> =>
+      const dispatchV2 = (
+        request: EventDispatcher.DispatchRequest,
+        receiptOnly = false,
+      ): Effect.Effect<void, unknown> =>
         Effect.gen(function* () {
           const bridge = options.eventV2Admission
           if (!bridge) return yield* Effect.void
@@ -1181,15 +1301,13 @@ export const layerWith = (options: LayerOptions) =>
             // The router authorized this trigger (it returned `dispatch` with targets) → trust `derived`.
             authorizedTrigger: true,
           }
-          return yield* bridge.admit({ request, scope })
+          if (!receiptOnly) return yield* bridge.admit({ request, scope })
+          if (!bridge.admitReceiptOnly) return yield* Effect.fail(new Error("event DAG receipt adapter is unavailable"))
+          return yield* bridge.admitReceiptOnly({ request, scope })
         })
 
-      // v2w-j4 durable-only: dispatch is V2-admission-ONLY. The hybrid fallback (switch off / seam
-      // absent → silently run the §C coordination through the V1 turn runner) is DELETED: the
-      // durable-only architecture forbids it. A disabled switch or an unwired seam is a TYPED refusal
-      // — dispatch fails, the dispatcher nacks, and the retry pump re-drives the event when the
-      // admission lane is live again. The event is never silently executed on the legacy path (and
-      // `coordinate` remains exposed for the §C coordination library's deterministic tests only).
+      // The V2 admission switch and bridge remain mandatory for either lane. Disabled or missing
+      // admission fails typed, so the dispatcher nacks instead of entering legacy orchestration.
       const dispatch: Interface["dispatch"] = (request) => {
         if (!isEventV2AdmissionEnabled(options.runtimeFeatures))
           return Effect.fail(
@@ -1205,7 +1323,14 @@ export const layerWith = (options: LayerOptions) =>
               `no eventV2Admission bridge is wired; refusing to dispatch event ${request.event.id} on the deleted legacy path`,
             ),
           )
-        return dispatchV2(request)
+        if (!options.dagCoordination || options.eventV2Admission.executionFor?.(request.event.type) !== "dag")
+          return dispatchV2(request)
+        if (!runner) return Effect.fail(new Error("event DAG turn runner is unavailable"))
+        return Effect.gen(function* () {
+          yield* dispatchV2(request, true)
+          const summary = yield* coordinate(request.event)
+          if (summary.hasUnfinished) return yield* Effect.fail(new EventDAGUnfinishedError(request.event.id))
+        })
       }
 
       return Service.of({ dispatch, coordinate })

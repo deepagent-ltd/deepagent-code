@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Context, Effect, Layer, Duration } from "effect"
 import { EventV2Bridge } from "../src/event-v2-bridge"
+import { V2OutboxWriter } from "../src/event/v2-outbox-writer"
 import { GlobalBus } from "../src/bus/global"
 import type { GlobalEvent } from "../src/bus/global"
 import { EventV2 } from "@deepagent-code/core/event"
@@ -63,6 +64,18 @@ const mirrorCount = (runtimeFeatures = admissionOff) =>
   }).pipe(Effect.scoped)
 
 describe("C5-12 event-v2-bridge flag-gated GlobalBus mirror removal", () => {
+  test("C5 registrations fail at graph construction when the EventV2 type has no durable sync definition", () => {
+    expect(() => EventV2Bridge.assertSynchronizedOutboxRegistry(V2OutboxWriter.EVENT_V2_OUTBOX_REGISTRY)).not.toThrow()
+    expect(() =>
+      EventV2Bridge.layerWithRegistry(
+        V2OutboxWriter.EVENT_V2_OUTBOX_REGISTRY.register({
+          ...V2OutboxWriter.EVENT_V2_OUTBOX_REGISTRY.lookup("session.created")!,
+          eventType: MirrorEvent.type,
+        }),
+      ),
+    ).toThrow("C5 outbox registrations require synchronized EventV2 definitions: test.mirror.event")
+  })
+
   test("flag OFF: the GlobalBus mirror emits the event (current runtime authoritative)", async () => {
     const count = await Effect.runPromise(mirrorCount(admissionOff))
     expect(count).toBeGreaterThan(0)

@@ -1,3 +1,4 @@
+import { eventLayer } from "../fixture/event-layer"
 import { Npm } from "@deepagent-code/core/npm"
 import { describe, expect } from "bun:test"
 import { Cause, Effect, Layer, Option } from "effect"
@@ -16,7 +17,7 @@ import { tmpRootAsync, tmpRootSharedAsync } from "../fixture/tmpdir"
 
 const fixtureProviderPath = fileURLToPath(fixtureProvider)
 const itWithAISDK = testEffect(
-  AISDK.layer.pipe(Layer.provideMerge(PluginV2.locationLayer.pipe(Layer.provide(EventV2.defaultLayer)))),
+  AISDK.layer.pipe(Layer.provideMerge(PluginV2.locationLayer.pipe(Layer.provide(eventLayer())))),
 )
 
 function npmEntrypointLayer(entrypoint: Option.Option<string>) {

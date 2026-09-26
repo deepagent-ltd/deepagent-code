@@ -24,6 +24,7 @@ const capture = () => {
         })
         return event
       }),
+    publishChecked: () => Effect.die("unused"),
     subscribe: () => Stream.empty,
     all: () => Stream.empty,
     aggregateEvents: () => Stream.empty,
@@ -32,7 +33,9 @@ const capture = () => {
     beforeCommit: () => Effect.void,
     project: () => Effect.void,
     replay: () => Effect.void,
+    replayChecked: () => Effect.die("unused"),
     replayAll: () => Effect.succeed(undefined),
+    replayAllChecked: () => Effect.die("unused"),
     snapshot: () => Effect.succeed(undefined),
     checkpoint: () => Effect.die("unused"),
     importSnapshot: () => Effect.die("unused"),

@@ -143,6 +143,62 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
+  it.effect("does not retain an in-memory claim when the Started event transaction rolls back after its hook", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionSchema.ID.make("ses_started_post_hook_rollback")
+      yield* seedSessions(database, [sessionID])
+      yield* database.db.run(sql`CREATE TRIGGER started_insert_abort BEFORE INSERT ON event
+        WHEN NEW.type = 'session.execution.started.1'
+        BEGIN SELECT RAISE(ABORT, 'started_insert_abort'); END`).pipe(Effect.orDie)
+
+      const store = yield* SessionStore.Service
+      let releaseCalls = 0
+      const observedStore = SessionStore.Service.of({
+        ...store,
+        release: (id, token) => Effect.sync(() => releaseCalls++).pipe(Effect.andThen(store.release(id, token))),
+      })
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => Effect.die("runner must not start"), observedStore)
+      const execution = Context.get(context, SessionExecution.Service)
+      expect((yield* execution.resume(sessionID).pipe(Effect.exit))._tag).toBe("Failure")
+      expect(yield* store.claimToken(sessionID)).toBeUndefined()
+      expect(yield* eventTypes(database, sessionID)).toEqual([])
+      expect(releaseCalls).toBe(0)
+    }),
+  )
+
+  it.effect("keeps a terminal-publication rollback fenced from a later automatic drain", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionSchema.ID.make("ses_terminal_post_hook_rollback")
+      yield* seedSessions(database, [sessionID])
+      yield* database.db.run(sql`CREATE TRIGGER succeeded_insert_abort BEFORE INSERT ON event
+        WHEN NEW.type = 'session.execution.succeeded.1'
+        BEGIN SELECT RAISE(ABORT, 'succeeded_insert_abort'); END`).pipe(Effect.orDie)
+
+      let runs = 0
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => Effect.sync(() => { runs++ }))
+      const execution = Context.get(context, SessionExecution.Service)
+      const store = yield* SessionStore.Service
+      yield* execution.resume(sessionID)
+      const token = yield* store.claimToken(sessionID)
+      expect(token).toBeNumber()
+      expect(runs).toBe(1)
+      expect(yield* eventTypes(database, sessionID)).toEqual([
+        EventV2.versionedType(SessionEvent.Execution.Started.type, 1),
+      ])
+
+      yield* database.db.run(sql`DROP TRIGGER succeeded_insert_abort`).pipe(Effect.orDie)
+      expect(yield* execution.resume(sessionID).pipe(Effect.flip)).toBeInstanceOf(SessionRunner.ExecutionRecoveryRequiredError)
+      expect(yield* store.claimToken(sessionID)).toBe(token)
+      expect(runs).toBe(1)
+    }),
+  )
+
   it.effect("refuses to drain a suspended Session until explicit recovery resolves its claim", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
@@ -797,10 +853,10 @@ function eventTypes(database: Database.Interface, sessionID: SessionSchema.ID) {
     )
 }
 
-function buildExecution(scope: Scope.Closeable, run: SessionRunner.Interface["run"]) {
+function buildExecution(scope: Scope.Closeable, run: SessionRunner.Interface["run"], providedStore?: SessionStore.Interface) {
   return Effect.gen(function* () {
     const events = yield* EventV2.Service
-    const store = yield* SessionStore.Service
+    const store = providedStore ?? (yield* SessionStore.Service)
     const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ run }))
     const locations = Layer.effect(
       LocationServiceMap,
@@ -850,7 +906,7 @@ function seedForeignClaimTurn(
       .run()
       .pipe(Effect.orDie)
     yield* database.db
-      .insert(SessionActivityTable)
+      .insert(SessionActivityTable) // fixture-exempt: seeds an active foreign-claim turn for crash recovery
       .values({
         activity_id: "activity_foreign_turn",
         session_id: sessionID,
@@ -935,7 +991,7 @@ function seedForeignClaimTurn(
     const ownerService = yield* SessionProviderOwner.Service
     yield* ownerService.register({ ownerToken: "owner_foreign_turn", leaseMs: 60_000 })
     yield* database.db
-      .insert(SessionProviderAttemptTable)
+      .insert(SessionProviderAttemptTable) // fixture-exempt: seeds a prepared foreign-owner attempt for crash recovery
       .values({
         attempt_id: "attempt_foreign_turn",
         session_id: sessionID,

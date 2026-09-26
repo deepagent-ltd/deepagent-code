@@ -995,7 +995,12 @@ export const layer = Layer.effect(
       yield* Effect.forEach(
         sessions.filter((sessionInfo) => !sessionInfo.parentID || !sessionIDs.has(sessionInfo.parentID)),
         (sessionInfo) =>
-          session.remove(sessionInfo.id).pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.void)),
+          session.remove(sessionInfo.id).pipe(
+            Effect.catchIf(NotFoundError.isInstance, () => Effect.void),
+            // Removing the Workspace while a historical Session still refers to it would leave
+            // broken placement. Keep the whole cleanup failed closed until audited adoption.
+            Effect.catchTag("Session.LegacySessionRequiresAdoption", (error) => Effect.die(error)),
+          ),
         { discard: true },
       )
 

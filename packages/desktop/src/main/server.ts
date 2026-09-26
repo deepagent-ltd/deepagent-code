@@ -62,6 +62,10 @@ export function preferAppEnv(dataRoot: string) {
     DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY: "true",
     DEEPAGENT_CODE_EXPERIMENTAL_FILEWATCHER: "true",
     DEEPAGENT_CODE_CLIENT: "desktop",
+    // Env-contract note (P2-4): Core honors DEEPAGENT_CODE_HOME as an exact data-root override
+    // ONLY alongside DEEPAGENT_CODE_TEST_HOME (global-path.ts override) — in production this
+    // value is inert and the sidecar resolves its storage roots from D-W1 platformDataHome.
+    // The XDG_* redirections below carry the production data-root effect instead.
     DEEPAGENT_CODE_HOME: dataRoot,
     XDG_DATA_HOME: dataRoot,
     XDG_CONFIG_HOME: dataRoot,

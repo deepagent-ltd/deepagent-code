@@ -88,6 +88,64 @@ describe("AgentExecution durable ownership", () => {
     }),
   )
 
+  it.effect("a broad repo root fences descendant files but disjoint files can run together", () =>
+    Effect.gen(function* () {
+      setNow(2_500)
+      const execution = yield* AgentExecution.Service
+      const broad = { ...key, taskID: "broad" }
+      const known = { ...key, taskID: "known" }
+      const other = { ...key, taskID: "other" }
+      const root = "file:/tmp/repo"
+      const first = yield* execution.claim({ ...broad, ownerID: "worker_a", agentID: "agent_a", resources: [root] })
+      expect(first.type).toBe("claimed")
+      if (first.type !== "claimed") return
+      expect(
+        (yield* execution.claim({
+          ...known,
+          ownerID: "worker_b",
+          agentID: "agent_b",
+          resources: ["file:/tmp/repo/src/a.ts"],
+        })).type,
+      ).toBe("resource_locked")
+      expect(
+        (yield* execution.claim({
+          ...other,
+          ownerID: "worker_b",
+          agentID: "agent_b",
+          resources: ["file:/tmp/repo-other/src/b.ts"],
+        })).type,
+      ).toBe("claimed")
+      expect(yield* execution.complete({ ...broad, ownerID: "worker_a", generation: first.record.generation })).toBe(
+        true,
+      )
+      const concrete = yield* execution.claim({
+        ...known,
+        ownerID: "worker_b",
+        agentID: "agent_b",
+        resources: ["file:/tmp/repo/src/a.ts"],
+      })
+      expect(concrete.type).toBe("claimed")
+      expect(
+        (yield* execution.claim({
+          ...key,
+          taskID: "another_broad",
+          ownerID: "worker_c",
+          agentID: "agent_a",
+          resources: [root],
+        })).type,
+      ).toBe("resource_locked")
+      expect(
+        (yield* execution.claim({
+          ...key,
+          taskID: "disjoint",
+          ownerID: "worker_c",
+          agentID: "agent_a",
+          resources: ["file:/tmp/repo/src/b.ts"],
+        })).type,
+      ).toBe("claimed")
+    }),
+  )
+
   it.effect("transfers a pending handoff only for its exact generation and target", () =>
     Effect.gen(function* () {
       setNow(3_000)

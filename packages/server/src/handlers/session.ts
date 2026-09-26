@@ -12,6 +12,7 @@ import {
   InvalidCursorError,
   InvalidRequestError,
   ServiceUnavailableError,
+  StaleRevertEpochError,
   SessionNotFoundError,
   UnknownError,
 } from "../errors"
@@ -33,6 +34,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 id: ctx.payload.id,
                 agent: ctx.payload.agent,
                 model: ctx.payload.model,
+                metadata: ctx.payload.metadata,
                 location: {
                   directory: location.directory,
                   workspaceID: location.workspaceID,
@@ -107,6 +109,23 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.get",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.get(ctx.params.sessionID).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+            ),
+          }
+        }),
+      )
+      .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
           return {
@@ -117,6 +136,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 prompt: ctx.payload.prompt,
                 delivery: ctx.payload.delivery,
                 resume: ctx.payload.resume,
+                revertEpoch: ctx.payload.revertEpoch,
               })
               .pipe(
                 Effect.catchTag("Session.NotFoundError", (error) =>
@@ -132,6 +152,38 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     new ConflictError({
                       message: `Prompt message ID conflicts with an existing durable record: ${error.messageID}`,
                       resource: error.messageID,
+                    }),
+                  ),
+                ),
+                Effect.catchTag("Session.LegacySessionRequiresAdoption", (error) =>
+                  Effect.fail(
+                    new ConflictError({
+                      message: `Historical session ${error.sessionID} requires explicit audited adoption`,
+                      resource: error.code,
+                    }),
+                  ),
+                ),
+                Effect.catchTags({
+                  "AgentV2.NotFoundError": (error) =>
+                    Effect.fail(new InvalidRequestError({
+                      message: `Unknown agent: ${error.id}`,
+                      kind: "unknown_agent",
+                      field: "prompt.agent",
+                    })),
+                  "Session.AgentNotSelectableError": (error) =>
+                    Effect.fail(new InvalidRequestError({
+                      message: `Agent is not selectable for a Session: ${error.id}`,
+                      kind: "agent_not_selectable",
+                      field: "prompt.agent",
+                    })),
+                }),
+                Effect.catchTag("SessionInput.StaleRevertEpoch", (error) =>
+                  Effect.fail(
+                    new StaleRevertEpochError({
+                      sessionID: error.sessionID,
+                      expected: error.expected,
+                      actual: error.actual,
+                      message: "stale_revert_epoch",
                     }),
                   ),
                 ),
@@ -153,6 +205,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   new SessionNotFoundError({
                     sessionID: error.sessionID,
                     message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+              Effect.catchTag("Session.LegacySessionRequiresAdoption", (error) =>
+                Effect.fail(
+                  new ConflictError({
+                    message: `Historical session ${error.sessionID} requires explicit audited adoption`,
+                    resource: error.code,
                   }),
                 ),
               ),

@@ -67,6 +67,53 @@ function load(dir: string, flags?: Parameters<typeof RuntimeFlags.layer>[0]) {
 }
 
 describe("plugin.loader.shared", () => {
+  it.live("reload disposes a removed file plugin and drops its tool hooks", () =>
+    withTmp(
+      async (dir) => {
+        const file = path.join(dir, "plugin.ts")
+        const disposed = path.join(dir, "disposed.txt")
+        await Bun.write(
+          file,
+          `export default async () => ({ tool: { sample: {} }, dispose: async () => { await Bun.write(${JSON.stringify(disposed)}, "yes") } })`,
+        )
+        await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ plugin: [pathToFileURL(file).href] }))
+        return { disposed }
+      },
+      (tmp) =>
+        Effect.gen(function* () {
+          const configFile = path.join(tmp.path, "deepagent-code.json")
+          const config = TestConfig.layer({
+            get: () =>
+              Effect.promise(async () => {
+                const value = (await Bun.file(configFile).json()) as { plugin: string[] }
+                return {
+                  plugin: value.plugin,
+                  plugin_origins: value.plugin.map((spec) => ({ spec, source: configFile, scope: "local" as const })),
+                }
+              }),
+            directories: () => Effect.succeed([tmp.path]),
+          })
+          yield* Effect.gen(function* () {
+            const plugin = yield* Plugin.Service
+            expect((yield* plugin.list()).some((hook) => !!hook.tool)).toBe(true)
+            yield* Effect.promise(() => Bun.write(configFile, JSON.stringify({ plugin: [] })))
+            yield* plugin.reload?.() ?? Effect.void
+            expect((yield* plugin.list()).some((hook) => !!hook.tool)).toBe(false)
+            expect(yield* Effect.promise(() => Bun.file(tmp.extra.disposed).text())).toBe("yes")
+          }).pipe(
+            Effect.provide(
+              Plugin.layer.pipe(
+                Layer.provide(EventV2Bridge.defaultLayer),
+                Layer.provide(RuntimeFlags.layer({ disableDefaultPlugins: true })),
+                Layer.provide(config),
+              ),
+            ),
+            provideInstance(tmp.path),
+          )
+        }),
+    ),
+  )
+
   it.live("loads a file:// plugin function export", () =>
     withTmp(
       async (dir) => {

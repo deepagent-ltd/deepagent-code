@@ -543,7 +543,7 @@ export class DurableKnowledgeStore {
       provenance: input.provenance,
       ...(input.idSlug ? { idSlug: input.idSlug } : {}),
     })
-    if (doc.status !== "provisional") return this.store.setStatus(doc.id, "provisional", documentRevision(doc))
+    if (doc.status !== "provisional") return this.store.markProvisionalEnvironmentFact(doc.id, documentRevision(doc))
     return doc
   }
 
@@ -567,7 +567,11 @@ export class DurableKnowledgeStore {
   markEnvironmentFactStale(id: string): boolean {
     const doc = this.store.get(id)
     if (!doc || doc.type !== "environment_fact") return false
-    this.store.setStatus(id, "quarantined", documentRevision(doc))
+    this.store.commitGovernance(id, documentRevision(doc), {
+      kind: "quarantine",
+      actor: { type: "system", id: "environment-fact-use-gate" },
+      reason: "environment fact connection failed",
+    })
     return true
   }
 

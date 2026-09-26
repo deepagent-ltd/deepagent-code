@@ -304,9 +304,8 @@ export const layerWith = (options?: LayerOptions) =>
                         eq(AgentPushLogTable.agent_id, request.agentID),
                         eq(AgentPushLogTable.group_id, request.groupID as IMID.GroupID),
                         gt(AgentPushLogTable.created_at, windowStart),
-                        // blocked pushes are stored as "blocked:<reason>" (never bare "blocked"), so
-                        // exclude the whole family — only delivered/digested pushes consume rate quota.
-                        sql`${AgentPushLogTable.decision} not like 'blocked:%'`,
+                        // External delivery failure audit rows are not additional pushes.
+                        sql`${AgentPushLogTable.decision} in ('deliver', 'digest')`,
                       ),
                     )
                     .get()
@@ -318,9 +317,15 @@ export const layerWith = (options?: LayerOptions) =>
                     pushesThisWindow: countRow?.n ?? 0,
                     // §E4 — the REAL resolved quiet-hours fact (override → configured window → false).
                     withinQuietHours,
-                    ...(factOverrides?.pushLimitPerHour != null ? { pushLimitPerHour: factOverrides.pushLimitPerHour } : {}),
-                    ...(factOverrides?.allowedLinkHosts != null ? { allowedLinkHosts: factOverrides.allowedLinkHosts } : {}),
-                    ...(factOverrides?.maxContentChars != null ? { maxContentChars: factOverrides.maxContentChars } : {}),
+                    ...(factOverrides?.pushLimitPerHour != null
+                      ? { pushLimitPerHour: factOverrides.pushLimitPerHour }
+                      : {}),
+                    ...(factOverrides?.allowedLinkHosts != null
+                      ? { allowedLinkHosts: factOverrides.allowedLinkHosts }
+                      : {}),
+                    ...(factOverrides?.maxContentChars != null
+                      ? { maxContentChars: factOverrides.maxContentChars }
+                      : {}),
                     // §E3 — the resolved workspace path ACL roots (undefined ⇒ leg stays off).
                     ...(allowedPathRoots != null ? { allowedPathRoots } : {}),
                   }
@@ -341,7 +346,10 @@ export const layerWith = (options?: LayerOptions) =>
                       .pipe(Effect.orDie)
                     messageID = msg.id
                     if (decision.promptInjectionSuspected)
-                      log.warn("agent push flagged for prompt-injection", { agentID: request.agentID, groupID: request.groupID })
+                      log.warn("agent push flagged for prompt-injection", {
+                        agentID: request.agentID,
+                        groupID: request.groupID,
+                      })
                   }
 
                   // §B2 audit + digest source: one row per attempt. `content` is retained for deliver +

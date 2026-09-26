@@ -3,7 +3,7 @@ import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { Deferred, Effect, Exit, Layer, Option } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
-import { Config } from "@/config/config"
+import { Config, normalizeLoadedConfig } from "@/config/config"
 import { ConfigManaged } from "@/config/managed"
 import { ConfigParse } from "../../src/config/parse"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
@@ -1034,6 +1034,136 @@ it.instance("updates config and writes to file", () =>
     const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "config.json"))
     expect(writtenConfig).toMatchObject({ model: "updated/model" })
   }),
+)
+
+it.instance(
+  "watches later config edits without replaying files present at subscription",
+  () =>
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory
+      const config = yield* Config.Service
+      const changed = Deferred.makeUnsafe<string>()
+      const seen: string[] = []
+      expect((yield* config.get()).model).toBe("before/model")
+      const stop = yield* config.watch!(() =>
+        Effect.gen(function* () {
+          const model = (yield* config.get()).model ?? ""
+          seen.push(model)
+          yield* Deferred.succeed(changed, model)
+        }),
+      )
+      yield* Effect.addFinalizer(() => Effect.sync(stop))
+
+      yield* Effect.sleep("100 millis")
+      expect(seen).toEqual([])
+      yield* FSUtil.use.writeFileString(
+        path.join(directory, "deepagent-code.json"),
+        JSON.stringify(schemaConfig({ model: "after/model" })),
+      )
+      expect(yield* Deferred.await(changed).pipe(Effect.timeout("5 seconds"))).toBe("after/model")
+    }),
+  { config: { model: "before/model" } },
+)
+
+it.live("watches config removal when the project directory is named plugin", () =>
+  Effect.gen(function* () {
+    const root = yield* tmpdirScoped()
+    const directory = path.join(root, "plugin")
+    yield* FSUtil.use.writeWithDirs(
+      path.join(directory, "deepagent-code.json"),
+      JSON.stringify(schemaConfig({ model: "before/model" })),
+    )
+    yield* withInstanceDir(
+      directory,
+      Effect.gen(function* () {
+        const config = yield* Config.Service
+        expect((yield* config.get()).model).toBe("before/model")
+        const changed = Deferred.makeUnsafe<string>()
+        const stop = yield* config.watch!(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(changed, (yield* config.get()).model ?? "")
+          }),
+        )
+        yield* Effect.addFinalizer(() => Effect.sync(stop))
+
+        yield* Effect.promise(() => fs.rm(path.join(directory, "deepagent-code.json")))
+        expect(yield* Deferred.await(changed).pipe(Effect.timeout("2 seconds"))).not.toBe("before/model")
+      }),
+    )
+  }),
+  20_000,
+)
+
+it.instance(
+  "watches a newly edited plugin file once after subscription",
+  () =>
+    Effect.gen(function* () {
+      const pluginDir = path.join((yield* TestInstance).directory, ".deepagent-code", "plugin")
+      const config = yield* Config.Service
+      yield* config.get()
+      const changed = Deferred.makeUnsafe<void>()
+      const added = Deferred.makeUnsafe<void>()
+      let calls = 0
+      const stop = yield* config.watch!(() =>
+        Effect.gen(function* () {
+          calls++
+          if (calls === 1) yield* Deferred.succeed(changed, undefined)
+          if (calls === 2) yield* Deferred.succeed(added, undefined)
+        }),
+      )
+      yield* Effect.addFinalizer(() => Effect.sync(stop))
+
+      yield* Effect.sleep("100 millis")
+      expect(calls).toBe(0)
+      yield* FSUtil.use.writeFileString(path.join(pluginDir, "demo.ts"), "export default { id: 'edited.plugin' }\n")
+      yield* Deferred.await(changed).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.sleep("100 millis")
+      expect(calls).toBe(1)
+      yield* FSUtil.use.writeFileString(path.join(pluginDir, "new.ts"), "export default { id: 'new.plugin' }\n")
+      yield* Deferred.await(added).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.sleep("100 millis")
+      expect(calls).toBe(2)
+    }),
+  {
+    init: (dir) =>
+      FSUtil.use.writeWithDirs(path.join(dir, ".deepagent-code", "plugin", "demo.ts"), "export default {}\n"),
+  },
+)
+
+it.instance(
+  "rearms plugin watching after its directory is deleted and rebuilt",
+  () =>
+    Effect.gen(function* () {
+      const pluginDir = path.join((yield* TestInstance).directory, ".deepagent-code", "plugin")
+      const config = yield* Config.Service
+      yield* config.get()
+      let signal = Deferred.makeUnsafe<void>()
+      let calls = 0
+      const stop = yield* config.watch!(() =>
+        Effect.gen(function* () {
+          calls++
+          yield* Deferred.succeed(signal, undefined)
+        }),
+      )
+      yield* Effect.addFinalizer(() => Effect.sync(stop))
+
+      yield* Effect.promise(() => fs.rm(pluginDir, { recursive: true }))
+      yield* Deferred.await(signal).pipe(Effect.timeout("5 seconds"))
+      signal = Deferred.makeUnsafe<void>()
+      yield* FSUtil.use.writeWithDirs(path.join(pluginDir, "rebuilt.ts"), "export default {}\n")
+      yield* Deferred.await(signal).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.sleep("200 millis")
+
+      const beforeEdit = calls
+      signal = Deferred.makeUnsafe<void>()
+      yield* FSUtil.use.writeFileString(path.join(pluginDir, "rebuilt.ts"), "export default { id: 'edited' }\n")
+      yield* Deferred.await(signal).pipe(Effect.timeout("5 seconds"))
+      expect(calls).toBe(beforeEdit + 1)
+    }),
+  {
+    init: (dir) =>
+      FSUtil.use.writeWithDirs(path.join(dir, ".deepagent-code", "plugin", "demo.ts"), "export default {}\n"),
+  },
 )
 
 it.instance("gets config directories", () =>
@@ -2200,4 +2330,21 @@ test("parseManagedPlist handles empty config", async () => {
     "test:mobileconfig",
   )
   expect(config.$schema).toBe("https://ai.deepagent.ltd/config.schema.json")
+})
+
+// D3 — `providers` is the Core V2 catalog key. The V1 loader must strip it (not reject the whole
+// file) so both loaders can read the same config; the V2 side keeps consuming it from the file.
+test("config loader strips the Core V2 providers key instead of failing the load", () => {
+  const file = {
+    $schema: "https://ai.deepagent.ltd/config.schema.json",
+    provider: { kimi: { name: "Kimi" } },
+    permission: {},
+    providers: { kimi: { name: "Kimi", models: {} } },
+  }
+  const config = ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(file, "test"), "test")
+
+  expect(config.provider).toBeDefined()
+  expect((config as Record<string, unknown>)["providers"]).toBeUndefined()
+  // The raw schema still rejects the key — only the loader strips it, so a typo'd key keeps failing.
+  expect(() => ConfigParse.schema(ConfigV1.Info, file, "test")).toThrow()
 })

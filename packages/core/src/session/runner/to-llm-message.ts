@@ -10,6 +10,32 @@ import {
 import { SessionMessage } from "../message"
 import type { FileAttachment } from "../prompt"
 
+// These entries are projected from durable prompt fields, never from generic message metadata.
+// Keep them in their own content part so the user's text remains byte-for-byte unchanged on
+// replay, while both provider families receive the same runtime-authored context tail.
+const attachmentTail = (message: SessionMessage.User): ContentPart[] => {
+  if (!message.agents?.length && !message.references?.length) return []
+  return [
+    {
+      type: "text",
+      text: `<runtime-attachments provenance="session-prompt" instruction="context-only">\n${JSON.stringify({
+        agents: message.agents?.map((agent) => ({ name: agent.name })) ?? [],
+        references:
+          message.references?.map((reference) => ({
+            name: reference.name,
+            kind: reference.kind,
+            ...(reference.uri === undefined ? {} : { uri: reference.uri }),
+            ...(reference.repository === undefined ? {} : { repository: reference.repository }),
+            ...(reference.branch === undefined ? {} : { branch: reference.branch }),
+            ...(reference.target === undefined ? {} : { target: reference.target }),
+            ...(reference.targetUri === undefined ? {} : { targetUri: reference.targetUri }),
+            ...(reference.problem === undefined ? {} : { problem: reference.problem }),
+          })) ?? [],
+      })}\n</runtime-attachments>`,
+    },
+  ]
+}
+
 const media = (file: FileAttachment): ContentPart => ({
   type: "media",
   mediaType: file.mime,
@@ -38,9 +64,8 @@ const toolCall = (tool: SessionMessage.AssistantTool, providerMetadata: Provider
 
 const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: ProviderMetadata | undefined) => {
   if (tool.state.status === "completed") {
-    // TODO: Materialize remote URL and managed file sources before provider-history lowering.
-    // ToolOutput.toResultValue intentionally rejects unmaterialized sources rather than
-    // guessing whether a provider can fetch them or leaking host-local resource paths.
+    // The runner rehydrates durable artifact refs before reaching this synchronous lowering.
+    // Unmaterialized historical sources still become a typed tool error instead of leaking a URL.
     const result =
       tool.provider?.executed === true && tool.state.result !== undefined
         ? tool.state.result
@@ -60,12 +85,11 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
       // The durable fold persists the settled ToolResultValue on failure, so reuse it: the
       // synthesized fallback (for failures settled without one, e.g. tool-error events) stringifies
       // to "[object Object]" when lowered into provider history.
-      result:
-        tool.state.result ?? {
-          error: tool.state.error,
-          content: tool.state.content,
-          structured: tool.state.structured,
-        },
+      result: tool.state.result ?? {
+        error: tool.state.error,
+        content: tool.state.content,
+        structured: tool.state.structured,
+      },
       resultType: "error",
       providerExecuted: tool.provider?.executed,
       providerMetadata,
@@ -106,12 +130,12 @@ function toLLMMessage(message: SessionMessage.Message, model: Model): Message[] 
         Message.make({
           id: message.id,
           role: "user",
-          content: [{ type: "text", text: message.text }, ...(message.files ?? []).map(media)],
-          metadata: {
-            ...message.metadata,
-            ...(message.agents?.length ? { agents: message.agents } : {}),
-            ...(message.references?.length ? { references: message.references } : {}),
-          },
+          content: [
+            { type: "text", text: message.text },
+            ...(message.files ?? []).map(media),
+            ...attachmentTail(message),
+          ],
+          metadata: message.metadata,
         }),
       ]
     case "synthetic":

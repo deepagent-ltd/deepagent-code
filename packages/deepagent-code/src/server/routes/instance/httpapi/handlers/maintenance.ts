@@ -874,10 +874,10 @@ function recoveryWriteOperation<A>(
  * open a short scope, while restore runs with the database fully closed and acquires the same
  * lifetime owner fence as the business runtime.
  */
-export function maintenanceOnlyHandlersFor(filename: string, state: BootstrapState) {
+export function maintenanceOnlyHandlersFor(filename: string, state: BootstrapState, onRestored?: () => void) {
   return HttpApiBuilder.group(MaintenanceApi, "maintenance", (handlers) =>
     Effect.gen(function* () {
-      const restartRequired = yield* Ref.make(false)
+      const reopenInProgress = yield* Ref.make(false)
       const getBootstrapStatus = () => Effect.fail(mapBootstrapStateToError(state, "database")!)
       const listBackups = Effect.fn("MaintenanceHttpApi.incidentBackupList")(function* (ctx: {
         query: { dir?: string }
@@ -946,12 +946,12 @@ export function maintenanceOnlyHandlersFor(filename: string, state: BootstrapSta
           )
         if (state.diagnostics.stableCode === "another_process_active")
           return yield* Effect.fail(mapRestoreModeToError(state, target))
-        if (yield* Ref.get(restartRequired))
+        if (yield* Ref.get(reopenInProgress))
           return yield* Effect.fail(
             makeApiError("restore_target_not_quarantined", {
               resource: target,
-              expected: "process restart after the committed restore",
-              actual: "restart_required",
+              expected: "fresh business runtime after the committed restore",
+              actual: "reopen_in_progress",
             }),
           )
         const manifest = yield* readManifestOrMissing(resolved)
@@ -980,13 +980,14 @@ export function maintenanceOnlyHandlersFor(filename: string, state: BootstrapSta
             }),
           ),
         )
-        yield* Ref.set(restartRequired, true)
+        yield* Ref.set(reopenInProgress, true)
+        yield* Effect.sync(() => onRestored?.())
         return {
           status: "restored" as const,
           inProgress: false,
           restoreId: outcome.restoreId,
           sourceFile: resolved,
-          message: `Restore succeeded; incident retained at ${outcome.quarantineDir}. Restart is required before business admission.`,
+          message: `Restore succeeded; incident retained at ${outcome.quarantineDir}. Business runtime is reopening.`,
         }
       })
       const evidenceCreate = (ctx: { payload: { session_id: string } }) =>

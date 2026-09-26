@@ -13,6 +13,7 @@ import { PostVerify } from "@deepagent-code/core/database/post-verify"
 import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { MdExport, type MdExportError } from "./md-export"
+import { withMaintenanceLock } from "./maintenance-lock"
 
 // W-02 M-2 (design §3.3) — the V1→V2 migration flow orchestrator. EXTERNAL by design: the
 // upgrade-run state machine and its storage-layer transition trigger stay untouched (a phase here
@@ -171,12 +172,12 @@ const writeJsonAtomic = (filePath: string, value: unknown) =>
   Effect.promise(async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     const tmp = `${filePath}.tmp-${Math.random().toString(36).slice(2)}`
-    await Bun.write(tmp, `${JSON.stringify(value, null, 2)}\n`)
+    await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`)
     await fs.rename(tmp, filePath)
   })
 
 export const readJournal = Effect.fn("MigrationOrchestrator.readJournal")(function* (journalPath: string) {
-  const text = yield* Effect.promise(() => Bun.file(journalPath).text()).pipe(
+  const text = yield* Effect.promise(() => fs.readFile(journalPath, "utf8")).pipe(
     Effect.catchCause(() => Effect.succeed(undefined)),
   )
   if (text === undefined) return undefined
@@ -357,12 +358,12 @@ const runArchivePhase = (input: RunInput, journal: Journal) =>
 
 // -- disk advisory (advisory list only — M-5 executes deletion) ---------------------------------------------
 
-const ResiduePatterns = [/\.bak$/i, /repro\.db$/i, /^\..*\.tmp-/] as const
+const ResiduePatterns = [/\.bak$/i, /^repro\.db$/i, /^\..*\.tmp-/] as const
+const ChannelDatabase = /^deepagent-code(?:-[a-zA-Z0-9._-]+)?\.db$/i
 
-/** Operational-residue classifier, shared with the M-4/M-5 governance modules. */
+/** Only explicit residue shapes are reclaimable; another channel or configured .db may be live. */
 export const isResidue = (name: string, dbPath: string) =>
-  ResiduePatterns.some((pattern) => pattern.test(name)) ||
-  (name.endsWith(".db") && path.resolve(path.dirname(dbPath), name) !== path.resolve(dbPath))
+  name !== path.basename(dbPath) && !ChannelDatabase.test(name) && ResiduePatterns.some((pattern) => pattern.test(name))
 
 /** Recursive file walk, shared with the M-4/M-5 governance modules. */
 export const walk = async (dir: string): Promise<string[]> => {
@@ -403,9 +404,8 @@ const computeDiskAdvisory = async (input: RunInput, orchestrationId: string): Pr
       note: "Incident quarantine copy. NEVER deleted (design §3.1 ruling / restore.ts).",
     })
   }
-  // Residue candidates live flat in the store directory (multi-channel DBs, manual .bak, repro
-  // DBs, orphaned tmp files). Listed as reclaimable; M-5 executes deletion only after checks +
-  // user confirmation.
+  // Explicit residue candidates live flat in the store directory (manual .bak, repro DBs,
+  // orphaned tmp files). Other .db files may belong to active channels or configured stores.
   for (const entry of await fs.readdir(dbDir, { withFileTypes: true }).catch(() => [])) {
     if (!entry.isFile() || !isResidue(entry.name, input.dbPath)) continue
     const file = path.join(dbDir, entry.name)
@@ -464,7 +464,11 @@ const phaseEffect = (phase: Phase, input: RunInput, journal: Journal) =>
               ? runArchivePhase(input, journal)
               : runDiskAdvisoryPhase(input, journal)
 
-export const run = Effect.fn("MigrationOrchestrator.run")(function* (input: RunInput) {
+export const run = Effect.fn("MigrationOrchestrator.run")((input: RunInput) =>
+  withMaintenanceLock(input.backupDir, runUnlocked(input)),
+)
+
+const runUnlocked = Effect.fn("MigrationOrchestrator.runUnlocked")(function* (input: RunInput) {
   const journalPath = journalPathFor(input.backupDir)
   const previous = yield* readJournal(journalPath)
   // Resume an interrupted/failed orchestration; a completed one starts a fresh chain (the archive

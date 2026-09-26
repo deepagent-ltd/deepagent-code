@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import type { ContextItem, Prompt } from "@/context/prompt"
+import { toV2Prompt } from "@deepagent-code/sdk/client"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 
@@ -33,13 +34,14 @@ const sentPromptAsync: Array<{
   directory: string
   metadata?: unknown
   text?: string
-  parts?: Array<{ id?: string; type: string; text?: string }>
+  parts?: unknown[]
   messageID?: string
   intentID?: string
   intentSource?: string
   intentVariant?: string
 }> = []
 const promptPrepareEvents: string[] = []
+const toastCalls: Array<{ variant?: string; title?: string; description?: string }> = []
 const promptPrepareProgress: string[] = []
 
 let params: { id?: string } = {}
@@ -74,30 +76,31 @@ const clientFor = (directory: string) => {
         return { data: undefined }
       },
       prompt: async () => ({ data: undefined }),
-      promptAsync: async (payload?: {
-        metadata?: unknown
-        parts?: Array<{ type: string; text?: string }>
-        messageID?: string
-        intentID?: string
-        intentSource?: string
-        intentVariant?: string
+      promptAsync: async () => { throw new Error("legacy prompt path") },
+      command: async () => ({ data: undefined }),
+      abort: async () => ({ data: undefined }),
+    },
+    v2: { session: {
+      prompt: async (payload: {
+        id?: string
+        prompt: { text: string; metadata?: unknown; files?: unknown[]; agents?: unknown[]; intent?: { id?: string; source?: string; variant?: string } }
       }) => {
         const sent = {
           directory,
-          metadata: payload?.metadata,
-          text: payload?.parts?.find((part) => part.type === "text")?.text,
-          parts: payload?.parts,
-          messageID: payload?.messageID,
-          intentID: payload?.intentID,
-          intentSource: payload?.intentSource,
-          intentVariant: payload?.intentVariant,
+          metadata: payload.prompt.metadata,
+          text: payload.prompt.text,
+          parts: [{ type: "text", text: payload.prompt.text }, ...(payload.prompt.files ?? []), ...(payload.prompt.agents ?? [])],
+          messageID: payload.id,
+          intentID: payload.prompt.intent?.id,
+          intentSource: payload.prompt.intent?.source,
+          intentVariant: payload.prompt.intent?.variant,
         }
         sentPromptAsync.push(sent)
         if (
-          (sent.text === "receipt lost" || sent.text === "Edited retry goal") &&
-          !rejectedAdmissionReceipts.has(sent.text)
+          (sent.text?.includes("receipt lost") || sent.text?.includes("Edited retry goal")) &&
+          !rejectedAdmissionReceipts.has(sent.text ?? "")
         ) {
-          rejectedAdmissionReceipts.add(sent.text)
+          rejectedAdmissionReceipts.add(sent.text ?? "")
           throw new Error("connection closed after durable admission")
         }
         if (sent.text === "prompt waits after admission") {
@@ -105,11 +108,9 @@ const clientFor = (directory: string) => {
             releaseDelayedPrompt = resolve
           })
         }
-        return { data: { messageID: "msg_server_admitted", delivery: "steer" } }
+        return { data: { data: { id: "msg_server_admitted", delivery: "steer" } } }
       },
-      command: async () => ({ data: undefined }),
-      abort: async () => ({ data: undefined }),
-    },
+    } },
     client: {
       request: async (payload: {
         url?: string
@@ -139,6 +140,41 @@ const clientFor = (directory: string) => {
               status: 400,
             },
           })
+        }
+        if (text === "prepare degrades") {
+          const degradedResult = {
+            prompt_draft_id: "",
+            context_plan_id: "",
+            state: "general_ready",
+            mode: "intelligence",
+            route: "general",
+            goal: text,
+            preview: text,
+            intent_id: payload.body?.intent_id,
+            degraded: true,
+          }
+          return {
+            data: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(
+                  new TextEncoder().encode(`data: ${JSON.stringify({ type: "result", result: degradedResult })}\n\n`),
+                )
+                controller.close()
+              },
+            }),
+          }
+        }
+        if (text === "prepare stalls") {
+          return {
+            data: new ReadableStream<Uint8Array>({
+              start(controller) {
+                // Emit one progress delta, then never the terminal event and never close:
+                // the exact hung-stream shape the D1 timeout must recover from.
+                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: "progress", preview: "Partial" })}\n\n`))
+                payload.signal?.addEventListener("abort", () => controller.close(), { once: true })
+              },
+            }),
+          }
         }
         if (text === "prepare waits") {
           return {
@@ -196,6 +232,7 @@ beforeAll(async () => {
   }))
 
   mock.module("@deepagent-code/sdk/client", () => ({
+    toV2Prompt,
     createDeepAgentCodeClient: (input: { directory: string }) => {
       createdClients.push(input.directory)
       return clientFor(input.directory)
@@ -204,7 +241,10 @@ beforeAll(async () => {
 
   mock.module("@deepagent-code/ui/toast", () => ({
     Toast: { Region: () => null },
-    showToast: () => 0,
+    showToast: (options: { variant?: string; title?: string; description?: string }) => {
+      toastCalls.push(options)
+      return 0
+    },
   }))
 
   mock.module("@deepagent-code/core/util/encode", () => ({
@@ -352,6 +392,7 @@ beforeAll(async () => {
 
   const mod = await import("./submit")
   createPromptSubmit = mod.createPromptSubmit
+  mod.setPrepareStreamIdleTimeoutMs(200)
 })
 
 beforeEach(() => {
@@ -369,6 +410,7 @@ beforeEach(() => {
   preparedIntents.length = 0
   sentPromptAsync.length = 0
   promptPrepareEvents.length = 0
+  toastCalls.length = 0
   promptPrepareProgress.length = 0
   promptContextItems.length = 0
   promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
@@ -703,6 +745,117 @@ describe("prompt submit worktree selection", () => {
       },
     })
     promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
+  })
+
+  // D1: the W1-3 degrade must also be VISIBLE — a toast accompanies the direct send.
+  test("shows a degrade toast when intelligence prompt preparation fails", async () => {
+    params = { id: "session-1" }
+    promptMode = "intelligence"
+    promptValue[0] = { type: "text", content: "prepare fails", start: 0, end: 13 }
+
+    const submit = createPromptSubmit({
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+    await flushAsyncSubmit()
+
+    expect(sentPromptAsync[0]?.text).toBe("prepare fails")
+    expect(toastCalls.length).toBe(1)
+    expect(toastCalls[0]?.title).toContain("Intelligence unavailable")
+  })
+
+  // D1: the server's own fail-soft degrade arrives as a NORMAL result event (route:general +
+  // degraded:true) — the catch path never fires, so the toast must key off the flag.
+  test("shows a degrade toast when the server marks the result as degraded", async () => {
+    params = { id: "session-1" }
+    promptMode = "intelligence"
+    promptValue[0] = { type: "text", content: "prepare degrades", start: 0, end: 16 }
+
+    const submit = createPromptSubmit({
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+    await flushAsyncSubmit()
+
+    expect(sentPromptAsync[0]?.text).toBe("prepare degrades")
+    expect(sentPromptAsync[0]?.metadata).toEqual({
+      deepagent: {
+        agent_mode_override: "general",
+        prompt_pipeline: {
+          mode: "direct_override",
+        },
+      },
+    })
+    expect(toastCalls.length).toBe(1)
+    expect(toastCalls[0]?.title).toContain("Intelligence unavailable")
+  })
+
+  // D1: a prepare stream that never emits its terminal event (hung refinement / dropped body)
+  // must time out and degrade to direct instead of locking the composer forever.
+  test("times out a stalled prepare stream and degrades to direct", async () => {
+    params = { id: "session-1" }
+    promptMode = "intelligence"
+    promptValue[0] = { type: "text", content: "prepare stalls", start: 0, end: 14 }
+
+    const submit = createPromptSubmit({
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+    // The stall is recovered by the 200ms idle deadline (shrunk in beforeAll), so wait past it.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    await flushAsyncSubmit()
+
+    expect(sentPromptAsync[0]?.text).toBe("prepare stalls")
+    expect(sentPromptAsync[0]?.metadata).toEqual({
+      deepagent: {
+        agent_mode_override: "general",
+        prompt_pipeline: {
+          mode: "direct_override",
+        },
+      },
+    })
   })
 
   test("stops intelligence prompt preparation without submitting", async () => {

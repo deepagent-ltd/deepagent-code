@@ -63,6 +63,7 @@ import {
   MessageTable,
   PartTable,
   SessionMessageTable,
+  SessionTable,
   SessionPromptEpochMessageTable,
   TaskRunEventTable,
   TaskRunTable,
@@ -447,7 +448,7 @@ function makePrompt(input?: PromptLayerOptions) {
     Layer.provideMerge(SessionPromptV2.layer),
     Layer.provide(input?.sessionV2 ?? SessionV2.defaultLayer),
     Layer.provide(testInstanceStoreLayer),
-    Layer.provide(SessionRevert.defaultLayer),
+    Layer.provideMerge(SessionRevert.defaultLayer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(Reference.defaultLayer),
     Layer.provide(summary),
@@ -882,6 +883,8 @@ const v2OwnerStubLayer = Layer.merge(
       list: () => Effect.succeed([]),
       create: () => Effect.die("v2 owner stub: create unused"),
       get: () => Effect.die("v2 owner stub: get unused"),
+      requireWritable: () => Effect.die("v2 owner stub: requireWritable unused"),
+      update: () => Effect.die("v2 owner stub: update unused"),
       messages: () => Effect.succeed([]),
       message: () => Effect.succeed(undefined),
       context: () =>
@@ -903,6 +906,7 @@ const v2OwnerStubLayer = Layer.merge(
       switchAgent: () => Effect.die("v2 owner stub: switchAgent unused"),
       switchModel: () => Effect.die("v2 owner stub: switchModel unused"),
       setPermissions: () => Effect.die("v2 owner stub: setPermissions unused"),
+      setArchived: () => Effect.die("v2 owner stub: setArchived unused"),
       prompt: () => Effect.die("v2 owner stub: prompt unused"),
       shell: () => Effect.die("v2 owner stub: shell unused"),
       skill: () => Effect.die("v2 owner stub: skill unused"),
@@ -1037,6 +1041,8 @@ const r0V2Stub = SessionV2.Service.of({
       Effect.as({ id: input.id, directory: "/tmp/ws1", slug: "r0", agent: "build" } as unknown as SessionV2.Info),
     ),
   get: () => Effect.fail(new Error("stub: not adopted") as unknown as SessionV2.NotFoundError),
+  requireWritable: () => Effect.succeed({ id: SessionV2.ID.make("ses_r0_stub") } as SessionV2.Info),
+  update: () => Effect.die("r0 stub: update unused"),
   messages: () =>
     Effect.succeed([
       new SessionMessage.User({
@@ -1077,6 +1083,7 @@ const r0V2Stub = SessionV2.Service.of({
       r0V2SwitchModelCalls.push({ id: input.model.id, providerID: input.model.providerID })
     }),
   setPermissions: () => Effect.die("r0 stub: setPermissions unused"),
+  setArchived: () => Effect.die("r0 stub: setArchived unused"),
   prompt: (input) =>
     Effect.sync(() => {
       r0V2PromptCalls.push(input.sessionID)
@@ -1085,10 +1092,16 @@ const r0V2Stub = SessionV2.Service.of({
       // chat path passes — core SessionV2.prompt defaults it to "steer") is pinned at the call shape.
       r0V2PromptDeliveries.push(input.delivery)
     }).pipe(
-      Effect.as({
-        id: SessionMessage.ID.make("msg_r0_admitted"),
-        delivery: "steer",
-      } as unknown as SessionInput.Admitted),
+      Effect.as(
+        new SessionInput.Admitted({
+          admittedSeq: 1,
+          id: SessionMessage.ID.make("msg_r0_admitted"),
+          sessionID: input.sessionID,
+          prompt: input.prompt,
+          delivery: input.delivery ?? "steer",
+          timeCreated: DateTime.makeUnsafe(1_000_000),
+        }),
+      ),
     ),
   shell: () => Effect.die("r0 stub: shell unused"),
   skill: () => Effect.die("r0 stub: skill unused"),
@@ -1178,7 +1191,6 @@ const mintR0Authorization = (db: Database.Interface["db"]): Effect.Effect<void, 
       })
       .run()
   })
-
 
 // Loop semantics
 
@@ -2229,7 +2241,7 @@ v2Real.instance("static loop consumes queued replies across turns", () =>
     expect(first.info.role).toBe("assistant")
     expect(first.parts.some((part) => part.type === "text" && part.text === "world one")).toBe(true)
 
-    yield* provideR0OwnerRefs(
+    const secondUser = yield* provideR0OwnerRefs(
       prompt.prompt({
         sessionID: session.id,
         agent: "build",
@@ -2242,6 +2254,7 @@ v2Real.instance("static loop consumes queued replies across turns", () =>
 
     const second = yield* provideR0OwnerRefs(prompt.loop({ sessionID: session.id }))
     expect(second.info.role).toBe("assistant")
+    if (second.info.role === "assistant") expect(second.info.parentID).toBe(secondUser.info.id)
     expect(second.parts.some((part) => part.type === "text" && part.text === "world two")).toBe(true)
 
     expect(yield* llm.hits).toHaveLength(2)
@@ -3309,6 +3322,68 @@ v2Real.instance(
   15_000,
 )
 
+v2Real.instance("promptAsync uses the V2 Session's configured agent system prompt", () =>
+  Effect.gen(function* () {
+    const marker = `agent-system-${crypto.randomUUID()}`
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      agent: { "live-test": { mode: "primary", prompt: `Follow the user's request. ${marker}` } },
+    }))
+    const prompt = yield* SessionPromptV2.Service
+    const sessions = yield* Session.Service
+    const { db } = yield* Database.Service
+    yield* mintR0Authorization(db)
+    const chat = yield* sessions.create({ title: "Configured V2 agent", agent: "live-test" })
+    yield* llm.text("ack")
+    yield* provideR0OwnerRefs(prompt.promptAsync({
+      sessionID: chat.id,
+      agent: "live-test",
+      model: ref,
+      parts: [{ type: "text", text: "hello" }],
+    }))
+    yield* llm.wait(1)
+    expect(JSON.stringify((yield* llm.inputs)[0])).toContain(marker)
+  }),
+  30_000,
+)
+
+v2Real.instance("reverted V2 turns are absent from the next provider request", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPromptV2.Service
+    const sessions = yield* Session.Service
+    const revert = yield* SessionRevert.Service
+    const { db } = yield* Database.Service
+    yield* mintR0Authorization(db)
+    const chat = yield* sessions.create({ title: "V2 revert context" })
+    const oldMessageID = MessageID.ascending()
+
+    yield* llm.text("OLD_BRANCH")
+    yield* provideR0OwnerRefs(prompt.prompt({
+      sessionID: chat.id,
+      messageID: oldMessageID,
+      agent: "build",
+      model: ref,
+      parts: [{ type: "text", text: "old request" }],
+    }))
+    yield* revert.revert({ sessionID: chat.id, messageID: oldMessageID })
+    yield* revert.cleanup(yield* sessions.get(chat.id), yield* sessions.mutationEpoch(chat.id))
+
+    yield* llm.text("NEW_BRANCH")
+    yield* provideR0OwnerRefs(prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      parts: [{ type: "text", text: "new request" }],
+    }))
+    const requests = yield* llm.inputs
+    expect(requests).toHaveLength(2)
+    expect(JSON.stringify(requests[1]?.messages)).not.toContain("OLD_BRANCH")
+    expect(JSON.stringify(requests[1]?.messages)).not.toContain("old request")
+  }),
+  30_000,
+)
+
 noLLMServer.instance("assertNotBusy succeeds when idle", () =>
   Effect.gen(function* () {
     const run = yield* SessionRunState.Service
@@ -3706,6 +3781,21 @@ v2Real.instance(
           if (tool?.state.status === "running") return true
         }),
         "timed out waiting for the bash tool part to enter running state",
+      )
+      // A running tool part can be published before the provider stream's final chunk is
+      // durably settled. This case cancels tool execution after the provider turn, so wait
+      // for the receipt instead of racing cancellation with stream finalization.
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const receipt = yield* db
+            .select({ state: V2ProviderTurnReceiptTable.state })
+            .from(V2ProviderTurnReceiptTable)
+            .where(eq(V2ProviderTurnReceiptTable.session_id, chat.id))
+            .get()
+            .pipe(Effect.orDie)
+          if (receipt?.state === "settled") return true
+        }),
+        "timed out waiting for the provider turn to settle before cancelling bash",
       )
       yield* prompt.cancel(chat.id)
 
@@ -4259,27 +4349,31 @@ v2Real.instance(
           parts: [{ type: "text", text: "Cancel this run" }],
         }),
       ).pipe(Effect.forkChild)
-      yield* llm.wait(1)
+      yield* awaitWithTimeout(llm.wait(1), "timed out waiting for first durable provider dispatch", "20 seconds")
 
       // V2 successor of the legacy steer buffer: a noReply admission while the drain hangs lands as a
       // durable pending session_input row (chat-path delivery defaults to "steer"); it is promoted
       // only by a later drain, so the in-flight provider turn stays the only dispatch.
       const steerID = MessageID.ascending()
-      yield* provideR0OwnerRefs(
-        prompt.prompt({
-          sessionID: session.id,
-          agent: "build",
-          noReply: true,
-          messageID: steerID,
-          parts: [{ type: "text", text: "This steer belongs to the canceled run" }],
-        }),
+      yield* awaitWithTimeout(
+        provideR0OwnerRefs(
+          prompt.prompt({
+            sessionID: session.id,
+            agent: "build",
+            noReply: true,
+            messageID: steerID,
+            parts: [{ type: "text", text: "This steer belongs to the canceled run" }],
+          }),
+        ),
+        "timed out admitting attached steer",
+        "10 seconds",
       )
       const admitted = yield* SessionInput.find(db, SessionMessage.ID.make(steerID))
       expect(admitted?.delivery).toBe("steer")
       expect(admitted?.promotedSeq).toBeUndefined()
       expect(yield* llm.calls).toBe(1)
 
-      yield* prompt.cancel(session.id)
+      yield* awaitWithTimeout(prompt.cancel(session.id), "timed out cancelling durable run", "10 seconds")
       const exit = yield* awaitWithTimeout(Fiber.await(running), "timed out joining canceled durable run", "5 seconds")
       // V2-only: cancel interrupts the process-local ownership chain; the joined prompt caller exits
       // with a failure, and no legacy activity/run/steer/intent rows exist to terminalize. The unwind
@@ -4300,12 +4394,16 @@ v2Real.instance(
       expect(yield* db.select().from(SessionIntentTable).all().pipe(Effect.orDie)).toHaveLength(0)
 
       yield* llm.text("next prompt completed")
-      const next = yield* provideR0OwnerRefs(
-        prompt.prompt({
-          sessionID: session.id,
-          agent: "build",
-          parts: [{ type: "text", text: "Start a new run" }],
-        }),
+      const next = yield* awaitWithTimeout(
+        provideR0OwnerRefs(
+          prompt.prompt({
+            sessionID: session.id,
+            agent: "build",
+            parts: [{ type: "text", text: "Start a new run" }],
+          }),
+        ),
+        "timed out completing next durable prompt",
+        "20 seconds",
       )
       expect(next.parts.some((part) => part.type === "text" && part.text === "next prompt completed")).toBeTrue()
       // The post-cancel drain promoted the pending steer and folded it into the next provider input.
@@ -4314,7 +4412,8 @@ v2Real.instance(
       const inputs = yield* llm.inputs
       expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("This steer belongs to the canceled run")
     }),
-  15_000,
+  // Let the stage-specific deadlines report which operation stalled under a loaded full-package run.
+  75_000,
 )
 
 // Agent variant
@@ -4699,9 +4798,7 @@ v2Real.instance(
       const draftID = prepareDraft(dir, session.id, "intelligence", "Design the prompt confirmation flow")
       expect(draftID).toMatch(/^prompt_draft:/)
 
-      // V2-only: the production submit path is promptAsync (app composer -> HTTP promptAsync); only
-      // its V2 branch consumes the confirmed draft (W0-3b) — prompt.prompt under the profile admits
-      // the raw parts unchanged. The drain is forked by promptAsync, so queue the turn reply first.
+      // The drain is forked by promptAsync, so queue the turn reply first.
       yield* llm.text("draft submitted")
       const receipt = yield* provideR0OwnerRefs(
         prompt.promptAsync({
@@ -5040,8 +5137,11 @@ v2Qualified.instance(
 
       expect(r0V2PromptCalls).toContain(chat.id)
       expect(r0V2ResumeCalls).toContain(chat.id)
-      expect(r0V2AdoptCalls).toContain(chat.id)
-      expect(r0V2AdoptPermissions).toContainEqual([{ action: "bash", resource: "*", effect: "deny" }])
+      expect(r0V2AdoptCalls).toEqual([])
+      expect(r0V2AdoptPermissions).toEqual([])
+      const createdRow = yield* db.select().from(SessionTable).where(eq(SessionTable.id, chat.id)).get()
+      expect(createdRow?.v2_authority).toBe(true)
+      expect(createdRow?.permission).toEqual([{ action: "bash", resource: "*", effect: "deny" }])
       expect(result.info.role).toBe("assistant")
       expect(result.parts.some((part) => part.type === "text" && part.text === "v2 owner reply")).toBe(true)
       // Mirror: V1 reader sees the user + assistant rows (V2 authority projected to the limited reader).
@@ -5056,6 +5156,39 @@ v2Qualified.instance(
       expect(intents).toBe(0)
       expect(steers).toBe(0)
       expect(leases).toBe(0)
+    }),
+  30_000,
+)
+
+v2Real.instance(
+  "confirmed prompt draft also replaces text and preserves metadata through prompt()",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const prompt = yield* SessionPromptV2.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
+      const session = yield* sessions.create({})
+      const draftID = prepareDraft(dir, session.id, "intelligence", "Original confirmed goal")
+
+      const submitted = yield* provideR0OwnerRefs(
+        prompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          noReply: true,
+          metadata: {
+            deepagent: { prompt_pipeline: { mode: "intelligence", confirmedDraftID: draftID, editedGoal: "Edited confirmed goal" } },
+          },
+          parts: [{ type: "text", text: "ignored raw prompt" }],
+        }),
+      )
+      expect(submitted.info.role).toBe("user")
+      expect(submitted.parts.find((part) => part.type === "text")?.text).toBe("Edited confirmed goal")
+      if (submitted.info.role === "user") {
+        expect(submitted.info.metadata?.deepagent?.prompt_pipeline?.confirmed).toBe(true)
+        expect(submitted.info.metadata?.deepagent?.prompt_pipeline?.prompt_draft_id).toBe(draftID)
+      }
     }),
   30_000,
 )
@@ -5400,26 +5533,28 @@ const shellBlockKey = (chat: { id: string }, payload: string) =>
         const payload = `printf side-effect >> ${path.join(directory, "count-intent.txt")}; printf ran`
         const marker = path.join(directory, "crash-after-intent.json")
 
-        yield* withCommandEffectCrashPoint(
-          { directory, marker, point: "after_intent_insert" },
-          () =>
-            Effect.gen(function* () {
-              const running = yield* provideR0OwnerRefs(
-                prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
-              ).pipe(Effect.forkChild)
-              yield* pollWithTimeout(
-                Effect.promise(() => Bun.file(marker).exists().then((exists) => (exists ? true : undefined))),
-                "command never reached the after-intent crash point",
-                "10 seconds",
-              )
-              // The ordering oracle: the durable intent row EXISTS while the OS effect has
-              // NOT run yet — intent-first, not execute-first.
-              const row = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
-              expect(row?.status).toBe("pending")
-              expect(row?.attempt).toBe(1)
-              expect(yield* readCountFile(path.join(directory, "count-intent.txt"))).toBe("")
-              yield* Fiber.interrupt(running)
-            }),
+        yield* withCommandEffectCrashPoint({ directory, marker, point: "after_intent_insert" }, () =>
+          Effect.gen(function* () {
+            const running = yield* provideR0OwnerRefs(
+              prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
+            ).pipe(Effect.forkChild)
+            yield* pollWithTimeout(
+              Effect.promise(() =>
+                Bun.file(marker)
+                  .exists()
+                  .then((exists) => (exists ? true : undefined)),
+              ),
+              "command never reached the after-intent crash point",
+              "10 seconds",
+            )
+            // The ordering oracle: the durable intent row EXISTS while the OS effect has
+            // NOT run yet — intent-first, not execute-first.
+            const row = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
+            expect(row?.status).toBe("pending")
+            expect(row?.attempt).toBe(1)
+            expect(yield* readCountFile(path.join(directory, "count-intent.txt"))).toBe("")
+            yield* Fiber.interrupt(running)
+          }),
         )
 
         // The crashed attempt left an unsettled intent: the retry must refuse re-execution
@@ -5457,7 +5592,6 @@ const shellBlockKey = (chat: { id: string }, payload: string) =>
     ),
   30_000,
 )
-
 ;(process.platform !== "win32" ? v2Real.instance : v2Real.instance.skip)(
   "P0-4: crash between execute and settle leaves UNKNOWN; retry refuses, force re-runs and settles",
   () =>
@@ -5470,25 +5604,27 @@ const shellBlockKey = (chat: { id: string }, payload: string) =>
         const payload = `printf side-effect >> ${path.join(directory, "count-settle.txt")}; printf ran`
         const marker = path.join(directory, "crash-before-settle.json")
 
-        yield* withCommandEffectCrashPoint(
-          { directory, marker, point: "after_execute_before_settle" },
-          () =>
-            Effect.gen(function* () {
-              const running = yield* provideR0OwnerRefs(
-                prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
-              ).pipe(Effect.forkChild)
-              yield* pollWithTimeout(
-                Effect.promise(() => Bun.file(marker).exists().then((exists) => (exists ? true : undefined))),
-                "command never reached the before-settle crash point",
-                "10 seconds",
-              )
-              // The OS effect RAN (definite observable), but the settle never committed: the
-              // durable outcome is unknown and the row must still be pending.
-              expect(yield* readCountFile(path.join(directory, "count-settle.txt"))).toBe("side-effect")
-              const row = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
-              expect(row?.status).toBe("pending")
-              yield* Fiber.interrupt(running)
-            }),
+        yield* withCommandEffectCrashPoint({ directory, marker, point: "after_execute_before_settle" }, () =>
+          Effect.gen(function* () {
+            const running = yield* provideR0OwnerRefs(
+              prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
+            ).pipe(Effect.forkChild)
+            yield* pollWithTimeout(
+              Effect.promise(() =>
+                Bun.file(marker)
+                  .exists()
+                  .then((exists) => (exists ? true : undefined)),
+              ),
+              "command never reached the before-settle crash point",
+              "10 seconds",
+            )
+            // The OS effect RAN (definite observable), but the settle never committed: the
+            // durable outcome is unknown and the row must still be pending.
+            expect(yield* readCountFile(path.join(directory, "count-settle.txt"))).toBe("side-effect")
+            const row = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
+            expect(row?.status).toBe("pending")
+            yield* Fiber.interrupt(running)
+          }),
         )
 
         // Retry sees the unsettled attempt and refuses — no second side-effect line.
@@ -5515,7 +5651,6 @@ const shellBlockKey = (chat: { id: string }, payload: string) =>
     ),
   30_000,
 )
-
 ;(process.platform !== "win32" ? v2Real.instance : v2Real.instance.skip)(
   "P0-4: completed !-shell block settles exactly once; duplicate delivery reuses the outcome",
   () =>
@@ -5613,11 +5748,10 @@ const v2RealPlugin = testEffect(
       yield* llm.text("second")
       yield* provideR0OwnerRefs(prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }))
       expect(commandEffectHookCalls).toHaveLength(1)
-      expect(((yield* CommandEffectReceipt.latestRow(db, hookKey))?.attempt) ?? 0).toBe(1)
+      expect((yield* CommandEffectReceipt.latestRow(db, hookKey))?.attempt ?? 0).toBe(1)
     }),
   30_000,
 )
-
 ;(process.platform !== "win32" ? v2RealPlugin.instance : v2RealPlugin.instance.skip)(
   "P0-4: quarantined plugin hook receipt refuses re-trigger; force re-runs the hook",
   () =>
@@ -5633,25 +5767,27 @@ const v2RealPlugin = testEffect(
       const marker = path.join(directory, "crash-hook-after-intent.json")
       commandEffectHookCalls.length = 0
 
-      yield* withCommandEffectCrashPoint(
-        { directory, marker, point: "after_intent_insert" },
-        () =>
-          Effect.gen(function* () {
-            const running = yield* provideR0OwnerRefs(
-              prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
-            ).pipe(Effect.forkChild)
-            yield* pollWithTimeout(
-              Effect.promise(() => Bun.file(marker).exists().then((exists) => (exists ? true : undefined))),
-              "command never reached the hook after-intent crash point",
-              "10 seconds",
-            )
-            const row = yield* CommandEffectReceipt.latestRow(db, hookKey)
-            expect(row?.kind).toBe("plugin_hook")
-            expect(row?.status).toBe("pending")
-            expect(commandEffectHookCalls).toHaveLength(0)
-            yield* Fiber.interrupt(running)
-          }),
-        )
+      yield* withCommandEffectCrashPoint({ directory, marker, point: "after_intent_insert" }, () =>
+        Effect.gen(function* () {
+          const running = yield* provideR0OwnerRefs(
+            prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
+          ).pipe(Effect.forkChild)
+          yield* pollWithTimeout(
+            Effect.promise(() =>
+              Bun.file(marker)
+                .exists()
+                .then((exists) => (exists ? true : undefined)),
+            ),
+            "command never reached the hook after-intent crash point",
+            "10 seconds",
+          )
+          const row = yield* CommandEffectReceipt.latestRow(db, hookKey)
+          expect(row?.kind).toBe("plugin_hook")
+          expect(row?.status).toBe("pending")
+          expect(commandEffectHookCalls).toHaveLength(0)
+          yield* Fiber.interrupt(running)
+        }),
+      )
 
       const refused = yield* provideR0OwnerRefs(
         prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
@@ -5664,9 +5800,7 @@ const v2RealPlugin = testEffect(
       expect((yield* CommandEffectReceipt.latestRow(db, hookKey))?.status).toBe("unknown")
 
       yield* llm.text("done")
-      yield* provideR0OwnerRefs(
-        prompt.command({ sessionID: chat.id, command: "receipt", arguments: "", force: true }),
-      )
+      yield* provideR0OwnerRefs(prompt.command({ sessionID: chat.id, command: "receipt", arguments: "", force: true }))
       expect(commandEffectHookCalls).toHaveLength(1)
       const forced = yield* CommandEffectReceipt.latestRow(db, hookKey)
       expect(forced?.attempt).toBe(2)
@@ -5674,4 +5808,3 @@ const v2RealPlugin = testEffect(
     }),
   30_000,
 )
-

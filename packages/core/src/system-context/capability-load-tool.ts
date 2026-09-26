@@ -35,8 +35,8 @@ import {
 // actions — never a path, URL or body). Execution resolves the manifest from the runtime
 // catalog, binds the REAL session/activity/turn identity, runs the K2 kernel through the
 // adapter (budget gate included: an over-limit body/turn settles as the typed frozen
-// `budget_exceeded` state — the body is never returned) and persists the durable receipt
-// (`session_capability_load`). The model-visible text is the L1 card (id/version/summary/
+// `budget_exceeded` state — the body is never returned) and persists a durable receipt
+// (`session_capability_load`) only for actually-loaded bodies. The model-visible text is the L1 card (id/version/summary/
 // entry tools) plus the exact hash- and budget-validated procedure body (design §7.3 L2 disclosure).
 //
 // The tools are authorized by the `capability.read` permission (Tool.withPermission) — load
@@ -49,7 +49,7 @@ export const CapabilityLoadToolOutput = Schema.Struct({
   body: Schema.String.pipe(Schema.optional),
   token_count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.optional),
   byte_count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.optional),
-  /** Byte-stable content digest of the durable receipt (loadedAt stripped) — audit binding. */
+  /** Byte-stable digest of an actually-loaded body's durable receipt (loadedAt stripped). */
   receipt_digest: Schema.String.pipe(Schema.optional),
 })
 export type CapabilityLoadToolOutput = typeof CapabilityLoadToolOutput.Type
@@ -76,7 +76,7 @@ export interface CapabilityLoadToolOptions {
   readonly db: Database.Interface["db"]
   readonly catalog?: ReadonlyArray<CapabilityManifest>
   /** Identity seam; the default resolves the session's latest provider turn (real activity/turn). */
-  readonly turnIdentity?: (sessionID: SessionSchema.ID) => Effect.Effect<CapabilityLoadTurnIdentity>
+  readonly turnIdentity?: (sessionID: SessionSchema.ID) => Effect.Effect<CapabilityLoadTurnIdentity, unknown>
 }
 
 /**
@@ -95,7 +95,7 @@ export interface CapabilityLoadToolOptions {
  * `packages/core/test/system-context/capability-l2-production.test.ts`.
  */
 export const makeDefaultCapabilityLoadTurnIdentity =
-  (db: Database.Interface["db"]): ((sessionID: SessionSchema.ID) => Effect.Effect<CapabilityLoadTurnIdentity>) =>
+  (db: Database.Interface["db"]): ((sessionID: SessionSchema.ID) => Effect.Effect<CapabilityLoadTurnIdentity, unknown>) =>
   (sessionID) =>
     Effect.gen(function* () {
       const row = yield* db
@@ -105,7 +105,7 @@ export const makeDefaultCapabilityLoadTurnIdentity =
         .orderBy(desc(V2ProviderTurnReceiptTable.created_at), desc(V2ProviderTurnReceiptTable.request_ordinal))
         .limit(1)
         .get()
-        .pipe(Effect.orDie)
+        .pipe(Effect.catchDefect(() => Effect.fail(new Error("Capability load turn identity is unavailable"))))
       if (!row) return { sessionId: sessionID, activityId: "", turnId: "" }
       return { sessionId: sessionID, activityId: row.activity_id, turnId: String(row.provider_turn_seq) }
     })

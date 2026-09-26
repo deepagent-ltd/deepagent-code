@@ -179,6 +179,7 @@ export const SessionProviderAttemptTable = sqliteTable(
       .references(() => SessionContextSelectionTable.selection_id),
     projection_hash: text().notNull(),
     request_hash: text().notNull(),
+    protocol_attempt_identity_hash: text(),
     prepared_turn_hash: text(),
     wire_request_hash: text(),
     provider_id: text().notNull(),

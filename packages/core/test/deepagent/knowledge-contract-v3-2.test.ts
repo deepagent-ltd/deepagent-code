@@ -9,6 +9,9 @@ import {
   type KnowledgeDocInput,
 } from "../../src/deepagent/durable-knowledge-store"
 import { seedCoreKnowledge } from "../../src/deepagent/knowledge-seed"
+import { LearningWorker } from "../../src/deepagent/background-learning"
+import { DeepAgentCodeHome } from "../../src/deepagent/workspace"
+import { createInitialRoundState } from "../../src/deepagent/round-state"
 import { retrieve, invalidateCache } from "../../src/deepagent/knowledge-retriever"
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
 import { releasedUserGlobalSelection } from "./released-selection-fixture"
@@ -135,6 +138,47 @@ describe("docs/34 knowledge retrieval contract", () => {
     expect(ids).toContain(approvedId)
     expect(queue.some((item) => item.approval_status === "pending")).toBe(true)
     expect(queue.some((item) => item.approval_status === "approved")).toBe(true)
+  })
+
+  test("pending review rows retain their one-to-one inbox reason grouping", async () => {
+    const workspace = path.join(base, "inbox-workspace")
+    const projectID = projectIdForWorkspace(workspace)
+    const worker = new LearningWorker(
+      new DeepAgentCodeHome(base).ensureProject(projectID, workspace),
+      projectID,
+      knowledgeSource.projectStoreFor(workspace),
+    )
+    const candidates = [
+      { candidate_id: "memory:group:first", summary: "Run checks before deployment", source_run_id: "run-group" },
+      { candidate_id: "memory:group:second", summary: "Record deployment rollback steps", source_run_id: "run-group" },
+      { candidate_id: "memory:group:repeat", summary: "Run checks before deployment", source_run_id: "run-group" },
+    ].map((candidate) => ({
+      ...candidate,
+      type: "memory" as const,
+      status: "staged" as const,
+      source_round: 1,
+      evidence_refs: ["run:group"],
+      confidence: 0.7,
+    }))
+    const result = await worker.govern({
+      projectID,
+      sessionID: "session-group",
+      runID: "run-group",
+      mode: "high",
+      roundState: createInitialRoundState("high"),
+      totalRounds: 1,
+      finalStatus: "completed",
+      trigger: "pause",
+      policy: "manual_review",
+    }, candidates)
+    const rows = knowledgeSource.listAllForWorkspace(workspace)
+      .filter((item) => item.sourceStore === "project" && item.approval_status === "pending")
+    expect(rows).toHaveLength(3)
+    expect(new Set(rows.map((item) => item.inboxID))).toEqual(new Set(result.inbox_ids))
+    expect(rows.map((item) => item.reasonGroup)).toEqual([
+      "manual review policy", "manual review policy", "manual review policy",
+    ])
+    expect(rows.every((item) => item.reviewReason === "manual review policy")).toBe(true)
   })
 
   test("review decisions use exact store and reject a stale page without writing", () => {

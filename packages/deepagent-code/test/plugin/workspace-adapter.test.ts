@@ -45,7 +45,7 @@ const noopBootstrapLayer = Layer.succeed(InstanceBootstrap.Service, InstanceBoot
 const workspaceLayer = Workspace.layer.pipe(
   Layer.provide(Auth.defaultLayer),
   Layer.provide(Session.defaultLayer),
-  Layer.provide(SessionCommandV2.defaultLayer),
+  Layer.provide(SessionCommandV2.testLayer),
   Layer.provide(Project.defaultLayer),
   Layer.provide(Vcs.defaultLayer),
   Layer.provide(FetchHttpClient.layer),
