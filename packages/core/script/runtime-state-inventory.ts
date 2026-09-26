@@ -315,6 +315,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
         ["packages/app/src/components/prompt-input/scenario-override.ts:listeners", ["module-listener-set", "ui-process", "process-lifetime", "process-exit", "coordination-only", "product-ui", "safe_bounded"]],
         ["packages/app/src/components/prompt-input/scenario-override.ts:scenarioOverride", ["module-singleton-state", "ui-process", "process-lifetime", "process-exit", "coordination-only", "product-ui", "safe_bounded"]],
         ["packages/app/src/components/prompt-input/submit.ts:pending", ["module-pending-map", "per-followup-id", "active-followups", "resolve-on-response-or-abort", "coordination-only", "product-ui", "safe_bounded"]],
+        ["packages/app/src/components/prompt-input/submit.ts:prepareStreamIdleTimeoutMs", ["module-test-injection-seam", "single-binding", "process-lifetime", "process-exit", "non-authority-constant-default", "product-ui-test-setter-only", "safe_bounded"]],
         ["packages/app/src/components/settings-keybinds.tsx:ButtonV2", ["ui-lazy-component", "source-module", "first-use-initialized", "not-applicable", "non-authority", "package-static", "safe_static"]],
         ["packages/app/src/components/settings-keybinds.tsx:IconButtonV2", ["ui-lazy-component", "source-module", "first-use-initialized", "not-applicable", "non-authority", "package-static", "safe_static"]],
         ["packages/app/src/components/settings-keybinds.tsx:IconV2", ["ui-lazy-component", "source-module", "first-use-initialized", "not-applicable", "non-authority", "package-static", "safe_static"]],
@@ -475,10 +476,10 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
         ["packages/deepagent-code/src/session/v2-plan-gate.ts:planHook", ["module-hook-object", "source-module", "source-bounded", "not-applicable", "non-authority", "package-static", "safe_static"]],
         // provider discovery caches (W-family re-pins): process-bounded failure memoization and
         // discovered-provider registries refreshed per discovery pass.
-        ["packages/deepagent-code/src/provider/provider.ts:closure@1301:1438.failedDiscoveryProviders", ["Provider-layer-instance", "per-discovery-pass", "runtime-lifetime", "layer-finalizer", "memoization-only", "instance-scoped", "safe_bounded"]],
-        ["packages/deepagent-code/src/provider/provider.ts:closure@1301:1439.failedDiscoveryGroups", ["Provider-layer-instance", "per-discovery-pass", "runtime-lifetime", "layer-finalizer", "memoization-only", "instance-scoped", "safe_bounded"]],
-        ["packages/deepagent-code/src/provider/provider.ts:closure@1301:1442.discoveryProviders", ["Provider-layer-instance", "per-discovery-pass", "runtime-lifetime", "layer-finalizer", "memoization-only", "instance-scoped", "safe_bounded"]],
-        ["packages/deepagent-code/src/provider/provider.ts:closure@1301:1446.legacyDiscoveryProviders", ["Provider-layer-instance", "per-discovery-pass", "runtime-lifetime", "layer-finalizer", "memoization-only", "instance-scoped", "safe_bounded"]],
+        ["packages/deepagent-code/src/provider/provider.ts:closure@1301:1441.failedDiscoveryProviders", ["Provider-layer-instance", "per-discovery-pass", "runtime-lifetime", "layer-finalizer", "memoization-only", "instance-scoped", "safe_bounded"]],
+        ["packages/deepagent-code/src/provider/provider.ts:closure@1301:1442.failedDiscoveryGroups", ["Provider-layer-instance", "per-discovery-pass", "runtime-lifetime", "layer-finalizer", "memoization-only", "instance-scoped", "safe_bounded"]],
+        ["packages/deepagent-code/src/provider/provider.ts:closure@1301:1445.discoveryProviders", ["Provider-layer-instance", "per-discovery-pass", "runtime-lifetime", "layer-finalizer", "memoization-only", "instance-scoped", "safe_bounded"]],
+        ["packages/deepagent-code/src/provider/provider.ts:closure@1301:1449.legacyDiscoveryProviders", ["Provider-layer-instance", "per-discovery-pass", "runtime-lifetime", "layer-finalizer", "memoization-only", "instance-scoped", "safe_bounded"]],
         ["packages/deepagent-code/src/provider/provider.ts:timeoutController@116:117.ctl", ["invocation-scope", "single-call", "call-stack", "abort-on-completion", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
         // keyed locks across the tool/task/orchestration family: released at settle; overlays
         // bounded by fanout ceilings.
@@ -532,7 +533,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
         ["packages/deepagent-code/src/util/rpc.ts:client@59:60.pending", ["rpc-client-connection", "per-connection", "connection-lifetime", "connection-close", "coordination-only", "instance-scoped", "safe_bounded"]],
         ["packages/deepagent-code/src/util/rpc.ts:client@59:68.listeners", ["rpc-client-connection", "per-connection", "connection-lifetime", "connection-close", "coordination-only", "instance-scoped", "safe_scoped"]],
         // config/runtime singletons: lazy one-shot bootstraps.
-        ["packages/deepagent-code/src/config/config.ts:closure@635:640.consoleManagedProviders", ["Config-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
+        ["packages/deepagent-code/src/config/config.ts:closure@643:648.consoleManagedProviders", ["Config-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
         ["packages/deepagent-code/src/config/tui.ts:runPromise", ["lazy-memoization", "source-module", "first-use-initialized", "not-applicable", "non-authority", "package-static", "safe_static"]],
         ["packages/deepagent-code/src/installation/index.ts:runPromise", ["lazy-memoization", "source-module", "first-use-initialized", "not-applicable", "non-authority", "package-static", "safe_static"]],
         ["packages/deepagent-code/src/runtime/base.ts:closure@181:185.approvals", ["RuntimeBase-instance", "per-approval", "instance-lifetime", "approval-resolution-cleanup", "coordination-only", "instance-scoped", "safe_bounded"]],
@@ -1663,7 +1664,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     reachability: "storage-locking",
     verdict: "safe_bounded",
   },
-  "packages/deepagent-code/src/config/config.ts:attach@1030:1069.observed": {
+  "packages/deepagent-code/src/config/config.ts:attach@1038:1077.observed": {
     owner: "Config.watch-directory-subscription",
     keyScope: "watched-config-or-plugin-filename",
     bound: "config-names-plus-directory-plugin-file-count",
@@ -1672,7 +1673,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     reachability: "config-hot-refresh",
     verdict: "safe_bounded",
   },
-  "packages/deepagent-code/src/config/config.ts:closure@993:1016.watchers": {
+  "packages/deepagent-code/src/config/config.ts:closure@1001:1024.watchers": {
     owner: "Config.watch-invocation",
     keyScope: "watched-target-directory",
     bound: "configured-target-directory-count",
@@ -1905,8 +1906,8 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
   // (:1145). Both die with the provider turn.
   ...Object.fromEntries(
     ([
-      ["packages/core/src/session/runner/llm.ts:closure@792:1394.withPublication", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "call-stack", "return", "coordination-only", "per-turn", "safe_scoped"]],
-      ["packages/core/src/session/runner/llm.ts:closure@792:1501.planResultMetadata", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "turn-plan-tool-call-count", "return", "turn-validation-only", "per-turn", "safe_scoped"]],
+      ["packages/core/src/session/runner/llm.ts:closure@792:1419.withPublication", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "call-stack", "return", "coordination-only", "per-turn", "safe_scoped"]],
+      ["packages/core/src/session/runner/llm.ts:closure@792:1526.planResultMetadata", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "turn-plan-tool-call-count", "return", "turn-validation-only", "per-turn", "safe_scoped"]],
     ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
       key,
       { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
