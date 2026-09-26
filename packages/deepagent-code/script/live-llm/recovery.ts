@@ -84,19 +84,25 @@ if (
 
 const patch = requireCase("patch-rebuild")
 // Provider-generic patch-recovery contract: every call is apply_patch_chunk, at least one
-// attempt fails with the verification error, at least one later attempt completes, and the
+// attempt fails the patch-vs-file verification, at least one later attempt completes, and the
 // final workspace applies only the valid transaction (asserted below). The exact call count
 // and interleaving are model behavior.
 const patchErrors = patch.tools.filter((tool) => tool.status === "error")
 const patchCompletedAfterError = patch.tools.some(
   (tool, index) => tool.status === "completed" && patch.tools.slice(0, index).some((prior) => prior.status === "error"),
 )
+// V2-owner wording parity: the core apply pipeline surfaces the stale-line verification failure
+// verbatim ("Failed to find expected lines in <path>: ...") instead of the legacy stack's
+// "apply_patch verification failed: ..." prefix. Both name the same failed verification against
+// the current file content; the workspace assertions below prove no partial application either way.
+const patchVerificationFailure = (tool: (typeof patch.tools)[number]) =>
+  tool.error?.includes("apply_patch verification failed") || tool.error?.includes("Failed to find expected lines")
 if (
   patch.tools.length === 0 ||
   patch.tools.some((tool) => tool.name !== "apply_patch_chunk") ||
   patchErrors.length < 1 ||
   !patchCompletedAfterError ||
-  !patchErrors.some((tool) => tool.error?.includes("apply_patch verification failed"))
+  !patchErrors.some(patchVerificationFailure)
 ) {
   throw new Error(`Patch recovery mismatch: ${patch.tools.map((tool) => `${tool.name}:${tool.status}`).join(", ")}`)
 }

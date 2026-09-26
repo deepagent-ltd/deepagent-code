@@ -1,5 +1,6 @@
 import type { SessionProviderResolutionListResponse } from "@deepagent-code/sdk"
 import { hash } from "@deepagent-code/core/util/encode"
+import { retry as retryFetch } from "@deepagent-code/core/util/retry"
 import { Button } from "@deepagent-code/ui/button"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { Dialog } from "@deepagent-code/ui/dialog"
@@ -129,9 +130,15 @@ export function SessionProviderRecoveryDock(props: {
   const [recoveries, { refetch }] = createResource(
     () => props.sessionID,
     async (sessionID) => {
-      const result = await sdk.client.session.providerResolutionList({ sessionID })
-      if (result.error) throw result.error
-      return result.data ?? []
+      // Retried, and network failures land in `recoveries.error` (rendered by the dock's own
+      // loadFailed fallback) instead of bubbling to the top ErrorBoundary. A dead server (e.g.
+      // after switching servers mid-session) must not brick the whole app behind the error page.
+      const list = async (): Promise<ProviderRecovery[]> => {
+        const result = await sdk.client.session.providerResolutionList({ sessionID })
+        if (result.error) throw result.error
+        return result.data ?? []
+      }
+      return retryFetch(list)
     },
   )
   const recovery = () => recoveries()?.[0]

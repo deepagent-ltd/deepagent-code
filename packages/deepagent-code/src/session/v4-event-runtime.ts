@@ -25,6 +25,7 @@ import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MultiAgentRuntime } from "./multi-agent-runtime"
+import { makeEventTurnRunnerV2 } from "./event-turn-runner"
 import { makeV2AdmissionBridge, makeSessionV2Adapter } from "./v2-admission-bridge"
 import { EventDispatcher, DISPATCH_GROUP } from "./event-dispatcher"
 import { AgentHandoffConsumer, HANDOFF_GROUP } from "./agent-handoff-consumer"
@@ -67,8 +68,7 @@ import { PRQueue } from "@/agent/pr-queue"
 // and then ignored. This layer assembles them and starts their scoped fibers with the server:
 //
 //   EventDispatcher   — subscribes the bus, runs the §A4 router, hands routed events to →
-//   MultiAgentRuntime — the DispatchPort; v2w-j4 durable-only: V2 admission only (the §C turn
-//                       runner is deleted; an unavailable admission lane fails closed at dispatch) →
+//   MultiAgentRuntime — the DispatchPort; V2 admission plus flag-gated V2 DAG coordination →
 //   RetentionSweeper  — the §A3 periodic prune loop.
 //
 // Everything is FLAG-GATED at the point of behavior: the dispatcher only dispatches when
@@ -212,9 +212,8 @@ export const makeEventPanelPort =
       Effect.catchCause((cause) => Effect.fail(cause)),
     )
 
-// The MultiAgentRuntime layer (v2w-j4 durable-only: V2-admission-only dispatch — no turn runner is
-// wired; the legacy event turn runner is deleted). Requires the session stack + core V4 services
-// (provided by the app graph). This is the DispatchPort the dispatcher drives.
+// The MultiAgentRuntime layer has the default single-event V2 admission lane and an opt-in V2 DAG
+// lane. Both require the session stack and core V4 services provided by the app graph.
 const runtimeLayer = Layer.unwrap(
   Effect.gen(function* () {
     const sessions = yield* Session.Service
@@ -235,18 +234,14 @@ const runtimeLayer = Layer.unwrap(
     // HTTP handlers use, so a human editing a file blocks an agent subtask from touching it).
     const fileLock = yield* FileLock.Service
     // C5-12 — the production V2 admission bridge provider wired into the `eventV2Admission` seam. Built
-    // here (the production seam construction site) so that when `isEventV2AdmissionEnabled()` is ON the
-    // runtime routes the event through the durable V2 admission path (SessionV2) instead of §C
-    // coordination. The bridge is typed against the runtime's seam and reads the SessionV2 stack + the V2
-    // Database from the shared graph directly; an absent SessionV2 stack is an inert provider (admit fails
-    // closed at dispatch time, matching the default-off discipline). The security namespace is resolved by
-    // the bridge (deterministic workspace-scoped default; ContextLocationIdentity upgrade is a follow-on).
+    // here so the single lane can admit a parent prompt and the DAG lane can persist its ingress receipt
+    // before coordinating child turns. The bridge reads the shared V2 Session and Database services. The
+    // security namespace remains a deterministic workspace-scoped default until ContextLocationIdentity
+    // supplies it.
     const db = (yield* Database.Service).db
     const v2Session = yield* SessionV2.Service
+    const flags = yield* RuntimeFlags.Service
     const eventV2Admission = makeV2AdmissionBridge({ db, v2Session })
-    // v2w-j4 durable-only: no `runner` is passed — dispatch is V2-admission-only and an unavailable
-    // admission lane fails closed with MultiAgentRuntime.EventV2AdmissionUnavailableError (the §C
-    // coordination library's runner seam remains for deterministic tests only).
     // §E2 — cap concurrent agent execution per workspace (default 5).
     // §E1 — wire the four-layer gate to real, fail-closed resolvers:
     //   L1 (event_source)  — per-EVENT: the event's workspace trusted-source set (system events must
@@ -259,6 +254,8 @@ const runtimeLayer = Layer.unwrap(
       concurrency,
       execution,
       fileLock,
+      dagCoordination: flags.v4DagCoordination,
+      runner: makeEventTurnRunnerV2({ sessions: v2Session, instanceStore, db }),
       // C5-12 — the production seam: when the V2 admission flag is ON the runtime uses this bridge.
       eventV2Admission,
       onEventCompleted: makeV4PRCollaboration({ sessions, instanceStore, git, queue, bus, approvalQueue }),
@@ -297,11 +294,7 @@ const runtimeLayer = Layer.unwrap(
 type GoalTickFlags = Pick<RuntimeFlags.Info, "v4MultiAgentRuntime" | "v4GoalTickEventDriven">
 type V4DaemonFlags = Pick<
   RuntimeFlags.Info,
-  | "v4MultiAgentRuntime"
-  | "v4PanelAutoConvene"
-  | "v4AgentPushEnabled"
-  | "v4EventDrivenArchive"
-  | "v4GoalTickEventDriven"
+  "v4MultiAgentRuntime" | "v4PanelAutoConvene" | "v4AgentPushEnabled" | "v4EventDrivenArchive" | "v4GoalTickEventDriven"
 >
 
 export const goalTickConsumerEnabled = (flags: GoalTickFlags): boolean =>
@@ -435,22 +428,21 @@ const retentionLayer = Layer.unwrap(
           })
           if (attempt.state === "prepared") attempt = yield* events.stageCheckpoint({ snapshotID: attempt.snapshotID })
           if (attempt.state === "prepared") return true
-          const snapshot = attempt.state === "complete"
-            ? yield* events.snapshot(sessionID)
-            : yield* events.finalizeCheckpoint({ snapshotID: attempt.snapshotID })
+          const snapshot =
+            attempt.state === "complete"
+              ? yield* events.snapshot(sessionID)
+              : yield* events.finalizeCheckpoint({ snapshotID: attempt.snapshotID })
           if (!snapshot || snapshot.snapshotID !== attempt.snapshotID) return false
           const compact = (remaining: number): Effect.Effect<boolean> =>
-            events
-              .compact!({
-                aggregateID: sessionID,
-                throughSeq: EventV2.Cursor.make(state.seq),
-                limit: 100,
-              })
-              .pipe(
-                Effect.flatMap((result) =>
-                  result.complete || remaining <= 1 ? Effect.succeed(result.complete) : compact(remaining - 1),
-                ),
-              )
+            events.compact!({
+              aggregateID: sessionID,
+              throughSeq: EventV2.Cursor.make(state.seq),
+              limit: 100,
+            }).pipe(
+              Effect.flatMap((result) =>
+                result.complete || remaining <= 1 ? Effect.succeed(result.complete) : compact(remaining - 1),
+              ),
+            )
           return yield* compact(10)
         }),
     })
@@ -724,7 +716,7 @@ const goalTickConsumerLayer = Layer.unwrap(
 // claims due spool rows and admits each bounded envelope as durable V2 session work
 // (`EventAdmission.admit` with the PRODUCTION SessionV2 adapter — the spool is the high/critical lane
 // of the V2 admission path). A consumption failure NACKS (bounded retry → `dead` = the DLQ) and
-// records an `event_consumer_failure` receipt in `deepagent_consumer_receipt` (`ConsumerReceipts.runOnce`,
+// records an `event_consumer_failure` receipt in `deepagent_consumer_receipt` (`ConsumerReceipts.recordDeadSpool`,
 // consumerKind "event_consumer_failure", source_event_id = the spool eventRef) + log.error — the durable,
 // admin-queriable DLQ visibility. (Admin HTTP surface: none exists for the spool today — receipt + log
 // only, per W5 scope.)
@@ -738,8 +730,7 @@ export const SPOOL_DRAIN_BATCH = 20
 export const SPOOL_DRAIN_LEASE_MS = 120_000
 
 /** Deterministic admission anchor per spool row (SessionV2 dedupe — a re-drain never double-admits). */
-export const spoolAdmissionAnchor = (eventRef: string, sessionID: string): string =>
-  `spool:${eventRef}:${sessionID}`
+export const spoolAdmissionAnchor = (eventRef: string, sessionID: string): string => `spool:${eventRef}:${sessionID}`
 
 // W5 F4 ③ — nack retry backoff. Exponential with a floor of 5s and a cap of 5min, keyed by the ATTEMPT
 // count (1st nack → 5s, 2nd → 10s, 3rd → 20s … past the 5-min cap). Kept small (fixed helper, one
@@ -774,8 +765,8 @@ export const CONSUMER_FAILURE_KIND = "event_consumer_failure"
  *   - a strategic refusal (noise / invalid envelope / digest mismatch / disabled) is recorded as a
  *     `refused` admission receipt by `EventAdmission.admit` itself — the drain sees the typed refusal
  *     and NACKs (bounded retry); the receipt row IS the durable record of the refusal.
- *   - the `event_consumer_failure` receipt is written ONLY when the nack dead-letters the spool row
- *     (the DLQ terminal state) — intermediate retries stay visible via the spool row's own
+ *   - the `event_consumer_failure` receipt is written ONLY for a dead spool row and reconciled on each
+ *     drain pass (the DLQ terminal state) — intermediate retries stay visible via the spool row's own
  *     `attempts`/`last_error`; on eventual success a pending failure receipt is CLEARED (F4 ②).
  *   - an INTERRUPTION (daemon dispose) is not a consumption failure: the row stays claimed and the
  *     lease expiry revives it — no spurious nack, no attempt inflation, no receipt.
@@ -790,6 +781,11 @@ export const spoolDrainPass = (input: {
     const at = input.now?.() ?? Date.now()
     const v2Session = input.v2Session
     if (!v2Session || !EventAdmission.isEventV2AdmissionEnabled(input.runtimeFeatures)) return
+    // A crash can land a fenced dead nack before its admin receipt. Repair a bounded batch from
+    // the spool authority on every pass; already recorded rows are excluded by the scan.
+    const missing = yield* ConsumerReceipts.deadSpoolWithoutReceipt(input.db, CONSUMER_FAILURE_KIND, SPOOL_DRAIN_BATCH)
+    for (const row of missing)
+      yield* ConsumerReceipts.recordDeadSpool(input.db, CONSUMER_FAILURE_KIND, row.eventRef).pipe(Effect.orDie)
     const claimed = yield* EventSpool.claimDue(input.db, {
       claimantId: "v4-spool-drain",
       now: at,
@@ -840,21 +836,10 @@ export const spoolDrainPass = (input: {
           backoffMs,
         }).pipe(Effect.orDie)
         const settled = yield* EventSpool.getByRef(input.db, row.eventRef)
-        // W5 F4 ① — the DLQ receipt is written ONLY when this nack dead-lettered the row (terminal):
-        // the durable `event_consumer_failure` receipt (last_error = the reason, attempts = the real
-        // count) is the admin view of the DLQ. Intermediate retries keep the spool row as the record.
+        // The receipt's terminal status and attempt count derive from the dead spool row. If this
+        // write fails after nack, the next pass's repair scan restores it without re-admitting work.
         if (settled?.status === "dead") {
-          yield* ConsumerReceipts.runOnce(input.db, {
-            consumerKind: CONSUMER_FAILURE_KIND,
-            sourceEventId: row.eventRef,
-            // The failing side effect carries the consumption error so the durable receipt's `last_error`
-            // is the real reason (the receipt stays `pending` = "a failed consumption is recorded"; the
-            // DLQ terminal state lives on the dead spool row).
-            sideEffect: Effect.fail(new Error(reason)),
-            now: at,
-          }).pipe(
-            Effect.catchCause(() => Effect.void),
-          )
+          yield* ConsumerReceipts.recordDeadSpool(input.db, CONSUMER_FAILURE_KIND, row.eventRef).pipe(Effect.orDie)
         }
         yield* Effect.logError("spool consumption failed (bounded retry → DLQ after cap)", {
           eventRef: row.eventRef,
@@ -881,10 +866,7 @@ const spoolDrainLayer = Layer.effectDiscard(
     const { db } = yield* Database.Service
     const v2Session = yield* SessionV2.Service
     yield* spoolDrainPass({ db, v2Session })
-      .pipe(
-        Effect.repeat(Schedule.spaced(Duration.millis(SPOOL_DRAIN_INTERVAL_MS))),
-        Effect.forkScoped,
-      )
+      .pipe(Effect.repeat(Schedule.spaced(Duration.millis(SPOOL_DRAIN_INTERVAL_MS))), Effect.forkScoped)
       .pipe(Effect.asVoid)
   }),
 )

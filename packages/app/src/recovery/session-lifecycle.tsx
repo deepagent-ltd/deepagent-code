@@ -1,8 +1,9 @@
-import { createContext, createEffect, createMemo, createSignal, onCleanup, useContext, type Accessor, type JSX } from "solid-js"
+import { createContext, createEffect, createMemo, createSignal, onCleanup, untrack, useContext, type Accessor, type JSX } from "solid-js"
 import { useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
-import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
+import { useSync } from "@/context/sync"
+import { eventBaseType } from "@/utils/event-type"
 import { createRecoveryLifecycle, type LifecycleSnapshot, type RecoveryLifecycle } from "./recovery-lifecycle-state"
 import { createExecutionJournalSubscription } from "./lifecycle-execution-pump"
 
@@ -25,11 +26,31 @@ export const useSessionLifecycle = () => useContext(SessionLifecycleContext)
 
 export function SessionLifecycle(props: { children: JSX.Element }) {
   const sdk = useSDK()
-  const serverSDK = useServerSDK()
   const serverSync = useServerSync()
+  const sync = useSync()
   const params = useParams()
   const [tick, setTick] = createSignal(0)
   const [lifecycle] = createSignal(createRecoveryLifecycle())
+  const refreshPending = new Set<string>()
+  let statusRevision = 0
+  const refreshMessages = (sessionID: string) => {
+    if (sessionID !== params.id || refreshPending.has(sessionID)) return
+    refreshPending.add(sessionID)
+    queueMicrotask(() => {
+      refreshPending.delete(sessionID)
+      if (sessionID !== params.id) return
+      void sync.session.sync(sessionID, { force: true }).catch((error) =>
+        console.error("Failed to refresh V2 session messages", error),
+      )
+    })
+  }
+  const refreshStatus = (sessionID: string) => {
+    const revision = ++statusRevision
+    void sdk.client.session.status().then((result) => {
+      if (revision !== statusRevision || sessionID !== params.id) return
+      sync.set("session_status", sessionID, result.data?.[sessionID] ?? { type: "idle" })
+    }).catch((error) => console.error("Failed to refresh V2 session status", error))
+  }
   const snapshot = createMemo(() => {
     void tick()
     return lifecycle().snapshot()
@@ -39,8 +60,8 @@ export function SessionLifecycle(props: { children: JSX.Element }) {
     // Durable journal (SOLE source — W9.6 removed the SSE fallback that double-delivered under
     // admission OFF): poll every known session of the directory plus the active one, anchor each
     // at its watermark on first subscribe, resume from the last seen seq afterwards.
-    const journal = createExecutionJournalSubscription({
-      client: serverSDK.client,
+    const journal = untrack(() => createExecutionJournalSubscription({
+      client: sdk.client,
       lifecycle: lifecycle(),
       sessionIDs: () => {
         const ids = new Set<string>()
@@ -49,6 +70,33 @@ export function SessionLifecycle(props: { children: JSX.Element }) {
         return [...ids]
       },
       handlers: {
+        onAnchor: (sessionID) => {
+          if (sessionID !== params.id) return
+          refreshMessages(sessionID)
+          refreshStatus(sessionID)
+        },
+        onJournalEvent: (sessionID, row) => {
+          if (sessionID !== params.id) return
+          const type = eventBaseType(row.type)
+          if (type === "session.execution.started") {
+            statusRevision++
+            sync.set("session_status", sessionID, { type: "busy" })
+          }
+          if (type === "session.execution.succeeded" || type === "session.execution.interrupted") {
+            statusRevision++
+            sync.set("session_status", sessionID, { type: "idle" })
+          }
+          if (type === "session.execution.failed") refreshStatus(sessionID)
+          if (
+            type === "session.next.text.ended" ||
+            type === "session.next.reasoning.ended" ||
+            type === "session.next.tool.success" ||
+            type === "session.next.tool.failed" ||
+            type === "session.execution.succeeded" ||
+            type === "session.execution.failed" ||
+            type === "session.execution.interrupted"
+          ) refreshMessages(sessionID)
+        },
         onEvent: () => setTick((value) => value + 1),
         onConnectionChange: (connected) => {
           // The reducer already owns the disconnect/reconnect vocabulary: the aggregate journal
@@ -63,18 +111,24 @@ export function SessionLifecycle(props: { children: JSX.Element }) {
           console.warn(`[recovery] execution journal resync (history compacted): session=${sessionID} dropped=(#${fromSeq ?? "?"}, #${floor}]`)
         },
       },
-    })
+    }))
     onCleanup(journal.dispose)
 
+    let activeSessionID: string | undefined
     createEffect(() => {
       // Track reactively (session id, directory, session list CONTENT — not just length, so a
       // same-size set swap still refreshes) and rebuild the drain set only when it changed.
-      void params.id
+      const sessionID = params.id
       void serverSync
         .child(sdk.directory, { bootstrap: false })[0]
         .session.map((session) => session.id)
         .join(",")
       journal.refresh()
+      // A previously subscribed background session may have received messages while inactive.
+      // Its cursor is already anchored, so navigation must refresh its visible snapshot.
+      if (sessionID === activeSessionID) return
+      activeSessionID = sessionID
+      if (sessionID) refreshMessages(sessionID)
     })
   })
 

@@ -924,7 +924,11 @@ const writeLegacyPlanMigrationDiagnostic = (
     provenance: { source: "runner", run_ref: PlanStore.planScope(sessionId) },
     tags: ["bug-010", "plan-migration", "quarantined"],
   })
-  store.setStatus(doc.id, "quarantined", documentRevision(doc))
+  store.commitGovernance(doc.id, documentRevision(doc), {
+    kind: "quarantine",
+    actor: { type: "system", id: "legacy-plan-migration" },
+    reason: message,
+  })
 }
 
 /** How many file observations a session keeps before the oldest are evicted. */

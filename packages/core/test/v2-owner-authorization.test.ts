@@ -267,7 +267,7 @@ function bindOracleAttempt(db: Database.Interface["db"], receipt: V2ProviderTurn
       .run()
       .pipe(Effect.orDie)
     yield* db
-      .insert(SessionActivityTable)
+      .insert(SessionActivityTable) // fixture-exempt: synthetic owner-qualification oracle binds a preexisting receipt activity
       .values({
         activity_id: receipt.activityId,
         session_id: receipt.sessionId,
@@ -350,7 +350,7 @@ function bindOracleAttempt(db: Database.Interface["db"], receipt: V2ProviderTurn
       .run()
       .pipe(Effect.orDie)
     yield* db
-      .insert(SessionProviderAttemptTable)
+      .insert(SessionProviderAttemptTable) // fixture-exempt: synthetic owner-qualification oracle binds a prepared receipt attempt
       .values({
         attempt_id: "attempt-v2-owner-auth",
         session_id: receipt.sessionId,

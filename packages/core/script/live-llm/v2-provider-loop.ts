@@ -95,6 +95,7 @@ await runGit("commit", "-m", "test fixture")
 
 const { ApplicationTools } = await import("../../src/tool/application-tools")
 const { AgentV2 } = await import("../../src/agent")
+const { DeepAgentPlanStore } = await import("../../src/deepagent")
 const { Database } = await import("../../src/database/database")
 const { EventV2 } = await import("../../src/event")
 const { EventTable } = await import("../../src/event/sql")
@@ -191,6 +192,10 @@ const program = Effect.gen(function* () {
   })
 
   yield* service.resume(created.id)
+
+  // This harness composes Core SessionV2 directly, without the production gateway's state-dir pin.
+  // Keep the tool-result continuation oracle on the unconfigured read-only observation path.
+  if (DeepAgentPlanStore.hasRoot()) throw new Error("V2 live Core harness unexpectedly configured a plan-store root")
 
   if (!issuedMarker) throw new Error("V2 tool execution did not issue a marker")
   if (promptText.includes(issuedMarker)) throw new Error("Runtime marker leaked into the prompt")

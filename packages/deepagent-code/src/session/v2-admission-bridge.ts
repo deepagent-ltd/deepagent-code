@@ -64,6 +64,7 @@ import type { MultiAgentRuntime } from "./multi-agent-runtime"
 export const V4_EVENT_REGISTRY: EventRegistryIface = EventRegistry.createEventRegistry([
   {
     eventType: "ci.failure",
+    execution: "dag",
     kind: "observation",
     schemaId: "ci.failure.schema",
     schemaVersion: "1",
@@ -109,6 +110,7 @@ export const V4_EVENT_REGISTRY: EventRegistryIface = EventRegistry.createEventRe
   },
   {
     eventType: "pr.comment",
+    execution: "dag",
     kind: "command",
     schemaId: "pr.comment.schema",
     schemaVersion: "1",
@@ -124,6 +126,7 @@ export const V4_EVENT_REGISTRY: EventRegistryIface = EventRegistry.createEventRe
   },
   {
     eventType: "monitor.alert",
+    execution: "dag",
     kind: "observation",
     schemaId: "monitor.alert.schema",
     schemaVersion: "1",
@@ -152,11 +155,42 @@ export const V4_EVENT_REGISTRY: EventRegistryIface = EventRegistry.createEventRe
     requestedCapability: "deepagent.goal.advance",
     autonomyCeiling: "medium",
   },
+  {
+    eventType: "schedule.scan",
+    kind: "observation",
+    schemaId: "schedule.scan.schema",
+    schemaVersion: "1",
+    payloadContentType: "application/json",
+    payloadVersion: "v1",
+    allowedProducerKinds: ["system"],
+    allowedSourceKinds: ["system"],
+    causation: { allowed: ["causedByEventId"], requiresCause: false },
+    risk: "low",
+    objective: "run the scheduled maintenance scan",
+    requestedCapability: "deepagent.maintenance.scan",
+    autonomyCeiling: "low",
+  },
+  {
+    eventType: "ci.repair.requested",
+    execution: "dag",
+    kind: "command",
+    schemaId: "ci.repair.requested.schema",
+    schemaVersion: "1",
+    payloadContentType: "application/json",
+    payloadVersion: "v1",
+    allowedProducerKinds: ["system"],
+    allowedSourceKinds: ["system"],
+    causation: { allowed: ["causedByEventId"], requiresCause: false },
+    risk: "high",
+    objective: "repair the repeated CI failure and verify the fix",
+    requestedCapability: "deepagent.ci.repair",
+    autonomyCeiling: "high",
+  },
 ])
 
 /**
  * A dispatch-time refusal that can NEVER succeed on retry: the event type is not registered with the
- * V2 admission registry (e.g. `schedule.scan` / `ci.repair.requested` until their product lanes ship).
+ * V2 admission registry.
  * Typed (mirroring `MultiAgentRuntime.EventV2AdmissionUnavailableError`) so the dispatcher can settle
  * the delivery as a terminal drop (ack + recordDrop) instead of burning the §A3 retry budget and
  * DLQ-ing a delivery that was never deliverable.
@@ -167,9 +201,7 @@ export class EventNotRegisteredError extends Error {
     readonly eventType: string,
     readonly eventId: string,
   ) {
-    super(
-      `C5-12 event type "${eventType}" is not registered with the V2 admission registry; refusing (fail-closed)`,
-    )
+    super(`C5-12 event type "${eventType}" is not registered with the V2 admission registry; refusing (fail-closed)`)
     this.name = "EventNotRegisteredError"
   }
 }
@@ -265,12 +297,11 @@ export const toEventEnvelope = (event: DeepAgentEvent.Event, registration: Event
 }
 
 /**
- * A deterministic SessionV2 message id derived from the admission's opaque exact-retry anchor
- * (`event-admission:<eventId>:<sessionId>`). SessionV2.prompt `id` must be a valid `msg_` id; the anchor
- * is opaque, so the adapter derives a stable `msg_` id (same anchor ⇒ same id ⇒ SessionV2 dedupes an exact
- * retry). Never carries the raw anchor into the message id — it is content-hashed.
+ * Preserve a caller's valid SessionV2 message identity. Historical event-admission anchors lack the
+ * `msg_` prefix, so they retain their stable hash mapping for exact retries of existing receipts.
  */
-const sessionMessageID = (anchor: string): string => `msg_${contentDigest(anchor).slice(0, 40)}`
+const sessionMessageID = (anchor: string): string =>
+  anchor.startsWith("msg_") ? anchor : `msg_${contentDigest(anchor).slice(0, 40)}`
 
 /** The `(yield* SessionV2.Service).prompt(...)` adapter wrapped to the `EventAdmission.SessionWorkAdapter`
  * contract. The model-facing prompt is the serialized bounded envelope (`promptText`), never the raw V4
@@ -347,36 +378,43 @@ export const makeV2AdmissionBridge = (deps: V2AdmissionBridgeDeps): MultiAgentRu
   const securityNamespaceFor =
     deps.securityNamespaceFor ?? ((workspaceId: string) => Effect.succeed(defaultSecurityNamespaceFor(workspaceId)))
 
+  const admit = (
+    request: EventDispatcher.DispatchRequest,
+    scope: EventAdmissionWiring.AdmissionScope,
+    receiptOnly: boolean,
+  ) =>
+    Effect.gen(function* () {
+      if (!receiptOnly && !deps.v2Session) {
+        return yield* Effect.fail(
+          new Error(`C5-12 V2 admission bridge requires the SessionV2 stack to admit event "${request.event.id}"`),
+        )
+      }
+      const registration = registry.lookup(request.event.type)
+      if (!registration) {
+        return yield* Effect.fail(new EventNotRegisteredError(request.event.type, request.event.id))
+      }
+      const envelope = toEventEnvelope(request.event, registration)
+      const verdict = EventRegistry.validatePublish(registry, envelope)
+      if (!verdict.ok) {
+        return yield* Effect.fail(new Error(`C5-12 event "${request.event.id}" is not publishable: ${verdict.message}`))
+      }
+      const registered = envelope as RegisteredEventEnvelope
+      yield* EventAdmissionWiring.admitWork(deps.db, {
+        event: registered,
+        registration: verdict.registration,
+        scope,
+        // DAG ingress uses the same validated C5 receipt, but each child runner owns its own
+        // V2 prompt admission. The receipt adapter deliberately creates no parent prompt.
+        adapter: receiptOnly
+          ? { admit: ({ messageID }) => Effect.succeed({ messageID }) }
+          : makeSessionV2Adapter(deps.v2Session!, deps.locationFor ?? defaultLocationFor, scope.workspaceId),
+        now: now(),
+      })
+    })
   return {
     securityNamespaceFor,
-    admit: ({ request, scope }) =>
-      Effect.gen(function* () {
-        if (!deps.v2Session) {
-          return yield* Effect.fail(
-            new Error(
-              `C5-12 V2 admission bridge requires the SessionV2 stack to admit event "${request.event.id}"`,
-            ),
-          )
-        }
-        const registration = registry.lookup(request.event.type)
-        if (!registration) {
-          return yield* Effect.fail(new EventNotRegisteredError(request.event.type, request.event.id))
-        }
-        const envelope = toEventEnvelope(request.event, registration)
-        const verdict = EventRegistry.validatePublish(registry, envelope)
-        if (!verdict.ok) {
-          return yield* Effect.fail(
-            new Error(`C5-12 event "${request.event.id}" is not publishable: ${verdict.message}`),
-          )
-        }
-        const registered = envelope as RegisteredEventEnvelope
-        yield* EventAdmissionWiring.admitWork(deps.db, {
-          event: registered,
-          registration: verdict.registration,
-          scope,
-          adapter: makeSessionV2Adapter(deps.v2Session, deps.locationFor ?? defaultLocationFor, scope.workspaceId),
-          now: now(),
-        })
-      }),
+    executionFor: (eventType) => registry.lookup(eventType)?.execution ?? "single",
+    admit: ({ request, scope }) => admit(request, scope, false),
+    admitReceiptOnly: ({ request, scope }) => admit(request, scope, true),
   }
 }

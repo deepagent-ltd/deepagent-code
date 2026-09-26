@@ -82,6 +82,19 @@ describe("operations for mode", () => {
     expect(ops.live).toBe(false)
   })
 
+  test("failed-migration read-only exit permits inspection but cannot restore or write", () => {
+    expect(operationsForMode("migration_failed_read_only")).toEqual({
+      browse: true,
+      search: true,
+      export: true,
+      backup: true,
+      descriptors: true,
+      restore: false,
+      write: false,
+      live: false,
+    })
+  })
+
   test("blocked_schema keeps backup/restore but disables write/live", () => {
     const ops = operationsForMode("blocked_schema")
     expect(ops.backup).toBe(true)

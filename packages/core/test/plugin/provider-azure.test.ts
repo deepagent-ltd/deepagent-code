@@ -1,3 +1,4 @@
+import { authLayer } from "../fixture/auth-layer"
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { Auth } from "@deepagent-code/core/auth"
@@ -15,8 +16,7 @@ import { fakeSelectorSdk, it, model, npmLayer, provider, withEnv } from "./provi
 
 const itWithAccount = testEffect(
   Catalog.locationLayer.pipe(
-    Layer.provideMerge(Auth.defaultLayer),
-    Layer.provideMerge(EventV2.defaultLayer),
+    Layer.provideMerge(authLayer()),
     Layer.provideMerge(
       Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make("test") }))),
     ),

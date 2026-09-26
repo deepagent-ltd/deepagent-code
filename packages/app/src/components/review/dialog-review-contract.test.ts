@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { listPending, reviewSummary, setStatus, listEnvFacts, decideEnvFact, modifyEnvFact } from "./dialog-review.api"
+import { listPending, reviewSummary, setStatus, listEnvFacts, decideEnvFact, modifyEnvFact, groupPendingByReason, type KnowledgeItem } from "./dialog-review.api"
 
 // P1-C route contract: the V3.1 self-learning Review dialog talks to the raw-request escape-hatch
 // routes (NOT the generated SDK). These assertions lock the exact method/url/body so a backend
@@ -20,6 +20,39 @@ function client(calls: Recorded[], data: unknown) {
 }
 
 describe("DeepAgent review dialog route contract", () => {
+  test("pending inbox candidates group by reason within their authority scope", () => {
+    const item: KnowledgeItem = {
+      sourceStore: "project",
+      id: "knowledge:one",
+      version: 1,
+      hash: "hash",
+      candidateId: "candidate-one",
+      fingerprint: "fingerprint",
+      governanceRevision: "governance",
+      type: "memory",
+      summary: "one",
+      evidence_strength: "weak",
+      evidence_refs: [],
+      approval_status: "pending",
+      scope: "durable:project:one",
+      inboxID: "inbox:candidate-one",
+      reasonGroup: "manual review policy",
+    }
+    const groups = groupPendingByReason([
+      item,
+      { ...item, id: "knowledge:two", candidateId: "candidate-two", inboxID: "inbox:candidate-two" },
+      { ...item, id: "knowledge:three", candidateId: "candidate-three", reasonGroup: "sensitive" },
+      { ...item, id: "knowledge:global", sourceStore: "user_global", scope: "durable" },
+      { ...item, id: "knowledge:approved", approval_status: "approved" },
+    ])
+    expect(groups.map((group) => [group.scope, group.reason, group.items.length])).toEqual([
+      ["project", "manual review policy", 2],
+      ["project", "sensitive", 1],
+      ["global", "manual review policy", 1],
+    ])
+    expect(groups[0]?.items.map((entry) => entry.inboxID)).toEqual(["inbox:candidate-one", "inbox:candidate-two"])
+  })
+
   test("listPending GETs /deepagent/knowledge/pending and unwraps items", async () => {
     const calls: Recorded[] = []
     const items = [

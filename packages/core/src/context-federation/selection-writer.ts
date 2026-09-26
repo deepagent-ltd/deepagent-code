@@ -152,7 +152,7 @@ export function buildSelectionEnvelope(
   opts: BuildEnvelopeOptions,
 ): SelectionEnvelope {
   const selectedRefs = batch.selected.map((ranked) => toSelectionRef(ranked))
-  const projectionText = buildProjection(batch)
+  const projectionText = buildProjection(selectedRefs)
   const projectionHash = Hash.sha256(projectionText)
   const now = opts.now ?? Date.now()
   const seed = {
@@ -602,7 +602,10 @@ function validationIdOf(input: {
 function selectedSourceFingerprint(batch: SelectionCandidateBatch, result: QueryResultV2): string {
   return Hash.sha256(
     CanonicalJson.stringify({
-      selected: batch.selected.map((ranked) => canonicalContextRef(ranked.candidate.ref)),
+      selected: batch.selected.map((ranked) => ({
+        ref: canonicalContextRef(ranked.candidate.ref),
+        provenanceRefs: ranked.candidate.provenance.map(canonicalContextRef),
+      })),
       graphRevisions: Object.fromEntries(
         Object.keys(result.graphStatuses).map((graph) => [
           graph,
@@ -622,6 +625,8 @@ function toSelectionRef(ranked: RankedCandidate): SelectionRef {
     // model-visible evidence, never unlimited. Ref/summary facts are untouched; only the title
     // token is truncated so the evidence tail and token accounting stay bounded.
     token: truncateTitle(candidate.title),
+    version: candidate.ref.revision,
+    provenanceRefs: candidate.provenance.map(canonicalContextRef),
     score: ranked.score,
     freshness: "current",
     sensitivity: sensitivityOf(candidate),
@@ -639,12 +644,14 @@ function sensitivityOf(candidate: ContextCandidate): SelectionRef["sensitivity"]
   return "source_code"
 }
 
-function buildProjection(batch: SelectionCandidateBatch): string {
+function buildProjection(refs: readonly SelectionRef[]): string {
   return CanonicalJson.stringify({
     mode: "v2",
-    refs: batch.selected.map((ranked) => ({
-      graph: ranked.candidate.ref.graph,
-      ref: canonicalContextRef(ranked.candidate.ref),
+    refs: refs.map((selected) => ({
+      graph: selected.graph,
+      ref: selected.ref,
+      version: selected.version,
+      provenanceRefs: selected.provenanceRefs,
     })),
   })
 }

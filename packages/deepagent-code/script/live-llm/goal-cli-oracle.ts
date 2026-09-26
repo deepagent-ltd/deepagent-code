@@ -35,21 +35,20 @@ export function requirePostFeedbackMutations(input: {
 }) {
   const targets = new Map(input.files.map((file) => [canonicalPath(input.workspace, file), file] as const))
   const mutations = input.tools.filter((tool) => {
-    if (!["write", "edit"].includes(tool.name) || typeof tool.input.filePath !== "string") return false
-    return targets.has(canonicalPath(input.workspace, tool.input.filePath))
+    if (!["write", "edit"].includes(tool.name)) return false
+    const file = toolPath(tool)
+    return file !== undefined && targets.has(canonicalPath(input.workspace, file))
   })
   const premature = mutations.find((tool) => tool.index < input.feedbackIndex)
   if (premature) {
-    throw new Error(`D2 Goal worker mutated a target file before the grader gap: ${String(premature.input.filePath)}`)
+    throw new Error(`D2 Goal worker mutated a target file before the grader gap: ${toolPath(premature)}`)
   }
 
   const missing = [...targets].flatMap(([target, file]) =>
-    mutations.some(
-      (tool) =>
-        tool.index > input.feedbackIndex &&
-        typeof tool.input.filePath === "string" &&
-        canonicalPath(input.workspace, tool.input.filePath) === target,
-    )
+    mutations.some((tool) => {
+      const file = toolPath(tool)
+      return tool.index > input.feedbackIndex && file !== undefined && canonicalPath(input.workspace, file) === target
+    })
       ? []
       : [file],
   )
@@ -64,6 +63,14 @@ export function requirePostFeedbackMutations(input: {
     throw new Error("D2 Goal worker did not persist plan completion after all grader-driven file mutations")
   }
   return mutations.filter((tool) => tool.index > input.feedbackIndex)
+}
+
+function toolPath(tool: GoalCliToolEvidence) {
+  return typeof tool.input.filePath === "string"
+    ? tool.input.filePath
+    : typeof tool.input.path === "string"
+      ? tool.input.path
+      : undefined
 }
 
 function canonicalPath(workspace: string, file: string) {

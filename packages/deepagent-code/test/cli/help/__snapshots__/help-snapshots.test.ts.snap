@@ -90,7 +90,7 @@ Options:
   -s, --session                       session id to continue                                [string]
       --fork                          fork the session before continuing (requires --continue or
                                       --session)                                           [boolean]
-      --share                         share the session                                    [boolean]
+      --share                         public sharing is unavailable in 2.0.2               [boolean]
   -m, --model                         model to use in the format of provider/model          [string]
       --agent                         agent to use                                          [string]
       --format                        format: default (formatted) or json (raw JSON events)
@@ -330,10 +330,10 @@ Options:
 exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode import --help 1`] = `
 "deepagent-code import <file>
 
-import session data from JSON file or URL
+import session data from a local JSON file (public links unavailable in 2.0.2)
 
 Positionals:
-  file  path to JSON file or share URL                                           [string] [required]
+  file  path to a local JSON file                                                [string] [required]
 
 Options:
   -h, --help        show help                                                              [boolean]

@@ -12,21 +12,21 @@ import { Agent } from "@/agent/agent"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceState } from "@/effect/instance-state"
 import { InstanceStore } from "@/project/instance-store"
+import { V2AgentRoster } from "@/session/v2-agent-roster"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 
 // V2 IM durable-only: the legacy `ServerAgentExecutor` (fresh V1 session per IM turn via
 // SessionPrompt.promptOrSteer, wired through core's `executeAgentMentions`) is DELETED — @mentions are
 // now admitted by the IM handler as durable SessionV2 work (src/im/im-agent-execution.ts) and the
 // terminal reply returns through the im_reply_outbox daemon. This module keeps only the production
 // AgentListProvider: mention resolution (and the v4 event runtime's registry lookups) still run
-// against the deepagent-code Agent.Service config roster.
+// against the Location-scoped Core V2 roster.
 
 /**
  * Production AgentListProvider for IM @mention resolution.
  *
- * The core `AgentListProviderLive` reads `AgentV2` (packages/core), whose registry
- * is empty in the deepagent-code server. Real agents live in the deepagent-code
- * `Agent.Service`, so IM must resolve mentions against it — otherwise no mention
- * ever matches and no agent runs. Mentions match on `name` (the agent's name).
+ * A bare daemon fiber has no InstanceRef. Directory-scoped lookup uses the event's directory;
+ * an opaque workspace ID with no directory can only resolve workspace-independent built-ins.
  */
 class ServerAgentListProvider implements AgentListProvider {
   constructor(
@@ -53,6 +53,16 @@ class ServerAgentListProvider implements AgentListProvider {
       const instanceCtx = yield* InstanceRef
       const ownScope = routedWorkspaceID ?? instanceCtx?.directory
       const inScope = ownScope === undefined || ownScope === input.workspaceID
+      const directory =
+        instanceCtx?.directory ??
+        (input.workspaceID && !input.workspaceID.startsWith("wrk") ? input.workspaceID : undefined)
+      const roster =
+        inScope && directory
+          ? yield* V2AgentRoster.agentsFor({
+              directory: AbsolutePath.make(directory),
+              ...(routedWorkspaceID ? { workspaceID: routedWorkspaceID } : {}),
+            })
+          : []
 
       // BLOCKER (v4-daemon-instanceref-die, residual): `agents.list()` resolves through InstanceState →
       // `InstanceState.context`, which `Effect.die`s when NO InstanceRef is present (instance-state.ts).
@@ -78,35 +88,50 @@ class ServerAgentListProvider implements AgentListProvider {
                 .pipe(Effect.flatMap((ctx) => agents.list().pipe(Effect.provideService(InstanceRef, ctx))))
             })()
         : Effect.succeed<Agent.Info[]>([])
-      const all = yield* listAgentsSafely
-      const mapped = all
-        .filter((agent) => !agent.hidden && (agent.mode === "all" || agent.mode === "primary"))
-        .map((agent): AgentDescriptor => {
-          // Resolve autonomy to its conservative default when the agent didn't
-          // declare one, so V4.0 autonomy gates always see a concrete level.
-          const autonomy = agent.autonomy ?? DEFAULT_AUTONOMY_LEVEL
-          // `approval_required` defaults BY autonomy (V3.8.1 §C.3): level_0 is
-          // all-manual ⇒ approval required; any higher declared level ⇒ the
-          // agent may act up to that level ⇒ not required. An explicit value
-          // always wins.
-          const approvalRequired = agent.approval_required ?? autonomy === DEFAULT_AUTONOMY_LEVEL
-          // Pass declarative metadata through only when present, so an agent
-          // that declared none stays free of empty arrays (V3.8 shape). Built
-          // immutably — AgentDescriptor fields are readonly.
-          return {
-            id: agent.name,
-            name: agent.name,
-            displayName: agent.description || agent.name,
-            description: agent.description,
-            visible: true,
-            autonomy,
-            approval_required: approvalRequired,
-            ...(agent.triggers !== undefined ? { triggers: agent.triggers } : {}),
-            ...(agent.capabilities !== undefined ? { capabilities: agent.capabilities } : {}),
-            ...(agent.context_sources !== undefined ? { context_sources: agent.context_sources } : {}),
-            ...(agent.limits !== undefined ? { limits: agent.limits } : {}),
-          } satisfies AgentDescriptor
-        })
+      const all = roster === undefined ? yield* listAgentsSafely : []
+      const mapped =
+        roster !== undefined
+          ? roster
+              .filter((agent) => !agent.hidden && agent.mode !== "subagent")
+              .map(
+                (agent): AgentDescriptor => ({
+                  id: String(agent.id),
+                  name: String(agent.id),
+                  displayName: agent.description || String(agent.id),
+                  description: agent.description,
+                  visible: true,
+                  autonomy: DEFAULT_AUTONOMY_LEVEL,
+                  approval_required: true,
+                }),
+              )
+          : all
+              .filter((agent) => !agent.hidden && (agent.mode === "all" || agent.mode === "primary"))
+              .map((agent): AgentDescriptor => {
+                // Resolve autonomy to its conservative default when the agent didn't
+                // declare one, so V4.0 autonomy gates always see a concrete level.
+                const autonomy = agent.autonomy ?? DEFAULT_AUTONOMY_LEVEL
+                // `approval_required` defaults BY autonomy (V3.8.1 §C.3): level_0 is
+                // all-manual ⇒ approval required; any higher declared level ⇒ the
+                // agent may act up to that level ⇒ not required. An explicit value
+                // always wins.
+                const approvalRequired = agent.approval_required ?? autonomy === DEFAULT_AUTONOMY_LEVEL
+                // Pass declarative metadata through only when present, so an agent
+                // that declared none stays free of empty arrays (V3.8 shape). Built
+                // immutably — AgentDescriptor fields are readonly.
+                return {
+                  id: agent.name,
+                  name: agent.name,
+                  displayName: agent.description || agent.name,
+                  description: agent.description,
+                  visible: true,
+                  autonomy,
+                  approval_required: approvalRequired,
+                  ...(agent.triggers !== undefined ? { triggers: agent.triggers } : {}),
+                  ...(agent.capabilities !== undefined ? { capabilities: agent.capabilities } : {}),
+                  ...(agent.context_sources !== undefined ? { context_sources: agent.context_sources } : {}),
+                  ...(agent.limits !== undefined ? { limits: agent.limits } : {}),
+                } satisfies AgentDescriptor
+              })
       // V4.0 §A1 — this is the PRODUCTION provider (ServerAgentListProviderLive is what
       // server.ts wires into imRuntimeLayer + v4EventRuntimeLayer + what multi-agent-runtime resolves).
       // The real deepagent-code agents (auto/general/plan) carry NO trigger/capability

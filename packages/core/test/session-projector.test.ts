@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { asc, eq } from "drizzle-orm"
@@ -23,6 +24,7 @@ import { MessageTable, SessionInputTable, SessionMessageTable, SessionTable } fr
 import { testEffect } from "./lib/effect"
 import { WorkspaceTable } from "@deepagent-code/core/control-plane/workspace.sql"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
+import { Hash } from "@deepagent-code/core/util/hash"
 
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
@@ -47,6 +49,87 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("replayable revert removals truncate V2 history while retaining the current notice", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const targetID = SessionMessage.ID.make("msg_revert_target")
+      const noticeID = SessionMessage.ID.make(`msg_${Hash.sha256(`revert-notice:${sessionID}:1`).slice(0, 40)}`)
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run().pipe(Effect.orDie)
+      yield* db.insert(SessionTable).values({
+        id: sessionID,
+        project_id: Project.ID.global,
+        slug: "revert",
+        directory: "/project",
+        title: "revert",
+        version: "test",
+        mutation_epoch: 1,
+      }).run().pipe(Effect.orDie)
+      const assistant = encodeMessage(new SessionMessage.Assistant({
+        id: targetID,
+        type: "assistant",
+        agent: "build",
+        model,
+        content: [
+          new SessionMessage.AssistantText({ type: "text", id: "keep", text: "keep" }),
+          new SessionMessage.AssistantText({ type: "text", id: "drop", text: "drop" }),
+        ],
+        time: { created },
+      }))
+      const { id: _, type: __, ...data } = assistant
+      yield* db.insert(SessionMessageTable).values({
+        id: targetID,
+        session_id: sessionID,
+        type: "assistant",
+        seq: 10,
+        time_created: 0,
+        data,
+      }).run().pipe(Effect.orDie)
+      const oldSystem = encodeMessage(new SessionMessage.System({
+        id: SessionMessage.ID.make("msg_revert_old_system"), type: "system", text: "old branch", time: { created },
+      }))
+      const { id: ___, type: ____, ...oldSystemData } = oldSystem
+      yield* db.insert(SessionMessageTable).values({
+        id: SessionMessage.ID.make(oldSystem.id),
+        session_id: sessionID,
+        type: "system",
+        seq: 11,
+        time_created: 0,
+        data: oldSystemData,
+      }).run().pipe(Effect.orDie)
+      const notice = encodeMessage(new SessionMessage.Synthetic({
+        id: noticeID, type: "synthetic", sessionID, text: "reverted", time: { created },
+      }))
+      const { id: _____, type: ______, ...noticeData } = notice
+      yield* db.insert(SessionMessageTable).values({
+        id: noticeID,
+        session_id: sessionID,
+        type: "synthetic",
+        seq: 12,
+        time_created: 0,
+        data: noticeData,
+      }).run().pipe(Effect.orDie)
+
+      yield* events.publish(SessionV1.Event.PartRemoved, {
+        sessionID,
+        messageID: SessionV1.MessageID.make(targetID),
+        partID: SessionV1.PartID.make(`prt_${targetID.slice("msg_".length)}_1`),
+      })
+      const partial = yield* db.select().from(SessionMessageTable).orderBy(SessionMessageTable.seq).all().pipe(Effect.orDie)
+      expect(partial.map((row) => row.id)).toEqual([targetID, noticeID])
+      expect(Schema.decodeUnknownSync(SessionMessage.Message)({
+        ...partial[0]!.data, id: targetID, type: "assistant",
+      })).toMatchObject({ content: [{ text: "keep" }] })
+
+      yield* events.publish(SessionV1.Event.MessageRemoved, {
+        sessionID,
+        messageID: SessionV1.MessageID.make(targetID),
+      })
+      expect((yield* db.select({ id: SessionMessageTable.id }).from(SessionMessageTable).all().pipe(Effect.orDie))
+        .map((row) => row.id)).toEqual([noticeID])
+    }),
+  )
+
   it.effect("projects a monotonic durable interrupt boundary without changing visible update time", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -312,7 +395,7 @@ describe("SessionProjector", () => {
         SessionV2.layer.pipe(
           Layer.provide(events),
           Layer.provide(database),
-          Layer.provide(Project.defaultLayer),
+          Layer.provide(projectLayer(database)),
           Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
           Layer.provide(SessionExecution.noopLayer),
         ),

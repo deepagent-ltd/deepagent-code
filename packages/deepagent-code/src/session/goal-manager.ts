@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto"
 import { Global } from "@deepagent-code/core/global"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
+import { DeepAgentLearningGeneration } from "@deepagent-code/core/deepagent/learning-generation"
 import {
   buildPlanFromWriteInput,
   createPlanDoc,
@@ -624,6 +625,10 @@ export const layer = Layer.effect(
         AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, "paused")
         // Immediate goal.updated so the status bar flips to "paused" now, not after the in-flight tick.
         yield* publishControlPhase(sessionID, c, "paused")
+        // The control transition is durable before learning observes it. Only a previously
+        // settled activity can be claimed; an in-flight provider turn is never sampled.
+        yield* DeepAgentLearningGeneration.claim(db, { trigger: "pause", sessionID })
+          .pipe(Effect.catchCause((cause) => Effect.logWarning("goal pause learning claim failed", { cause })))
         return true
       })
 
@@ -894,6 +899,6 @@ export const productionLayer = Layer.suspend(() =>
 )
 
 /** Standalone default. Production roots must provide one shared SessionV2 runtime to productionLayer. */
-export const defaultLayer = productionLayer.pipe(Layer.provide(SessionV2.liveLayer))
+export const testLayer = productionLayer.pipe(Layer.provide(SessionV2.liveLayer))
 
 export * as GoalManager from "./goal-manager"

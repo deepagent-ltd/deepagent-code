@@ -234,6 +234,7 @@ export namespace PromptLifecycle {
       prompt: Prompt,
       // Superset of SessionInput.Delivery; `goal_steer` (§S1.3) does not flow this dormant V2 path.
       delivery: Schema.Literals(["steer", "queue", "goal_steer"]),
+      revertEpoch: NonNegativeInt.pipe(Schema.optional),
     },
   })
   export type Admitted = typeof Admitted.Type
@@ -292,6 +293,25 @@ export namespace Execution {
     },
   })
   export type Interrupted = typeof Interrupted.Type
+}
+
+/** One durable diagnosis for a loop stop or an interrupted tool with unknown side effects. */
+export namespace LoopBudget {
+  export const Triggered = EventV2.define({
+    type: "session.loop.budget.triggered",
+    ...options,
+    schema: {
+      ...Base,
+      activityID: Schema.String,
+      reason: Schema.Literals(["steps", "repeated_tool", "orphan_effect"]),
+      limit: NonNegativeInt.pipe(Schema.optional),
+      used: NonNegativeInt.pipe(Schema.optional),
+      tool: Schema.String.pipe(Schema.optional),
+      inputHash: Schema.String.pipe(Schema.optional),
+      effectIDs: Schema.Array(Schema.String).pipe(Schema.optional),
+    },
+  })
+  export type Triggered = typeof Triggered.Type
 }
 
 /**
@@ -683,7 +703,12 @@ export namespace Compaction {
     schema: {
       ...Base,
       messageID: SessionMessageID.ID,
-      reason: Schema.Union([Schema.Literal("auto"), Schema.Literal("manual")]),
+      reason: Schema.Union([
+        Schema.Literal("auto"),
+        Schema.Literal("manual"),
+        Schema.Literal("hard_gate"),
+        Schema.Literal("provider_overflow"),
+      ]),
     },
   })
   export type Started = typeof Started.Type
@@ -718,6 +743,8 @@ export namespace Compaction {
       reason: Started.data.fields.reason,
       text: Schema.String,
       recent: Schema.String,
+      checkpointID: Schema.String.pipe(Schema.optional),
+      checkpointHash: Schema.String.pipe(Schema.optional),
     },
   })
   export type Ended = typeof Ended.Type
@@ -741,6 +768,7 @@ const DurableDefinitions = [
   Execution.Succeeded,
   Execution.Failed,
   Execution.Interrupted,
+  LoopBudget.Triggered,
   ContextUpdated,
   Synthetic,
   StructuredCaptured,

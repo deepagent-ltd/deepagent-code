@@ -34,6 +34,7 @@ const version = Object.values(binaries)[0]
 await $`mkdir -p ./dist/${pkg.name}`
 await $`mkdir -p ./dist/${pkg.name}/bin`
 await $`cp ./script/postinstall.mjs ./dist/${pkg.name}/postinstall.mjs`
+await $`cp ./script/install-data-home.mjs ./dist/${pkg.name}/install-data-home.mjs`
 await Bun.file(`./dist/${pkg.name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
 await Bun.file(`./dist/${pkg.name}/bin/${pkg.name}.exe`).write(
   [
@@ -79,7 +80,7 @@ await Promise.all(tasks)
 await publish(`./dist/${pkg.name}`, `${pkg.name}-ai`, version)
 
 const image = "ghcr.io/deepagent-ltd/deepagent-code"
-const platforms = "linux/amd64,linux/arm64"
+const platforms = "linux/amd64"
 const tags = [`${image}:${version}`, `${image}:${Script.channel}`]
 const tagFlags = tags.flatMap((t) => ["-t", t])
 
@@ -87,9 +88,6 @@ const tagFlags = tags.flatMap((t) => ["-t", t])
 if (!Script.preview) {
   await $`docker buildx build --platform ${platforms} ${tagFlags} --push .`
   // Calculate SHA values
-  const arm64Sha = await $`sha256sum ./dist/deepagent-code-linux-arm64.tar.gz | cut -d' ' -f1`
-    .text()
-    .then((x) => x.trim())
   const x64Sha = await $`sha256sum ./dist/deepagent-code-linux-x64.tar.gz | cut -d' ' -f1`.text().then((x) => x.trim())
   const macX64Sha = await $`sha256sum ./dist/deepagent-code-darwin-x64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
   const macArm64Sha = await $`sha256sum ./dist/deepagent-code-darwin-arm64.zip | cut -d' ' -f1`
@@ -110,15 +108,12 @@ if (!Script.preview) {
     "pkgrel=1",
     "pkgdesc='The AI coding agent built for the terminal.'",
     "url='https://github.com/deepagent-ltd/deepagent-code'",
-    "arch=('aarch64' 'x86_64')",
+    "arch=('x86_64')",
     "license=('MIT')",
     "provides=('deepagent-code')",
     "conflicts=('deepagent-code')",
     "depends=('ripgrep')",
     "",
-    `source_aarch64=("\${pkgname}_\${pkgver}_aarch64.tar.gz::https://github.com/deepagent-ltd/deepagent-code/releases/download/v\${pkgver}\${_subver}/deepagent-code-linux-arm64.tar.gz")`,
-    `sha256sums_aarch64=('${arm64Sha}')`,
-
     `source_x86_64=("\${pkgname}_\${pkgver}_x86_64.tar.gz::https://github.com/deepagent-ltd/deepagent-code/releases/download/v\${pkgver}\${_subver}/deepagent-code-linux-x64.tar.gz")`,
     `sha256sums_x86_64=('${x64Sha}')`,
     "",
@@ -183,13 +178,6 @@ if (!Script.preview) {
     "    if Hardware::CPU.intel? and Hardware::CPU.is_64_bit?",
     `      url "https://github.com/deepagent-ltd/deepagent-code/releases/download/v${Script.version}/deepagent-code-linux-x64.tar.gz"`,
     `      sha256 "${x64Sha}"`,
-    "      def install",
-    '        bin.install "deepagent-code"',
-    "      end",
-    "    end",
-    "    if Hardware::CPU.arm? and Hardware::CPU.is_64_bit?",
-    `      url "https://github.com/deepagent-ltd/deepagent-code/releases/download/v${Script.version}/deepagent-code-linux-arm64.tar.gz"`,
-    `      sha256 "${arm64Sha}"`,
     "      def install",
     '        bin.install "deepagent-code"',
     "      end",

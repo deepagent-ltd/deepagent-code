@@ -3,7 +3,6 @@ import { directoryPickerKind } from "./directory-picker-policy"
 
 const local = {
   type: "sidecar",
-  variant: "base",
   http: { url: "http://localhost:4096" },
 } as const
 const remote = {

@@ -69,6 +69,7 @@ export const CurrentOnSessionSettled = Context.Reference<
 // evaluatePlanGate decision; absent (core-only compositions) tools settle ungated exactly as before.
 export type ToolSettleGateInput = {
   readonly sessionID: string
+  readonly parentID?: string
   readonly toolName: string
   readonly args: unknown
 }
@@ -92,6 +93,33 @@ export class StepLimitExceededError extends Schema.TaggedErrorClass<StepLimitExc
   }
 }
 
+export class RepeatedToolError extends Schema.TaggedErrorClass<RepeatedToolError>()("SessionRunner.RepeatedToolError", {
+  sessionID: SessionSchema.ID,
+  tool: Schema.String,
+  inputHash: Schema.String,
+  count: Schema.Int,
+}) {
+  constructor(props: {
+    readonly sessionID: SessionSchema.ID
+    readonly tool: string
+    readonly inputHash: string
+    readonly count: number
+  }) {
+    super(props)
+    this.message = `${props.tool} called ${props.count} consecutive times with identical input in session ${props.sessionID}`
+  }
+}
+
+export class ContextBudgetHardGateError extends Schema.TaggedErrorClass<ContextBudgetHardGateError>()(
+  "SessionRunner.ContextBudgetHardGateError",
+  { sessionID: SessionSchema.ID, estimatedTokens: Schema.Int, effectiveHardGate: Schema.Int, reason: Schema.String },
+) {
+  constructor(props: { readonly sessionID: SessionSchema.ID; readonly estimatedTokens: number; readonly effectiveHardGate: number; readonly reason: string }) {
+    super(props)
+    this.message = `context_budget_hard_gate: ${props.reason} (${props.estimatedTokens} >= ${props.effectiveHardGate})`
+  }
+}
+
 /** A durable execution claim already exists. The caller must classify/recover that Session instead
  * of starting another provider drain whose preceding physical outcome may be unknown. */
 export class ExecutionRecoveryRequiredError extends Schema.TaggedErrorClass<ExecutionRecoveryRequiredError>()(
@@ -110,6 +138,8 @@ export type RunError =
   | MessageDecodeError
   | ContextSnapshotDecodeError
   | StepLimitExceededError
+  | RepeatedToolError
+  | ContextBudgetHardGateError
   | ExecutionRecoveryRequiredError
   | SystemContext.InitializationBlocked
   | SessionContextEpoch.AgentReplacementBlocked

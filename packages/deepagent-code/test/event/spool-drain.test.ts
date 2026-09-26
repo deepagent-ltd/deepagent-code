@@ -127,14 +127,40 @@ describe("W5 DLQ visibility — spool drain failure → event_consumer_failure r
         const receipt = yield* ConsumerReceipts.receiptFor(db, CONSUMER_FAILURE_KIND, envelope.eventRef)
         expect(receipt).toBeDefined()
         if (!receipt) return
-        expect(receipt.status).toBe("pending")
+        expect(receipt.status).toBe("dead")
         expect(receipt.lastError).toContain("SessionV2 refused the spooled work")
-        // The receipt's failure side effect ran once at the DLQ transition (only-on-dead policy); the
-        // real attempt count lives on the spool row above.
-        expect(receipt.attempts).toBeGreaterThanOrEqual(1)
+        expect(receipt.attempts).toBe(row!.attempts)
         // The admission receipt is honestly terminal `refused` (its effect never ran).
         const admission = yield* EventAdmission.admissionFor(db, envelope.eventRef)
         expect(admission?.status).toBe("refused")
+      }),
+    )
+  })
+
+  test("a later drain repairs a missing terminal receipt without retrying the dead work", async () => {
+    await runWithDb((db) =>
+      Effect.gen(function* () {
+        const envelope = envelopeFor("event://w5-spool-crash-gap")
+        yield* EventSpool.enqueue(db, { envelope, sessionID: "ses_w5_crash_gap", priority: "high", now: 10 })
+        const claimed = yield* EventSpool.claimDue(db, { claimantId: "test", now: 20 })
+        yield* EventSpool.nack(db, {
+          eventRef: envelope.eventRef,
+          claimToken: claimed.claimToken,
+          now: 30,
+          reason: "crashed after nack",
+          maxAttempts: 1,
+        })
+        expect(yield* ConsumerReceipts.receiptFor(db, CONSUMER_FAILURE_KIND, envelope.eventRef)).toBeUndefined()
+
+        const calls: number[] = []
+        yield* spoolDrainPass({ db, v2Session: failingV2Session(calls), now: () => 40 })
+        expect(calls).toHaveLength(0)
+        const receipt = yield* ConsumerReceipts.receiptFor(db, CONSUMER_FAILURE_KIND, envelope.eventRef)
+        expect(receipt).toMatchObject({ status: "dead", attempts: 1, lastError: "crashed after nack" })
+
+        yield* spoolDrainPass({ db, v2Session: failingV2Session(calls), now: () => 50 })
+        expect(calls).toHaveLength(0)
+        expect(yield* ConsumerReceipts.receiptFor(db, CONSUMER_FAILURE_KIND, envelope.eventRef)).toEqual(receipt)
       }),
     )
   })

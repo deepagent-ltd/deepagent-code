@@ -91,7 +91,12 @@ export const layer = Layer.effectDiscard(
                 )
                 .orderBy(desc(TaskRunTable.generation))
                 .get()
-                .pipe(Effect.orDie)
+                .pipe(
+                  Effect.mapError(() => new ToolFailure({ message: "task_recovery: run lookup is unavailable" })),
+                  Effect.catchDefect(() =>
+                    Effect.fail(new ToolFailure({ message: "task_recovery: run lookup is unavailable" })),
+                  ),
+                )
               if (!latest || latest.state !== "recovery_required")
                 return yield* new ToolFailure({
                   message: `task_recovery: latest run for ${input.task_id} is ${latest?.state ?? "absent"}, not recovery_required`,
@@ -134,6 +139,9 @@ export const layer = Layer.effectDiscard(
                           ? `task_recovery: latest run for ${input.task_id} is ${error.actualState}, not recovery_required`
                           : `task_recovery failed (${error._tag}); the run is unchanged — retry the call.`,
                     }),
+                ),
+                Effect.catchDefect(() =>
+                  Effect.fail(new ToolFailure({ message: "task_recovery: run settlement is unavailable; retry the call" })),
                 ),
               )
 

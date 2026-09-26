@@ -22,6 +22,7 @@ const artifact = await runLegacyLiveCases({
     "This parent is a constrained task supervision test. Use only task, task_status, and task_read in the exact requested order. Never call unavailable file or search tools.",
   cases: [{ name: "interrupted", prompt }],
   files: { "fixtures/partial.txt": `${marker}\n` },
+  inspectTaskRuns: true,
 })
 await writeLiveArtifact(
   { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
@@ -39,9 +40,15 @@ const child = observation.children[0]
 if (!child || child.parentID !== observation.sessionID || child.agent !== "researcher") {
   throw new Error("Interrupted child lineage or agent identity is incorrect")
 }
-const subagent = nestedRecord(child.metadata, ["deepagent", "subagent"])
-if (subagent.state !== "interrupted" || subagent.finished !== true || subagent.reason !== "human") {
-  throw new Error(`Interrupted child has invalid durable metadata: ${JSON.stringify(subagent)}`)
+const run = observation.taskRuns?.[0]
+if (
+  observation.taskRuns?.length !== 1 ||
+  run?.childSessionID !== child.id ||
+  run.executionRuntime !== "v2" ||
+  run.state !== "interrupted" ||
+  run.reason !== "human"
+) {
+  throw new Error(`Interrupted child has invalid durable run: ${JSON.stringify(observation.taskRuns)}`)
 }
 const childTools = child.assistants.flatMap((assistant) => assistant.tools)
 const read = childTools.find(
@@ -76,8 +83,19 @@ if (!observation.finalText.includes(marker) || !observation.finalText.toLowerCas
   throw new Error("Parent did not report recovered interrupted evidence")
 }
 if (
-  child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
-  child.model.id !== artifact.fingerprint.modelID ||
+  child.v2Assistants.length === 0 ||
+  child.v2Assistants.some(
+    (assistant) =>
+      assistant.model.providerID !== artifact.fingerprint.runtimeProviderID ||
+      assistant.model.id !== artifact.fingerprint.modelID,
+  ) ||
+  child.v2ProviderTurns.length === 0 ||
+  child.v2ProviderTurns.some(
+    (turn) =>
+      turn.providerID !== artifact.fingerprint.runtimeProviderID ||
+      turn.modelID !== artifact.fingerprint.modelID ||
+      turn.state !== "settled",
+  ) ||
   child.assistants.some(
     (assistant) =>
       assistant.providerID !== artifact.fingerprint.runtimeProviderID || assistant.modelID !== artifact.fingerprint.modelID,
@@ -94,7 +112,7 @@ const result = {
     childMessageCount: child.messageCount,
     childCompletedRead: true,
     questionLatch: "abort",
-    durableState: subagent.state,
+    durableState: run.state,
     parentTools: observation.tools.map((tool) => `${tool.name}:${tool.status}`),
   },
 }
@@ -104,16 +122,5 @@ await writeLiveArtifact(
   result,
 )
 console.log(`${result.suite}: passed (${result.fingerprint.providerID}/${result.fingerprint.modelID})`)
-
-function nestedRecord(value: unknown, keys: string[]) {
-  const result = keys.reduce<Record<string, unknown> | undefined>((current, key) => {
-    if (!current) return undefined
-    const next = current[key]
-    if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-    return next as Record<string, unknown>
-  }, typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined)
-  if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
-  return result
-}
 
 finishLiveScript()

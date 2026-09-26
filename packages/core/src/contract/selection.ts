@@ -154,7 +154,9 @@ export const SelectionModelCapability = Schema.Struct({
     "openai-compatible.chat",
     "anthropic.messages",
   ]),
-  contextWindow: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  // Absent means unknown. Keep zero decodable for older durable v1 envelopes that
+  // used it as a placeholder, but new writers omit the field instead of inventing 0.
+  contextWindow: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.optional),
   structuredOutput: Schema.Boolean,
 })
 export type SelectionModelCapability = typeof SelectionModelCapability.Type
@@ -200,6 +202,10 @@ export const SelectionRef = Schema.Struct({
   graph: GraphKindSchema,
   ref: Schema.String,
   token: Schema.String,
+  // Optional for older durable v1 selections. New writers preserve the source
+  // revision and actual provenance refs; an empty provenance list is not invented.
+  version: Schema.String.pipe(Schema.optional),
+  provenanceRefs: Schema.Array(Schema.String).pipe(Schema.optional),
   score: Schema.Finite,
   freshness: Schema.Literals(["current", "historical", "expired", "superseded", "conflict", "unknown"]),
   sensitivity: Schema.String,

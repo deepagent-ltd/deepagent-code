@@ -20,8 +20,9 @@ import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionInput } from "@deepagent-code/core/session/input"
+import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionEvent } from "@deepagent-code/core/session/event"
-import { SessionTable } from "@deepagent-code/core/session/sql"
+import { MessageTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { testEffect } from "./lib/effect"
@@ -318,6 +319,107 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("keeps prompt metadata and model selection durable across an exact retry", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const created = yield* session.create({ location })
+      const prompt = new Prompt({
+        text: "Selected turn",
+        metadata: { deepagent: { prompt_pipeline: { mode: "intelligence" } } },
+        model: { providerID: "provider", id: "selected", variant: "fast" },
+      })
+      const admitted = yield* session.prompt({ sessionID: created.id, prompt, resume: false })
+      expect((yield* session.get(created.id)).model).toBeUndefined()
+      yield* SessionInput.promoteSteers(db, events, created.id, Number.MAX_SAFE_INTEGER)
+      expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("selected"))
+      yield* session.switchModel({
+        sessionID: created.id,
+        model: { providerID: ProviderV2.ID.make("provider"), id: ModelV2.ID.make("later") },
+      })
+      expect((yield* session.prompt({ sessionID: created.id, id: admitted.id, prompt, resume: false })).id).toBe(admitted.id)
+      expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("later"))
+      const user = (yield* session.messages({ sessionID: created.id })).find((message) => message.type === "user")
+      expect(user?.metadata).toEqual(prompt.metadata)
+      expect(user?.type === "user" ? user.model?.id : undefined).toBe("selected")
+      const legacy = yield* db.select().from(MessageTable).where(eq(MessageTable.id, SessionV1.MessageID.ascending(admitted.id))).get()
+      expect(legacy?.data).toMatchObject({ metadata: prompt.metadata, model: { modelID: "selected", variant: "fast" } })
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .slice(0, 3)
+          .map((event) => event.type),
+      ).toEqual([
+        "session.created.2",
+        "session.next.prompt.admitted.1",
+        "session.next.prompt.promoted.1",
+      ])
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .filter((event) => event.type === "session.next.model.switched.1"),
+      ).toHaveLength(1)
+    }),
+  )
+
+  it.effect("does not switch agent or model when prompt admission rejects a stale revert epoch", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const created = yield* session.create({ location })
+      const messageID = SessionMessage.ID.create()
+      yield* db.update(SessionTable).set({ mutation_epoch: 1 }).where(eq(SessionTable.id, created.id)).run()
+
+      const failure = yield* session.prompt({
+        sessionID: created.id,
+        id: messageID,
+        prompt: new Prompt({
+          text: "Stale selection",
+          agent: "plan",
+          model: { providerID: "provider", id: "selected" },
+        }),
+        revertEpoch: 0,
+        resume: false,
+      }).pipe(Effect.flip)
+
+      expect(failure._tag).toBe("SessionInput.StaleRevertEpoch")
+      expect((yield* session.get(created.id)).agent).toBeUndefined()
+      expect((yield* session.get(created.id)).model).toBeUndefined()
+      expect(yield* SessionInput.find(db, messageID)).toBeUndefined()
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .map((event) => event.type),
+      ).toEqual(["session.created.2"])
+    }),
+  )
+
+  it.effect("concurrent exact prompt retries project one selection with the admitted input", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const created = yield* session.create({ location })
+      const input = {
+        sessionID: created.id,
+        id: SessionMessage.ID.create(),
+        prompt: new Prompt({ text: "Select once", model: { providerID: "provider", id: "selected" } }),
+        resume: false,
+      }
+
+      const receipts = yield* Effect.all([session.prompt(input), session.prompt(input)], { concurrency: "unbounded" })
+      expect(receipts[0]).toEqual(receipts[1])
+      expect((yield* session.get(created.id)).model).toBeUndefined()
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .map((event) => event.type),
+      ).toEqual(["session.created.2", "session.next.prompt.admitted.1"])
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .filter((event) => event.type === "session.next.model.switched.1"),
+      ).toHaveLength(0)
+      yield* SessionInput.promoteSteers(db, yield* EventV2.Service, created.id, Number.MAX_SAFE_INTEGER)
+      expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("selected"))
+    }),
+  )
+
   it.effect("replays one prompt lifecycle into a fresh target database", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
@@ -326,7 +428,11 @@ describe("SessionV2.create", () => {
       const created = yield* session.create({ id: SessionV2.ID.make("ses_fresh_target_replay"), location })
       const admitted = yield* session.prompt({
         sessionID: created.id,
-        prompt: new Prompt({ text: "Replay lifecycle" }),
+        prompt: new Prompt({
+          text: "Replay lifecycle",
+          agent: "plan",
+          model: { providerID: "provider", id: "selected" },
+        }),
         resume: false,
       })
       yield* SessionInput.promoteSteers(sourceDb, sourceEvents, created.id, Number.MAX_SAFE_INTEGER)
@@ -365,6 +471,7 @@ describe("SessionV2.create", () => {
 
         expect(yield* store.get(created.id)).toBeUndefined()
         expect(yield* events.replayAll(serialized.slice(0, 2))).toBe(created.id)
+        expect(yield* store.get(created.id)).toMatchObject({ agent: undefined, model: undefined })
         expect(yield* SessionInput.find(db, admitted.id)).toMatchObject({
           id: admitted.id,
           sessionID: created.id,
@@ -375,6 +482,7 @@ describe("SessionV2.create", () => {
         expect(yield* store.context(created.id)).toEqual([])
 
         expect(yield* events.replayAll(serialized.slice(2))).toBe(created.id)
+        expect(yield* store.get(created.id)).toMatchObject({ agent: "plan", model: { id: "selected" } })
         expect(yield* SessionInput.find(db, admitted.id)).toMatchObject({
           id: admitted.id,
           sessionID: created.id,
@@ -507,12 +615,7 @@ describe("SessionV2.create", () => {
           .pipe(Effect.orDie),
       ).toEqual(sequence)
       expect(
-        yield* db
-          .select()
-          .from(EventTable)
-          .where(eq(EventTable.aggregate_id, created.id))
-          .all()
-          .pipe(Effect.orDie),
+        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
       ).toEqual(beforeEvents)
 
       yield* db
@@ -619,12 +722,7 @@ describe("SessionV2.create", () => {
             .pipe(Effect.orDie),
         ).toEqual(sequence)
         expect(
-          yield* db
-            .select()
-            .from(EventTable)
-            .where(eq(EventTable.aggregate_id, created.id))
-            .all()
-            .pipe(Effect.orDie),
+          yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
         ).toEqual(beforeEvents)
       }
 
@@ -666,7 +764,7 @@ describe("SessionV2.create", () => {
             },
           },
           { ownerID: "wrk_owner", strictOwner: true },
-      )
+        )
         .pipe(Effect.catchDefect(Effect.succeed))
       expect(ownedDefect).toBeInstanceOf(EventV2.InvalidSyncEventError)
       expect((ownedDefect as EventV2.InvalidSyncEventError).message).toContain("current workspace authority")
@@ -722,7 +820,10 @@ describe("SessionV2.create", () => {
       const session = yield* SessionV2.Service
       const created = yield* session.create({ location })
       const unavailable = (
-        effect: Effect.Effect<void, SessionV2.NotFoundError | SessionV2.OperationUnavailableError>,
+        effect: Effect.Effect<
+          void,
+          SessionV2.NotFoundError | SessionV2.LegacySessionRequiresAdoption | SessionV2.OperationUnavailableError
+        >,
       ) =>
         effect.pipe(
           Effect.flip,
@@ -757,12 +858,7 @@ describe("SessionV2.create", () => {
         .run()
         .pipe(Effect.orDie)
       yield* session.create({ location })
-      const row = yield* db
-        .select()
-        .from(ProjectTable)
-        .where(eq(ProjectTable.id, resolved.id))
-        .get()
-        .pipe(Effect.orDie)
+      const row = yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, resolved.id)).get().pipe(Effect.orDie)
       expect(row?.worktree).toBe(AbsolutePath.make("/sentinel-worktree"))
     }),
   )
@@ -782,10 +878,9 @@ describe("SessionV2.create", () => {
       expect(yield* session.get(created.id)).toMatchObject({ model })
       expect(
         Array.from(
-          yield* session.events({ sessionID: created.id, after: EventV2.Cursor.make(0) }).pipe(
-            Stream.take(1),
-            Stream.runCollect,
-          ),
+          yield* session
+            .events({ sessionID: created.id, after: EventV2.Cursor.make(0) })
+            .pipe(Stream.take(1), Stream.runCollect),
         ),
       ).toMatchObject([{ event: { type: "session.next.model.switched", data: { model } } }])
     }),
@@ -819,10 +914,9 @@ describe("SessionV2.create", () => {
       expect(yield* session.get(created.id)).toMatchObject({ permissions })
       expect(
         Array.from(
-          yield* session.events({ sessionID: created.id, after: EventV2.Cursor.make(0) }).pipe(
-            Stream.take(1),
-            Stream.runCollect,
-          ),
+          yield* session
+            .events({ sessionID: created.id, after: EventV2.Cursor.make(0) })
+            .pipe(Stream.take(1), Stream.runCollect),
         ),
       ).toMatchObject([{ event: { type: "session.next.permissions.changed", data: { permissions } } }])
     }),
@@ -847,7 +941,6 @@ describe("SessionV2.create", () => {
     }),
   )
 })
-
 
 describe("SessionV2 agent admission validation (RI-04)", () => {
   rosterIt.effect("create typed-fails an unknown agent before projecting the Session", () =>

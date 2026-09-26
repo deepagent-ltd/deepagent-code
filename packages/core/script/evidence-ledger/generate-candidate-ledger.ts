@@ -8,7 +8,7 @@
  * explicit input because gate statuses and approvals are evidence, not facts this script may
  * infer. Omitting a packaged directory intentionally produces a fail-closed NO-GO ledger.
  */
-import { mkdtemp, rm } from "node:fs/promises"
+import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { generateManifest, serializeManifest } from "../manifest-digest/manifest"
@@ -48,6 +48,8 @@ const evidenceDir = required("--evidence-dir")
 // (when provided, signatures are checked and failures reject); unsigned runs stay eligible.
 const publicKeyPath = option("--public-key")
 const outputPath = option("--out")
+const artifactDir = option("--artifact-dir")
+if (artifactDir && !outputPath) throw new Error("--out is required with --artifact-dir")
 const temporary = await mkdtemp(path.join(os.tmpdir(), "deepagent-evidence-ledger-"))
 
 try {
@@ -100,11 +102,28 @@ try {
       packagedDirectory,
       "--runs",
       runsPath,
+      "--evidence-dir",
+      evidenceDir,
+      ...(args.includes("--require-cli-binary") ? ["--require-cli-binary"] : []),
       "--out",
       packagedPath,
     ])
     if (report.stderr) process.stderr.write(report.stderr)
     if (report.exitCode !== 0) throw new Error(`packaged report generation failed (${report.exitCode})`)
+  }
+
+  if (artifactDir) {
+    await mkdir(path.join(artifactDir, "caller-inventory"), { recursive: true })
+    await Promise.all([
+      copyFile(sourcePath, path.join(artifactDir, "source-manifest.json")),
+      copyFile(runtimePath, path.join(artifactDir, "runtime-inventory.tsv")),
+      copyFile(
+        path.join(callerInventoryDirectory, "report.json"),
+        path.join(artifactDir, "caller-inventory/report.json"),
+      ),
+      ...(packagedDirectory ? [copyFile(packagedPath, path.join(artifactDir, "packaged-runtime-report.json"))] : []),
+      ...(runsPath ? [copyFile(runsPath, path.join(artifactDir, "runs.json"))] : []),
+    ])
   }
 
   const ledgerArgs = [
@@ -123,6 +142,17 @@ try {
   const ledger = await run(path.join(import.meta.dir, "generate-ledger.ts"), ledgerArgs)
   if (ledger.stdout) process.stdout.write(ledger.stdout)
   if (ledger.stderr) process.stderr.write(ledger.stderr)
+  if (artifactDir) {
+    const verification = await run(path.join(import.meta.dir, "verify-ledger-products.ts"), [
+      "--ledger",
+      outputPath!,
+      "--artifact-dir",
+      artifactDir,
+    ])
+    if (verification.stdout) process.stdout.write(verification.stdout)
+    if (verification.stderr) process.stderr.write(verification.stderr)
+    if (verification.exitCode !== 0) throw new Error(`ledger products failed readback (${verification.exitCode})`)
+  }
   process.exitCode = ledger.exitCode
 } finally {
   await rm(temporary, { recursive: true, force: true })

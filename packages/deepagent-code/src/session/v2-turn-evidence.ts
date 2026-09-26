@@ -63,6 +63,10 @@ export const recordTurnEvidence = Effect.fn("recordTurnEvidence")(function* (inp
       : undefined
     if (message.type === "user") {
       lastUser = message
+      const metadata = message.metadata ??
+        (Option.isSome(mirrored) && mirrored.value.info.role === "user"
+          ? mirrored.value.info.metadata
+          : undefined)
       const info = {
         id: MessageID.make(message.id),
         sessionID: input.sessionID,
@@ -73,6 +77,7 @@ export const recordTurnEvidence = Effect.fn("recordTurnEvidence")(function* (inp
           providerID: ProviderV2.ID.make(input.model.providerID),
           modelID: ModelV2.ID.make(input.model.modelID),
         },
+        ...(metadata === undefined ? {} : { metadata }),
       }
       if (mirroredInfo !== mirrorFingerprint(info)) yield* input.sessions.updateMessage(info)
       continue

@@ -122,6 +122,8 @@ import type {
   DeepagentPanelConsultResponses,
   DeepagentPanelStatusErrors,
   DeepagentPanelStatusResponses,
+  DeepagentProjectSwitchErrors,
+  DeepagentProjectSwitchResponses,
   DeepagentQueueListErrors,
   DeepagentQueueListResponses,
   DeepagentReviewsErrors,
@@ -177,6 +179,7 @@ import type {
   ExperimentalWorkspaceSyncListResponses,
   ExperimentalWorkspaceWarpErrors,
   ExperimentalWorkspaceWarpResponses,
+  ExternalChannelsInput,
   FileCreateBody,
   FileCreateErrors,
   FileCreateResponses,
@@ -216,6 +219,9 @@ import type {
   FindTextResponses,
   FormatterStatusErrors,
   FormatterStatusResponses,
+  GatewayChatResponses,
+  GatewayModelsResponses,
+  GatewayResponsesResponses,
   GlobalCapabilitiesErrors,
   GlobalCapabilitiesResponses,
   GlobalConfigGetErrors,
@@ -376,6 +382,7 @@ import type {
   PermissionRespondResponses,
   PermissionRuleset,
   PermissionV2Reply,
+  PermissionV2Ruleset,
   ProfileHotspotsErrors,
   ProfileHotspotsResponses,
   ProfileResultErrors,
@@ -408,6 +415,13 @@ import type {
   ProviderOauthAuthorizeResponses,
   ProviderOauthCallbackErrors,
   ProviderOauthCallbackResponses,
+  ProxyAdminAuditListResponses,
+  ProxyAdminLaneListResponses,
+  ProxyAdminLedgerListResponses,
+  ProxyAdminTenantCreateResponses,
+  ProxyAdminTenantDeleteResponses,
+  ProxyAdminTenantListResponses,
+  ProxyAdminTenantUpdateResponses,
   PtyConnectErrors,
   PtyConnectResponses,
   PtyConnectTokenErrors,
@@ -465,12 +479,21 @@ import type {
   SessionDiffArtifactManifestResponses,
   SessionDiffErrors,
   SessionDiffResponses,
+  SessionExportBundleErrors,
+  SessionExportBundleResponses,
+  SessionExportBundleStreamErrors,
+  SessionExportBundleStreamResponse,
+  SessionExportBundleStreamResponses,
   SessionExportSnapshotErrors,
   SessionExportSnapshotResponses,
   SessionForkErrors,
   SessionForkResponses,
   SessionGetErrors,
   SessionGetResponses,
+  SessionImportBundleErrors,
+  SessionImportBundleResponses,
+  SessionImportBundleShareErrors,
+  SessionImportBundleShareResponses,
   SessionImportSnapshotErrors,
   SessionImportSnapshotResponses,
   SessionInitErrors,
@@ -481,6 +504,7 @@ import type {
   SessionMessageResponses,
   SessionMessagesErrors,
   SessionMessagesResponses,
+  SessionMetadata,
   SessionPlanErrors,
   SessionPlanResponses,
   SessionPromptAsyncErrors,
@@ -501,6 +525,10 @@ import type {
   SessionProviderResolutionResolveResponses,
   SessionRevertErrors,
   SessionRevertResponses,
+  SessionRevokeBundleShareErrors,
+  SessionRevokeBundleShareResponses,
+  SessionShareBundleErrors,
+  SessionShareBundleResponses,
   SessionShareErrors,
   SessionShareResponses,
   SessionShellErrors,
@@ -573,6 +601,8 @@ import type {
   V2FsListResponses,
   V2FsReadErrors,
   V2FsReadResponses,
+  V2HealthCompositionErrors,
+  V2HealthCompositionResponses,
   V2HealthGetErrors,
   V2HealthGetResponses,
   V2ModelListErrors,
@@ -600,6 +630,8 @@ import type {
   V2SessionEventsErrors,
   V2SessionEventsResponse,
   V2SessionEventsResponses,
+  V2SessionGetErrors,
+  V2SessionGetResponses,
   V2SessionListErrors,
   V2SessionListResponses,
   V2SessionMessagesErrors,
@@ -636,6 +668,10 @@ import type {
   WebhookMonitorResponses,
   WebhookPrErrors,
   WebhookPrResponses,
+  WorkspaceConfigExternalChannelsGetErrors,
+  WorkspaceConfigExternalChannelsGetResponses,
+  WorkspaceConfigExternalChannelsPutErrors,
+  WorkspaceConfigExternalChannelsPutResponses,
   WorkspaceConfigTrustedSourcesGetErrors,
   WorkspaceConfigTrustedSourcesGetResponses,
   WorkspaceConfigTrustedSourcesPutErrors,
@@ -1740,6 +1776,275 @@ export class Global extends HeyApiClient {
   }
 }
 
+export class Gateway extends HeyApiClient {
+  /**
+   * List proxy tenant models
+   */
+  public models<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<GatewayModelsResponses, unknown, ThrowOnError>({
+      url: "/v1/models",
+      ...options,
+    })
+  }
+
+  /**
+   * Create a proxy chat completion
+   */
+  public chat<ThrowOnError extends boolean = false>(
+    parameters?: {
+      body?: unknown
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "body", map: "body" }] }])
+    return (options?.client ?? this.client).post<GatewayChatResponses, unknown, ThrowOnError>({
+      url: "/v1/chat/completions",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Create a text-only proxy response
+   */
+  public responses<ThrowOnError extends boolean = false>(
+    parameters?: {
+      body?: unknown
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "body", map: "body" }] }])
+    return (options?.client ?? this.client).post<GatewayResponsesResponses, unknown, ThrowOnError>({
+      url: "/v1/responses",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class ProxyAdmin extends HeyApiClient {
+  /**
+   * List proxy tenants
+   */
+  public tenantList<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<ProxyAdminTenantListResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/tenants",
+      ...options,
+    })
+  }
+
+  /**
+   * Provision a proxy tenant
+   */
+  public tenantCreate<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      key: string
+      directory: string
+      model_allowlist: Array<string>
+      tier: "passthrough" | "context" | "full"
+      permission_policy?: PermissionV2Ruleset
+      quota_requests_per_minute: number
+      quota_tokens_per_day: number
+      lane_limit: number
+      deadline_ms: number
+      enabled?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "id" },
+            { in: "body", key: "key" },
+            { in: "body", key: "directory" },
+            { in: "body", key: "model_allowlist" },
+            { in: "body", key: "tier" },
+            { in: "body", key: "permission_policy" },
+            { in: "body", key: "quota_requests_per_minute" },
+            { in: "body", key: "quota_tokens_per_day" },
+            { in: "body", key: "lane_limit" },
+            { in: "body", key: "deadline_ms" },
+            { in: "body", key: "enabled" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ProxyAdminTenantCreateResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/tenants",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Revoke a proxy tenant while retaining its audit ledger
+   */
+  public tenantDelete<ThrowOnError extends boolean = false>(
+    parameters: {
+      tenantID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "tenantID" }] }])
+    return (options?.client ?? this.client).delete<ProxyAdminTenantDeleteResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/tenants/{tenantID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update a proxy tenant
+   */
+  public tenantUpdate<ThrowOnError extends boolean = false>(
+    parameters: {
+      tenantID: string
+      model_allowlist?: Array<string>
+      tier?: "passthrough" | "context" | "full"
+      permission_policy?: PermissionV2Ruleset
+      quota_requests_per_minute?: number
+      quota_tokens_per_day?: number
+      lane_limit?: number
+      deadline_ms?: number
+      enabled?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "tenantID" },
+            { in: "body", key: "model_allowlist" },
+            { in: "body", key: "tier" },
+            { in: "body", key: "permission_policy" },
+            { in: "body", key: "quota_requests_per_minute" },
+            { in: "body", key: "quota_tokens_per_day" },
+            { in: "body", key: "lane_limit" },
+            { in: "body", key: "deadline_ms" },
+            { in: "body", key: "enabled" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<ProxyAdminTenantUpdateResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/tenants/{tenantID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Export proxy request ledger
+   */
+  public ledgerList<ThrowOnError extends boolean = false>(
+    parameters?: {
+      tenant?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "tenant" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProxyAdminLedgerListResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/ledger",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Export durable proxy audit events
+   */
+  public auditList<ThrowOnError extends boolean = false>(
+    parameters?: {
+      tenant?: string
+      limit?: string
+      after?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "tenant" },
+            { in: "query", key: "limit" },
+            { in: "query", key: "after" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProxyAdminAuditListResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/audit",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List proxy conversation lanes
+   */
+  public laneList<ThrowOnError extends boolean = false>(
+    parameters?: {
+      tenant?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "tenant" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProxyAdminLaneListResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/lanes",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Event_ extends HeyApiClient {
   /**
    * Subscribe to events
@@ -1837,7 +2142,7 @@ export class Backup extends HeyApiClient {
   /**
    * Verify or restore a backup
    *
-   * Verifies the selected backup. In the incident-only maintenance shell, dry_run:false acquires the exclusive database owner, quarantines the current DB/WAL/SHM, restores and forward-migrates, then requires a process restart. A live business runtime refuses installation.
+   * Verifies the selected backup. In the incident-only maintenance shell, dry_run:false acquires the exclusive database owner, quarantines the current DB/WAL/SHM, restores and forward-migrates, then reopens the business runtime in the same process. A live business runtime refuses installation.
    */
   public restore<ThrowOnError extends boolean = false>(
     parameters?: {
@@ -2029,7 +2334,7 @@ export class Composition extends HeyApiClient {
   /**
    * Root composition digest
    *
-   * Reports the stable composition digest of this process root (session owner, tool registry, database, Location host). The incident-only maintenance shell constructs no business runtime and answers a typed 503 instead.
+   * Reports the stable v2 composition digest of this process root (session owner, V2 tool registry, authority surface, database, Location host). The incident-only maintenance shell constructs no business runtime and answers a typed 503 instead.
    */
   public digest<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
     return (options?.client ?? this.client).get<
@@ -3812,6 +4117,40 @@ export class Wiki extends HeyApiClient {
 }
 
 export class Deepagent extends HeyApiClient {
+  /**
+   * Seal previous project learning generations
+   *
+   * Claim settled learning generations before navigating to another project.
+   */
+  public projectSwitch<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentProjectSwitchResponses,
+      DeepagentProjectSwitchErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/learning/project-switch",
+      ...options,
+      ...params,
+    })
+  }
+
   /**
    * List recent DeepAgent run reviews
    *
@@ -8552,6 +8891,8 @@ export class Session2 extends HeyApiClient {
    * Send message
    *
    * Create and send a new message to a session, streaming the AI response.
+   *
+   * @deprecated
    */
   public prompt<ThrowOnError extends boolean = false>(
     parameters: {
@@ -8621,7 +8962,9 @@ export class Session2 extends HeyApiClient {
   /**
    * Delete message
    *
-   * Permanently delete a specific message and all of its parts from a session without reverting file changes.
+   * Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.
+   *
+   * @deprecated
    */
   public deleteMessage<ThrowOnError extends boolean = false>(
     parameters: {
@@ -9067,6 +9410,8 @@ export class Session2 extends HeyApiClient {
    * Send async message
    *
    * Durably admit a new message or steer, start session execution if needed, and return without waiting for model completion.
+   *
+   * @deprecated
    */
   public promptAsync<ThrowOnError extends boolean = false>(
     parameters: {
@@ -9710,7 +10055,7 @@ export class Session2 extends HeyApiClient {
   /**
    * Export a session snapshot
    *
-   * Export the session's conversation (session + messages + parts) as a self-describing snapshot bundle (JSON). The bundle re-imports on another device as a fresh, continuable session.
+   * Export the session's conversation (session + messages + parts) as a self-describing snapshot bundle (JSON). The bundle re-imports on another device as a fresh, read-only archive.
    */
   public exportSnapshot<ThrowOnError extends boolean = false>(
     parameters: {
@@ -9733,7 +10078,7 @@ export class Session2 extends HeyApiClient {
   /**
    * Import a session snapshot
    *
-   * Import a previously exported session bundle into the current instance as a fresh, continuable session (new IDs, re-rooted to the current project/directory).
+   * Import a previously exported session bundle into the current instance as a fresh, read-only archive (new IDs, re-rooted to the current project/directory).
    */
   public importSnapshot<ThrowOnError extends boolean = false>(
     parameters: {
@@ -9757,11 +10102,213 @@ export class Session2 extends HeyApiClient {
       },
     })
   }
+
+  /**
+   * Export a verified read-only session ZIP
+   */
+  public exportBundle<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      tier: "conversation" | "conversation_metadata" | "session_logs"
+      archive?: "zip"
+      redact?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "tier" },
+            { in: "body", key: "archive" },
+            { in: "body", key: "redact" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionExportBundleResponses, SessionExportBundleErrors, ThrowOnError>(
+      {
+        url: "/session/{sessionID}/export-bundle",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Stream ZIP export progress and result
+   */
+  public exportBundleStream<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      tier: "conversation" | "conversation_metadata" | "session_logs"
+      archive?: "zip"
+      redact?: boolean
+    },
+    options?: Options<never, ThrowOnError, SessionExportBundleStreamResponse>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "tier" },
+            { in: "body", key: "archive" },
+            { in: "body", key: "redact" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).sse.post<
+      SessionExportBundleStreamResponses,
+      SessionExportBundleStreamErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/export-bundle-stream",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Import a verified read-only session ZIP
+   */
+  public importBundle<ThrowOnError extends boolean = false>(
+    parameters: {
+      bundle: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "bundle" }] }])
+    return (options?.client ?? this.client).post<SessionImportBundleResponses, SessionImportBundleErrors, ThrowOnError>(
+      {
+        url: "/session/import-bundle",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Upload a redacted session ZIP to the configured share host
+   */
+  public shareBundle<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      tier: "conversation" | "conversation_metadata" | "session_logs"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "tier" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionShareBundleResponses, SessionShareBundleErrors, ThrowOnError>({
+      url: "/session/{sessionID}/share-bundle",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Import a verified ZIP from a share link
+   */
+  public importBundleShare<ThrowOnError extends boolean = false>(
+    parameters: {
+      url: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "url" }] }])
+    return (options?.client ?? this.client).post<
+      SessionImportBundleShareResponses,
+      SessionImportBundleShareErrors,
+      ThrowOnError
+    >({
+      url: "/session/import-bundle-share",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Revoke a session ZIP share
+   */
+  public revokeBundleShare<ThrowOnError extends boolean = false>(
+    parameters: {
+      url: string
+      revokeToken: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "url" },
+            { in: "body", key: "revokeToken" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionRevokeBundleShareResponses,
+      SessionRevokeBundleShareErrors,
+      ThrowOnError
+    >({
+      url: "/session/revoke-bundle-share",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class Part extends HeyApiClient {
   /**
-   * Delete a part from a message.
+   * Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.
+   *
+   * @deprecated
    */
   public delete<ThrowOnError extends boolean = false>(
     parameters: {
@@ -9795,7 +10342,9 @@ export class Part extends HeyApiClient {
   }
 
   /**
-   * Update a part in a message.
+   * Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.
+   *
+   * @deprecated
    */
   public update<ThrowOnError extends boolean = false>(
     parameters: {
@@ -10625,10 +11174,92 @@ export class TrustedSources extends HeyApiClient {
   }
 }
 
+export class ExternalChannels extends HeyApiClient {
+  /**
+   * Get external IM channel bindings
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      WorkspaceConfigExternalChannelsGetResponses,
+      WorkspaceConfigExternalChannelsGetErrors,
+      ThrowOnError
+    >({
+      url: "/workspace/{workspaceID}/config/external-channels",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Replace external IM channel bindings
+   */
+  public put<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      directory?: string
+      workspace?: string
+      externalChannelsInput?: ExternalChannelsInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "externalChannelsInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<
+      WorkspaceConfigExternalChannelsPutResponses,
+      WorkspaceConfigExternalChannelsPutErrors,
+      ThrowOnError
+    >({
+      url: "/workspace/{workspaceID}/config/external-channels",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class WorkspaceConfig extends HeyApiClient {
   private _trustedSources?: TrustedSources
   get trustedSources(): TrustedSources {
     return (this._trustedSources ??= new TrustedSources({ client: this.client }))
+  }
+
+  private _externalChannels?: ExternalChannels
+  get externalChannels(): ExternalChannels {
+    return (this._externalChannels ??= new ExternalChannels({ client: this.client }))
   }
 }
 
@@ -10641,6 +11272,18 @@ export class Health extends HeyApiClient {
   public get<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
     return (options?.client ?? this.client).get<V2HealthGetResponses, V2HealthGetErrors, ThrowOnError>({
       url: "/api/health",
+      ...options,
+    })
+  }
+
+  /**
+   * Inspect bare Core composition
+   *
+   * Reports the unqualified Core runtime used by standalone serve and its absent app bridges.
+   */
+  public composition<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<V2HealthCompositionResponses, V2HealthCompositionErrors, ThrowOnError>({
+      url: "/health/composition",
       ...options,
     })
   }
@@ -10901,6 +11544,7 @@ export class Session3 extends HeyApiClient {
         providerID: string
         variant?: string
       }
+      metadata?: SessionMetadata
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -10913,6 +11557,7 @@ export class Session3 extends HeyApiClient {
             { in: "body", key: "id" },
             { in: "body", key: "agent" },
             { in: "body", key: "model" },
+            { in: "body", key: "metadata" },
           ],
         },
       ],
@@ -10930,6 +11575,25 @@ export class Session3 extends HeyApiClient {
   }
 
   /**
+   * Get session
+   *
+   * Read the current durable Session projection.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<V2SessionGetResponses, V2SessionGetErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Send message
    *
    * Durably admit one session input and schedule the Core V2 session runner. Set resume to false for admit-only delivery.
@@ -10941,6 +11605,7 @@ export class Session3 extends HeyApiClient {
       prompt: Prompt
       delivery?: "steer" | "queue" | "goal_steer"
       resume?: boolean
+      revertEpoch?: number
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -10954,6 +11619,7 @@ export class Session3 extends HeyApiClient {
             { in: "body", key: "prompt" },
             { in: "body", key: "delivery" },
             { in: "body", key: "resume" },
+            { in: "body", key: "revertEpoch" },
           ],
         },
       ],
@@ -11556,6 +12222,16 @@ export class DeepAgentCodeClient extends HeyApiClient {
   private _global?: Global
   get global(): Global {
     return (this._global ??= new Global({ client: this.client }))
+  }
+
+  private _gateway?: Gateway
+  get gateway(): Gateway {
+    return (this._gateway ??= new Gateway({ client: this.client }))
+  }
+
+  private _proxyAdmin?: ProxyAdmin
+  get proxyAdmin(): ProxyAdmin {
+    return (this._proxyAdmin ??= new ProxyAdmin({ client: this.client }))
   }
 
   private _event?: Event_

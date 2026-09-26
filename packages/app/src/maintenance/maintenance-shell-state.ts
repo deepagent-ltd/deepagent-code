@@ -12,7 +12,7 @@ import { type DiagnosticEntry, diagnosticEntries, containsSensitiveValue } from 
 // W-02 M-6: a fourth view mode — an orchestrated V1→V2 migration chain is running (or stopped
 // with a failure) on the otherwise-ready store; the shell renders its phase progress instead of
 // letting a large library look like a frozen startup.
-export type ShellViewMode = "ready" | "read_only_recovery" | "blocked_schema" | "migration_in_progress"
+export type ShellViewMode = "ready" | "read_only_recovery" | "blocked_schema" | "migration_in_progress" | "migration_failed_read_only"
 
 export interface ShellBackupItem {
   fileName: string
@@ -123,6 +123,10 @@ export function operationsForMode(mode: ShellViewMode | null): ShellOperations {
       // The migration chain owns the store; the view is progress + guidance only. Restoring
       // mid-migration would race the chain, so every operation (including restore) is disabled.
       return { browse: false, search: false, export: false, backup: false, descriptors: false, restore: false, write: false, live: false }
+    case "migration_failed_read_only":
+      // A failed migration may be inspected without offering restore against an otherwise-ready
+      // store. The durable journal remains failed until the user returns to retry it.
+      return { browse: true, search: true, export: true, backup: true, descriptors: true, restore: false, write: false, live: false }
     case "read_only_recovery":
       // Read-only recovery allows copy/export/backup/descriptors; write/live are disabled.
       return { browse: true, search: true, export: true, backup: true, descriptors: true, restore: true, write: false, live: false }

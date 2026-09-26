@@ -514,6 +514,7 @@ describe("production runtime integrity", () => {
         "const lock = Semaphore.makeUnsafe(1)",
         "const memoMap = Layer.makeMemoMapUnsafe()",
         "const context = Context.makeUnsafe<unknown>(new Map())",
+        "const timestamp = DateTime.makeUnsafe(0)",
         'const staticValues = new Set(["one"])',
         "const version = { registry: 2 }",
         "// version.registry = 3 is documentation, not executable mutation",
@@ -549,6 +550,7 @@ describe("production runtime integrity", () => {
     expect(candidates.find((candidate) => candidate.name === "lock")?.classification).toBe("bounded_cache_review")
     expect(candidates.find((candidate) => candidate.name === "memoMap")?.classification).toBe("runtime_state_review")
     expect(candidates.find((candidate) => candidate.name === "context")?.classification).toBe("runtime_state_review")
+    expect(candidates.find((candidate) => candidate.name === "timestamp")).toBeUndefined()
     expect(candidates.find((candidate) => candidate.name === "staticValues")?.classification).toBe("static_container")
     expect(candidates.find((candidate) => candidate.name === "version")?.mutated).toBe(false)
     expect(candidates.find((candidate) => candidate.name === "totals")?.mutated).toBe(true)
@@ -592,16 +594,52 @@ describe("production runtime integrity", () => {
     )
     expect(unclassified.map((candidate) => `${candidate.key} (${candidate.verdict})`)).toEqual([])
 
+    // These 18 bindings moved with 2.0.2 source edits. Their owners and exit paths are reviewed
+    // in runtime-state-inventory.ts; a stale source anchor must reopen review instead of falling
+    // through to an unresolved or guessed classification.
+    const reanchored = [
+      ["packages/core/src/agent-gateway.ts:closure@1124:1132.durable", "safe_scoped"],
+      ["packages/core/src/agent-gateway.ts:closure@3580:3582.storage", "safe_scoped"],
+      ["packages/core/src/event.ts:closure@617:619.synchronized", "safe_scoped"],
+      ["packages/core/src/event.ts:closure@617:620.typed", "safe_scoped"],
+      ["packages/core/src/event.ts:closure@617:623.projectors", "safe_scoped"],
+      ["packages/core/src/event.ts:closure@617:624.snapshotCodecs", "safe_scoped"],
+      ["packages/core/src/util/effect-flock.ts:closure@99:104.ensuredDirs", "safe_bounded"],
+      ["packages/core/src/permission.ts:closure@197:205.withNoProgressOwner", "safe_scoped"],
+      ["packages/core/src/permission.ts:closure@197:206.pending", "safe_scoped"],
+      ["packages/core/src/session/runner/llm.ts:closure@792:1419.withPublication", "safe_scoped"],
+      ["packages/core/src/session/runner/llm.ts:closure@792:1526.planResultMetadata", "safe_scoped"],
+      ["packages/deepagent-code/src/cli/cmd/run/runtime.ts:closure@916:917.sdk", "safe_scoped"],
+      ["packages/deepagent-code/src/cli/cmd/run.ts:closure@279:1246.sdk", "safe_scoped"],
+      ["packages/deepagent-code/src/deepagent/learning-reviewer-runner.ts:closure@88:100.abort", "safe_scoped"],
+      ["packages/deepagent-code/src/config/config.ts:attach@1038:1077.observed", "safe_bounded"],
+      ["packages/deepagent-code/src/config/config.ts:closure@1001:1024.watchers", "safe_scoped"],
+      ["packages/deepagent-code/src/permission/index.ts:closure@136:143.withPermissionOwner", "safe_scoped"],
+      ["packages/deepagent-code/src/permission/index.ts:closure@136:190.allPending", "safe_bounded"],
+    ] as const
+    for (const [key, verdict] of reanchored) {
+      const candidate = candidates.find((item) => item.key === key)
+      expect(candidate?.verdict).toBe(verdict)
+      expect(candidate?.owner).not.toBe("unresolved")
+      expect(candidate?.finalizer).not.toBe("unresolved")
+    }
+
     // `review_required` is the explicit adjudication backlog: process-lifetime bindings whose
     // owner/bound/finalizer a human has to rule on. RI-94's terminal state is an empty backlog, and
-    // the recorded clearing (5fc382979, 269 -> 0) has since drifted back to the entries below
-    // (mostly `session/prompt.ts` and `event.ts` module-level state). The gate therefore pins the
-    // CURRENT count: it admits the known backlog but a NEW unadjudicated binding fails here instead
+    // the recorded clearing (5fc382979, 269 -> 0) has since drifted back to the entries below.
+    // The gate pins the currently identified backlog: a NEW unadjudicated binding fails here instead
     // of arriving silently. To lower the ceiling, adjudicate entries and update this number — never
     // raise it without an entry in the review.
-    const REVIEW_REQUIRED_CEILING = 35
+    // The remaining three are process-global session/turn budget maps without a production
+    // finalizer or durable owner: domain_pack_load (two) and knowledge_propose (one).
+    const REVIEW_REQUIRED_CEILING = 3
     const backlog = candidates.filter((candidate) => candidate.verdict === "review_required")
     expect(backlog.length).toBeLessThanOrEqual(REVIEW_REQUIRED_CEILING)
+    expect(backlog.map((candidate) => candidate.key)).toEqual([
+      "packages/core/src/system-context/domain-pack-load-tool.ts:sessionLoaded",
+      "packages/core/src/system-context/domain-pack-load-tool.ts:turnCharged",
+      "packages/core/src/tool/knowledge-propose.ts:sessionProposals",
+    ])
     if (backlog.length > 0)
       console.warn(
         `[RI-94] ${backlog.length} binding(s) await adjudication (ceiling ${REVIEW_REQUIRED_CEILING}): ` +

@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, Stream } from "effect"
 import { eq } from "drizzle-orm"
@@ -52,7 +53,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(store),
-  Layer.provide(Project.defaultLayer),
+  Layer.provide(projectLayer(database)),
   Layer.provide(execution),
 )
 const it = testEffect(Layer.mergeAll(database, events, projector, store, execution, sessions))
@@ -76,6 +77,7 @@ const setup = Effect.gen(function* () {
       directory: "/project",
       title: "test",
       version: "test",
+      v2_authority: true,
     })
     .onConflictDoNothing()
     .run()
@@ -336,6 +338,75 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
+  it.effect("fences stale revert epochs atomically and reuses the message ID as the intent key", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const input = {
+        id: messageID,
+        sessionID,
+        prompt: new Prompt({ text: "Save this intent once" }),
+        revertEpoch: 0,
+        resume: false,
+      }
+      const first = yield* session.prompt(input)
+      expect((yield* session.prompt(input)).admittedSeq).toBe(first.admittedSeq)
+      expect(first.revertEpoch).toBe(0)
+      expect((yield* session.prompt({ ...input, revertEpoch: 1 }).pipe(Effect.flip))._tag).toBe(
+        "Session.PromptConflictError",
+      )
+
+      const { db } = yield* Database.Service
+      yield* db.update(SessionTable).set({ mutation_epoch: 1 }).where(eq(SessionTable.id, sessionID)).run()
+      const stale = yield* session
+        .prompt({ ...input, id: SessionMessage.ID.create() })
+        .pipe(Effect.flip)
+      expect(stale).toMatchObject({
+        _tag: "SessionInput.StaleRevertEpoch",
+        sessionID,
+        expected: 0,
+        actual: 1,
+      })
+      expect(yield* admittedCount).toBe(1)
+      const durable = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.PromptLifecycle.Admitted.type, 1)))
+        .all()
+      expect(durable).toHaveLength(1)
+
+      const next = yield* session.prompt({
+        ...input,
+        id: SessionMessage.ID.create(),
+        revertEpoch: 1,
+      })
+      expect(next.revertEpoch).toBe(1)
+      expect(yield* admittedCount).toBe(2)
+    }),
+  )
+
+  it.effect("rolls back an unrelated admission hook failure without treating it as a stale epoch", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const id = SessionMessage.ID.create()
+      const failure = yield* SessionInput.admit(db, events, {
+        id,
+        sessionID,
+        prompt: new Prompt({ text: "Uncommitted intent" }),
+        delivery: "steer",
+        commit: () => Effect.fail(new Error("unrelated admission hook failure")),
+      }).pipe(Effect.catchDefect(Effect.succeed))
+
+      expect(failure).toBeInstanceOf(EventV2.CommitHookError)
+      if (failure instanceof EventV2.CommitHookError)
+        expect(failure.cause).toMatchObject({ message: "unrelated admission hook failure" })
+      expect(yield* SessionInput.find(db, id)).toBeUndefined()
+      expect(yield* eventCount(EventV2.versionedType(SessionEvent.PromptLifecycle.Admitted.type, 1))).toBe(0)
+    }),
+  )
+
   it.effect("returns one recorded message to concurrent exact retries", () =>
     Effect.gen(function* () {
       yield* setup
@@ -544,6 +615,7 @@ describe("SessionV2.prompt", () => {
           directory: "/project",
           title: "other",
           version: "test",
+          v2_authority: true,
         })
         .onConflictDoNothing()
         .run()
@@ -595,7 +667,7 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
-  it.effect("only records the prompt when resume is false", () =>
+  it.effect("an admitted but unjoined prompt stays durable without waking execution, including exact retry", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -603,8 +675,13 @@ describe("SessionV2.prompt", () => {
       wakeCalls.length = 0
       wakeSeqs.length = 0
 
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Do not run" }), resume: false })
+      const request = { id: messageID, sessionID, prompt: new Prompt({ text: "Do not run" }), resume: false }
+      const first = yield* session.prompt(request)
+      const retry = yield* session.prompt(request)
 
+      expect(retry).toEqual(first)
+      expect(yield* admitted(messageID)).toMatchObject({ id: messageID, sessionID, prompt: { text: "Do not run" } })
+      expect(yield* admittedCount).toBe(1)
       expect(executionCalls).toEqual([])
       expect(wakeCalls).toEqual([])
       expect(wakeSeqs).toEqual([])

@@ -6,6 +6,7 @@ import os from "os"
 import path from "path"
 import { createRequire } from "module"
 import { fileURLToPath } from "url"
+import { installDataHome } from "./install-data-home.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
@@ -129,10 +130,7 @@ function installPackage(name) {
 
   // Keep the staging area in the platform data home (D-W1): %LOCALAPPDATA%\deepagent-code on
   // Windows, ~/.deepagent/code elsewhere.
-  const dataHome =
-    os.platform() === "win32"
-      ? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"), "deepagent-code")
-      : path.join(os.homedir(), ".deepagent", "code")
+  const dataHome = installDataHome()
   const root = path.join(dataHome, "tmp", "install")
   fs.mkdirSync(root, { recursive: true })
   const temp = fs.mkdtempSync(path.join(root, "package-"))

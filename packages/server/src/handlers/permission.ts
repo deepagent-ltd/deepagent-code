@@ -1,6 +1,9 @@
 import { Location } from "@deepagent-code/core/location"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { PermissionSaved } from "@deepagent-code/core/permission/saved"
+import { SessionV2 } from "@deepagent-code/core/session"
+import { Database } from "@deepagent-code/core/database/database"
+import { DeepAgentActivityAuthority } from "@deepagent-code/core/deepagent/activity-authority"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -13,6 +16,8 @@ function missingRequest(id: PermissionV2.ID) {
 
 export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", (handlers) =>
   Effect.gen(function* () {
+    const database = yield* Database.Service
+    const session = yield* SessionV2.Service
     return handlers
       .handle(
         "permission.request.list",
@@ -36,6 +41,20 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
           yield* permission
             .reply({ requestID: ctx.params.requestID, reply: ctx.payload.reply, message: ctx.payload.message })
             .pipe(Effect.catchTag("PermissionV2.NotFoundError", () => missingRequest(ctx.params.requestID)))
+          if (request.metadata?.["kind"] === "no_progress" && ctx.payload.reply !== "reject") {
+            const activityID = request.metadata["activity_id"]
+            if (typeof activityID === "string") {
+              const current = yield* DeepAgentActivityAuthority.reconstruct({
+                activityKind: "v2",
+                activityID,
+              }).pipe(Effect.provideService(Database.Service, database), Effect.orDie)
+              if (current.objective.state === "active")
+                yield* session.resume(ctx.params.sessionID).pipe(
+                  Effect.catchCause((cause) => Effect.logError("V2 no-progress continuation failed", { cause })),
+                  Effect.forkDetach,
+                )
+            }
+          }
           return HttpApiSchema.NoContent.make()
         }),
       )

@@ -7,6 +7,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { SessionTable, MessageTable, PartTable } from "@deepagent-code/core/session/sql"
 import { InstanceRef } from "@/effect/instance-ref"
 import { ShareNext } from "@/share/share-next"
+import { publicSharingEnabled } from "@/share/public-share-policy"
 import { EOL } from "os"
 import path from "path"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -82,10 +83,10 @@ type ExportData = { info: SDKSession; messages: Array<{ info: Message; parts: Pa
 
 export const ImportCommand = effectCmd({
   command: "import <file>",
-  describe: "import session data from JSON file or URL",
+  describe: "import session data from a local JSON file (public links unavailable in 2.0.2)",
   builder: (yargs) =>
     yargs.positional("file", {
-      describe: "path to JSON file or share URL",
+      describe: "path to a local JSON file",
       type: "string",
       demandOption: true,
     }),
@@ -106,6 +107,9 @@ const runImport = Effect.fn("Cli.import.body")(function* (file: string, ctx: Ins
   const isUrl = file.startsWith("http://") || file.startsWith("https://")
 
   if (isUrl) {
+    if (!publicSharingEnabled()) {
+      return yield* new CliError({ message: "Public share-link imports are disabled in this release; import a local file instead" })
+    }
     const slug = parseShareUrl(file)
     if (!slug) {
       const baseUrl = yield* Effect.orDie(share.url())

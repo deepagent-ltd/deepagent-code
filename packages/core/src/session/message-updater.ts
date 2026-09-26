@@ -110,6 +110,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.execution.succeeded": () => Effect.void,
       "session.execution.failed": () => Effect.void,
       "session.execution.interrupted": () => Effect.void,
+      "session.loop.budget.triggered": () => Effect.void,
       "session.next.agent.switched": (event) => {
         return adapter.appendMessage(
           new SessionMessage.AgentSwitched({
@@ -396,6 +397,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             reason: event.data.reason,
             summary: event.data.text,
             recent: event.data.recent,
+            checkpointID: event.data.checkpointID,
+            checkpointHash: event.data.checkpointHash,
             time: { created: event.data.timestamp },
           }),
         )

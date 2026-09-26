@@ -16,6 +16,7 @@ import { V2OutboxWriter } from "@/event/v2-outbox-writer"
 import "@deepagent-code/core/account"
 import "@deepagent-code/core/catalog"
 import "@deepagent-code/core/session/event"
+import "@deepagent-code/core/proxy/event"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
@@ -130,11 +131,22 @@ function legacySessionInfo(
   })
 }
 
+export const assertSynchronizedOutboxRegistry = (
+  registry: Parameters<typeof V2OutboxWriter.registrationForEventType>[1],
+) => {
+  const invalid = registry.eventTypes().filter((type) => EventV2.registry.get(type)?.sync === undefined)
+  if (invalid.length > 0)
+    throw new Error(`C5 outbox registrations require synchronized EventV2 definitions: ${invalid.join(", ")}`)
+}
+
 export const layerWithRegistry = (
   registry: Parameters<typeof V2OutboxWriter.registrationForEventType>[1],
   runtimeFeatures: RuntimeFeatureRegistry = RuntimeFeatures,
-) =>
-  Layer.effect(
+) => {
+  // Every registered type must have a durable EventV2 row. Validate at graph construction so a
+  // non-sync registration cannot silently turn an authorized C5 fact into a best-effort event.
+  assertSynchronizedOutboxRegistry(registry)
+  return Layer.effect(
     Service,
     Effect.gen(function* () {
       const events = yield* EventV2.Service
@@ -150,10 +162,12 @@ export const layerWithRegistry = (
       const landIfRegistered = (event: EventV2.Payload): Effect.Effect<void, unknown> => {
         const registration = V2OutboxWriter.registrationForEventType(event.type, registry)
         if (!registration) return Effect.void
+        if (event.version === undefined || EventV2.registry.get(event.type)?.sync === undefined)
+          return Effect.die(new Error(`registered C5 event is not synchronized: ${event.type}`))
         return V2OutboxWriter.land(db, { event, registration, now: Date.now() }).pipe(Effect.asVoid)
       }
 
-      const publish: EventV2.Interface["publish"] = (definition, data, options) =>
+      const publishChecked: EventV2.Interface["publishChecked"] = (definition, data, options) =>
         Effect.gen(function* () {
           // The in-transaction landing hook. Only attached for synchronized (durable) events: EventV2
           // dies on a commit hook for a non-sync event (there is no event transaction to share) — for a
@@ -161,8 +175,8 @@ export const layerWithRegistry = (
           // COMPOSES with the caller's hook rather than replacing it: a caller may already commit its own
           // local projection in the same transaction (e.g. the fork-delivery cursor), so the outbox
           // landing runs after it, never instead of it. The hook itself checks the C5 registration (the
-          // outbox refuses arbitrary types, design §8.8) — a registered NON-sync type is therefore not
-          // landed (documented: C5-registered facts are sync).
+          // outbox refuses arbitrary types, design §8.8). Registry validation above rejects
+          // registered non-sync types before this graph starts.
           const commit =
             definition.sync !== undefined
               ? (seq: number, event: EventV2.Payload) =>
@@ -172,13 +186,13 @@ export const layerWithRegistry = (
                   })
               : options?.commit
           const event = yield* options?.location
-            ? events.publish(definition, data, { ...options, commit })
+            ? events.publishChecked(definition, data, { ...options, commit })
             : Effect.gen(function* () {
                 const route = yield* EventRouteRef
                 const ctx = route ?? (yield* InstanceRef)
-                if (!ctx) return yield* events.publish(definition, data, { ...options, commit })
+                if (!ctx) return yield* events.publishChecked(definition, data, { ...options, commit })
                 const workspaceID = route?.workspaceID ?? (yield* WorkspaceRef)
-                return yield* events.publish(definition, data, {
+                return yield* events.publishChecked(definition, data, {
                   ...options,
                   commit,
                   location: new Location.Info({
@@ -191,12 +205,28 @@ export const layerWithRegistry = (
           return event
         })
 
+      const publish: EventV2.Interface["publish"] = (definition, data, options) =>
+        publishChecked(definition, data, options).pipe(Effect.orDie)
+
       // W5 ① replay driver — the EventV2 replay surface (sync / import / control-plane re-commit of the
       // serialized event log) lands C5-registered event ids in-transaction too. Replayed commits carry the
       // SAME `eventv2:<eventId>` idempotency key, so a re-replay fenced on the same key. The hook COMPOSES
       // with a caller-supplied in-transaction hook (never replaces it).
+      const replayChecked: EventV2.Interface["replayChecked"] = (serialized, options) =>
+        events.replayChecked(serialized, {
+          ...options,
+          onCommit: (seq, event) =>
+            Effect.gen(function* () {
+              if (options?.onCommit) yield* options.onCommit(seq, event)
+              return yield* landIfRegistered(event)
+            }),
+        })
+
       const replay: EventV2.Interface["replay"] = (serialized, options) =>
-        events.replay(serialized, {
+        replayChecked(serialized, options).pipe(Effect.orDie)
+
+      const replayAllChecked: EventV2.Interface["replayAllChecked"] = (serialized, options) =>
+        events.replayAllChecked(serialized, {
           ...options,
           onCommit: (seq, event) =>
             Effect.gen(function* () {
@@ -206,14 +236,7 @@ export const layerWithRegistry = (
         })
 
       const replayAll: EventV2.Interface["replayAll"] = (serialized, options) =>
-        events.replayAll(serialized, {
-          ...options,
-          onCommit: (seq, event) =>
-            Effect.gen(function* () {
-              if (options?.onCommit) yield* options.onCommit(seq, event)
-              return yield* landIfRegistered(event)
-            }),
-        })
+        replayAllChecked(serialized, options).pipe(Effect.orDie)
 
       const unsubscribe = yield* events.listen((event) =>
         Effect.gen(function* () {
@@ -259,12 +282,16 @@ export const layerWithRegistry = (
       return Service.of({
         ...events,
         publish,
+        publishChecked,
         replay,
+        replayChecked,
         replayAll,
+        replayAllChecked,
         listen: (listener) => events.listen((event) => listener(compatibilityEvent(event))),
       })
     }),
   )
+}
 
 export const layerWithRuntimeFeatures = (runtimeFeatures: RuntimeFeatureRegistry) =>
   layerWithRegistry(V2OutboxWriter.EVENT_V2_OUTBOX_REGISTRY, runtimeFeatures)

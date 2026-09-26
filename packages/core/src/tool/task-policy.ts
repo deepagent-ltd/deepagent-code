@@ -20,6 +20,10 @@ import { Wildcard } from "../util/wildcard"
 export const MAX_SUBAGENT_FANOUT = DEFAULT_MAX_FANOUT
 export const MAX_SUBAGENT_CONCURRENCY = DEFAULT_MAX_CONCURRENCY
 export const DEFAULT_SUBAGENT_TIMEOUT_MS = 30 * 60_000
+export const subagentTimeoutMs = () => {
+  const value = Number(process.env.DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS)
+  return Number.isSafeInteger(value) && value > 0 ? value : DEFAULT_SUBAGENT_TIMEOUT_MS
+}
 
 const taskSlots = new Map<string, { readonly semaphore: Semaphore.Semaphore; users: number }>()
 

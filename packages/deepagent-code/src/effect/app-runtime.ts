@@ -9,7 +9,6 @@ import { attach } from "./run-service"
 import * as Observability from "@deepagent-code/core/effect/observability"
 
 import { DevCampaignMint, devCampaignMint } from "@/effect/dev-campaign-mint"
-import { PromptEpoch } from "@/session/prompt-epoch"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Database } from "@deepagent-code/core/database/database"
 import { Auth } from "@/auth"
@@ -43,7 +42,7 @@ import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { Format } from "@/format"
 import { InstanceLayer } from "@/project/instance-layer"
-import { CompositionDigest } from "./composition-digest"
+import { Root } from "./root"
 import { Project } from "@/project/project"
 import { Vcs } from "@/project/vcs"
 import { Reference } from "@/reference/reference"
@@ -53,24 +52,14 @@ import { Installation } from "@/installation"
 import { ShareNext } from "@/share/share-next"
 import { SessionShare } from "@/share/session"
 import { Npm } from "@deepagent-code/core/npm"
-import { makeMemoMap } from "@deepagent-code/core/effect/memo-map"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { LearningReviewerRunner } from "@/deepagent/learning-reviewer-runner"
 import { LegacyEventCanonicalizerRuntime } from "@/legacy-event-canonicalizer-runtime"
-import { productionSourcesLayer } from "@/context-federation/production-sources"
 import { LocationIndexRuntime } from "@/location-index/runtime"
-import { RecoveryExecutor } from "@/server/recovery-executor"
-import { TaskWorktreeReclamation } from "@/effect/task-worktree-reclamation"
-import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { V2OutboxRuntime } from "@/event/v2-outbox-runtime"
-import { V2McpBridge } from "@/session/v2-mcp-bridge"
-import { V2PluginToolsBridge } from "@/session/v2-plugin-tools-bridge"
-import { InstanceRegistry } from "@/effect/instance-registry"
-import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
-import { TaskRunDispatcher } from "@deepagent-code/core/session/task-run-dispatcher"
 
 const v2StartupRecovery = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -105,6 +94,7 @@ const baseAppLayer = Layer.mergeAll(
   Snapshot.defaultLayer,
   Plugin.defaultLayer,
   ModelsDev.defaultLayer,
+  Root.gatewayClientLayer,
   Provider.defaultLayer,
   ProviderAuth.defaultLayer,
   Agent.defaultLayer,
@@ -146,6 +136,7 @@ const baseAppLayer = Layer.mergeAll(
   Command.defaultLayer,
   Truncate.configuredLayer,
   ToolRegistry.productionLayer,
+  Root.applicationToolsLayer,
   Format.defaultLayer,
   Project.defaultLayer,
   Vcs.defaultLayer,
@@ -159,31 +150,23 @@ const baseAppLayer = Layer.mergeAll(
   // into the Core ApplicationTools seam so V2 session tool materialization includes them. The
   // ApplicationTools layer constant is the same one the LocationServiceMap dependencies build,
   // so one shared memoMap yields ONE instance for bridges and Location trees.
-  V2McpBridge.layer.pipe(
-    Layer.provide(ApplicationTools.layer),
-    Layer.provide(InstanceRegistry.layer),
-    Layer.provideMerge(MCP.defaultLayer),
-  ),
-  V2PluginToolsBridge.layer.pipe(
-    Layer.provide(ApplicationTools.layer),
-    Layer.provide(InstanceRegistry.layer),
-    Layer.provideMerge(ToolRegistry.productionLayer),
-  ),
+  Root.mcpBridgeLayer,
+  Root.pluginBridgeLayer,
   // The ONE process-global background task runtime: the auto-started Core V2 run dispatcher
   // (claims + drains durable background task runs through the authority executor) plus the
   // notification outbox delivery loop. Requirements (Database, SessionV2) come from the
   // provideMerge'd Database/sessionRuntimeLayer below — the same single V2 session runtime the
   // task tool and facade submit through.
-  TaskRunDispatcher.runtimeLayer(),
+  Root.taskDispatcherLayer,
 ).pipe(
   // These authorities must be providers of the merged production graph, not siblings whose
   // outputs cannot satisfy V2 outbox/session inputs.
   Layer.provideMerge(Database.defaultLayer),
   Layer.provideMerge(EventV2Bridge.defaultLayer),
-  Layer.provideMerge(V2RunnerFrame.sessionRuntimeLayer),
+  Layer.provideMerge(Root.layer),
   // RI-123: same owner-qualification references the HTTP graph root provides — prompt paths
   // running on this root resolve them from the calling fiber's context.
-  Layer.provideMerge(V2RunnerFrame.ownerQualificationReferencesLayer),
+  Layer.provideMerge(Root.routesProvideStack.ownerReferences),
   Layer.provideMerge(InstanceLayer.layer),
   Layer.provideMerge(Observability.layer),
   Layer.provide(DurableLearningRuntime.reviewerRegistryLayer),
@@ -211,25 +194,25 @@ export const AppLayer = baseAppLayer.pipe(
   // LIVE four-graph sources (LiveCodeQuery / LocationIndexCoordinator / durable knowledge +
   // released-snapshot picker). `process.cwd()` is the production workspace (one server per
   // project); absent this seam the runner degrades the four graphs honestly (pre-W3.7 behavior).
-  Layer.provide(productionSourcesLayer({ workspaceDirectory: process.cwd() })),
-  Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
+  Layer.provide(Root.routesProvideStack.productionSources),
+  Layer.provide(Root.routesProvideStack.promptEpoch),
   // W7 — settle-triggered durable learning: the runner's `onSessionSettled` hook (same INTO-the-base
   // graph direction as the v2RunnerSeam above; `DEEPAGENT_DURABLE_LEARNING=false` keeps legacy-only).
-  Layer.provide(DurableLearningRuntime.onSessionSettledSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
+  Layer.provide(Root.routesProvideStack.onSessionSettled),
   // W2.2 — C1B recovery executor production wiring: the executor layer build runs the startup drain —
   // process boot = post-crash resume (applies committed pending recovery commands, never fails).
   // It self-provides the module-level Database.defaultLayer constant (memoized by object
   // identity, so it is the SAME connection the base graph builds — no split-brain).
-  Layer.provide(RecoveryExecutor.layer.pipe(Layer.provide(Database.defaultLayer))),
+  Layer.provide(Root.routesProvideStack.recoveryExecutor),
   // C-P2-08 — startup reclamation of stale retained run-owned worktrees (timeout retention debt
   // past the grace period); same layer-build-means-boot drain convention, same shared
   // Database.defaultLayer connection, and it never fails the boot.
-  Layer.provide(TaskWorktreeReclamation.layer.pipe(Layer.provide(Database.defaultLayer))),
+  Layer.provide(Root.routesProvideStack.worktreeReclamation),
   Layer.provideMerge(devCampaignMint),
   // W0.5: deliver the shipped owner-authorization.json into the local DB once per runtime build
   // (after the database layer initialized; fail-open on file absence, fail-closed on verification
   // failure — nothing unverifiable is written).
-  Layer.provideMerge(V2OwnerSeed.layer({ env: process.env, appRoot: V2OwnerSeed.defaultOwnerAuthorizationAppRoot() })),
+  Layer.provideMerge(Root.ownerSeedLayer),
   Layer.provideMerge(captureRootDatabasePath),
 )
 
@@ -238,8 +221,7 @@ export const AppLayer = baseAppLayer.pipe(
 // and therefore disposal authority — live in ONE explicit process root shared by the
 // AppRuntime bridges (CLI/TUI worker) and the embedded server. `Server.listen`
 // listeners and test runtimes keep private per-root maps (RI-106).
-const rootMemoMap = makeMemoMap()
-const rt = ManagedRuntime.make(AppLayer, { memoMap: rootMemoMap })
+const rt = ManagedRuntime.make(AppLayer, { memoMap: Root.embeddedServerMemoMap() })
 type Runtime = Pick<typeof rt, "runSync" | "runPromise" | "runPromiseExit" | "runFork" | "runCallback" | "dispose">
 
 /** Services provided by AppRuntime — i.e. what an Effect run via AppRuntime.runPromise can yield. */
@@ -247,7 +229,7 @@ export type AppServices = ManagedRuntime.ManagedRuntime.Services<typeof rt>
 const wrap = (effect: Parameters<typeof rt.runSync>[0]) => attach(effect as never) as never
 
 /** Memo map of the one explicit process root; `Server.Default` builds its web handler with it. */
-export const embeddedServerMemoMap = () => rootMemoMap
+export const embeddedServerMemoMap = Root.embeddedServerMemoMap
 
 /**
  * The fully-built AppRuntime root, or `undefined` before the first build completes (and after
@@ -259,7 +241,7 @@ export const embeddedServerMemoMap = () => rootMemoMap
  */
 export const builtAppRuntimeRoot = () => {
   if (rt.cachedContext === undefined || rootDatabasePath === undefined) return undefined
-  return { memoMap: rootMemoMap, databasePath: rootDatabasePath }
+  return { memoMap: Root.embeddedServerMemoMap(), databasePath: rootDatabasePath }
 }
 
 export const AppRuntime: Runtime = {
@@ -286,4 +268,4 @@ export const AppRuntime: Runtime = {
  * (CLI/TUI worker, tests). Runs against the SAME root context the embedded server shares, so its
  * digest must equal the HTTP-exposed digest of the server route graph facet by facet.
  */
-export const compositionDigest = (): Promise<CompositionDigest.Record> => AppRuntime.runPromise(CompositionDigest.current)
+export const compositionDigest = Root.compositionDigest

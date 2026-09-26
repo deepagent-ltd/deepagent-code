@@ -22,6 +22,7 @@ export type NotificationJournalHandlers = {
 export const createNotificationJournalSubscription = (
   input: {
     readonly client: CursorClient
+    readonly clientFor?: (directory: string) => CursorClient
     readonly currentDirectory: () => string | undefined
     readonly sessionsOf: (directory: string) => readonly string[]
     readonly handlers: NotificationJournalHandlers
@@ -41,6 +42,7 @@ export const createNotificationJournalSubscription = (
   }
 
   async function subscribe(ids: readonly string[], force: boolean) {
+    const client = input.clientFor?.(directory) ?? input.client
     // Anchor every session at its journal watermark (first subscribe) or the last seen seq
     // (rebuild). Watermark-first keeps the drain from replaying journal history; the seq
     // anchors keep a gap-driven resync from re-rendering delivered notifications.
@@ -52,7 +54,7 @@ export const createNotificationJournalSubscription = (
           after.set(sessionID, String(last))
           return
         }
-        const cursor = await input.client.context.eventsCursor({ session_id: sessionID }).catch(() => undefined)
+        const cursor = await client.context.eventsCursor({ session_id: sessionID }).catch(() => undefined)
         after.set(sessionID, cursor?.data?.watermark !== undefined ? String(cursor.data.watermark) : undefined)
       }),
     )
@@ -70,7 +72,7 @@ export const createNotificationJournalSubscription = (
         rebuild(true)
       },
     }
-    unsubscribe = subscribeSessionNotifications(input.client, [...ids], handlers, {
+    unsubscribe = subscribeSessionNotifications(client, [...ids], handlers, {
       after: (sessionID) => after.get(sessionID),
     }, pollMs)
   }

@@ -61,6 +61,12 @@ describe("DeepAgent Code config", () => {
     }
   })
 
+  test("passes the first-party subagent intensity into the V2 gateway runtime", () => {
+    expect(gatewayConfig().subagentIntensity).toBe("inherit")
+    expect(gatewayConfig({ provider: { deepagent: { options: { subagentIntensity: "downgrade" } } } }).subagentIntensity)
+      .toBe("downgrade")
+  })
+
   test("W7: durable learning defaults ON; =false falls back to the legacy-only posture", () => {
     const previous = process.env.DEEPAGENT_DURABLE_LEARNING
     try {

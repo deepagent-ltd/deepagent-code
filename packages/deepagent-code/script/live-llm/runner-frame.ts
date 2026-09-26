@@ -4,6 +4,7 @@ import { ProductionV2Sources } from "@deepagent-code/core/context-federation/pro
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
 import { Global } from "@deepagent-code/core/global"
+import { IMExternalDelivery } from "@deepagent-code/core/im/external-delivery"
 import {
   LocationRuntimeHost,
   LocationServiceMap,
@@ -13,11 +14,35 @@ import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { Effect, Layer } from "effect"
 import { CodeIntelFacade } from "../../src/code-intelligence/facade"
+import { gatewayConfigFromSettings } from "../../src/deepagent/config"
+import { CompositionDigest } from "../../src/effect/composition-digest"
 import { ContextQueryFacade } from "../../src/context-federation/context-query-facade"
 import { LocationIndexRuntime } from "../../src/location-index/runtime"
 import { InstanceStore } from "../../src/project/instance-store"
 import { V2RunnerFrame } from "../../src/session/v2-runner-frame"
+import { SettingsStore } from "../../src/settings/store"
 import { testInstanceStoreLayer } from "../../test/fixture/fixture"
+
+// The harness runs the same process-local Session owner as production, but installs its own
+// Location host for isolated fixtures. Declare that frame instead of inheriting the unqualified
+// Core fallback; G3 checks the exact deviations below against the production frame.
+export const liveFrameIdentity: CompositionDigest.FrameIdentityShape = {
+  sessionOwner: V2RunnerFrame.frameIdentity.sessionOwner,
+  locationHost: {
+    host: "deepagent-code/script/live-llm:runnerFrameHost",
+    idleTimeToLive: V2RunnerFrame.frameIdentity.locationHost.idleTimeToLive,
+    seams: [
+      "core/ContextToolRuntime:instance-scoped",
+      "core/ProductionV2Sources:empty",
+      "core/IMExternalDelivery:unavailable",
+      "core/ContextQueryAuthorization:process-local-store",
+      "core/SessionRunner.CurrentOnSessionSettled:none",
+      "core/SessionRunner.CurrentToolSettleGate:none",
+      "core/V2ProviderTurn.CurrentBuildIdentity",
+      "core/V2ProviderTurn.CurrentOwnerAuthorizationPublicKey",
+    ],
+  },
+}
 
 // A1-06: the live harness used Core's `defaultLocationRuntimeHost`, whose ContextToolRuntime seam is
 // the honest-unavailable stub — so V2 live runs could never call the canonical code_intel /
@@ -58,6 +83,7 @@ const host = Layer.effect(
         Layer.mergeAll(
           V2RunnerFrame.runnerFrameSeamFor(ref, sources),
           V2RunnerFrame.runnerFrameContextToolsFor(ref),
+          IMExternalDelivery.unavailableLayer,
           Layer.succeed(SessionRunner.CurrentToolSettleGate, undefined),
           Layer.succeed(SessionRunner.CurrentOnSessionSettled, undefined),
           Layer.succeed(V2ProviderTurn.CurrentBuildIdentity, buildIdentity),
@@ -82,13 +108,28 @@ export function liveLocationServiceMap() {
         host,
         Database.defaultLayer,
         EventV2.layer.pipe(Layer.provide(Database.defaultLayer)),
-        AgentGateway.runtimeLayer({ enabled: false, runsDir: Global.Path.agent.runs, durableLearning: false }),
+        // Use the same first-party settings source as the production frame. Core's bare default
+        // ignores subagentIntensity, which made this live harness run a different tool policy.
+        Layer.unwrap(
+          Effect.map(Effect.promise(SettingsStore.read), (settings) =>
+            AgentGateway.runtimeLayer({
+              ...gatewayConfigFromSettings(settings.deepagent),
+              enabled: process.env.DEEPAGENT_ENABLED !== "false" && process.env.DEEPAGENT_ENABLED !== "0",
+              runsDir: Global.Path.agent.runs,
+              durableLearning: false,
+            }),
+          ),
+        ),
       ),
     ]),
     Layer.provide(
       // ContextQueryAuthorization.defaultLayer shares the facades' internal store (same layer
       // object, one memoized build), matching runnerFrameLocationMapLayer in production.
-      Layer.mergeAll(CodeIntelFacade.defaultLayer, ContextQueryFacade.defaultLayer, ContextQueryAuthorization.defaultLayer),
+      Layer.mergeAll(
+        CodeIntelFacade.defaultLayer,
+        ContextQueryFacade.defaultLayer,
+        ContextQueryAuthorization.defaultLayer,
+      ),
     ),
     Layer.provide(LocationIndexRuntime.defaultLayer),
     Layer.provide(testInstanceStoreLayer),

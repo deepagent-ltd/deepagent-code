@@ -1,10 +1,10 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect } from "bun:test"
 import { count, eq } from "drizzle-orm"
 import { Effect, Layer, Schema } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
 import { PermissionV2 } from "@deepagent-code/core/permission"
-import { Project } from "@deepagent-code/core/project"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
@@ -54,7 +54,7 @@ const stackOver = (database: Layer.Layer<Database.Service, unknown>) => {
     Layer.provide(events),
     Layer.provide(database),
     Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
-    Layer.provide(Project.defaultLayer),
+    Layer.provide(projectLayer(database)),
     Layer.provide(SessionExecution.noopLayer),
   )
   const coreStack = Layer.mergeAll(database, events, projector, sessions)
@@ -532,6 +532,21 @@ describe("task_close (WS4b-S1)", () => {
 })
 
 describe("task_recovery (WS4b-S1)", () => {
+  it.effect("settles a run-ledger lookup outage as a typed tool error", () =>
+    Effect.gen(function* () {
+      const { db, events, sessions, registry } = yield* services
+      const parent = yield* sessions.create({ location: { directory } })
+      const submitted = yield* TaskRunAuthority.submit(db, events, sessions, specFor(parent.id, "call-recovery-db"))
+      yield* db.run("DROP TABLE task_run").pipe(Effect.orDie)
+      const result = yield* executeTool(
+        registry,
+        call("task_recovery", { task_id: submitted.run.childSessionID, resolution: "failed", reason: "triage" }, parent.id),
+      )
+      expect(result.type).toBe("error")
+      expect(String(result.value)).toContain("task_recovery: run lookup is unavailable")
+    }),
+  )
+
   it.effect("requires the recovery_required precondition and asks permission before resolving", () =>
     Effect.gen(function* () {
       const { events, sessions, registry } = yield* services

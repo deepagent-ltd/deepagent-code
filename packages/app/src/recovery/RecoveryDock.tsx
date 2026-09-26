@@ -58,7 +58,10 @@ export function RecoveryDock(props: { sessionId: string; client: MaintenanceClie
   })
 
   createEffect(() => {
-    props.onPendingChange?.(pendingItems(state()).length > 0 || state().loadStatus === "loading")
+    props.onPendingChange?.(
+      pendingItems(state()).some((item) => item.descriptor.descriptorKind !== "resolved") ||
+        state().loadStatus === "loading",
+    )
   })
 
   // Query-first ("核对中"): a network-unknown descriptor is re-queried before its

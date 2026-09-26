@@ -3,6 +3,10 @@
 import { Script } from "@deepagent-code/script"
 import { $ } from "bun"
 import { fileURLToPath } from "url"
+import { assertReleaseDraftFromEnv } from "./assert-release-candidate"
+import { prepareReleaseFiles } from "./prepare-release-files"
+import { verifySdkBuild } from "../packages/sdk/js/script/verify-build"
+import { publishUpdaterEvidence, verifyUpdaterInputs } from "../packages/desktop/scripts/verify-updater-assets"
 
 console.log("=== publishing ===\n")
 
@@ -10,61 +14,58 @@ const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
 const tag = `v${Script.version}`
 
-const pkgjsons = await Array.fromAsync(
-  new Bun.Glob("**/package.json").scan({
-    absolute: true,
-  }),
-).then((arr) => arr.filter((x) => !x.includes("node_modules") && !x.includes("dist")))
-
-async function prepareReleaseFiles() {
-  for (const file of pkgjsons) {
-    let pkg = await Bun.file(file).text()
-    pkg = pkg.replaceAll(/"version": "[^"]+"/g, `"version": "${Script.version}"`)
-    console.log("updated:", file)
-    await Bun.file(file).write(pkg)
-  }
-
-  await $`bun install`
-  await $`./packages/sdk/js/script/build.ts`
+if (Script.release && Script.preview)
+  throw new Error("preview release candidate freezing requires a separate repository routing design")
+if (!Script.release) await prepareReleaseFiles(Script.version, dir)
+const assertCandidate = async (expectedDraft = true) => {
+  if (!Script.release) return
+  await assertReleaseDraftFromEnv("packages/deepagent-code/dist/deepagent-code-linux-x64", expectedDraft)
 }
+await assertCandidate()
+await verifySdkBuild(`${dir}/packages/sdk/js`)
+await assertCandidate()
 
-if (Script.release && !Script.preview) {
-  await $`git fetch origin --tags`
-  await $`git switch --detach`
+if (Script.release) {
+  const latestDir = process.env.LATEST_YML_DIR
+  const assetsDir = process.env.RELEASE_ASSETS_DIR
+  const ledgerPath = process.env.RELEASE_LEDGER_PATH
+  const repo = process.env.GH_REPO
+  if (!latestDir || !assetsDir || !ledgerPath || !repo || !process.env.RUNNER_TEMP)
+    throw new Error(
+      "release updater verification requires latest YAML, staged assets, RI-51 ledger, repository and runner temp",
+    )
+  await verifyUpdaterInputs(latestDir, assetsDir, Script.version)
+  await $`bun ./packages/desktop/scripts/finalize-latest-json.ts`
+  await $`bun ./packages/desktop/scripts/finalize-latest-yml.ts`
+  await publishUpdaterEvidence({
+    directory: process.env.RUNNER_TEMP,
+    repository: repo,
+    tag,
+    commit: process.env.DEEPAGENT_CODE_CANDIDATE_COMMIT!,
+    tree: process.env.DEEPAGENT_CODE_CANDIDATE_TREE!,
+    ledgerPath,
+    assertCandidate,
+  })
 }
-
-await prepareReleaseFiles()
 
 console.log("\n=== cli ===\n")
+await assertCandidate()
 await $`bun ./packages/deepagent-code/script/publish.ts`
 
 console.log("\n=== preview cli ===\n")
+await assertCandidate()
 await $`bun ./packages/cli/script/publish.ts`
 
 console.log("\n=== sdk ===\n")
+await assertCandidate()
 await $`bun ./packages/sdk/js/script/publish.ts`
 
 console.log("\n=== plugin ===\n")
+await assertCandidate()
 await $`bun ./packages/plugin/script/publish.ts`
 
 if (Script.release) {
-  await $`bun ./packages/desktop/scripts/finalize-latest-json.ts`
-  await $`bun ./packages/desktop/scripts/finalize-latest-yml.ts`
-}
-
-if (Script.release && !Script.preview) {
-  await $`git commit -am "release: ${tag}"`
-  await $`git tag -d ${tag}`.nothrow()
-  await $`git tag ${tag}`
-  await $`git push origin refs/tags/${tag} --force-with-lease --no-verify`
-  await new Promise((resolve) => setTimeout(resolve, 5_000))
-  await $`git fetch origin`
-  await $`git checkout -B dev origin/dev`
-  await prepareReleaseFiles()
-  await $`git commit -am "sync release versions for ${tag}"`
-  await $`git push origin HEAD:dev --no-verify`
-}
-
-if (Script.release) {
-  await $`gh release edit ${tag} --draft=false --repo ${process.env.GH_REPO}`
+  await assertCandidate()
+  await $`gh api --method PATCH ${`repos/${process.env.GH_REPO}/releases/${process.env.DEEPAGENT_CODE_RELEASE}`} -F draft=false`
+  await assertCandidate(false)
 }

@@ -1,12 +1,25 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { Cause, Effect, Exit, Fiber, Layer, Option } from "effect"
+import { createHash } from "node:crypto"
+import { pathToFileURL } from "node:url"
+import { Cause, DateTime, Effect, Exit, Fiber, Layer, Option } from "effect"
+import { LLM } from "@deepagent-code/llm"
+import { Auth, LLMClient } from "@deepagent-code/llm/route"
+import { AnthropicMessages, OpenAIChat } from "@deepagent-code/llm/protocols"
+import { AgentV2 } from "@deepagent-code/core/agent"
+import { ModelV2 } from "@deepagent-code/core/model"
+import { ProviderV2 } from "@deepagent-code/core/provider"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { rehydrateToolArtifacts } from "@deepagent-code/core/session/runner/tool-artifacts"
+import { toLLMMessages } from "@deepagent-code/core/session/runner/to-llm-message"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Global } from "@deepagent-code/core/global"
 import { Config } from "@deepagent-code/core/config"
 import { ConfigToolOutput } from "@deepagent-code/core/config/tool-output"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { ToolOutputStore } from "@deepagent-code/core/tool-output-store"
+import { ToolArtifact } from "@deepagent-code/core/tool-artifact"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -81,7 +94,7 @@ describe("ToolOutputStore", () => {
     ),
   )
 
-  it.live("preserves native media and structured metadata without applying a settlement media limit", () =>
+  it.live("preserves native media and structured metadata within the artifact egress limit", () =>
     withStore(({ store }) =>
       Effect.gen(function* () {
         const data = "a".repeat(6 * 1024 * 1024)
@@ -102,6 +115,304 @@ describe("ToolOutputStore", () => {
           mime: "image/png",
           name: "pixel.png",
         })
+      }),
+    ),
+  )
+
+  it.live("retains remote media once and replays it without fetching again", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() =>
+        Bun.serve({
+          port: 0,
+          fetch: () => new Response("pixel", { headers: { "content-type": "image/png" } }),
+        }),
+      ),
+      (server) =>
+        withStore(({ store }) =>
+          Effect.gen(function* () {
+            const result = yield* store.bound({
+              sessionID,
+              toolCallID: "call-remote",
+              output: {
+                structured: {},
+                content: [{ type: "file", source: { type: "url", url: server.url.toString() }, mime: "image/png" }],
+              },
+            })
+            const file = result.output.content[0]
+            if (file?.type !== "file") throw new Error("expected retained artifact")
+            expect(file.source.type).toBe("file")
+            if (file.source.type !== "file") throw new Error("expected artifact ref")
+            expect(file.source.uri).toMatch(/^artifact:sha256:/)
+            server.stop(true)
+            expect(yield* store.rehydrate({ sessionID, file })).toEqual({
+              type: "file",
+              source: { type: "data", data: Buffer.from("pixel").toString("base64") },
+              mime: "image/png",
+            })
+            const wrongSession = yield* store
+              .rehydrate({ sessionID: SessionV2.ID.make("ses_other_location"), file })
+              .pipe(Effect.flip)
+            expect(wrongSession.reason).toBe("unavailable")
+          }),
+        ),
+      (server) => Effect.sync(() => server.stop(true)),
+    ),
+  )
+
+  it.live("rebuilds OpenAI and Anthropic provider bodies from one retained artifact", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() =>
+        Bun.serve({
+          port: 0,
+          fetch: () => new Response("pixel", { headers: { "content-type": "image/png" } }),
+        }),
+      ),
+      (server) =>
+        withStore(({ root, store }) =>
+          Effect.gen(function* () {
+            const location = { directory: AbsolutePath.make(root) }
+            const retained = yield* store.bound({
+              sessionID,
+              toolCallID: "call-wire-artifact",
+              location,
+              output: {
+                structured: {},
+                content: [{ type: "file", source: { type: "url", url: server.url.toString() }, mime: "image/png" }],
+              },
+            })
+            const retainedFile = retained.output.content[0]
+            if (retainedFile?.type !== "file") throw new Error("expected retained file")
+            if (retainedFile.source.type !== "file") throw new Error("expected retained ref")
+            expect(retainedFile.source.uri).toMatch(/^artifact:sha256:[a-f0-9]{64}:/)
+            server.stop(true)
+            for (const route of [
+              OpenAIChat.route.with({ endpoint: { baseURL: "https://openai.test/v1/" }, auth: Auth.bearer("test") }),
+              AnthropicMessages.route.with({
+                endpoint: { baseURL: "https://anthropic.test/v1/" },
+                auth: Auth.header("x-api-key", "test"),
+              }),
+            ]) {
+              const model = route.model({ id: "model" })
+              const assistant = new SessionMessage.Assistant({
+                id: SessionMessage.ID.make("msg_artifact"),
+                type: "assistant",
+                agent: AgentV2.ID.make("build"),
+                model: {
+                  id: ModelV2.ID.make(String(model.id)),
+                  providerID: ProviderV2.ID.make(String(model.provider)),
+                },
+                content: [
+                  new SessionMessage.AssistantTool({
+                    type: "tool",
+                    id: "call-wire-artifact",
+                    name: "image_lookup",
+                    state: new SessionMessage.ToolStateCompleted({
+                      status: "completed",
+                      input: {},
+                      structured: {},
+                      content: retained.output.content,
+                    }),
+                    time: { created: DateTime.makeUnsafe(0) },
+                  }),
+                ],
+                time: { created: DateTime.makeUnsafe(0) },
+              })
+              const history = yield* rehydrateToolArtifacts([assistant], sessionID, store.rehydrate)
+              const prepared = yield* LLMClient.prepare(
+                LLM.request({ id: "req_artifact", model, messages: toLLMMessages(history, model) }),
+              )
+              const body = JSON.stringify(prepared.body)
+              expect(body).toContain(Buffer.from("pixel").toString("base64"))
+              expect(body).not.toContain("artifact:sha256:")
+              expect(body).not.toContain(server.url.toString())
+            }
+          }),
+        ),
+      (server) => Effect.sync(() => server.stop(true)),
+    ),
+  )
+
+  it.live("returns typed reasons for oversized, unavailable, and unsupported remote artifacts", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() =>
+        Bun.serve({
+          port: 0,
+          fetch: (request) => {
+            if (new URL(request.url).pathname === "/large")
+              return new Response(Buffer.alloc(ToolArtifact.MAX_BYTES + 1), {
+                headers: { "content-type": "image/png" },
+              })
+            if (new URL(request.url).pathname === "/svg")
+              return new Response("<svg/>", { headers: { "content-type": "image/svg+xml" } })
+            return new Response("missing", { status: 404, headers: { "content-type": "image/png" } })
+          },
+        }),
+      ),
+      (server) =>
+        withStore(({ store }) =>
+          Effect.gen(function* () {
+            const reason = (pathname: string, mime: string) =>
+              store
+                .bound({
+                  sessionID,
+                  toolCallID: `call-${pathname}`,
+                  output: {
+                    structured: {},
+                    content: [
+                      { type: "file", source: { type: "url", url: new URL(pathname, server.url).toString() }, mime },
+                    ],
+                  },
+                })
+                .pipe(
+                  Effect.flip,
+                  Effect.map((error) => (error._tag === "ToolArtifact.Error" ? error.reason : "storage")),
+                )
+            expect(yield* reason("/large", "image/png")).toBe("too_large")
+            expect(yield* reason("/missing", "image/png")).toBe("unavailable")
+            expect(yield* reason("/svg", "image/svg+xml")).toBe("unsupported_content_type")
+          }),
+        ),
+      (server) => Effect.sync(() => server.stop(true)),
+    ),
+  )
+
+  it.live("redacts remote text before storing and detects replay tampering", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() =>
+        Bun.serve({
+          port: 0,
+          fetch: () =>
+            new Response("Bearer abcdefghijklmnopqrstuvwxyz012345", { headers: { "content-type": "text/plain" } }),
+        }),
+      ),
+      (server) =>
+        withStore(({ root, store }) =>
+          Effect.gen(function* () {
+            const result = yield* store.bound({
+              sessionID,
+              toolCallID: "call-text-artifact",
+              output: {
+                structured: {},
+                content: [{ type: "file", source: { type: "url", url: server.url.toString() }, mime: "text/plain" }],
+              },
+            })
+            const file = result.output.content[0]
+            if (file?.type !== "file" || file.source.type !== "file") throw new Error("expected retained text")
+            expect(yield* store.rehydrate({ sessionID, file })).toEqual({ type: "text", text: "«redacted»" })
+            const digest = file.source.uri.split(":")[3]
+            yield* Effect.promise(() =>
+              Bun.write(path.join(root, "tool-artifacts", "unplaced", sessionID, `${digest}.bin`), "tampered"),
+            )
+            expect((yield* store.rehydrate({ sessionID, file }).pipe(Effect.flip)).reason).toBe("integrity_mismatch")
+          }),
+        ),
+      (server) => Effect.sync(() => server.stop(true)),
+    ),
+  )
+
+  it.live("materializes only files inside the managed output directory", () =>
+    withStore(({ root, store }) =>
+      Effect.gen(function* () {
+        const managed = path.join(root, "tool-output", "image.png")
+        const external = path.join(root, "external.png")
+        yield* Effect.promise(() => Bun.write(managed, "pixel", { createPath: true }))
+        yield* Effect.promise(() => Bun.write(external, "secret"))
+        const bound = yield* store.bound({
+          sessionID,
+          toolCallID: "call-managed",
+          output: {
+            structured: {},
+            content: [
+              { type: "file", source: { type: "file", uri: pathToFileURL(managed).toString() }, mime: "image/png" },
+            ],
+          },
+        })
+        expect(bound.output.content[0]?.type).toBe("file")
+        const refused = yield* store
+          .bound({
+            sessionID,
+            toolCallID: "call-external",
+            output: {
+              structured: {},
+              content: [
+                { type: "file", source: { type: "file", uri: pathToFileURL(external).toString() }, mime: "image/png" },
+              ],
+            },
+          })
+          .pipe(Effect.flip)
+        expect(refused._tag).toBe("ToolArtifact.Error")
+        if (refused._tag === "ToolArtifact.Error") expect(refused.reason).toBe("invalid_source")
+      }),
+    ),
+  )
+
+  it.live("reuses an existing digest across concurrent and repeated materializations", () =>
+    withStore(({ root, store, fs }) =>
+      Effect.gen(function* () {
+        const managed = path.join(root, "tool-output", "image.png")
+        yield* Effect.promise(() => Bun.write(managed, "pixel", { createPath: true }))
+        const output = {
+          structured: {},
+          content: [
+            {
+              type: "file" as const,
+              source: { type: "file" as const, uri: pathToFileURL(managed).toString() },
+              mime: "image/png",
+            },
+          ],
+        }
+        const first = yield* Effect.all(
+          [
+            store.bound({ sessionID, toolCallID: "call-concurrent-a", output }),
+            store.bound({ sessionID, toolCallID: "call-concurrent-b", output }),
+          ],
+          { concurrency: 2 },
+        )
+        const repeated = yield* store.bound({ sessionID, toolCallID: "call-repeated", output })
+        expect(first[0].output.content).toEqual(first[1].output.content)
+        expect(repeated.output.content).toEqual(first[0].output.content)
+        const digest = createHash("sha256").update("pixel").digest("hex")
+        const retained = path.join(root, "tool-artifacts", "unplaced", sessionID)
+        expect(yield* fs.readDirectory(retained)).toEqual([`${digest}.bin`])
+        expect(yield* fs.readFileString(path.join(retained, `${digest}.bin`))).toBe("pixel")
+      }),
+    ),
+  )
+
+  it.live("rejects a conflicting digest file without overwriting it or leaving temporary files", () =>
+    withStore(({ root, store, fs }) =>
+      Effect.gen(function* () {
+        const managed = path.join(root, "tool-output", "image.png")
+        yield* Effect.promise(() => Bun.write(managed, "pixel", { createPath: true }))
+        const digest = createHash("sha256").update("pixel").digest("hex")
+        const retained = path.join(root, "tool-artifacts", "unplaced", sessionID)
+        yield* Effect.forEach(["other", "longer"], (corrupted) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() =>
+              Bun.write(path.join(retained, `${digest}.bin`), corrupted, { createPath: true }),
+            )
+            const error = yield* store
+              .bound({
+                sessionID,
+                toolCallID: "call-conflicting-digest",
+                output: {
+                  structured: {},
+                  content: [
+                    {
+                      type: "file",
+                      source: { type: "file", uri: pathToFileURL(managed).toString() },
+                      mime: "image/png",
+                    },
+                  ],
+                },
+              })
+              .pipe(Effect.flip)
+            expect(error._tag).toBe("ToolArtifact.Error")
+            if (error._tag === "ToolArtifact.Error") expect(error.reason).toBe("integrity_mismatch")
+            expect(yield* fs.readFileString(path.join(retained, `${digest}.bin`))).toBe(corrupted)
+            expect(yield* fs.readDirectory(retained)).toEqual([`${digest}.bin`])
+          }),
+        )
       }),
     ),
   )

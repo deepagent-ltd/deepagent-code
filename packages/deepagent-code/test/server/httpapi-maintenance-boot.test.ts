@@ -265,6 +265,11 @@ test("the blocked-schema shell restores a verified backup while the business dat
     })
     expect(restored.status).toBe(200)
     expect(await restored.json()).toMatchObject({ status: "restored", inProgress: false })
+    expect((await waitForStatus(new URL(MaintenancePaths.bootstrapStatus, listener.url), 200, headers)).status).toBe(200)
+    expect((await fetch(new URL("/session", listener.url), { headers })).status).toBe(200)
+    const incidents = await fs.readdir(path.join(root.path, "restore-incidents"))
+    expect(incidents).toHaveLength(1)
+    expect(await fs.readdir(path.join(root.path, "restore-incidents", incidents[0]))).toContain("restore-target.db")
   } finally {
     await listener.stop(true)
   }
@@ -277,6 +282,112 @@ test("the blocked-schema shell restores a verified backup while the business dat
     }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.scoped),
   )
 }, 60_000)
+
+test("a failed warm reopen keeps the incident shell closed to business until retry succeeds", async () => {
+  await using root = await tmpdir()
+  const filename = path.join(root.path, "restore-failed-warm.db")
+  await Effect.runPromise(Database.Service.pipe(Effect.provide(Database.layerFromPath(filename)), Effect.scoped))
+  const backupDir = path.join(root.path, "backups")
+  await fs.mkdir(backupDir)
+  const manifest = await Effect.runPromise(
+    Backup.create({ sourcePath: filename, destDir: backupDir, buildId: "maintenance-warm-failure" }),
+  )
+  await Bun.write(filename, "not a sqlite database")
+  await fs.rm(`${filename}-wal`, { force: true })
+  await fs.rm(`${filename}-shm`, { force: true })
+
+  Flag.DEEPAGENT_CODE_DB = filename
+  process.env.DEEPAGENT_CODE_SERVER_PASSWORD = "maintenance-secret"
+  let prepareAttempts = 0
+  let allowPrepare = false
+  let rebindAttempts = 0
+  let allowRebind = false
+  const listener = await Server.listen({
+    hostname: "127.0.0.1",
+    port: 0,
+    restorePrepare: async () => {
+      prepareAttempts++
+      if (!allowPrepare) throw new Error("injected warm-build failure")
+    },
+    restoreRebind: async () => {
+      rebindAttempts++
+      if (!allowRebind) throw new Error("injected listener-rebind failure")
+    },
+  })
+  const headers = {
+    authorization: `Basic ${btoa("deepagent-code:maintenance-secret")}`,
+    "content-type": "application/json",
+  }
+  try {
+    const restored = await fetch(new URL(MaintenancePaths.backupRestore, listener.url), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        backup_manifest_ref: Backup.manifestPathFor(manifest.backup.filePath),
+        target: filename,
+        dry_run: false,
+      }),
+    })
+    expect(restored.status).toBe(200)
+    await waitFor(() => prepareAttempts > 0)
+    expect((await waitForStatus(new URL(MaintenancePaths.bootstrapStatus, listener.url), 423, headers)).status).toBe(423)
+    expect((await waitForStatus(new URL("/session", listener.url), 404, headers)).status).toBe(404)
+    expect(await fs.readdir(path.join(root.path, "restore-incidents"))).toHaveLength(1)
+    allowPrepare = true
+    await waitFor(() => rebindAttempts > 0)
+    expect((await waitForStatus(new URL(MaintenancePaths.bootstrapStatus, listener.url), 423, headers)).status).toBe(423)
+    expect((await waitForStatus(new URL("/session", listener.url), 404, headers)).status).toBe(404)
+    allowRebind = true
+    expect((await waitForStatus(new URL(MaintenancePaths.bootstrapStatus, listener.url), 200, headers)).status).toBe(200)
+    expect((await waitForStatus(new URL("/session", listener.url), 200, headers)).status).toBe(200)
+    expect(await fs.readdir(path.join(root.path, "restore-incidents"))).toHaveLength(1)
+  } finally {
+    await listener.stop(true)
+  }
+}, 60_000)
+
+async function waitFor(predicate: () => boolean) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (predicate()) return
+    await Bun.sleep(100)
+  }
+  throw new Error("timed out waiting for listener handoff")
+}
+
+async function waitForStatus(url: URL, expected: number, headers: Record<string, string>, probeTimeoutMs = 2_000) {
+  const deadline = Date.now() + 20_000
+  while (Date.now() < deadline) {
+    // A probe can straddle the close/rebind handoff. Abort that one request so a stalled
+    // connection cannot pin the entire retry loop until the test's outer timeout.
+    const response = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(Math.max(1, Math.min(probeTimeoutMs, deadline - Date.now()))),
+    }).catch(() => undefined)
+    if (response?.status === expected) return response
+    await Bun.sleep(100)
+  }
+  throw new Error(`timed out waiting for HTTP ${expected}`)
+}
+
+test("maintenance status polling retries a probe that never responds", async () => {
+  let probes = 0
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => {
+      probes++
+      if (probes === 1) return new Promise<Response>(() => {})
+      return Response.json({ ready: true })
+    },
+  })
+  try {
+    const response = await waitForStatus(new URL(`http://127.0.0.1:${server.port}/`), 200, {}, 100)
+    expect(response.status).toBe(200)
+    expect(probes).toBe(2)
+  } finally {
+    server.stop(true)
+  }
+}, 5_000)
 
 test("a backup failure during full runtime construction falls back to the incident shell", async () => {
   await using root = await tmpdir()

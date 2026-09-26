@@ -173,8 +173,15 @@ describe("W5 outbox writer — EventV2 publish lands in deepagent_event_outbox",
         Effect.gen(function* () {
           // A registration whose producer policy the envelope violates: the commit hook's `land` fails
           // the registry validation → the whole publish transaction ROLLS BACK (fail-closed, design §8.3).
-          const outcome = yield* bridge.publish(TestEvent, { sessionID: "ses_w5_fail", value: "v3" }).pipe(Effect.exit)
-          // The publish dies (the hook failure surfaces as a transaction defect).
+          const checked = yield* bridge.publishChecked(TestEvent, { sessionID: "ses_w5_fail", value: "v3" })
+            .pipe(Effect.catch(Effect.succeed))
+          expect(checked).toBeInstanceOf(EventV2.CommitHookError)
+          if (checked instanceof EventV2.CommitHookError) {
+            expect(checked.eventType).toBe(TestEvent.type)
+            expect(checked.message).toContain("producer")
+          }
+          // The old public channel remains compatible: the same hook error is still a defect.
+          const outcome = yield* bridge.publish(TestEvent, { sessionID: "ses_w5_fail_legacy", value: "v3" }).pipe(Effect.exit)
           expect(Exit.isFailure(outcome)).toBe(true)
           // NO durable event row and NO outbox row — the landing window is closed.
           const eventRows = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, "ses_w5_fail")).all()
@@ -276,6 +283,28 @@ describe("W5 outbox writer — EventV2 publish lands in deepagent_event_outbox",
           .where(eq(DeepAgentEventOutboxTable.idempotency_key, `eventv2:${serialized.id}`))
           .all()
         expect(rows.length).toBe(1)
+      }),
+    ))
+
+  test("exact replay repairs a historical event whose C5 outbox row is missing", () =>
+    runWith((db, bridge) =>
+      Effect.gen(function* () {
+        const event = yield* bridge.publish(TestEvent, { sessionID: "ses_w5_historical", value: "historical" })
+        const serialized: EventV2.SerializedEvent = {
+          id: event.id,
+          type: EventV2.versionedType(TestEvent.type, 1),
+          seq: event.seq!,
+          aggregateID: "ses_w5_historical",
+          data: event.data,
+        }
+        yield* db.delete(DeepAgentEventOutboxTable).where(eq(DeepAgentEventOutboxTable.idempotency_key, `eventv2:${event.id}`)).run()
+        expect(yield* V2OutboxWriter.forEvent(db, event.id)).toBeUndefined()
+
+        const hooks: number[] = []
+        yield* bridge.replayAllChecked([serialized], { onCommit: (seq) => Effect.sync(() => hooks.push(seq)) })
+        expect(hooks).toEqual([event.seq!])
+        expect(yield* V2OutboxWriter.forEvent(db, event.id)).toBeDefined()
+        expect((yield* db.select().from(EventTable).where(eq(EventTable.id, event.id)).all()).length).toBe(1)
       }),
     ))
 

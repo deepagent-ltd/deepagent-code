@@ -29,7 +29,9 @@ Leaves own resolution, permission, and side-effect ordering. Translate only expe
 
 ## Registration
 
-Built-ins register through `Tools.Service.register({ [name]: tool })`. Application tools register through `ApplicationTools.Service.register(...)`, exposed publicly as `deepagent-code.tools.register(...)`.
+Built-ins and Core `PluginBoot` plugins register through `Tools.Service.register({ [name]: tool })` while constructing a Location. `PluginBoot` supplies that typed service to each plugin effect before the boot wait completes. Application tools register through `ApplicationTools.Service.register(...)`, exposed publicly as `deepagent-code.tools.register(...)`.
+
+The deepagent-code package owns npm/filesystem plugin loading, config-glob `tools/*.ts` discovery, and parsing the config `plugins` field. It adapts discovered V1 custom-tool definitions once into canonical `Tool` values and registers them in `ApplicationTools` for the instance lifetime. Its MCP bridge uses the same process-scoped application channel; MCP client authority remains in deepagent-code. Core does not load plugin JavaScript or interpret that config field. Session-scoped registration is reserved for a later design.
 
 Both are scoped:
 
@@ -54,6 +56,5 @@ Producer capture limits are separate. For example, Bash keeps `AppProcess.maxOut
 
 ## Current Gaps
 
-- Plugin boot has not been redesigned to register canonical tools through `Tools.Service`; do not redesign it as part of leaf migrations.
-- MCP and future Session-scoped registrations still need an explicit canonical registration design.
+- Future Session-scoped registrations still need an explicit canonical registration design.
 - The public Session result shape currently exposes managed `outputPaths`; full storage encapsulation requires a future opaque managed-output reference design.

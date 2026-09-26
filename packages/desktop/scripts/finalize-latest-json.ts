@@ -3,6 +3,7 @@
 import { $ } from "bun"
 import path from "node:path"
 import { parseArgs } from "node:util"
+import { assertReleaseDraft } from "./assert-release-draft"
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -146,40 +147,32 @@ const alias = (data: Record<string, { url: string; signature: string }>, key: st
 }
 
 const winx = await read("latest-yml-x86_64-pc-windows-msvc", "latest.yml")
-const wina = await read("latest-yml-aarch64-pc-windows-msvc", "latest.yml")
 const macx = await read("latest-yml-x86_64-apple-darwin", "latest-mac.yml")
 const maca = await read("latest-yml-aarch64-apple-darwin", "latest-mac.yml")
 const linx = await read("latest-yml-x86_64-unknown-linux-gnu", "latest-linux.yml")
-const lina = await read("latest-yml-aarch64-unknown-linux-gnu", "latest-linux-arm64.yml")
 
-const yver = winx?.version ?? wina?.version ?? macx?.version ?? maca?.version ?? linx?.version ?? lina?.version
+const yver = winx?.version ?? macx?.version ?? maca?.version ?? linx?.version
 if (yver && yver !== version) throw new Error(`latest.yml version mismatch: expected ${version}, got ${yver}`)
 
 const out: Record<string, { url: string; signature: string }> = {}
 
 const winxexe = pick(winx?.files ?? [], [".exe"])
-const winaexe = pick(wina?.files ?? [], [".exe"])
 
 const macxTarGz = "deepagent-code-desktop-mac-x64.app.tar.gz"
 const macaTarGz = "deepagent-code-desktop-mac-arm64.app.tar.gz"
 
 const linxDeb = pick(linx?.files ?? [], [".deb"])
-const linaDeb = pick(lina?.files ?? [], [".deb"])
 
 await add(out, "windows-x86_64-nsis", winxexe)
-await add(out, "windows-aarch64-nsis", winaexe)
 await add(out, "darwin-x86_64-app", macxTarGz)
 await add(out, "darwin-aarch64-app", macaTarGz)
 
 await add(out, "linux-x86_64-deb", linxDeb)
-await add(out, "linux-aarch64-deb", linaDeb)
 
 alias(out, "windows-x86_64", "windows-x86_64-nsis")
-alias(out, "windows-aarch64", "windows-aarch64-nsis")
 alias(out, "darwin-x86_64", "darwin-x86_64-app")
 alias(out, "darwin-aarch64", "darwin-aarch64-app")
 alias(out, "linux-x86_64", "linux-x86_64-deb")
-alias(out, "linux-aarch64", "linux-aarch64-deb")
 
 const platforms = Object.fromEntries(
   Object.keys(out)
@@ -206,6 +199,7 @@ if (dryRun) {
   console.log(`dry-run: wrote latest.json for ${tag} to ${file}`)
   process.exit(0)
 }
-await $`gh release upload ${tag} ${file} --clobber --repo ${repo}`
+assertReleaseDraft()
+await $`bun ${path.resolve(import.meta.dir, "../../../script/upload-release-asset.ts")} ${file}`
 
 console.log(`finalized latest.json for ${tag}`)

@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import { $ } from "bun"
 import fs from "fs/promises"
 import path from "path"
-import { Effect } from "effect"
+import { Effect, Exit } from "effect"
 import { Git } from "@deepagent-code/core/git"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { branch, commit, gitRemote } from "./fixture/git"
@@ -12,6 +12,36 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(Git.defaultLayer)
 
 describe("Git", () => {
+  it.live("reports an unborn repository without a HEAD", () =>
+    Effect.gen(function* () {
+      const root = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      yield* Effect.promise(() => $`git init`.cwd(root.path).quiet())
+      const git = yield* Git.Service
+      expect(yield* git.head(root.path)).toBeUndefined()
+      expect(Exit.isFailure(yield* git.patch(AbsolutePath.make(root.path)).pipe(Effect.exit))).toBe(true)
+    }),
+  )
+
+  it.live("captures successive workspace revisions even when the same file remains dirty", () =>
+    withRemote((fixture) =>
+      Effect.gen(function* () {
+        const git = yield* Git.Service
+        const directory = AbsolutePath.make(fixture.source)
+        const clean = yield* git.patch(directory)
+        yield* Effect.promise(() => fs.writeFile(path.join(fixture.source, "README.md"), "first edit\n"))
+        const first = yield* git.patch(directory)
+        yield* Effect.promise(() => fs.writeFile(path.join(fixture.source, "README.md"), "second edit\n"))
+        const second = yield* git.patch(directory)
+        expect(new Set([clean, first, second]).size).toBe(3)
+        yield* Effect.promise(() => fs.writeFile(path.join(fixture.source, "new.txt"), "new evidence\n"))
+        expect(yield* git.patch(directory)).not.toBe(second)
+      }),
+    ),
+  )
+
   it.live("clones a remote and reads checkout metadata", () =>
     withRemote((fixture) =>
       Effect.gen(function* () {

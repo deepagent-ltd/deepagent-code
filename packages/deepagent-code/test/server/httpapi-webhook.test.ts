@@ -24,10 +24,7 @@ import { InstanceBootstrap as InstanceBootstrapService } from "../../src/project
 import { InstanceStore } from "../../src/project/instance-store"
 import { Project } from "../../src/project/project"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
-import {
-  ackOf,
-  deriveIdempotencyKey,
-} from "../../src/server/routes/instance/httpapi/handlers/webhook"
+import { ackOf, deriveIdempotencyKey } from "../../src/server/routes/instance/httpapi/handlers/webhook"
 import { Session } from "@/session/session"
 import { Database } from "@deepagent-code/core/database/database"
 import * as Log from "@deepagent-code/core/util/log"
@@ -118,7 +115,10 @@ function requestJson<T>(path: string, init?: RequestInit) {
 const replayAll = (workspaceID: string) =>
   DeepAgentEventBus.Service.pipe(
     Effect.flatMap((bus) =>
-      bus.replay({ workspaceID, from: 0 }).pipe(Stream.runCollect, Effect.map((c) => Array.from(c))),
+      bus.replay({ workspaceID, from: 0 }).pipe(
+        Stream.runCollect,
+        Effect.map((c) => Array.from(c)),
+      ),
     ),
   )
 
@@ -180,6 +180,7 @@ describe("Webhook §A1 ingress — git / ci / pr / monitor", () => {
       const bySource = new Map(events.map((e) => [e.source, e]))
       expect(bySource.get("git")?.type).toBe("git.push")
       expect(bySource.get("ci")?.type).toBe("ci.failure")
+      expect((bySource.get("ci")?.payload as { directory?: string }).directory).toBe(directory)
       expect(bySource.get("pr")?.type).toBe("pr.comment")
       expect(bySource.get("monitor")?.type).toBe("monitor.alert")
       expect(bySource.get("git")?.idempotencyKey).toBe(git.idempotencyKey)
@@ -195,7 +196,13 @@ describe("Webhook §A1 ingress — git / ci / pr / monitor", () => {
       const directory = yield* tmpdirScoped({ git: true })
       const q = `directory=${encodeURIComponent(directory)}`
       const headers = { "content-type": "application/json" }
-      const body = JSON.stringify({ repo: "acme/app", branch: "main", commit: "sha9", actor: "carol", deliveryId: "dup" })
+      const body = JSON.stringify({
+        repo: "acme/app",
+        branch: "main",
+        commit: "sha9",
+        actor: "carol",
+        deliveryId: "dup",
+      })
 
       const first = yield* requestJson<Ack>(`/api/v1/webhook/git?${q}`, { method: "POST", headers, body })
       const second = yield* requestJson<Ack>(`/api/v1/webhook/git?${q}`, { method: "POST", headers, body })

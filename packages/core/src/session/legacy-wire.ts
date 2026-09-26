@@ -213,6 +213,8 @@ export function legacyUser(input: {
 }): SessionV1.WithParts {
   const created = DateTime.toEpochMillis(input.message.time.created)
   const messageID = SessionV1.MessageID.ascending(input.message.id)
+  const agent = input.message.type === "user" ? (input.message.agent ?? input.agent) : input.agent
+  const model = input.message.type === "user" ? (input.message.model ?? input.model) : input.model
   const parts: SessionV1.Part[] = []
   if (input.message.text) {
     parts.push({
@@ -244,12 +246,32 @@ export function legacyUser(input: {
       sessionID: input.sessionID,
       role: "user",
       time: { created },
-      agent: input.agent ?? "",
+      agent: agent ?? "",
       model: {
-        providerID: (input.model?.providerID ?? "") as ProviderV2.ID,
-        modelID: (input.model?.id ?? "") as ModelV2.ID,
-        ...(input.model?.variant === undefined ? {} : { variant: input.model.variant }),
+        providerID: (model?.providerID ?? "") as ProviderV2.ID,
+        modelID: (model?.id ?? "") as ModelV2.ID,
+        ...(model?.variant === undefined ? {} : { variant: model.variant }),
       },
+      ...(input.message.metadata === undefined ? {} : { metadata: input.message.metadata }),
+      // V1-wire parity: the durable user row carries the structured-output request (Prompt.format
+      // survives promotion); the legacy owner persisted it on the user message and the read model
+      // (API/messages surface) still expects it, so the egress must not drop it. The V1 Info codec
+      // only accepts Format CLASS instances (a plain object fails encode — see the app's
+      // structured-output tests), so re-instantiate rather than copy.
+      ...(input.message.type === "user" && input.message.format !== undefined
+        ? {
+            format:
+              input.message.format.type === "json_schema"
+                ? new SessionV1.OutputFormatJsonSchema({
+                    type: "json_schema",
+                    schema: input.message.format.schema ?? {},
+                    ...(input.message.format.retryCount === undefined
+                      ? {}
+                      : { retryCount: input.message.format.retryCount }),
+                  })
+                : new SessionV1.OutputFormatText({ type: "text" }),
+          }
+        : {}),
     },
     parts,
   }
