@@ -3,7 +3,6 @@ export * as Log from "./log"
 import path from "path"
 import fs from "fs/promises"
 import { createWriteStream } from "fs"
-import * as Global from "../global"
 import { Cause, Schema } from "effect"
 import { Glob } from "./glob"
 
@@ -79,6 +78,11 @@ export function init(options: Options) {
 }
 
 async function initialize(options: Options) {
+  // global.ts imports this module for its startup migration report, so a static import back would
+  // be a cycle: whichever module loads first sees the other's exports uninitialized (this crashed
+  // the Windows already-migrated warn at every launch). The log directory is only needed once
+  // logging initializes, well after both modules have evaluated — resolve it lazily here.
+  const { Path } = await import("../global")
   if (options.level) level = options.level
   // Route concurrent logs away from the previous stream before ending it. Test/runtime re-init can
   // overlap background fibers that log while the old file handle is closing.
@@ -86,10 +90,10 @@ async function initialize(options: Options) {
   await closeWrite?.()
   closeWrite = undefined
   logpath = ""
-  void cleanup(Global.Path.log)
+  void cleanup(Path.log)
   if (options.print) return
   logpath = path.join(
-    Global.Path.log,
+    Path.log,
     options.dev ? "dev.log" : new Date().toISOString().split(".")[0].replace(/:/g, "") + ".log",
   )
   const runID = process.env.DEEPAGENT_CODE_RUN_ID
