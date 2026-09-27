@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
+import { createHash } from "node:crypto"
 import path from "node:path"
 import { gunzipSync } from "node:zlib"
 import { Cause, Effect, Exit } from "effect"
@@ -26,7 +27,7 @@ async function makeBackup(destDir: string, fileName: string, payload: string, cr
           fileName: `${fileName}.db`,
           filePath,
           sizeBytes: payload.length,
-          sha256: `sha-${fileName}`,
+          sha256: createHash("sha256").update(payload).digest("hex"),
           createdAt: Date.now() + createdOffsetMs,
         },
         source: {
@@ -95,6 +96,24 @@ describe("BackupGovernor (W-02 M-4)", () => {
     // The governance report persisted.
     const stored = await Bun.file(BackupGovernor.reportPathFor(backupDir)).json()
     expect(stored.kind).toBe("backup-governance-report")
+  })
+
+  test("a mismatched archive round-trip leaves the original backup and manifest in place", async () => {
+    await using tmp = await tmpdir()
+    const backupDir = path.join(tmp.path, "backups")
+    const original = await makeBackup(backupDir, "old", "original bytes", 1_000)
+    await makeBackup(backupDir, "new", "new bytes", 2_000)
+    const manifestPath = `${original}.manifest.json`
+    const manifest = await readManifest(manifestPath)
+    await Bun.write(manifestPath, JSON.stringify({
+      ...manifest,
+      backup: { ...manifest.backup, sha256: "0".repeat(64) },
+    }))
+
+    const failure = await Effect.runPromise(Effect.flip(BackupGovernor.govern({ backupDir, keep: 1 })))
+    expect(failure).toMatchObject({ _tag: "BackupGovernor.BackupGovernorError", code: "archive_failed" })
+    expect(await Bun.file(original).text()).toBe("original bytes")
+    expect(await Bun.file(manifestPath).exists()).toBeTrue()
   })
 
   test("milestones: a migration archive record shields its backup from retention eviction", async () => {

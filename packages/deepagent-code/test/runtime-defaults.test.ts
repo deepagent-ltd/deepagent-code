@@ -143,6 +143,7 @@ describe("W0.1 entry parity: CLI and desktop sidecar apply identical runtime def
     const killEnv = {
       [EVENT_V2_ADMISSION_ENV]: "false",
       [CORE_V2_EXECUTION_OWNER_ENV]: "0",
+      [CONTEXT_FEDERATION_PRODUCTION_ENV]: "false",
       [MODELS_URL_ENV]: "https://models.dev",
     }
     const cli = entrySnapshot("index", killEnv)
@@ -151,7 +152,8 @@ describe("W0.1 entry parity: CLI and desktop sidecar apply identical runtime def
     expect(cli[EVENT_V2_ADMISSION_ENV]).toBe("false")
     expect(cli[CORE_V2_EXECUTION_OWNER_ENV]).toBe("0")
     expect(cli[IM_SINGLE_WRITE_ENV]).toBe("true")
-    expect(cli[CONTEXT_FEDERATION_PRODUCTION_ENV]).toBe("true")
+    expect(cli[CONTEXT_FEDERATION_PRODUCTION_ENV]).toBe("false")
+    expect(runtimeDefaultsFromEnv(cli).federationActivate).toBe(false)
     expect(cli[MODELS_URL_ENV]).toBe("https://models.dev")
   })
 })

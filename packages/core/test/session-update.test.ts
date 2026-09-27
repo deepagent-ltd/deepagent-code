@@ -17,6 +17,7 @@ import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionInfo } from "@deepagent-code/core/session/info"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionTable } from "@deepagent-code/core/session/sql"
+import { SessionInputTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { DateTime } from "effect"
 import { testEffect } from "./lib/effect"
@@ -67,6 +68,76 @@ const publishV2Update = (sessionID: SessionSchema.ID, apply: (info: SessionSchem
   })
 
 describe("SessionV2 native session.updated.2 authority", () => {
+  it.effect("keeps a V1-only row readable while refusing every V2 prompt and update write", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const id = SessionV2.ID.make("ses_legacy_read_only")
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: ProjectV2.ID.global, worktree: location.directory, sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+      yield* events.publish(SessionV1.Event.Created, {
+        sessionID: id,
+        info: SessionV1.SessionInfo.make({
+          id,
+          slug: "legacy",
+          version: "test",
+          projectID: ProjectV2.ID.global,
+          directory: location.directory,
+          title: "Historical",
+          time: { created: 1, updated: 1 },
+        }),
+      })
+      expect((yield* sessions.get(id)).title).toBe("Historical")
+      expect((yield* rowOf(id)).v2_authority).toBe(false)
+      const prompt = yield* sessions
+        .prompt({ sessionID: id, prompt: { text: "must not admit" }, resume: false })
+        .pipe(Effect.flip)
+      expect(prompt).toBeInstanceOf(SessionV2.LegacySessionRequiresAdoption)
+      expect(yield* sessions.update({ sessionID: id, title: "forbidden" }).pipe(Effect.flip)).toBeInstanceOf(
+        SessionV2.LegacySessionRequiresAdoption,
+      )
+      expect(yield* sessions.setPermissions({ sessionID: id, permissions: [] }).pipe(Effect.flip)).toBeInstanceOf(
+        SessionV2.LegacySessionRequiresAdoption,
+      )
+      expect(yield* sessions.interrupt(id).pipe(Effect.flip)).toBeInstanceOf(SessionV2.LegacySessionRequiresAdoption)
+      expect(yield* sessions.resume(id).pipe(Effect.flip)).toBeInstanceOf(SessionV2.LegacySessionRequiresAdoption)
+      expect((yield* rowOf(id)).title).toBe("Historical")
+      expect(
+        (yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, id)).all()).length,
+      ).toBe(0)
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, id)).all()).map((event) => event.type),
+      ).toEqual(["session.created.1"])
+    }),
+  )
+
+  it.effect("updates title, metadata, permissions and archive with one native V2 event", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const created = yield* sessions.create({ location })
+      const updated = yield* sessions.update({
+        sessionID: created.id,
+        title: "Renamed",
+        metadata: { source: "w3" },
+        permissions: [{ action: "bash", resource: "*", effect: "deny" }],
+        archived: 42,
+      })
+      expect(updated.title).toBe("Renamed")
+      expect(updated.metadata).toEqual({ source: "w3" })
+      expect(updated.permissions).toEqual([{ action: "bash", resource: "*", effect: "deny" }])
+      expect((yield* rowOf(created.id)).time_archived).toBe(42)
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all()).map(
+          (event) => event.type,
+        ),
+      ).toEqual(["session.created.2", "session.updated.2"])
+    }),
+  )
   it.effect("registers session.updated.2 as the canonical synchronized definition", () =>
     Effect.sync(() => {
       expect(EventV2.syncRegistry.get("session.updated.1")).toBeDefined()
@@ -193,6 +264,13 @@ describe("SessionV2 native session.updated.2 authority", () => {
         yield* events.replayAll(serialized)
         const replayed = yield* store.get(created.id)
         expect(replayed).toMatchObject({ title: "native title", agent: "build" })
+        expect(
+          (yield* db
+            .select({ authority: SessionTable.v2_authority })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, created.id))
+            .get())?.authority,
+        ).toBe(true)
       }).pipe(Effect.provide(Layer.fresh(Layer.mergeAll(targetDatabase, targetEvents, targetProjector, targetStore))))
     }),
   )

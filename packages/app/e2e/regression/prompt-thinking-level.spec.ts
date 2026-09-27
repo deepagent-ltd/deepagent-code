@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test } from "@playwright/test"
 import { base64Encode } from "@deepagent-code/core/util/encode"
 import { mockDeepAgentCodeServer } from "../utils/mock-server"
 import { expectAppVisible } from "../utils/waits"
@@ -54,15 +54,11 @@ test("shows the V2 thinking level control while relevant", async ({ page }) => {
   })
 
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
-  const composer = page.locator('[data-component="session-composer"]')
+  const composer = page.locator('[data-component="session-prompt-dock"]')
   const input = composer.locator('[data-component="prompt-input"]')
   const control = composer.locator('[data-component="prompt-variant-control"]')
   await expectAppVisible(composer)
 
-  await idleComposer(page)
-  await expect(control).toBeHidden()
-
-  await composer.hover()
   await expect(control).toBeVisible()
 
   await control.locator('[data-action="prompt-model-variant"]').click()
@@ -73,15 +69,11 @@ test("shows the V2 thinking level control while relevant", async ({ page }) => {
   await expect(high).toBeVisible()
   await high.click()
 
-  await idleComposer(page)
   await input.focus()
   await expect(control).toBeVisible()
 
-  await idleComposer(page)
+  await input.press("!")
+  await expect(control).toHaveCount(0)
+  await input.press("Backspace")
   await expect(control).toBeVisible()
 })
-
-async function idleComposer(page: Page) {
-  await page.mouse.move(0, 0)
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
-}

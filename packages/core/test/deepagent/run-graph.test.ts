@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { DocumentStore } from "../../src/deepagent/document-store"
+import { DocumentStore, getGovernanceEnvelope } from "../../src/deepagent/document-store"
 import { buildRunGraph, type RunSummary } from "../../src/deepagent/run-graph"
 import { explainCandidate } from "../../src/deepagent/reviewer"
 import { tmpRoot } from "../fixture/tmpdir"
@@ -75,5 +75,40 @@ describe("V3 run graph as working memory", () => {
     expect(contexts).toHaveLength(1)
     expect(store.get(refs.runContextId)?.body).toContain("status: completed")
     expect(store.verify().ok).toBe(true)
+  })
+
+  test("learning candidate decisions carry governance on the original graph identity", () => {
+    buildRunGraph(
+      store,
+      summary({
+        learningCandidates: [
+          {
+            candidate_id: "learn-staged",
+            type: "memory",
+            status: "staged",
+            source_run_id: "run_1",
+            source_round: 1,
+            summary: "Preserve durable admission",
+            evidence_refs: ["receipt:1"],
+            confidence: 0.9,
+          },
+          {
+            candidate_id: "learn-rejected",
+            type: "memory",
+            status: "rejected",
+            source_run_id: "run_1",
+            source_round: 1,
+            summary: "Skip durable admission",
+            evidence_refs: ["receipt:2"],
+            confidence: 0.4,
+          },
+        ],
+      }),
+    )
+    const docs = store.list({ type: "memory", scope: "run:run_1" }).map((ref) => store.get(ref.id)!)
+    expect(docs).toHaveLength(2)
+    expect(docs.map((doc) => getGovernanceEnvelope(doc)?.review_status).sort()).toEqual(["pending", "rejected"])
+    expect(docs.every((doc) => getGovernanceEnvelope(doc)?.source_doc_ref === `${doc.id}@v1`)).toBe(true)
+    expect(new DocumentStore(root).verify().ok).toBe(true)
   })
 })

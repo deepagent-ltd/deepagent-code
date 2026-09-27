@@ -3,9 +3,13 @@ import { writeLiveArtifact } from "../../../llm/script/live-llm/config"
 import { finishLiveScript } from "./lifecycle"
 import { runLegacyLiveCases } from "./runtime"
 
-// Starts the production turn first, waits for SessionRunState to report it busy, then admits a
-// durable steer through SessionPrompt.promptOrSteer without awaiting the original turn. The runtime
-// records active-turn and durable-pending evidence, so a sequential follow-up cannot satisfy this suite.
+// Starts the production turn first, waits for the durable V2 activity to report active (the
+// session_legacy_activity row the V2 drain maintains), then admits a durable steer through the
+// SessionPrompt.promptAsync admit-only ingress — a chat prompt admitted while an activity is live
+// takes delivery "steer" (the V2 admission contract) and coalesces at the next safe provider-turn
+// boundary. The runtime records durable activity-active, pending (session_input.promoted_seq IS
+// NULL), and consumed evidence from the durable inbox, so a sequential follow-up cannot satisfy
+// this suite.
 const steeringMarker = `steer-boundary-${crypto.randomUUID()}`
 const prompt = [
   "Inspect README.md using the read tool before answering.",

@@ -102,6 +102,7 @@ export type V2LiveCase = {
   name: string
   agent: string
   prompt: string
+  expectedOutcome?: "hard_gate_blocked"
 }
 
 export async function runV2LiveCases(input: {
@@ -111,6 +112,7 @@ export async function runV2LiveCases(input: {
   files?: Record<string, string>
   inspectFiles?: string[]
   toolSandbox?: { verifierScript?: string }
+  modelPolicyCapture?: { providerID: "deepseek" | "moonshotai" | "zai" }
 }) {
   const config = await loadLiveLLMConfig()
   const preflight = await preflightLiveLLM(config)
@@ -123,6 +125,10 @@ export async function runV2LiveCases(input: {
     await mkdir(workspace, { recursive: true })
     await mkdir(isolatedHome, { recursive: true })
     isolateProcess(testRoot, isolatedHome, isolatedData, config)
+    if (input.modelPolicyCapture) {
+      const { AgentGateway } = await import("../../src/agent-gateway")
+      AgentGateway.configure({ enabled: false, baseDir: isolatedData })
+    }
     const ownerSetup = await prepareHarnessOwner()
     await Promise.all(
       Object.entries(input.files ?? {}).map(async ([file, content]) => {
@@ -135,7 +141,7 @@ export async function runV2LiveCases(input: {
       : undefined
     await Bun.write(
       path.join(workspace, "deepagent-code.json"),
-      JSON.stringify(workspaceConfig(config, input.agents, sandbox?.shell)),
+      JSON.stringify(workspaceConfig(config, input.agents, sandbox?.shell, input.modelPolicyCapture)),
     )
     await initializeGit(workspace)
 
@@ -151,6 +157,9 @@ export async function runV2LiveCases(input: {
     const { ProviderV2 } = await import("../../src/provider")
     const { AbsolutePath } = await import("../../src/schema")
     const { SessionV2 } = await import("../../src/session")
+    const { SessionContextCheckpointTable, SessionModelPolicyReceiptTable } = await import("../../src/session/long-context.sql")
+    const { SessionProviderAttemptTable } = await import("../../src/context-federation/session-sql")
+    const { V2ProviderTurnReceiptTable } = await import("../../src/session/runner/v2-provider-turn.sql")
     const sessionExecutionLocal = await import("../../src/session/execution/local")
     const { Prompt } = await import("../../src/session/prompt")
     const { SessionProjector } = await import("../../src/session/projector")
@@ -188,7 +197,8 @@ export async function runV2LiveCases(input: {
       sessions,
     ).pipe(Layer.provide(ownerSetup.ownerLayer))
     const location = Location.Ref.make({ directory: AbsolutePath.make(workspace) })
-    const providerID = ProviderV2.ID.make(runtimeProviderIDFor(config))
+    const runtimeProviderID = input.modelPolicyCapture?.providerID ?? runtimeProviderIDFor(config)
+    const providerID = ProviderV2.ID.make(runtimeProviderID)
     const modelID = ModelV2.ID.make(config.modelID)
     const startedAt = Date.now()
 
@@ -214,8 +224,11 @@ export async function runV2LiveCases(input: {
               prompt: new Prompt({ text: testCase.prompt }),
               resume: false,
             })
-            yield* service.resume(created.id)
-            const messages = yield* service.context(created.id)
+            if (testCase.expectedOutcome === "hard_gate_blocked") {
+              const exit = yield* service.resume(created.id).pipe(Effect.exit)
+              if (exit._tag !== "Failure") throw new Error(`${testCase.name} unexpectedly dispatched past the hard gate`)
+            } else yield* service.resume(created.id)
+            const messages = testCase.expectedOutcome === "hard_gate_blocked" ? [] : yield* service.context(created.id)
             const assistants = messages.filter((message) => message.type === "assistant")
             const tools = assistants.flatMap((message) =>
               message.content
@@ -239,6 +252,22 @@ export async function runV2LiveCases(input: {
                 Effect.orDie,
                 Effect.map((rows) => rows.map((row) => row.type)),
               )
+            const policy = input.modelPolicyCapture
+              ? yield* database.db.select().from(SessionModelPolicyReceiptTable)
+                  .where(eq(SessionModelPolicyReceiptTable.session_id, created.id)).all().pipe(Effect.orDie)
+              : []
+            const attempts = input.modelPolicyCapture
+              ? yield* database.db.select().from(SessionProviderAttemptTable)
+                  .where(eq(SessionProviderAttemptTable.session_id, created.id)).all().pipe(Effect.orDie)
+              : []
+            const turns = input.modelPolicyCapture
+              ? yield* database.db.select().from(V2ProviderTurnReceiptTable)
+                  .where(eq(V2ProviderTurnReceiptTable.session_id, created.id)).all().pipe(Effect.orDie)
+              : []
+            const checkpoints = input.modelPolicyCapture
+              ? yield* database.db.select().from(SessionContextCheckpointTable)
+                  .where(eq(SessionContextCheckpointTable.session_id, created.id)).all().pipe(Effect.orDie)
+              : []
             return {
               name: testCase.name,
               sessionID: created.id,
@@ -269,6 +298,31 @@ export async function runV2LiveCases(input: {
               ),
               sessionUsage: session.tokens,
               eventTypes,
+              ...(input.modelPolicyCapture ? { modelPolicy: {
+                receipts: policy.map((row) => ({
+                  id: row.receipt_id,
+                  providerID: row.provider_id,
+                  runtimeModelID: row.runtime_model_id,
+                  apiModelID: row.api_model_id,
+                  promptEpoch: row.prompt_epoch,
+                  requestHash: row.request_hash,
+                  policy: row.policy,
+                  estimatedFullRequestTokens: row.estimated_full_request_tokens,
+                  selectionID: row.context_selection_id,
+                  projectionHash: row.context_projection_hash,
+                  graphSnapshotRefs: row.graph_snapshot_refs,
+                  offeredToolIDs: row.offered_tool_ids,
+                  degradedToolIDs: row.degraded_tool_ids,
+                  attemptID: row.provider_attempt_id,
+                  triggerSource: row.trigger_source,
+                  checkpointID: row.checkpoint_id,
+                  checkpointHash: row.checkpoint_hash,
+                  blockedReason: row.blocked_reason,
+                })),
+                attempts: attempts.map((row) => ({ id: row.attempt_id, state: row.state })),
+                turns: turns.map((row) => ({ id: row.receipt_id, state: row.state, attemptID: row.provider_attempt_id })),
+                checkpoints: checkpoints.map((row) => ({ id: row.checkpoint_id, hash: row.content_hash })),
+              } } : {}),
             }
           }),
         )
@@ -280,7 +334,7 @@ export async function runV2LiveCases(input: {
       mode: "live" as const,
       stack: "session-v2" as const,
       status: "passed" as const,
-      fingerprint: { ...modelFingerprint(config), runtimeProviderID: runtimeProviderIDFor(config) },
+      fingerprint: { ...modelFingerprint(config), runtimeProviderID },
       preflight: { durationMs: preflight.durationMs },
       sandbox: sandbox?.evidence,
       cases: observations,
@@ -320,16 +374,23 @@ function isolateProcess(testRoot: string, isolatedHome: string, isolatedData: st
   process.env.DEEPAGENT_ENABLED = "false"
 }
 
-function workspaceConfig(config: LiveLLMConfig, agents: Record<string, V2LiveAgent>, shell?: string) {
+function workspaceConfig(
+  config: LiveLLMConfig,
+  agents: Record<string, V2LiveAgent>,
+  shell?: string,
+  modelPolicyCapture?: { providerID: "deepseek" | "moonshotai" | "zai" },
+) {
+  const providerID = modelPolicyCapture?.providerID ?? runtimeProviderIDFor(config)
   return {
     $schema: "https://ai.deepagent.ltd/config.schema.json",
-    model: `${runtimeProviderIDFor(config)}/${config.modelID}`,
+    model: `${providerID}/${config.modelID}`,
     snapshot: false,
+    ...(modelPolicyCapture ? { compaction: { auto: false } } : {}),
     ...(shell ? { shell } : {}),
     permission: { "*": "deny" },
     agent: Object.fromEntries(Object.entries(agents).map(([id, agent]) => [id, { mode: "primary", ...agent }])),
     provider: {
-      [runtimeProviderIDFor(config)]: {
+      [providerID]: {
         name: `${liveProviderLabel(config)} V2 live test`,
         env: [],
         npm: "@ai-sdk/openai-compatible",

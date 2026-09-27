@@ -1,8 +1,9 @@
-import type { Model } from "@deepagent-code/llm"
+import type { LLMRequest, Model } from "@deepagent-code/llm"
 import type { ProtocolAttemptIdentity } from "../../contract/model-protocol"
 import type { PreparedCapabilitySnapshotRef } from "../../contract/prepared-turn"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
+import { Token } from "../../util/token"
 
 export type Owner = "legacy_aisdk" | "legacy_native" | "v2" | "shadow_v2"
 export type ContextReadiness = "ready" | "fallback" | "unavailable"
@@ -258,6 +259,24 @@ const positiveEnv = (name: string, fallback: number) => {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
 }
 
+/** Budget the complete provider input before dispatch, including protocol options and tool choice.
+ * The fixed reserve covers role delimiters/framing omitted by the JSON representation; cache hits
+ * do not reduce the model's occupied context window. Keep this estimator shared by the hard gate
+ * and the durable prepared-turn budget receipt. */
+export function estimateFullRequestTokens(request: LLMRequest): number {
+  return Token.estimate(JSON.stringify({
+    model: request.model.id,
+    system: request.system,
+    messages: request.messages,
+    tools: request.tools,
+    toolChoice: request.toolChoice,
+    generation: request.generation,
+    providerOptions: request.providerOptions,
+    responseFormat: request.responseFormat,
+    metadata: request.metadata,
+  })) + 256
+}
+
 // Shared by the session runner and the compaction summary turn so every durable receipt budgets the
 // same way; compaction cannot import the runner layer without a module cycle.
 //
@@ -289,12 +308,25 @@ export function budget(model: Model, estimatedFullRequestTokens = 0): Budget {
       safetyMargin: 0,
       provenance: "host_guard",
     }
+  const safetyMargin = positiveEnv("DEEPAGENT_CODE_CONTEXT_SAFETY_MARGIN", 1_024)
+  const physicalInputBudget = context - safetyMargin
+  if (physicalInputBudget <= 0)
+    return {
+      decision: "unavailable",
+      reason: "context_limit_invalid",
+      estimatedFullRequestTokens,
+      physicalInputBudget,
+      reservedOutputTokens: output,
+      safetyMargin,
+      provenance: "model_limit",
+    }
   return {
-    decision: "ok",
+    decision: estimatedFullRequestTokens < physicalInputBudget ? "ok" : "unavailable",
+    ...(estimatedFullRequestTokens >= physicalInputBudget ? { reason: "physical_budget_exceeded" as const } : {}),
     estimatedFullRequestTokens,
-    physicalInputBudget: context,
+    physicalInputBudget,
     reservedOutputTokens: output,
-    safetyMargin: 0,
+    safetyMargin,
     provenance: "model_limit",
   }
 }

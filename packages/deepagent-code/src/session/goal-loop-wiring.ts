@@ -1,4 +1,4 @@
-import { DateTime, Effect, Option, Schema } from "effect"
+import { Cause, DateTime, Effect, Option, Schema } from "effect"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import type { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import type {
@@ -173,6 +173,10 @@ export type SubagentTurnInput = {
   readonly directory?: string
   /** Durable parent Session that owns every child turn and collaboration artifact for one V4 event. */
   readonly parentSessionID?: string
+  /** Event DAG claim identity. Generation advances only after a durable retry claim. */
+  readonly eventID?: string
+  readonly taskID?: string
+  readonly generation?: number
   /**
    * Event-driven write turns fail closed when a dedicated worktree cannot be created. Read-only turns may
    * deliberately degrade to the event directory.
@@ -824,7 +828,13 @@ export const makeTaskSubagentRunner =
         cost: usage.cost,
         sessionID: child.id,
       } satisfies SubagentTurnResult
-    }).pipe(Effect.catchCause(() => Effect.succeed(failedTurn("subagent turn failed"))))
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("goal subagent turn failed", Cause.pretty(cause)).pipe(
+          Effect.as(failedTurn("subagent turn failed")),
+        ),
+      ),
+    )
 
 /**
  * §16.3 order 3 typed adapter: one plain-text turn = one durable V2 admission plus one explicit drain

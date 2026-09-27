@@ -5,6 +5,8 @@ import path from "node:path"
 import type { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import type { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import type { PermissionV2 } from "@deepagent-code/core/permission"
+import type { QuestionV2 } from "@deepagent-code/core/question"
+import type { Effect } from "effect"
 import type { SessionV1 } from "@deepagent-code/core/v1/session"
 import { GlobalBus, type GlobalEvent } from "../../src/bus/global"
 import type { QuestionID } from "../../src/question/schema"
@@ -165,6 +167,7 @@ export async function runLegacyLiveCases(input: {
   modelContextTokens?: number
   maxProviderTurns?: number
   toolOutput?: ConfigV1.Info["tool_output"]
+  compaction?: ConfigV1.Info["compaction"]
   evaluateWorkspace?: (directory: string, sandbox?: ToolSandbox) => Promise<unknown>
   beforeCase?: (input: {
     caseName: string
@@ -178,6 +181,7 @@ export async function runLegacyLiveCases(input: {
     request: PermissionV1.Request
   }) => Promise<void>
   sharedSession?: boolean
+  initialAgent?: string
   compactAfterCases?: string[]
   overrideReportedInputTokensAfterCases?: ReadonlyArray<{ caseName: string; inputTokens: number }>
   timeoutMs?: number
@@ -187,9 +191,17 @@ export async function runLegacyLiveCases(input: {
   steerDuringCases?: ReadonlyArray<{ duringCaseName: string; text: string }>
   observeAssembledRequestFingerprints?: boolean
   inspectDurability?: boolean
+  // Durable V2 oracles: per-case provider-turn receipts (volatile context classification + the
+  // assembled history messages) and task_run rows owned by the Core V2 TaskRunAuthority. These
+  // replace the legacy GlobalBus fingerprint event and the deepagent.subagent session-metadata
+  // projection that the V2-owner cutover removed.
+  inspectProviderTurns?: boolean
+  inspectTaskRuns?: boolean
   inspectPlan?: boolean
   subagentIntensity?: "inherit" | "downgrade"
   environment?: Readonly<Record<string, string>>
+  /** G3: exact process-scoped tools the fixture expects the live bridge to register. */
+  expectedApplicationToolIDs?: ReadonlyArray<string>
   panel?: LegacyPanelCase
   v4Event?: V4LiveEventCase
 }) {
@@ -237,6 +249,19 @@ export async function runLegacyLiveCases(input: {
 
   try {
     await prepareIsolation(testRoot, isolatedHome, isolatedData, config, input.environment)
+    // First-party settings are captured when the process-global V2 gateway layer opens. The
+    // workspace pseudo-provider is migrated later by the V1 config reader, so seed the isolated
+    // settings store before constructing the V2 runtime for intensity scenarios.
+    if (input.subagentIntensity)
+      await Bun.write(
+        path.join(isolatedData, "settings.json"),
+        JSON.stringify({
+          deepagent: {
+            subagentIntensity: input.subagentIntensity,
+            ...(input.environment?.DEEPAGENT_MODE ? { agentMode: input.environment.DEEPAGENT_MODE } : {}),
+          },
+        }),
+      )
     // The V2 owner gate is default-on (prompt-v2 refuses with v2_owner_unavailable otherwise). Arm a
     // harness-owned campaign before any layer boots (Reference defaults cache env) and seed the row
     // before the program boots, mirroring the core harness (core/script/live-llm/runtime.ts:15-23).
@@ -255,9 +280,10 @@ export async function runLegacyLiveCases(input: {
     await AgentGateway.flushKnowledgeSeed()
     const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
     const { EffectFlock } = await import("@deepagent-code/core/util/effect-flock")
-    const { Context, Deferred, Effect, Fiber, Layer, Option, Schedule, Schema } = await import("effect")
-    const { eq } = await import("drizzle-orm")
+    const { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schedule, Schema, Scope } = await import("effect")
+    const { and, desc, eq, gt, inArray } = await import("drizzle-orm")
     const { AgentExecution } = await import("@deepagent-code/core/deepagent/agent-execution")
+    const { DeepAgentEventAdmissionTable } = await import("@deepagent-code/core/deepagent/event-admission-sql")
     const { ApprovalQueue } = await import("@deepagent-code/core/deepagent/approval-queue")
     const { DeepAgentEventBus } = await import("@deepagent-code/core/deepagent/deepagent-event-bus")
     const { Scheduler } = await import("@deepagent-code/core/deepagent/scheduler")
@@ -265,6 +291,8 @@ export async function runLegacyLiveCases(input: {
     const { BUILTIN_AGENT_DESCRIPTORS } = await import("@deepagent-code/core/im/builtin-agents")
     const { AgentListProviderService } = await import("@deepagent-code/core/im/agent-list-provider")
     const { PermissionV2 } = await import("@deepagent-code/core/permission")
+    const { QuestionV2 } = await import("@deepagent-code/core/question")
+    const { TaskRunDispatcher } = await import("@deepagent-code/core/session/task-run-dispatcher")
     const { Location } = await import("@deepagent-code/core/location")
     const { LocationServiceMap } = await import("@deepagent-code/core/location-layer")
     const { AbsolutePath } = await import("@deepagent-code/core/schema")
@@ -293,6 +321,20 @@ export async function runLegacyLiveCases(input: {
     const { SessionPromptEpochTable } = await import("../../src/session/prompt-epoch.sql")
     const { PartTable, SessionIntentTable, SessionMessageTable, SessionWorldStateBaselineTable } = await import(
       "@deepagent-code/core/session/sql"
+    )
+    const { SessionInputTable, TaskRunTable } = await import("@deepagent-code/core/session/sql")
+    const { SessionActivityInputTable, SessionActivityTable, SessionProviderAttemptTable } = await import(
+      "@deepagent-code/core/context-federation/session-sql"
+    )
+    const { V2ProviderTurnReceiptTable } = await import("@deepagent-code/core/session/runner/v2-provider-turn.sql")
+    const { SessionContextCheckpointTable, SessionModelPolicyReceiptTable } = await import(
+      "@deepagent-code/core/session/long-context.sql"
+    )
+    const { V2StructuredOutputEvidenceTable } = await import(
+      "@deepagent-code/core/session/runner/v2-structured-output-evidence.sql"
+    )
+    const { V2ToolEffectAdmissionTable, V2ToolEffectTable } = await import(
+      "@deepagent-code/core/session/runner/v2-tool-effect.sql"
     )
     const { SessionV2 } = await import("@deepagent-code/core/session")
     const { SessionMessage } = await import("@deepagent-code/core/session/message")
@@ -323,7 +365,9 @@ export async function runLegacyLiveCases(input: {
     const { SessionToolArgumentReceiptTable } = await import("../../src/session/tool-argument-receipt.sql")
     const { SessionToolRequestReceiptTable } = await import("../../src/session/tool-request-receipt.sql")
     const { EventDispatcher } = await import("../../src/session/event-dispatcher")
+    const { makeEventTurnRunnerV2 } = await import("../../src/session/event-turn-runner")
     const { MultiAgentRuntime } = await import("../../src/session/multi-agent-runtime")
+    const { makeV2AdmissionBridge } = await import("../../src/session/v2-admission-bridge")
     const { V4PRCollaboration } = await import("../../src/session/v4-pr-collaboration")
     const { RuntimeFlags } = await import("../../src/effect/runtime-flags")
     const { InstanceRef } = await import("../../src/effect/instance-ref")
@@ -333,7 +377,11 @@ export async function runLegacyLiveCases(input: {
     const { consultPanel } = await import("../../src/panel/consult")
     const { makeTaskSubagentRunner } = await import("../../src/session/goal-loop-wiring")
     const { TestInstance, testInstanceStoreLayer, tmpdirScoped } = await import("../../test/fixture/fixture")
-    const { liveLocationServiceMap } = await import("./runner-frame")
+    const { liveFrameIdentity, liveLocationServiceMap } = await import("./runner-frame")
+    const { assertHarnessComposition } = await import("./composition-gate")
+    const { Root } = await import("../../src/effect/root")
+    const { ModelsDev } = await import("@deepagent-code/core/models-dev")
+    const { CompositionDigest } = await import("../../src/effect/composition-digest")
 
     // Mirror production (src/session/v2-runner-frame.ts): SessionRuntime.layer threads ONE shared
     // delegation slot into every drain fiber, and the capture wires that holder to the SessionV2
@@ -354,6 +402,7 @@ export async function runLegacyLiveCases(input: {
     )
     const sessionRuntimeLayer = Layer.mergeAll(
       coreSessionRuntime,
+      Layer.succeed(CompositionDigest.FrameIdentity, liveFrameIdentity),
       TaskTool.captureDelegationServiceLayer.pipe(
         Layer.provide(TaskTool.delegationSlotLayer),
         Layer.provide(coreSessionRuntime),
@@ -371,17 +420,18 @@ export async function runLegacyLiveCases(input: {
         }
       | undefined
     const program = Effect.gen(function* () {
+      const scope = yield* Scope.Scope
       const prompts = yield* SessionPromptV2.Service
       const v2Session = yield* SessionV2.Service
       const database = yield* Database.Service
       const runState = yield* SessionRunState.Service
-      const steers = yield* SessionSteer.Service
       const compaction = yield* SessionCompaction.Service
       const revert = yield* SessionRevert.Service
       const sessions = yield* Session.Service
       const instance = yield* TestInstance
       const parentInstance = yield* InstanceRef
       if (!parentInstance) return yield* Effect.die(new Error("Live LLM harness has no parent InstanceRef"))
+      const composition = yield* CompositionDigest.current
       const permissions = yield* Permission.Service
       const questions = yield* Question.Service
       const agents = input.panel || input.v4Event ? yield* Agent.Service : undefined
@@ -411,6 +461,56 @@ export async function runLegacyLiveCases(input: {
       }> = []
       const events = yield* EventV2Bridge.Service
       const locationServices = yield* Effect.serviceOption(LocationServiceMap)
+      const handleQuestion = (
+        request: (typeof questionRequests)[number],
+        reply: (answers: string[][]) => Effect.Effect<void>,
+        reject: () => Effect.Effect<void>,
+      ) => {
+        questionRequests.push(request)
+        const questionAction = input.questionAction
+        if (questionAction?.type === "abort") {
+          request.latch = { type: "abort" }
+          // The ask event is published by the active run. Interrupt it after this listener
+          // returns, otherwise cancellation waits for the same event publication to finish.
+          return Effect.forkIn(prompts.cancel(request.sessionID as SessionID).pipe(Effect.orDie), scope).pipe(
+            Effect.asVoid,
+          )
+        }
+        if (questionAction?.type === "background") {
+          return Effect.gen(function* () {
+            const child = yield* sessions.get(request.sessionID as SessionID)
+            if (!child.parentID) return yield* Effect.die(new Error("Background child has no parent Session"))
+            const observation = yield* Effect.gen(function* () {
+              const messages = yield* sessions.messages({ sessionID: child.parentID as SessionID })
+              const taskRunning = messages.some((message) =>
+                message.parts.some(
+                  (part) =>
+                    part.type === "tool" &&
+                    part.tool === "task" &&
+                    part.state.status === "completed" &&
+                    part.state.output.includes('state="running"'),
+                ),
+              )
+              return taskRunning ? true : undefined
+            }).pipe(
+              Effect.repeat({ while: (value) => value === undefined, schedule: Schedule.spaced("50 millis") }),
+              Effect.timeout(config.timeoutMs),
+            )
+            request.latch = {
+              type: "background",
+              parentSessionID: child.parentID,
+              taskRunning: observation === true,
+            }
+            yield* reply([[questionAction.reply]])
+          })
+        }
+        if (questionAction?.type === "hold") {
+          request.latch = { type: "hold" }
+          return Effect.void
+        }
+        if (input.questionReply !== undefined) return reply([[input.questionReply]])
+        return reject()
+      }
       const unsubscribe = yield* events.listen((event) => {
         // Core V2 asks (permission.v2.asked) settle ONLY through PermissionV2.reply — the legacy
         // Permission.reply below settles app-level (V1) asks and would leave a V2 assert parked
@@ -424,6 +524,9 @@ export async function runLegacyLiveCases(input: {
             patterns: [...asked.resources],
             metadata: asked.metadata ?? {},
             always: [...(asked.save ?? [])],
+            ...(asked.source?.type === "tool"
+              ? { tool: { messageID: asked.source.messageID, callID: asked.source.callID } }
+              : {}),
           } as PermissionV1.Request
           permissionRequests.push(request)
           permissionLocations.set(request.id, {
@@ -448,6 +551,13 @@ export async function runLegacyLiveCases(input: {
             )
             if (Option.isNone(service))
               return yield* Effect.die(new Error("PermissionV2 service is missing from the asking Location"))
+            if (permissionBarrier && input.permissionBarrierCount) {
+              if (permissionRequests.length === input.permissionBarrierCount) {
+                permissionBarrierSnapshots.push(permissionRequests.map((item) => String(item.id)))
+                yield* Deferred.succeed(permissionBarrier, undefined)
+              }
+              yield* Deferred.await(permissionBarrier)
+            }
             yield* service.value.reply({
               requestID: asked.id,
               reply: input.permissionReply?.reply ?? "reject",
@@ -492,63 +602,41 @@ export async function runLegacyLiveCases(input: {
       })
       yield* Effect.addFinalizer(() => unsubscribe)
       const unsubscribeQuestions = yield* events.listen((event) => {
-        if (event.type !== Question.Event.Asked.type) return Effect.void
-        const request = event.data as (typeof questionRequests)[number]
-        questionRequests.push(request)
-        const questionAction = input.questionAction
-        if (questionAction?.type === "abort") {
-          request.latch = { type: "abort" }
-          return prompts.cancel(request.sessionID as SessionID).pipe(Effect.orDie)
-        }
-        if (questionAction?.type === "background") {
+        if (event.type === QuestionV2.Event.Asked.type) {
+          const asked = event.data as QuestionV2.Request
+          const request: (typeof questionRequests)[number] = {
+            id: asked.id as unknown as QuestionID,
+            sessionID: asked.sessionID,
+            questions: asked.questions,
+            ...(asked.tool === undefined ? {} : { tool: asked.tool }),
+          }
+          if (Option.isNone(locationServices))
+            return Effect.die(new Error("Live LLM harness has no LocationServiceMap for QuestionV2 reply"))
+          const ref = event.location ?? Location.Ref.make({ directory: AbsolutePath.make(instance.directory) })
+          const question = Effect.serviceOption(QuestionV2.Service).pipe(Effect.provide(locationServices.value.get(ref)))
           return Effect.gen(function* () {
-            const child = yield* sessions.get(request.sessionID as SessionID)
-            if (!child.parentID) return yield* Effect.die(new Error("Background child has no parent Session"))
-            const observation = yield* Effect.gen(function* () {
-              const messages = yield* sessions.messages({ sessionID: child.parentID as SessionID })
-              const taskRunning = messages.some((message) =>
-                message.parts.some(
-                  (part) =>
-                    part.type === "tool" &&
-                    part.tool === "task" &&
-                    part.state.status === "completed" &&
-                    part.state.output.includes('state="running"'),
-                ),
-              )
-              return taskRunning ? true : undefined
-            }).pipe(
-              Effect.repeat({ while: (value) => value === undefined, schedule: Schedule.spaced("50 millis") }),
-              Effect.timeout(config.timeoutMs),
+            const service = yield* question
+            if (Option.isNone(service)) return yield* Effect.die(new Error("QuestionV2 service is missing from the asking Location"))
+            yield* handleQuestion(
+              request,
+              (answers) => service.value.reply({ requestID: asked.id, answers }).pipe(Effect.orDie),
+              () => service.value.reject(asked.id).pipe(Effect.orDie),
             )
-            request.latch = {
-              type: "background",
-              parentSessionID: child.parentID,
-              taskRunning: observation === true,
-            }
-            yield* questions.reply({
-              requestID: request.id,
-              answers: [[questionAction.reply]],
-            })
           }).pipe(Effect.orDie)
         }
-        if (questionAction?.type === "hold") {
-          request.latch = { type: "hold" }
-          return Effect.void
-        }
-        if (input.questionReply !== undefined) {
-          return questions.reply({ requestID: request.id, answers: [[input.questionReply]] }).pipe(Effect.orDie)
-        }
-        return questions.reject(request.id).pipe(Effect.orDie)
+        if (event.type !== Question.Event.Asked.type) return Effect.void
+        const request = event.data as (typeof questionRequests)[number]
+        return handleQuestion(
+          request,
+          (answers) => questions.reply({ requestID: request.id, answers }).pipe(Effect.orDie),
+          () => questions.reject(request.id).pipe(Effect.orDie),
+        ).pipe(Effect.orDie)
       })
       yield* Effect.addFinalizer(() => unsubscribeQuestions)
       const v4Event = input.v4Event
-      // v2w-j4 durable-only: the production V1 event turn runner is deleted and MultiAgentRuntime.dispatch
-      // is V2-admission-only. This LIVE §C harness still exercises the coordination library end-to-end
-      // (partition → gate → arbitrate → run → PR collaboration) with the V2-native subagent runner: the
-      // runner slot is deferred until the event id (hence its deterministic parent session) exists, and
-      // the dispatcher's dispatchPort drives `coordinate` directly — the harness-local equivalent of the
-      // deleted production dispatch branch, so the durable delivery/ack machinery stays exercised.
-      let v4Runner: ReturnType<typeof makeTaskSubagentRunner> | undefined
+      // Exercise the production V2 DAG lane: receipt-only event admission, durable child-session
+      // execution and isolated worktree continuations. The ordinary task subagent runner has no
+      // continuation ref and would leave the dependent verification task permanently un-runnable.
       const v4 =
         v4Event && agents && instances && gitService && prQueue
           ? yield* Effect.gen(function* () {
@@ -560,7 +648,7 @@ export async function runLegacyLiveCases(input: {
                 AgentExecution.layer,
                 Scheduler.layer,
               ).pipe(Layer.provide(databaseLayer))
-              const flags = RuntimeFlags.layer({ v4MultiAgentRuntime: true })
+              const flags = RuntimeFlags.layer({ v4MultiAgentRuntime: true, v4DagCoordination: true })
               const registry = Layer.succeed(AgentListProviderService, {
                 listAgents: () => Effect.succeed([...BUILTIN_AGENT_DESCRIPTORS]),
                 findByTrigger: () => Effect.succeed([]),
@@ -573,6 +661,8 @@ export async function runLegacyLiveCases(input: {
                   const approvalQueue = yield* ApprovalQueue.Service
                   return MultiAgentRuntime.layerWith({
                     execution,
+                    dagCoordination: true,
+                    eventV2Admission: makeV2AdmissionBridge({ db: database.db, v2Session }),
                     trustedSources: [v4Event.source],
                     onEventCompleted: V4PRCollaboration.make({
                       sessions,
@@ -582,17 +672,7 @@ export async function runLegacyLiveCases(input: {
                       bus,
                       approvalQueue,
                     }),
-                    runner: (turn) =>
-                      v4Runner
-                        ? v4Runner(turn)
-                        : Effect.succeed({
-                            ok: false,
-                            reason: "runner_not_wired",
-                            structured: undefined,
-                            text: "",
-                            tokensUsed: 0,
-                            cost: 0,
-                          }),
+                    runner: makeEventTurnRunnerV2({ sessions: v2Session, instanceStore: instances, db: database.db }),
                   })
                 }),
               ).pipe(Layer.provide(core), Layer.provide(registry))
@@ -602,16 +682,7 @@ export async function runLegacyLiveCases(input: {
                   const bus = yield* DeepAgentEventBus.Service
                   return EventDispatcher.layerWith({
                     dispatchPort: {
-                      dispatch: (request) =>
-                        multiAgent.coordinate(request.event).pipe(
-                          Effect.flatMap((summary) =>
-                            summary.hasUnfinished
-                              ? Effect.fail(
-                                  new Error(`multi-agent coordination incomplete for event ${request.event.id}`),
-                                )
-                              : Effect.void,
-                          ),
-                        ),
+                      dispatch: (request) => multiAgent.dispatch(request),
                     },
                     runLoops: false,
                     pendingDeliveryCount: bus.pendingDeliveryCount,
@@ -631,9 +702,8 @@ export async function runLegacyLiveCases(input: {
                 priority: "normal",
                 payload: { ...v4Event.payload, directory: instance.directory },
               })
-              // The event id now exists: create its deterministic parent session and install the
-              // V2-native subagent runner into the deferred slot (makeTaskSubagentRunner parents every
-              // child turn here and freezes the driver model onto the child session).
+              // The event id now exists: materialize the deterministic V1 parent projection used by
+              // the PR collaboration observer. Dispatch admits the same id through SessionV2.
               const parentSessionID = MultiAgentRuntime.parentSessionIDFor(event.id)
               yield* V4PRCollaboration.ensureEventParent({
                 sessions,
@@ -642,19 +712,19 @@ export async function runLegacyLiveCases(input: {
                 directory: instance.directory,
                 correlationID: event.id,
               })
-              v4Runner = makeTaskSubagentRunner({
-                sessions,
-                agents,
-                parentSessionID,
-                model: { providerID, modelID },
-                purpose: "generic",
-                v2Session,
-              })
               const sourceDeliveryPendingBefore = (yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).some(
                 (delivery) =>
                   delivery.subscriptionGroup === EventDispatcher.DISPATCH_GROUP && delivery.eventID === event.id,
               )
               const decision = yield* eventDispatcher.handle(event)
+              const ingressReceipt = (yield* database.db
+                .select()
+                .from(DeepAgentEventAdmissionTable)
+                .where(eq(DeepAgentEventAdmissionTable.event_ref, `event://${event.id}`)))[0]
+              const parentUserMessages = (yield* v2Session.messages({
+                sessionID: SessionV2.ID.make(parentSessionID),
+                order: "asc",
+              })).filter((message) => message.type === "user").length
               const sourceDeliveryPendingAfter = (yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).some(
                 (delivery) =>
                   delivery.subscriptionGroup === EventDispatcher.DISPATCH_GROUP && delivery.eventID === event.id,
@@ -720,6 +790,11 @@ export async function runLegacyLiveCases(input: {
                 Effect.gen(function* () {
                   const info = yield* sessions.get(sessionID as SessionID)
                   const messages = yield* sessions.messages({ sessionID: info.id })
+                  const usageByMessage = new Map(
+                    (yield* v2Session.messages({ sessionID: SessionV2.ID.make(sessionID), order: "asc" })).flatMap(
+                      (message) => (message.type === "assistant" ? [[message.id, message.tokens] as const] : []),
+                    ),
+                  )
                   return {
                     id: info.id,
                     agent: info.agent,
@@ -733,7 +808,10 @@ export async function runLegacyLiveCases(input: {
                               providerID: message.info.providerID,
                               modelID: message.info.modelID,
                               error: message.info.error,
-                              tokens: message.info.tokens,
+                              // The V1 wire mirror retains tool parts but not V2 provider usage.
+                              // Debit evidence must come from the authoritative V2 projection.
+                              tokens:
+                                usageByMessage.get(SessionMessage.ID.make(message.info.id)) ?? message.info.tokens,
                               tools: message.parts
                                 .filter((part) => part.type === "tool")
                                 .map((part) => ({ name: part.tool, status: part.state.status })),
@@ -751,6 +829,13 @@ export async function runLegacyLiveCases(input: {
               return {
                 event,
                 dispatch: { decision, sourceDeliveryPendingBefore, sourceDeliveryPendingAfter },
+                ingressReceipt: ingressReceipt && {
+                  eventRef: ingressReceipt.event_ref,
+                  sessionID: ingressReceipt.session_id,
+                  envelopeDigest: ingressReceipt.envelope_digest,
+                  status: ingressReceipt.status,
+                  parentUserMessages,
+                },
                 summary,
                 executions,
                 childSessions,
@@ -783,6 +868,7 @@ export async function runLegacyLiveCases(input: {
       const sharedSession = input.sharedSession
         ? yield* sessions.create({
             title: `Live ${input.suite}: shared Session`,
+            ...(input.initialAgent ? { agent: input.initialAgent } : {}),
             permission: Permission.fromConfig(input.primaryPermission ?? input.permission ?? {}),
           })
         : undefined
@@ -842,6 +928,16 @@ export async function runLegacyLiveCases(input: {
               })
             : undefined
           const messagesBefore = yield* sessions.messages({ sessionID: session.id })
+          const lastProviderTurnBefore = input.inspectProviderTurns || testCase.admission
+            ? yield* database.db
+                .select({ requestOrdinal: V2ProviderTurnReceiptTable.request_ordinal })
+                .from(V2ProviderTurnReceiptTable)
+                .where(eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)))
+                .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal))
+                .limit(1)
+                .get()
+                .pipe(Effect.orDie)
+            : undefined
           const toolCountBefore = messagesBefore.reduce(
             (count, message) => count + message.parts.filter((part) => part.type === "tool").length,
             0,
@@ -929,19 +1025,28 @@ export async function runLegacyLiveCases(input: {
           const turn = testCase.admission
             ? Effect.gen(function* () {
                 yield* prompts.promptAsync(promptInput)
-                if (!promptInput.messageID) {
+                const admittedMessageID = promptInput.messageID
+                if (!admittedMessageID) {
                   return yield* Effect.die(new Error("Durable admission did not reserve a message ID"))
                 }
                 admittedCases.set(testCase.name, {
                   ...promptInput,
                   intentID: testCase.admission!.intentID,
-                  messageID: promptInput.messageID,
+                  messageID: admittedMessageID,
                 })
                 const hasRetry = testCase.admission!.exactRetry || testCase.admission!.conflictingRetry
                 const activeBeforeRetry = hasRetry
-                  ? yield* runState
-                      .isBusy(session.id)
+                  ? yield* database.db
+                      .select({ receiptID: V2ProviderTurnReceiptTable.receipt_id })
+                      .from(V2ProviderTurnReceiptTable)
+                      .where(and(
+                        eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)),
+                        inArray(V2ProviderTurnReceiptTable.state, ["preparing", "dispatching", "streaming"]),
+                      ))
+                      .get()
                       .pipe(
+                        Effect.orDie,
+                        Effect.map((receipt) => receipt !== undefined),
                         Effect.repeat({ while: (busy) => !busy, schedule: Schedule.spaced("10 millis") }),
                         Effect.timeout(config.timeoutMs),
                       )
@@ -985,6 +1090,17 @@ export async function runLegacyLiveCases(input: {
                 admissionRetryEvidence.push({ activeBeforeRetry, exact, conflict })
                 return yield* Effect.gen(function* () {
                   const busy = yield* runState.isBusy(session.id)
+                  const settled = yield* database.db
+                    .select({ receiptID: V2ProviderTurnReceiptTable.receipt_id })
+                    .from(V2ProviderTurnReceiptTable)
+                    .where(and(
+                      eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)),
+                      gt(V2ProviderTurnReceiptTable.request_ordinal, lastProviderTurnBefore?.requestOrdinal ?? 0),
+                      eq(V2ProviderTurnReceiptTable.user_message_id, admittedMessageID),
+                      eq(V2ProviderTurnReceiptTable.state, "settled"),
+                    ))
+                    .get()
+                    .pipe(Effect.orDie)
                   const messages = yield* sessions.messages({ sessionID: session.id })
                   const assistant = messages
                     .filter(
@@ -993,9 +1109,10 @@ export async function runLegacyLiveCases(input: {
                     )
                     .slice(assistantCountBefore)
                     .findLast(
-                      (message) => message.info.time.completed !== undefined || message.info.error !== undefined,
+                      (message) => message.info.parentID === admittedMessageID &&
+                        (message.info.time.completed !== undefined || message.info.error !== undefined),
                     )
-                  return !busy && assistant ? assistant : undefined
+                  return !busy && settled && assistant ? assistant : undefined
                 }).pipe(
                   Effect.repeat({ while: (result) => result === undefined, schedule: Schedule.spaced("50 millis") }),
                   Effect.timeout(config.timeoutMs),
@@ -1009,40 +1126,93 @@ export async function runLegacyLiveCases(input: {
             : prompts.prompt(promptInput)
           const result =
             concurrentSteers.length === 0
-              ? yield* turn
+              ? input.questionAction?.type === "abort"
+                ? yield* Effect.gen(function* () {
+                    // Cancelling a pending V2 Question interrupts the prompt's drain fiber. Await
+                    // its Exit as data so the harness can inspect the durable interrupted assistant
+                    // and continue the same Session instead of interrupting its own root program.
+                    const fiber = yield* turn.pipe(Effect.forkChild)
+                    const exit = yield* Fiber.await(fiber)
+                    if (Exit.isSuccess(exit)) return exit.value
+                    if (!Cause.hasInterrupts(exit.cause)) return yield* Effect.failCause(exit.cause)
+                    const messages = yield* sessions.messages({ sessionID: session.id })
+                    const assistant = messages
+                      .filter(
+                        (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } =>
+                          message.info.role === "assistant",
+                      )
+                      .slice(assistantCountBefore)
+                      .at(-1)
+                    if (!assistant) return yield* Effect.die(new Error("Cancelled V2 Question produced no assistant evidence"))
+                    return assistant
+                  })
+                : yield* turn
               : yield* Effect.gen(function* () {
                   const fiber = yield* turn.pipe(Effect.forkChild)
-                  const active = yield* runState
-                    .isBusy(session.id)
-                    .pipe(
-                      Effect.repeat({ while: (busy) => !busy, schedule: Schedule.spaced("10 millis") }),
-                      Effect.timeout(config.timeoutMs),
-                    )
+                  // V2-owner busy oracle: a live provider-turn receipt (preparing/dispatching/
+                  // streaming) for the session. The promptV2 drain calls coreV2Session.resume
+                  // directly (no execution-coordinator lifecycle events), and the legacy
+                  // SessionRunState.runners registry is never populated under the V2 owner.
+                  const durableBusy = Effect.gen(function* () {
+                    const live = yield* database.db
+                      .select({ receiptID: V2ProviderTurnReceiptTable.receipt_id })
+                      .from(V2ProviderTurnReceiptTable)
+                      .where(
+                        and(
+                          eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)),
+                          inArray(V2ProviderTurnReceiptTable.state, ["preparing", "dispatching", "streaming"]),
+                        ),
+                      )
+                      .get()
+                      .pipe(Effect.orDie)
+                    return live !== undefined
+                  })
+                  const active = yield* durableBusy.pipe(
+                    Effect.repeat({ while: (busy) => !busy, schedule: Schedule.spaced("10 millis") }),
+                    Effect.timeout(config.timeoutMs),
+                  )
                   if (!active)
                     return yield* Effect.die(new Error("Prompt did not enter an active turn before steering"))
                   yield* Effect.forEach(
                     concurrentSteers,
                     (steer, index) =>
                       Effect.gen(function* () {
-                        const activeBeforeAdmission = yield* runState.isBusy(session.id)
-                        const ingress = yield* prompts.promptOrSteer({
+                        const activeBeforeAdmission = yield* durableBusy
+                        // V2-owner steering ingress: prompt-async is the durable admit-only
+                        // surface (P1-1). A chat prompt admitted while an activity is live takes
+                        // delivery "steer" (SessionV2.prompt default) and coalesces into the
+                        // active activity at the next safe provider-turn boundary — the V2
+                        // admission contract the legacy promptOrSteer branch implemented.
+                        const messageID = MessageID.ascending()
+                        yield* prompts.promptAsync({
                           sessionID: session.id,
-                          messageID: MessageID.ascending(),
+                          messageID,
                           model: { providerID, modelID },
                           agent: testCase.agent ?? "live-test",
                           parts: [{ type: "text", text: steer.text }],
                         })
-                        if (ingress.kind !== "steer")
-                          return yield* Effect.die(new Error(`Steer ${index + 1} started a second turn`))
-                        const pendingAfterAdmission = (yield* steers.pending(session.id, ingress.delivery)).some(
-                          (item) => item.id === ingress.admitted.id,
-                        )
+                        const row = yield* database.db
+                          .select({
+                            delivery: SessionInputTable.delivery,
+                            admittedSeq: SessionInputTable.admitted_seq,
+                            promotedSeq: SessionInputTable.promoted_seq,
+                          })
+                          .from(SessionInputTable)
+                          .where(eq(SessionInputTable.id, SessionMessage.ID.make(messageID)))
+                          .get()
+                          .pipe(Effect.orDie)
+                        if (!row || row.delivery !== "steer")
+                          return yield* Effect.die(
+                            new Error(
+                              `Steer ${index + 1} was not durably admitted as delivery=steer: ${JSON.stringify(row)}`,
+                            ),
+                          )
                         steeringEvidence.push({
-                          id: ingress.admitted.id,
-                          delivery: ingress.delivery,
-                          ordinal: ingress.admitted.seq,
+                          id: messageID,
+                          delivery: row.delivery,
+                          ordinal: row.admittedSeq,
                           activeBeforeAdmission,
-                          pendingAfterAdmission,
+                          pendingAfterAdmission: row.promotedSeq === null,
                           consumedAfterAdmission: false,
                         })
                       }),
@@ -1053,10 +1223,16 @@ export async function runLegacyLiveCases(input: {
                     steeringEvidence,
                     (evidence) =>
                       Effect.gen(function* () {
-                        const pendingAfterRun = (yield* steers.pending(session.id)).some(
-                          (item) => item.id === evidence.id,
-                        )
-                        evidence.consumedAfterAdmission = !pendingAfterRun
+                        const pendingAfterRun = yield* database.db
+                          .select({ promotedSeq: SessionInputTable.promoted_seq })
+                          .from(SessionInputTable)
+                          .where(eq(SessionInputTable.id, SessionMessage.ID.make(evidence.id)))
+                          .get()
+                          .pipe(Effect.orDie)
+                        if (!pendingAfterRun) {
+                          return yield* Effect.die(new Error(`Durable steer inbox row disappeared: ${evidence.id}`))
+                        }
+                        evidence.consumedAfterAdmission = pendingAfterRun.promotedSeq !== null
                       }),
                     { discard: true },
                   )
@@ -1156,8 +1332,18 @@ export async function runLegacyLiveCases(input: {
               const finalText = latest?.parts.some(
                 (part) => part.type === "text" && !part.synthetic && !part.ignored && part.text.trim().length > 0,
               )
+              const latestActivity = yield* database.db
+                .select({ state: SessionActivityTable.state })
+                .from(SessionActivityTable)
+                .where(eq(SessionActivityTable.session_id, SessionV2.ID.make(session.id)))
+                .orderBy(desc(SessionActivityTable.ordinal))
+                .limit(1)
+                .get()
+                .pipe(Effect.orDie)
+              // V2 projections do not set the legacy assistant completion timestamp. Its durable
+              // activity settlement is the completion oracle for the automatic queue continuation.
               return input.awaitParentTools?.every((tool) => completed.has(tool)) &&
-                latest?.info.time.completed !== undefined &&
+                (latestActivity ? latestActivity.state === "settled" : latest?.info.time.completed !== undefined) &&
                 finalText
                 ? true
                 : undefined
@@ -1193,6 +1379,14 @@ export async function runLegacyLiveCases(input: {
                 }),
               )
               const childDirectoryExists = yield* Effect.promise(() => directoryExists(child.directory))
+              const taskWorkspace = input.verifyChildWorktrees
+                ? yield* database.db
+                    .select({ branch: TaskRunTable.worktree_branch })
+                    .from(TaskRunTable)
+                    .where(eq(TaskRunTable.child_session_id, SessionV2.ID.make(child.id)))
+                    .get()
+                    .pipe(Effect.orDie)
+                : undefined
               const childAssistants = childMessages.filter(
                 (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } =>
                   message.info.role === "assistant",
@@ -1220,6 +1414,52 @@ export async function runLegacyLiveCases(input: {
                 directoryExists: childDirectoryExists,
                 agent: child.agent,
                 model: child.model,
+                v2Users: v2Messages.flatMap((message) =>
+                  message.type === "user"
+                    ? [{
+                        id: message.id,
+                        metadata: message.metadata,
+                        text: message.text,
+                      }]
+                    : [],
+                ),
+                v2Assistants: v2Messages.flatMap((message) =>
+                  message.type === "assistant"
+                    ? [{
+                        id: message.id,
+                        model: message.model,
+                        text: message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join(""),
+                      }]
+                    : [],
+                ),
+                v2ProviderTurns: yield* database.db
+                  .select({
+                    receiptID: V2ProviderTurnReceiptTable.receipt_id,
+                    providerID: V2ProviderTurnReceiptTable.provider_id,
+                    modelID: V2ProviderTurnReceiptTable.model_id,
+                    state: V2ProviderTurnReceiptTable.state,
+                  })
+                  .from(V2ProviderTurnReceiptTable)
+                  .where(eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(child.id)))
+                  .all()
+                  .pipe(Effect.orDie),
+                structuredEvidence: input.inspectTaskRuns
+                  ? yield* database.db
+                      .select({
+                        runID: V2StructuredOutputEvidenceTable.run_id,
+                        childSessionID: V2StructuredOutputEvidenceTable.child_session_id,
+                        outputMessageID: V2StructuredOutputEvidenceTable.output_message_id,
+                        schemaName: V2StructuredOutputEvidenceTable.schema_name,
+                        validationOutcome: V2StructuredOutputEvidenceTable.validation_outcome,
+                        outputSha256: V2StructuredOutputEvidenceTable.output_sha256,
+                        schemaSha256: V2StructuredOutputEvidenceTable.schema_sha256,
+                        rawOutput: V2StructuredOutputEvidenceTable.raw_output,
+                      })
+                      .from(V2StructuredOutputEvidenceTable)
+                      .where(eq(V2StructuredOutputEvidenceTable.child_session_id, child.id))
+                      .all()
+                      .pipe(Effect.orDie)
+                  : undefined,
                 metadata: child.metadata,
                 messageCount: childMessages.length,
                 assembledRequestFingerprints: assembledRequestFingerprints
@@ -1243,6 +1483,20 @@ export async function runLegacyLiveCases(input: {
                   ? yield* Effect.promise(() => git(child.directory, "status", "--short", "--untracked-files=all"))
                   : "<removed>",
                 verifier,
+                branch: taskWorkspace?.branch,
+                branchFiles: taskWorkspace?.branch
+                  ? Object.fromEntries(
+                      yield* Effect.forEach(input.inspectChildFiles ?? [], (file) =>
+                        Effect.sync(() => {
+                          const result = Bun.spawnSync(
+                            ["git", "show", `refs/heads/${taskWorkspace.branch}:${file}`],
+                            { cwd: instance.directory, stdout: "pipe", stderr: "pipe" },
+                          )
+                          return [file, result.exitCode === 0 ? result.stdout.toString() : undefined] as const
+                        }),
+                      ),
+                    )
+                  : undefined,
                 users: childMessages
                   .filter(
                     (message): message is SessionV1.WithParts & { info: SessionV1.User } =>
@@ -1359,6 +1613,19 @@ export async function runLegacyLiveCases(input: {
                   .all()
                   .pipe(Effect.orDie)
                 const activityIDs = new Set(legacyActivities.map((activity) => activity.activity_id))
+                const v2Activities = yield* database.db
+                  .select({
+                    activity_id: SessionActivityTable.activity_id,
+                    ordinal: SessionActivityTable.ordinal,
+                    trigger_input_id: SessionActivityTable.trigger_input_id,
+                    state: SessionActivityTable.state,
+                    settled_at: SessionActivityTable.settled_at,
+                  })
+                  .from(SessionActivityTable)
+                  .where(eq(SessionActivityTable.session_id, SessionV2.ID.make(session.id)))
+                  .all()
+                  .pipe(Effect.orDie)
+                const v2ActivityIDs = new Set(v2Activities.map((activity) => activity.activity_id))
                 return {
                   activityAdmissions: yield* database.db
                     .select()
@@ -1422,6 +1689,128 @@ export async function runLegacyLiveCases(input: {
                     .from(SessionToolArgumentReceiptTable)
                     .all()
                     .pipe(Effect.orDie)).filter((receipt) => receiptIDs.has(receipt.receipt_id)),
+                  v2: {
+                    contextCheckpoints: yield* database.db
+                      .select()
+                      .from(SessionContextCheckpointTable)
+                      .where(eq(SessionContextCheckpointTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie),
+                    modelPolicies: yield* database.db
+                      .select()
+                      .from(SessionModelPolicyReceiptTable)
+                      .where(eq(SessionModelPolicyReceiptTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie),
+                    compactions: (yield* database.db
+                      .select({ id: SessionMessageTable.id, type: SessionMessageTable.type, data: SessionMessageTable.data })
+                      .from(SessionMessageTable)
+                      .where(and(
+                        eq(SessionMessageTable.session_id, SessionV2.ID.make(session.id)),
+                        eq(SessionMessageTable.type, "compaction"),
+                      ))
+                      .all()
+                      .pipe(Effect.orDie)).map((row) =>
+                        Schema.decodeUnknownSync(SessionMessage.Message)({
+                          ...row.data,
+                          id: row.id,
+                          type: row.type,
+                        }),
+                      ),
+                    inputs: yield* database.db
+                      .select({
+                        id: SessionInputTable.id,
+                        delivery: SessionInputTable.delivery,
+                        admitted_seq: SessionInputTable.admitted_seq,
+                        promoted_seq: SessionInputTable.promoted_seq,
+                      })
+                      .from(SessionInputTable)
+                      .where(eq(SessionInputTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie),
+                    activities: v2Activities,
+                    activityInputs: (yield* database.db
+                      .select({
+                        activity_id: SessionActivityInputTable.activity_id,
+                        input_id: SessionActivityInputTable.input_id,
+                        ordinal: SessionActivityInputTable.ordinal,
+                        admitted_seq: SessionActivityInputTable.admitted_seq,
+                        role: SessionActivityInputTable.role,
+                      })
+                      .from(SessionActivityInputTable)
+                      .all()
+                      .pipe(Effect.orDie)).filter((row) => v2ActivityIDs.has(row.activity_id)),
+                    providerAttempts: yield* database.db
+                      .select({
+                        attempt_id: SessionProviderAttemptTable.attempt_id,
+                        activity_id: SessionProviderAttemptTable.activity_id,
+                        provider_turn_seq: SessionProviderAttemptTable.provider_turn_seq,
+                        owner_token: SessionProviderAttemptTable.owner_token,
+                        state: SessionProviderAttemptTable.state,
+                      })
+                      .from(SessionProviderAttemptTable)
+                      .where(eq(SessionProviderAttemptTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie),
+                    providerReceipts: (yield* database.db
+                      .select({
+                        receipt_id: V2ProviderTurnReceiptTable.receipt_id,
+                        activity_id: V2ProviderTurnReceiptTable.activity_id,
+                        request_ordinal: V2ProviderTurnReceiptTable.request_ordinal,
+                        provider_turn_seq: V2ProviderTurnReceiptTable.provider_turn_seq,
+                        provider_attempt_id: V2ProviderTurnReceiptTable.provider_attempt_id,
+                        owner_token: V2ProviderTurnReceiptTable.owner_token,
+                        state: V2ProviderTurnReceiptTable.state,
+                        outcome_artifact: V2ProviderTurnReceiptTable.outcome_artifact,
+                      })
+                      .from(V2ProviderTurnReceiptTable)
+                      .where(eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie)).map((receipt) => ({
+                        receipt_id: receipt.receipt_id,
+                        activity_id: receipt.activity_id,
+                        request_ordinal: receipt.request_ordinal,
+                        provider_turn_seq: receipt.provider_turn_seq,
+                        provider_attempt_id: receipt.provider_attempt_id,
+                        owner_token: receipt.owner_token,
+                        state: receipt.state,
+                        toolCalls: receipt.outcome_artifact?.flatMap((event) =>
+                          typeof event === "object" &&
+                          event !== null &&
+                          "type" in event &&
+                          event.type === "tool-call" &&
+                          "id" in event &&
+                          typeof event.id === "string" &&
+                          "name" in event &&
+                          typeof event.name === "string"
+                            ? [{ id: event.id, name: event.name }]
+                            : [],
+                        ) ?? [],
+                      })),
+                    toolAdmissions: yield* database.db
+                      .select({
+                        receipt_id: V2ToolEffectAdmissionTable.receipt_id,
+                        provider_attempt_id: V2ToolEffectAdmissionTable.provider_attempt_id,
+                        tool_call_id: V2ToolEffectAdmissionTable.tool_call_id,
+                        tool_name: V2ToolEffectAdmissionTable.tool_name,
+                      })
+                      .from(V2ToolEffectAdmissionTable)
+                      .where(eq(V2ToolEffectAdmissionTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie),
+                    toolEffects: yield* database.db
+                      .select({
+                        receipt_id: V2ToolEffectTable.receipt_id,
+                        provider_attempt_id: V2ToolEffectTable.provider_attempt_id,
+                        tool_call_id: V2ToolEffectTable.tool_call_id,
+                        tool_name: V2ToolEffectTable.tool_name,
+                        state: V2ToolEffectTable.state,
+                      })
+                      .from(V2ToolEffectTable)
+                      .where(eq(V2ToolEffectTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie),
+                  },
                 }
               })
             : undefined
@@ -1432,10 +1821,92 @@ export async function runLegacyLiveCases(input: {
                 root: AgentGateway.DeepAgentPlanStore.planStoreRoot(session.id),
               }
             : undefined
+          // Durable V2 provider-turn receipts: the authority surface for per-turn request evidence
+          // (volatile context classification, offered tools). The receipt carries only the history
+          // HASH (not the assembled messages), so request-content oracles key off the volatile
+          // parts. The legacy session.request.assembled-fingerprint GlobalBus event is
+          // legacy-owner-only.
+          const providerTurns = input.inspectProviderTurns
+            ? yield* database.db
+                .select({
+                  receiptID: V2ProviderTurnReceiptTable.receipt_id,
+                  requestOrdinal: V2ProviderTurnReceiptTable.request_ordinal,
+                  activityID: V2ProviderTurnReceiptTable.activity_id,
+                  providerTurnSeq: V2ProviderTurnReceiptTable.provider_turn_seq,
+                  state: V2ProviderTurnReceiptTable.state,
+                  providerID: V2ProviderTurnReceiptTable.provider_id,
+                  modelID: V2ProviderTurnReceiptTable.model_id,
+                  preparedTurn: V2ProviderTurnReceiptTable.prepared_turn,
+                  outcomeArtifact: V2ProviderTurnReceiptTable.outcome_artifact,
+                })
+                .from(V2ProviderTurnReceiptTable)
+                .where(
+                  and(
+                    eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)),
+                    gt(V2ProviderTurnReceiptTable.request_ordinal, lastProviderTurnBefore?.requestOrdinal ?? 0),
+                  ),
+                )
+                .orderBy(V2ProviderTurnReceiptTable.request_ordinal)
+                .all()
+                .pipe(
+                  Effect.orDie,
+                  Effect.map((rows) =>
+                    rows.map((row) => ({
+                      receiptID: row.receiptID,
+                      requestOrdinal: row.requestOrdinal,
+                      activityID: row.activityID,
+                      providerTurnSeq: row.providerTurnSeq,
+                      state: row.state,
+                      providerID: row.providerID,
+                      modelID: row.modelID,
+                      systemVolatileParts: row.preparedTurn?.system_volatile_parts ?? [],
+                      toolFinalOfferedIDs: row.preparedTurn?.tool_final_offered_ids ?? [],
+                      toolDefinitionHash: row.preparedTurn?.tool_definition_hash ?? null,
+                      toolCallIDs:
+                        row.outcomeArtifact?.flatMap((event) =>
+                          typeof event === "object" &&
+                          event !== null &&
+                          "type" in event &&
+                          event.type === "tool-call" &&
+                          "name" in event &&
+                          event.name === "plan" &&
+                          "id" in event &&
+                          typeof event.id === "string"
+                            ? [event.id]
+                            : [],
+                        ) ?? [],
+                    })),
+                  ),
+                )
+            : undefined
+          // Durable V2 task runs owned by the Core TaskRunAuthority (replaces the deleted
+          // deepagent.subagent session-metadata projection as the subagent control-plane oracle).
+          const taskRuns = input.inspectTaskRuns
+            ? yield* database.db
+                .select({
+                  runID: TaskRunTable.run_id,
+                  executionRuntime: TaskRunTable.execution_runtime,
+                  parentSessionID: TaskRunTable.parent_session_id,
+                  childSessionID: TaskRunTable.child_session_id,
+                  generation: TaskRunTable.generation,
+                  deliveryMode: TaskRunTable.delivery_mode,
+                  phase: TaskRunTable.phase,
+                  state: TaskRunTable.state,
+                  reason: TaskRunTable.reason,
+                  mutationCapability: TaskRunTable.mutation_capability,
+                  workspaceMode: TaskRunTable.workspace_mode,
+                })
+                .from(TaskRunTable)
+                .where(eq(TaskRunTable.parent_session_id, SessionV2.ID.make(session.id)))
+                .all()
+                .pipe(Effect.orDie)
+            : undefined
           return {
             name: testCase.name,
             sessionID: session.id,
             plan,
+            providerTurns,
+            taskRuns,
             assembledRequestFingerprints: assembledRequestFingerprints
               .slice(requestFingerprintCountBefore)
               .filter((event) => event.payload?.properties?.sessionID === session.id)
@@ -1460,6 +1931,7 @@ export async function runLegacyLiveCases(input: {
             tokenUsageOverride,
             revert: revertEvidence,
             users: currentUsers.map((message) => ({
+              id: message.info.id,
               metadata: message.info.metadata,
               text: message.parts
                 .flatMap((part) => (part.type === "text" && !part.synthetic ? [part.text] : []))
@@ -1568,6 +2040,7 @@ export async function runLegacyLiveCases(input: {
         }),
       )
       return {
+        composition,
         observations,
         workspace: {
           directory: instance.directory,
@@ -1618,6 +2091,7 @@ export async function runLegacyLiveCases(input: {
             modelContextTokens: input.modelContextTokens,
             maxProviderTurns: input.maxProviderTurns,
             toolOutput: input.toolOutput,
+            compaction: input.compaction,
             agentPermissions: input.agentPermissions,
             subagentIntensity: input.subagentIntensity,
           }),
@@ -1698,6 +2172,8 @@ export async function runLegacyLiveCases(input: {
                 Permission.defaultLayer,
                 Question.defaultLayer,
                 EventV2Bridge.defaultLayer,
+                ModelsDev.defaultLayer,
+                Root.gatewayClientLayer,
                 Worktree.appLayer,
                 Git.defaultLayer,
                 EffectFlock.defaultLayer,
@@ -1720,6 +2196,9 @@ export async function runLegacyLiveCases(input: {
                 LSP.defaultLayer,
                 MCP.defaultLayer,
                 ToolRegistry.productionLayer,
+                Root.applicationToolsLayer,
+                Root.mcpBridgeLayer,
+                Root.pluginBridgeLayer,
                 RuntimeFlags.defaultLayer,
                 InstanceRegistry.layer,
                 // Ambient shared placement: the session runtime below references this SAME
@@ -1730,6 +2209,10 @@ export async function runLegacyLiveCases(input: {
                 // Location's PermissionV2 to auto-reply.
                 liveLocationMap,
                 sessionRuntimeLayer,
+                TaskRunDispatcher.runtimeLayer().pipe(
+                  Layer.provide(sessionRuntimeLayer),
+                  Layer.provide(Database.defaultLayer),
+                ),
               ),
             ),
             Layer.provide(sessionRuntimeLayer),
@@ -1747,6 +2230,11 @@ export async function runLegacyLiveCases(input: {
         ),
       ),
     )
+    const { AppLayer } = await import("../../src/effect/app-runtime")
+    const productionComposition = await Effect.runPromise(
+      CompositionDigest.current.pipe(Effect.provide(AppLayer), Effect.scoped),
+    )
+    await assertHarnessComposition(result.composition, productionComposition, input.expectedApplicationToolIDs)
     const providerErrors = result.observations.flatMap((observation) => observation.providerErrors)
     const v4Errors = result.v4
       ? [
@@ -1768,6 +2256,7 @@ export async function runLegacyLiveCases(input: {
       status: errors.length > 0 ? ("failed" as const) : ("passed" as const),
       error: errors.length > 0 ? errors : undefined,
       fingerprint: { ...modelFingerprint(config), runtimeProviderID: liveProviderID },
+      composition: result.composition,
       preflight: { durationMs: preflight.durationMs },
       sandbox: sandbox?.evidence,
       initialVerifier,
@@ -1881,6 +2370,7 @@ export function liveWorkspaceConfig(
     modelContextTokens?: number
     maxProviderTurns?: number
     toolOutput?: ConfigV1.Info["tool_output"]
+    compaction?: ConfigV1.Info["compaction"]
     agentPermissions?: Readonly<Record<string, ConfigV1.Info["permission"]>>
     subagentIntensity?: "inherit" | "downgrade"
   },
@@ -1893,6 +2383,7 @@ export function liveWorkspaceConfig(
     permission,
     mcp,
     tool_output: options?.toolOutput,
+    compaction: options?.compaction,
     agent: {
       "live-test": {
         mode: "primary",

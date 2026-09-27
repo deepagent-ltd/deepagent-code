@@ -1,0 +1,11 @@
+{
+  "schema": "deepagent-live-composition-deviations.v1",
+  "deviations": [
+    { "path": "database.path", "reason": "The harness opens an isolated test database." },
+    { "path": "locationHost.host", "reason": "The harness installs its fixture Location host." },
+    { "path": "locationHost.seams", "reason": "The fixture host omits production IM, source, settle, and gate adapters." },
+    { "path": "v2Registry.applicationTools", "reason": "The harness adds query_log and fixture-specific application tools." },
+    { "path": "v2Registry.materialized", "reason": "Fixture application tools change the effective Core registry." },
+    { "path": "v2Registry.legacyEgress", "reason": "Fixture and production instances load different V1 egress tools." }
+  ]
+}

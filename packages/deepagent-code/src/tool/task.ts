@@ -195,6 +195,9 @@ const v2LastAssistantText = (messages: readonly SessionMessage.Message[]) =>
     .filter((part): part is SessionMessage.AssistantText => part.type === "text")
     .at(-1)?.text ?? ""
 
+const v2LastAssistantMessageID = (messages: readonly SessionMessage.Message[]) =>
+  messages.filter((message): message is SessionMessage.Assistant => message.type === "assistant").at(-1)?.id
+
 // A failed child drain surfaces with its message populated so the parent sees why it stopped.
 const drainMessage = (error: unknown) => {
   const message = error instanceof Error && error.message.trim() ? error.message : String(error)
@@ -493,7 +496,20 @@ export const TaskTool = Tool.define(
               continue
             }
             const error = validateStructuredOutput(outputSchema, candidate)
-            if (!error)
+            if (!error) {
+              const output = JSON.stringify(candidate)
+              if (runID !== undefined) {
+                const transcript = yield* v2Sessions.messages({ sessionID: childID, order: "asc" }).pipe(Effect.orDie)
+                yield* TaskRunAuthority.recordStructuredEvidence(database.db, {
+                  runId: runID,
+                  schemaName: typeof params.output_schema === "string" ? params.output_schema.trim() : "inline",
+                  schema: outputSchema,
+                  validationOutcome: "validated",
+                  rawOutput: output.slice(0, 24_000),
+                  outputMessageId: v2LastAssistantMessageID(transcript),
+                  ownerToken: `core-v2-task-finalizer:${runID}`,
+                })
+              }
               return {
                 title: params.description,
                 metadata: taskMetadata(childID),
@@ -501,10 +517,11 @@ export const TaskTool = Tool.define(
                   sessionID: childID,
                   state: "completed",
                   summary: params.description,
-                  text: JSON.stringify(candidate),
+                  text: output,
                   maxChars: flags.subagentOutputMaxChars,
                 }),
               }
+            }
             correction = error.slice(0, 1_000)
             exhausted = "structured_output_invalid"
           }
@@ -525,13 +542,17 @@ export const TaskTool = Tool.define(
             reason: receipt.reason,
           })
           if (runID !== undefined)
-            yield* TaskRunAuthority.recordStructuredEvidence(database.db, {
-              runId: runID,
-              schemaName: typeof params.output_schema === "string" ? params.output_schema.trim() : "inline",
-              schema: outputSchema,
-              validationOutcome: "validation_failed",
-              rawOutput: output,
-              ownerToken: `core-v2-task-finalizer:${runID}`,
+            yield* Effect.gen(function* () {
+              const transcript = yield* v2Sessions.messages({ sessionID: childID, order: "asc" })
+              yield* TaskRunAuthority.recordStructuredEvidence(database.db, {
+                runId: runID,
+                schemaName: typeof params.output_schema === "string" ? params.output_schema.trim() : "inline",
+                schema: outputSchema,
+                validationOutcome: "validation_failed",
+                rawOutput: output,
+                outputMessageId: v2LastAssistantMessageID(transcript),
+                ownerToken: `core-v2-task-finalizer:${runID}`,
+              })
             }).pipe(
               // Evidence is best-effort by contract (goal-loop-wiring parity): the degraded output
               // is the settlement, and a missing row reads as explicit-recovery on status surfaces.

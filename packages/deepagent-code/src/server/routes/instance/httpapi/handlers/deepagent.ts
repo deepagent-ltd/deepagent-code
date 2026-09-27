@@ -19,6 +19,7 @@ import {
   DeepAgentGoalPlanValidationError,
   DeepAgentKnowledgeReviewConflictError,
   DeepAgentPromotionError,
+  DeepAgentProjectSwitchError,
   type DeepAgentShipGateMetric,
 } from "../groups/deepagent"
 import { WorkspaceRouteContext } from "../middleware/workspace-routing"
@@ -41,6 +42,8 @@ import type { PanelVerdict } from "@/agent/schema/panel"
 import type { CompletionCriterion } from "@deepagent-code/core/deepagent/goal-loop"
 import { PlanConflictError, PlanValidationError } from "@deepagent-code/core/deepagent/plan-controller"
 import { Database } from "@deepagent-code/core/database/database"
+import { DeepAgentLearningGeneration } from "@deepagent-code/core/deepagent/learning-generation"
+import { InstanceRef } from "@/effect/instance-ref"
 import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import {
@@ -226,6 +229,25 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     // (the route runtime provides DeepAgentEventBus.defaultLayer — same seam the IM handlers use).
     const eventBus = yield* DeepAgentEventBus.Service
 
+    const projectSwitch = Effect.fn("DeepAgentHttpApi.projectSwitch")(function* () {
+      const previous = yield* InstanceRef
+      if (!previous) return 0
+      // Explicit navigation is the project-switch source. Generic disposal and shutdown do not
+      // prove that a user moved to another project, so they never claim this trigger.
+      let claimed = 0
+      while (true) {
+        const result = yield* DeepAgentLearningGeneration.claim(database.db, {
+          trigger: "project_switch",
+          projectID: previous.project.id,
+        })
+        if (!result) break
+        claimed++
+      }
+      return claimed
+    }, Effect.catchCause((cause) => Effect.logError("project-switch learning claim failed", { cause }).pipe(
+      Effect.andThen(Effect.fail(new DeepAgentProjectSwitchError({ message: "Learning generation claim failed" }))),
+    )))
+
     // Build a reviewer-subagent turn runner scoped to a session — the panelist seam consultPanel needs.
     // Reuses makeTaskSubagentRunner (the same child-session + permission-derivation path the goal loop
     // and the task tool use) and adapts its SubagentTurnResult to the PanelTurnRunner shape.
@@ -375,6 +397,9 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       evidence_refs: item.evidence_refs,
       approval_status: item.approval_status,
       scope: item.scope,
+      inboxID: item.inboxID,
+      reviewReason: item.reviewReason,
+      reasonGroup: item.reasonGroup,
     })
 
     const knowledgePending = Effect.fn("DeepAgentHttpApi.knowledgePending")(function* () {
@@ -1180,6 +1205,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     })
 
     return handlers
+      .handle("projectSwitch", projectSwitch)
       .handle("reviews", reviews)
       .handle("promote", promote)
       .handle("reject", reject)

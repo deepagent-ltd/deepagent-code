@@ -23,8 +23,11 @@ type Directive = { kind: "pass"; reminder?: string } | { kind: "block"; output: 
 const decide = function (
   flags: RuntimeFlags.Info,
   runtime: AgentGateway.RuntimeInterface,
-  input: { readonly sessionID: string; readonly toolName: string; readonly args: unknown },
+  input: { readonly sessionID: string; readonly parentID?: string; readonly toolName: string; readonly args: unknown },
 ): Effect.Effect<Directive> {
+  // The parent owns the goal plan. A delegated child has its own Session ID and cannot advance
+  // that plan, so gating its edits on a child-local plan creates a deadlock.
+  if (input.parentID) return Effect.succeed({ kind: "pass" })
   return Effect.sync(() =>
     runtime.withStorage(() => {
       const sessionID = input.sessionID

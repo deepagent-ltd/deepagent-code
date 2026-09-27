@@ -11,6 +11,7 @@ import {
 import { ConfigPlugin } from "@/config/plugin"
 import { ConfigPluginV1 } from "@deepagent-code/core/v1/config/plugin"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
+import { PluginSignature } from "./signature"
 
 export namespace PluginLoader {
   // A normalized plugin declaration derived from config before any filesystem or npm work happens.
@@ -51,7 +52,7 @@ export namespace PluginLoader {
     error?: (
       candidate: Candidate,
       retry: boolean,
-      stage: "install" | "entry" | "compatibility" | "load",
+      stage: "install" | "entry" | "compatibility" | "signature" | "load",
       error: unknown,
       resolved?: Resolved,
     ) => void
@@ -133,14 +134,32 @@ export namespace PluginLoader {
   }
 
   // Import the resolved module only after all earlier validation has succeeded.
-  export async function load(row: Resolved): Promise<{ ok: true; value: Loaded } | { ok: false; error: unknown }> {
+  export async function load(
+    row: Resolved,
+  ): Promise<
+    | { ok: true; value: Loaded }
+    | { ok: false; stage: "signature"; error: PluginSignature.SignatureError }
+    | { ok: false; stage: "load"; error: unknown }
+  > {
+    try {
+      await PluginSignature.check(row)
+    } catch (error) {
+      return {
+        ok: false,
+        stage: "signature",
+        error:
+          error instanceof PluginSignature.SignatureError
+            ? error
+            : new PluginSignature.SignatureError(row.spec, String(error)),
+      }
+    }
     let mod
     try {
       mod = await import(row.entry)
     } catch (error) {
-      return { ok: false, error }
+      return { ok: false, stage: "load", error }
     }
-    if (!mod) return { ok: false, error: new Error(`Plugin ${row.spec} module is empty`) }
+    if (!mod) return { ok: false, stage: "load", error: new Error(`Plugin ${row.spec} module is empty`) }
     return { ok: true, value: { ...row, mod } }
   }
 
@@ -180,7 +199,7 @@ export namespace PluginLoader {
 
     const loaded = await load(resolved.value)
     if (!loaded.ok) {
-      report?.error?.(candidate, retry, "load", loaded.error, resolved.value)
+      report?.error?.(candidate, retry, loaded.stage, loaded.error, resolved.value)
       return { retry: false }
     }
 

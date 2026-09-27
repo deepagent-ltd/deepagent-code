@@ -25,6 +25,7 @@ import {
 import { ContextTokenCodec } from "@deepagent-code/core/context-federation/token-codec"
 import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentDurableLearning } from "@deepagent-code/core/deepagent/durable-learning"
+import { documentRevision } from "@deepagent-code/core/deepagent/document-store"
 import {
   DurableKnowledgeStore,
   projectIdForWorkspace,
@@ -325,7 +326,13 @@ describe("durable learning released Run A to Run B", () => {
         )
         if (!released) return yield* Effect.die("Run A release is unavailable")
 
-        const unpublished = store.documentStore.update(learned.id, `${learned.body}\nUnpublished follow-up.`)
+        const unpublished = store.documentStore.commitGovernedEdit(
+          learned.id,
+          documentRevision(learned),
+          `${learned.body}\nUnpublished follow-up.`,
+          { type: "human", id: "test-editor" },
+          { source: "human", evidence_refs: ["human:test-editor"] },
+        )
         expect(unpublished.version).toBe(learned.version + 1)
         expect(unpublished.status).toBe("active")
         expect((yield* DeepAgentReleasedSnapshot.current(db, scope))?.documents).toEqual([releasedRef])

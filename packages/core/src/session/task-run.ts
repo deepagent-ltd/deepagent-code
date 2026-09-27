@@ -1308,6 +1308,7 @@ const drainAndSettle = (
         return { outcome: "timeout" as const, research, rawResultMessageID }
       }
       if (Exit.isSuccess(drain.value)) return { outcome: "completed" as const, research, rawResultMessageID }
+      if (Cause.hasInterruptsOnly(drain.value.cause)) return { outcome: "interrupted" as const, research, rawResultMessageID }
       const failure = Option.getOrUndefined(Cause.findErrorOption(drain.value.cause))
       return { outcome: "failed" as const, research, rawResultMessageID, failureMessage: failureMessage(failure) }
     }).pipe(Effect.onInterrupt(() => input.sessions.interrupt(input.run.childSessionID).pipe(Effect.ignore)))
@@ -1369,6 +1370,18 @@ const drainAndSettle = (
         state: "failed",
         reason: "task_timeout",
         error: { code: "task_timeout", message: `Subagent timed out after ${input.timeoutMs}ms.` },
+      })
+      yield* retainWorkspace
+      return { outcome: result.outcome, research: result.research } as const
+    }
+    if (result.outcome === "interrupted") {
+      yield* settle(input.db, {
+        runID: input.run.runID,
+        ownerToken,
+        claimGeneration: claimed.claimGeneration,
+        state: "interrupted",
+        reason: "human",
+        error: { code: "interrupted", message: "The subagent was interrupted while waiting for input." },
       })
       yield* retainWorkspace
       return { outcome: result.outcome, research: result.research } as const

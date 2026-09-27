@@ -162,6 +162,7 @@ const checkCommands: Record<DeterministicCheck, DispatcherCommand[]> = {
 }
 
 const modelCommands = new Map<string, DispatcherCommand>([
+  ["live:server-gateway:proxy-smoke", command("packages/deepagent-code", "bun", "run", "test:llm-live:proxy-smoke")],
   ["live:adapter:provider-smoke", command("packages/llm", "bun", "run", "test:llm-live:provider")],
   ["live:adapter:structured-output", command("packages/llm", "bun", "run", "test:llm-live:structured-adapter")],
   ["live:session-v2:v2-provider-loop", command("packages/core", "bun", "run", "test:llm-live:v2-provider-loop")],
@@ -276,6 +277,7 @@ const modelCommands = new Map<string, DispatcherCommand>([
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:permissions-deny"),
   ],
   ["ext:legacy-session:mcp-marker", command("packages/deepagent-code", "bun", "run", "test:llm-ext:mcp-marker")],
+  ["ext:legacy-session:tool-ecosystem", command("packages/deepagent-code", "bun", "run", "test:llm-ext:tool-ecosystem")],
   ["ext:adapter:provider-abort", command("packages/llm", "bun", "run", "test:llm-ext:provider-abort")],
   ["ext:packaged-sidecar:packaged-sidecar", command("packages/desktop", "bun", "run", "test:llm-ext:sidecar")],
   ["ext:packaged-sidecar:desktop-subagents", command("packages/desktop", "bun", "run", "test:llm-release:subagents")],

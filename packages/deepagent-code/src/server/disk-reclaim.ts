@@ -8,6 +8,7 @@ import { Backup } from "@deepagent-code/core/database/backup"
 import { Database } from "@deepagent-code/core/database/database"
 import { Global } from "@deepagent-code/core/global"
 import { isResidue, MigrationOrchestrator, sizeOf, walk } from "./migration-orchestrator"
+import { withMaintenanceLock } from "./maintenance-lock"
 
 // W-02 M-5 (design §3.3) — disk reclaim. Codes the full measurement of the data root
 // (~/.deepagent/code, resolved through Global.Path — never a hardcoded string) into an inventory,
@@ -79,6 +80,8 @@ export interface ReclaimReport {
   readonly candidates: readonly ReclaimCandidate[]
   readonly restoreIncidentsBytes: number
   readonly restoreIncidentsNeverDeleted: true
+  /** A failed confirmed run still records the deletions completed before the failure. */
+  readonly failure?: { readonly code: DiskReclaimError["code"]; readonly detail: string }
 }
 
 export interface ReclaimInput {
@@ -104,7 +107,7 @@ const writeJsonAtomic = (filePath: string, value: unknown) =>
   Effect.promise(async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     const tmp = `${filePath}.tmp-${Math.random().toString(36).slice(2)}`
-    await Bun.write(tmp, `${JSON.stringify(value, null, 2)}\n`)
+    await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`)
     await fs.rename(tmp, filePath)
   }).pipe(
     Effect.catchCause(
@@ -189,7 +192,7 @@ const advisoryResiduePaths = Effect.fn("DiskReclaim.advisoryResiduePaths")(funct
   )?.outcome
   if (advisoryPath?.kind !== "disk_advisory") return new Set<string>()
   const advisory = yield* Effect.promise(() =>
-    Bun.file(advisoryPath.advisoryPath).json().catch(() => undefined),
+    fs.readFile(advisoryPath.advisoryPath, "utf8").then((t) => JSON.parse(t)).catch(() => undefined),
   )
   return new Set(
     ((advisory as { entries?: { category?: string; path?: string }[] } | undefined)?.entries ?? [])
@@ -201,18 +204,17 @@ const advisoryResiduePaths = Effect.fn("DiskReclaim.advisoryResiduePaths")(funct
 /** Every filesystem path referenced by a backup manifest under the backups root (the keep-set). */
 const manifestReferencedPaths = Effect.fn("DiskReclaim.manifestReferencedPaths")(function* (backupDir: string) {
   const referenced = new Set<string>()
-  for (const dir of [backupDir, path.join(backupDir, "archive")]) {
-    const names = yield* Effect.promise(() => fs.readdir(dir).catch(() => [] as string[]))
-    for (const name of names.filter((entry) => entry.endsWith(".manifest.json"))) {
-      const manifest = yield* Backup.readManifest(path.join(dir, name)).pipe(
-        Effect.catchCause(() => Effect.succeed(undefined)),
-      )
-      if (manifest === undefined) continue
-      referenced.add(path.resolve(manifest.backup.filePath))
-      referenced.add(path.resolve(manifest.source.filePath))
+  const unreadable: string[] = []
+  for (const file of (yield* Effect.promise(() => walk(backupDir))).filter((item) => item.endsWith(".manifest.json"))) {
+    const manifest = yield* Backup.readManifest(file).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+    if (manifest === undefined) {
+      unreadable.push(file)
+      continue
     }
+    referenced.add(path.resolve(manifest.backup.filePath))
+    referenced.add(path.resolve(manifest.source.filePath))
   }
-  return referenced
+  return { referenced, unreadable }
 })
 
 /** The safety oracle: a candidate is deletable only when nothing references or protects it. */
@@ -221,25 +223,31 @@ const blockedReasonFor = (input: {
   readonly dbPath: string
   readonly backupDir: string
   readonly referenced: ReadonlySet<string>
+  readonly unreadable: readonly string[]
 }): string | undefined => {
-  const { candidate, dbPath, backupDir, referenced } = input
+  const { candidate, dbPath, backupDir, referenced, unreadable } = input
   if (within(candidate, path.join(path.dirname(path.resolve(dbPath)), "restore-incidents")))
     return "restore-incidents is never deleted (design §3.1 ruling)"
   if (path.resolve(candidate) === path.resolve(dbPath)) return "the live authority database is never a candidate"
   if (candidate === `${dbPath}-wal` || candidate === `${dbPath}-shm`) return "WAL/SHM sidecar of the live database"
   if (within(candidate, backupDir)) return "the backups root is governed by retention (M-4), not reclaim"
+  if (unreadable.length > 0) return "backup manifest unreadable; reclaim blocked until it is repaired"
   if (referenced.has(path.resolve(candidate))) return "referenced by a backup manifest"
   return undefined
 }
 
-export const reclaim = Effect.fn("DiskReclaim.reclaim")(function* (input: ReclaimInput) {
+export const reclaim = Effect.fn("DiskReclaim.reclaim")((input: ReclaimInput) =>
+  withMaintenanceLock(input.backupDir, reclaimUnlocked(input)),
+)
+
+const reclaimUnlocked = Effect.fn("DiskReclaim.reclaimUnlocked")(function* (input: ReclaimInput) {
   const dataRoot = path.resolve(input.dataRoot ?? Global.Path.data)
   const dbPath = path.resolve(input.dbPath)
   const backupDir = path.resolve(input.backupDir)
   const incidentsDir = path.join(path.dirname(dbPath), "restore-incidents")
 
   const fromAdvisory = yield* advisoryResiduePaths(backupDir)
-  const referenced = yield* manifestReferencedPaths(backupDir)
+  const manifests = yield* manifestReferencedPaths(backupDir)
   // Advisory candidates UNION the live re-scan; the filesystem is the truth the checks run on.
   const liveScan = (yield* Effect.promise(() => fs.readdir(path.dirname(dbPath)).catch(() => [] as string[])))
     .map((name) => path.join(path.dirname(dbPath), name))
@@ -259,7 +267,7 @@ export const reclaim = Effect.fn("DiskReclaim.reclaim")(function* (input: Reclai
     Effect.gen(function* () {
       const exists = yield* Effect.promise(() => fs.stat(candidate).then(() => true).catch(() => false))
       if (!exists) return undefined
-      const blockedReason = blockedReasonFor({ candidate, dbPath, backupDir, referenced })
+      const blockedReason = blockedReasonFor({ candidate, dbPath, backupDir, ...manifests })
       return {
         path: candidate,
         sizeBytes: yield* Effect.promise(() => sizeOf(candidate)),
@@ -275,32 +283,38 @@ export const reclaim = Effect.fn("DiskReclaim.reclaim")(function* (input: Reclai
   const totalBytesBefore = inventoryBefore.reduce((sum, entry) => sum + entry.sizeBytes, 0)
   const executed = input.confirm === true
   const vacuumRequested = input.vacuum === true
-  const vacuumed = executed && vacuumRequested
+  let vacuumed = false
   const deleted = new Set<string>()
+  let failure: DiskReclaimError | undefined
 
   if (executed) {
     for (const item of deletable) {
-      yield* Effect.promise(() => fs.rm(item.path)).pipe(
-        Effect.catchCause(
-          (cause) =>
-            new DiskReclaimError({
-              code: "reclaim_failed",
-              detail: `cannot delete ${item.path}: ${cause instanceof Error ? cause.message : String(cause)}`,
-            }),
-        ),
-      )
+      const removed = yield* Effect.tryPromise({
+        try: () => fs.rm(item.path),
+        catch: (cause) =>
+          new DiskReclaimError({
+            code: "reclaim_failed",
+            detail: `cannot delete ${item.path}: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
+      }).pipe(Effect.match({ onFailure: (error) => ({ error }), onSuccess: () => ({}) }))
+      if ("error" in removed) {
+        failure = removed.error
+        break
+      }
       deleted.add(item.path)
     }
-    if (vacuumRequested) {
-      yield* input.db.run(sql`VACUUM`).pipe(
-        Effect.catchCause(
-          (cause) =>
-            new DiskReclaimError({
-              code: "reclaim_failed",
-              detail: `VACUUM failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-            }),
+    if (vacuumRequested && failure === undefined) {
+      const vacuum = yield* input.db.run(sql`VACUUM`).pipe(
+        Effect.catchCause((cause) =>
+          new DiskReclaimError({
+            code: "reclaim_failed",
+            detail: `VACUUM failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
         ),
+        Effect.match({ onFailure: (error) => ({ error }), onSuccess: () => ({}) }),
       )
+      if ("error" in vacuum) failure = vacuum.error
+      else vacuumed = true
     }
   }
   const candidates: readonly ReclaimCandidate[] = plan
@@ -337,7 +351,9 @@ export const reclaim = Effect.fn("DiskReclaim.reclaim")(function* (input: Reclai
     candidates,
     restoreIncidentsBytes: incidentsBytesOf(inventoryAfter),
     restoreIncidentsNeverDeleted: true,
+    ...(failure === undefined ? {} : { failure: { code: failure.code, detail: failure.detail } }),
   }
   yield* writeJsonAtomic(reportPathFor(backupDir), report)
+  if (failure) return yield* failure
   return report
 })

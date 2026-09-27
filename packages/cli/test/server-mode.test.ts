@@ -135,15 +135,15 @@ afterAll(async () => {
 const stateFile = () => path.join(home, "state", "server-mode.json")
 
 describe("ServerMode.login", () => {
-  it("stores state with 0600 permissions, the camelCase access token, and the cookie refresh token", async () => {
+  it("stores tokens and applies private file mode on POSIX", async () => {
     const state = await run(service.pipe(Effect.flatMap((s) => s.login(base, "a@b.c", "pw"))))
 
     expect(state.gatewayUrl).toBe(base)
     expect(state.accessToken).toBe("tok-1")
     expect(state.refreshToken).toBe("ref-1")
 
-    const info = await stat(stateFile())
-    expect(info.mode & 0o777).toBe(0o600)
+    // Windows reports synthetic POSIX mode bits for NTFS files.
+    if (process.platform !== "win32") expect((await stat(stateFile())).mode & 0o777).toBe(0o600)
     const persisted = JSON.parse(await readFile(stateFile(), "utf8"))
     expect(persisted.accessToken).toBe("tok-1")
     expect(persisted.refreshToken).toBe("ref-1")

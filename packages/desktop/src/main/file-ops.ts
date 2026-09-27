@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs"
-import { basename, dirname, join, relative, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { ZipReader, ZipWriter, BlobReader, BlobWriter } from "@zip.js/zip.js"
 
 export type FileOpResult = { ok: true } | { ok: false; error: string }
@@ -14,7 +14,10 @@ export function assertWithinRoot(root: string, ...paths: string[]): FileOpResult
   const rootResolved = resolve(root)
   for (const p of paths) {
     const rel = relative(rootResolved, resolve(p))
-    if (rel.startsWith("..")) return { ok: false, error: "Path is outside the workspace" }
+    // On Windows, relative() returns an absolute path when the target is on another drive or UNC share.
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      return { ok: false, error: "Path is outside the workspace" }
+    }
   }
   return null
 }

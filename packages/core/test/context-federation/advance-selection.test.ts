@@ -8,7 +8,6 @@ import { budgetSelection } from "../../src/context-federation/selection-budget"
 import { Hash } from "../../src/util/hash"
 import { type QueryEnvelope, type QueryResultV2, type GraphStatusRecord } from "../../src/context-federation/resolver-v2"
 import {
-  SessionActivityTable,
   SessionContextSelectionTable,
   SessionProviderAttemptTable,
 } from "../../src/context-federation/session-sql"
@@ -34,13 +33,13 @@ import { SessionMessage } from "../../src/session/message"
 import { Prompt } from "../../src/session/prompt"
 import { SessionSchema } from "../../src/session/schema"
 import { SessionInputTable, SessionTable } from "../../src/session/sql"
+import { openFixtureActivity } from "../fixture/open-activity"
 
 const ns = SecurityNamespaceID.make("sec_advance_test")
 const proj = ProjectScopeKey.make("prj_advance_test")
 const loc = LocationKey.make("loc_advance_test")
 const projectId = ProjectV2.ID.make("project-advance-test")
 const sessionId = SessionSchema.ID.make("ses_advance_test")
-const activityId = "act_advance_test"
 const triggerId = SessionMessage.ID.make("msg_advance_trigger")
 const ownerToken = "provider-owner-advance-test"
 
@@ -62,7 +61,7 @@ const egress = {
   sensitivities: ["public", "source_code"] as const,
 }
 
-function envelope(overrides?: Partial<QueryEnvelope>): QueryEnvelope {
+function envelope(activityId: string, overrides?: Partial<QueryEnvelope>): QueryEnvelope {
   return {
     membership: { sessionId, activityId, inputIds: [triggerId] },
     location: { locationKey: loc },
@@ -102,7 +101,7 @@ function status(graph: GraphKind, state: GraphStatus["status"], revision: string
   }
 }
 
-function result(candidates: readonly ContextCandidate[]): QueryResultV2 {
+function result(activityId: string, candidates: readonly ContextCandidate[]): QueryResultV2 {
   const byGraph = new Map<GraphKind, ContextCandidate[]>()
   for (const candidate of candidates) {
     const list = byGraph.get(candidate.ref.graph) ?? []
@@ -182,7 +181,7 @@ function harnessWith() {
   const layer = Layer.mergeAll(database, owners, attempts, writer, advance)
   return {
     run: <A, E>(
-      effect: Effect.Effect<
+      effect: (activityId: string) => Effect.Effect<
         A,
         E,
         | Database.Service
@@ -194,8 +193,8 @@ function harnessWith() {
     ) =>
       Effect.runPromise(
         Effect.gen(function* () {
-          yield* seedSession()
-          return yield* effect
+          const activityId = yield* seedSession()
+          return yield* effect(activityId)
         }).pipe(Effect.provide(layer), Effect.scoped),
       ),
   }
@@ -236,10 +235,7 @@ function seedSession() {
       .insert(SessionInputTable)
       .values({ id: triggerId, session_id: sessionId, prompt: new Prompt({ text: "trigger" }), delivery: "steer", admitted_seq: 0, promoted_seq: 0 })
       .run()
-    yield* db
-      .insert(SessionActivityTable)
-      .values({ activity_id: activityId, session_id: sessionId, ordinal: 0, trigger_input_id: triggerId, delivery: "steer", state: "active", created_at: 1_000 })
-      .run()
+    return (yield* openFixtureActivity({ sessionId, triggerInputId: triggerId, securityNamespaceId: ns, now: 1_000 })).activityId
   })
 }
 
@@ -247,12 +243,12 @@ describe("AdvanceSelection (C3-06b: next-revision feed from tool results)", () =
   test("advances to revision+1 and leaves the dispatched attempt.selection_id unchanged", async () => {
     const harness = harnessWith()
     await harness.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const writer = yield* SelectionWriter.Service
         const owner = yield* SessionProviderOwner.Service
         yield* owner.register({ ownerToken, leaseMs: 60_000, now: 1_000 })
 
-        const sel = build(result([candidate({ graph: "code", entityId: "a" })]), envelope(), 0, 1)
+        const sel = build(result(activityId, [candidate({ graph: "code", entityId: "a" })]), envelope(activityId), 0, 1)
         expect((yield* writer.write({ envelope: sel, attempt, now: 1_000 })).kind).toBe("written")
         const prepared = yield* (yield* SessionProviderAttempt.Service).prepare({
           sessionId,
@@ -303,12 +299,12 @@ describe("AdvanceSelection (C3-06b: next-revision feed from tool results)", () =
   test("assertAttemptBound refuses binding the new selection to the OLD attempt", async () => {
     const harness = harnessWith()
     const refused = await harness.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const writer = yield* SelectionWriter.Service
         const owner = yield* SessionProviderOwner.Service
         yield* owner.register({ ownerToken, leaseMs: 60_000, now: 1_000 })
 
-        const sel = build(result([candidate({ graph: "code", entityId: "a" })]), envelope(), 0, 1)
+        const sel = build(result(activityId, [candidate({ graph: "code", entityId: "a" })]), envelope(activityId), 0, 1)
         yield* writer.write({ envelope: sel, attempt, now: 1_000 })
         const prepared = yield* (yield* SessionProviderAttempt.Service).prepare({
           sessionId,
@@ -344,12 +340,12 @@ describe("AdvanceSelection (C3-06b: next-revision feed from tool results)", () =
   test("the successor carries the tool results as new evidence at revision+1", async () => {
     const harness = harnessWith()
     await harness.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const writer = yield* SelectionWriter.Service
         const owner = yield* SessionProviderOwner.Service
         yield* owner.register({ ownerToken, leaseMs: 60_000, now: 1_000 })
 
-        const sel = build(result([candidate({ graph: "code", entityId: "a" })]), envelope(), 0, 1)
+        const sel = build(result(activityId, [candidate({ graph: "code", entityId: "a" })]), envelope(activityId), 0, 1)
         yield* writer.write({ envelope: sel, attempt, now: 1_000 })
         const prepared = yield* (yield* SessionProviderAttempt.Service).prepare({
           sessionId,
@@ -390,12 +386,12 @@ describe("AdvanceSelection (C3-06b: next-revision feed from tool results)", () =
   test("advance is deterministic: the same identity yields the same successor selectionId", async () => {
     const harness = harnessWith()
     await harness.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const writer = yield* SelectionWriter.Service
         const owner = yield* SessionProviderOwner.Service
         yield* owner.register({ ownerToken, leaseMs: 60_000, now: 1_000 })
 
-        const sel = build(result([candidate({ graph: "code", entityId: "a" })]), envelope(), 0, 1)
+        const sel = build(result(activityId, [candidate({ graph: "code", entityId: "a" })]), envelope(activityId), 0, 1)
         yield* writer.write({ envelope: sel, attempt, now: 1_000 })
         const prepared = yield* (yield* SessionProviderAttempt.Service).prepare({
           sessionId,

@@ -7,7 +7,6 @@ import { budgetSelection } from "../../src/context-federation/selection-budget"
 import { Hash } from "../../src/util/hash"
 import { type QueryEnvelope, type QueryResultV2, type GraphStatusRecord } from "../../src/context-federation/resolver-v2"
 import {
-  SessionActivityTable,
   SessionContextSelectionTable,
   SessionProviderAttemptTable,
 } from "../../src/context-federation/session-sql"
@@ -33,6 +32,7 @@ import { SessionMessage } from "../../src/session/message"
 import { Prompt } from "../../src/session/prompt"
 import { SessionSchema } from "../../src/session/schema"
 import { SessionInputTable, SessionTable } from "../../src/session/sql"
+import { openFixtureActivity } from "../fixture/open-activity"
 
 const ns = SecurityNamespaceID.make("sec_writer_test")
 const proj = ProjectScopeKey.make("prj_writer_test")
@@ -61,7 +61,7 @@ const egress = {
   sensitivities: ["public", "source_code"] as const,
 }
 
-function envelope(overrides?: Partial<QueryEnvelope>): QueryEnvelope {
+function envelope(activityId: string, overrides?: Partial<QueryEnvelope>): QueryEnvelope {
   return {
     membership: { sessionId, activityId, inputIds: [triggerId] },
     location: { locationKey: loc },
@@ -95,7 +95,7 @@ function status(graph: GraphKind, state: GraphStatus["status"], revision: string
   }
 }
 
-function result(candidates: readonly ContextCandidate[], statuses?: Record<GraphKind, GraphStatus["status"]>): QueryResultV2 {
+function result(activityId: string, candidates: readonly ContextCandidate[], statuses?: Record<GraphKind, GraphStatus["status"]>): QueryResultV2 {
   const byGraph = new Map<GraphKind, ContextCandidate[]>()
   for (const candidate of candidates) {
     const list = byGraph.get(candidate.ref.graph) ?? []
@@ -160,10 +160,10 @@ describe("SelectionWriter (C3-05 production write + FK + no v2-none + successor)
   test("writes a selection+validation row with a real identity (never v2-none) for an all-denied resolution", async () => {
     const harness = harnessWith()
     await harness.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const writer = yield* SelectionWriter.Service
-        const r = result([], { code: "denied", documents: "denied", knowledge: "denied", memory: "denied" })
-        const sel = build(r, envelope(), 0, 1)
+        const r = result(activityId, [], { code: "denied", documents: "denied", knowledge: "denied", memory: "denied" })
+        const sel = build(r, envelope(activityId), 0, 1)
         expect(Object.values(sel.graphStatuses).every((s) => s.status === "denied")).toBe(true)
         const outcome = yield* writer.write({ envelope: sel, attempt, now: 1_000 })
         expect(outcome.kind).toBe("written")
@@ -184,9 +184,9 @@ describe("SelectionWriter (C3-05 production write + FK + no v2-none + successor)
   test("requires the attempt FK binding: a write without attempt is a typed RequiredAttemptFkError", async () => {
     const harness = harnessWith()
     const outcome = await harness.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const writer = yield* SelectionWriter.Service
-        const sel = build(result([candidate({ graph: "code", entityId: "a" })]), envelope(), 0, 1)
+        const sel = build(result(activityId, [candidate({ graph: "code", entityId: "a" })]), envelope(activityId), 0, 1)
         return yield* writer
           .write({ envelope: sel, attempt: { attemptId: "", providerTurnSeq: 1, requestHash: "", providerId: "" } })
           .pipe(Effect.catch((error) => Effect.succeed({ error })))
@@ -198,7 +198,7 @@ describe("SelectionWriter (C3-05 production write + FK + no v2-none + successor)
   test("assertAttemptBound rejects an attempt that was never bound to a selection (FK absent)", async () => {
     const harness = harnessWith()
     const outcome = await harness.run(
-      Effect.gen(function* () {
+      () => Effect.gen(function* () {
         const writer = yield* SelectionWriter.Service
         return yield* writer
           .assertAttemptBound({ attemptId: "does-not-exist", selectionId: "sel-missing" })
@@ -211,9 +211,9 @@ describe("SelectionWriter (C3-05 production write + FK + no v2-none + successor)
   test("exact retry is idempotent: a second write with the same envelope is typed existing, no duplicate row", async () => {
     const harness = harnessWith()
     await harness.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const writer = yield* SelectionWriter.Service
-        const sel = build(result([candidate({ graph: "code", entityId: "a" })]), envelope(), 0, 1)
+        const sel = build(result(activityId, [candidate({ graph: "code", entityId: "a" })]), envelope(activityId), 0, 1)
         const first = yield* writer.write({ envelope: sel, attempt, now: 1_000 })
         expect(first.kind).toBe("written")
         const second = yield* writer.write({ envelope: sel, attempt, now: 1_000 })
@@ -236,11 +236,11 @@ describe("SelectionWriter (C3-05 production write + FK + no v2-none + successor)
   test("a validated V2 attempt bound to a selection passes assertAttemptBound before dispatch", async () => {
     const harness = harnessWith()
     await harness.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const writer = yield* SelectionWriter.Service
         const owner = yield* SessionProviderOwner.Service
         yield* owner.register({ ownerToken, leaseMs: 60_000, now: 1_000 })
-        const sel = build(result([candidate({ graph: "code", entityId: "a" })]), envelope(), 0, 1)
+        const sel = build(result(activityId, [candidate({ graph: "code", entityId: "a" })]), envelope(activityId), 0, 1)
         expect((yield* writer.write({ envelope: sel, attempt, now: 1_000 })).kind).toBe("written")
         const attempts = yield* SessionProviderAttempt.Service
         const prepared = yield* attempts.prepare({
@@ -269,18 +269,18 @@ describe("SelectionWriter (C3-05 production write + FK + no v2-none + successor)
   test("validation drift → rebuild successor → the dispatched attempt carries the NEW selection identity", async () => {
     const harness = harnessWith()
     await harness.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const writer = yield* SelectionWriter.Service
         const owner = yield* SessionProviderOwner.Service
         yield* owner.register({ ownerToken, leaseMs: 60_000, now: 1_000 })
 
-        const r0 = result([candidate({ graph: "code", entityId: "a" })])
-        const selA = build(r0, envelope(), 0, 1)
+        const r0 = result(activityId, [candidate({ graph: "code", entityId: "a" })])
+        const selA = build(r0, envelope(activityId), 0, 1)
         expect((yield* writer.write({ envelope: selA, attempt, now: 1_000 })).kind).toBe("written")
 
         // Drift detected -> build a SUCCESSOR (revision 1, new identity, invalidated outcome).
-        const env2 = envelope({ observedLocationMutationEpoch: 4, expectedLocationMutationEpoch: 2 })
-        const r1 = result([candidate({ graph: "code", entityId: "a" })])
+        const env2 = envelope(activityId, { observedLocationMutationEpoch: 4, expectedLocationMutationEpoch: 2 })
+        const r1 = result(activityId, [candidate({ graph: "code", entityId: "a" })])
         const batch1 = budgetSelection(r1, env2)
         const selB = SelectionWriter.rebuildForDrift(selA, batch1, r1, env2, { triggerInputId: triggerId, providerTurnSeq: 1, now: 1_000 })
         expect(selB.revision).toBe(1)
@@ -333,7 +333,7 @@ describe("SelectionWriter (C3-05 production write + FK + no v2-none + successor)
 
   test("L2: a candidate title token is truncated at 120 chars in the selection ref (bounded evidence)", () => {
     const longCandidate = { ...candidate({ graph: "code", entityId: "long-token" }), title: "y".repeat(400) }
-    const sel = build(result([longCandidate]), envelope(), 0, 1)
+    const sel = build(result(activityId, [longCandidate]), envelope(activityId), 0, 1)
     const token = sel.selectedRefs[0]?.token
     expect(token).toBeDefined()
     expect(token?.length).toBe(121)
@@ -353,11 +353,11 @@ function harnessWith() {
   const writer = SelectionWriter.layer.pipe(Layer.provide(database))
   const layer = Layer.mergeAll(database, owners, attempts, writer)
   return {
-    run: <A, E>(effect: Effect.Effect<A, E, Database.Service | SessionProviderOwner.Service | SessionProviderAttempt.Service | SelectionWriter.Service>) =>
+    run: <A, E>(effect: (activityId: string) => Effect.Effect<A, E, Database.Service | SessionProviderOwner.Service | SessionProviderAttempt.Service | SelectionWriter.Service>) =>
       Effect.runPromise(
         Effect.gen(function* () {
-          yield* seedSession()
-          return yield* effect
+          const activityId = yield* seedSession()
+          return yield* effect(activityId)
         }).pipe(Effect.provide(layer), Effect.scoped),
       ),
   }
@@ -404,9 +404,6 @@ function seedSession() {
       .insert(SessionInputTable)
       .values({ id: triggerId, session_id: sessionId, prompt: new Prompt({ text: "trigger" }), delivery: "steer", admitted_seq: 0, promoted_seq: 0 })
       .run()
-    yield* db
-      .insert(SessionActivityTable)
-      .values({ activity_id: activityId, session_id: sessionId, ordinal: 0, trigger_input_id: triggerId, delivery: "steer", state: "active", created_at: 1_000 })
-      .run()
+    return (yield* openFixtureActivity({ sessionId, triggerInputId: triggerId, securityNamespaceId: ns, now: 1_000 })).activityId
   })
 }

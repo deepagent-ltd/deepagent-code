@@ -13,7 +13,6 @@ import { validateSession } from "../../src/cli/tui/validate-session"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
-import { MessageV2 } from "../../src/session/message-v2"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Global } from "@deepagent-code/core/global"
 
@@ -814,16 +813,13 @@ describe("HttpApi SDK", () => {
     ),
   )
 
-  // Regression: EventV2 must publish on the same ProjectBus the /event handler
-  // subscribes to, AND the /event stream must forward handler ALS/context into the
-  // body-pump fiber. Drives the full SDK → /event → Session.updatePart → sync.run →
-  // bus.publish → SDK subscriber path. Goes red if either the publisher uses a
-  // different bus instance (Bug 2 / pre-#27825) or the stream loses context (Bug 1 /
-  // pre-#27425).
-  serverPathParity("streams sync-backed part updates to /event subscribers", (serverPath) =>
+  // The V2 session update is an authoritative EventV2 write. Its projected event must
+  // reach the same ProjectBus and /event stream the SDK subscribes to. Legacy part
+  // writes are read-only and must fail without changing the projected message.
+  serverPathParity("streams V2 session updates to /event subscribers", (serverPath) =>
     withStandardProject(serverPath, ({ sdk, directory }) =>
       Effect.gen(function* () {
-        const session = yield* capture(() => sdk.session.create({ title: "sync-backed part event" }))
+        const session = yield* capture(() => sdk.session.create({ title: "V2 session event" }))
         const sessionID = String(record(session.data).id)
         const seeded = yield* seedMessage(directory, sessionID)
 
@@ -845,7 +841,7 @@ describe("HttpApi SDK", () => {
               Deferred.doneUnsafe(ready, Effect.void)
               continue
             }
-            if (type === MessageV2.Event.PartUpdated.type) {
+            if (type === "session.updated") {
               Deferred.doneUnsafe(received, Effect.succeed(payload))
               return
             }
@@ -864,16 +860,25 @@ describe("HttpApi SDK", () => {
             >,
           }),
         )
-        expect(updated.status).toBe(200)
+        expect(updated.status).toBe(503)
+        expect(updated.error).toMatchObject({
+          _tag: "ServiceUnavailableError",
+          service: "session.updatePart",
+        })
+        const message = yield* capture(() => sdk.session.message({ sessionID, messageID: seeded.message.id }))
+        expect(firstPartText(message.data)).toBe(seeded.part.text)
+
+        const renamed = yield* capture(() => sdk.session.update({ sessionID, title: "updated via V2" }))
+        expect(renamed.status).toBe(200)
 
         const event = yield* awaitWithTimeout(
           Deferred.await(received),
-          "timed out waiting for message.part.updated bus payload over /event",
+          "timed out waiting for session.updated bus payload over /event",
           "5 seconds",
         )
         const properties = record(record(event).properties)
-        expect(record(properties.part)).toMatchObject({ id: seeded.part.id, type: "text" })
-        return { type: record(event).type, partType: record(properties.part).type }
+        expect(record(properties.info)).toMatchObject({ id: sessionID, title: "updated via V2" })
+        return { type: record(event).type, title: record(properties.info).title }
       }),
     ),
   )
@@ -955,13 +960,10 @@ describe("HttpApi SDK", () => {
   serverPathParity(
     "acknowledges async prompts after admission without waiting for model completion",
     (serverPath) =>
-      withFakeLlm(serverPath, ({ sdk, llm }) =>
-        Effect.gen(function* () {
-          let responseReleased = false
-          const responseDelay = Bun.sleep(2_000).then(() => {
-            responseReleased = true
-          })
-          yield* llm.hold("delayed response", responseDelay)
+      withFakeLlm(serverPath, ({ sdk, llm }) => {
+        const responseGate = Promise.withResolvers<void>()
+        return Effect.gen(function* () {
+          yield* llm.hold("delayed response", responseGate.promise)
           const session = yield* capture(() =>
             sdk.session.create({
               title: "async admission",
@@ -998,8 +1000,7 @@ describe("HttpApi SDK", () => {
           // V2 admission vocabulary: prompts admit on the "steer" channel by default.
           expect(prompt.data).toMatchObject({ delivery: "steer" })
           expect(JSON.stringify(messages)).toContain("persist before acknowledging")
-          expect(responseReleased).toBe(false)
-          yield* Effect.promise(() => responseDelay)
+          responseGate.resolve()
           yield* pollWithTimeout(
             capture(() => sdk.session.status()).pipe(
               Effect.map((response) => (sessionID in record(response.data) ? undefined : true)),
@@ -1007,8 +1008,8 @@ describe("HttpApi SDK", () => {
             "async prompt runner did not become idle after the delayed response completed",
             "15 seconds",
           )
-        }),
-      ),
+        }).pipe(Effect.ensuring(Effect.sync(() => responseGate.resolve())))
+      }),
     60_000,
   )
 

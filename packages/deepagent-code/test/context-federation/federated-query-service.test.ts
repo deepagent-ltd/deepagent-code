@@ -92,7 +92,10 @@ describe("LiveFederatedContextQuery", () => {
       confidence: { evidence_strength: "strong", support_count: 1 },
       extensions: { sensitivity: "public" },
     })
-    store.setStatus(released.id, "active", documentRevision(released))
+    store.commitGovernance(released.id, documentRevision(released), {
+      kind: "approve",
+      actor: { type: "human", id: "fixture-reviewer" },
+    })
     const unreleased = store.create({
       type: "knowledge",
       scope: `durable:project:${projectIdForWorkspace(identity.canonicalRoot)}`,
@@ -103,7 +106,10 @@ describe("LiveFederatedContextQuery", () => {
       confidence: { evidence_strength: "strong", support_count: 1 },
       extensions: { sensitivity: "public" },
     })
-    store.setStatus(unreleased.id, "active", documentRevision(unreleased))
+    store.commitGovernance(unreleased.id, documentRevision(unreleased), {
+      kind: "approve",
+      actor: { type: "human", id: "fixture-reviewer" },
+    })
     const documents = [DeepAgentReleasedSnapshot.documentRef(store.get(released.id)!, "project")]
     const selection = {
       snapshotId: "snapshot-federated-query",

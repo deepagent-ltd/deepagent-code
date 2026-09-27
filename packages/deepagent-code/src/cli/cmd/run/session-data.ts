@@ -315,7 +315,7 @@ function key(msg: string, call: string): string {
 // V2 asks carry the PermissionV2 vocabulary (action/resources/save); normalize to the legacy
 // PermissionRequest shape the footer renders and mark provenance so the reply settles through
 // the session-scoped V2 route — the legacy /permission/:id/reply route 404s on PermissionV2.
-function permissionRequestFromV2(
+export function permissionRequestFromV2(
   properties: Extract<Event, { type: "permission.v2.asked" }>["properties"],
 ): RunPermissionRequest {
   return {

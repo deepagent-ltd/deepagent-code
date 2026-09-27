@@ -11,6 +11,7 @@ export const LegacyZeroReason = Schema.Union([
   Schema.Literal("v2_only_profile"),
   Schema.Literal("v2_stack_unavailable"),
   Schema.Literal("v2_owner_unavailable"),
+  Schema.Literal("legacy_session_requires_adoption"),
 ])
 export type LegacyZeroReason = Schema.Schema.Type<typeof LegacyZeroReason>
 
@@ -23,11 +24,7 @@ export class LegacyExecutionUnavailable extends Schema.TaggedErrorClass<LegacyEx
   },
 ) {}
 
-export const refuseLegacyExecution = (input: {
-  reason: LegacyZeroReason
-  detail: string
-  sessionID?: string
-}) =>
+export const refuseLegacyExecution = (input: { reason: LegacyZeroReason; detail: string; sessionID?: string }) =>
   Effect.fail(
     new LegacyExecutionUnavailable({
       reason: input.reason,

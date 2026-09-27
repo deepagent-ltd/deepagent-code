@@ -7,7 +7,6 @@ import { budgetSelection } from "../../src/context-federation/selection-budget"
 import { SessionContextResolverV2, type QueryEnvelope, type QueryResultV2, type GraphStatusRecord } from "../../src/context-federation/resolver-v2"
 import { type V2Adapter } from "../../src/context-federation/adapters-v2"
 import {
-  SessionActivityTable,
   SessionContextSelectionTable,
   SessionContextValidationTable,
   SessionProviderAttemptTable,
@@ -36,6 +35,7 @@ import { SessionMessage } from "../../src/session/message"
 import { Prompt } from "../../src/session/prompt"
 import { SessionSchema } from "../../src/session/schema"
 import { SessionInputTable, SessionTable } from "../../src/session/sql"
+import { openFixtureActivity } from "../fixture/open-activity"
 
 // C3-09 — deterministic dynamic matrix (fixture/fake adapters only). Each scenario drives the
 // F1 resolver + F2 selection-writer to prove: no unauthorized degradation, real (never v2-none)
@@ -70,7 +70,7 @@ const egress = {
   sensitivities: ["public", "source_code"] as const,
 }
 
-function envelope(overrides?: Partial<QueryEnvelope>): QueryEnvelope {
+function envelope(activityId: string, overrides?: Partial<QueryEnvelope>): QueryEnvelope {
   return {
     membership: { sessionId, activityId, inputIds: [triggerId] },
     location: { locationKey: loc },
@@ -104,7 +104,7 @@ function status(graph: GraphKind, state: GraphStatus["status"], revision: string
   }
 }
 
-function result(candidates: readonly ContextCandidate[], statuses?: Record<GraphKind, GraphStatus["status"]>, successorRebuild?: QueryResultV2["successorRebuild"]): QueryResultV2 {
+function result(activityId: string, candidates: readonly ContextCandidate[], statuses?: Record<GraphKind, GraphStatus["status"]>, successorRebuild?: QueryResultV2["successorRebuild"]): QueryResultV2 {
   const byGraph = new Map<GraphKind, ContextCandidate[]>()
   for (const candidate of candidates) byGraph.set(candidate.ref.graph, [...(byGraph.get(candidate.ref.graph) ?? []), candidate])
   const graphs: GraphKind[] = ["code", "documents", "knowledge", "memory"]
@@ -165,7 +165,7 @@ describe("C3-08 legacy_incomplete: read-only + non-dispatchable", () => {
   test("a legacy v2-none row is classified legacy_incomplete and refused for a new dispatch", async () => {
     const h = harnessWith()
     await h.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const db = (yield* Database.Service).db
         // INSERT a legacy row (the pre-switch bridge shape: graph_statuses is an ARRAY, revisions carry v2-none).
         yield* db
@@ -209,7 +209,7 @@ describe("C3-08 legacy_incomplete: read-only + non-dispatchable", () => {
           .get()
           .pipe(Effect.orDie)
         expect(SelectionWriter.isLegacyIncompleteRow(row!)).toBe(true)
-        const v2Sel = build(result([]), envelope(), 0, 1)
+        const v2Sel = build(result(activityId, []), envelope(activityId), 0, 1)
         yield* SelectionWriter.writeSelectionRow(db, v2Sel, 1_000)
         const v2Row = yield* db
           .select()
@@ -225,7 +225,7 @@ describe("C3-08 legacy_incomplete: read-only + non-dispatchable", () => {
   test("assertAttemptBound refuses to dispatch a legacy_incomplete selection (typed)", async () => {
     const h = harnessWith()
     const outcome = await h.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const db = (yield* Database.Service).db
         const owner = yield* SessionProviderOwner.Service
         yield* owner.register({ ownerToken, leaseMs: 60_000, now: 1_000 })
@@ -310,9 +310,9 @@ describe("C3-08 legacy_incomplete: read-only + non-dispatchable", () => {
   test("a V2 prepared turn carries all-four real graph statuses, never v2-none", async () => {
     const h = harnessWith()
     await h.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const db = (yield* Database.Service).db
-        const sel = build(result([candidate({ graph: "code", entityId: "a" })]), envelope(), 0, 1)
+        const sel = build(result(activityId, [candidate({ graph: "code", entityId: "a" })]), envelope(activityId), 0, 1)
         expect((yield* SelectionWriter.writeSelectionRow(db, sel, 1_000)).conflict).toBe(false)
         const row = yield* db
           .select()
@@ -334,7 +334,7 @@ describe("C3-09 graph timeout + isolation (permission-critical never degrades)",
     const timeoutAdapter: V2Adapter = { graph: "code", source: "code", adapterVersion: "code.v1", resolve: () => Effect.never }
     const knowledgeAdapter = readyAdapter("knowledge")
     const adapters = { code: timeoutAdapter, documents: readyAdapter("documents"), knowledge: knowledgeAdapter, memory: readyAdapter("memory") }
-    const result = await Effect.runPromise(SessionContextResolverV2.resolveGraphs(envelope(), adapters, 10))
+    const result = await Effect.runPromise(SessionContextResolverV2.resolveGraphs(envelope(activityId), adapters, 10))
     expect(result.graphStatuses.code.status).toBe("timeout")
     expect(result.graphStatuses.code.reasonCode).toBe("source_timeout")
     expect(result.graphStatuses.documents.status).toBe("ready")
@@ -345,7 +345,7 @@ describe("C3-09 graph timeout + isolation (permission-critical never degrades)",
   test("a denied graph is terminal (blocked), never best-effort degraded, even when policy permits degrade", async () => {
     // egress excludes `code` -> denied terminal
     const noCode = { ...egress, graphs: ["documents", "knowledge", "memory"] as const }
-    const permit = envelope({ egress: noCode, agentPolicy: { agentId: "agent-c3-dyn", autonomyCeiling: "critical", permitDegraded: true } })
+    const permit = envelope(activityId, { egress: noCode, agentPolicy: { agentId: "agent-c3-dyn", autonomyCeiling: "critical", permitDegraded: true } })
     const result = await Effect.runPromise(SessionContextResolverV2.resolveGraphs(permit, fourAdapters({ code: readyAdapter("code") }), 100))
     expect(result.graphStatuses.code.status).toBe("denied")
     expect(result.graphStatuses.code.reasonCode).toBe("provider_egress_denied")
@@ -360,7 +360,7 @@ describe("C3-09 index rebuild + drift successor + permission revoke + restart + 
       adapterVersion: "code.v1",
       resolve: () => Effect.succeed({ candidates: [], revision: "", observedMutationEpoch: 0, available: false, unavailableReasonCode: "link_refresh_pending" }),
     }
-    const result = await Effect.runPromise(SessionContextResolverV2.resolveGraphs(envelope(), fourAdapters({ code: rebuilding }), 100))
+    const result = await Effect.runPromise(SessionContextResolverV2.resolveGraphs(envelope(activityId), fourAdapters({ code: rebuilding }), 100))
     expect(result.graphStatuses.code.status).toBe("degraded_unavailable")
     expect(result.graphStatuses.code.reasonCode).toBe("link_refresh_pending")
     expect(result.graphStatuses.code.candidateCount).toBe(0)
@@ -372,18 +372,17 @@ describe("C3-09 index rebuild + drift successor + permission revoke + restart + 
     const h = harnessWith()
     // Drift detected by the F1 resolver (pure, over the fixture adapters) -> typed successor signal.
     const drifted = { ...principal, authorizationEpoch: 9 }
-    const env2 = envelope({ principal: drifted, expectedAuthorizationEpoch: 3 })
-    const r1 = await Effect.runPromise(SessionContextResolverV2.resolveGraphs(env2, fourAdapters({ code: readyAdapter("code") }), 100))
-    expect(r1.successorRebuild?.trigger).toBe("authorization_epoch_drift")
-
     await h.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const db = (yield* Database.Service).db
         const owner = yield* SessionProviderOwner.Service
         yield* owner.register({ ownerToken, leaseMs: 60_000, now: 1_000 })
+        const env2 = envelope(activityId, { principal: drifted, expectedAuthorizationEpoch: 3 })
+        const r1 = yield* SessionContextResolverV2.resolveGraphs(env2, fourAdapters({ code: readyAdapter("code") }), 100)
+        expect(r1.successorRebuild?.trigger).toBe("authorization_epoch_drift")
 
-        const baseEnv = envelope()
-        const r0 = result([candidate({ graph: "code", entityId: "a" })])
+        const baseEnv = envelope(activityId)
+        const r0 = result(activityId, [candidate({ graph: "code", entityId: "a" })])
         const selA = build(r0, baseEnv, 0, 1)
         expect((yield* SelectionWriter.writeSelectionRow(db, selA, 1_000)).conflict).toBe(false)
 
@@ -440,12 +439,12 @@ describe("C3-09 index rebuild + drift successor + permission revoke + restart + 
   test("permission revoked between prepare and dispatch -> typed dispatch refusal at the assert seam (no request)", async () => {
     const h = harnessWith()
     const outcome = await h.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const db = (yield* Database.Service).db
         const owner = yield* SessionProviderOwner.Service
         yield* owner.register({ ownerToken, leaseMs: 60_000, now: 1_000 })
 
-        const sel = build(result([candidate({ graph: "code", entityId: "a" })]), envelope(), 0, 1)
+        const sel = build(result(activityId, [candidate({ graph: "code", entityId: "a" })]), envelope(activityId), 0, 1)
         expect((yield* SelectionWriter.writeSelectionRow(db, sel, 1_000)).conflict).toBe(false)
         yield* SelectionWriter.revalidateSelection(db, {
           selectionId: sel.selectionId,
@@ -488,12 +487,12 @@ describe("C3-09 index rebuild + drift successor + permission revoke + restart + 
   test("process restart: re-construct the writer from the persisted fixture rows -> same identity, valid validation, preserved binding", async () => {
     const h = harnessWith()
     await h.run(
-      Effect.gen(function* () {
+      (activityId) => Effect.gen(function* () {
         const db = (yield* Database.Service).db
         const owner = yield* SessionProviderOwner.Service
         yield* owner.register({ ownerToken, leaseMs: 60_000, now: 1_000 })
 
-        const sel = build(result([candidate({ graph: "code", entityId: "a" })]), envelope(), 0, 1)
+        const sel = build(result(activityId, [candidate({ graph: "code", entityId: "a" })]), envelope(activityId), 0, 1)
         expect((yield* SelectionWriter.writeSelectionRow(db, sel, 1_000)).conflict).toBe(false)
         yield* SelectionWriter.revalidateSelection(db, {
           selectionId: sel.selectionId,
@@ -524,7 +523,7 @@ describe("C3-09 index rebuild + drift successor + permission revoke + restart + 
 
         // "Restart": derive the SAME envelope from the SAME inputs (deterministic) and re-construct a
         // writer over the SAME persisted rows. The identity (content-addressed) is unchanged.
-        const selAgain = build(result([candidate({ graph: "code", entityId: "a" })]), envelope(), 0, 1)
+        const selAgain = build(result(activityId, [candidate({ graph: "code", entityId: "a" })]), envelope(activityId), 0, 1)
         expect(selAgain.selectionId).toBe(sel.selectionId)
         const restarted = yield* SelectionWriter.assertAttemptBoundSelection(db, { attemptId: prepared.attemptId, selectionId: selAgain.selectionId, now: 3_000 })
         // The binding is preserved: same attempt -> same selection, validation still valid.
@@ -540,13 +539,13 @@ describe("C3-09 index rebuild + drift successor + permission revoke + restart + 
     const adapters = fourAdapters({ code: readyAdapter("code"), documents: readyAdapter("documents"), knowledge: readyAdapter("knowledge"), memory: readyAdapter("memory") })
     // Calibration: one fast resolution.
     const start = performance.now()
-    await Effect.runPromise(SessionContextResolverV2.resolveGraphs(envelope(), adapters, 100))
+    await Effect.runPromise(SessionContextResolverV2.resolveGraphs(envelope(activityId), adapters, 100))
     const calibrationMs = performance.now() - start
     const N = 20
     const samples: number[] = []
     for (let i = 0; i < N; i++) {
       const s = performance.now()
-      await Effect.runPromise(SessionContextResolverV2.resolveGraphs(envelope(), adapters, 100))
+      await Effect.runPromise(SessionContextResolverV2.resolveGraphs(envelope(activityId), adapters, 100))
       samples.push(performance.now() - s)
     }
     samples.sort((a, b) => a - b)
@@ -586,11 +585,11 @@ function harnessWith() {
   const writer = SelectionWriter.layer.pipe(Layer.provide(database))
   const layer = Layer.mergeAll(database, owners, attempts, writer)
   return {
-    run: <A, E>(effect: Effect.Effect<A, E, Database.Service | SessionProviderOwner.Service | SessionProviderAttempt.Service | SelectionWriter.Service>) =>
+    run: <A, E>(effect: (activityId: string) => Effect.Effect<A, E, Database.Service | SessionProviderOwner.Service | SessionProviderAttempt.Service | SelectionWriter.Service>) =>
       Effect.runPromise(
         Effect.gen(function* () {
-          yield* seedSession()
-          return yield* effect
+          const activityId = yield* seedSession()
+          return yield* effect(activityId)
         }).pipe(Effect.provide(layer), Effect.scoped),
       ),
   }
@@ -614,10 +613,7 @@ function seedSession() {
       .insert(SessionInputTable)
       .values({ id: triggerId, session_id: sessionId, prompt: new Prompt({ text: "trigger" }), delivery: "steer", admitted_seq: 0, promoted_seq: 0 })
       .run()
-    yield* db
-      .insert(SessionActivityTable)
-      .values({ activity_id: activityId, session_id: sessionId, ordinal: 0, trigger_input_id: triggerId, delivery: "steer", state: "active", created_at: 1_000 })
-      .run()
+    return (yield* openFixtureActivity({ sessionId, triggerInputId: triggerId, securityNamespaceId: ns, now: 1_000 })).activityId
   })
 }
 

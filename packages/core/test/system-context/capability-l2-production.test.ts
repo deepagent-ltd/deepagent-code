@@ -504,10 +504,19 @@ describe("capability_load tool settle: budget gate + audit receipt + snapshot ch
         const third = yield* settleLoadCall("call-load-c", "deepagent.shell-execute")
         expect(third.result.type).toBe("text")
         expect(String(third.result.value)).toContain("budget")
-        expect((third.output?.structured as CapabilityLoadToolOutput).body).toBeUndefined()
-        // Only the two actually-loaded bodies have durable rows.
+        const rejected = third.output?.structured as CapabilityLoadToolOutput
+        expect(rejected.state.state).toBe("budget_exceeded")
+        expect(rejected.body).toBeUndefined()
+        expect(rejected.receipt_digest).toBeUndefined()
+        const retry = yield* settleLoadCall("call-load-c-retry", "deepagent.shell-execute")
+        expect((retry.output?.structured as CapabilityLoadToolOutput).state.state).toBe("budget_exceeded")
+        // This is a loaded-facts audit: neither the first refusal nor its retry writes a receipt.
         const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
         expect(receipts).toHaveLength(2)
+        expect(receipts.map((receipt) => receipt.bodyRef)).toEqual([
+          requestFor("deepagent.code-read").bodyRef,
+          requestFor("deepagent.code-edit").bodyRef,
+        ])
       }).pipe(Effect.provide(toolLayer), Effect.scoped),
     )
   })
@@ -521,6 +530,18 @@ describe("capability_load tool settle: budget gate + audit receipt + snapshot ch
         expect(Tool.permission(loadTool, "capability_load")).toBe("capability.read")
         expect(Tool.permission(packTool, "domain_pack_load")).toBe("capability.read")
       }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+    ))
+
+  test("a capability receipt database outage settles as a typed tool error", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* registerLoadTools(db)
+        yield* db.run("DROP TABLE session_capability_load").pipe(Effect.orDie)
+        const settlement = yield* settleLoadCall("call-db-unavailable", "deepagent.code-read")
+        expect(settlement.result.type).toBe("error")
+        expect(String(settlement.result.value)).toContain("Capability load storage is unavailable")
+      }).pipe(Effect.provide(toolLayer), Effect.scoped),
     ))
 })
 

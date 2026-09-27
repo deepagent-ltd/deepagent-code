@@ -258,6 +258,9 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | Ripgrep.Service
 
       const gate = yield* Deferred.make<Picker, Error>()
       state.wait.set(dir, gate)
+      // The picker created by this fiber but not yet transferred to the map (ownership).
+      // Every path below must end with it either registered (variable cleared) or destroyed.
+      let created: Fff.Picker | undefined
       return yield* Effect.gen(function* () {
         const id = key(dir)
         const isFirstPicker = state.pick.size === 0
@@ -290,14 +293,37 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | Ripgrep.Service
         }
 
         const pick = made.value
+        created = pick
+        // release() may have run while Fff.create was in flight: it failed the wait gate and
+        // removed it, and the layer finalizer has already destroyed whatever was registered at
+        // that point. Registering this picker now would orphan its native watcher thread against
+        // process exit — observed as the Bun-on-Windows segfault in short-lived CLI commands
+        // (bootstrap forks warm(), the command finishes, disposal races the still-creating
+        // picker). Destroy it here instead and fail the (already failed) gate.
+        if (state.wait.get(dir) !== gate) {
+          yield* Effect.uninterruptible(
+            fffSync("destroy orphaned picker", () => pick.destroy()).pipe(Effect.ignore),
+          )
+          created = undefined
+          return yield* Effect.fail(new Error("fff picker released during creation"))
+        }
         const entry: Picker = { pick, ready: yield* Effect.cached(scanReady(dir, pick)) }
         state.pick.set(dir, entry)
+        created = undefined
         yield* Deferred.succeed(gate, entry)
         return entry
       }).pipe(
         Effect.ensuring(
           Effect.gen(function* () {
             if (state.wait.get(dir) === gate) state.wait.delete(dir)
+            // Interrupted between native creation and registration: nobody owns `created` —
+            // destroy it or its native watcher outlives disposal.
+            if (created !== undefined) {
+              const orphan = created
+              yield* Effect.uninterruptible(
+                fffSync("destroy orphaned picker", () => orphan.destroy()).pipe(Effect.ignore),
+              )
+            }
             yield* Deferred.fail(gate, new Error("fff init interrupted")).pipe(Effect.ignore)
           }),
         ),

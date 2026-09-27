@@ -25,6 +25,7 @@ type Active = {
   owner: Owner
   onClose?: () => void
   setClosing: (closing: boolean) => void
+  closing: () => boolean
 }
 
 const Context = createContext<ReturnType<typeof init>>()
@@ -80,12 +81,14 @@ function init() {
     const zIndex = 50 + layer * 10
     let dispose: (() => void) | undefined
     let setClosing: ((closing: boolean) => void) | undefined
+    let closingSignal: (() => boolean) | undefined
 
     const node = runWithOwner(owner, () =>
       createRoot((d: () => void) => {
         dispose = d
         const [closing, setClosingSignal] = createSignal(false)
         setClosing = setClosingSignal
+        closingSignal = closing
         return (
           <Kobalte
             modal
@@ -121,24 +124,37 @@ function init() {
       }),
     )
 
-    if (!dispose || !setClosing) return
+    if (!dispose || !setClosing || !closingSignal) return
 
-    const active: Active = { id, node, dispose, owner, onClose, setClosing }
+    const active: Active = { id, node, dispose, owner, onClose, setClosing, closing: closingSignal }
     setStack((items) => [...items, active])
   }
 
-  const push = (element: DialogElement, owner: Owner, onClose?: () => void) => {
+  // Finish any close that is still inside its animation window: dispose the closing entries
+  // now and drop them from the stack, so a dialog mounted on top never shares the stack with
+  // a dead one (whose pending timer would otherwise be cancelled by push/show and leak).
+  const settleClosing = () => {
+    const closing = stack().filter((item) => item.closing())
+    if (closing.length === 0) return
     if (timer.current !== undefined) {
       clearTimeout(timer.current)
       timer.current = undefined
     }
     lock.value = false
+    for (const item of closing) item.dispose()
+    const ids = new Set(closing.map((item) => item.id))
+    setStack((items) => items.filter((item) => !ids.has(item.id)))
+  }
+
+  const push = (element: DialogElement, owner: Owner, onClose?: () => void) => {
+    settleClosing()
     mount(element, owner, onClose, stack().length)
   }
 
   const show = (element: DialogElement, owner: Owner, onClose?: () => void) => {
     for (const item of stack()) item.dispose()
     setStack([])
+    settleClosing()
     if (timer.current !== undefined) {
       clearTimeout(timer.current)
       timer.current = undefined
@@ -147,8 +163,20 @@ function init() {
     mount(element, owner, onClose, 0)
   }
 
+  // The top-most entry that is NOT already closing. A closing dialog is exiting (its stack
+  // removal waits out the close animation), so consumers must not treat it as the active
+  // dialog: command.tsx gates keybinds on `dialog.active`, and counting an exiting entry
+  // makes every reopen pressed during the 100ms close window feel dead.
+  const active = () => {
+    for (let i = stack().length - 1; i >= 0; i--) {
+      if (!stack()[i].closing()) return stack()[i]
+    }
+    return undefined
+  }
+
   return {
     stack,
+    active,
     close,
     show,
     push,
@@ -180,7 +208,7 @@ export function useDialog() {
 
   return {
     get active() {
-      return ctx.stack().at(-1)
+      return ctx.active()
     },
     show(element: DialogElement, onClose?: () => void) {
       const base = ctx.stack().at(-1)?.owner ?? owner

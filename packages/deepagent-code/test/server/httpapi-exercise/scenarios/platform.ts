@@ -158,4 +158,30 @@ export const platformScenarios: Scenario[] = [
         "trusted source replacement should round-trip",
       )
     }),
+  http.protected
+    .get("/workspace/{workspaceID}/config/external-channels", "workspaceConfig.externalChannels.get")
+    .at((ctx) => ({
+      path: route("/workspace/{workspaceID}/config/external-channels", { workspaceID: "workspace-httpapi" }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.externalChannels)
+    }),
+  http.protected
+    .put("/workspace/{workspaceID}/config/external-channels", "workspaceConfig.externalChannels.put")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/workspace/{workspaceID}/config/external-channels", { workspaceID: "workspace-httpapi" }),
+      headers: ctx.headers(),
+      body: { externalChannels: [{ provider: "slack", groupID: "img_httpapi", channelID: "C123" }] },
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.externalChannels)
+      check(
+        isRecord(body.externalChannels[0]) && body.externalChannels[0].channelID === "C123",
+        "external channel binding should round-trip",
+      )
+    }),
 ]

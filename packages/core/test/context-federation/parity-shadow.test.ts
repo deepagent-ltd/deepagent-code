@@ -11,7 +11,7 @@ import {
   type QueryResultV2,
   type GraphStatusRecord,
 } from "../../src/context-federation/resolver-v2"
-import { SessionActivityTable, SessionContextSelectionTable } from "../../src/context-federation/session-sql"
+import { SessionContextSelectionTable } from "../../src/context-federation/session-sql"
 import { ContextCandidate, ContextFederation } from "../../src/context-federation/federation"
 import {
   LocationKey,
@@ -32,6 +32,7 @@ import { SessionMessage } from "../../src/session/message"
 import { Prompt } from "../../src/session/prompt"
 import { SessionSchema } from "../../src/session/schema"
 import { SessionInputTable, SessionTable } from "../../src/session/sql"
+import { openFixtureActivity } from "../fixture/open-activity"
 
 const ns = SecurityNamespaceID.make("sec_parity_test")
 const proj = ProjectScopeKey.make("prj_parity_test")
@@ -59,9 +60,9 @@ const egress = {
   sensitivities: ["public", "source_code"] as const,
 }
 
-function envelope(overrides?: Partial<QueryEnvelope>): QueryEnvelope {
+function envelope(overrides?: Partial<QueryEnvelope>, currentActivityId = activityId): QueryEnvelope {
   return {
-    membership: { sessionId, activityId, inputIds: [triggerId] },
+    membership: { sessionId, activityId: currentActivityId, inputIds: [triggerId] },
     location: { locationKey: loc },
     principal,
     workspace: { workspaceId: "ws_parity" },
@@ -107,6 +108,7 @@ function status(
 function result(
   candidates: readonly ContextCandidate[],
   statusesByGraph?: Record<GraphKind, GraphStatus["status"]>,
+  currentActivityId = activityId,
 ): QueryResultV2 {
   const byGraph = new Map<GraphKind, ContextCandidate[]>()
   for (const candidate of candidates) {
@@ -133,7 +135,7 @@ function result(
     queryFingerprint: "qf-parity",
     authorizationFingerprint: "af-parity",
     executionFingerprint: "ef-parity",
-    membership: { sessionId, activityId, inputIds: [triggerId] },
+    membership: { sessionId, activityId: currentActivityId, inputIds: [triggerId] },
     location: { locationKey: loc },
     results,
     graphStatuses,
@@ -286,14 +288,14 @@ describe("ParityShadow (C3-07: recorded parity + side-effect-free shadow)", () =
   test("shadow writes NO selection rows and leaves the recorded dispatched selection unchanged", async () => {
     const harness = dbShadowHarness()
     await harness.run(
-      Effect.gen(function* () {
+      (currentActivityId) => Effect.gen(function* () {
         const writer = yield* SelectionWriter.Service
         const svc = yield* ParityShadow.Service
-        const env = envelope()
-        const batch = budgetSelection(result([candidate({ graph: "code", entityId: "a" })]), env)
+        const env = envelope(undefined, currentActivityId)
+        const batch = budgetSelection(result([candidate({ graph: "code", entityId: "a" })], undefined, currentActivityId), env)
         const sel = SelectionWriter.buildSelectionEnvelope(
           batch,
-          result([candidate({ graph: "code", entityId: "a" })]),
+          result([candidate({ graph: "code", entityId: "a" })], undefined, currentActivityId),
           env,
           {
             revision: 0,
@@ -322,7 +324,7 @@ describe("ParityShadow (C3-07: recorded parity + side-effect-free shadow)", () =
           case: "provider_contract_replay",
           inputFingerprint: "input-db",
           recorded: { selectedRefs: sel.selectedRefs, graphStatuses: sel.graphStatuses },
-          resolve: () => Effect.succeed(result([candidate({ graph: "code", entityId: "b" })])),
+          resolve: () => Effect.succeed(result([candidate({ graph: "code", entityId: "b" })], undefined, currentActivityId)),
           dispatch: {
             transport: () => Effect.succeed(undefined),
             tool: () => Effect.succeed(undefined),
@@ -362,11 +364,11 @@ function dbShadowHarness() {
   const parityShadow = ParityShadow.layerWith(true)
   const layer = Layer.mergeAll(database, writer, parityShadow)
   return {
-    run: <A, E>(effect: Effect.Effect<A, E, Database.Service | SelectionWriter.Service | ParityShadow.Service>) =>
+    run: <A, E>(effect: (activityId: string) => Effect.Effect<A, E, Database.Service | SelectionWriter.Service | ParityShadow.Service>) =>
       Effect.runPromise(
         Effect.gen(function* () {
-          yield* seedSession()
-          return yield* effect
+          const activityId = yield* seedSession()
+          return yield* effect(activityId)
         }).pipe(Effect.provide(layer), Effect.scoped),
       ),
   }
@@ -427,17 +429,6 @@ function seedSession() {
         promoted_seq: 0,
       })
       .run()
-    yield* db
-      .insert(SessionActivityTable)
-      .values({
-        activity_id: activityId,
-        session_id: sessionId,
-        ordinal: 0,
-        trigger_input_id: triggerId,
-        delivery: "steer",
-        state: "active",
-        created_at: 1_000,
-      })
-      .run()
+    return (yield* openFixtureActivity({ sessionId, triggerInputId: triggerId, securityNamespaceId: ns, now: 1_000 })).activityId
   })
 }

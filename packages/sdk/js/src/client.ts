@@ -1,4 +1,5 @@
 export * from "./gen/types.gen.js"
+export { toV2Prompt, waitForV2PromptTerminal } from "./v2-prompt.js"
 
 import { createClient } from "./gen/client/client.gen.js"
 import { type Config } from "./gen/client/types.gen.js"

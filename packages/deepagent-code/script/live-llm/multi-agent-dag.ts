@@ -11,7 +11,7 @@ import { runLegacyLiveCases } from "./runtime"
 const researchMarker = `research-${crypto.randomUUID()}`
 const expectedOutput = `artifact-${crypto.randomUUID()}`
 const researchContent = `${researchMarker}\n`
-const expectedContent = `${expectedOutput}\n`
+const expectedContent = expectedOutput
 const verifierSuccess = `dag-ok-${crypto.randomUUID()}`
 const verifierFailure = `dag-error-${crypto.randomUUID()}`
 const workerOutputSchema = {
@@ -38,7 +38,8 @@ const prompt = [
   `Use this exact worker output_schema: ${JSON.stringify(workerOutputSchema)}.`,
   "In the worker prompt, include the exact mechanism returned by the researcher.",
   "Tell the worker to read fixtures/instruction.txt exactly once, write its exact content to output/result.txt, and return result set to the exact bytes it wrote.",
-  "After the worker returns, call pr_finalize exactly once with no pr_ids so its automatic PR is reviewed, merged, and stage-reviewed.",
+  "Tell the worker that read returns literal file text: a value beginning artifact- is the content to copy, not an artifact reference. Do not re-read it.",
+  "After the worker returns, call pr_finalize exactly once with no pr_ids so its automatic PR is reviewed and merged.",
   "Wait for pr_finalize to finish before starting the third task.",
   "Third call task with subagent_type reviewer and output_schema ReviewResult.",
   "Tell the reviewer to read output/result.txt exactly once, verify it against the expected value stated in fixtures/review.txt, and return approve only when byte-exact; otherwise block with a finding.",
@@ -77,6 +78,7 @@ const artifact = await runLegacyLiveCases({
   },
   inspectFiles: ["fixtures/research.txt", "fixtures/instruction.txt", "fixtures/review.txt", "output/result.txt"],
   inspectPRCollaboration: true,
+  inspectTaskRuns: true,
   toolSandbox: { verifierScript, initialVerifier: "fail" },
   evaluateWorkspace: async (directory, sandbox) => {
     if (!sandbox) throw new Error("Multi-Agent DAG verifier requires a qualified tool sandbox")
@@ -109,152 +111,99 @@ if (!artifact.sandbox?.networkDenied || !artifact.sandbox.verifierWriteDenied) {
 
 const observation = artifact.cases[0]
 if (!observation) throw new Error("Missing Multi-Agent DAG observation")
-const children = observation.children
-if (children.length !== 5) {
-  throw new Error(`Expected three task children plus Reviewer and Senior Reviewer, received ${children.length}`)
+if (observation.providerErrors.length > 0) {
+  throw new Error(`Multi-Agent DAG provider failed: ${JSON.stringify(observation.providerErrors)}`)
 }
-const researcher = requireChild("researcher")
-const worker = requireChild("worker")
-const reviewers = children.filter((child) => child.agent === "reviewer")
-const reviewer = reviewers.find((child) => nestedRecord(child.metadata, ["deepagent"]).pr_review === undefined)
-const prReviewer = reviewers.find((child) => nestedRecord(child.metadata, ["deepagent"]).pr_review !== undefined)
-const seniorReviewer = requireChild("senior-reviewer")
-if (!reviewer || !prReviewer) throw new Error("DAG did not create distinct result and PR Reviewer sessions")
-
-for (const child of children) {
-  if (child.parentID !== observation.sessionID) {
-    throw new Error(`Child ${child.id} has incorrect parent lineage`)
-  }
+const researcher = observation.children.find((child) => child.agent === "researcher")
+const worker = observation.children.find((child) => child.agent === "worker")
+const reviewers = observation.children.filter((child) => child.agent === "reviewer")
+const prReviewer = reviewers.find((child) => child.v2Tools.length === 0)
+const resultReviewer = reviewers.find((child) => child.v2Tools.some((tool) => tool.name === "read"))
+if (!researcher || !worker || !prReviewer || !resultReviewer || observation.children.length !== 4) {
+  throw new Error("DAG did not produce researcher, worker, PR reviewer, and result reviewer")
+}
+for (const child of observation.children) {
   if (
-    child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
-    child.model.id !== artifact.fingerprint.modelID ||
-    child.assistants.some(
-      (assistant) =>
-        assistant.providerID !== artifact.fingerprint.runtimeProviderID ||
-        assistant.modelID !== artifact.fingerprint.modelID ||
-        assistant.error !== undefined,
-    )
+    child.parentID !== observation.sessionID || child.v2Assistants.length === 0 ||
+    child.v2Assistants.some((assistant) => assistant.model.providerID !== artifact.fingerprint.runtimeProviderID ||
+      assistant.model.id !== artifact.fingerprint.modelID) ||
+    child.v2ProviderTurns.length === 0 ||
+    child.v2ProviderTurns.some((turn) => turn.providerID !== artifact.fingerprint.runtimeProviderID ||
+      turn.modelID !== artifact.fingerprint.modelID || turn.state !== "settled") ||
+    child.structuredEvidence?.length !== 1 || child.structuredEvidence[0]?.validationOutcome !== "validated"
   ) {
-    throw new Error(`Child ${child.id} persisted the wrong provider/model identity`)
-  }
-  const subagent = nestedRecord(child.metadata, ["deepagent", "subagent"])
-  if (subagent.state !== "completed" || subagent.finished !== true || subagent.reason !== "structured_output_valid") {
-    throw new Error(`Child ${child.id} did not persist a completed structured result`)
-  }
-  const structuredCalls = child.assistants
-    .flatMap((assistant) => assistant.tools)
-    .filter((tool) => tool.name === "StructuredOutput" && tool.status === "completed")
-  if (structuredCalls.length !== 1) {
-    throw new Error(`Child ${child.id} expected one completed StructuredOutput call, got ${structuredCalls.length}`)
+    throw new Error(`DAG child ${child.id} lacks V2 lineage, model, or structured-output evidence`)
   }
 }
-
-const researchResult = structuredResult(researcher, "ResearchResult")
-if (researchResult.mechanism !== researchMarker && researchResult.mechanism !== researchContent) {
-  throw new Error(`Researcher returned wrong hidden marker: ${JSON.stringify(researchResult.mechanism)}`)
+const researchRead = researcher.v2Tools.filter((tool) => tool.name === "read" && tool.status === "completed")
+if (researcher.v2Tools.length !== 1 || researchRead.length !== 1 || researchRead[0]?.output !== researchContent) {
+  throw new Error("Researcher did not read the hidden mechanism exactly once")
 }
-const researcherReads = completedTools(researcher, "read")
-if (researcherReads.length !== 1) {
-  throw new Error(`Researcher expected one completed read, got ${researcherReads.length}`)
+const workerRead = worker.v2Tools.find((tool) => tool.name === "read" && tool.status === "completed")
+const workerWrite = worker.v2Tools.find((tool) => tool.name === "write" && tool.status === "completed")
+if (
+  worker.v2Tools.length !== 2 || !workerRead || !workerWrite ||
+  workerRead.output !== expectedContent ||
+  typeof workerWrite.input !== "object" || workerWrite.input === null ||
+  workerWrite.input.content !== expectedContent
+) {
+  throw new Error("Worker did not transfer the instruction bytes with one read and one write")
 }
-
-const workerResult = structuredResult(worker, "WorkerResult")
-if (typeof workerResult.result !== "string" || workerResult.result.split(expectedOutput).length !== 2) {
-  throw new Error(`Worker structured result did not carry the unique hidden artifact: ${JSON.stringify(workerResult.result)}`)
+const resultReads = resultReviewer.v2Tools.filter((tool) => tool.name === "read" && tool.status === "completed")
+if (
+  resultReviewer.v2Tools.length !== 2 || resultReads.length !== 2 ||
+  new Set(resultReads.map((tool) => typeof tool.input === "object" && tool.input !== null ? tool.input.path : undefined)).size !== 2 ||
+  resultReads.some((tool) => tool.output !== expectedContent)
+) {
+  throw new Error("Result reviewer did not independently read the output and expected fixture")
 }
-if (completedTools(worker, "read").length !== 1 || completedTools(worker, "write").length !== 1) {
-  throw new Error("Worker did not complete exactly one read and one write")
-}
-
-const reviewResult = structuredResult(reviewer, "ReviewResult")
-if (reviewResult.verdict !== "approve" || !Array.isArray(reviewResult.findings) || reviewResult.findings.length !== 0) {
-  throw new Error(`Reviewer did not independently approve exact output: ${JSON.stringify(reviewResult)}`)
-}
-if (completedTools(reviewer, "read").length !== 2) {
-  throw new Error("Reviewer did not complete exactly two reads")
-}
-
+if (prReviewer.v2Tools.length > 0) throw new Error("PR reviewer called a tool")
 const taskTools = observation.tools.filter((tool) => tool.name === "task" && tool.status === "completed")
-if (taskTools.length !== 3) {
-  throw new Error(`Parent expected three completed task calls, got ${taskTools.length}`)
-}
 const finalizeTools = observation.tools.filter((tool) => tool.name === "pr_finalize" && tool.status === "completed")
-if (finalizeTools.length !== 1) {
-  throw new Error(`Parent expected one completed pr_finalize call, got ${finalizeTools.length}`)
+if (
+  taskTools.length !== 3 || finalizeTools.length !== 1 || observation.tools.length !== 4 ||
+  observation.tools[0]?.name !== "task" || observation.tools[1]?.name !== "task" ||
+  observation.tools[2]?.name !== "pr_finalize" || observation.tools[3]?.name !== "task"
+) {
+  throw new Error("Parent did not execute researcher, worker, PR finalize, and result reviewer in order")
 }
-const forbiddenParentTools = observation.tools.filter(
-  (tool) => tool.status === "completed" && !["task", "pr_finalize"].includes(tool.name),
-)
-if (forbiddenParentTools.length > 0) {
-  throw new Error(`Parent executed forbidden tools: ${forbiddenParentTools.map((tool) => tool.name).join(", ")}`)
+const finalized: unknown = JSON.parse(finalizeTools[0]!.output ?? "null")
+if (!Array.isArray(finalized) || finalized.length !== 1 || finalized[0]?.status !== "merged") {
+  throw new Error(`DAG worker PR was not merged: ${JSON.stringify(finalized)}`)
+}
+const runs = observation.taskRuns ?? []
+if (
+  runs.length !== 4 || runs.some((run) => run.executionRuntime !== "v2" || run.state !== "completed" ||
+    run.parentSessionID !== observation.sessionID ||
+    !observation.children.some((child) => child.id === run.childSessionID))
+) {
+  throw new Error(`DAG V2 task runs did not settle: ${JSON.stringify(runs)}`)
 }
 if (observation.permissionRequests.length > 0) {
-  throw new Error(
-    `Unexpected permission requests: ${observation.permissionRequests.map((request) => `${request.permission}@${request.sessionID}`).join(", ")}`,
-  )
+  throw new Error("DAG unexpectedly required permission interaction")
 }
-
-const output = artifact.workspace.files["output/result.txt"]
-if (output !== expectedContent) {
-  throw new Error(`Final artifact bytes mismatch: ${JSON.stringify(output)}`)
+if (artifact.workspace.files["output/result.txt"] !== expectedContent || artifact.workspace.status.trim() !== "") {
+  throw new Error("DAG PR did not produce a clean, exact parent output")
 }
-const verifier = record(artifact.evaluation, "DAG verifier")
-const verifierStdout = String(verifier.stdout)
-if (verifier.exitCode !== 0 || !verifierStdout.includes(verifierSuccess)) {
-  throw new Error(
-    `Hidden verifier did not pass after DAG completion: exit=${verifier.exitCode}, stdout=${JSON.stringify(verifierStdout)}`,
-  )
+const verifier = artifact.evaluation as { exitCode?: number; stdout?: string } | undefined
+if (!verifier || verifier.exitCode !== 0 || !verifier.stdout?.includes(verifierSuccess)) {
+  throw new Error(`DAG hidden verifier failed: ${JSON.stringify(verifier)}`)
 }
-
-const changedPaths = artifact.workspace.status
-  .split("\n")
-  .filter((line) => line.trim())
-  .map((line) => line.slice(3).trim())
-if (changedPaths.length !== 0) {
-  throw new Error(`Unexpected workspace mutations: ${JSON.stringify(changedPaths)}`)
-}
-const collaboration = artifact.collaboration
-if (!collaboration) throw new Error("Missing DAG PR collaboration evidence")
-const entries = array(record(collaboration.queue, "DAG PR queue").entries, "DAG PR entries").map((entry) =>
-  record(entry, "DAG PR entry"),
-)
 if (
-  entries.length !== 1 ||
-  entries[0]?.status !== "merged" ||
-  entries[0]?.workerID !== worker.id ||
-  entries[0]?.reviewerID !== prReviewer.id ||
-  !collaboration.branch.startsWith("deepagent-code/session-") ||
-  (collaboration.worktrees.match(/^worktree /gm) ?? []).length !== 1
+  !observation.finalText.includes(researchMarker) ||
+  !observation.finalText.includes(expectedOutput) ||
+  !observation.finalText.toLowerCase().includes("approve")
 ) {
-  throw new Error("DAG worker PR did not complete the production review and merge lifecycle")
+  throw new Error("Parent did not aggregate researcher, worker, and reviewer results")
 }
-for (const marker of [researchMarker, expectedOutput]) {
-  if (!observation.finalText.includes(marker)) {
-    throw new Error("Parent did not aggregate all hidden child results")
-  }
-}
-if (!observation.finalText.toLowerCase().includes("approve")) {
-  throw new Error("Parent did not aggregate the reviewer verdict")
-}
-
 const result = {
   ...artifact,
   mode: "ext" as const,
   evidence: {
-    childIDs: children.map((child) => child.id),
-    childAgents: children.map((child) => child.agent),
-    researchMarkerHash: Bun.hash(researchContent).toString(16),
-    expectedOutputHash: Bun.hash(expectedContent).toString(16),
-    taskCallCount: taskTools.length,
-    changedPaths,
-    prReviewerSessionID: prReviewer.id,
-    seniorReviewerSessionID: seniorReviewer.id,
-    prID: entries[0]?.id,
+    childSessionIDs: observation.children.map((child) => child.id),
+    prID: finalized[0].prID,
     hiddenVerifierExit: verifier.exitCode,
-    hiddenVerifierPassed: verifierStdout.includes(verifierSuccess),
-    parentAggregatedResearch: observation.finalText.includes(researchMarker),
-    parentAggregatedWorker: observation.finalText.includes(expectedOutput),
-    parentAggregatedReview: observation.finalText.toLowerCase().includes("approve"),
+    resultHash: Bun.hash(expectedContent).toString(16),
   },
 }
 await writeLiveArtifact(
@@ -262,59 +211,6 @@ await writeLiveArtifact(
   result.suite,
   result,
 )
-console.log(
-  `${result.suite}: passed (${result.fingerprint.providerID}/${result.fingerprint.modelID}, ` +
-    `${children.length} children, ${observation.usage.input + observation.usage.output} parent tokens)`,
-)
-
-function requireChild(agent: string) {
-  const matches = children.filter((child) => child.agent === agent)
-  if (matches.length !== 1 || !matches[0]) {
-    throw new Error(`Expected exactly one ${agent} child, received ${matches.length}`)
-  }
-  return matches[0]
-}
-
-function completedTools(child: (typeof children)[number], name: string) {
-  return child.assistants
-    .flatMap((assistant) => assistant.tools)
-    .filter((tool) => tool.name === name && tool.status === "completed")
-}
-
-function structuredResult(child: (typeof children)[number], name: string) {
-  const finalizers = child.assistants.filter((assistant) => assistant.structured !== undefined)
-  if (finalizers.length !== 1 || !finalizers[0]) {
-    throw new Error(`${name} child expected exactly one structured finalizer turn`)
-  }
-  return record(finalizers[0].structured, name)
-}
-
-function record(value: unknown, name: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${name} is not an object`)
-  }
-  return value as Record<string, unknown>
-}
-
-function array(value: unknown, name: string): unknown[] {
-  if (!Array.isArray(value)) throw new Error(`${name} is not an array`)
-  return value
-}
-
-function nestedRecord(value: unknown, keys: string[]) {
-  const result = keys.reduce<Record<string, unknown> | undefined>(
-    (current, key) => {
-      if (!current) return undefined
-      const next = current[key]
-      if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-      return next as Record<string, unknown>
-    },
-    typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined,
-  )
-  if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
-  return result
-}
+console.log(`${result.suite}: passed (${result.fingerprint.providerID}/${result.fingerprint.modelID}, 4 V2 children)`)
 
 finishLiveScript()

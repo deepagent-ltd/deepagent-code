@@ -1,24 +1,26 @@
+import { projectLayer } from "./fixture/project-layer"
 import { afterAll, describe, expect } from "bun:test"
 import { and, count, eq } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import fs from "fs/promises"
 import { realpathSync } from "node:fs"
 import path from "path"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Database } from "@deepagent-code/core/database/database"
+import { AgentExecutionTable } from "@deepagent-code/core/deepagent/agent-execution-sql"
+import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { EventV2 } from "@deepagent-code/core/event"
 import { FileMutation } from "@deepagent-code/core/file-mutation"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Location } from "@deepagent-code/core/location"
 import { LocationMutation } from "@deepagent-code/core/location-mutation"
 import { PermissionV2 } from "@deepagent-code/core/permission"
-import { Project } from "@deepagent-code/core/project"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
-import { SessionInputTable, SessionTable, TaskRunEventTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { EventTaskWorkspaceTable, SessionInputTable, SessionTable, TaskRunEventTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { TaskRunAuthority } from "@deepagent-code/core/session/task-run"
 import { TaskWorkspace } from "@deepagent-code/core/session/task-workspace"
@@ -57,7 +59,7 @@ const stackOver = (database: Layer.Layer<Database.Service, unknown>) => {
     Layer.provide(events),
     Layer.provide(database),
     Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
-    Layer.provide(Project.defaultLayer),
+    Layer.provide(projectLayer(database)),
     Layer.provide(SessionExecution.noopLayer),
   )
   return Layer.mergeAll(database, events, projector, sessions)
@@ -296,6 +298,7 @@ describe("Core V2 TaskWorkspace", () => {
   it.effect("release refuses in-flight runs, prunes after terminal settle, and stays idempotent", () =>
     Effect.gen(function* () {
       const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "repo")))
+      const headBefore = repoHead(repo)
       const { db, events, sessions } = yield* services
       const parent = yield* sessions.create({ location: { directory: AbsolutePath.make(repo) } })
       const submitted = yield* TaskRunAuthority.submit(db, events, sessions, specFor(parent.id, "call-ws-rel-1", repo, "worktree"))
@@ -321,6 +324,7 @@ describe("Core V2 TaskWorkspace", () => {
         now: 2_000,
       })
 
+      yield* Effect.promise(() => fs.writeFile(path.join(directory, "result.txt"), "preserved child work\n"))
       const released = yield* TaskWorkspace.release(db, { runID: submitted.run.runID })
       expect(released.released).toBeTrue()
       expect(worktreePaths(repo)).not.toContain(directory)
@@ -332,10 +336,13 @@ describe("Core V2 TaskWorkspace", () => {
           () => undefined,
         ),
       )
-      // The branch is retained for the later PR/merge flow, still at the recorded base commit.
+      // A tool write without an explicit child commit remains reviewable after worktree pruning.
       const retained = yield* runRow(db, submitted.run.runID)
       const branchTip = gitIn(repo, ["rev-parse", `refs/heads/${retained.worktree_branch}`]).stdout.toString().trim()
-      expect(branchTip).toBe(retained.workspace_base_commit!)
+      expect(branchTip).not.toBe(retained.workspace_base_commit!)
+      expect(gitIn(repo, ["show", `${branchTip}:result.txt`]).stdout.toString()).toBe("preserved child work\n")
+      expect(repoHead(repo)).toBe(headBefore)
+      expect(porcelainStatus(repo)).toBe("")
 
       const again = yield* TaskWorkspace.release(db, { runID: submitted.run.runID })
       expect(again.released).toBeTrue()
@@ -633,6 +640,115 @@ describe("Core V2 TaskWorkspace stale-worktree reclamation (C-P2-08)", () => {
 })
 
 // ── Child-Location write stack (real built-in write tool against a Location root) ─────────────
+
+describe("event subtask TaskWorkspace receipts", () => {
+  it.effect("does not reclaim a ready workspace during a live lease, then reclaims its orphan", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "event-ready-orphan")))
+      const { db } = yield* services
+      const identity = {
+        eventID: DeepAgentEvent.ID.create(1_000), taskID: "event-ready-orphan:fix", generation: 1,
+      }
+      const receipt = yield* TaskWorkspace.prepareEvent(db, { ...identity, parentDirectory: repo, now: 1_000 })
+      yield* db.insert(AgentExecutionTable).values({
+        workspace_id: "wrk_event_orphan", event_id: identity.eventID, task_id: identity.taskID,
+        status: "running", owner_id: "owner-one", generation: 1, lease_expires_at: 10_000,
+        artifacts: [], tokens_used: 0, created_at: 1_000, updated_at: 1_000,
+      }).run().pipe(Effect.orDie)
+      expect((yield* TaskWorkspace.reclaimStale(db, { now: 5_000, retentionMs: 3_000 })).scanned).toBe(0)
+      expect((yield* db.select().from(EventTaskWorkspaceTable).all())[0]?.state).toBe("ready")
+      yield* Effect.promise(() => fs.access(receipt.directory))
+      expect((yield* TaskWorkspace.reclaimStale(db, { now: 10_001, retentionMs: 3_000 })).reclaimed).toBe(1)
+      expect((yield* db.select().from(EventTaskWorkspaceTable).all())[0]?.state).toBe("reclaimed")
+      expect(worktreePaths(repo)).not.toContain(receipt.directory)
+    }),
+  )
+
+  it.effect("settlement failure becomes reclaimable without claiming preserved work succeeded", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "event-failed-settle")))
+      const { db } = yield* services
+      const identity = { eventID: "evt_failed_settle", taskID: "evt_failed_settle:fix", generation: 1 }
+      const receipt = yield* TaskWorkspace.prepareEvent(db, { ...identity, parentDirectory: repo, now: 1_000 })
+      expectExit0(gitIn(repo, ["worktree", "remove", "--force", receipt.directory]), "remove fixture worktree")
+      const attempt = yield* TaskWorkspace.settleEvent(db, { ...identity, now: 2_000 }).pipe(Effect.exit)
+      expect(Exit.isFailure(attempt)).toBe(true)
+      const row = (yield* db.select().from(EventTaskWorkspaceTable).all())[0]
+      expect(row).toMatchObject({ state: "failed", time_settled: 2_000 })
+      expect(row?.continuation_ref).toBeNull()
+      expect((yield* TaskWorkspace.reclaimStale(db, { now: 5_000, retentionMs: 3_000 })).reclaimed).toBe(1)
+      expect((yield* db.select().from(EventTaskWorkspaceTable).all())[0]?.state).toBe("reclaimed")
+    }),
+  )
+
+  it.effect("duplicate prepares adopt one receipt while successive owner generations stay isolated", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "event-owner-repo")))
+      const { db } = yield* services
+      const identity = { eventID: "evt_double_owner", taskID: "evt_double_owner:fix" }
+      const [first, duplicate] = yield* Effect.all([
+        TaskWorkspace.prepareEvent(db, { ...identity, generation: 1, parentDirectory: repo, now: 1_000 }),
+        TaskWorkspace.prepareEvent(db, { ...identity, generation: 1, parentDirectory: repo, now: 1_000 }),
+      ], { concurrency: 2 })
+      expect(duplicate).toEqual(first)
+      const successor = yield* TaskWorkspace.prepareEvent(db, {
+        ...identity, generation: 2, parentDirectory: repo, now: 1_100,
+      })
+      expect(successor.directory).not.toBe(first.directory)
+      expect(successor.branch).not.toBe(first.branch)
+      expect(worktreePaths(repo)).toContain(first.directory)
+      expect(worktreePaths(repo)).toContain(successor.directory)
+      yield* Effect.promise(() => fs.writeFile(path.join(first.directory, "owner-one.txt"), "owner one\n"))
+      yield* Effect.promise(() => fs.writeFile(path.join(successor.directory, "owner-two.txt"), "owner two\n"))
+      const settled = yield* Effect.all([
+        TaskWorkspace.settleEvent(db, { ...identity, generation: 1, now: 2_000 }),
+        TaskWorkspace.settleEvent(db, { ...identity, generation: 2, now: 2_000 }),
+      ], { concurrency: 2 })
+      expect(settled[0].continuationRef).not.toBe(settled[1].continuationRef)
+      expect(gitIn(repo, ["show", `${settled[0].continuationRef}:owner-one.txt`]).exitCode).toBe(0)
+      expect(gitIn(repo, ["show", `${settled[1].continuationRef}:owner-two.txt`]).exitCode).toBe(0)
+      expect((yield* TaskWorkspace.reclaimStale(db, { now: 5_000, retentionMs: 3_000 })).reclaimed).toBe(2)
+    }),
+  )
+
+  it.effect("adopts a crash-window worktree, freezes its base, and reclaims both generations", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "event-repo")))
+      const { db } = yield* services
+      const firstKey = { eventID: "evt_event_workspace", taskID: "evt_event_workspace:fix", generation: 1 }
+      const first = yield* TaskWorkspace.prepareEvent(db, { ...firstKey, parentDirectory: repo, now: 1_000 })
+      expect(first.operationKey).toBe(`${firstKey.eventID}:${firstKey.taskID}`)
+      expect(first.branch).toStartWith("deepagent-code/event-")
+      expect((yield* db.select().from(EventTaskWorkspaceTable).all()).map((row) => row.state)).toEqual(["ready"])
+      yield* db.update(EventTaskWorkspaceTable).set({ state: "pending" }).run().pipe(Effect.orDie)
+      const adopted = yield* TaskWorkspace.prepareEvent(db, {
+        ...firstKey, parentDirectory: repo, baseRef: "missing-ref-must-not-be-resolved", now: 1_100,
+      })
+      expect(adopted).toEqual(first)
+      yield* TaskWorkspace.requireEventAdmissible(db, firstKey)
+      yield* Effect.promise(() => fs.writeFile(path.join(first.directory, "fix.txt"), "fixed\n"))
+      const settled = yield* TaskWorkspace.settleEvent(db, { ...firstKey, now: 2_000 })
+      expect(settled.continuationRef).toBe(first.branch)
+      expect((yield* TaskWorkspace.settleEvent(db, { ...firstKey, now: 2_100 })).continuationRef).toBe(first.branch)
+
+      const nextKey = { eventID: firstKey.eventID, taskID: `${firstKey.eventID}:test`, generation: 2 }
+      const next = yield* TaskWorkspace.prepareEvent(db, {
+        ...nextKey, parentDirectory: repo, baseRef: settled.continuationRef, now: 3_000,
+      })
+      expect(next.directory).not.toBe(first.directory)
+      expect(yield* Effect.promise(() => fs.readFile(path.join(next.directory, "fix.txt"), "utf8"))).toBe("fixed\n")
+      yield* TaskWorkspace.settleEvent(db, { ...nextKey, now: 4_000 })
+      expect((yield* TaskWorkspace.reclaimStale(db, { now: 3_999, retentionMs: 3_000 })).reclaimed).toBe(0)
+      const reclaimed = yield* TaskWorkspace.reclaimStale(db, { now: 7_000, retentionMs: 3_000 })
+      expect(reclaimed).toMatchObject({ scanned: 2, reclaimed: 2, failed: [] })
+      expect((yield* db.select().from(EventTaskWorkspaceTable).all()).map((row) => row.state)).toEqual([
+        "reclaimed", "reclaimed",
+      ])
+      expect(worktreePaths(repo)).not.toContain(first.directory)
+      expect(worktreePaths(repo)).not.toContain(next.directory)
+    }),
+  )
+})
 
 const allowPermission = Layer.succeed(
   PermissionV2.Service,

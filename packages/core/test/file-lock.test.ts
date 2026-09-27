@@ -4,6 +4,7 @@
  * 测试 FileLockService 的核心合同：人锁优先、TTL 过期、抢占逻辑。
  */
 import { describe, expect, test } from "bun:test"
+import { Context, Effect, Layer } from "effect"
 import { FileLock, HUMAN_LOCK_TTL_MS, AGENT_LOCK_TTL_MS } from "@deepagent-code/core/file-lock"
 
 // 直接实例化 FileLock 的同步逻辑（不通过 Effect layer，直接拿 Service 实现）
@@ -100,6 +101,26 @@ function createTestLockService(): FileLock.Interface {
 }
 
 describe("FileLockService — core contracts (V3.7 P2)", () => {
+  test("real lock service makes a broad agent lock visible to a human file edit", async () => {
+    const svc = Context.get(await Effect.runPromise(Layer.build(FileLock.layer).pipe(Effect.scoped)), FileLock.Service)
+    const root = `/tmp/file-lock-hierarchy-${process.pid}`
+    const broad = svc.acquire(root, "agent")
+    expect(broad).not.toBeNull()
+    if (!broad) return
+    expect(svc.status(`${root}/src/a.ts`)?.lockId).toBe(broad.lockId)
+    const human = svc.acquire(`${root}/src/a.ts`, "human")
+    expect(human).not.toBeNull()
+    expect(svc.renew(broad.lockId)).toBe(false)
+    expect(svc.acquire(root, "agent")).toBeNull()
+    const sibling = svc.acquire(`${root}/src/b.ts`, "agent")
+    expect(sibling).not.toBeNull()
+    if (human) svc.release(human.lockId)
+    if (sibling) svc.release(sibling.lockId)
+    const next = svc.acquire(root, "agent")
+    expect(next).not.toBeNull()
+    if (next) svc.release(next.lockId)
+  })
+
   test("acquire returns a lock entry with correct kind and TTL", () => {
     const svc = createTestLockService()
     const before = Date.now()

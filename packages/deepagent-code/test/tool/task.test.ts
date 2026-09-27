@@ -46,9 +46,13 @@ const sessionV2Reads = Layer.effect(
       list: die,
       create: die,
       get: (id) =>
-        store.get(id).pipe(
-          Effect.flatMap((info) => (info ? Effect.succeed(info) : new SessionV2.NotFoundError({ sessionID: id }))),
-        ),
+        store
+          .get(id)
+          .pipe(
+            Effect.flatMap((info) => (info ? Effect.succeed(info) : new SessionV2.NotFoundError({ sessionID: id }))),
+          ),
+      requireWritable: die,
+      update: die,
       messages: die,
       message: die,
       context: die,
@@ -56,6 +60,7 @@ const sessionV2Reads = Layer.effect(
       switchAgent: die,
       switchModel: die,
       setPermissions: die,
+      setArchived: die,
       prompt: die,
       shell: die,
       skill: die,
@@ -79,7 +84,7 @@ const baseLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     SessionRunState.defaultLayer,
     SessionStatus.defaultLayer,
     Truncate.defaultLayer,
-    ToolRegistry.defaultLayer,
+    ToolRegistry.testLayer,
     Database.defaultLayer,
     RuntimeFlags.layer(flags),
   )
@@ -352,23 +357,21 @@ describe("tool.task (V2 authority entry policy gates)", () => {
     }),
   )
 
-  noV2Runtime.instance(
-    "a composition without the V2 session runtime fails honestly instead of executing",
-    () =>
-      Effect.gen(function* () {
-        const { chat, assistant } = yield* seed()
-        const tool = yield* TaskTool
-        const def = yield* tool.init()
-        const exit = yield* def
-          .execute(
-            { description: "probe", prompt: "p", subagent_type: "researcher" },
-            execCtx({ sessionID: chat.id, messageID: assistant.id }),
-          )
-          .pipe(Effect.exit)
-        expect(Exit.isFailure(exit)).toBe(true)
-        const failure = Exit.isFailure(exit) ? Cause.pretty(exit.cause) : ""
-        expect(failure).toContain("task is unavailable")
-        expect(failure).toContain("sessions: missing")
-      }),
+  noV2Runtime.instance("a composition without the V2 session runtime fails honestly instead of executing", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const exit = yield* def
+        .execute(
+          { description: "probe", prompt: "p", subagent_type: "researcher" },
+          execCtx({ sessionID: chat.id, messageID: assistant.id }),
+        )
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      const failure = Exit.isFailure(exit) ? Cause.pretty(exit.cause) : ""
+      expect(failure).toContain("task is unavailable")
+      expect(failure).toContain("sessions: missing")
+    }),
   )
 })

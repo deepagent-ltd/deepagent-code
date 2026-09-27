@@ -4,12 +4,15 @@ import { Cause, Effect, Exit, Fiber, Layer, ManagedRuntime, Option } from "effec
 import { ToolCallID, ToolFailure } from "@deepagent-code/llm"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { Tool } from "@deepagent-code/core/tool/tool"
+import { EventV2 } from "@deepagent-code/core/event"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { V2McpBridge } from "@/session/v2-mcp-bridge"
 import { InstanceRegistry } from "@/effect/instance-registry"
 import { MCP } from "@/mcp"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { ToolProvenance } from "@/tool/provenance"
 import type { InstanceContext } from "@/project/instance-context"
 
 const instance: InstanceContext = {
@@ -46,14 +49,37 @@ function waitFor(condition: () => boolean, timeoutMs: number) {
 }
 
 describe("V2McpBridge abort parity", () => {
-  const runtime = (tools: Record<string, unknown>) =>
-    ManagedRuntime.make(
+  const runtime = (tools: Record<string, unknown>, listeners = new Set<EventV2.Listener>()) => {
+    for (const [key, item] of Object.entries(tools)) {
+      const [server, name] = key.split(":")
+      if (server && name)
+        ToolProvenance.set(item as Parameters<typeof ToolProvenance.set>[0], {
+          source: "mcp",
+          mcpServer: server,
+          mcpToolName: name,
+        })
+    }
+    return ManagedRuntime.make(
       Layer.mergeAll(
         ApplicationTools.layer,
         InstanceRegistry.layer,
         V2McpBridge.layer.pipe(
           Layer.provide(ApplicationTools.layer),
           Layer.provide(InstanceRegistry.layer),
+          Layer.provide(
+            Layer.succeed(
+              EventV2Bridge.Service,
+              EventV2Bridge.Service.of({
+                listen: (listener: EventV2.Listener) =>
+                  Effect.sync(() => {
+                    listeners.add(listener)
+                    return Effect.sync(() => {
+                      listeners.delete(listener)
+                    })
+                  }),
+              } as unknown as EventV2.Interface),
+            ),
+          ),
           Layer.provide(
             Layer.succeed(
               MCP.Service,
@@ -83,6 +109,7 @@ describe("V2McpBridge abort parity", () => {
         ),
       ),
     )
+  }
 
   test("registering settles an MCP tool result as model-visible text", async () => {
     const rt = runtime({
@@ -156,6 +183,86 @@ describe("V2McpBridge abort parity", () => {
       const error = Option.getOrThrow(Cause.findErrorOption(exit.cause))
       expect(error instanceof ToolFailure).toBe(true)
       expect((error as ToolFailure).message).toContain("demo:broken")
+    } finally {
+      await rt.dispose()
+    }
+  })
+
+  test("an MCP isError result settles as a typed tool failure", async () => {
+    const rt = runtime({
+      "demo:failure": {
+        description: "returns a protocol error",
+        inputSchema: jsonSchema({ type: "object", properties: {} }),
+        execute: async () => ({ isError: true, content: [{ type: "text", text: "MCP_FIXTURE_FAILURE" }] }),
+      },
+    })
+    try {
+      await rt.runPromise(InstanceRegistry.initializeInstance(instance))
+      const exit = await rt.runPromiseExit(settle("mcp__demo__failure", {}))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (!Exit.isFailure(exit)) return
+      expect(Cause.hasDies(exit.cause)).toBe(false)
+      const error = Option.getOrThrow(Cause.findErrorOption(exit.cause))
+      expect(error instanceof ToolFailure).toBe(true)
+      expect((error as ToolFailure).message).toContain("MCP_FIXTURE_FAILURE")
+    } finally {
+      await rt.dispose()
+    }
+  })
+
+  test("refreshes the next tool snapshot across disconnect and reconnect", async () => {
+    const listeners = new Set<EventV2.Listener>()
+    let connected = true
+    const tools: Record<string, unknown> = {
+      "demo:echo": {
+        description: "echoes",
+        inputSchema: jsonSchema({ type: "object", properties: {} }),
+        execute: async () => {
+          if (!connected) throw new Error("transport disconnected")
+          return { content: [{ type: "text", text: "first connection" }] }
+        },
+      },
+    }
+    const rt = runtime(tools, listeners)
+    const changed = {
+      type: MCP.ToolsChanged.type,
+      data: { server: "demo" },
+      location: { directory: instance.directory },
+    } as unknown as EventV2.Payload
+    try {
+      await rt.runPromise(InstanceRegistry.initializeInstance(instance))
+      const entries = () =>
+        rt.runPromise(ApplicationTools.Service.use((applications) => Effect.sync(() => applications.entries())))
+      expect(Tool.permission((await entries()).get("mcp__demo__echo")!.tool, "mcp__demo__echo")).toBe("mcp")
+      connected = false
+      const failed = await rt.runPromiseExit(settle("mcp__demo__echo", {}))
+      expect(Exit.isFailure(failed)).toBe(true)
+      if (Exit.isFailure(failed))
+        expect(Option.getOrThrow(Cause.findErrorOption(failed.cause))).toBeInstanceOf(ToolFailure)
+
+      delete tools["demo:echo"]
+      await rt.runPromise(Effect.forEach([...listeners], (listener) => listener(changed), { discard: true }))
+      expect((await entries()).has("mcp__demo__echo")).toBe(false)
+
+      tools["demo:echo"] = {
+        description: "echoes after reconnect",
+        inputSchema: jsonSchema({ type: "object", properties: {} }),
+        execute: async () => ({ content: [{ type: "text", text: "reconnected" }] }),
+      }
+      ToolProvenance.set(tools["demo:echo"] as Parameters<typeof ToolProvenance.set>[0], {
+        source: "mcp",
+        mcpServer: "demo",
+        mcpToolName: "echo",
+      })
+      await rt.runPromise(Effect.forEach([...listeners], (listener) => listener(changed), { discard: true }))
+      expect(Tool.permission((await entries()).get("mcp__demo__echo")!.tool, "mcp__demo__echo")).toBe("mcp")
+      expect((await rt.runPromise(settle("mcp__demo__echo", {}))).content[0]).toEqual({
+        type: "text",
+        text: "reconnected",
+      })
+      await rt.runPromise(InstanceRegistry.disposeInstanceState(instance))
+      expect((await entries()).has("mcp__demo__echo")).toBe(false)
+      expect(listeners.size).toBe(0)
     } finally {
       await rt.dispose()
     }

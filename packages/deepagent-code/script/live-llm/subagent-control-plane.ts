@@ -29,6 +29,7 @@ const artifact01 = await runLegacyLiveCases({
   environment: { DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE: "durable" },
   cases: [{ name: "subagent-dirty-readonly", prompt: prompt01 }],
   files: { "fixtures/cp01.txt": `${evidence01}\n` },
+  inspectTaskRuns: true,
   beforeCase: async ({ directory }) => {
     // Write an uncommitted file so the parent workspace is dirty.
     // A researcher (mutation_capability=read_only) must still be admitted — only
@@ -76,13 +77,15 @@ if (child01.parentID !== cp01.sessionID || child01.agent !== "researcher") {
   throw new Error("REAL-CP-01: Child lineage or agent type incorrect")
 }
 
-// DB-oracle: child session metadata — set by settleSubagentRun in task.ts
-const subagent01 = nestedRecord(child01.metadata, ["deepagent", "subagent"])
-if (subagent01.finished !== true || subagent01.state !== "completed") {
-  throw new Error(`REAL-CP-01: Child durable metadata state incorrect: ${JSON.stringify(subagent01)}`)
+// DB-oracle: durable task_run row written by the Core V2 TaskRunAuthority (the
+// deepagent.subagent session-metadata projection was removed with the V2-owner cutover —
+// subagent-foreground alignment; task_run is the authority task_status's L10 overlay reads).
+const run01 = requireTaskRun(cp01, child01.id)
+if (run01.executionRuntime !== "v2" || run01.state !== "completed") {
+  throw new Error(`REAL-CP-01: Child durable task_run state incorrect: ${JSON.stringify(run01)}`)
 }
-if (typeof subagent01.run_id !== "string" || subagent01.run_id.length === 0) {
-  throw new Error("REAL-CP-01: Child durable metadata missing run_id — legacy path was used, not durable")
+if (run01.mutationCapability !== "read_only") {
+  throw new Error(`REAL-CP-01: task_run.mutation_capability is not read_only: ${run01.mutationCapability}`)
 }
 
 // mutation_capability=read_only fence: child must NOT have successfully called mutating tools
@@ -112,8 +115,10 @@ const result01 = {
     childSessionIDLength: child01.id.length,
     dirtyWorkspaceAllowed: true,
     mutatingToolsUsed: mutating01.length,
-    durableState: subagent01.state,
-    runID: (subagent01.run_id as string).slice(0, 8),
+    durableState: run01.state,
+    mutationCapability: run01.mutationCapability,
+    runID: run01.runID.slice(0, 8),
+    executionRuntime: run01.executionRuntime,
     taskStatusDbOracle: statusOut01.includes("[terminé]"),
   },
 }
@@ -151,6 +156,7 @@ const artifact02 = await runLegacyLiveCases({
   environment: { DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE: "durable" },
   cases: [{ name: "subagent-durable-events", prompt: prompt02 }],
   files: { "fixtures/cp02.txt": `${evidence02}\n` },
+  inspectTaskRuns: true,
 })
 
 await writeLiveArtifact(
@@ -193,20 +199,23 @@ if (child02.parentID !== cp02.sessionID || child02.agent !== "researcher") {
   throw new Error("REAL-CP-02: Child lineage or agent type incorrect")
 }
 
-// DB-oracle: metadata set by settleSubagentRun → implies run_settled event was written
-const subagent02 = nestedRecord(child02.metadata, ["deepagent", "subagent"])
-if (subagent02.finished !== true || subagent02.state !== "completed") {
+// DB-oracle: durable task_run row written through the Core V2 TaskRunAuthority — a completed
+// state implies the run_settled event transaction committed, which only follows
+// execution_started → run_claimed → run_queued.
+const run02 = requireTaskRun(cp02, child02.id)
+if (run02.executionRuntime !== "v2" || run02.state !== "completed") {
   throw new Error(
-    `REAL-CP-02: Durable event audit incomplete — child has state=${subagent02.state} finished=${subagent02.finished}`,
+    `REAL-CP-02: Durable event audit incomplete — task_run state=${run02.state} runtime=${run02.executionRuntime}`,
   )
 }
 
-// Presence of run_id and generation proves the durable code path was taken (not legacy)
-if (typeof subagent02.run_id !== "string" || subagent02.run_id.length === 0) {
-  throw new Error("REAL-CP-02: Child durable metadata missing run_id — durable path was not activated")
+// Presence of a durable run id and a numeric generation proves the Core V2 authority path was
+// taken (not a legacy in-memory dispatch)
+if (typeof run02.runID !== "string" || run02.runID.length === 0) {
+  throw new Error("REAL-CP-02: task_run row missing run_id — durable path was not activated")
 }
-if (typeof subagent02.generation !== "number") {
-  throw new Error("REAL-CP-02: Child durable metadata missing generation — durable path was not activated")
+if (typeof run02.generation !== "number") {
+  throw new Error("REAL-CP-02: task_run row missing generation — durable path was not activated")
 }
 
 // Child must have read the fixture through a completed read tool
@@ -220,9 +229,10 @@ const result02 = {
   evidence: {
     markerHash: Bun.hash(marker02).toString(16),
     childSessionIDLength: child02.id.length,
-    durableState: subagent02.state,
-    runID: (subagent02.run_id as string).slice(0, 8),
-    generation: subagent02.generation,
+    durableState: run02.state,
+    runID: run02.runID.slice(0, 8),
+    generation: run02.generation,
+    executionRuntime: run02.executionRuntime,
     taskStatusDbOracle: statusOut02.includes("[terminé]"),
     // All four events must have been written in task_run_event for state="completed":
     impliedEventTrail: ["run_queued", "run_claimed", "execution_started", "run_settled"],
@@ -237,20 +247,22 @@ console.log(`${result02.suite}: passed (${result02.fingerprint.providerID}/${res
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function nestedRecord(value: unknown, keys: string[]) {
-  const result = keys.reduce<Record<string, unknown> | undefined>(
-    (current, key) => {
-      if (!current) return undefined
-      const next = current[key]
-      if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-      return next as Record<string, unknown>
-    },
-    typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined,
-  )
-  if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
-  return result
+function requireTaskRun(
+  observation: { taskRuns: Array<Record<string, unknown>> | undefined },
+  childSessionID: string,
+) {
+  const run = observation.taskRuns?.find((row) => row.childSessionID === childSessionID)
+  if (!run) throw new Error(`Missing durable task_run row for child session ${childSessionID}`)
+  return run as {
+    runID: string
+    executionRuntime: string
+    childSessionID: string
+    generation: number
+    state: string
+    reason: string | null
+    mutationCapability: string
+    workspaceMode: string
+  }
 }
 
 finishLiveScript()

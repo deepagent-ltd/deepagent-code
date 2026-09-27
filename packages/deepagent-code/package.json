@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "name": "deepagent-code",
   "type": "module",
   "license": "AGPL-3.0-or-later",
@@ -10,6 +10,7 @@
     "test": "bun test --timeout 30000 --max-concurrency 4",
     "test:ci": "mkdir -p .artifacts/unit && bun test --timeout 30000 --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
     "test:llm-routes": "bun test --timeout 30000 test/script/live-llm-routes.test.ts test/script/run-live-llm-all.test.ts",
+    "test:llm-live:proxy-smoke": "bun run script/live-llm/proxy-smoke.ts && bun run script/live-llm/proxy-process-smoke.ts",
     "test:llm-det:contracts": "bun test --timeout 30000 test/tool/apply_patch_chunk.test.ts test/tool/task.test.ts test/tool/task-concurrency.test.ts test/tool/task-run.test.ts test/tool/registry.test.ts test/tool/truncation.test.ts test/tool/shell.test.ts test/mcp/adapter.test.ts test/mcp/lifecycle.test.ts test/session/structured-output.test.ts test/session/conversation-log-writer.test.ts test/session/tool-input-validation.test.ts test/cli/run/run-process.test.ts test/script/live-llm-eval-scoring.test.ts test/script/live-llm-goal-cli-oracle.test.ts test/script/live-llm-expert-panel-oracle.test.ts test/script/live-llm-plan-advance-oracle.test.ts test/script/live-llm-plan-create-replan-oracle.test.ts test/script/live-llm-activity-progress-oracle.test.ts && bun test --timeout 30000 test/session/prompt.test.ts --test-name-pattern 'runs a prompt in the persisted session directory'",
     "test:llm-live:cli-headless": "bun run script/live-llm/cli-headless.ts",
     "test:llm-ext:goal-cli": "bun run script/live-llm/cli-goal-loop.ts",
@@ -110,6 +111,7 @@
     "@types/yargs": "17.0.33",
     "@typescript/native-preview": "catalog:",
     "drizzle-orm": "catalog:",
+    "openai": "6.39.1",
     "prettier": "3.6.2",
     "typescript": "catalog:",
     "vscode-languageserver-types": "3.17.5",

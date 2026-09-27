@@ -4,6 +4,7 @@ import { Database } from "../database/database"
 import { MessageDecodeError } from "./error"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
+import { LongContext } from "./long-context"
 import { SessionContextEpochTable, SessionMessageTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
@@ -110,9 +111,15 @@ export const entriesForRunner = Effect.fn("SessionHistory.entriesForRunner")(fun
   baselineSeq: number,
 ) {
   const rows = yield* messageRows(db, sessionID, yield* latestCompaction(db, sessionID), baselineSeq)
-  return yield* Effect.forEach(rows, (row) =>
-    decodeMessageRow(row).pipe(Effect.map((message) => ({ seq: row.seq, message }))),
-  )
+  return yield* Effect.forEach(rows, (row) => Effect.gen(function* () {
+    const message = yield* decodeMessageRow(row)
+    if (message.type === "compaction" && message.reason === "hard_gate") {
+      if (!message.checkpointID || !message.checkpointHash)
+        return yield* Effect.die("Hard-gate compaction message has no checkpoint binding")
+      yield* LongContext.assertCheckpoint(db, sessionID, message.checkpointID, message.checkpointHash).pipe(Effect.orDie)
+    }
+    return { seq: row.seq, message }
+  }))
 })
 
 export * as SessionHistory from "./history"

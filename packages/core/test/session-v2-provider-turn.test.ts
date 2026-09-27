@@ -624,7 +624,7 @@ function seed() {
       .onConflictDoNothing()
       .run()
     yield* db
-      .insert(SessionActivityTable)
+      .insert(SessionActivityTable) // fixture-exempt: legacy provider-turn crash/replay suite requires a fixed receipt activity ID
       .values({
         activity_id: activityId,
         session_id: sessionId,

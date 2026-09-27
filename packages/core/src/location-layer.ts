@@ -32,6 +32,7 @@ import { BuiltInTools } from "./tool/builtins"
 import { Image } from "./image"
 import { ToolRegistry } from "./tool/registry"
 import { ApplicationTools } from "./tool/application-tools"
+import { IMExternalDelivery } from "./im/external-delivery"
 import { ToolOutputStore } from "./tool-output-store"
 import { AppProcess } from "./process"
 import { Ripgrep } from "./ripgrep"
@@ -72,7 +73,8 @@ export interface LocationRuntimeHostInterface {
     | ProductionV2Sources
     | ContextToolRuntime.Service
     | ContextQueryAuthorization.Service
-    | ContextQueryAuthorization.Controller,
+    | ContextQueryAuthorization.Controller
+    | IMExternalDelivery.Service,
     never,
     AgentGateway.Runtime
   >
@@ -100,6 +102,7 @@ export const defaultLocationRuntimeHost = Layer.effect(
           // Bare-core fallback: one process-local authority store per keyed tree, matching the
           // pre-seam behavior where the tree self-provided `ContextQueryAuthorization.defaultLayer`.
           ContextQueryAuthorization.defaultLayer,
+          IMExternalDelivery.unavailableLayer,
           Layer.succeed(SessionRunner.CurrentToolSettleGate, undefined),
           Layer.succeed(SessionRunner.CurrentOnSessionSettled, undefined),
           Layer.succeed(V2ProviderTurn.CurrentBuildIdentity, buildIdentity),
@@ -155,6 +158,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
   {
     lookup: (ref: Location.Ref) => {
       const location = Location.layer(ref)
+      const config = Config.locationLayer
       const runtimeHost = Layer.unwrap(Effect.map(LocationRuntimeHost, (host) => host.layer(ref)))
       // Production System Context stack (design §7.3 L0): the host-local builtins +
       // ambient instructions, the stably-loaded `deepagent/capability-catalog`
@@ -165,17 +169,16 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         SystemContextBuiltIns.locationLayer,
         CapabilityCatalog.layer,
         ProjectDocs.layer,
-      ).pipe(Layer.provideMerge(SystemContextRegistry.layer))
+      ).pipe(Layer.provideMerge(config), Layer.provideMerge(SystemContextRegistry.layer))
       const base = Layer.mergeAll(
         location,
         Policy.locationLayer,
-        Config.locationLayer,
+        config,
         ProjectReference.locationLayer,
         PluginV2.locationLayer,
         Catalog.locationLayer,
         CommandV2.locationLayer,
         AgentV2.locationLayer,
-        PluginBoot.locationLayer,
         FileSystem.locationLayer,
         Watcher.locationLayer,
         Pty.locationLayer,
@@ -189,10 +192,13 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         Layer.provide(resources),
         Layer.provide(base),
       )
+      // Boot plugins receive the canonical Location registration capability. Construct the
+      // registry first: placing PluginBoot in `base` would make this provide graph cyclic.
+      const pluginBoot = PluginBoot.locationLayer.pipe(Layer.provide(permissionsAndTools), Layer.provide(base))
       // The query-authority store is NOT self-provided here: the runner's session binds must land
       // in the store the host's graph facades resolve from, so it travels through the
       // LocationRuntimeHost seam (provided by `runtimeHost` below).
-      const services = Layer.mergeAll(base, resources, permissionsAndTools)
+      const services = Layer.mergeAll(base, resources, permissionsAndTools, pluginBoot)
       const image = Image.layer.pipe(Layer.provide(services))
       const mutation = FileMutation.locationLayer.pipe(Layer.provide(services))
       const searches = LocationSearch.layer.pipe(Layer.provide(Ripgrep.layer), Layer.provide(services))

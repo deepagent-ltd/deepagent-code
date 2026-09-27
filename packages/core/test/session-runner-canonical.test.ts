@@ -1,5 +1,5 @@
 import { expect } from "bun:test"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { Database } from "../src/database/database"
 import { SessionContext } from "../src/context-federation/session-context"
@@ -7,6 +7,9 @@ import { ContextQueryAuthorization } from "../src/context-federation/query-autho
 import { SessionProviderAttempt } from "../src/context-federation/provider-attempt"
 import { SessionProviderOwner } from "../src/context-federation/provider-owner"
 import { SessionRunnerCanonical } from "../src/session/runner/canonical-turn"
+import { ModelHardPolicy } from "../src/session/runner/model-hard-policy"
+import { LongContext } from "../src/session/long-context"
+import { SessionModelPolicyReceiptTable } from "../src/session/long-context.sql"
 import { V2ProviderTurn } from "../src/session/runner/v2-provider-turn"
 import { SessionSchema } from "../src/session/schema"
 import { SessionMessage } from "../src/session/message"
@@ -30,6 +33,48 @@ const contexts = SessionContext.layer.pipe(
 )
 const it = testEffect(Layer.mergeAll(database, owners, turns, attempts, contexts))
 const sessionID = SessionSchema.ID.make("ses_canonical")
+
+it.effect("hard-gate policy retries retain each exact selection provenance", () =>
+  Effect.gen(function* () {
+    yield* seed
+    const { db } = yield* Database.Service
+    const policy = ModelHardPolicy.decide({
+      providerID: "deepseek",
+      runtimeModelID: "deepseek-flash",
+      apiModelID: "deepseek-flash",
+      physicalInputBudget: 1_000_000,
+      estimatedFullRequestTokens: 384_000,
+      autoCompact: false,
+    })
+    const first = {
+      db,
+      sessionID,
+      activityID: "activity_hard_gate",
+      userMessageID: "msg_trigger",
+      promptEpoch: 0,
+      requestHash: Hash.sha256("same-wire-request"),
+      providerID: "deepseek",
+      runtimeModelID: "deepseek-flash",
+      apiModelID: "deepseek-flash",
+      policy,
+      estimatedFullRequestTokens: 384_000,
+      reservedOutputTokens: 512,
+      selectionID: "selection_first",
+      projectionHash: Hash.sha256("first projection"),
+      graphSnapshotRefs: ["graph:first"],
+      offeredToolIDs: ["read"],
+      degradedToolIDs: [],
+    }
+    const firstID = yield* LongContext.recordPolicy(first)
+    expect(yield* LongContext.recordPolicy(first)).toBe(firstID)
+    const next = { ...first, selectionID: "selection_next", projectionHash: Hash.sha256("next projection"), graphSnapshotRefs: ["graph:next"] }
+    const nextID = yield* LongContext.recordPolicy(next)
+    expect(nextID).not.toBe(firstID)
+    const rows = yield* db.select().from(SessionModelPolicyReceiptTable).all().pipe(Effect.orDie)
+    expect(rows).toHaveLength(2)
+    expect(rows.map((row) => row.context_selection_id).sort()).toEqual(["selection_first", "selection_next"])
+  }),
+)
 
 const seed = Effect.gen(function* () {
   const { db } = yield* Database.Service
@@ -172,6 +217,7 @@ it.effect("creates attempt and receipt in one recoverable boundary and binds the
       contexts: yield* SessionContext.Service,
       sessionID,
       admission,
+      protocolAttemptIdentityHash: Hash.sha256("route-one"),
       receipt: receiptInput,
       ownerToken: yield* providerTurns.currentOwnerToken(),
     })
@@ -180,6 +226,7 @@ it.effect("creates attempt and receipt in one recoverable boundary and binds the
     expect(first.receipt.activityId).toBe(admission.activityId)
     expect(first.receipt.providerAttemptId).toBe(first.attempt.attemptId)
     expect(first.receipt.providerTurnSeq).toBe(first.attempt.providerTurnSeq)
+    expect(first.attempt.protocolAttemptIdentityHash).toBe(Hash.sha256("route-one"))
 
     // Exact retry converges onto the same prepared attempt and preparing receipt.
     const retry = yield* SessionRunnerCanonical.commitTurn({
@@ -187,11 +234,112 @@ it.effect("creates attempt and receipt in one recoverable boundary and binds the
       contexts: yield* SessionContext.Service,
       sessionID,
       admission,
+      protocolAttemptIdentityHash: Hash.sha256("route-one"),
       receipt: receiptInput,
       ownerToken: yield* providerTurns.currentOwnerToken(),
     })
     expect(retry.attempt.attemptId).toBe(first.attempt.attemptId)
     expect(retry.receipt.receiptId).toBe(first.receipt.receiptId)
+
+    // A retry cannot silently adopt a prepared attempt admitted under a different route.
+    const drifted = yield* SessionRunnerCanonical.commitTurn({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID,
+      admission,
+      protocolAttemptIdentityHash: Hash.sha256("route-two"),
+      receipt: receiptInput,
+      ownerToken: yield* providerTurns.currentOwnerToken(),
+    }).pipe(Effect.flip)
+    expect(drifted).toMatchObject({ reason: "prepared_attempt_binding_mismatch" })
+  }),
+)
+
+it.effect("rolls back a managed policy, attempt, and turn receipt together at the insert fault boundary", () =>
+  Effect.gen(function* () {
+    yield* seed
+    const { db } = yield* Database.Service
+    const admission = yield* SessionRunnerCanonical.admitSelection({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID,
+      agent: "build",
+      location: { directory: "/project" },
+      promotedInputIds: ["msg_trigger"],
+      system: { baseline: "baseline", revision: 0, baselineSeq: 1 },
+      historyEndMessageId: "msg_trigger",
+    })
+    const requestInputHash = Hash.sha256("managed-request")
+    const policy = {
+      sessionID,
+      activityID: admission.activityId,
+      userMessageID: "msg_trigger",
+      promptEpoch: 0,
+      requestHash: requestInputHash,
+      providerID: "deepseek",
+      runtimeModelID: "deepseek-flash",
+      apiModelID: "deepseek-flash",
+      policy: ModelHardPolicy.decide({
+        providerID: "deepseek",
+        runtimeModelID: "deepseek-flash",
+        apiModelID: "deepseek-flash",
+        physicalInputBudget: 1_000_000,
+        estimatedFullRequestTokens: 100,
+        autoCompact: true,
+      }),
+      estimatedFullRequestTokens: 100,
+      reservedOutputTokens: 1_000,
+      selectionID: admission.selectionId,
+      projectionHash: admission.projectionHash,
+      graphSnapshotRefs: admission.selectedRefs ?? [],
+      offeredToolIDs: ["echo"],
+      degradedToolIDs: [],
+    }
+    const input = {
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID,
+      admission,
+      receipt: {
+        sessionId: sessionID,
+        userMessageId: "msg_trigger",
+        historyPromptEpoch: 0,
+        historySourceEndMessageId: "msg_trigger",
+        requestInputHash,
+        providerId: "deepseek",
+        modelId: "deepseek-flash",
+        protocol: "openai-chat" as const,
+        ownerMode: "v2" as const,
+      },
+      policy,
+      ownerToken: yield* (yield* V2ProviderTurn.Service).currentOwnerToken(),
+    }
+
+    const mismatched = yield* SessionRunnerCanonical.commitTurn({
+      ...input,
+      policy: { ...policy, requestHash: Hash.sha256("wrong-request") },
+    }).pipe(Effect.flip)
+    expect(mismatched).toMatchObject({ reason: "model_policy_attempt_binding_mismatch" })
+    expect(yield* db.select().from(SessionProviderAttemptTable).all().pipe(Effect.orDie)).toHaveLength(0)
+
+    // This trigger fires after the canonical attempt and V2 receipt have been inserted in the
+    // transaction. A fault here must expose none of the three writes after the transaction exits.
+    yield* db.run(sql`CREATE TRIGGER policy_insert_abort BEFORE INSERT ON session_model_policy_receipt
+      BEGIN SELECT RAISE(ABORT, 'policy_insert_abort'); END`).pipe(Effect.orDie)
+    expect((yield* SessionRunnerCanonical.commitTurn(input).pipe(Effect.exit))._tag).toBe("Failure")
+    expect(yield* db.select().from(SessionProviderAttemptTable).all().pipe(Effect.orDie)).toHaveLength(0)
+    expect(yield* db.select().from(V2ProviderTurnReceiptTable).all().pipe(Effect.orDie)).toHaveLength(0)
+    expect(yield* db.select().from(SessionModelPolicyReceiptTable).all().pipe(Effect.orDie)).toHaveLength(0)
+
+    yield* db.run(sql`DROP TRIGGER policy_insert_abort`).pipe(Effect.orDie)
+    const first = yield* SessionRunnerCanonical.commitTurn(input)
+    const retry = yield* SessionRunnerCanonical.commitTurn(input)
+    expect(retry.attempt.attemptId).toBe(first.attempt.attemptId)
+    expect(retry.receipt.receiptId).toBe(first.receipt.receiptId)
+    const [bound] = yield* db.select().from(SessionModelPolicyReceiptTable).all().pipe(Effect.orDie)
+    expect(bound?.provider_attempt_id).toBe(first.attempt.attemptId)
+    expect(bound?.request_hash).toBe(requestInputHash)
+    expect(yield* db.select().from(SessionModelPolicyReceiptTable).all().pipe(Effect.orDie)).toHaveLength(1)
   }),
 )
 

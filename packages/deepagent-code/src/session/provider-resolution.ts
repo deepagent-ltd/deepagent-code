@@ -469,14 +469,20 @@ const service = Effect.gen(function* () {
     : new Conflict({ code: "command_id_conflict", reason: error.reason })
 
 /** The legacy resolution a legacy command id produced (the durable read-back). */
-  const legacyResolutionForCommand = function* (commandRef: string) {
+  const legacyResolutionForCommand = function* (sessionID: SessionID, commandRef: string) {
     const command = yield* db
       .select()
       .from(SessionToolRequestResolutionCommandTable)
-      .where(eq(SessionToolRequestResolutionCommandTable.command_id, commandRef))
+      .where(
+        and(
+          eq(SessionToolRequestResolutionCommandTable.command_id, commandRef),
+          eq(SessionToolRequestResolutionCommandTable.session_id, sessionID),
+        ),
+      )
       .get()
       .pipe(Effect.orDie)
-    if (!command?.result_resolution_id) return undefined
+    if (!command) return yield* new NotFound({ reason: `recovery command ${commandRef} was not found for this session` })
+    if (!command.result_resolution_id) return undefined
     const row = yield* db
       .select()
       .from(SessionToolRequestResolutionTable)
@@ -516,16 +522,19 @@ const service = Effect.gen(function* () {
 
     if (input.commandKind === "query_command") {
       const command = yield* store.getCommand(input.commandRef)
-      if (command)
+      if (command) {
+        if (command.attempt.sessionId !== input.sessionID)
+          return yield* new NotFound({ reason: `recovery command ${input.commandRef} was not found for this session` })
         return {
           commandKind: "query_command" as const,
           authority: "context_federation_attempt" as const,
           command,
         }
+      }
       return {
         commandKind: "query_command" as const,
         authority: "legacy_provider_receipt" as const,
-        resolution: yield* legacyResolutionForCommand(input.commandRef),
+        resolution: yield* legacyResolutionForCommand(input.sessionID, input.commandRef),
       }
     }
 

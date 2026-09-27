@@ -6,6 +6,7 @@ import { Search } from "@deepagent-code/core/filesystem/search"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { FileMutation } from "@deepagent-code/core/file-mutation"
 import { FileLock } from "@deepagent-code/core/file-lock"
+import { LockKeys } from "@deepagent-code/core/deepagent/lock-keys"
 import { AbsolutePath, RelativePath } from "@deepagent-code/core/schema"
 import { LSP } from "@/lsp/lsp"
 import { Effect, Layer } from "effect"
@@ -333,7 +334,7 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       payload: { path: string; kind: "human" | "agent" }
     }) {
       const directory = (yield* InstanceState.context).directory
-      const abs = path.resolve(directory, ctx.payload.path)
+      const abs = LockKeys.fileLockKey(directory, ctx.payload.path)
       if (!FSUtil.contains(directory, abs)) {
         return { ok: false as const, error: "path_escape" as const }
       }
@@ -359,7 +360,7 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       query: { path: string }
     }) {
       const directory = (yield* InstanceState.context).directory
-      const abs = path.resolve(directory, ctx.query.path)
+      const abs = LockKeys.fileLockKey(directory, ctx.query.path)
       return fileLock.status(abs)
     })
 

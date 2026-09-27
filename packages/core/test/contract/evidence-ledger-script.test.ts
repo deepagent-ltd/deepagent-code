@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { generateKeyPairSync } from "node:crypto"
-import { mkdir } from "node:fs/promises"
+import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { contentDigest } from "../../src/contract/digest"
 import { makeAuthoritativeLedger } from "../../src/contract/evidence-ledger"
@@ -154,13 +154,15 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
   expect(ledger.candidateId).toBe(candidateId)
   expect(ledger.evidenceBundleDigests).toEqual([runtimeIntegrityEvidenceDigest(signed.evidence)])
   expect(ledger.sourceManifestDigest).toBe(Hash.sha256(Buffer.from("source-manifest-bytes")))
-  expect(makeAuthoritativeLedger({
-    manifest,
-    sourceManifestDigest: ledger.sourceManifestDigest,
-    runtimeInventoryDigest: ledger.runtimeInventoryDigest,
-    packagedReportDigest: ledger.packagedReportDigest,
-    evidenceBundleDigests: ledger.evidenceBundleDigests,
-  }).ledgerDigest).toBe(ledger.ledgerDigest)
+  expect(
+    makeAuthoritativeLedger({
+      manifest,
+      sourceManifestDigest: ledger.sourceManifestDigest,
+      runtimeInventoryDigest: ledger.runtimeInventoryDigest,
+      packagedReportDigest: ledger.packagedReportDigest,
+      evidenceBundleDigests: ledger.evidenceBundleDigests,
+    }).ledgerDigest,
+  ).toBe(ledger.ledgerDigest)
 
   const packageDir = join(root.path, "package-dir")
   await mkdir(join(packageDir, "bin"), { recursive: true })
@@ -183,6 +185,12 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
     ]),
   )
   const wrapperOutputPath = join(root.path, "wrapper-ledger.json")
+  const productDir = join(root.path, "products")
+  const gateInput = JSON.stringify(
+    Object.fromEntries(gates.map((gate) => [gate.gate, { status: gate.status, refs: gate.refs }])),
+  )
+  await mkdir(productDir)
+  await Bun.write(join(productDir, "gates.json"), gateInput)
   const wrapper = new URL("../../script/evidence-ledger/generate-candidate-ledger.ts", import.meta.url)
   const wrapperChild = Bun.spawn(
     [
@@ -200,6 +208,8 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
       runsPath,
       "--out",
       wrapperOutputPath,
+      "--artifact-dir",
+      productDir,
     ],
     { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
   )
@@ -209,5 +219,126 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
   ])
   expect(wrapperExitCode).toBe(0)
   expect(wrapperStderr).toBe("")
-  expect((await Bun.file(wrapperOutputPath).json()).candidateId).toBe(candidateId)
+  const wrapperLedger = await Bun.file(wrapperOutputPath).json()
+  expect(wrapperLedger.candidateId).toBe(candidateId)
+  expect(Hash.sha256(Buffer.from(await Bun.file(join(productDir, "source-manifest.json")).arrayBuffer()))).toBe(
+    wrapperLedger.sourceManifestDigest,
+  )
+  expect(Hash.sha256(Buffer.from(await Bun.file(join(productDir, "runtime-inventory.tsv")).arrayBuffer()))).toBe(
+    wrapperLedger.runtimeInventoryDigest,
+  )
+  expect(Hash.sha256(Buffer.from(await Bun.file(join(productDir, "packaged-runtime-report.json")).arrayBuffer()))).toBe(
+    wrapperLedger.packagedReportDigest,
+  )
+  expect(await Bun.file(join(productDir, "caller-inventory/report.json")).exists()).toBe(true)
+
+  const verifier = new URL("../../script/evidence-ledger/verify-ledger-products.ts", import.meta.url)
+  const verify = async () => {
+    const child = Bun.spawn(
+      [process.execPath, verifier.pathname, "--ledger", wrapperOutputPath, "--artifact-dir", productDir],
+      { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
+    )
+    return { exitCode: await child.exited, stderr: await new Response(child.stderr).text() }
+  }
+  expect((await verify()).exitCode).toBe(0)
+  for (const name of [
+    "source-manifest.json",
+    "runtime-inventory.tsv",
+    "caller-inventory/report.json",
+    "packaged-runtime-report.json",
+  ]) {
+    const file = join(productDir, name)
+    const original = await Bun.file(file).text()
+    await Bun.write(file, `${original}\n`)
+    expect((await verify()).exitCode).not.toBe(0)
+    await Bun.write(file, original)
+  }
+  await rm(join(productDir, "gates.json"))
+  const missingGates = await verify()
+  expect(missingGates.exitCode).not.toBe(0)
+  expect(missingGates.stderr).toContain("gates.json is required when a ledger gate has passed")
+  await Bun.write(join(productDir, "gates.json"), gateInput)
+  expect((await verify()).exitCode).toBe(0)
+  await Bun.write(join(productDir, "gates.json"), JSON.stringify({ G0: { status: "passed", refs: ["tampered"] } }))
+  expect((await verify()).stderr).toContain("gates.json G0 does not match ledger manifest")
+  await Bun.write(join(productDir, "gates.json"), gateInput)
+
+  const runs = (await Bun.file(join(productDir, "runs.json")).json()) as Array<{ attemptID: string }>
+  await Bun.write(join(productDir, "runs.json"), JSON.stringify(runs.map((run) => ({ ...run, attemptID: "tampered" }))))
+  expect((await verify()).stderr).toContain("runs.json does not match packaged runtime report")
+
+  // A prebuilt report cannot launder an unrelated runtime evidence artifact through the direct
+  // ledger entrypoint, even when candidateID and evidenceDigest were copied correctly.
+  await Bun.write(
+    packagePath,
+    JSON.stringify(
+      makePackagedRuntimeReport({
+        candidateId,
+        commit: "commit-script",
+        tree: "tree-script",
+        artifacts: packagedReport.artifacts,
+        runs: packagedReport.runs.map((run) => ({ ...run, sessionID: "ses-unrelated" })),
+      }),
+    ),
+  )
+  const unrelated = Bun.spawn(
+    [
+      process.execPath,
+      script.pathname,
+      "--manifest",
+      manifestPath,
+      "--source-manifest",
+      sourcePath,
+      "--runtime-inventory",
+      runtimePath,
+      "--packaged-report",
+      packagePath,
+      "--evidence-dir",
+      evidenceDir,
+      "--public-key",
+      publicKeyPath,
+      "--out",
+      outputPath,
+    ],
+    { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
+  )
+  const [unrelatedStderr, unrelatedExitCode] = await Promise.all([
+    new Response(unrelated.stderr).text(),
+    unrelated.exited,
+  ])
+  expect(unrelatedExitCode).not.toBe(0)
+  expect(unrelatedStderr).toContain("sessionID does not match runtime evidence")
+})
+
+test("RI-51 source-only NO-GO readback accepts all-pending gates without gates.json", async () => {
+  await using root = await tmpdir()
+  const ledgerPath = join(root.path, "ledger.json")
+  const artifactDir = join(root.path, "release-evidence-products")
+  const gate = new URL("../../script/evidence-ledger/release-gate.ts", import.meta.url)
+  const child = Bun.spawn([process.execPath, gate.pathname, "--out", ledgerPath], {
+    cwd: join(import.meta.dir, "../.."),
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  expect(exitCode).not.toBe(0)
+  expect(stderr).toContain("RI-51 RELEASE-NO-GO: evidence_bundle_missing,packaged_report_missing")
+  expect(stdout).toContain("RI-51 archived products match ledger")
+  expect(
+    (await Bun.file(ledgerPath).json()).manifest.gates.every((entry: { status: string }) => entry.status === "pending"),
+  ).toBe(true)
+  expect(await Bun.file(join(artifactDir, "gates.json")).exists()).toBe(false)
+
+  const verifier = new URL("../../script/evidence-ledger/verify-ledger-products.ts", import.meta.url)
+  const readback = Bun.spawn(
+    [process.execPath, verifier.pathname, "--ledger", ledgerPath, "--artifact-dir", artifactDir],
+    { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
+  )
+  const [readbackStderr, readbackExitCode] = await Promise.all([new Response(readback.stderr).text(), readback.exited])
+  expect(readbackExitCode).toBe(0)
+  expect(readbackStderr).toBe("")
 })

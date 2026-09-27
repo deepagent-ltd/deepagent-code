@@ -1431,6 +1431,12 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
   async function navigateToProject(directory: string | undefined) {
     if (!directory) return
     const root = projectRoot(directory)
+    const previous = currentProject()?.worktree
+    if (previous && pathKey(previous) !== pathKey(root)) {
+      // Seal only the old project's settled learning generations. Navigation remains available
+      // if its background-learning authority is temporarily unavailable.
+      await serverSDK.client.deepagent.projectSwitch({ directory: previous }).catch(() => undefined)
+    }
     server.projects.touch(root)
     const project = layout.projects.list().find((item) => item.worktree === root)
     let dirs = project

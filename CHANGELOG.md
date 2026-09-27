@@ -2,6 +2,66 @@
 
 This changelog contains public, user-facing product changes. Internal incident identifiers, local paths, private environment topology, test credentials, release-gate evidence, and operational measurements are intentionally excluded.
 
+## Core 2.0.2 / Desktop 2.0.2
+
+Release labels: `core-v2.0.2` and `desktop-v2.0.2` (`2.0.2`).
+
+### Windows
+
+- Fixed a startup crash that hit Windows installs on every launch after the one-time data migration had completed, as well as in the migration-guarded and migration-failed paths.
+- The interactive TUI now starts on Windows; it previously crashed during the first draw.
+- Hardened the CLI runtime and file-search picker against two crash classes found in short-lived Windows commands.
+
+### Terminal (web & desktop)
+
+- The terminal panel no longer sticks on "Loading terminal..." when a session opens in a fresh page load: terminals now start automatically within seconds, and a failed readiness probe retries instead of deadlocking the panel.
+
+### Security and configuration
+
+- Plaintext MCP server secrets found in config files are now erased exactly where they came from: migration rewrites the originating file in place (comments preserved) after moving each secret into the OS credential store (DPAPI on Windows), transactionally and idempotently — the plaintext no longer survives on disk.
+- Instance-level configuration updates made through the HTTP config API now persist to the project config file that is actually loaded, instead of a file nothing reads back.
+
+### Release engineering
+
+- Windows release binaries are now built natively on Windows runners in CI instead of cross-compiled; the build pipeline executes the produced executable as a smoke test, so a non-starting Windows build fails the release instead of shipping.
+- Embedded web UI builds start from a clean output directory so stale chunks from an interrupted build cannot ship inside the binary.
+
+### Sessions and history
+
+- Legacy sessions no longer accept writes through the old surfaces: editing or deleting historical message parts returns typed guidance to adopt the session instead of silently writing the legacy projection, and sharing actions validate session state first, with conflicts surfaced honestly in the UI.
+- Manual compaction is honest about outcomes: over-budget summaries are refused with an explicit result instead of being reported as compacted, and a completed run keeps a verifiable receipt.
+- Stalled-session challenges survive restarts and resume durably; an expired permission owner rotates instead of deadlocking the session.
+- A delegated task's merged PR can be undone through an audited rollback that reverts the review and merge records together with the workspace.
+
+### Sharing
+
+- Public web sharing is off by default in this release; it will return in a later version.
+- Local session ZIP export/import remains available and now scrubs credential material — cookies, basic-auth headers, and encoded or serialized secret forms — from exported data.
+
+### Server mode
+
+- Added a tenant-gated transparent LLM proxy for server deployments: provider traffic flows through per-tenant lanes bound to tool policy, with durable audit events, admission-serialized token accounting, and per-provider-turn usage records.
+- The gateway binds its service inventory to the running composition, so config drift cannot serve stale tool surfaces.
+
+### Agents and integrations
+
+- Agent pushes deliver to bound Slack channels: bindings are fail-closed (empty, incomplete, or revoked bindings never send), pushes respect rate limits and quiet hours, and retries never double-send.
+- `@agent` and `@reference` mentions in prompts render into provider requests through the durable wire path.
+- Configured instruction files load into the system context.
+
+### Providers
+
+- Kimi connects again after upstream catalog renames: official provider ids are bridged to their renamed catalog entries end to end.
+- Mixed-generation config files (V1 `provider` keys alongside the V2 `providers` catalog) no longer break config loading.
+
+### Desktop fixes
+
+- An unreachable server now shows a real offline state — naming the server, re-probing automatically, and offering one-click switching to another configured server — instead of a mislabeled maintenance banner over an indefinitely loading app; a server that drops mid-session keeps already-loaded content behind a reconnecting banner and recovers automatically when it returns.
+- Intelligence draft preparation that fails on the server degrades visibly: the message is sent directly with a clear notice instead of silently locking the composer.
+- The settings dialog always offers a close button, and Escape reliably closes and reopens dialogs.
+- New V2 chats resolve the model before the first question, live replies render in directory sessions, and chat lists refresh from the directory journal.
+- Tool artifacts use Node file APIs in the packaged desktop app; packaged builds are located on both macOS architectures; plugin settings read from the server context; provider-recovery lists retry transient failures instead of erroring the whole app.
+
 ## Core 2.0.1 / Desktop 2.0.1
 
 Release labels: `core-v2.0.1` and `desktop-v2.0.1` (`2.0.1`).

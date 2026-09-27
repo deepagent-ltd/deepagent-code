@@ -222,6 +222,16 @@ describe("buildVolatileRoundContext", () => {
     expect(vol).not.toContain("Token budget remaining")
   })
 
+  test("a resumed doom loop removes the continue directive from volatile context", () => {
+    const continuation = buildVolatileContinuationContext(undefined, true)
+    expect(continuation).toContain("# Loop recovery")
+    expect(continuation).toContain("Reassess")
+    expect(continuation).not.toContain("Continue directly")
+    const round = buildVolatileRoundContext(ctxAt(3, 40_000), undefined, true)
+    expect(round).toContain("# Loop recovery")
+    expect(round).not.toContain("Work in short design")
+  })
+
   test("keeps runtime control inside the round context marker", () => {
     const vol = buildVolatileRoundContext(ctxAt(2, 80_000), "<plan-status>exact parameters</plan-status>")
     expect(vol.indexOf("<plan-status>")).toBeGreaterThan(vol.indexOf("<deepagent-round-context>"))

@@ -21,9 +21,9 @@ const sourceCommit = process.env.DEEPAGENT_CODE_COMMIT ?? gitOutput(["rev-parse"
 const sourceDirty = sourceCommit
   ? (gitOutput(["status", "--porcelain", "--untracked-files=all"])?.length ?? 0) > 0
   : undefined
+if (Script.release && sourceDirty !== false) throw new Error("release binary requires a clean source commit")
 
 process.chdir(dir)
-
 
 function releaseOwnerPublicKeyDefine(): Record<string, string> {
   const raw = process.env.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY?.trim()
@@ -53,6 +53,10 @@ const createEmbeddedWebUIBundle = async () => {
   console.log(`Building Web UI to embed in the binary`)
   const appDir = path.join(import.meta.dirname, "../../app")
   const dist = path.join(appDir, "dist")
+  // Start from an empty dist so the embedded file map contains exactly what this build produced —
+  // a failed or interrupted previous build would otherwise leave stale hashed chunks next to the
+  // fresh ones and both would ship inside the binary.
+  await fs.promises.rm(dist, { recursive: true, force: true })
   await $`DEEPAGENT_CODE_CHANNEL=${Script.channel} bun run --cwd ${appDir} build`
   const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: dist })))
     .map((file) => file.replaceAll("\\", "/"))
@@ -83,21 +87,12 @@ const allTargets: {
 }[] = [
   {
     os: "linux",
-    arch: "arm64",
-  },
-  {
-    os: "linux",
     arch: "x64",
   },
   {
     os: "linux",
     arch: "x64",
     avx2: false,
-  },
-  {
-    os: "linux",
-    arch: "arm64",
-    abi: "musl",
   },
   {
     os: "linux",
@@ -122,10 +117,6 @@ const allTargets: {
     os: "darwin",
     arch: "x64",
     avx2: false,
-  },
-  {
-    os: "win32",
-    arch: "arm64",
   },
   {
     os: "win32",
@@ -138,9 +129,19 @@ const allTargets: {
   },
 ]
 
-const targets = singleFlag
+// --exclude-win32 drops the Windows targets from a multi-target run — used by the release
+// pipeline, which builds Windows natively on a Windows runner (bun cross-compile with a large
+// embedded web UI produced non-starting Windows PEs when the build host was macOS; building
+// natively removes that entire risk class instead of per-host triage).
+const excludeWin32 = process.argv.includes("--exclude-win32")
+
+const targets = (singleFlag
   ? allTargets.filter((item) => {
-      if (archFlag ? item.arch !== archFlag || item.abi !== undefined || item.avx2 === false : item.os !== process.platform || item.arch !== process.arch) {
+      if (
+        archFlag
+          ? item.arch !== archFlag || item.abi !== undefined || item.avx2 === false
+          : item.os !== process.platform || item.arch !== process.arch
+      ) {
         return false
       }
 
@@ -158,6 +159,7 @@ const targets = singleFlag
       return true
     })
   : allTargets
+).filter((item) => !excludeWin32 || item.os !== "win32")
 
 await $`rm -rf dist`
 
@@ -170,9 +172,11 @@ if (!skipInstall) {
   // compile target, so every cross target (win32 included) hard-fails resolution with
   // "Could not resolve @ff-labs/fff-bin-<target>/..." unless that platform's bin package
   // is installed. fff-bun is a dependency of core, not this package, so force the install
-  // from core's directory to pull every @ff-labs/fff-bin-* variant without touching manifests.
+  // from core's directory to pull every @ff-labs/fff-bin-* variant. --no-save keeps the
+  // install from rewriting core's package.json/lockfile when the pinned version drifts
+  // from what the catalog resolved (P2-5: no silent manifest mutation from a build step).
   const corePkg = JSON.parse(readFileSync(path.resolve(dir, "../core/package.json"), "utf8"))
-  await $`bun install --cwd ${path.resolve(dir, "../core")} --os="*" --cpu="*" @ff-labs/fff-bun@${corePkg.dependencies["@ff-labs/fff-bun"]}`
+  await $`bun install --no-save --cwd ${path.resolve(dir, "../core")} --os="*" --cpu="*" @ff-labs/fff-bun@${corePkg.dependencies["@ff-labs/fff-bun"]}`
 }
 for (const item of targets) {
   const name = [
@@ -287,6 +291,15 @@ for (const item of targets) {
   binaries[name] = Script.version
 }
 
+// A release archive must contain the same minted owner row as the unpacked install. The caller
+// provides this only for production release builds; ordinary local builds remain unchanged.
+const ownerAuthorizationFile = process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE
+if (ownerAuthorizationFile) {
+  const row = await Bun.file(ownerAuthorizationFile).bytes()
+  if (row.byteLength === 0) throw new Error("release owner authorization file is empty")
+  for (const name of Object.keys(binaries)) await Bun.write(`dist/${name}/bin/owner-authorization.json`, row)
+}
+
 if (Script.release) {
   for (const key of Object.keys(binaries)) {
     if (key.includes("linux")) {
@@ -295,7 +308,7 @@ if (Script.release) {
       await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
     }
   }
-  await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${process.env.GH_REPO}`
+  // Release archives are uploaded by the workflow only after the RI-51 gate.
 }
 
 export { binaries }

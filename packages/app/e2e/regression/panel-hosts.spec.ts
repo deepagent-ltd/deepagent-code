@@ -104,11 +104,13 @@ test("Bottom Panel, movable views, Problems, and mobile reachability", async ({ 
   await expect(page.locator("[data-terminal-pane]")).toHaveCount(0)
   await page.screenshot({ path: "e2e/test-results/panel-bottom-problems.png", fullPage: true })
 
-  await bottom.getByRole("button", { name: "Move to Right Sidebar" }).click()
+  await page.getByRole("button", { name: "Panel Views" }).click()
+  await page.getByRole("button", { name: "Move to Right Sidebar: Problems" }).click()
   await expect(bottom.getByText("Type mismatch")).toBeHidden()
   const side = page.locator("#review-panel")
   await expect(side.getByText("Type mismatch")).toBeVisible()
-  await side.getByRole("button", { name: "Move to bottom dock" }).click()
+  await page.getByRole("button", { name: "Panel Views" }).click()
+  await page.getByRole("button", { name: "Move to Bottom Panel: Problems" }).click()
   await expect(bottom.getByText("Type mismatch")).toBeVisible()
   await expect(page.locator("[data-terminal-pane]")).toHaveCount(0)
 
@@ -135,45 +137,24 @@ test("Bottom Panel, movable views, Problems, and mobile reachability", async ({ 
   await bottom.getByText("Type mismatch").click()
   await expect(page.getByText("app.ts").first()).toBeVisible()
 
-  for (const view of ["Debug Console", "Terminal"]) {
+  for (const view of ["Debug Console"]) {
     await bottom.getByRole("tab", { name: view, exact: true }).click()
-    await bottom.getByRole("button", { name: "Move to Right Sidebar" }).click()
+    await page.getByRole("button", { name: "Panel Views" }).click()
+    await page.getByRole("button", { name: `Move to Right Sidebar: ${view}` }).click()
     await expect(side.getByText(view).first()).toBeVisible()
-    if (view === "Terminal") {
-      await expectTerminalPaneInHost(page, "side")
-      const actionBoxes = await Promise.all(
-        [
-          side.getByLabel("Split terminal"),
-          side.getByLabel("New terminal"),
-          side.getByLabel("Move to bottom dock"),
-          side.getByRole("button", { name: "Close", exact: true }),
-        ].map(async (control) => {
-          await expect(control).toBeVisible()
-          return control.boundingBox()
-        }),
-      )
-      const boxes = actionBoxes.filter((box): box is NonNullable<typeof box> => box !== null)
-      expect(boxes).toHaveLength(4)
-      expect(boxes.every((box) => Math.abs(box.y - boxes[0].y) <= 1)).toBe(true)
-      expect(boxes.every((box, index) => index === 0 || box.x > boxes[index - 1].x)).toBe(true)
-      await side.screenshot({ path: "e2e/test-results/panel-side-terminal-toolbar.png" })
-    }
-    await side.getByRole("button", { name: "Move to bottom dock" }).click()
+    await page.getByRole("button", { name: "Panel Views" }).click()
+    await page.getByRole("button", { name: `Move to Bottom Panel: ${view}` }).click()
     await expect(bottom.getByRole("tab", { name: view, exact: true })).toBeVisible()
-    if (view === "Terminal") {
-      await bottom.getByRole("tab", { name: "Terminal", exact: true }).click()
-      await expectTerminalPaneInHost(page, "bottom")
-    }
   }
 
   await bottom.getByRole("tab", { name: "Problems", exact: true }).click()
-  for (const view of ["Terminal", "Debug Console", "Problems"]) {
+  for (const view of ["Debug Console", "Problems"]) {
     await page.getByRole("button", { name: "Panel Views" }).click()
     await page.getByRole("button", { name: `Move to Right Sidebar: ${view}` }).click()
   }
-  const unavailableBottomToggle = page.getByRole("button", { name: "Move a Panel View to the Bottom Panel first." })
-  await expect(unavailableBottomToggle).toBeDisabled()
-  await expect(bottom).toHaveCSS("height", "0px")
+  await expect(bottom.getByRole("tab", { name: "Terminal", exact: true })).toBeVisible()
+  await bottom.getByRole("tab", { name: "Terminal", exact: true }).click()
+  await expectTerminalPaneInHost(page, "bottom")
   await page.getByRole("button", { name: "Panel Views" }).click()
   await page.getByRole("button", { name: "Move to Bottom Panel: Problems" }).click()
   await expect(bottom.getByText("Type mismatch")).toBeVisible()
@@ -241,9 +222,7 @@ test("Terminal keeps one visible host and supports tabs plus atomic splits", asy
   await expect(page.locator("[data-terminal-pane]")).toHaveCount(0)
   await bottom.getByRole("tab", { name: "Terminal", exact: true }).click()
   await expect(page.locator("[data-terminal-pane]")).toHaveCount(4)
-
-  await bottom.getByRole("button", { name: "Move to Right Sidebar" }).click()
-  await expect(page.locator('[data-terminal-host="bottom"]')).toHaveCount(0)
-  await expect(page.locator('[data-terminal-host="side"] [data-terminal-pane]')).toHaveCount(4)
+  await expect(page.locator('[data-terminal-host="bottom"] [data-terminal-pane]')).toHaveCount(4)
+  await expect(page.locator('[data-terminal-host="side"]')).toHaveCount(0)
   await expect(page.locator("[data-terminal-pane]")).toHaveCount(4)
 })

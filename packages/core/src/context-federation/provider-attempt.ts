@@ -27,6 +27,7 @@ export type Attempt = {
   readonly selectionId: string
   readonly projectionHash: string
   readonly requestHash: string
+  readonly protocolAttemptIdentityHash?: string
   readonly preparedTurnHash?: string
   readonly wireRequestHash?: string
   readonly providerId: string
@@ -107,6 +108,7 @@ export type PrepareInput = {
   readonly selectionId: string
   readonly projectionHash: string
   readonly requestHash: string
+  readonly protocolAttemptIdentityHash?: string
   readonly providerId: string
   readonly ownerToken: string
   readonly parentAttemptId?: string
@@ -630,6 +632,7 @@ export function prepareInTransaction(
         existing.selection_id !== input.selectionId ||
         existing.projection_hash !== input.projectionHash ||
         existing.request_hash !== input.requestHash ||
+        (existing.protocol_attempt_identity_hash ?? undefined) !== input.protocolAttemptIdentityHash ||
         existing.provider_id !== input.providerId ||
         existing.owner_token !== input.ownerToken ||
         existing.execution_claim_token !== session.executionClaimToken ||
@@ -680,6 +683,7 @@ export function prepareInTransaction(
       selection_id: input.selectionId,
       projection_hash: input.projectionHash,
       request_hash: input.requestHash,
+      protocol_attempt_identity_hash: input.protocolAttemptIdentityHash,
       provider_id: input.providerId,
       owner_token: input.ownerToken,
       parent_attempt_id: input.parentAttemptId,
@@ -692,6 +696,7 @@ export function prepareInTransaction(
       ...row,
       attempt_version: row.attempt_version ?? 0,
       execution_claim_token: row.execution_claim_token ?? 0,
+      protocol_attempt_identity_hash: row.protocol_attempt_identity_hash ?? null,
       parent_attempt_id: row.parent_attempt_id ?? null,
       idempotency_key: row.idempotency_key ?? null,
       owner_token: row.owner_token ?? null,
@@ -857,6 +862,9 @@ function attempt(row: typeof SessionProviderAttemptTable.$inferSelect): Attempt 
     selectionId: row.selection_id,
     projectionHash: row.projection_hash,
     requestHash: row.request_hash,
+    ...(row.protocol_attempt_identity_hash
+      ? { protocolAttemptIdentityHash: row.protocol_attempt_identity_hash }
+      : {}),
     ...(row.prepared_turn_hash ? { preparedTurnHash: row.prepared_turn_hash } : {}),
     ...(row.wire_request_hash ? { wireRequestHash: row.wire_request_hash } : {}),
     providerId: row.provider_id,

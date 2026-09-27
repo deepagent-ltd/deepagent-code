@@ -57,6 +57,18 @@ export class Prompt extends Schema.Class<Prompt>("Prompt")({
   agents: Schema.Array(AgentAttachment).pipe(Schema.optional),
   references: Schema.Array(ReferenceAttachment).pipe(Schema.optional),
   format: OutputFormat.pipe(Schema.optional),
+  metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(Schema.optional),
+  intent: Schema.Struct({
+    id: Schema.String.pipe(Schema.optional),
+    source: Schema.String.pipe(Schema.optional),
+    variant: Schema.String.pipe(Schema.optional),
+  }).pipe(Schema.optional),
+  agent: Schema.String.pipe(Schema.optional),
+  model: Schema.Struct({
+    id: Schema.String,
+    providerID: Schema.String,
+    variant: Schema.String.pipe(Schema.optional),
+  }).pipe(Schema.optional),
 }) {
   static readonly equivalence = Schema.toEquivalence(Prompt)
 

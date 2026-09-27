@@ -435,8 +435,9 @@ const configureDelivery = Effect.gen(function* () {
 })
 
 const seedWorkspace = Effect.sync(() => {
-  writeFileSync(path.join(root, "go.mod"), "module example.test/finalizer\n\ngo 1.24\n")
-  writeFileSync(path.join(root, "mod.go"), "package finalizer\n")
+  // CI provides Bun for this repo; using a local script keeps the real bash validation oracle
+  // independent of the runner's Go toolchain version and network toolchain download.
+  writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { test: "bun -e 'process.exit(0)'" } }))
 })
 
 const newSession = (id: string) =>
@@ -452,6 +453,7 @@ const newSession = (id: string) =>
         directory: root,
         title: "G2 delivery",
         version: "test",
+        v2_authority: true,
       })
       .onConflictDoNothing()
       .run()
@@ -470,7 +472,7 @@ describe("G2 finalizer delivery over a REAL V2 session", () => {
         [
           LLMEvent.stepStart({ index: 0 }),
           LLMEvent.toolCall({ id: "call_write", name: "write", input: { path: observedPath } }),
-          LLMEvent.toolCall({ id: "call_validate", name: "bash", input: { command: "go test ./..." } }),
+          LLMEvent.toolCall({ id: "call_validate", name: "bash", input: { command: "bun run test" } }),
           LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
           LLMEvent.finish({ reason: "tool-calls" }),
         ],
@@ -492,7 +494,7 @@ describe("G2 finalizer delivery over a REAL V2 session", () => {
       // Validation harvest: same join, same versioned types, and the evidence must be bound to THIS
       // activity before the finalizer may treat it as delivering authority.
       const validation = harvestActivityValidation({ db } as never, sessionID, activityId, root)
-      expect(validation.map((result) => [result.command, result.passed])).toEqual([["go test ./...", true]])
+      expect(validation.map((result) => [result.command, result.passed])).toEqual([["bun run test", true]])
       expect(AgentGateway.DeepAgentSessionState.get(sessionID)?.lastValidationActivityId).toBe(activityId)
 
       // G-E: the verdict is a durable, replayable fact — not a stderr line that dies with the run.

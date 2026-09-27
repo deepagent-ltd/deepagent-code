@@ -1,3 +1,4 @@
+import { eventLayer } from "../fixture/event-layer"
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { EventV2 } from "@deepagent-code/core/event"
@@ -8,7 +9,7 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { testEffect } from "../lib/effect"
 import { fakeSelectorSdk } from "./provider-helper"
 
-const it = testEffect(PluginV2.locationLayer.pipe(Layer.provide(EventV2.defaultLayer)))
+const it = testEffect(PluginV2.locationLayer.pipe(Layer.provide(eventLayer())))
 
 const model = new ModelV2.Info({
   ...ModelV2.Info.empty(ProviderV2.ID.make("xai"), ModelV2.ID.make("grok-4")),

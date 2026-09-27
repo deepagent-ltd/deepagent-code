@@ -64,7 +64,7 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
     .pipe(
       // V3.5: debug/profile tools route through DebugService (D1) + RuntimeBase (R0).
       // Provided closest to the base so the merged EventV2Bridge below (applied last)
-      // satisfies DebugService's requirement, mirroring ToolRegistry.defaultLayer.
+      // satisfies DebugService's requirement, mirroring ToolRegistry.testLayer.
       Layer.provide(DebugService.layer),
       Layer.provide(RuntimeBase.layer),
       Layer.provide(Worktree.defaultLayer),

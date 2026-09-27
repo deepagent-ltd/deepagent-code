@@ -20,6 +20,7 @@ import { QueryClient, queryOptions } from "@tanstack/solid-query"
 import { loadMcpQuery } from "../server-sync"
 import { NormalizedProviderListResponse } from "@deepagent-code/ui/context"
 import { ScopedKey, type ServerScope } from "@/utils/server-scope"
+import { permissionRequestFromV2 } from "./permission-v2"
 
 type GlobalStore = {
   ready: boolean
@@ -276,29 +277,51 @@ export async function bootstrapDirectory(input: {
         ),
       input.mcp && (() => retry(() => input.sdk.command.list().then((x) => input.setStore("command", x.data ?? [])))),
       () =>
-        retry(() =>
-          input.sdk.permission.list().then((x) => {
-            const ids = (x.data ?? []).map((perm) => perm?.sessionID).filter((id): id is string => !!id)
-            const grouped = groupBySession(
-              (x.data ?? []).filter((perm): perm is PermissionRequest => !!perm?.id && !!perm.sessionID),
-            )
-            return warmSessions({ ids, store: input.store, setStore: input.setStore, sdk: input.sdk }).then(() =>
-              batch(() => {
-                for (const sessionID of new Set([...Object.keys(input.store.permission), ...Object.keys(grouped)])) {
-                  // The legacy /permission list never includes PermissionV2 asks — keep
-                  // provenance-tracked entries instead of wiping them on every bootstrap.
-                  const kept = (input.store.permission[sessionID] ?? []).filter(
-                    (perm) => !!perm?.id && input.store.permission_v2[sessionID]?.[perm.id] === true,
-                  )
-                  const merged = [...kept, ...(grouped[sessionID] ?? [])]
-                    .filter((p) => !!p?.id)
-                    .sort((a, b) => cmp(a.id, b.id))
-                  input.setStore("permission", sessionID, reconcile(merged, { key: "id" }))
-                }
-              }),
-            )
-          }),
-        ),
+        retry(async () => {
+          const before = Object.fromEntries(
+            Object.entries(input.store.permission_v2).map(([sessionID, requests]) => [
+              sessionID,
+              new Set(Object.keys(requests)),
+            ]),
+          )
+          const hasV2List = typeof input.sdk.v2?.permission?.request?.list === "function"
+          const [legacy, v2] = await Promise.all([
+            input.sdk.permission.list(),
+            hasV2List
+              ? input.sdk.v2.permission.request.list({ location: { directory: input.directory } })
+              : Promise.resolve(undefined),
+          ])
+          if (legacy.error) throw legacy.error
+          if (v2?.error) throw v2.error
+          const grouped = groupBySession(
+            (legacy.data ?? []).filter((perm): perm is PermissionRequest => !!perm?.id && !!perm.sessionID),
+          )
+          const v2Grouped = groupBySession((v2?.data?.data ?? []).map(permissionRequestFromV2))
+          const ids = [...(legacy.data ?? []), ...(v2?.data?.data ?? [])].map((perm) => perm.sessionID)
+          return warmSessions({ ids, store: input.store, setStore: input.setStore, sdk: input.sdk }).then(() =>
+            batch(() => {
+              for (const sessionID of new Set([
+                ...Object.keys(input.store.permission),
+                ...Object.keys(grouped),
+                ...Object.keys(v2Grouped),
+              ])) {
+                // Events received after this fetch began are newer than its snapshot. Keep
+                // them; remove older entries absent from the durable V2 pending list.
+                const late = (input.store.permission[sessionID] ?? []).filter(
+                  (perm) =>
+                    input.store.permission_v2[sessionID]?.[perm.id] === true &&
+                    (!hasV2List || !before[sessionID]?.has(perm.id)),
+                )
+                const liveV2 = [
+                  ...new Map([...late, ...(v2Grouped[sessionID] ?? [])].map((perm) => [perm.id, perm])).values(),
+                ]
+                const merged = [...liveV2, ...(grouped[sessionID] ?? [])].sort((a, b) => cmp(a.id, b.id))
+                input.setStore("permission", sessionID, reconcile(merged, { key: "id" }))
+                input.setStore("permission_v2", sessionID, Object.fromEntries(liveV2.map((perm) => [perm.id, true])))
+              }
+            }),
+          )
+        }),
       () =>
         retry(() =>
           input.sdk.question.list().then((x) => {

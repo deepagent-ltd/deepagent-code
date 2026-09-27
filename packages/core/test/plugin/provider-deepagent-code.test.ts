@@ -1,3 +1,4 @@
+import { eventLayer } from "../fixture/event-layer"
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Layer, Option } from "effect"
 import { Catalog } from "@deepagent-code/core/catalog"
@@ -239,7 +240,7 @@ describe("OpencodePlugin", () => {
 
       expect(Option.getOrUndefined(selected)?.id).toBe(ModelV2.ID.make("gpt-5-nano"))
     }).pipe(
-      Effect.provide(Catalog.locationLayer.pipe(Layer.provide(EventV2.defaultLayer), Layer.provide(locationLayer))),
+      Effect.provide(Catalog.locationLayer.pipe(Layer.provide(eventLayer()), Layer.provide(locationLayer))),
     ),
   )
 })

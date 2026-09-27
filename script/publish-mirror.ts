@@ -33,7 +33,13 @@ const version = pkg.version as string
 
 const entries = await readdir(distDir, { withFileTypes: true })
 const targets = entries
-  .filter((entry) => entry.isDirectory() && entry.name.startsWith("deepagent-code-"))
+  .filter(
+    (entry) =>
+      entry.isDirectory() &&
+      entry.name.startsWith("deepagent-code-") &&
+      !entry.name.startsWith("deepagent-code-linux-arm64") &&
+      !entry.name.startsWith("deepagent-code-windows-arm64"),
+  )
   .map((entry) => entry.name)
 
 if (targets.length === 0) {
@@ -58,8 +64,7 @@ const manifest: Record<string, { sha256: string; size: number }> = {}
 for (const target of targets) {
   const binary = path.join(distDir, target, "bin", "deepagent-code")
   if (target.includes("windows-")) {
-    // The installer never resolves windows-arm64 and windows builds ship via the npm
-    // deepagent-code-ai packages + postinstall; skip them here rather than zip .exe shells.
+    // Windows builds ship via the npm deepagent-code-ai package + postinstall.
     continue
   }
   const stat = await readFile(binary).catch(() => undefined)

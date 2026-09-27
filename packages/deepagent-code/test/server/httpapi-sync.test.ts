@@ -121,9 +121,7 @@ describe("sync HttpApi", () => {
           items: { kind: string; aggregate_id?: string; snapshot?: { snapshotID: string } }[]
           nextCursor: string
         }
-        expect(firstPage.items).toEqual([
-          expect.objectContaining({ kind: "event", aggregate_id: sibling.id }),
-        ])
+        expect(firstPage.items).toEqual([expect.objectContaining({ kind: "event", aggregate_id: sibling.id })])
 
         const resync = yield* requestInDirectory(SyncPaths.history, tmp.directory, {
           method: "POST",
@@ -140,8 +138,12 @@ describe("sync HttpApi", () => {
         ])
 
         const { db } = yield* Database.Service
-        yield* db.update(SessionTable).set({ mutation_epoch: sql`${SessionTable.mutation_epoch} + 1` })
-          .where(eq(SessionTable.id, session.id)).run().pipe(Effect.orDie)
+        yield* db
+          .update(SessionTable)
+          .set({ mutation_epoch: sql`${SessionTable.mutation_epoch} + 1` })
+          .where(eq(SessionTable.id, session.id))
+          .run()
+          .pipe(Effect.orDie)
         const replacementPrepared = yield* requestInDirectory(SyncPaths.checkpointPrepare, tmp.directory, {
           method: "POST",
           headers,
@@ -168,7 +170,10 @@ describe("sync HttpApi", () => {
           body: JSON.stringify({ snapshotID: replacementAttempt.snapshotID }),
         })
         expect(replacementFinalized.status, yield* replacementFinalized.text).toBe(200)
-        const later = yield* Session.use.create({ title: "event after replacement snapshot", workspaceID: syncWorkspaceID })
+        const later = yield* Session.use.create({
+          title: "event after replacement snapshot",
+          workspaceID: syncWorkspaceID,
+        })
 
         const replacementHistory = yield* requestInDirectory(SyncPaths.history, tmp.directory, {
           method: "POST",
@@ -215,7 +220,10 @@ describe("sync HttpApi", () => {
             .from(EventTable)
             .where(eq(EventTable.aggregate_id, session.id))
             .get()
-            .pipe(Effect.orDie, Effect.map((row) => row?.count)),
+            .pipe(
+              Effect.orDie,
+              Effect.map((row) => row?.count),
+            ),
         ).toBe(0)
       }),
     { git: true, config: { formatter: false, lsp: false } },
@@ -274,7 +282,17 @@ describe("sync HttpApi", () => {
           .pipe(Effect.orDie)
         yield* db
           .insert(EventSnapshotRowTable)
-          .values({ snapshot_id: snapshot.snapshotID, aggregate_id: snapshot.aggregateID, row_index: 0, table_name: "session", row_key: session.id, row_hash: rowHash, row_bytes: 2, chunk_count: 1, chain_hash: "2".repeat(64) })
+          .values({
+            snapshot_id: snapshot.snapshotID,
+            aggregate_id: snapshot.aggregateID,
+            row_index: 0,
+            table_name: "session",
+            row_key: session.id,
+            row_hash: rowHash,
+            row_bytes: 2,
+            chunk_count: 1,
+            chain_hash: "2".repeat(64),
+          })
           .run()
           .pipe(Effect.orDie)
         yield* db
@@ -296,7 +314,10 @@ describe("sync HttpApi", () => {
         expect(history.status, yield* history.text).toBe(200)
         const envelope = (yield* history.json) as { items: { kind: string; snapshot: EventV2.SerializedSnapshot }[] }
         expect(envelope.items).toHaveLength(1)
-        expect(envelope.items[0]).toMatchObject({ kind: "resync_required", snapshot: { snapshotID: snapshot.snapshotID } })
+        expect(envelope.items[0]).toMatchObject({
+          kind: "resync_required",
+          snapshot: { snapshotID: snapshot.snapshotID },
+        })
 
         const rows = yield* requestInDirectory(SyncPaths.snapshotRows, tmp.directory, {
           method: "POST",
@@ -372,7 +393,10 @@ describe("sync HttpApi", () => {
           .from(EventTable)
           .where(eq(EventTable.aggregate_id, session.id))
           .all()
-          .pipe(Effect.orDie, Effect.map((rows) => rows.find((row) => row.type === "message.part.updated.1")))
+          .pipe(
+            Effect.orDie,
+            Effect.map((rows) => rows.find((row) => row.type === "message.part.updated.1")),
+          )
         expect(event).toBeDefined()
         if (!event) return
         const descriptor = FilePartArtifact.descriptor(event.data)
@@ -456,7 +480,11 @@ describe("sync HttpApi", () => {
           .where(eq(EventTable.aggregate_id, session.id))
           .get()
           .pipe(Effect.orDie)
-        yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, session.id)).run().pipe(Effect.orDie)
+        yield* db
+          .delete(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .run()
+          .pipe(Effect.orDie)
         yield* db.delete(SessionTable).where(eq(SessionTable.id, session.id)).run().pipe(Effect.orDie)
         Flag.DEEPAGENT_CODE_WORKSPACE_ID = undefined
         const response = yield* requestInDirectory(SyncPaths.replay, tmp.directory, {
@@ -512,7 +540,11 @@ describe("sync HttpApi", () => {
         expect(historyBody.items.map((row) => row.aggregate_id)).toContain(session.id)
 
         const { db } = yield* Database.Service
-        yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, session.id)).run().pipe(Effect.orDie)
+        yield* db
+          .delete(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .run()
+          .pipe(Effect.orDie)
         yield* db.delete(SessionTable).where(eq(SessionTable.id, session.id)).run().pipe(Effect.orDie)
 
         const replayed = yield* requestInDirectory(SyncPaths.replay, tmp.directory, {
@@ -640,13 +672,11 @@ describe("sync HttpApi", () => {
           .where(eq(EventTable.aggregate_id, session.id))
           .all()
           .pipe(Effect.orDie)
-        const created = beforeEvents.find(
-          (event) => event.type === EventV2.versionedType(SessionV1.Event.Created.type, 1),
-        )
+        const created = beforeEvents.find((event) => event.type === EventV2.versionedType(SessionEvent.Created.type, 2))
         expect(created).toBeDefined()
         expect(beforeSession).toBeDefined()
         expect(beforeSequence).toBeDefined()
-        const data = created!.data as { sessionID: string; info: Record<string, unknown> }
+        const data = { sessionID: session.id, info: session }
 
         const response = yield* requestInDirectory(SyncPaths.replay, tmp.directory, {
           method: "POST",
@@ -678,12 +708,7 @@ describe("sync HttpApi", () => {
             .pipe(Effect.orDie),
         ).toEqual(beforeSequence)
         expect(
-          yield* db
-            .select()
-            .from(EventTable)
-            .where(eq(EventTable.aggregate_id, session.id))
-            .all()
-            .pipe(Effect.orDie),
+          yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, session.id)).all().pipe(Effect.orDie),
         ).toEqual(beforeEvents)
       }),
     { git: true, config: { formatter: false, lsp: false } },
@@ -774,9 +799,7 @@ describe("sync HttpApi", () => {
           .where(eq(EventTable.aggregate_id, session.id))
           .all()
           .pipe(Effect.orDie)
-        const updated = beforeEvents.find(
-          (event) => event.type === EventV2.versionedType(SessionEvent.Updated.type, 2),
-        )
+        const updated = beforeEvents.find((event) => event.type === EventV2.versionedType(SessionEvent.Updated.type, 2))
         expect(updated).toBeDefined()
         expect(beforeSequence).toBeDefined()
         const data = updated!.data as { sessionID: string; info: Record<string, unknown> }
@@ -817,12 +840,7 @@ describe("sync HttpApi", () => {
             .pipe(Effect.orDie),
         ).toEqual(beforeSequence)
         expect(
-          yield* db
-            .select()
-            .from(EventTable)
-            .where(eq(EventTable.aggregate_id, session.id))
-            .all()
-            .pipe(Effect.orDie),
+          yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, session.id)).all().pipe(Effect.orDie),
         ).toEqual(beforeEvents)
       }),
     { git: true, config: { formatter: false, lsp: false } },
@@ -845,7 +863,11 @@ describe("sync HttpApi", () => {
           .pipe(Effect.orDie)
         const otherDirectory = `${tmp.directory}-other`
         const otherProjectID = session.projectID
-        yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, session.id)).run().pipe(Effect.orDie)
+        yield* db
+          .delete(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .run()
+          .pipe(Effect.orDie)
         yield* db.delete(SessionTable).where(eq(SessionTable.id, session.id)).run().pipe(Effect.orDie)
         const data = created!.data as { sessionID: string; info: Record<string, unknown> }
         const response = yield* requestInDirectory(SyncPaths.replay, tmp.directory, {
@@ -870,9 +892,7 @@ describe("sync HttpApi", () => {
 
         expect(response.status).toBe(409)
         expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get()).toBeUndefined()
-        expect(
-          yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, session.id)).all(),
-        ).toEqual([])
+        expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, session.id)).all()).toEqual([])
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )
@@ -945,7 +965,9 @@ describe("sync HttpApi", () => {
           body: JSON.stringify({}),
         })
         const firstBody = (yield* first.json) as HistoryResponse
-        const firstRows = firstBody.items.filter((row): row is HistoryItem & { id: string; seq: number } => row.kind === "event")
+        const firstRows = firstBody.items.filter(
+          (row): row is HistoryItem & { id: string; seq: number } => row.kind === "event",
+        )
         expect(firstRows).toHaveLength(SyncHistoryLimits.events)
         expect(firstBody.complete).toBe(false)
         const state = Object.fromEntries(firstRows.map((row) => [row.aggregate_id, row.seq]))
@@ -955,7 +977,9 @@ describe("sync HttpApi", () => {
           body: JSON.stringify(state),
         })
         const secondBody = (yield* second.json) as HistoryResponse
-        const secondRows = secondBody.items.filter((row): row is HistoryItem & { id: string; seq: number } => row.kind === "event")
+        const secondRows = secondBody.items.filter(
+          (row): row is HistoryItem & { id: string; seq: number } => row.kind === "event",
+        )
         expect(secondRows.length).toBeGreaterThan(0)
         expect(secondRows.length).toBeLessThanOrEqual(SyncHistoryLimits.events)
         expect(new Set([...firstRows, ...secondRows].map((row) => row.id)).size).toBe(
@@ -1151,7 +1175,9 @@ describe("sync HttpApi", () => {
           body: JSON.stringify({ [session.id]: sequence!.seq }),
         })
         const firstBody = (yield* first.json) as HistoryResponse
-        const rows = firstBody.items.filter((row): row is HistoryItem & { id: string; seq: number } => row.kind === "event")
+        const rows = firstBody.items.filter(
+          (row): row is HistoryItem & { id: string; seq: number } => row.kind === "event",
+        )
         expect(first.status).toBe(200)
         expect(rows.map((row) => row.id)).toEqual([
           "evt_sync_wire_small_before",
@@ -1340,11 +1366,15 @@ describe("sync HttpApi", () => {
           if (page.complete) break
         }
         const history = pages.flatMap((page) => page.items).filter((item) => item.aggregate_id === session.id)
-        expect(history.map((item) => item.type)).toEqual(["session.created.1", "message.updated.1"])
+        expect(history.map((item) => item.type)).toEqual(["session.created.2", "message.updated.1"])
         expect(Buffer.byteLength(JSON.stringify(history[1]!.data))).toBe(EventV2.MAX_ENCODED_PAYLOAD_BYTES)
 
         const { db } = yield* Database.Service
-        yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, session.id)).run().pipe(Effect.orDie)
+        yield* db
+          .delete(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .run()
+          .pipe(Effect.orDie)
         yield* db.delete(SessionTable).where(eq(SessionTable.id, session.id)).run().pipe(Effect.orDie)
         for (const page of pages) {
           const events = page.items

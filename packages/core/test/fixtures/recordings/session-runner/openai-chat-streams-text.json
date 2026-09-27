@@ -13,7 +13,7 @@
         "headers": {
           "content-type": "application/json"
         },
-        "body": "{\"model\":\"deepseek-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hello in one short sentence.\\n<system-update>\\nContext selection (this turn):\\n- code: degraded_unavailable [rev code:unavailable] (0 refs)\\n- documents: degraded_unavailable [rev documents:unavailable] (0 refs)\\n- knowledge: empty [rev released:no-store] (0 refs)\\n- memory: empty [rev memory:no-store] (0 refs)\\n</system-update>\"}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"reasoning_effort\":\"none\",\"max_tokens\":20,\"temperature\":0}"
+        "body": "{\"model\":\"deepseek-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hello in one short sentence.\\n<system-update>\\nContext selection (this turn):\\n- code: degraded_unavailable [rev code:unavailable] [adapter version code-intelligence.v1] (0 refs)\\n- documents: degraded_unavailable [rev documents:unavailable] [adapter version documents-union.v1] (0 refs)\\n- knowledge: empty [rev released:no-store] [adapter version released-knowledge.v1] (0 refs)\\n- memory: empty [rev memory:no-store] [adapter version durable-memory.v1] (0 refs)\\n</system-update>\"}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"reasoning_effort\":\"none\",\"max_tokens\":20,\"temperature\":0}"
       },
       "response": {
         "status": 200,

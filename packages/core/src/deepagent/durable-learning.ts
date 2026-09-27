@@ -875,7 +875,7 @@ const reviewPhase = Effect.fn("DeepAgentDurableLearning.reviewPhase")(function* 
         source_run_id: candidate.source_run_id,
         confidence: candidate.confidence,
       })),
-      instructions: "Return verdict and selected_candidate_ids. Never invent candidates or modify evidence.",
+      instructions: "Return only a JSON object with verdict (approve, reject, or manual_review) and selected_candidate_ids (string array). Never invent candidates or modify evidence.",
     })
     const requestRef = yield* Effect.promise(() =>
       writeArtifact(admission.base_dir, artifactDirectory(admission), "learning-review-request", request),

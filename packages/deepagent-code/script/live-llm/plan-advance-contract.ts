@@ -18,9 +18,8 @@ const artifact = await runLegacyLiveCases({
   primaryPermission: { "*": "deny", plan: "ask" },
   permissionReply: { reply: "once" },
   sharedSession: true,
-  inspectDurability: true,
+  inspectProviderTurns: true,
   inspectPlan: true,
-  observeAssembledRequestFingerprints: true,
   environment: { DEEPAGENT_ENABLED: "true", DEEPAGENT_MODE: "high" },
   primaryPrompt: [
     "This is a Plan advance parameter-contract test in one durable Session.",
@@ -179,7 +178,7 @@ expectations.forEach((expected) => {
   if (observation.providerErrors.length > 0) {
     throw new Error(`${expected.caseName} recorded Provider errors: ${JSON.stringify(observation.providerErrors)}`)
   }
-  if (observation.assembledRequestFingerprints.length < expected.calls.length) {
+  if ((observation.providerTurns ?? []).length < expected.calls.length) {
     throw new Error(`${expected.caseName} did not capture every Provider request boundary`)
   }
 })

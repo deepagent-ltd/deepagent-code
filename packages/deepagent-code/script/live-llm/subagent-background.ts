@@ -19,6 +19,7 @@ const artifact = await runLegacyLiveCases({
   permission: { "*": "deny", read: "allow", question: "allow" },
   primaryPermission: { "*": "deny", task: "allow", task_status: "allow", task_read: "allow" },
   questionAction: { type: "background", reply: release },
+  inspectTaskRuns: true,
   awaitParentTools: ["task", "task_status", "task_read"],
   primaryPrompt:
     "This parent is a constrained background task supervision test. Use only task, task_status, and task_read in the exact requested order. Never call unavailable file, search, or shell tools.",
@@ -41,9 +42,9 @@ const child = observation.children[0]
 if (!child || child.parentID !== observation.sessionID || child.agent !== "researcher") {
   throw new Error("Background child lineage or agent identity is incorrect")
 }
-const subagent = nestedRecord(child.metadata, ["deepagent", "subagent"])
-if (subagent.state !== "completed" || subagent.finished !== true || subagent.reason !== "structured_output_valid") {
-  throw new Error(`Background child has invalid durable metadata: ${JSON.stringify(subagent)}`)
+const run = observation.taskRuns?.find((row) => row.childSessionID === child.id)
+if (!run || run.executionRuntime !== "v2" || run.deliveryMode !== "background" || run.state !== "completed") {
+  throw new Error(`Background child has no completed durable V2 task_run: ${JSON.stringify(run)}`)
 }
 const latch = observation.questionRequests.find(
   (request) =>
@@ -97,8 +98,6 @@ if (!childTools.some((tool) => tool.name === "question" && tool.status === "comp
   throw new Error("Background child did not resume from the Question latch answer")
 }
 if (
-  child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
-  child.model.id !== artifact.fingerprint.modelID ||
   child.assistants.some(
     (assistant) =>
       assistant.providerID !== artifact.fingerprint.runtimeProviderID || assistant.modelID !== artifact.fingerprint.modelID,
@@ -116,7 +115,9 @@ const result = {
     childMessageCount: child.messageCount,
     nonterminalLatch: true,
     automaticContinuation: true,
-    durableState: subagent.state,
+    durableState: run.state,
+    deliveryMode: run.deliveryMode,
+    runID: run.runID.slice(0, 8),
     parentTools: observation.tools.map((tool) => `${tool.name}:${tool.status}`),
   },
 }
@@ -126,16 +127,5 @@ await writeLiveArtifact(
   result,
 )
 console.log(`${result.suite}: passed (${result.fingerprint.providerID}/${result.fingerprint.modelID})`)
-
-function nestedRecord(value: unknown, keys: string[]) {
-  const result = keys.reduce<Record<string, unknown> | undefined>((current, key) => {
-    if (!current) return undefined
-    const next = current[key]
-    if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-    return next as Record<string, unknown>
-  }, typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined)
-  if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
-  return result
-}
 
 finishLiveScript()

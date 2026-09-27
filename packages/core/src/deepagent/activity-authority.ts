@@ -409,7 +409,8 @@ export const observe = Effect.fn("DeepAgentActivityAuthority.observe")(function*
           const stalled =
             current.enforcement_state === "monitoring" &&
             current.stall_threshold !== null &&
-            noProgressCount >= current.stall_threshold
+            noProgressCount >= current.stall_threshold &&
+            input.nextAction !== "finish"
           const updated = yield* tx
             .update(SessionActivityObjectiveTable)
             .set({

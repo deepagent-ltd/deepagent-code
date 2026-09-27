@@ -33,6 +33,7 @@ import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { Identifier } from "@deepagent-code/core/util/identifier"
 import * as Log from "@deepagent-code/core/util/log"
 import type { Message, OpencodeClient, SessionMessageResponse } from "@deepagent-code/sdk"
+import { toV2Prompt, waitForV2PromptTerminal } from "@deepagent-code/sdk"
 import { Context, Effect, Layer } from "effect"
 import * as ACPError from "./error"
 import { buildConfigOptions, parseModelSelection } from "./config-option"
@@ -525,26 +526,30 @@ export function make(input: {
       const command = detectSlashCommand(parts)
 
       if (!command) {
-        const response = yield* request(
+        const admitted = yield* request(
           () =>
-            input.sdk.session.prompt(
+            input.sdk.v2.session.prompt(
               {
                 sessionID: current.id,
-                model: {
-                  providerID: selected.providerID,
-                  modelID: selected.modelID,
-                },
-                ...(variant ? { variant } : {}),
-                parts,
-                ...(modeId ? { agent: modeId } : {}),
-                directory: current.cwd,
+                prompt: toV2Prompt({
+                  model: { providerID: selected.providerID, modelID: selected.modelID },
+                  ...(variant ? { variant } : {}),
+                  parts,
+                  ...(modeId ? { agent: modeId } : {}),
+                }),
               },
               { throwOnError: true },
             ),
           "session",
         )
+        const terminal = yield* request(
+          () => waitForV2PromptTerminal(input.sdk, { sessionID: current.id, messageID: admitted.data.id }),
+          "session",
+        )
         yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
-        return promptResponse(response.info, params.messageId)
+        return promptResponse(terminal.tokens && terminal.cost !== undefined
+          ? { tokens: terminal.tokens, cost: terminal.cost }
+          : undefined, params.messageId)
       }
 
       const known = snapshot.availableCommands.find((item) => item.name === command.name)

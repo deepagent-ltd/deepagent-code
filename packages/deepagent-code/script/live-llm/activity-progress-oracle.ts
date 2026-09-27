@@ -56,6 +56,53 @@ type ActivityDurability = {
     receipt_id: string
     request_state: string
   }>
+  v2?: {
+    inputs: ReadonlyArray<{ id: string; delivery: string; admitted_seq: number; promoted_seq: number | null }>
+    activities: ReadonlyArray<{
+      activity_id: string
+      ordinal: number
+      trigger_input_id: string
+      state: string
+      settled_at: number | null
+    }>
+    activityInputs: ReadonlyArray<{
+      activity_id: string
+      input_id: string
+      ordinal: number
+      admitted_seq: number
+      role: string
+    }>
+    providerAttempts: ReadonlyArray<{
+      attempt_id: string
+      activity_id: string
+      provider_turn_seq: number
+      owner_token: string | null
+      state: string
+    }>
+    providerReceipts: ReadonlyArray<{
+      receipt_id: string
+      activity_id: string
+      request_ordinal: number
+      provider_turn_seq: number
+      provider_attempt_id: string | null
+      owner_token: string
+      state: string
+      toolCalls: ReadonlyArray<{ id: string; name: string }>
+    }>
+    toolAdmissions: ReadonlyArray<{
+      receipt_id: string
+      provider_attempt_id: string
+      tool_call_id: string
+      tool_name: string
+    }>
+    toolEffects: ReadonlyArray<{
+      receipt_id: string
+      provider_attempt_id: string
+      tool_call_id: string
+      tool_name: string
+      state: string
+    }>
+  }
 }
 
 export function assertActivityProgressObservation(input: {
@@ -64,9 +111,11 @@ export function assertActivityProgressObservation(input: {
   steerText: string
   marker: string
   expectedTools: readonly string[]
+  authority?: "v1" | "v2"
   observation: {
-    users: ReadonlyArray<{ text: string }>
+    users: ReadonlyArray<{ id?: string; text: string }>
     steering: ReadonlyArray<{
+      id?: string
       delivery: string
       activeBeforeAdmission: boolean
       pendingAfterAdmission: boolean
@@ -74,7 +123,7 @@ export function assertActivityProgressObservation(input: {
     }>
     assistantTurns: number
     finalText: string
-    newTools: ReadonlyArray<{ name: string; status: string }>
+    newTools: ReadonlyArray<{ id?: string; name: string; status: string }>
     providerErrors: readonly unknown[]
     durability?: ActivityDurability
   }
@@ -116,6 +165,16 @@ export function assertActivityProgressObservation(input: {
 
   const durability = input.observation.durability
   if (!durability) throw new Error(`${input.caseName} did not capture activity durability`)
+  if (input.authority === "v2") {
+    return assertV2ActivityDurability({
+      caseName: input.caseName,
+      steeringID: steering.id,
+      userIDs: input.observation.users.map((user) => user.id),
+      assistantTurns: input.observation.assistantTurns,
+      newTools: input.observation.newTools,
+      durability: durability.v2,
+    })
+  }
   // Provider-generic durability contract: trigger and steer admissions both persist, every
   // activity settles process-owned, each activity's progress is contiguous to a final row with
   // dispatched receipts, and runs/terminals match. A model that finishes before the steer lands
@@ -228,7 +287,134 @@ export function assertActivityProgressObservation(input: {
   if (input.observation.assistantTurns !== progress.length) {
     throw new Error(`${input.caseName} assistant turns and progress revisions diverged`)
   }
-  return { activities, progress }
+  return {
+    activities,
+    progressStates: progress.map((item) => `${item.revision}:${item.state}`),
+    evidenceKind: "legacy_activity_progress" as const,
+  }
+}
+
+function assertV2ActivityDurability(input: {
+  caseName: string
+  steeringID: string | undefined
+  userIDs: ReadonlyArray<string | undefined>
+  assistantTurns: number
+  newTools: ReadonlyArray<{ id?: string; name: string; status: string }>
+  durability: ActivityDurability["v2"]
+}) {
+  const v2 = input.durability
+  if (!v2) throw new Error(`${input.caseName} did not capture V2 activity durability`)
+  const inputs = [...v2.inputs].sort((left, right) => left.admitted_seq - right.admitted_seq)
+  const [trigger, steer] = inputs
+  if (
+    inputs.length !== 2 ||
+    !trigger ||
+    !steer ||
+    trigger.id !== input.userIDs[0] ||
+    steer.id !== input.userIDs[1] ||
+    steer.id !== input.steeringID ||
+    steer.delivery !== "steer" ||
+    trigger.promoted_seq === null ||
+    steer.promoted_seq === null ||
+    trigger.promoted_seq >= steer.promoted_seq
+  ) {
+    throw new Error(`${input.caseName} did not persist and promote exactly one trigger and steer input`)
+  }
+  const activities = [...v2.activities].sort((left, right) => left.ordinal - right.ordinal)
+  if (
+    activities.length < 1 ||
+    activities.length > 2 ||
+    activities.some(
+      (activity, index) => activity.state !== "settled" || activity.settled_at === null || activity.ordinal !== index,
+    )
+  ) {
+    throw new Error(`${input.caseName} did not settle one or two V2 activities`)
+  }
+  const memberships = v2.activityInputs
+  const triggerMembership = memberships.find((item) => item.input_id === trigger.id)
+  const steerMembership = memberships.find((item) => item.input_id === steer.id)
+  if (
+    memberships.length !== 2 ||
+    !triggerMembership ||
+    !steerMembership ||
+    triggerMembership.activity_id !== activities[0]?.activity_id ||
+    triggerMembership.role !== "trigger" ||
+    triggerMembership.ordinal !== 0 ||
+    triggerMembership.admitted_seq !== trigger.admitted_seq ||
+    steerMembership.admitted_seq !== steer.admitted_seq ||
+    !activities.some((activity) => activity.activity_id === steerMembership.activity_id) ||
+    (activities.length === 1 && (steerMembership.role !== "steer" || steerMembership.ordinal !== 1)) ||
+    (activities.length === 2 && (steerMembership.role !== "trigger" || steerMembership.ordinal !== 0)) ||
+    activities.some(
+      (activity) =>
+        activity.trigger_input_id !==
+        memberships.find((item) => item.activity_id === activity.activity_id && item.role === "trigger")?.input_id,
+    )
+  ) {
+    throw new Error(`${input.caseName} activity inputs did not cover trigger and steer`)
+  }
+  const receipts = [...v2.providerReceipts].sort((left, right) => left.request_ordinal - right.request_ordinal)
+  if (
+    receipts.length !== input.assistantTurns ||
+    receipts.some(
+      (receipt, index) =>
+        receipt.state !== "settled" ||
+        receipt.request_ordinal !== index + 1 ||
+        receipt.provider_turn_seq !== index + 1 ||
+        !activities.some((activity) => activity.activity_id === receipt.activity_id) ||
+        !v2.providerAttempts.some(
+          (attempt) =>
+            attempt.attempt_id === receipt.provider_attempt_id &&
+            attempt.activity_id === receipt.activity_id &&
+            attempt.provider_turn_seq === receipt.provider_turn_seq &&
+            attempt.owner_token === receipt.owner_token &&
+            receipt.owner_token.length > 0 &&
+            attempt.state === "settled",
+        ),
+    )
+  ) {
+    throw new Error(`${input.caseName} provider receipt lacked its exact attempt or terminal state`)
+  }
+  if (v2.providerAttempts.length !== receipts.length) {
+    throw new Error(`${input.caseName} provider attempts and receipts diverged`)
+  }
+  const toolIDs = input.newTools.map((tool) => tool.id)
+  const receiptToolCalls = receipts.flatMap((receipt) => receipt.toolCalls)
+  if (
+    toolIDs.some((id) => !id) ||
+    new Set(toolIDs).size !== toolIDs.length ||
+    receiptToolCalls.length !== toolIDs.length ||
+    receiptToolCalls.some((call) => !toolIDs.includes(call.id)) ||
+    v2.toolAdmissions.length !== toolIDs.length
+  ) {
+    throw new Error(`${input.caseName} tool calls did not match V2 admissions`)
+  }
+  for (const tool of input.newTools) {
+    const admission = v2.toolAdmissions.find((item) => item.tool_call_id === tool.id)
+    const receipt = receipts.find((item) => item.receipt_id === admission?.receipt_id)
+    const effect = v2.toolEffects.find((item) => item.receipt_id === admission?.receipt_id && item.tool_call_id === tool.id)
+    if (
+      !admission ||
+      !receipt ||
+      admission.tool_name !== tool.name ||
+      admission.provider_attempt_id !== receipt.provider_attempt_id ||
+      !effect ||
+      effect.provider_attempt_id !== admission.provider_attempt_id ||
+      effect.tool_name !== tool.name ||
+      effect.state !== "settled" ||
+      !receipt.toolCalls.some((call) => call.id === tool.id && call.name === tool.name)
+    ) {
+      throw new Error(`${input.caseName} tool ${String(tool.id)} lacked a matching durable tool effect`)
+    }
+  }
+  if (v2.toolEffects.length !== toolIDs.length) {
+    throw new Error(`${input.caseName} tool effects and observed calls diverged`)
+  }
+  return {
+    activities,
+    progressStates: receipts.map((receipt) => `${receipt.provider_turn_seq}:${receipt.state}`),
+    evidenceKind: "v2_provider_turn" as const,
+  }
 }
 
 function activityMarker(data: unknown): ActivityProgressMarker | undefined {

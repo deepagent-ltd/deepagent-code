@@ -9,6 +9,17 @@
   background: var(--v2-background-bg-base);
 }
 
+/* D4: the settings variant carries no title, so its header holds only the close button —
+   right-align it and keep the body flush so the tab layout is unchanged. */
+[data-component="dialog-v2"][data-variant="settings"] [data-slot="dialog-header"] {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  padding: 8px;
+  background: transparent;
+}
+
 [data-component="dialog-v2"][data-variant="settings"] [data-slot="dialog-body"] {
   padding: 0;
   overflow: hidden;

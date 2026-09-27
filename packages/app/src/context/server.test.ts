@@ -62,7 +62,7 @@ describe("resolveServerList", () => {
 })
 
 test("treats localhost http connections as local alongside the builtin sidecar", () => {
-  expect(ServerConnection.local({ type: "sidecar", variant: "base", http: { url: "http://127.0.0.1:4096" } })).toBe(
+  expect(ServerConnection.local({ type: "sidecar", http: { url: "http://127.0.0.1:4096" } })).toBe(
     true,
   )
   expect(ServerConnection.local({ type: "http", http: { url: "http://localhost:4096" } })).toBe(true)
@@ -70,7 +70,7 @@ test("treats localhost http connections as local alongside the builtin sidecar",
 })
 
 test("active server removal falls back across built-in and persisted servers", () => {
-  const local = { type: "sidecar", variant: "base", http: { url: "http://127.0.0.1:4096" } } as const
+  const local = { type: "sidecar", http: { url: "http://127.0.0.1:4096" } } as const
   const remote = { type: "http", http: { url: "http://10.0.0.5:4097" } } as const
 
   expect(

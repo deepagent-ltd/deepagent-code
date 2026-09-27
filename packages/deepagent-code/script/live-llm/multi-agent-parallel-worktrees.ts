@@ -69,6 +69,7 @@ const artifact = await runLegacyLiveCases({
   inspectChildFiles: ["output/left.txt", "output/right.txt"],
   toolSandbox: { verifierScript, initialVerifier: "fail" },
   verifyChildWorktrees: true,
+  inspectTaskRuns: true,
   permissionReply: { reply: "once" },
   permissionBarrierCount: 2,
   modelMaxTokens: 2048,
@@ -102,132 +103,91 @@ if (
 ) {
   throw new Error("Parallel workers did not receive distinct isolated worktrees")
 }
-
-for (const child of observation.children) {
-  if (
-    child.parentID !== observation.sessionID ||
-    child.agent !== "worker" ||
-    child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
-    child.model.id !== artifact.fingerprint.modelID ||
-    child.assistants.some(
-      (assistant) =>
-        assistant.providerID !== artifact.fingerprint.runtimeProviderID ||
-        assistant.modelID !== artifact.fingerprint.modelID ||
-        assistant.error !== undefined,
-    )
-  ) {
-    throw new Error(`Parallel child ${child.id} has invalid lineage, role, or model identity`)
-  }
-  const subagent = nestedRecord(child.metadata, ["deepagent", "subagent"])
-  if (subagent.state !== "completed" || subagent.finished !== true || subagent.reason !== "structured_output_valid") {
-    throw new Error(`Parallel child ${child.id} did not persist a completed structured result`)
-  }
-  const tools = child.assistants.flatMap((assistant) => assistant.tools)
-  if (
-    tools.filter((tool) => tool.name === "read" && tool.status === "completed").length !== 1 ||
-    tools.filter((tool) => tool.name === "write" && tool.status === "completed").length !== 1 ||
-    tools.filter((tool) => tool.name === "StructuredOutput" && tool.status === "completed").length !== 1 ||
-    tools.some((tool) => tool.status !== "completed")
-  ) {
-    throw new Error(
-      `Parallel child ${child.id} has an invalid tool sequence: ${tools.map((tool) => `${tool.name}:${tool.status}`).join(" -> ")}`,
-    )
-  }
-  const isLeft = child.files["output/left.txt"] === leftContent && child.files["output/right.txt"] === undefined
-  const isRight = child.files["output/right.txt"] === rightContent && child.files["output/left.txt"] === undefined
-  if ((!isLeft && !isRight) || child.status.trim().split("\n").filter(Boolean).length !== 1) {
-    throw new Error(`Parallel child ${child.id} did not retain exactly one isolated output`)
-  }
-  if (child.verifier?.exitCode !== 0 || !child.verifier.stdout.includes(verifierSuccess)) {
-    throw new Error(`Parallel child ${child.id} hidden verifier failed with exit ${child.verifier?.exitCode}`)
-  }
-}
+const branchFiles = observation.children.map((child) => child.branchFiles)
 if (
-  observation.children.filter((child) => child.files["output/left.txt"] === leftContent).length !== 1 ||
-  observation.children.filter((child) => child.files["output/right.txt"] === rightContent).length !== 1
+  branchFiles.filter((files) => files?.["output/left.txt"] === leftContent && files["output/right.txt"] === undefined).length !== 1 ||
+  branchFiles.filter((files) => files?.["output/right.txt"] === rightContent && files["output/left.txt"] === undefined).length !== 1
 ) {
-  throw new Error("Parallel workers did not produce one left and one right isolated result")
+  throw new Error(`Parallel worker branches do not preserve isolated outputs: ${JSON.stringify(branchFiles)}`)
 }
-
+for (const child of observation.children) {
+  const read = child.v2Tools.find((tool) => tool.name === "read" && tool.status === "completed")
+  const write = child.v2Tools.find((tool) => tool.name === "write" && tool.status === "completed")
+  if (
+    child.parentID !== observation.sessionID || child.agent !== "worker" ||
+    child.v2Assistants.length === 0 ||
+    child.v2Assistants.some((assistant) => assistant.model.providerID !== artifact.fingerprint.runtimeProviderID ||
+      assistant.model.id !== artifact.fingerprint.modelID) ||
+    child.v2ProviderTurns.length === 0 ||
+    child.v2ProviderTurns.some((turn) => turn.providerID !== artifact.fingerprint.runtimeProviderID ||
+      turn.modelID !== artifact.fingerprint.modelID || turn.state !== "settled") ||
+    child.structuredEvidence?.length !== 1 ||
+    child.structuredEvidence[0]?.validationOutcome !== "validated" ||
+    child.v2Tools.length !== 2 || !read || !write ||
+    typeof read.output !== "string" || typeof write.input !== "object" || write.input === null ||
+    read.output !== write.input.content ||
+    child.directoryExists || child.status !== "<removed>" || !child.branch
+  ) {
+    throw new Error(`Parallel worker ${child.id} has invalid V2 run, tool, or branch evidence`)
+  }
+}
+const runs = observation.taskRuns ?? []
+if (
+  runs.length !== 2 || runs.some((run) => run.executionRuntime !== "v2" ||
+    run.parentSessionID !== observation.sessionID || run.state !== "completed" ||
+    run.workspaceMode !== "worktree" || !observation.children.some((child) => child.id === run.childSessionID))
+) {
+  throw new Error(`Parallel V2 task runs did not settle: ${JSON.stringify(runs)}`)
+}
 const taskTools = observation.tools.filter((tool) => tool.name === "task" && tool.status === "completed")
 if (taskTools.length !== 2 || new Set(taskTools.map((tool) => tool.messageID)).size !== 1) {
   throw new Error("Parent did not emit two completed task calls in one provider response")
 }
-for (const child of observation.children) {
-  const results = child.assistants.flatMap((assistant) => {
-    if (
-      typeof assistant.structured !== "object" ||
-      assistant.structured === null ||
-      Array.isArray(assistant.structured)
-    ) {
-      return []
-    }
-    return typeof assistant.structured.result === "string" ? [assistant.structured.result] : []
-  })
-  if (
-    results.length !== 1 ||
-    !taskTools.some((tool) => tool.output?.includes(`<task id="${child.id}" state="completed">`))
-  ) {
-    throw new Error(`Parallel child ${child.id} did not return one structured result through its parent task`)
-  }
+if (taskTools.some((tool) => {
+  const input = tool.input
+  return typeof input !== "object" || input === null || input.subagent_type !== "worker" ||
+    input.isolation !== "worktree" || input.background === true ||
+    !observation.children.some((child) => tool.metadata?.task_id === child.id)
+})) {
+  throw new Error("Parent task calls did not preserve worker/worktree/foreground inputs and child linkage")
 }
-if (
-  taskTools.some((tool) => {
-    const input = record(tool.input, "task input")
-    return input.subagent_type !== "worker" || input.isolation !== "worktree" || input.background === true
-  })
-) {
-  throw new Error("Parent parallel task calls did not preserve worker/worktree/foreground inputs")
-}
-if (observation.tools.some((tool) => tool.status === "completed" && tool.name !== "task")) {
+if (observation.tools.some((tool) => tool.name !== "task")) {
   throw new Error("Parent executed a forbidden non-task tool")
 }
-
 const permissionIDs = observation.permissionRequests.map((request) => String(request.id)).sort()
 if (
   permissionIDs.length !== 2 ||
   new Set(observation.permissionRequests.map((request) => request.sessionID)).size !== 2 ||
-  observation.permissionRequests.some(
-    (request) => request.permission !== "read" || request.eventDirectory !== artifact.workspace.directory,
-  )
-) {
-  throw new Error(`Parallel permission routing is invalid: ${JSON.stringify(observation.permissionRequests)}`)
-}
-if (
+  observation.permissionRequests.some((request) => request.permission !== "read" ||
+    !observation.children.some((child) => child.id === request.sessionID &&
+      child.directory === request.eventDirectory)) ||
   observation.permissionBarrierSnapshots.length !== 1 ||
-  observation.permissionBarrierSnapshots[0]?.slice().sort().join("\0") !== permissionIDs.join("\0")
+  observation.permissionBarrierSnapshots[0]?.slice().sort().join("\0") !== permissionIDs.join("\0") ||
+  observation.pendingPermissionIDs.length !== 0
 ) {
-  throw new Error("Parent permission list never observed both child requests at the concurrency barrier")
+  throw new Error(`Parallel V2 permission routing or barrier failed: ${JSON.stringify(observation.permissionRequests)}`)
 }
-if (observation.pendingPermissionIDs.length !== 0) {
-  throw new Error(`Parallel suite left pending permissions: ${observation.pendingPermissionIDs.join(", ")}`)
-}
-
 if (
   artifact.workspace.files["output/left.txt"] !== undefined ||
   artifact.workspace.files["output/right.txt"] !== undefined ||
   artifact.workspace.status.trim() !== ""
 ) {
-  throw new Error(`Explicit worktree output leaked into the parent checkout: ${JSON.stringify(artifact.workspace)}`)
+  throw new Error("Explicit worktree output leaked into the parent checkout")
 }
-if (![leftContent.trim(), rightContent.trim()].every((marker) => observation.finalText.includes(marker))) {
+if (![leftMarker, rightMarker].every((marker) => observation.finalText.includes(marker))) {
   throw new Error("Parent did not aggregate both parallel worker results")
 }
-
 const result = {
   ...artifact,
   mode: "ext" as const,
   evidence: {
     childIDs: observation.children.map((child) => child.id),
-    childDirectories: observation.children.map((child) => child.directory),
+    childBranches: observation.children.map((child) => child.branch),
     sharedParentToolMessageID: taskTools[0]?.messageID,
     concurrentPermissionIDs: permissionIDs,
     parentBarrierSnapshot: observation.permissionBarrierSnapshots[0],
-    parentPendingAfterCompletion: observation.pendingPermissionIDs,
-    permissionEventDirectories: observation.permissionRequests.map((request) => request.eventDirectory),
     leftOutputHash: Bun.hash(leftContent).toString(16),
     rightOutputHash: Bun.hash(rightContent).toString(16),
-    hiddenVerifierExits: observation.children.map((child) => child.verifier?.exitCode),
   },
 }
 await writeLiveArtifact(
@@ -237,26 +197,7 @@ await writeLiveArtifact(
 )
 console.log(
   `${result.suite}: passed (${result.fingerprint.providerID}/${result.fingerprint.modelID}, ` +
-    `${observation.children.length} concurrent workers, ${observation.permissionRequests.length} parent-routed permissions)`,
+    `${observation.children.length} concurrent workers, ${observation.permissionRequests.length} permissions)`,
 )
-
-function record(value: unknown, name: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${name} is not an object`)
-  return value as Record<string, unknown>
-}
-
-function nestedRecord(value: unknown, keys: string[]) {
-  const result = keys.reduce<Record<string, unknown> | undefined>(
-    (current, key) => {
-      if (!current) return undefined
-      const next = current[key]
-      if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-      return next as Record<string, unknown>
-    },
-    record(value, keys[0] ?? "value"),
-  )
-  if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
-  return result
-}
 
 finishLiveScript()

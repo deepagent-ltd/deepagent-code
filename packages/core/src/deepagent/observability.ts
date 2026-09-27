@@ -289,6 +289,7 @@ export const layerWith = (options?: LayerOptions) =>
           let agentPushRejectedTotal = 0
           const agentPushRejectedByReason: Record<string, number> = {}
           for (const row of pushRows) {
+            if (row.decision === "delivery_failed") continue
             agentPushTotal += row.n
             if (row.decision.startsWith("blocked:")) {
               agentPushRejectedTotal += row.n
