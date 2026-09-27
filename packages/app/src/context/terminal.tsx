@@ -1105,7 +1105,12 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
     onMount(() => {
       void ensureRuntime()
       const timer = setInterval(() => {
-        if (bottomSession?.all().length || sideSession?.all().length) void ensureRuntime()
+        // Keep probing until a runtimeId resolves: on a cold load the one-shot health call can
+        // land inside the server's instance bootstrap and fail, and the auto-create lifecycle
+        // gates on runtimeId - without this retry the terminal panel stays on
+        // "Loading terminal..." forever. Once resolved, keep polling while terminals exist to
+        // catch server runtime changes.
+        if (!runtime.id() || bottomSession?.all().length || sideSession?.all().length) void ensureRuntime()
       }, RUNTIME_POLL_MS)
       onCleanup(() => clearInterval(timer))
     })
