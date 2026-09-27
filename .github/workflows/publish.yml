@@ -118,7 +118,7 @@ jobs:
       - name: Build (release identity pinned)
         id: build
         run: |
-          ./packages/deepagent-code/script/build.ts ${{ (needs.version.outputs.channel == 'beta' && '--sourcemaps') || '' }}
+          ./packages/deepagent-code/script/build.ts --exclude-win32 ${{ (needs.version.outputs.channel == 'beta' && '--sourcemaps') || '' }}
           ./packages/cli/script/build.ts ${{ (needs.version.outputs.channel == 'beta' && '--sourcemaps') || '' }}
           # Ship the authorization row at every binary's appRoot (dirname of the executable —
           # V2OwnerSeed.defaultOwnerAuthorizationAppRoot) so default installs self-qualify.
@@ -153,6 +153,15 @@ jobs:
           path: ${{ runner.temp }}/owner-authorization.json
           if-no-files-found: warn
 
+      # Public half of the ephemeral release owner key: the native Windows build job pins the
+      # same key into its binaries via DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY, keeping one
+      # build identity across every platform artifact. Public material — safe as an artifact.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-owner-public-key
+          path: ${{ runner.temp }}/release-owner-public-key.pem
+          if-no-files-found: warn
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: deepagent-code-cli
@@ -164,20 +173,73 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: deepagent-code-cli-windows
-          path: packages/deepagent-code/dist/deepagent-code-windows*
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
           name: deepagent-code-preview-cli
           path: packages/cli/dist/cli-*
 
     outputs:
       version: ${{ needs.version.outputs.version }}
 
+  # Windows binaries build NATIVELY on a Windows runner: bun cross-compilation with the large
+  # embedded web UI produced non-starting Windows PEs when the build host was macOS (verified on
+  # the acceptance box), and native builds have been validated end-to-end there dozens of times.
+  # The build script's own smoke test actually executes the exe here, so a broken build fails CI.
+  build-cli-windows:
+    needs:
+      - version
+      - build-cli
+    runs-on: blacksmith-4vcpu-windows-2025
+    if: github.repository == 'deepagent-ltd/deepagent-code'
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+        with:
+          ref: ${{ needs.version.outputs.candidate_commit }}
+          fetch-tags: true
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Setup git committer
+        id: committer
+        uses: ./.github/actions/setup-git-committer
+        with:
+          deepagent-code-app-id: ${{ vars.DEEPAGENT_CODE_APP_ID }}
+          deepagent-code-app-secret: ${{ secrets.DEEPAGENT_CODE_APP_SECRET }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: owner-authorization
+          path: ${{ runner.temp }}/owner-auth
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-owner-public-key
+          path: ${{ runner.temp }}/owner-key
+
+      - name: Build (release identity pinned, native)
+        shell: bash
+        run: |
+          bun install
+          cd packages/deepagent-code
+          bun script/build.ts --single --baseline ${{ (needs.version.outputs.channel == 'beta' && '--sourcemaps') || '' }}
+          for dir in dist/deepagent-code-*/bin; do
+            [ -d "$dir" ] && cp "$RUNNER_TEMP/owner-auth/owner-authorization.json" "$dir/owner-authorization.json"
+          done
+        env:
+          DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
+          DEEPAGENT_CODE_CHANNEL: ${{ needs.version.outputs.channel }}
+          DEEPAGENT_CODE_RELEASE: ${{ needs.version.outputs.release }}
+          DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: ${{ runner.temp }}/owner-auth/owner-authorization.json
+          DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: ${{ runner.temp }}/owner-key/release-owner-public-key.pem
+          GH_REPO: ${{ needs.version.outputs.repo }}
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: deepagent-code-cli-windows
+          path: packages/deepagent-code/dist/deepagent-code-windows*
+
   sign-cli-windows:
     needs:
-      - build-cli
+      - build-cli-windows
       - version
     runs-on: blacksmith-4vcpu-windows-2025
     if: github.repository == 'deepagent-ltd/deepagent-code'
@@ -269,6 +331,7 @@ jobs:
   build-electron:
     needs:
       - build-cli
+      - build-cli-windows
       - version
     if: github.repository == 'deepagent-ltd/deepagent-code'
     continue-on-error: false
@@ -452,6 +515,7 @@ jobs:
     needs:
       - version
       - build-cli
+      - build-cli-windows
       - sign-cli-windows
       - build-electron
     if: always() && !failure() && !cancelled() && needs.version.outputs.channel != 'beta'

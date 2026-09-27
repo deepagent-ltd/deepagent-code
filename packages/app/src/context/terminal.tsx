@@ -978,7 +978,11 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
     // Reactive effective session key: real session ID when available, draft UUID otherwise.
     const effectiveSessionKey = createMemo(() => params.id ?? draftKey)
 
-    let runtimeId: string | undefined
+    // runtimeId must be a signal: the terminal auto-create lifecycle gates on it, and on a cold
+    // load with a persisted-open panel the gate's only evaluation happens before the one-shot
+    // health probe resolves. A plain variable can never retrigger that effect, deadlocking the
+    // panel on "Loading terminal..." forever.
+    const [runtimeId, setRuntimeId] = createSignal<string | undefined>(undefined)
     let runtimeRequest: Promise<void> | undefined
     let bottomSession: TerminalSession | undefined
     let sideSession: TerminalSession | undefined
@@ -994,13 +998,13 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
         .health({ cache: "no-store" })
         .then((result) => {
           const next = result.data?.runtimeId ?? sdk.url
-          if (!runtimeId) {
-            runtimeId = next
+          if (!runtimeId()) {
+            setRuntimeId(next)
             return
           }
-          if (runtimeId === next) return
-          console.info("[terminal] server runtime changed", { previousRuntimeId: runtimeId, runtimeId: next })
-          runtimeId = next
+          if (runtimeId() === next) return
+          console.info("[terminal] server runtime changed", { previousRuntimeId: runtimeId(), runtimeId: next })
+          setRuntimeId(next)
           // Invalidate all cached snapshots for this scope — old PTY IDs are dead.
           invalidateScopeSnapshots(scope)
           bottomSession?.resetRuntime()
@@ -1015,7 +1019,7 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
       return runtimeRequest as Promise<void>
     }
 
-    const runtime = { id: () => runtimeId, ensure: ensureRuntime }
+    const runtime = { id: runtimeId, ensure: ensureRuntime }
     bottomSession = createWorkspaceTerminalSession(sdk, runtime)
     sideSession = createWorkspaceTerminalSession(sdk, runtime)
 
@@ -1105,7 +1109,12 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
     onMount(() => {
       void ensureRuntime()
       const timer = setInterval(() => {
-        if (bottomSession?.all().length || sideSession?.all().length) void ensureRuntime()
+        // Keep probing until a runtimeId resolves: on a cold load the one-shot health call can
+        // land inside the server's instance bootstrap and fail, and the auto-create lifecycle
+        // gates on runtimeId - without this retry the terminal panel stays on
+        // "Loading terminal..." forever. Once resolved, keep polling while terminals exist to
+        // catch server runtime changes.
+        if (!runtime.id() || bottomSession?.all().length || sideSession?.all().length) void ensureRuntime()
       }, RUNTIME_POLL_MS)
       onCleanup(() => clearInterval(timer))
     })
