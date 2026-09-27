@@ -3,7 +3,8 @@ name: generate
 on:
   push:
     branches:
-      - dev
+      - main
+  workflow_dispatch:
 
 jobs:
   generate:

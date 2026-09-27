@@ -3,8 +3,7 @@ name: test
 on:
   push:
     branches:
-      - dev
-  pull_request:
+      - main
   workflow_dispatch:
 
 concurrency:

@@ -37,6 +37,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { applyEdits, modify, parse } from "jsonc-parser"
+import { Filesystem } from "@/util/filesystem"
 
 const log = Log.create({ service: "mcp" })
 const DEFAULT_TIMEOUT = 30_000
@@ -48,16 +49,17 @@ const TolerantListToolsResultSchema = ListToolsResultSchema.extend({
 // Replace one server entry in a jsonc config file in place, keeping comments and sibling keys
 // intact. Returns false when the file is absent or no longer declares that server (raced removal
 // or a shadowed origin) so the caller can surface that the plaintext may still live there.
+// Filesystem (node:fs) rather than Bun.file: this module is also bundled into the desktop's
+// Node sidecar, whose build fails on any Bun-only runtime API.
 export async function rewriteMcpEntry(origin: string, server: string, entry: ConfigMCPV1.Info): Promise<boolean> {
-  const file = Bun.file(origin)
-  if (!(await file.exists())) return false
-  const text = await file.text()
+  if (!(await Filesystem.exists(origin))) return false
+  const text = await Filesystem.readText(origin)
   const parsed = parse(text) as { mcp?: Record<string, unknown> } | undefined
   if (!parsed || typeof parsed !== "object" || !parsed.mcp || !(server in parsed.mcp)) return false
   const edits = modify(text, ["mcp", server], structuredClone(entry), {
     formattingOptions: { tabSize: 2, insertSpaces: true },
   })
-  await Bun.file(origin).write(applyEdits(text, edits))
+  await Filesystem.write(origin, applyEdits(text, edits))
   return true
 }
 
