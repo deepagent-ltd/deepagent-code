@@ -9,14 +9,10 @@ name: desktop-build
 # Linux packages are unsigned here.
 
 on:
+  # Only the dev->main merge (push to main); ad-hoc runs via workflow_dispatch.
   push:
     branches:
       - main
-      # W-01 §2.2.6 trigger extension: exercise the Windows packaging path on
-      # the dev mainline too (windows targets only, no release publishing — the
-      # release job stays main-only), so NSIS + Trusted Signing + the packaged
-      # smoke regress on every dev push instead of only at release time.
-      - dev
   workflow_dispatch:
     inputs:
       channel:
