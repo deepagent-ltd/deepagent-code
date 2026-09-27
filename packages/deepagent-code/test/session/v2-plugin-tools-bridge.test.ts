@@ -12,7 +12,10 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { V2PluginToolsBridge } from "@/session/v2-plugin-tools-bridge"
 import { InstanceRegistry } from "@/effect/instance-registry"
+import { InstanceRef } from "@/effect/instance-ref"
 import { ToolRegistry } from "@/tool/registry"
+import { adaptCustomTool, customToolName } from "@/tool/custom-tool-adapter"
+import { CustomToolRejections } from "@/tool/custom-tool-rejections"
 import type { InstanceContext } from "@/project/instance-context"
 import * as V1Tool from "@/tool/tool"
 
@@ -51,6 +54,7 @@ const recordingEvents = (published: Array<{ type: string; data: unknown }>) =>
         published.push({ type: definition.type, data })
         return data
       })) as EventV2.Interface["publish"],
+    publishChecked: (() => Effect.die("unused")) as EventV2.Interface["publishChecked"],
     subscribe: () => Stream.empty,
     all: () => Stream.empty,
     aggregateEvents: () => Stream.empty,
@@ -59,7 +63,9 @@ const recordingEvents = (published: Array<{ type: string; data: unknown }>) =>
     beforeCommit: () => Effect.void,
     project: (() => Effect.void) as EventV2.Interface["project"],
     replay: (() => Effect.void) as EventV2.Interface["replay"],
+    replayChecked: (() => Effect.die("unused")) as EventV2.Interface["replayChecked"],
     replayAll: (() => Effect.succeed(undefined)) as EventV2.Interface["replayAll"],
+    replayAllChecked: (() => Effect.die("unused")) as EventV2.Interface["replayAllChecked"],
     snapshot: () => Effect.succeed(undefined),
     checkpoint: () => Effect.die("unused"),
     claim: () => Effect.die("unused"),
@@ -120,6 +126,21 @@ describe("V2PluginToolsBridge native execution semantics", () => {
       }),
   }
 
+  const attachmentTool: V1Tool.Def = {
+    id: "attachment_tool",
+    description: "returns a remote attachment for Core materialization",
+    parameters: Schema.Unknown,
+    execute: () =>
+      Effect.succeed({
+        title: "remote image",
+        metadata: {},
+        output: "Image attached",
+        attachments: [
+          { type: "file", mime: "image/png", url: "https://assets.example.test/image.png", filename: "image.png" },
+        ],
+      }),
+  }
+
   const askingTool: V1Tool.Def = {
     id: "asking_tool",
     description: "asks for permission through ctx.ask",
@@ -128,6 +149,18 @@ describe("V2PluginToolsBridge native execution semantics", () => {
       Effect.gen(function* () {
         yield* ctx.ask({ permission: "asking_tool", patterns: ["*"], metadata: { args }, always: ["*"] })
         return { title: "", metadata: {}, output: "ran" }
+      }),
+  }
+
+  const instanceBoundTool: V1Tool.Def = {
+    id: "instance_bound_tool",
+    description: "uses a legacy instance-scoped service during execution",
+    parameters: Schema.Unknown,
+    execute: () =>
+      Effect.gen(function* () {
+        const current = yield* InstanceRef
+        if (!current) return yield* Effect.die("missing instance context")
+        return { title: "", metadata: {}, output: current.directory }
       }),
   }
 
@@ -159,6 +192,44 @@ describe("V2PluginToolsBridge native execution semantics", () => {
   // One shared runtime/instance: registration is instance-scoped in production, and a single
   // initializeInstance registers every tool below exactly once.
   const slow = slowTool()
+
+  test("normalizes valid custom names and rejects names Core cannot register", () => {
+    expect(customToolName("plugin.action")).toBe("plugin_action")
+    expect(adaptCustomTool({ ...metadataTool, id: "1-invalid!" })).toBeUndefined()
+  })
+
+  test("registers app-owned tools from the instance roster and removes them on disposal", async () => {
+    const hostInstance = { ...instance }
+    const hostIDs = ["lsp", "profile", "debug", "query_log"]
+    const hostRt = ManagedRuntime.make(
+      Layer.mergeAll(
+        ApplicationTools.layer,
+        InstanceRegistry.layer,
+        V2PluginToolsBridge.layer.pipe(
+          Layer.provide(ApplicationTools.layer),
+          Layer.provide(InstanceRegistry.layer),
+          Layer.provide(Layer.succeed(ToolRegistry.Service, ToolRegistry.Service.of({
+            ids: () => Effect.succeed(hostIDs),
+            all: () => Effect.succeed(hostIDs.map((id) => ({ ...metadataTool, id }))),
+            custom: () => Effect.succeed([]),
+            named: () => Effect.die("unused"),
+            tools: () => Effect.die("unused"),
+          }))),
+        ),
+      ),
+    )
+    try {
+      await hostRt.runPromise(InstanceRegistry.initializeInstance(hostInstance))
+      expect(await hostRt.runPromise(Effect.map(ApplicationTools.Service, (service) =>
+        [...service.entries().keys()].toSorted()))).toEqual(hostIDs.toSorted())
+      await hostRt.runPromise(InstanceRegistry.disposeInstanceState(hostInstance))
+      expect(await hostRt.runPromise(Effect.map(ApplicationTools.Service, (service) =>
+        service.entries().size))).toBe(0)
+    } finally {
+      await hostRt.dispose()
+    }
+  })
+
   const rt = ManagedRuntime.make(
     Layer.mergeAll(
       ApplicationTools.layer,
@@ -173,7 +244,7 @@ describe("V2PluginToolsBridge native execution semantics", () => {
               ids: () => Effect.succeed([]),
               all: () => Effect.succeed([]),
               custom: () =>
-                Effect.succeed([metadataTool, progressTool, askingTool, slow.def]),
+                Effect.succeed([metadataTool, progressTool, attachmentTool, askingTool, instanceBoundTool, slow.def]),
               named: () => Effect.die("unused"),
               tools: () => Effect.die("unused"),
             }),
@@ -198,6 +269,16 @@ describe("V2PluginToolsBridge native execution semantics", () => {
     expect(output.content[0]).toEqual({ type: "text", text: "did work" })
   })
 
+  test("keeps remote plugin attachments for the Core artifact materializer", async () => {
+    const output = await rt.runPromise(settle("attachment_tool"))
+    expect(output.content[1]).toEqual({
+      type: "file",
+      source: { type: "url", url: "https://assets.example.test/image.png" },
+      mime: "image/png",
+      name: "image.png",
+    })
+  })
+
   test("ctx.metadata publishes a durable Tool.Progress event through EventV2", async () => {
     const published: Array<{ type: string; data: unknown }> = []
     const output = await rt.runPromise(
@@ -218,6 +299,11 @@ describe("V2PluginToolsBridge native execution semantics", () => {
       settle("asking_tool").pipe(Effect.provideService(PermissionV2.Service, approvedPermission)),
     )
     expect((output.structured as Record<string, unknown>)["output"]).toBe("ran")
+  })
+
+  test("settle restores the registering instance for legacy wrapper dependencies", async () => {
+    const output = await rt.runPromise(settle("instance_bound_tool"))
+    expect((output.structured as Record<string, unknown>)["output"]).toBe(instance.directory)
   })
 
   test("ctx.ask rejection is a typed tool failure, never a die inside settle", async () => {
@@ -284,7 +370,7 @@ describe("V2PluginToolsBridge native execution semantics", () => {
               ToolRegistry.Service.of({
                 ids: () => Effect.succeed([]),
                 all: () => Effect.succeed([]),
-                custom: () => Effect.succeed([metadataTool]),
+                custom: () => Effect.succeed([metadataTool, { ...metadataTool, id: "1-invalid!" }]),
                 named: () => Effect.die("unused"),
                 tools: () => Effect.die("unused"),
               }),
@@ -295,16 +381,20 @@ describe("V2PluginToolsBridge native execution semantics", () => {
     )
     const registered = () =>
       reloadRt.runPromise(
-        Effect.map(Effect.service(ApplicationTools.Service), (applications) =>
-          applications.entries().has("meta_tool"),
-        ),
+        Effect.map(Effect.service(ApplicationTools.Service), (applications) => applications.entries().has("meta_tool")),
+      )
+    const rejected = () =>
+      reloadRt.runPromise(
+        Effect.map(ApplicationTools.Service, (applications) => CustomToolRejections.count(applications)),
       )
 
     await reloadRt.runPromise(InstanceRegistry.initializeInstance(instance))
     expect(await registered()).toBe(true)
+    expect(await rejected()).toBe(1)
 
     await reloadRt.runPromise(InstanceRegistry.disposeInstanceState(instance))
     expect(await registered()).toBe(false)
+    expect(await rejected()).toBe(0)
 
     const reloaded: InstanceContext = {
       directory: "/fixture/project",
@@ -313,6 +403,53 @@ describe("V2PluginToolsBridge native execution semantics", () => {
     } as InstanceContext
     await reloadRt.runPromise(InstanceRegistry.initializeInstance(reloaded))
     expect(await registered()).toBe(true)
+    expect(await rejected()).toBe(1)
     await reloadRt.dispose()
+  })
+
+  test("live plugin removal unregisters its tool and the next snapshot sees replacements", async () => {
+    let definitions: V1Tool.Def[] = [metadataTool]
+    let changed: (() => Effect.Effect<void>) | undefined
+    const liveRt = ManagedRuntime.make(
+      Layer.mergeAll(
+        ApplicationTools.layer,
+        InstanceRegistry.layer,
+        V2PluginToolsBridge.layer.pipe(
+          Layer.provide(ApplicationTools.layer),
+          Layer.provide(InstanceRegistry.layer),
+          Layer.provide(
+            Layer.succeed(
+              ToolRegistry.Service,
+              ToolRegistry.Service.of({
+                ids: () => Effect.succeed([]),
+                all: () => Effect.succeed([]),
+                custom: () => Effect.succeed(definitions),
+                watchCustom: (callback) =>
+                  Effect.sync(() => {
+                    changed = callback
+                    return () => {
+                      changed = undefined
+                    }
+                  }),
+                named: () => Effect.die("unused"),
+                tools: () => Effect.die("unused"),
+              }),
+            ),
+          ),
+        ),
+      ),
+    )
+    const registered = () =>
+      liveRt.runPromise(Effect.map(ApplicationTools.Service, (applications) => [...applications.entries().keys()]))
+    await liveRt.runPromise(InstanceRegistry.initializeInstance(instance))
+    expect(await registered()).toContain("meta_tool")
+    const history = await liveRt.runPromise(settle("meta_tool"))
+    definitions = [progressTool]
+    if (!changed) throw new Error("plugin change listener missing")
+    await liveRt.runPromise(changed())
+    expect(await registered()).not.toContain("meta_tool")
+    expect(await registered()).toContain("progress_tool")
+    expect((history.structured as Record<string, unknown>)["output"]).toBe("did work")
+    await liveRt.dispose()
   })
 })

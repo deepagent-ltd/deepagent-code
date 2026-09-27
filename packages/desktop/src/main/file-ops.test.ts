@@ -323,6 +323,7 @@ describe("assertWithinRoot", () => {
   test("accepts paths inside the root", () => {
     const root = join(tmpdir(), "workspace")
     expect(assertWithinRoot(root, join(root, "a.txt"), join(root, "sub", "b.txt"))).toBeNull()
+    expect(assertWithinRoot(root, join(root, "..notes.txt"))).toBeNull()
   })
 
   test("rejects a path that escapes the root via ..", () => {
@@ -337,6 +338,14 @@ describe("assertWithinRoot", () => {
     const res = assertWithinRoot(root, "/etc/passwd")
     expect(res?.ok).toBe(false)
   })
+
+  if (process.platform === "win32") {
+    test("rejects other drives and UNC shares", () => {
+      const root = "C:\\workspace"
+      expect(assertWithinRoot(root, "D:\\outside\\secret.txt")?.ok).toBe(false)
+      expect(assertWithinRoot(root, "\\\\server\\share\\secret.txt")?.ok).toBe(false)
+    })
+  }
 
   test("rejects when any one of several paths escapes", () => {
     const root = join(tmpdir(), "workspace")

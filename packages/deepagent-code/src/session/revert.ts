@@ -58,7 +58,15 @@ export const layer = Layer.effect(
       if (!target) return session
       const lastUser = Option.getOrUndefined(
         yield* sessions
-          .findMessage(input.sessionID, (message) => message.info.role === "user" && message.info.id <= input.messageID)
+          .findMessage(
+            input.sessionID,
+            (message) =>
+              message.info.role === "user" &&
+              message.info.id <= input.messageID &&
+              // Revert itself publishes a user-shaped Synthetic notice. It is not a turn anchor.
+              (message.parts.length === 0 ||
+                message.parts.some((part) => part.type !== "text" || !part.synthetic)),
+          )
           .pipe(Effect.orDie),
       )?.info as SessionV1.User | undefined
       const remaining = [] as SessionV1.Part[]

@@ -453,14 +453,21 @@ describe("tool.task V2 authority E2E", () => {
       const { db } = yield* Database.Service
       const run = yield* db.select().from(TaskRunTable).where(eq(TaskRunTable.parent_session_id, chat.id)).get().pipe(Effect.orDie)
       expect(run?.state).toBe("completed")
-      // The validated success path seals no failure evidence.
       const evidence = yield* db
         .select()
         .from(V2StructuredOutputEvidenceTable)
         .where(eq(V2StructuredOutputEvidenceTable.run_id, run!.run_id))
         .get()
         .pipe(Effect.orDie)
-      expect(evidence).toBeUndefined()
+      const transcript = yield* (yield* SessionV2.Service).messages({
+        sessionID: SessionSchema.ID.make(run!.child_session_id),
+        order: "asc",
+      })
+      expect(evidence?.validation_outcome).toBe("validated")
+      expect(evidence?.raw_output).toBe('{"verdict":"solid"}')
+      expect(evidence?.output_message_id).toBe(
+        transcript.filter((message): message is SessionMessage.Assistant => message.type === "assistant").at(-1)?.id,
+      )
     }),
   )
 
@@ -513,6 +520,13 @@ describe("tool.task V2 authority E2E", () => {
       expect(evidence?.schema_name).toBe("inline")
       expect(evidence?.raw_output).toContain(`"_degraded":true`)
       expect(evidence?.owner_token).toBe(`core-v2-task-finalizer:${run!.run_id}`)
+      const transcript = yield* (yield* SessionV2.Service).messages({
+        sessionID: SessionSchema.ID.make(run!.child_session_id),
+        order: "asc",
+      })
+      expect(evidence?.output_message_id).toBe(
+        transcript.filter((message): message is SessionMessage.Assistant => message.type === "assistant").at(-1)?.id,
+      )
     }),
   )
 

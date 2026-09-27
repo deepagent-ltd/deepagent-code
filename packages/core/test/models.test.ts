@@ -5,10 +5,11 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { Global } from "@deepagent-code/core/global"
 import { ModelsDev, OFFICIAL_VENDORED_CATALOG } from "@deepagent-code/core/models-dev"
-import { EventV2 } from "@deepagent-code/core/event"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { it } from "./lib/effect"
-import { readFile, rm, writeFile, utimes, mkdir, mkdtemp } from "fs/promises"
+import { eventLayer } from "./fixture/event-layer"
+import { readFile, rm, writeFile, utimes, mkdir } from "fs/promises"
+import { mkdtempSync } from "node:fs"
 import path from "path"
 import os from "os"
 import { tmpRootAsync } from "./fixture/tmpdir"
@@ -29,7 +30,10 @@ afterAll(() => {
   Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = ORIGINAL_DISABLE_FETCH
 })
 
-const cacheFile = path.join(Global.Path.cache, "models.json")
+const testRoot = mkdtempSync(path.join(os.tmpdir(), "deepagent-code-models-test-"))
+const testCache = path.join(testRoot, "cache")
+const cacheFile = path.join(testCache, "models.json")
+const testGlobal = Global.layerWith({ cache: testCache, state: path.join(testRoot, "state") })
 
 const fixture: Record<string, ModelsDev.Provider> = {
   acme: {
@@ -89,7 +93,7 @@ const makeMockClient = (state: Ref.Ref<MockState>) =>
     }),
   )
 
-const buildLayer = (state: Ref.Ref<MockState>, global = Global.layer) => {
+const buildLayer = (state: Ref.Ref<MockState>, global = testGlobal) => {
   const fs = FSUtil.defaultLayer
   const flock = EffectFlock.layer.pipe(Layer.provide(fs), Layer.provide(global))
   // Layer.fresh is required: ModelsDev.layer is a module-level Layer constant,
@@ -98,7 +102,7 @@ const buildLayer = (state: Ref.Ref<MockState>, global = Global.layer) => {
   return Layer.fresh(ModelsDev.layer).pipe(
     Layer.provide(Layer.succeed(HttpClient.HttpClient, makeMockClient(state))),
     Layer.provide(fs),
-    Layer.provide(EventV2.defaultLayer),
+    Layer.provide(eventLayer()),
     Layer.provide(global),
     Layer.provide(flock),
   )
@@ -106,7 +110,7 @@ const buildLayer = (state: Ref.Ref<MockState>, global = Global.layer) => {
 
 const writeCacheText = (text: string, mtimeMs?: number) =>
   Effect.promise(async () => {
-    await mkdir(Global.Path.cache, { recursive: true })
+    await mkdir(testCache, { recursive: true })
     await writeFile(cacheFile, text)
     if (mtimeMs !== undefined) {
       const t = mtimeMs / 1000
@@ -124,7 +128,7 @@ beforeEach(async () => {
 })
 
 afterAll(async () => {
-  await rm(cacheFile, { force: true })
+  await rm(testRoot, { recursive: true, force: true })
 })
 
 // Vendored first-party catalog entries (deepagent) are always overlaid under

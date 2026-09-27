@@ -1,3 +1,4 @@
+import { eventLayer } from "../fixture/event-layer"
 import { describe, expect } from "bun:test"
 import { createGroq } from "@ai-sdk/groq"
 import { Effect, Layer } from "effect"
@@ -10,7 +11,7 @@ import { it, model } from "./provider-helper"
 import { testEffect } from "../lib/effect"
 
 const aisdkIt = testEffect(
-  AISDK.layer.pipe(Layer.provideMerge(PluginV2.locationLayer.pipe(Layer.provide(EventV2.defaultLayer)))),
+  AISDK.layer.pipe(Layer.provideMerge(PluginV2.locationLayer.pipe(Layer.provide(eventLayer())))),
 )
 
 describe("GroqPlugin", () => {

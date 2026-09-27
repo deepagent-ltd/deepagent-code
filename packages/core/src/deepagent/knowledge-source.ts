@@ -25,6 +25,7 @@ import { CanonicalJson } from "../util/canonical-json"
 import { Hash } from "../util/hash"
 import path from "node:path"
 import { AsyncLocalStorage } from "node:async_hooks"
+import { existsSync, readdirSync, readFileSync } from "node:fs"
 
 // V3.2.1 decision B (docs/34 §8): the read-side adapter between the knowledge retriever and the
 // durable DocumentStore. Durable knowledge lives in TWO roots under the single injected base
@@ -277,7 +278,13 @@ export const listAllForWorkspace = (workspacePath: string): readonly ReviewItem[
       out.push(item)
     }
   }
-  return out
+  const inbox = inboxMetadataForWorkspace(workspacePath)
+  return out.map((item) => {
+    const metadata = item.sourceStore === "project" && item.approval_status === "pending"
+      ? inbox.get(item.candidateId)
+      : undefined
+    return metadata ? { ...item, ...metadata } : item
+  })
 }
 
 export const reviewSummaryForWorkspace = (workspacePath: string): { readonly pendingCount: number } => ({
@@ -300,6 +307,42 @@ export type ReviewItem = {
   //   "durable" (or legacy untagged)  → user-global bucket
   //   "durable:project:<project_id>"  → that project's bucket
   readonly scope: string
+  readonly inboxID?: string
+  readonly reviewReason?: string
+  readonly reasonGroup?: string
+}
+
+const inboxMetadataForWorkspace = (workspacePath: string) => {
+  const projectID = projectIdForWorkspace(workspacePath)
+  const dir = path.join(new DeepAgentCodeHome(ensureBase()).projectPaths(projectID).docsDir, "memory-inbox")
+  if (!existsSync(dir)) return new Map<string, { inboxID: string; reviewReason: string; reasonGroup: string }>()
+  return new Map(
+    readdirSync(dir)
+      .filter((file) => file.endsWith(".json") && !existsSync(path.join(dir, `${file}.revoked`)))
+      .flatMap((file): Array<[string, { inboxID: string; reviewReason: string; reasonGroup: string }]> => {
+        try {
+          const value: unknown = JSON.parse(readFileSync(path.join(dir, file), "utf8"))
+          if (!value || typeof value !== "object" || Array.isArray(value)) return []
+          const item = value as Record<string, unknown>
+          if (!item.candidate || typeof item.candidate !== "object" || Array.isArray(item.candidate)) return []
+          const candidateID = (item.candidate as Record<string, unknown>).candidate_id
+          if (
+            typeof candidateID !== "string" ||
+            item.id !== `inbox:${candidateID}` ||
+            item.project_id !== projectID ||
+            item.status !== "pending" ||
+            typeof item.reason !== "string"
+          ) return []
+          return [[candidateID, {
+            inboxID: item.id,
+            reviewReason: item.reason,
+            reasonGroup: typeof item.reason_group === "string" ? item.reason_group : item.reason,
+          }]]
+        } catch {
+          return []
+        }
+      }),
+  )
 }
 
 export type ReviewAuthority = Pick<

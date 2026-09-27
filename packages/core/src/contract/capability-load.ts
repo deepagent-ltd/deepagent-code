@@ -11,12 +11,12 @@ import { contentDigest } from "./digest"
 // L2 single <=1200 tokens, per turn <=2 new / 2400 tokens.
 // Pure-new contract module: not imported by any production module this wave.
 //
-// Cross-field coherence: this contract freezes the shape and the versioned enums,
-// not cross-field rules. Coherence between fields (e.g. a `denied`/`disabled`
-// state implies a matching `reasonCode`; `budget_exceeded` implies
-// `newThisTurn` > `limitNewPerTurn`; an uncertainty `timeout` implies
-// `network_unknown`) is enforced by consumers / refinements on the V2 request
-// path, NOT by the frozen shape.
+// The tagged union enforces each state's own fields (for example, denied and
+// disabled require their respective reasonCode). This schema does not enforce
+// relationships between independent common fields. The production loader
+// persists only actually-loaded bodies; budget_exceeded is a transient result
+// with attempted-budget details and no durable session_capability_load row.
+// Request-path consumers enforce any further cross-field rules.
 //
 // Invariant literals: fields frozen to an always-true literal (e.g.
 // `refBelongsToActiveSnapshot`, `historyStaysReadable`,
@@ -236,7 +236,9 @@ const contentLoadCommon = {
 }
 
 /**
- * Durable capability load receipt `session_capability_load` (design §7.5).
+ * Capability load receipt shape (design §7.5). Loaded bodies use it for durable
+ * `session_capability_load` rows; rejected attempts use the same tagged shape
+ * transiently and do not create a loaded-body audit row.
  * Carries the load/session/activity/turn identity, catalog snapshot, body /
  * runtime / permission hashes, permission + runtime binding, request/result
  * hash (so an exact retry returns the same receipt + body hash), the tagged

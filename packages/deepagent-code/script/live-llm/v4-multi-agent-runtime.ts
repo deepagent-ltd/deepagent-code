@@ -77,6 +77,15 @@ if (
   throw new Error(`V4 event did not traverse and ack the durable dispatcher delivery: ${JSON.stringify(artifact.v4.dispatch)}`)
 }
 if (
+  artifact.v4.ingressReceipt?.eventRef !== `event://${artifact.v4.event.id}` ||
+  artifact.v4.ingressReceipt.sessionID !== artifact.v4.parentSession.id ||
+  artifact.v4.ingressReceipt.status !== "resolved" ||
+  !/^[0-9a-f]{64}$/.test(artifact.v4.ingressReceipt.envelopeDigest) ||
+  artifact.v4.ingressReceipt.parentUserMessages !== 0
+) {
+  throw new Error(`V4 DAG did not persist a receipt-only V2 ingress: ${JSON.stringify(artifact.v4.ingressReceipt)}`)
+}
+if (
   artifact.v4.summary.hasUnfinished ||
   artifact.v4.summary.outcomes.length !== 2 ||
   artifact.v4.summary.outcomes.some((outcome) => outcome.status !== "completed")

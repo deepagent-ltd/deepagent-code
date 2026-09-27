@@ -26,14 +26,14 @@ import type { DatabaseMigration } from "../database/migration"
 // ledger is defined HERE (the event hotspot) via the idempotent migration pattern; wiring it into the
 // shared migration registry is the main agent's / database hotspot's job.
 
-export type ConsumerReceiptStatus = "pending" | "done"
+export type ConsumerReceiptStatus = "pending" | "done" | "dead"
 
 export const ConsumerReceiptTable = sqliteTable(
   "deepagent_consumer_receipt",
   {
     consumer_kind: text().notNull(),
     source_event_id: text().notNull(),
-    // pending → done. `pending` is a NOT-YET-completed (failed / in-flight) delivery — retryable.
+    // pending → done for side effects; a terminal spool failure is recorded as dead.
     status: text().$type<ConsumerReceiptStatus>().notNull(),
     // number of times the side effect has been ATTEMPTED (incremented on each run).
     attempts: integer().notNull().default(0),

@@ -29,7 +29,7 @@ afterEach(async () => {
 
 const node = CrossSpawnSpawner.defaultLayer
 
-const it = testEffect(Layer.mergeAll(ToolRegistry.defaultLayer, node))
+const it = testEffect(Layer.mergeAll(ToolRegistry.testLayer, node))
 
 describe("tool.skill", () => {
   it.instance("execute returns skill content block with files", () =>

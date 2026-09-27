@@ -35,6 +35,8 @@ export type CausationPolicy = {
 export interface EventTypeRegistration {
   readonly eventType: string
   readonly kind: EventKind
+  /** Event runtime execution lane. Omitted registrations retain the single-admission lane. */
+  readonly execution?: "single" | "dag"
   /** Frozen `EventSchemaRef.schemaId` the publisher requires on the envelope. */
   readonly schemaId: string
   /** Frozen `EventSchemaRef.schemaVersion` the publisher requires on the envelope. */
@@ -115,6 +117,8 @@ export const createEventRegistry = (seed?: ReadonlyArray<EventTypeRegistration>)
   const map = new Map<string, EventTypeRegistration>()
   for (const registration of seed ?? []) {
     if (map.has(registration.eventType)) throw new Error(`Duplicate event registration: ${registration.eventType}`)
+    if (registration.execution !== undefined && registration.execution !== "single" && registration.execution !== "dag")
+      throw new Error(`Invalid execution mode for event registration: ${registration.eventType}`)
     if (map.size >= MAX_EVENT_TYPE_REGISTRATIONS)
       throw new Error(`Event registration limit exceeded (${MAX_EVENT_TYPE_REGISTRATIONS})`)
     map.set(registration.eventType, registration)

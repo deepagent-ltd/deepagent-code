@@ -1,0 +1,116 @@
+name: release-qualification-v2
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_commit:
+        description: "Exact SHA at release-candidates/v<version>"
+        required: true
+        type: string
+      candidate_tree:
+        description: "Exact tree SHA for candidate_commit"
+        required: true
+        type: string
+      review_ref:
+        description: "Optional refs/heads/release-evidence/... branch containing release-qualification/review.json and evidence/"
+        required: false
+        type: string
+      review_commit:
+        description: "Exact SHA at review_ref (required with review_ref)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  qualification:
+    if: github.repository == 'deepagent-ltd/deepagent-code'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 120
+    environment: release-qualification
+    steps:
+      - name: Checkout exact dispatch ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Assert frozen candidate and review ref
+        env:
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_TREE: ${{ inputs.candidate_tree }}
+          REVIEW_REF: ${{ inputs.review_ref }}
+          REVIEW_COMMIT: ${{ inputs.review_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" =~ ^refs/heads/release-candidates/v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]
+          [[ "$CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_TREE" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GITHUB_SHA" == "$CANDIDATE_COMMIT" ]]
+          [[ "$(git rev-parse HEAD)" == "$CANDIDATE_COMMIT" ]]
+          [[ "$(git rev-parse 'HEAD^{tree}')" == "$CANDIDATE_TREE" ]]
+          [[ "$(git ls-remote origin "$GITHUB_REF" | cut -f1)" == "$CANDIDATE_COMMIT" ]]
+          [[ -z "$(git status --porcelain --untracked-files=all)" ]]
+          if [[ -n "$REVIEW_REF" || -n "$REVIEW_COMMIT" ]]; then
+            [[ "$REVIEW_REF" =~ ^refs/heads/release-evidence/[A-Za-z0-9._/-]+$ ]]
+            [[ "$REVIEW_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$(git ls-remote origin "$REVIEW_REF" | cut -f1)" == "$REVIEW_COMMIT" ]]
+            git fetch --no-tags origin "$REVIEW_REF"
+            [[ "$(git rev-parse FETCH_HEAD)" == "$REVIEW_COMMIT" ]]
+            mkdir -p "$RUNNER_TEMP/ri51-review"
+            git archive "$REVIEW_COMMIT" release-qualification | tar -xf - -C "$RUNNER_TEMP/ri51-review"
+          fi
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Verify protected reviewer configuration
+        if: inputs.review_ref != '' || inputs.review_commit != ''
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_QUALIFICATION_REVIEW_TOKEN || github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/environments/release-qualification" > "$RUNNER_TEMP/ri51-environment.json"
+          bun packages/core/script/evidence-ledger/produce-qualification-bundle.ts \
+            --assert-environment "$RUNNER_TEMP/ri51-environment.json"
+
+      - name: Capture real static checks
+        env:
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_TREE: ${{ inputs.candidate_tree }}
+        run: |
+          bun packages/core/script/evidence-ledger/run-qualification-checks.ts \
+            --commit "$CANDIDATE_COMMIT" --tree "$CANDIDATE_TREE" \
+            --out "$RUNNER_TEMP/ri51-checks.json"
+
+      - name: Build content-addressed qualification bundle
+        env:
+          CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          CANDIDATE_TREE: ${{ inputs.candidate_tree }}
+          REVIEW_REF: ${{ inputs.review_ref }}
+          REVIEW_COMMIT: ${{ inputs.review_commit }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "$REVIEW_REF" ]]; then
+            args+=(--review-dir "$RUNNER_TEMP/ri51-review/release-qualification" \
+              --review-ref "$REVIEW_REF" --review-commit "$REVIEW_COMMIT")
+          fi
+          bun packages/core/script/evidence-ledger/produce-qualification-bundle.ts \
+            --out "$RUNNER_TEMP/ri51-qualification" \
+            --commit "$CANDIDATE_COMMIT" --tree "$CANDIDATE_TREE" \
+            --run-id "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --checks "$RUNNER_TEMP/ri51-checks.json" "${args[@]}"
+
+      - name: Upload reviewed qualification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-qualification-v2
+          path: ${{ runner.temp }}/ri51-qualification/
+          if-no-files-found: error
+          retention-days: 30

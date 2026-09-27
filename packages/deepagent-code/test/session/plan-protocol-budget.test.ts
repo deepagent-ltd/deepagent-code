@@ -17,13 +17,11 @@ import { Location } from "@deepagent-code/core/location"
 import { LocationMutation } from "@deepagent-code/core/location-mutation"
 import { Policy } from "@deepagent-code/core/policy"
 import { Project } from "@deepagent-code/core/project"
-import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
-import { SessionTable } from "@deepagent-code/core/session/sql"
 import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
@@ -74,6 +72,8 @@ import { tmpRootShared } from "../fixture/fixture"
  */
 
 const root = mkdtempSync(tmpRootShared())
+// The V2 drain reads plan authority after the scripted tool calls.
+AgentGateway.DeepAgentSessionState.configure(root)
 const database = Database.layerFromPath(":memory:")
 
 const providerTurns = V2ProviderTurn.layer.pipe(
@@ -342,32 +342,6 @@ const answerTurn = (index: number): LLMEvent[] => [
   LLMEvent.finish({ reason: "stop" }),
 ]
 
-// A Session row must exist before the drain can resolve one, and every insert needs the global
-// project row (the same two seeds the finalizer harness performs).
-const seedProjectAndSession = (sessionID: SessionSchema.ID) =>
-  Effect.gen(function* () {
-    const { db } = yield* Database.Service
-    yield* db
-      .insert(ProjectTable)
-      .values({ id: Project.ID.global, worktree: AbsolutePath.make(root), sandboxes: [] })
-      .onConflictDoNothing()
-      .run()
-      .pipe(Effect.orDie)
-    yield* db
-      .insert(SessionTable)
-      .values({
-        id: sessionID,
-        project_id: Project.ID.global,
-        slug: sessionID,
-        directory: root,
-        title: "plan protocol budget",
-        version: "test",
-      })
-      .onConflictDoNothing()
-      .run()
-      .pipe(Effect.orDie)
-  })
-
 const drive = (name: string, scripted: LLMEvent[][], plan: PlanStub[]) =>
   Effect.gen(function* () {
     const sessionID = sessionFor(name)
@@ -375,8 +349,13 @@ const drive = (name: string, scripted: LLMEvent[][], plan: PlanStub[]) =>
     planCalls = 0
     responses = scripted
     planScript = plan
-    yield* seedProjectAndSession(sessionID)
     const session = yield* SessionV2.Service
+    const created = yield* session.create({
+      id: sessionID,
+      title: "plan protocol budget",
+      location: { directory: AbsolutePath.make(root) },
+    })
+    expect(created.id).toBe(sessionID)
     yield* session.prompt({ sessionID, prompt: new Prompt({ text: "do the work" }), resume: false })
     yield* session.resume(sessionID)
   })

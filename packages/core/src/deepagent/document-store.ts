@@ -470,7 +470,7 @@ export class DocumentStore {
     const cur = this.findLogical(input)
     if (cur) {
       const doc = this.upsert(input)
-      if (doc.status !== "active") return this.setStatus(doc.id, "active", documentRevision(doc))
+      if (doc.status !== "active") return this.appendOperationalStatus(doc.id, "active", documentRevision(doc))
       return this.get(doc.id)!
     }
 
@@ -486,6 +486,8 @@ export class DocumentStore {
   update(id: string, body: string, links?: readonly DocLink[]): Doc {
     const cur = this.get(id)
     if (!cur) throw new Error(`update: unknown doc ${id}`)
+    if (KNOWLEDGE_TYPES.has(cur.type) && ["candidate", "active"].includes(cur.status) && body !== cur.body)
+      throw new Error(`update: governed knowledge body requires commitGovernedEdit ${id}`)
     // Preserve the current status: an update (e.g. adding a link via link()) must not silently
     // demote an `active` doc back to `draft`.
     let next: Doc = {
@@ -515,6 +517,8 @@ export class DocumentStore {
   updateWithProvenance(id: string, body: string, provenance: Provenance, links?: readonly DocLink[]): Doc {
     const cur = this.get(id)
     if (!cur) throw new Error(`updateWithProvenance: unknown doc ${id}`)
+    if (KNOWLEDGE_TYPES.has(cur.type) && ["candidate", "active"].includes(cur.status) && body !== cur.body)
+      throw new Error(`updateWithProvenance: governed knowledge body requires commitGovernedEdit ${id}`)
     let next: Doc = {
       ...cur,
       body,
@@ -531,6 +535,67 @@ export class DocumentStore {
     next = { ...next, hash: computeHash(next) }
     this.persist(next)
     return next
+  }
+
+  // A human edit of visible or pending knowledge changes the material reviewed by governance.
+  // Commit the body and matching envelope in one CAS revision, so no active revision can carry an
+  // approval fingerprint for different content. Drafts have no governance decision to preserve.
+  commitGovernedEdit(
+    id: string,
+    expected: DocumentRevision,
+    body: string,
+    actor: GovernanceActor,
+    provenance: Provenance,
+  ): Doc {
+    const cur = this.requireRevision(id, expected, "commitGovernedEdit")
+    if (!KNOWLEDGE_TYPES.has(cur.type)) throw new Error(`commitGovernedEdit: not governed knowledge ${id}`)
+    if (actor.type !== "human" || provenance.source !== "human" || !actor.id)
+      throw new Error(`commitGovernedEdit: human actor and provenance required ${id}`)
+    const status = cur.status === "active" || cur.status === "draft" ? cur.status : "candidate"
+    const fingerprintForEdit = governanceFingerprint({ ...cur, body })
+    const governance = getGovernanceEnvelope(cur)
+    if (
+      body === cur.body &&
+      canonical(provenance) === canonical(cur.provenance) &&
+      (status === "draft" ||
+        (cur.status === status &&
+          governance?.fingerprint === fingerprintForEdit &&
+          governance.review_status === (status === "active" ? "approved" : "pending") &&
+          governance.actor_type === actor.type &&
+          governance.actor_id === actor.id))
+    )
+      return cur
+    const next: Doc = {
+      ...cur,
+      body,
+      provenance,
+      status,
+      version: cur.version + 1,
+      superseded_by: null,
+      hash: "",
+      ...(status !== "draft"
+        ? {
+            extensions: {
+              ...cur.extensions,
+              governance: {
+                ...(typeof cur.extensions?.candidate_id === "string"
+                  ? { candidate_id: cur.extensions.candidate_id }
+                  : {}),
+                fingerprint: fingerprintForEdit,
+                review_status: status === "active" ? "approved" : "pending",
+                actor_type: actor.type,
+                actor_id: actor.id,
+                source_doc_ref: `${cur.id}@v${cur.version}`,
+                updated_at: Date.now(),
+              } satisfies GovernanceEnvelope,
+            },
+          }
+        : {}),
+    }
+    this.assertKnowledgeConfidence(next)
+    const hashed = { ...next, hash: computeHash(next) }
+    this.persist(hashed)
+    return hashed
   }
 
   // Find an existing non-rejected knowledge doc that near-duplicates `input` (same type + scope +
@@ -576,8 +641,16 @@ export class DocumentStore {
     this.update(from, cur.body, [...cur.links, { rel, to, ...(note ? { note } : {}) }])
   }
 
-  setStatus(id: string, status: DocStatus, expected: DocumentRevision): Doc {
-    const cur = this.requireRevision(id, expected, "setStatus")
+  // Provisional environment facts are operational observations, not approved knowledge. Keep this
+  // narrow entry separate from governance so callers cannot make arbitrary documents active.
+  markProvisionalEnvironmentFact(id: string, expected: DocumentRevision): Doc {
+    const cur = this.requireRevision(id, expected, "markProvisionalEnvironmentFact")
+    if (cur.type !== "environment_fact") throw new Error(`markProvisionalEnvironmentFact: not an environment_fact ${id}`)
+    return this.appendOperationalStatus(id, "provisional", expected)
+  }
+
+  private appendOperationalStatus(id: string, status: "active" | "provisional", expected: DocumentRevision): Doc {
+    const cur = this.requireRevision(id, expected, "appendOperationalStatus")
     if (cur.status === status) return cur
     const next: Doc = {
       ...cur,

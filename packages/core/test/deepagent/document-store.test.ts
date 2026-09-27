@@ -6,6 +6,7 @@ import {
   DocumentStore,
   DocumentConflictError,
   documentRevision,
+  getGovernanceEnvelope,
   knowledgeSimilarity,
   tokenizeForSimilarity,
 } from "../../src/deepagent/document-store"
@@ -249,12 +250,15 @@ describe("F30-1 DocumentStore CAS + atomic durability", () => {
     expect(new DocumentStore(root).get(a.id)!.body).toBe("same body")
   })
 
-  test("setStatus appends a new revision and preserves the old version bytes", () => {
+  test("governance commit appends a new revision and preserves the old version bytes", () => {
     const a = store.create(design("body"))
     expect(a.version).toBe(1)
     const file = path.join(root, "docs", "design", `${a.id.replaceAll(":", "__")}@v1.json`)
     const before = readFileSync(file, "utf8")
-    store.setStatus(a.id, "active", documentRevision(a))
+    store.commitGovernance(a.id, documentRevision(a), {
+      kind: "approve",
+      actor: { type: "human", id: "reviewer" },
+    })
     expect(store.get(a.id)!.status).toBe("active")
     expect(store.get(a.id)!.version).toBe(2)
     expect(readFileSync(file, "utf8")).toBe(before)
@@ -262,6 +266,27 @@ describe("F30-1 DocumentStore CAS + atomic durability", () => {
     const files = readdirSync(dir).filter((f) => f.endsWith(".json"))
     expect(files.length).toBe(2)
     expect(new DocumentStore(root).get(a.id)!.status).toBe("active")
+  })
+
+  test("ordinary edits cannot change approved knowledge without a matching governance revision", () => {
+    const draft = store.create({
+      type: "knowledge",
+      scope: "durable",
+      body: "reviewed body",
+      description: "governed knowledge",
+      provenance: { source: "model" },
+      confidence: { evidence_strength: "strong", support_count: 1 },
+    })
+    const approved = store.commitGovernance(draft.id, documentRevision(draft), {
+      kind: "approve",
+      actor: { type: "human", id: "reviewer" },
+    })
+    expect(() => store.update(approved.id, "different body")).toThrow(/commitGovernedEdit/)
+    expect(() => store.updateWithProvenance(approved.id, "different body", { source: "human" })).toThrow(
+      /commitGovernedEdit/,
+    )
+    expect(store.get(approved.id)?.version).toBe(approved.version)
+    expect(getGovernanceEnvelope(store.get(approved.id)!)?.review_status).toBe("approved")
   })
 
   test("writeFileExclusive throws EEXIST on an existing path (the CAS primitive)", () => {

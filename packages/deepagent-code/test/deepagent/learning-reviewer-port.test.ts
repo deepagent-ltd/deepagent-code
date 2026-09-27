@@ -4,7 +4,6 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { LLMEvent, type LLMRequest } from "@deepagent-code/llm"
 import type { LLMClientShape } from "@deepagent-code/llm/route"
 import { Effect, Exit, Stream } from "effect"
-import type { Auth } from "@/auth"
 import { createLearningReviewerPort } from "@/deepagent/learning-reviewer-runner"
 import type { Provider } from "@/provider/provider"
 
@@ -61,15 +60,16 @@ test("reviewer uses one frozen native request without Session, workspace, tools,
   } as LLMClientShape
   const provider = {
     defaultModel: () => Effect.succeed({ providerID: model.providerID, modelID: model.id }),
+    getSmallModel: () => Effect.succeed(undefined),
     getProvider: () => Effect.succeed(providerInfo),
     getModel: () =>
       Effect.sync(() => {
         state.modelLookups += 1
         return model
       }),
-  } as unknown as Provider.Interface
+  }
   const port = createLearningReviewerPort({
-    auth: { get: () => Effect.succeed(undefined) } as unknown as Auth.Interface,
+    auth: { get: () => Effect.succeed(undefined) },
     provider,
     llmClient,
   })
@@ -122,6 +122,7 @@ test("reviewer uses one frozen native request without Session, workspace, tools,
   ])
   expect(state.requests[0].tools).toEqual([])
   expect(state.requests[0].generation?.temperature).toBe(0)
+  expect(state.requests[0].generation?.maxTokens).toBe(4_096)
   expect(state.requests[0].metadata).toBeUndefined()
   expect(state.requests[0].responseFormat).toMatchObject({ type: "json", name: "learning_reviewer_response" })
   expect(JSON.stringify(state.requests[0])).not.toContain("/workspace/private")
@@ -130,16 +131,17 @@ test("reviewer uses one frozen native request without Session, workspace, tools,
 test("reviewer rejects a mismatched durable run identity before model dispatch", async () => {
   let calls = 0
   const port = createLearningReviewerPort({
-    auth: { get: () => Effect.succeed(undefined) } as unknown as Auth.Interface,
+    auth: { get: () => Effect.succeed(undefined) },
     provider: {
       defaultModel: () => Effect.succeed({ providerID: model.providerID, modelID: model.id }),
+      getSmallModel: () => Effect.succeed(undefined),
       getProvider: () => Effect.succeed(providerInfo),
       getModel: () =>
         Effect.sync(() => {
           calls += 1
           return model
         }),
-    } as unknown as Provider.Interface,
+    },
     llmClient: {
       prepare: () => Effect.die("unexpected prepare"),
       stream: () => Stream.die("unexpected dispatch"),
@@ -165,4 +167,80 @@ test("reviewer rejects a mismatched durable run identity before model dispatch",
   )
   expect(Exit.isFailure(outcome)).toBe(true)
   expect(calls).toBe(0)
+})
+
+test("reviewer freezes the configured small model into its durable identity", async () => {
+  const small = { ...model, id: ModelV2.ID.make("gpt-small-reviewer") }
+  const port = createLearningReviewerPort({
+    auth: { get: () => Effect.succeed(undefined) },
+    provider: {
+      defaultModel: () => Effect.succeed({ providerID: model.providerID, modelID: model.id }),
+      getSmallModel: () => Effect.succeed(small),
+      getProvider: () => Effect.succeed(providerInfo),
+      getModel: () => Effect.succeed(small),
+    },
+    llmClient: {
+      prepare: () => Effect.die("unexpected prepare"),
+      stream: () => Stream.die("unexpected dispatch"),
+      generate: () => Effect.die("unexpected generate"),
+    } as LLMClientShape,
+  })
+  const identity = await Effect.runPromise(
+    port.identity({ attemptId: "review:small", jobId: "job-small", workspacePath: "/workspace/private" }),
+  )
+  expect(identity.providerId).toBe(small.providerID)
+  expect(identity.modelId).toBe(small.id)
+  expect(identity.policyHash).toMatch(/^[a-f0-9]{64}$/)
+})
+
+test("DeepSeek reviewer validates JSON locally without unsupported wire text.format", async () => {
+  const deepseek = {
+    ...model,
+    id: ModelV2.ID.make("deepseek-flash"),
+    providerID: ProviderV2.ID.make("deepseek"),
+    api: { id: "deepseek-flash", url: "https://api.deepseek.com", npm: "@ai-sdk/openai-compatible" },
+  }
+  const requests: LLMRequest[] = []
+  const port = createLearningReviewerPort({
+    auth: { get: () => Effect.succeed(undefined) },
+    provider: {
+      defaultModel: () => Effect.succeed({ providerID: deepseek.providerID, modelID: deepseek.id }),
+      getSmallModel: () => Effect.succeed(deepseek),
+      getProvider: () =>
+        Effect.succeed({ ...providerInfo, id: deepseek.providerID, models: { [deepseek.id]: deepseek } }),
+      getModel: () => Effect.succeed(deepseek),
+    },
+    llmClient: {
+      prepare: () => Effect.die("unexpected prepare"),
+      stream: (request: LLMRequest) => {
+        requests.push(request)
+        return Stream.make(
+          LLMEvent.textDelta({ id: "review-output", text: '{"verdict":"reject","selected_candidate_ids":[]}' }),
+          LLMEvent.finish({ reason: "stop" }),
+        )
+      },
+      generate: () => Effect.die("unexpected generate"),
+    } as LLMClientShape,
+  })
+  const identity = await Effect.runPromise(
+    port.identity({ attemptId: "review:deepseek", jobId: "job-deepseek", workspacePath: "/private" }),
+  )
+  expect(
+    await Effect.runPromise(
+      port.execute({
+        attemptId: "review:deepseek",
+        reviewSessionId: identity.reviewSessionId,
+        workspacePath: "/private",
+        providerId: identity.providerId,
+        modelId: identity.modelId,
+        policyHash: identity.policyHash,
+        requestRef: "artifact:request",
+        request: '{"candidates":[]}',
+      }),
+    ),
+  ).toEqual({ verdict: "reject", selectedCandidateIds: [] })
+  expect(requests).toHaveLength(1)
+  expect(requests[0].responseFormat).toBeUndefined()
+  expect(requests[0].system).toEqual([])
+  expect(requests[0].tools).toEqual([])
 })

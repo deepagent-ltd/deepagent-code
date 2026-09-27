@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect, test } from "bun:test"
 import { Database as BunDatabase } from "bun:sqlite"
 import path from "node:path"
@@ -6,7 +7,6 @@ import { Effect, Exit, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
 import { EventTable } from "@deepagent-code/core/event/sql"
-import { Project } from "@deepagent-code/core/project"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionMessage } from "@deepagent-code/core/session/message"
@@ -44,7 +44,7 @@ const stackOver = (database: Layer.Layer<Database.Service, unknown>) => {
     Layer.provide(events),
     Layer.provide(database),
     Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
-    Layer.provide(Project.defaultLayer),
+    Layer.provide(projectLayer(database)),
     Layer.provide(SessionExecution.noopLayer),
   )
   return Layer.mergeAll(database, events, projector, sessions)
@@ -252,6 +252,24 @@ describe("Core V2 durable TaskRun authority", () => {
         { version: 2, type: "execution_started" },
         { version: 3, type: "run_settled" },
       ])
+    }),
+  )
+
+  it.effect("a child interruption settles the durable task as interrupted", () =>
+    Effect.gen(function* () {
+      const { db, events, sessions } = yield* services
+      const parent = yield* sessions.create({ location: { directory } })
+      const submitted = yield* TaskRunAuthority.submit(db, events, sessions, specFor(parent.id))
+      const result = yield* TaskRunAuthority.execute({
+        db,
+        run: submitted.run,
+        sessions: { ...sessions, resume: () => Effect.interrupt },
+        timeoutMs: 5_000,
+      })
+      expect(result.outcome).toBe("interrupted")
+      const settled = yield* TaskRunAuthority.get(db, submitted.run.runID)
+      expect(settled?.state).toBe("interrupted")
+      expect(settled?.reason).toBe("human")
     }),
   )
 

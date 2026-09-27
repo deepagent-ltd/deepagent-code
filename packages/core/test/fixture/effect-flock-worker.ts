@@ -9,6 +9,8 @@ type Msg = {
   key: string
   dir: string
   holdMs?: number
+  clockSkewMs?: number
+  started?: string
   ready?: string
   active?: string
   done?: string
@@ -19,6 +21,8 @@ function sleep(ms: number) {
 }
 
 const msg: Msg = JSON.parse(process.argv[2])
+if (msg.clockSkewMs)
+  Object.defineProperty(performance, "timeOrigin", { value: performance.timeOrigin - msg.clockSkewMs })
 
 const testGlobal = Global.layerWith({
   home: os.homedir(),
@@ -43,6 +47,8 @@ async function job() {
     if (msg.active) await fs.rm(msg.active, { force: true })
   }
 }
+
+if (msg.started) await fs.writeFile(msg.started, String(process.pid))
 
 await Effect.runPromise(
   Effect.gen(function* () {

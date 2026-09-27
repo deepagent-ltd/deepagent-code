@@ -33,14 +33,16 @@ if (!packagedBinary) {
         expect(response.status).toBe(200)
         const body = (yield* Effect.promise(() => response.json())) as CompositionDigest.Record
 
-        expect(body.version).toBe(1)
+        expect(body.version).toBe(3)
         expect(body.digest).toMatch(/^[0-9a-f]{64}$/)
         expect(
           CompositionDigest.compute({
             sessionOwner: body.sessionOwner,
-            toolRegistry: body.toolRegistry,
+            v2Registry: body.v2Registry,
+            authoritySurface: body.authoritySurface,
             database: body.database,
             locationHost: body.locationHost,
+            serviceCoverage: body.serviceCoverage,
           }),
         ).toBe(body.digest)
 
@@ -70,13 +72,14 @@ if (!packagedBinary) {
         expect(body.database.readerProtocol).toBe(Database.SupportedReaderProtocol)
         expect(body.database.writerProtocol).toBe(Database.SupportedWriterProtocol)
 
-        // The packaged tool registry carries the core built-ins under the stable-set hash.
-        expect(body.toolRegistry.ids).toEqual([...body.toolRegistry.ids].toSorted())
-        expect(body.toolRegistry.count).toBe(body.toolRegistry.ids.length)
-        expect(body.toolRegistry.digest).toBe(
-          ContractDigest.contentDigest({ kind: "tool-registry", ids: body.toolRegistry.ids }),
+        // The packaged V2 registry carries the actual materialized core built-ins.
+        expect(body.v2Registry.materialized.ids).toEqual([...body.v2Registry.materialized.ids].toSorted())
+        expect(body.v2Registry.materialized.count).toBe(body.v2Registry.materialized.ids.length)
+        expect(body.v2Registry.legacyEgress.digest).toBe(
+          ContractDigest.contentDigest({ kind: "tool-registry", ids: body.v2Registry.legacyEgress.ids }),
         )
-        for (const id of ["read", "edit", "write", "glob", "grep"]) expect(body.toolRegistry.ids).toContain(id)
+        for (const id of ["read", "edit", "write", "glob", "grep"])
+          expect(body.v2Registry.materialized.ids).toContain(id)
       }),
     { timeout: 120_000 },
   )

@@ -57,6 +57,7 @@ const prompt = [
   "Run ./verify exactly as written. The first attempts fail even when nothing is wrong yet.",
   "After the first failure, read src/state.txt exactly once and edit its exact value from state=broken to state=ready.",
   "Then rerun ./verify without making another edit until it reports success.",
+  "The success marker can only be printed by a ./verify run that happens AFTER the edit — runs before the edit always fail by design. Keep rerunning ./verify after the edit until it prints the success marker; do not stop after the edit.",
   "Reply with the success marker ./verify printed. Never claim a success ./verify did not report.",
 ].join("\n")
 const artifact = await runLegacyLiveCases({

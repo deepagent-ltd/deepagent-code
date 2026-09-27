@@ -38,6 +38,10 @@ export interface Subtask {
   // declared write scope: glob-ish paths this subtask expects to modify (may be empty = unknown/broad).
   readonly fileScope: ReadonlyArray<string>
   readonly requiredAutonomy: AutonomyPolicy.ActionRisk
+  /** Optional arbitration facts for independent tasks in one DAG wave. Defaults come from the event. */
+  readonly priority?: DeepAgentEvent.EventPriority
+  readonly diffSize?: number
+  readonly origin?: "human" | "schedule" | "system"
 }
 
 export interface Partition {

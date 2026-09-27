@@ -16,6 +16,19 @@ const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 const ref = { activityKind: "legacy" as const, activityID: "activity-1" }
 
 describe("DeepAgentActivityAuthority", () => {
+  test("a final provider turn settles without opening a no-progress challenge", async () => {
+    await run(
+      Effect.gen(function* () {
+        const configured = yield* configure()
+        const first = yield* observe(configured.version, false, "finish")
+        const second = yield* observe(first.objective.version, false, "finish")
+        const third = yield* observe(second.objective.version, false, "finish")
+        expect(third.objective).toMatchObject({ state: "active", noProgressCount: 2 })
+        expect((yield* DeepAgentActivityAuthority.reconstruct(ref)).pendingPermissionRequestIDs).toEqual([])
+      }),
+    )
+  })
+
   test("backfills a disabled objective and projects the base activity terminal state", async () => {
     await run(
       Effect.gen(function* () {
@@ -969,10 +982,10 @@ describe("DeepAgentActivityAuthority", () => {
     )
   })
 
-  test("does not recover a healthy permission owner before its lease expires", async () => {
+  test("does not recover a healthy permission owner until its lease is removed", async () => {
     await run(
       Effect.gen(function* () {
-        yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID: "runtime-live", leaseMs: 10 })
+        yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID: "runtime-live", leaseMs: 60_000 })
         yield* DeepAgentActivityAuthority.requestPermission({
           ...ref,
           requestID: "permission-live-owner",
@@ -990,7 +1003,8 @@ describe("DeepAgentActivityAuthority", () => {
           "permission-live-owner",
         ])
 
-        yield* Effect.sleep("20 millis")
+        const { db } = yield* Database.Service
+        yield* db.run("DELETE FROM session_activity_permission_owner_lease WHERE owner_id = 'runtime-live'")
         expect(yield* DeepAgentActivityAuthority.recoverPendingPermissions("runtime-other")).toBe(1)
         expect((yield* DeepAgentActivityAuthority.reconstruct(ref)).objective.state).toBe("recovery_required")
       }),
@@ -1128,7 +1142,7 @@ describe("DeepAgentActivityAuthority", () => {
       Effect.gen(function* () {
         yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({
           ownerID: "runtime-effect-before-crash",
-          leaseMs: 10,
+          leaseMs: 60_000,
         })
         const request = yield* DeepAgentActivityAuthority.requestPermission({
           ...ref,
@@ -1170,7 +1184,7 @@ describe("DeepAgentActivityAuthority", () => {
           ),
         ).toBe(true)
         expect(yield* DeepAgentActivityAuthority.recoverPermissionEffects("runtime-effect-before-crash")).toBe(0)
-        yield* Effect.sleep("20 millis")
+        yield* db.run("DELETE FROM session_activity_permission_owner_lease WHERE owner_id = 'runtime-effect-before-crash'")
         const [started] = yield* DeepAgentActivityAuthority.permissionEffectsForToolCall({
           sessionID: "session-1",
           toolMessageID: "assistant-crash",
@@ -1190,7 +1204,7 @@ describe("DeepAgentActivityAuthority", () => {
         ).toBe(true)
         yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({
           ownerID: "runtime-effect-after-crash",
-          leaseMs: 1_000,
+          leaseMs: 60_000,
         })
         expect(yield* DeepAgentActivityAuthority.recoverPermissionEffects("runtime-effect-after-crash")).toBe(1)
         expect(
@@ -1217,7 +1231,7 @@ describe("DeepAgentActivityAuthority", () => {
       Effect.gen(function* () {
         yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({
           ownerID: "runtime-incident-before-restart",
-          leaseMs: 100,
+          leaseMs: 60_000,
         })
         const effectRequest = yield* DeepAgentActivityAuthority.requestPermission({
           ...ref,
@@ -1257,10 +1271,13 @@ describe("DeepAgentActivityAuthority", () => {
           tool: { messageID: "assistant-incident", callID: "call-incident" },
           ownerID: "runtime-incident-before-restart",
         })
-        yield* Effect.sleep("120 millis")
+        const { db } = yield* Database.Service
+        yield* db.run(
+          "DELETE FROM session_activity_permission_owner_lease WHERE owner_id = 'runtime-incident-before-restart'",
+        )
         yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({
           ownerID: "runtime-incident-after-restart",
-          leaseMs: 1_000,
+          leaseMs: 60_000,
         })
 
         expect(yield* DeepAgentActivityAuthority.recoverPermissionEffects("runtime-incident-after-restart")).toBe(1)
@@ -1268,7 +1285,6 @@ describe("DeepAgentActivityAuthority", () => {
         // so the subsequent pending sweep is an idempotent no-op.
         expect(yield* DeepAgentActivityAuthority.recoverPendingPermissions("runtime-incident-after-restart")).toBe(0)
 
-        const { db } = yield* Database.Service
         expect(
           yield* db.get(
             `SELECT state FROM session_activity_permission_effect_dispatch WHERE request_id = '${effectRequest.requestID}'`,

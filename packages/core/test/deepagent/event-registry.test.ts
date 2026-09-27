@@ -112,6 +112,16 @@ describe("EventRegistry create + lookup", () => {
       ),
     ).toThrow(`limit exceeded (${EventRegistry.MAX_EVENT_TYPE_REGISTRATIONS})`)
   })
+
+  test("defaults execution to single and accepts only registered execution modes", () => {
+    expect(registry.lookup(commandReg.eventType)?.execution ?? "single").toBe("single")
+    expect(createEventRegistry([{ ...commandReg, execution: "dag" }]).lookup(commandReg.eventType)?.execution).toBe(
+      "dag",
+    )
+    expect(() => createEventRegistry([{ ...commandReg, execution: "unexpected" as "dag" }])).toThrow(
+      "Invalid execution mode",
+    )
+  })
 })
 
 describe("EventRegistry publisher policy (fail-closed)", () => {

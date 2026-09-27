@@ -273,6 +273,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     requestAnimationFrame(() => {
       if (draftReview() || draftPreview()) return
       draftPreparePrompt = undefined
+      // D1: prepare locked the editor (blur + cursor-wait). When no draft surface remains —
+      // including a server-side degrade that ends preparation without ever producing a draft —
+      // hand focus back so the composer is usable again instead of looking stuck.
+      if (!props.disabled) {
+        editorRef.focus()
+        queueScroll()
+      }
     })
   }
 

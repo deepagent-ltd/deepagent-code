@@ -87,8 +87,38 @@ it.live("serializes concurrent sink reconfiguration and closes the superseded wr
     )
     Global.Path.log = yield* tmpdirScoped()
 
+    yield* Effect.promise(() => Log.init({ print: false, dev: true }))
+    const logger = Log.create({ service: "log-reconfiguration-test" })
+    Array.from({ length: 128 }, (_, index) => logger.info(`pending write ${index}`))
     yield* Effect.promise(() => Promise.all([Log.init({ print: false, dev: true }), Log.init({ print: true })]))
 
     expect(Log.file()).toBe("")
+  }),
+)
+
+it.live("falls back when an asynchronous log open fails and recovers on re-init", () =>
+  Effect.gen(function* () {
+    const previous = Global.Path.log
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(async () => {
+        await Log.init({ print: true })
+        Global.Path.log = previous
+      }),
+    )
+    const dir = yield* tmpdirScoped()
+    Global.Path.log = path.join(dir, "removed")
+
+    yield* Effect.promise(() => Log.init({ print: false, dev: true }))
+    const logger = Log.create({ service: "log-open-failure-test" })
+    logger.info("write before open fails")
+    yield* Effect.sleep("30 millis")
+    logger.info("write after stream is destroyed")
+
+    Global.Path.log = dir
+    yield* Effect.promise(() => Log.init({ print: false, dev: true }))
+    logger.info("write after recovery")
+    yield* Effect.promise(() => Log.init({ print: true }))
+
+    expect(yield* Effect.promise(() => fs.readFile(path.join(dir, "dev.log"), "utf8"))).toContain("write after recovery")
   }),
 )

@@ -11,18 +11,19 @@ export * as FileLock from "./file-lock"
  */
 import { randomUUID } from "node:crypto"
 import { Context, Layer } from "effect"
+import { LockKeys } from "./deepagent/lock-keys"
 
 export type LockKind = "human" | "agent"
 
 export interface FileLockEntry {
   readonly lockId: string
-  readonly path: string       // 规范化绝对路径
+  readonly path: string // 规范化绝对路径
   readonly kind: LockKind
-  readonly expiresAt: number  // Date.now() + TTL ms
+  readonly expiresAt: number // Date.now() + TTL ms
 }
 
 export const HUMAN_LOCK_TTL_MS = 30_000
-export const AGENT_LOCK_TTL_MS = 60_000  // 单次写操作上限
+export const AGENT_LOCK_TTL_MS = 60_000 // 单次写操作上限
 export const MAX_ACTIVE_LOCKS = 4096
 
 export interface Interface {
@@ -56,39 +57,36 @@ export const layer = Layer.succeed(
       }
     }
 
-    const status = (path: string): FileLockEntry | null => {
-      const entry = locks.get(path)
-      if (!entry) return null
-      if (entry.expiresAt <= Date.now()) {
-        locks.delete(path)
-        byId.delete(entry.lockId)
-        return null
-      }
-      return entry
+    const status = (filePath: string): FileLockEntry | null => {
+      gc()
+      return (
+        locks.get(filePath) ??
+        [...locks.values()].find((entry) => LockKeys.filePathsOverlap(entry.path, filePath)) ??
+        null
+      )
     }
 
-    const acquire = (path: string, kind: LockKind): FileLockEntry | null => {
+    const acquire = (filePath: string, kind: LockKind): FileLockEntry | null => {
       gc()
-      const existing = status(path)
-      if (existing) {
-        // human 可以强制覆盖 agent 锁；其余情况拒绝
-        if (kind === "human" && existing.kind === "agent") {
-          // 覆盖：清理旧锁
-          byId.delete(existing.lockId)
-        } else {
-          return null
-        }
+      const overlapping = [...locks.values()].filter((entry) => LockKeys.filePathsOverlap(entry.path, filePath))
+      // Human edits preempt every overlapping agent lock, including a broad repo-root lock. Its
+      // holder's next renewal fails and interrupts the agent turn; another human still wins.
+      if (overlapping.length > 0 && (kind === "agent" || overlapping.some((entry) => entry.kind === "human")))
+        return null
+      for (const entry of overlapping) {
+        locks.delete(entry.path)
+        byId.delete(entry.lockId)
       }
       if (locks.size >= MAX_ACTIVE_LOCKS) return null
       const ttl = kind === "human" ? HUMAN_LOCK_TTL_MS : AGENT_LOCK_TTL_MS
       const entry: FileLockEntry = {
         lockId: randomUUID(),
-        path,
+        path: filePath,
         kind,
         expiresAt: Date.now() + ttl,
       }
-      locks.set(path, entry)
-      byId.set(entry.lockId, path)
+      locks.set(filePath, entry)
+      byId.set(entry.lockId, filePath)
       return entry
     }
 

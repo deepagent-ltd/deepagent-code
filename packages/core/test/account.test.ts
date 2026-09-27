@@ -1,3 +1,4 @@
+import { eventLayer } from "./fixture/event-layer"
 import path from "path"
 import fs from "fs/promises"
 import { describe, expect } from "bun:test"
@@ -15,7 +16,7 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(PluginV2.locationLayer.pipe(Layer.provide(EventV2.defaultLayer)))
+const it = testEffect(PluginV2.locationLayer.pipe(Layer.provide(eventLayer())))
 
 function context(
   records: { provider: ProviderV2.Info; models: Map<ModelV2.ID, ModelV2.Info> }[],
@@ -56,7 +57,7 @@ function context(
 function testLayer(dir: string) {
   return Auth.layer.pipe(
     Layer.provide(FSUtil.defaultLayer),
-    Layer.provideMerge(EventV2.defaultLayer),
+    Layer.provideMerge(eventLayer()),
     Layer.provide(
       Layer.mergeAll(
         Global.layerWith({

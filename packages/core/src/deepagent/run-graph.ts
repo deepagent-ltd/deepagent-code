@@ -131,7 +131,17 @@ export const buildRunGraph = (store: DocumentStore, s: RunSummary): RunGraphRefs
       },
       links: [{ rel: "derived_from", to: candidate.id }],
     })
-    store.setStatus(doc.id, learning.status === "staged" ? "candidate" : "rejected", documentRevision(doc))
+    store.commitGovernance(
+      doc.id,
+      documentRevision(doc),
+      learning.status === "staged"
+        ? { kind: "stage", actor: { type: "system", id: "run-graph" } }
+        : {
+            kind: "reject",
+            actor: { type: "system", id: "run-graph" },
+            reason: "run graph learning candidate rejected",
+          },
+    )
   }
 
   return { candidateId: candidate.id, runContextId: runContext.id, runStateId: runState.id }

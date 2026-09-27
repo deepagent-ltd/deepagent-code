@@ -1,0 +1,3 @@
+Runtime schema checkpoint only.
+
+The executable upgrade sequence remains in packages/core/src/database/migration.

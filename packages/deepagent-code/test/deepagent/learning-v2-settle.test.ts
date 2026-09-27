@@ -48,6 +48,7 @@ import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
 import { LearningAdmissionOutboxTable } from "@deepagent-code/core/deepagent/learning-admission-outbox.sql"
 import { LearningJobTable } from "@deepagent-code/core/deepagent/learning-job.sql"
+import { LearningGenerationTable } from "@deepagent-code/core/deepagent/learning-generation.sql"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { Effect, Layer, LayerMap, Option, Schema, Stream } from "effect"
@@ -279,6 +280,7 @@ const seedSession = Effect.gen(function* () {
       directory: root,
       title: "W7 settle",
       version: "test",
+      v2_authority: true,
     })
     .onConflictDoNothing()
     .run()
@@ -350,6 +352,7 @@ const seedAuthoritativeCompletion = Effect.sync(() => {
 
 const clearLearningTables = Effect.gen(function* () {
   const { db } = yield* Database.Service
+  yield* db.delete(LearningGenerationTable).run().pipe(Effect.orDie)
   yield* db.delete(LearningAdmissionOutboxTable).run().pipe(Effect.orDie)
   yield* db.delete(LearningJobTable).run().pipe(Effect.orDie)
 })
@@ -372,7 +375,7 @@ const settleOnce = Effect.gen(function* () {
 })
 
 describe("W7 V2 session settle → durable learning admission", () => {
-  it.effect("does not treat an ordinary settled activity as completed learning", () =>
+  it.effect("seals an unfinished settled activity without treating it as completed learning", () =>
     Effect.gen(function* () {
       yield* clearLearningTables
       yield* configureGateway(true)
@@ -386,6 +389,9 @@ describe("W7 V2 session settle → durable learning admission", () => {
         .pipe(Effect.orDie)
       expect(outbox).toHaveLength(0)
       expect(yield* db.select().from(LearningJobTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(LearningGenerationTable).all().pipe(Effect.orDie)).toEqual([
+        expect.objectContaining({ session_id: sessionID, trigger: null, admitted_at: null }),
+      ])
     }),
   )
 
@@ -430,6 +436,7 @@ describe("W7 V2 session settle → durable learning admission", () => {
           directory: root,
           title: "W7 empty",
           version: "test",
+          v2_authority: true,
         })
         .onConflictDoNothing()
         .run()
@@ -677,6 +684,7 @@ describe("W15 onSessionSettled reads the V2 receipt terminal state (P2)", () => 
         .pipe(Effect.orDie)
       expect(outbox).toHaveLength(1)
       expect(outbox[0]!.trigger).toBe("session_finalization")
+      expect(yield* db.select().from(LearningGenerationTable).all().pipe(Effect.orDie)).toHaveLength(0)
       const intent = JSON.parse(outbox[0]!.payload_json) as { final_status: string; total_rounds: number }
       expect(intent.final_status).toBe("completed")
       expect(intent.total_rounds).toBe(1)
@@ -697,6 +705,7 @@ describe("W15 onSessionSettled reads the V2 receipt terminal state (P2)", () => 
           .all()
           .pipe(Effect.orDie),
       ).toHaveLength(1)
+      expect(yield* db.select().from(LearningGenerationTable).all().pipe(Effect.orDie)).toHaveLength(0)
     }),
   )
 })

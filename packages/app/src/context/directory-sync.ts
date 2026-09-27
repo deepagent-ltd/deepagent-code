@@ -675,7 +675,9 @@ export const createDirSyncContext = (
             return
           }
 
-          const limit = meta.limit[key] ?? initialMessagePageSize
+          // An empty first page records limit=0. A later journal refresh still needs a
+          // positive page size once the first admitted prompt or response appears.
+          const limit = (meta.limit[key] ?? 0) > 0 ? meta.limit[key] : initialMessagePageSize
           const sessionReq =
             hasSession && !opts?.force
               ? Promise.resolve()

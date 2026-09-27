@@ -13,7 +13,7 @@ void Log.init({ print: false })
 // Skip tests if no API key is available
 const hasApiKey = !!process.env.ANTHROPIC_API_KEY
 const it = testEffect(
-  Layer.mergeAll(SessionPromptV2.defaultLayer, Session.defaultLayer).pipe(Layer.provide(testInstanceStoreLayer)),
+  Layer.mergeAll(SessionPromptV2.testLayer, Session.defaultLayer).pipe(Layer.provide(testInstanceStoreLayer)),
 )
 const live = hasApiKey ? it.instance : it.instance.skip
 

@@ -96,7 +96,7 @@ export function createDialogProviderOptions() {
   async function promptCustomProviderID(): Promise<string | undefined> {
     const value = await DialogPrompt.show(dialog, i18n.t("tui.provider.other"), {
       placeholder: i18n.t("tui.provider.idPlaceholder"),
-      description: () => (
+      description: (
         <text fg={theme.textMuted}>
           This only stores a credential. Configure the provider in deepagent-code.json to use it.
         </text>
@@ -340,7 +340,7 @@ function CodeMethod(props: CodeMethodProps) {
         }
         setError(true)
       }}
-      description={() => (
+      description={
         <box gap={1}>
           <text fg={theme.textMuted}>{props.authorization.instructions}</text>
           <Link href={props.authorization.url} fg={theme.primary} />
@@ -348,7 +348,7 @@ function CodeMethod(props: CodeMethodProps) {
             <text fg={theme.error}>Invalid code</text>
           </Show>
         </box>
-      )}
+      }
     />
   )
 }

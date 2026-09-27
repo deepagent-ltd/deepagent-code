@@ -72,10 +72,10 @@ describe("Plan advance live oracle", () => {
     ).toThrow("non-patch step field title")
   })
 
-  test("rejects receipt chains that do not prove semantic admission", () => {
+  test("rejects when no settled provider-turn receipt offers the plan tool", () => {
     const value = observation()
-    value.durability.argumentReceipts.find((receipt) => receipt.layer === "processor_decoded")!.validation_outcome =
-      "schema_valid"
+    value.providerTurns = [value.providerTurns![0]!, { ...value.providerTurns![0]!, state: "failed" }]
+    value.providerTurns[0]!.state = "dispatching"
     expect(() =>
       assertPlanAdvanceObservation({
         caseName: "weak-receipt",
@@ -93,7 +93,30 @@ describe("Plan advance live oracle", () => {
           },
         ],
       }),
-    ).toThrow("argument receipt chain was incomplete")
+    ).toThrow("settled provider-turn receipt for plan call call_1 was incomplete")
+  })
+
+  test("rejects a settled plan receipt from another call", () => {
+    const value = observation()
+    value.providerTurns![0]!.toolCallIDs = ["call_from_previous_case"]
+    expect(() =>
+      assertPlanAdvanceObservation({
+        caseName: "wrong-call-receipt",
+        observation: value,
+        immutable,
+        expectedVersion: 2,
+        expectedActiveStepID: "step_2",
+        expectedStatuses: { step_1: "done", step_2: "active" },
+        expectedCalls: [
+          {
+            version: 1,
+            protocol: "success",
+            activeStepID: "step_2",
+            statuses: { step_1: "done", step_2: "active" },
+          },
+        ],
+      }),
+    ).toThrow("settled provider-turn receipt for plan call call_1 was incomplete")
   })
 })
 
@@ -129,38 +152,16 @@ function observation() {
       },
       ref: { id: "doc_1", version: 2 },
     },
-    durability: {
-      requestReceipts: [
-        {
-          receipt_id: "receipt_1",
-          assistant_message_id: "assistant_1",
-          request_state: "dispatched",
-          final_offered_tool_ids: ["plan"],
-          call_ids: ["call_1"],
-          tool_definition_hash: "definition_hash",
-        },
-      ],
-      argumentReceipts: [
-        receipt("ai_sdk_input", "schema_valid", "payload_hash"),
-        receipt("adapter_assembly", "schema_valid", "payload_hash"),
-        receipt("processor_decoded", "semantic_valid", "payload_hash"),
-        receipt("raw_frame", "not_evaluated", null),
-      ],
-    },
-  }
-}
-
-function receipt(layer: string, validationOutcome: string, payloadHash: string | null) {
-  return {
-    receipt_id: "receipt_1",
-    layer,
-    call_id: layer === "raw_frame" ? null : "call_1",
-    tool_name: layer === "raw_frame" ? null : "plan",
-    event_type: layer === "adapter_assembly" ? "tool-call" : layer,
-    payload_hash: payloadHash,
-    payload_length: payloadHash ? 120 : null,
-    payload_keys: payloadHash ? ["active_step_id", "expected_plan_id", "expected_version", "operation", "steps"] : [],
-    unavailable_reason: payloadHash ? null : "provider_transport_did_not_expose_raw_frame",
-    validation_outcome: validationOutcome,
+    providerTurns: [
+      {
+        receiptID: "receipt_1",
+        requestOrdinal: 1,
+        providerTurnSeq: 1,
+        state: "settled",
+        toolFinalOfferedIDs: ["plan"],
+        toolDefinitionHash: "definition_hash",
+        toolCallIDs: ["call_1"],
+      },
+    ],
   }
 }

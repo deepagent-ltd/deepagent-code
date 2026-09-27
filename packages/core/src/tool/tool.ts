@@ -1,6 +1,6 @@
 export * as Tool from "./tool"
 
-import { ToolDefinition, ToolFailure, ToolOutput, type ToolCall } from "@deepagent-code/llm"
+import { ToolDefinition, ToolFailure, ToolOutput, type ToolCall, type ToolFileSource } from "@deepagent-code/llm"
 import { Effect, JsonSchema, Schema } from "effect"
 import type { AgentV2 } from "../agent"
 import type { SessionMessage } from "../session/message"
@@ -36,6 +36,7 @@ export class RegistrationError extends Schema.TaggedErrorClass<RegistrationError
 export type Content =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "file"; readonly data: string; readonly mime: string; readonly name?: string }
+  | { readonly type: "file"; readonly source: ToolFileSource; readonly mime: string; readonly name?: string }
 
 type Config<Input extends SchemaType<any>, Output extends SchemaType<any>> = {
   readonly description: string
@@ -100,7 +101,7 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
                     ? { type: "text" as const, text: part.text }
                     : {
                         type: "file" as const,
-                        source: { type: "data" as const, data: part.data },
+                        source: "source" in part ? part.source : { type: "data" as const, data: part.data },
                         mime: part.mime,
                         name: part.name,
                       },
@@ -128,10 +129,7 @@ export interface DynamicConfig {
    */
   readonly inputJsonSchema: JsonSchema.JsonSchema | Record<string, unknown>
   readonly execute: (input: unknown, context: Context) => Effect.Effect<unknown, ToolFailure>
-  readonly toModelOutput?: (input: {
-    readonly input: unknown
-    readonly output: unknown
-  }) => ReadonlyArray<Content>
+  readonly toModelOutput?: (input: { readonly input: unknown; readonly output: unknown }) => ReadonlyArray<Content>
 }
 
 /** Dynamic-tool variant of `make` for raw-JSON-Schema hosts; output passes through unvalidated. */
@@ -161,7 +159,7 @@ export function makeDynamic(config: DynamicConfig): Definition<any, any> {
                 ? { type: "text" as const, text: part.text }
                 : {
                     type: "file" as const,
-                    source: { type: "data" as const, data: part.data },
+                    source: "source" in part ? part.source : { type: "data" as const, data: part.data },
                     mime: part.mime,
                     name: part.name,
                   },

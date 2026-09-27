@@ -1,7 +1,13 @@
 import { afterAll, expect, mock, beforeEach } from "bun:test"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import type { MCP as MCPNS } from "../../src/mcp/index"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
+import { V2McpBridge } from "@/session/v2-mcp-bridge"
+import { InstanceRegistry } from "@/effect/instance-registry"
+import { InstanceRef } from "@/effect/instance-ref"
 import { testEffect } from "../lib/effect"
+import path from "path"
 
 // The mock.module registrations below persist for the whole process unless
 // restored; release them when this file finishes so later files import the
@@ -201,6 +207,20 @@ const { MCP } = await import("../../src/mcp/index")
 const { McpOAuthCallback } = await import("../../src/mcp/oauth-callback")
 
 const it = testEffect(MCP.defaultLayer)
+const withEvents = testEffect(MCP.defaultLayer.pipe(Layer.provideMerge(EventV2Bridge.defaultLayer)))
+const withV2Tools = testEffect(
+  Layer.mergeAll(
+    MCP.defaultLayer,
+    ApplicationTools.layer,
+    InstanceRegistry.layer,
+    V2McpBridge.layer.pipe(
+      Layer.provide(MCP.defaultLayer),
+      Layer.provide(EventV2Bridge.defaultLayer),
+      Layer.provide(ApplicationTools.layer),
+      Layer.provide(InstanceRegistry.layer),
+    ),
+  ),
+)
 
 function statusName(status: Record<string, MCPNS.Status> | MCPNS.Status, server: string) {
   if ("status" in status) return status.status
@@ -282,6 +302,93 @@ it.instance(
 // ========================================================================
 // Test: connect() / disconnect() lifecycle
 // ========================================================================
+
+withEvents.instance(
+  "publishes tool-set changes after add, disconnect, and reconnect",
+  () =>
+    Effect.gen(function* () {
+      const mcp = yield* MCP.Service
+      const events = yield* EventV2Bridge.Service
+      const changed: string[] = []
+      const unsubscribe = yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === MCP.ToolsChanged.type) changed.push((event.data as { server: string }).server)
+        }),
+      )
+      lastCreatedClientName = "change-server"
+      getOrCreateClientState("change-server")
+      yield* mcp.add("change-server", { type: "local", command: ["echo", "test"] })
+      yield* mcp.disconnect("change-server")
+      yield* mcp.connect("change-server")
+      yield* unsubscribe
+      expect(changed).toEqual(["change-server", "change-server", "change-server"])
+    }),
+  { config: { mcp: { "change-server": { type: "local", command: ["echo", "test"] } } } },
+)
+
+withV2Tools.instance(
+  "live MCP reconnect updates the V2 application tool registry",
+  () =>
+    Effect.gen(function* () {
+      const context = yield* InstanceRef
+      if (!context) return yield* Effect.die("missing instance")
+      const mcp = yield* MCP.Service
+      const applications = yield* ApplicationTools.Service
+      lastCreatedClientName = "live-server"
+      getOrCreateClientState("live-server").tools = [
+        { name: "echo", description: "echo", inputSchema: { type: "object", properties: {} } },
+      ]
+      yield* InstanceRegistry.initializeInstance(context)
+      expect(applications.entries().has("mcp__live-server__echo")).toBe(false)
+      yield* mcp.add("live-server", { type: "local", command: ["echo", "test"] })
+      expect(applications.entries().has("mcp__live-server__echo")).toBe(true)
+      yield* mcp.disconnect("live-server")
+      expect(applications.entries().has("mcp__live-server__echo")).toBe(false)
+      yield* mcp.connect("live-server")
+      expect(applications.entries().has("mcp__live-server__echo")).toBe(true)
+      connectShouldFail = true
+      yield* mcp.connect("live-server")
+      expect(applications.entries().has("mcp__live-server__echo")).toBe(false)
+      connectShouldFail = false
+      yield* mcp.connect("live-server")
+      expect(applications.entries().has("mcp__live-server__echo")).toBe(true)
+    }),
+  { config: { mcp: {} } },
+)
+
+withV2Tools.instance(
+  "external config edits add and remove MCP tools without reloading the instance",
+  () =>
+    Effect.gen(function* () {
+      const context = yield* InstanceRef
+      if (!context) return yield* Effect.die("missing instance")
+      const applications = yield* ApplicationTools.Service
+      const mcp = yield* MCP.Service
+      lastCreatedClientName = "config-server"
+      getOrCreateClientState("config-server").tools = [
+        { name: "echo", description: "echo", inputSchema: { type: "object", properties: {} } },
+      ]
+      yield* InstanceRegistry.initializeInstance(context)
+      const file = path.join(context.directory, "deepagent-code.json")
+      yield* Effect.promise(() =>
+        Bun.write(file, JSON.stringify({ mcp: { "config-server": { type: "local", command: ["echo", "test"] } } })),
+      )
+      const waitFor = (present: boolean) =>
+        Effect.promise(async () => {
+          for (let i = 0; i < 100; i++) {
+            if (applications.entries().has("mcp__config-server__echo") === present) return
+            await Bun.sleep(20)
+          }
+          throw new Error(`MCP tool did not become ${present ? "present" : "absent"}`)
+        })
+      yield* waitFor(true)
+      const tool = Object.values(yield* mcp.tools())[0]
+      expect(tool && ToolProvenance.get(tool)?.configSource).toBe(file)
+      yield* Effect.promise(() => Bun.write(file, JSON.stringify({ mcp: {} })))
+      yield* waitFor(false)
+    }),
+  { config: { mcp: {} } },
+)
 
 it.instance(
   "disconnect sets status to disabled and removes client",

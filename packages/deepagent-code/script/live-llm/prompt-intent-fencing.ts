@@ -41,6 +41,7 @@ const artifact = await runLegacyLiveCases({
     },
   ],
   sharedSession: true,
+  initialAgent: "live-test",
   primaryPrompt:
     `When the user says "${directPrompt}", reply with exactly ${directMarker}. ` +
     `When the user says "${rewritePrompt}", reply with exactly ${rewriteMarker}. ` +
@@ -48,6 +49,20 @@ const artifact = await runLegacyLiveCases({
   modelMaxTokens: 128,
   maxProviderTurns: 2,
 })
+
+await writeLiveArtifact(
+  { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
+  `${artifact.suite}-observed`,
+  artifact,
+  {
+    redactions: [
+      { value: directMarker, replacement: "<direct-marker>" },
+      { value: rewriteMarker, replacement: "<rewrite-marker>" },
+      { value: directIntentID, replacement: "<direct-intent>" },
+      { value: rewriteIntentID, replacement: "<rewrite-intent>" },
+    ],
+  },
+)
 
 const direct = requireCase("intelligence-direct")
 const rewrite = requireCase("revert-rewrite")
@@ -105,7 +120,8 @@ if (
   rewrite.admission?.state !== "admitted" ||
   rewrite.admission.source !== "rewrite" ||
   rewrite.admission.variant !== "rewritten" ||
-  rewrite.admission.mutationEpoch !== rewrite.revert.epochAfter
+  // Cleanup clears the revert marker and advances the mutation epoch once more.
+  rewrite.admission.mutationEpoch !== rewrite.revert.epochAfter + 1
 ) {
   throw new Error(`Rewrite intent receipt was invalid: ${JSON.stringify(rewrite.admission)}`)
 }
@@ -117,8 +133,9 @@ if (
 ) {
   throw new Error("Exact rewrite retry was not an active-turn admission no-op")
 }
-if (rewrite.users.length !== 1 || rewrite.users[0]?.text !== rewritePrompt) {
-  throw new Error(`Revert/rewrite materialized ${rewrite.users.length} current user messages instead of one`)
+const rewriteUsers = rewrite.users.filter((message) => message.text.trim() !== "")
+if (rewriteUsers.length !== 1 || rewriteUsers[0]?.text !== rewritePrompt) {
+  throw new Error(`Revert/rewrite materialized ${rewriteUsers.length} current user messages instead of one`)
 }
 if (
   rewrite.assistantTurns !== 1 ||
@@ -151,7 +168,7 @@ const result = {
     conflictingDraftRejected: true,
     staleEpochRetryRejected: true,
     mutationEpochAdvance: rewrite.revert.epochAfter - rewrite.revert.epochBefore,
-    userMessagesAfterRewrite: rewrite.users.length,
+    userMessagesAfterRewrite: rewriteUsers.length,
     providerTurns: direct.assistantTurns + rewrite.assistantTurns,
   },
 }

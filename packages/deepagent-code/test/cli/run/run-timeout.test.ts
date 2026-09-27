@@ -7,8 +7,8 @@
 //
 // Template mirrors #27371 (run-process.test.ts): the harness timeoutMs is the outer bound — a
 // process that still hangs is killed AT it (~30s), while a process that exits on its own after
-// DEEPAGENT_CODE_RUN_TIMEOUT_MS fires finishes well under it. The durationMs bound is what
-// distinguishes "self-exit" from "harness kill".
+// DEEPAGENT_CODE_RUN_TIMEOUT_MS fires finishes well under it. The harness termination marker
+// distinguishes the two even when both paths print "Timed out".
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { cliIt } from "../../lib/cli-process"
@@ -23,6 +23,7 @@ describe("deepagentCode run (non-interactive timeout exit)", () => {
           timeoutMs: 30_000,
           env: { DEEPAGENT_CODE_RUN_TIMEOUT_MS: "5000" },
         })
+        expect(result.termination).toBe("exited")
         expect(result.exitCode).not.toBe(0)
         expect(`${result.stdout}\n${result.stderr}`).toContain("Timed out")
         expect(result.durationMs).toBeLessThan(25_000)

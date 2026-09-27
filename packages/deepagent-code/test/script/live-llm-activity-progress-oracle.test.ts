@@ -47,13 +47,173 @@ describe("activity progress live oracle", () => {
       }),
     ).toThrow("lacked matching runs and terminal receipts")
   })
+
+  test("accepts V2 activity, input, provider, and tool-effect authorities without V1 rows", () => {
+    expect(() =>
+      assertActivityProgressObservation({
+        caseName: "v2-activity",
+        triggerText,
+        steerText,
+        marker: "MARKER",
+        expectedTools: ["read", "read"],
+        authority: "v2",
+        observation: v2Observation(),
+      }),
+    ).not.toThrow()
+  })
+
+  test("rejects a V2 steer that was never promoted into the activity", () => {
+    const value = v2Observation()
+    value.durability.v2.activityInputs = value.durability.v2.activityInputs.slice(0, 1)
+    expect(() =>
+      assertActivityProgressObservation({
+        caseName: "v2-missing-steer",
+        triggerText,
+        steerText,
+        marker: "MARKER",
+        expectedTools: ["read", "read"],
+        authority: "v2",
+        observation: value,
+      }),
+    ).toThrow("activity inputs did not cover trigger and steer")
+  })
+
+  test("rejects a V2 tool call without its exact durable terminal effect", () => {
+    const value = v2Observation()
+    value.durability.v2.toolEffects = value.durability.v2.toolEffects.slice(0, 1)
+    expect(() =>
+      assertActivityProgressObservation({
+        caseName: "v2-missing-effect",
+        triggerText,
+        steerText,
+        marker: "MARKER",
+        expectedTools: ["read", "read"],
+        authority: "v2",
+        observation: value,
+      }),
+    ).toThrow("lacked a matching durable tool effect")
+  })
+
+  test("rejects a provider tool call that was omitted from observed terminal effects", () => {
+    const value = v2Observation()
+    value.durability.v2.providerReceipts[2]!.toolCalls.push({ id: "unobserved_call", name: "read" })
+    expect(() =>
+      assertActivityProgressObservation({
+        caseName: "v2-unobserved-tool",
+        triggerText,
+        steerText,
+        marker: "MARKER",
+        expectedTools: ["read", "read"],
+        authority: "v2",
+        observation: value,
+      }),
+    ).toThrow("tool calls did not match V2 admissions")
+  })
+
+  test("rejects a V2 provider receipt without its exact attempt binding", () => {
+    const value = v2Observation()
+    value.durability.v2.providerAttempts = value.durability.v2.providerAttempts.slice(0, 2)
+    expect(() =>
+      assertActivityProgressObservation({
+        caseName: "v2-missing-attempt",
+        triggerText,
+        steerText,
+        marker: "MARKER",
+        expectedTools: ["read", "read"],
+        authority: "v2",
+        observation: value,
+      }),
+    ).toThrow("provider receipt lacked its exact attempt")
+  })
+
+  test("rejects an unknown V2 provider outcome even when a tool terminal was recorded", () => {
+    const value = v2Observation()
+    value.durability.v2.providerReceipts[0]!.state = "indeterminate_after_crash"
+    value.durability.v2.providerAttempts[0]!.state = "indeterminate_after_crash"
+    expect(() =>
+      assertActivityProgressObservation({
+        caseName: "v2-provider-unknown",
+        triggerText,
+        steerText,
+        marker: "MARKER",
+        expectedTools: ["read", "read"],
+        authority: "v2",
+        observation: value,
+      }),
+    ).toThrow("provider receipt lacked its exact attempt or terminal state")
+  })
 })
+
+function v2Observation() {
+  const value = observation()
+  return {
+    ...value,
+    newTools: [
+      { id: "call_0", name: "read", status: "completed" },
+      { id: "call_1", name: "read", status: "completed" },
+    ],
+    durability: {
+      ...value.durability,
+      activityAdmissions: [],
+      legacyActivities: [],
+      legacyActivityRuns: [],
+      legacyActivityTerminals: [],
+      legacyActivityAdmissions: [],
+      activityProgress: [],
+      requestReceipts: [],
+      v2: {
+        inputs: [
+          { id: "user_turn", delivery: "steer", admitted_seq: 1, promoted_seq: 1 },
+          { id: "user_steer", delivery: "steer", admitted_seq: 2, promoted_seq: 2 },
+        ],
+        activities: [
+          { activity_id: "activity_1", ordinal: 0, trigger_input_id: "user_turn", state: "settled", settled_at: 4 },
+        ],
+        activityInputs: [
+          { activity_id: "activity_1", input_id: "user_turn", ordinal: 0, admitted_seq: 1, role: "trigger" },
+          { activity_id: "activity_1", input_id: "user_steer", ordinal: 1, admitted_seq: 2, role: "steer" },
+        ],
+        providerAttempts: [0, 1, 2].map((index) => ({
+          attempt_id: `attempt_${index}`,
+          activity_id: "activity_1",
+          provider_turn_seq: index + 1,
+          owner_token: "process:owner",
+          state: "settled",
+        })),
+        providerReceipts: [0, 1, 2].map((index) => ({
+          receipt_id: `receipt_${index}`,
+          activity_id: "activity_1",
+          request_ordinal: index + 1,
+          provider_turn_seq: index + 1,
+          provider_attempt_id: `attempt_${index}`,
+          owner_token: "process:owner",
+          state: "settled",
+          toolCalls: index < 2 ? [{ id: `call_${index}`, name: "read" }] : [],
+        })),
+        toolAdmissions: [0, 1].map((index) => ({
+          receipt_id: `receipt_${index}`,
+          provider_attempt_id: `attempt_${index}`,
+          tool_call_id: `call_${index}`,
+          tool_name: "read",
+        })),
+        toolEffects: [0, 1].map((index) => ({
+          receipt_id: `receipt_${index}`,
+          provider_attempt_id: `attempt_${index}`,
+          tool_call_id: `call_${index}`,
+          tool_name: "read",
+          state: "settled",
+        })),
+      },
+    },
+  }
+}
 
 function observation() {
   return {
-    users: [{ text: triggerText }, { text: steerText }],
+    users: [{ id: "user_turn", text: triggerText }, { id: "user_steer", text: steerText }],
     steering: [
       {
+        id: "user_steer",
         delivery: "steer",
         activeBeforeAdmission: true,
         pendingAfterAdmission: true,

@@ -6,6 +6,7 @@ import { and, desc, eq, inArray } from "drizzle-orm"
 import { Cause, Effect, Exit, Option } from "effect"
 import { Context, Layer, Schema } from "effect"
 import { AgentV2 } from "../agent"
+import { AgentGateway } from "../agent-gateway"
 import { Database } from "../database/database"
 import { ConflictArbiter } from "../deepagent/conflict-arbiter"
 import { EventV2 } from "../event"
@@ -17,12 +18,12 @@ import { TaskRunTable, type TaskStructuredOutputReceipt } from "../session/sql"
 import { TaskRunAuthority } from "../session/task-run"
 import { Delegation } from "./delegation"
 import {
-  DEFAULT_SUBAGENT_TIMEOUT_MS,
   MAX_SUBAGENT_FANOUT,
   admitTaskCall,
   inheritedTaskPermissions,
   resolveOutputSchema,
   resolveWorkspaceMode,
+  subagentTimeoutMs,
   taskLaunchRestriction,
   withTaskConcurrency,
 } from "./task-policy"
@@ -76,6 +77,9 @@ const Input = Schema.Struct({
   file_scope: Schema.optional(Schema.Array(Schema.String)).annotate({
     description:
       "Optional declared file scope (globs or directory prefixes) this task expects to touch. Recorded on the durable run; overlapping scopes across active sibling write tasks raise a non-blocking warning.",
+  }),
+  background: Schema.optional(Schema.Boolean).annotate({
+    description: "Run the agent in the background. The task returns its ID immediately and a completion notification follows.",
   }),
 })
 
@@ -302,6 +306,8 @@ export const layer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const agents = yield* AgentV2.Service
     const permission = yield* PermissionV2.Service
+    // Tool settlement runs in a narrowed context; capture Location policy while registering.
+    const gateway = Option.getOrUndefined(yield* Effect.serviceOption(AgentGateway.Runtime))
 
     yield* tools
       .register({
@@ -405,22 +411,31 @@ export const layer = Layer.effectDiscard(
                         `Cannot resume task "${params.task_id}": its agent type is "${target.value.agent}" but this call requests "${params.subagent_type}".`,
                       )
                   }
-                  const deadline = Date.now() + DEFAULT_SUBAGENT_TIMEOUT_MS
+                  const timeoutMs = subagentTimeoutMs()
+                  const deadline = Date.now() + timeoutMs
                   let timedOut = false
+                  const background = params.background === true && params.task_id === undefined
 
                   // Follow-up turns (resume-by-task_id first turns, structured-output finalizer
                   // prompts) stay with the tool layer: admit-only prompt + explicit awaited drain.
-                  const drive = (childID: SessionSchema.ID, text: string) =>
+                  const drive = (childID: SessionSchema.ID, text: string, noTools = false) =>
                     Effect.gen(function* () {
                       if (Date.now() >= deadline) {
                         timedOut = true
-                        return `[task ended before completion: timed out after ${DEFAULT_SUBAGENT_TIMEOUT_MS}ms — resume with task_id "${childID}" to continue.]`
+                        return `[task ended before completion: timed out after ${timeoutMs}ms — resume with task_id "${childID}" to continue.]`
                       }
                       // P1-1 contract: admit-only, then an EXPLICIT awaited drain. An advisory wake
                       // (resume: true) races `wait` — the forked drain may not have started when
                       // awaitIdle observes the still-idle child, silently returning an empty result.
                       yield* sessions
-                        .prompt({ sessionID: childID, prompt: new Prompt({ text }), resume: false })
+                        .prompt({
+                          sessionID: childID,
+                          prompt: new Prompt({
+                            text,
+                            ...(noTools ? { metadata: { deepagent_code_task_finalizer: true } } : {}),
+                          }),
+                          resume: false,
+                        })
                         .pipe(Effect.orDie)
                       // A typed drain failure (step budget exhausted, model error) is the CHILD's
                       // outcome, not a process fault: it degrades into the task result with the
@@ -436,7 +451,7 @@ export const layer = Layer.effectDiscard(
                       if (Option.isNone(drain)) {
                         timedOut = true
                         yield* sessions.interrupt(childID).pipe(Effect.ignore)
-                        return `${research}\n\n[task ended before completion: timed out after ${DEFAULT_SUBAGENT_TIMEOUT_MS}ms — resume with task_id "${childID}" to continue.]`
+                        return `${research}\n\n[task ended before completion: timed out after ${timeoutMs}ms — resume with task_id "${childID}" to continue.]`
                       }
                       if (Exit.isSuccess(drain.value)) return research
                       const cause = Option.getOrUndefined(Cause.findErrorOption(drain.value.cause))
@@ -458,6 +473,7 @@ export const layer = Layer.effectDiscard(
                       ? Effect.succeed(undefined)
                       : database.db
                           .select({
+                            state: TaskRunTable.state,
                             workspace_mode: TaskRunTable.workspace_mode,
                             worktree_branch: TaskRunTable.worktree_branch,
                             worktree_state: TaskRunTable.worktree_state,
@@ -505,12 +521,24 @@ export const layer = Layer.effectDiscard(
                             }),
                           })
                         : []
+                    const parentMode = AgentGateway.DeepAgentSessionState.get(context.sessionID)?.mode ??
+                      gateway?.snapshot.agentMode
+                    const intensityOrder: readonly AgentGateway.AgentMode[] = ["general", "high", "xhigh", "max", "ultra"]
+                    const parentModeIndex = parentMode === undefined ? -1 : intensityOrder.indexOf(parentMode)
+                    const childMode = gateway?.subagentIntensity === "downgrade" && parentModeIndex >= 0
+                      ? intensityOrder[Math.max(0, parentModeIndex - 1)]
+                      : undefined
                     const admitted = yield* TaskRunAuthority.submit(database.db, events, sessions, {
                       parentSessionID: context.sessionID,
                       parentMessageID: context.assistantMessageID,
                       toolCallID: context.toolCallID,
-                      deliveryMode: "foreground",
-                      prompt: new Prompt({ text: params.prompt }),
+                      deliveryMode: background ? "background" : "foreground",
+                      prompt: new Prompt({
+                        text: params.prompt,
+                        ...(childMode === undefined
+                          ? {}
+                          : { metadata: { deepagent: { agent_mode_override: childMode } } }),
+                      }),
                       agent: resolved.id,
                       ...(outputSchema === undefined ? {} : { outputSchema }),
                       ...(params.file_scope === undefined ? {} : { fileScope: params.file_scope }),
@@ -535,6 +563,27 @@ export const layer = Layer.effectDiscard(
                         ),
                       ),
                     )
+                    if (background) {
+                      const current = yield* runRowByID(admitted.run.runID)
+                      const state =
+                        current?.state === "completed" ||
+                        current?.state === "failed" ||
+                        current?.state === "interrupted" ||
+                        current?.state === "recovery_required"
+                          ? current.state
+                          : "running"
+                      return {
+                        childID: admitted.run.childSessionID,
+                        runID: admitted.run.runID,
+                        warnings,
+                        run: runInfoOf(current, params.subagent_type),
+                        text: `<task id="${admitted.run.childSessionID}" state="${state}">\n${
+                          state === "running"
+                            ? `Background task enqueued: ${params.description}`
+                            : `Background task settled as ${state}; use task_read for its transcript.`
+                        }\n</task>`,
+                      }
+                    }
                     const result = yield* TaskRunAuthority.execute({
                       db: database.db,
                       run: admitted.run,
@@ -545,6 +594,10 @@ export const layer = Layer.effectDiscard(
                         `Task ${admitted.run.childSessionID} lost its durable execution lease; it can be resumed by task_id.`,
                       ),
                     ))
+                    if (result.outcome === "interrupted")
+                      return yield* toolFailure(
+                        `Task ${admitted.run.childSessionID} was interrupted. Partial work is preserved; inspect it with task_read.`,
+                      )
                     if (result.outcome === "timeout") timedOut = true
                     const run = runInfoOf(yield* runRowByID(admitted.run.runID), params.subagent_type)
                     return {
@@ -557,7 +610,7 @@ export const layer = Layer.effectDiscard(
                           ? result.research
                           : result.outcome === "timeout"
                             ? `${result.research}\n\n${timeoutNoticeText({
-                                timeoutMs: DEFAULT_SUBAGENT_TIMEOUT_MS,
+                                timeoutMs,
                                 childID: admitted.run.childSessionID,
                                 ...(run?.branch === undefined ? {} : { branch: run.branch }),
                               })}`
@@ -591,6 +644,13 @@ export const layer = Layer.effectDiscard(
                   const research = launch.text
                   const warnings = launch.warnings
                   const runInfo = launch.run
+                  if (background)
+                    return {
+                      task_id: childID,
+                      text: research,
+                      ...(runInfo === undefined ? {} : { run: runInfo }),
+                      ...(warnings.length === 0 ? {} : { warnings }),
+                    }
                   if (!outputSchema)
                     return {
                       task_id: childID,
@@ -606,7 +666,8 @@ export const layer = Layer.effectDiscard(
                   // one or two doomed 1ms finalizer prompts into the child inbox.
                   if (timedOut)
                     return yield* toolFailure(
-                      `Subagent timed out before it could satisfy the output schema. Task id ${childID} holds the partial turns.`,
+                      `[task_timeout] Subagent timed out before it could satisfy the output schema. ` +
+                        `Automatic retry is disabled. Use task_read with task_id "${childID}" to inspect the partial turns.`,
                     )
 
                   // Structured contract (V1 finalizer parity): the schema rides the prompt text — V2
@@ -659,13 +720,14 @@ export const layer = Layer.effectDiscard(
                         ? "Convert the persisted research result below into the requested StructuredOutput schema."
                         : "Return exactly one JSON value matching the output schema below. Do not use Markdown or explanatory prose.",
                       "Do not continue research and do not add facts that are absent from the result.",
+                      "Do not call tools. The research result below is the complete evidence for this conversion.",
                       ...(correction ? [`Previous validation error: ${correction}`] : []),
                       `<output_schema>${JSON.stringify(outputSchema)}</output_schema>`,
                       "<research_result>",
                       boundedRaw,
                       "</research_result>",
                     ].join("\n")
-                    const response = yield* drive(childID, finalizerText)
+                    const response = yield* drive(childID, finalizerText, true)
                     if (timedOut) {
                       correction = "Subagent timed out while finalizing structured output."
                       break

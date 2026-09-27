@@ -10,6 +10,7 @@ import { InstallationChannel, InstallationVersion } from "./installation/version
 import { EventV2 } from "./event"
 import { makeGlobalNode } from "./effect/app-node"
 import { httpClient } from "./effect/app-node-platform"
+import { OFFICIAL_PROVIDER_CATALOG_ALIASES } from "./provider-official"
 
 export const CatalogModelStatus = Schema.Literals(["alpha", "beta", "deprecated"])
 export type CatalogModelStatus = typeof CatalogModelStatus.Type
@@ -292,7 +293,23 @@ export const DEEPAGENT_MODEL_PROTOCOL: Record<string, "openai-compatible.respons
   "deepseek-v4-pro": "openai-compatible.responses",
 }
 
-const mergeVendored = (loaded: Record<string, Provider>) => ({ ...OFFICIAL_VENDORED_CATALOG, ...loaded })
+export const mergeVendored = (loaded: Record<string, Provider>) => {
+  const merged = { ...OFFICIAL_VENDORED_CATALOG, ...loaded }
+  // D2 — official-id catalog bridge, applied at the single choke point every consumer reads
+  // (the V1 provider loader's database, the V2 Catalog via ModelsDevPlugin, and the refresh
+  // handler all call ModelsDev.get()). Upstream models.dev renamed entries out from under
+  // fixed official ids (kimi-for-coding → kimi-code-plan-cn); without re-homing, a key-store
+  // credential for the official id merges into nothing — silently no-op for V1, and
+  // CatalogV2.ProviderNotFound (HTTP 500) on the V2 prompt path. The catalog entry keeps its
+  // new id too; the official id becomes a second key for the same data.
+  for (const [officialID, catalogID] of Object.entries(OFFICIAL_PROVIDER_CATALOG_ALIASES)) {
+    if (merged[officialID]) continue
+    const entry = merged[catalogID]
+    if (!entry) continue
+    merged[officialID] = { ...entry, id: officialID }
+  }
+  return merged
+}
 
 // Chain entries may be base URLs ("https://models.dev") or full file URLs (".../api.json",
 // the historical DEFAULT_MODELS_URL shape); both map to the base the catalog is fetched from.

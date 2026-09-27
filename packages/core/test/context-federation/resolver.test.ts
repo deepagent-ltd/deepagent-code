@@ -54,7 +54,10 @@ describe("FederatedContextResolver shadow mode", () => {
       confidence: { evidence_strength: "strong", support_count: 1 },
       extensions: { sensitivity: "public" },
     })
-    store.setStatus(knowledge.id, "active", documentRevision(knowledge))
+    store.commitGovernance(knowledge.id, documentRevision(knowledge), {
+      kind: "approve",
+      actor: { type: "human", id: "fixture-reviewer" },
+    })
     const scope = {
       securityNamespaceId: namespace,
       projectScopeKey: project,

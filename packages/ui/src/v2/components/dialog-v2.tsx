@@ -32,7 +32,10 @@ export function Dialog(props: DialogProps) {
   const title = children(() => local.title)
   const description = children(() => local.description)
   const action = children(() => local.action)
-  const hasHeader = () => title() || action()
+  // D4: the settings variant historically renders headerless (no title passed), which also hid
+  // the only Close affordance — closing degraded to outside-click only. Keep the headerless
+  // layout but always show the close button on the settings variant.
+  const hasHeader = () => title() || action() || local.variant === "settings"
 
   return (
     <div

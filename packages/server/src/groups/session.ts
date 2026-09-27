@@ -5,8 +5,9 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionInput } from "@deepagent-code/core/session/input"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { ProjectV2 } from "@deepagent-code/core/project"
-import { AbsolutePath, PositiveInt, RelativePath, withStatics } from "@deepagent-code/core/schema"
+import { AbsolutePath, NonNegativeInt, PositiveInt, RelativePath, withStatics } from "@deepagent-code/core/schema"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { Schema, Struct } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
@@ -15,6 +16,7 @@ import {
   InvalidCursorError,
   InvalidRequestError,
   ServiceUnavailableError,
+  StaleRevertEpochError,
   SessionNotFoundError,
   UnknownError,
 } from "../errors"
@@ -96,6 +98,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         id: SessionV2.ID.pipe(Schema.optional),
         agent: AgentV2.ID.pipe(Schema.optional),
         model: ModelV2.Ref.pipe(Schema.optional),
+        metadata: SessionSchema.Metadata.pipe(Schema.optional),
       }),
       success: Schema.Struct({ data: SessionV2.Info }),
       error: InvalidRequestError,
@@ -131,6 +134,21 @@ export const SessionGroup = HttpApiGroup.make("server.session")
     ),
   )
   .add(
+    HttpApiEndpoint.get("session.get", "/api/session/:sessionID", {
+      params: { sessionID: SessionV2.ID },
+      success: Schema.Struct({ data: SessionV2.Info }),
+      error: SessionNotFoundError,
+    })
+      .middleware(SessionLocationMiddleware)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.get",
+          summary: "Get session",
+          description: "Read the current durable Session projection.",
+        }),
+      ),
+  )
+  .add(
     HttpApiEndpoint.post("session.prompt", "/api/session/:sessionID/prompt", {
       params: { sessionID: SessionV2.ID },
       payload: Schema.Struct({
@@ -138,9 +156,10 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         prompt: Prompt,
         delivery: SessionInput.Delivery.pipe(Schema.optional),
         resume: Schema.Boolean.pipe(Schema.optional),
+        revertEpoch: NonNegativeInt.pipe(Schema.optional),
       }),
       success: Schema.Struct({ data: SessionInput.Admitted }),
-      error: [ConflictError, ServiceUnavailableError, SessionNotFoundError],
+      error: [ConflictError, StaleRevertEpochError, ServiceUnavailableError, SessionNotFoundError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
@@ -162,7 +181,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         modelID: ModelV2.ID,
       }),
       success: HttpApiSchema.NoContent,
-      error: [SessionNotFoundError, ServiceUnavailableError],
+      error: [ConflictError, SessionNotFoundError, ServiceUnavailableError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
@@ -246,6 +265,6 @@ export const SessionGroup = HttpApiGroup.make("server.session")
   .annotateMerge(
     OpenApi.annotations({
       title: "sessions",
-      description: "Experimental session routes.",
+      description: "Core V2 session routes.",
     }),
   )

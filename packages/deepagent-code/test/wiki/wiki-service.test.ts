@@ -1,6 +1,7 @@
 import { describe, expect, test, afterEach } from "bun:test"
 import { rmSync } from "node:fs"
 import { Effect } from "effect"
+import { documentRevision, getGovernanceEnvelope, governanceFingerprint } from "@deepagent-code/core/deepagent/document-store"
 import {
   WikiService,
   WikiGraph,
@@ -81,6 +82,28 @@ describe("WikiService — §B.2 editable boundary", () => {
 })
 
 describe("WikiService — §B.3 editKnowledge governance", () => {
+  test("editing approved knowledge commits the new body and matching human approval atomically", () => {
+    const { store, service } = svc()
+    const draft = store.create(knowledgeInput({ body: "reviewed body" }))
+    const approved = store.commitGovernance(draft.id, documentRevision(draft), {
+      kind: "approve",
+      actor: { type: "human", id: "reviewer" },
+    })
+    const page = run(service.editKnowledge({ docId: approved.id, body: "edited body", editor: { id: "alice" } }))
+    const edited = store.get(page.docId)!
+    expect(edited.version).toBe(approved.version + 1)
+    expect(edited.status).toBe("active")
+    expect(getGovernanceEnvelope(edited)).toMatchObject({
+      fingerprint: governanceFingerprint(edited),
+      review_status: "approved",
+      actor_type: "human",
+      actor_id: "alice",
+      source_doc_ref: `${approved.id}@v${approved.version}`,
+    })
+    expect(store.get(approved.id, approved.version)?.body).toBe("reviewed body")
+    expect(store.verify().ok).toBe(true)
+  })
+
   test("edit stamps provenance.source=human + bumps version (append-only)", () => {
     const { store, service } = svc()
     const k = store.create(knowledgeInput({ body: "v1" }))

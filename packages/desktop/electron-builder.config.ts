@@ -60,7 +60,6 @@ const getBase = (): Configuration => ({
     "resources/icons/**/*",
     "resources/entitlements.plist",
     "resources/*.metainfo.xml",
-    "resources/deepagent-code-cli*",
   ],
   asarUnpack: ["out/main/chunks/node.js"],
   beforePack: () => auditPackageInputs(path.dirname(fileURLToPath(import.meta.url))),

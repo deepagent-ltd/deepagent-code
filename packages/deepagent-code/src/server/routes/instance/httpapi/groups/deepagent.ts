@@ -12,6 +12,11 @@ import { NonNegativeInt, PositiveInt } from "@deepagent-code/core/schema"
 
 const root = "/deepagent"
 
+export class DeepAgentProjectSwitchError extends Schema.ErrorClass<DeepAgentProjectSwitchError>("DeepAgentProjectSwitchError")(
+  { message: Schema.String },
+  { httpApiStatus: 503 },
+) {}
+
 export class DeepAgentPromotionError extends Schema.ErrorClass<DeepAgentPromotionError>("DeepAgentPromotionError")(
   {
     message: Schema.String,
@@ -196,6 +201,9 @@ export const DeepAgentKnowledgeItem = Schema.Struct({
   // Storage scope for project-vs-global grouping in the Review UI: "durable" (global) or
   // "durable:project:<project_id>". Optional so an older server without the field still decodes.
   scope: Schema.optional(Schema.String),
+  inboxID: Schema.optional(Schema.String),
+  reviewReason: Schema.optional(Schema.String),
+  reasonGroup: Schema.optional(Schema.String),
 })
 
 export const DeepAgentKnowledgeList = Schema.Struct({ items: Schema.Array(DeepAgentKnowledgeItem) })
@@ -640,6 +648,19 @@ export const DeepAgentExecutionArchive = Schema.Struct({
 
 export const DeepAgentApi = HttpApi.make("deepagent").add(
   HttpApiGroup.make("deepagent")
+    .add(
+      HttpApiEndpoint.post("projectSwitch", `${root}/learning/project-switch`, {
+        query: WorkspaceRoutingQuery,
+        success: described(Schema.Number, "Settled learning generations claimed for the previous project"),
+        error: DeepAgentProjectSwitchError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.projectSwitch",
+          summary: "Seal previous project learning generations",
+          description: "Claim settled learning generations before navigating to another project.",
+        }),
+      ),
+    )
     .add(
       HttpApiEndpoint.get("reviews", `${root}/reviews`, {
         query: WorkspaceRoutingQuery,

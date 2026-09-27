@@ -2,12 +2,14 @@ export * as DurableLearningRuntime from "./learning-runtime"
 
 import path from "node:path"
 import { existsSync, readFileSync, realpathSync } from "node:fs"
-import { and, count, desc, eq, inArray, isNull, ne, notInArray, or } from "drizzle-orm"
+import { and, count, desc, eq, inArray, isNull, lte, ne, notInArray, or } from "drizzle-orm"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentDurableLearning } from "@deepagent-code/core/deepagent/durable-learning"
 import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagent/learning-lifecycle-trigger"
+import { DeepAgentLearningGeneration } from "@deepagent-code/core/deepagent/learning-generation"
 import { LearningAdmissionOutboxTable } from "@deepagent-code/core/deepagent/learning-admission-outbox.sql"
+import { LearningGenerationTable } from "@deepagent-code/core/deepagent/learning-generation.sql"
 import { createInitialRoundState, type ValidationResult } from "@deepagent-code/core/deepagent/round-state"
 import type { LearningEvidenceSnapshot } from "@deepagent-code/core/deepagent/learning"
 import { writeFileAtomic } from "@deepagent-code/core/deepagent/atomic-write"
@@ -26,6 +28,7 @@ import { Hash } from "@deepagent-code/core/util/hash"
 import { Cause, Context, Duration, Effect, Layer, Schedule, Scope } from "effect"
 
 const pollInterval = Duration.seconds(1)
+const idleLearningWindowMs = 120_000
 
 // Durable log types for the two tool events this module joins against. `EventTable.type` stores the
 // SYNCHRONIZED (version-suffixed) name — `session.next.tool.success.1` — while the definition's bare
@@ -223,15 +226,37 @@ export const layer = Layer.effectDiscard(
     const database = yield* Database.Service
     const reviewers = yield* CurrentReviewerRegistry
     const owner = `learning-worker:${process.pid}:${crypto.randomUUID()}`
-    const tick = Effect.suspend(() =>
-      DeepAgentDurableLearning.drain(database.db, {
+    const tick = Effect.gen(function* () {
+      // Recover an already-chosen trigger before claiming any new generation. An interrupted
+      // artifact write/admission replays the same immutable trigger and never dispatches a
+      // second extraction merely because another lifecycle signal arrived after restart.
+      yield* DeepAgentLearningGeneration.recover(database.db, Global.Path.agent.data)
+      const due = yield* database.db.select({ sessionId: LearningGenerationTable.session_id })
+        .from(LearningGenerationTable)
+        .innerJoin(SessionTable, eq(LearningGenerationTable.session_id, SessionTable.id))
+        .where(and(
+          isNull(LearningGenerationTable.trigger),
+          isNull(SessionTable.execution_claim_token),
+          lte(LearningGenerationTable.settled_at, Date.now() - idleLearningWindowMs),
+        ))
+        .orderBy(LearningGenerationTable.settled_at)
+        .limit(32)
+      yield* Effect.forEach(new Set(due.map((row) => row.sessionId)), (sessionID) =>
+        DeepAgentLearningGeneration.notify(database.db, {
+          trigger: "idle",
+          sessionID,
+          dueAt: Date.now() - idleLearningWindowMs,
+        }, Global.Path.agent.data).pipe(
+          Effect.catchCause((cause) => Effect.logWarning("idle learning admission failed", { sessionID, cause })),
+        ), { discard: true })
+      return yield* DeepAgentDurableLearning.drain(database.db, {
         owner,
         authorityRoot: Global.Path.agent.data,
         ...(learningReviewerProviderEnabled() && reviewers
           ? { reviewerForWorkspace: reviewers.reviewerForWorkspace }
           : {}),
-      }),
-    ).pipe(
+      })
+    }).pipe(
       Effect.catchCause((cause) =>
         Effect.logError("durable learning worker tick failed", { cause: Cause.pretty(cause) }).pipe(Effect.as([])),
       ),
@@ -244,9 +269,8 @@ export const layer = Layer.effectDiscard(
       }),
     )
 
-    // Legacy idle/pause/project-switch receipts intentionally stay quarantined. Their identity
-    // included the signal name, so replaying them would relearn an already-submitted completed
-    // source. A future long-stopped generation migration must reconcile them explicitly.
+    // Legacy lifecycle receipts stay quarantined: their source is an already-admitted Run A.
+    // The independent settled-activity generation authority above handles new lifecycle signals.
     yield* tick
     yield* tick.pipe(Effect.repeat(Schedule.spaced(pollInterval)), Effect.forkScoped)
   }),
@@ -424,7 +448,6 @@ export function onSessionSettled(
       // the durable Goal authority says `done`, its runner-authored completion report exists, and the
       // current structural plan is complete with its declared acceptance evidence.
       const completion = withStorage(() => authoritativeCompletion(input.sessionID))
-      if (!completion) return
       const session = yield* database.db
         .select({
           id: SessionTable.id,
@@ -445,8 +468,10 @@ export function onSessionSettled(
       // One authoritative Goal completion is one learning source. A later activity in the same
       // conversation must not re-learn the already-completed Goal merely because its durable
       // completion report remains visible in the session graph.
-      const runID = `v2_goal_${Hash.sha256(`${input.sessionID}:${completion.goalId}`).slice(0, 24)}`
-      const existingAdmission = yield* database.db
+      const runID = completion
+        ? `v2_goal_${Hash.sha256(`${input.sessionID}:${completion.goalId}`).slice(0, 24)}`
+        : `v2_activity_${Hash.sha256(`${input.sessionID}:${activityId}`).slice(0, 24)}`
+      const existingAdmission = completion ? yield* database.db
         .select({ intentId: LearningAdmissionOutboxTable.intent_id })
         .from(LearningAdmissionOutboxTable)
         .where(
@@ -456,7 +481,7 @@ export function onSessionSettled(
           ),
         )
         .get()
-        .pipe(Effect.orDie)
+        .pipe(Effect.orDie) : undefined
       if (existingAdmission) return
       const mode = runtime?.snapshot.agentMode ?? AgentGateway.snapshot().agentMode
       const roundState = createInitialRoundState(mode)
@@ -502,7 +527,7 @@ export function onSessionSettled(
       // not enter learning extraction (V2 has no failure-dossier diagnoses to extract), same for
       // `indeterminate_after_crash` and any non-terminal receipt (no proven success).
       const latestTurn = yield* database.db
-        .select({ state: V2ProviderTurnReceiptTable.state })
+        .select({ state: V2ProviderTurnReceiptTable.state, terminalAt: V2ProviderTurnReceiptTable.terminal_at })
         .from(V2ProviderTurnReceiptTable)
         .where(
           and(
@@ -546,7 +571,7 @@ export function onSessionSettled(
           roundState,
           totalRounds: roundState.round,
           finalStatus: "completed",
-          trigger: "session_finalization",
+          trigger: completion ? "session_finalization" : "idle",
           policy:
             (runtime?.selfLearning ?? AgentGateway.selfLearningPolicy()) === "auto"
               ? "auto_merge_safe_project"
@@ -555,6 +580,12 @@ export function onSessionSettled(
         },
       }
       const fingerprint = DeepAgentDurableLearning.admissionFingerprint(admission)
+      if (!completion) {
+        // A settled activity with an unfinished Goal is an immutable, unclaimed learning source.
+        // No extraction runs here: idle/pause/project-switch race to claim one durable generation.
+        yield* DeepAgentLearningGeneration.record(database.db, admission, latestTurn.terminalAt ?? Date.now())
+        return
+      }
       const content = CanonicalJson.stringify({
         schema_version: "deepagent_global_run_state.v1",
         run_id: runID,

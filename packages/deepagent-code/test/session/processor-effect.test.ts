@@ -48,6 +48,8 @@ import { SessionIntentTable, SessionTable } from "@deepagent-code/core/session/s
 import { LLMEvent } from "@deepagent-code/llm"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { DeepAgentActivityAuthority } from "@deepagent-code/core/deepagent/index"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { LLMRequestPrep } from "../../src/session/llm/request"
 import {
   SessionActivityObjectiveTable,
   SessionActivityEvidenceTable,
@@ -2019,7 +2021,7 @@ itNoProgress.live(
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
-          const { session } = yield* boot()
+          const { session, provider } = yield* boot()
           const database = yield* Database.Service
           const permission = yield* Permission.Service
           const chat = yield* session.create({})
@@ -2072,6 +2074,49 @@ itNoProgress.live(
             actorID: "test-user",
           })
           const resumed = yield* DeepAgentActivityAuthority.reconstruct({ activityKind: "legacy", activityID })
+          const priorRuntime = AgentGateway.snapshot()
+          const priorEnabled = AgentGateway.isDeepAgentRuntimeEnabled()
+          AgentGateway.configure({ enabled: true, agentMode: "high" })
+          const prepared = yield* LLMRequestPrep.prepare({
+            user: parent,
+            sessionID: chat.id,
+            model: yield* provider.getModel(ref.providerID, ref.modelID),
+            agent: agent(),
+            system: [],
+            messages: [
+              { role: "user", content: "keep reading" },
+              {
+                role: "assistant",
+                content: [
+                  { type: "tool-call", toolCallId: "read-1", toolName: "read", input: { filePath: "stable.ts" } },
+                ],
+              },
+              {
+                role: "tool",
+                content: [
+                  {
+                    type: "tool-result",
+                    toolCallId: "read-1",
+                    toolName: "read",
+                    output: { type: "text", value: "unchanged" },
+                  },
+                ],
+              },
+            ],
+            tools: {},
+            provider: yield* provider.getProvider(ref.providerID),
+            auth: undefined,
+            plugin: yield* Plugin.Service,
+            flags: yield* RuntimeFlags.Service,
+            isWorkflow: false,
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => AgentGateway.configure({ enabled: priorEnabled, agentMode: priorRuntime.agentMode })),
+            ),
+          )
+          expect(prepared.messages.at(-1)).toMatchObject({ role: "user" })
+          expect(JSON.stringify(prepared.messages.at(-1))).toContain("# Loop recovery")
+          expect(JSON.stringify(prepared.messages.at(-1))).not.toContain("Continue directly")
           const stalledAgain = yield* DeepAgentActivityAuthority.observe({
             activityKind: "legacy",
             activityID,
@@ -2268,6 +2313,78 @@ itNoProgress.live(
           ).toMatchObject({ state: "interrupted", terminal_reason: "permission_interrupted" })
         }),
       { config: cfg },
+    ),
+  20_000,
+)
+
+itNoProgress.live(
+  "configured doom_loop deny interrupts the durable activity without an interactive challenge",
+  () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const { processors, session, provider } = yield* boot()
+          const database = yield* Database.Service
+          const permission = yield* Permission.Service
+          const chat = yield* session.create({})
+          const parent = yield* user(chat.id, "read stable.ts until it changes")
+          const activityID = yield* admitActivity(chat.id, parent.id)
+          const model = yield* provider.getModel(ref.providerID, ref.modelID)
+          const tracker = new ToolSequenceTracker()
+
+          const run = Effect.fn("test.runAutoInterruptTurn")(function* () {
+            const msg = yield* assistant(chat.id, parent.id, dir)
+            const handle = yield* processors.create({
+              assistantMessage: msg,
+              sessionID: chat.id,
+              model,
+              sequenceTracker: tracker,
+              loopPolicy: "ask",
+            })
+            return yield* handle.process({
+              user: {
+                id: parent.id,
+                sessionID: chat.id,
+                role: "user",
+                time: parent.time,
+                agent: parent.agent,
+                model: { providerID: ref.providerID, modelID: ref.modelID },
+              } satisfies SessionV1.User,
+              sessionID: chat.id,
+              model,
+              agent: agent(),
+              system: [],
+              messages: [{ role: "user", content: "read stable.ts until it changes" }],
+              tools: {},
+            })
+          })
+
+          expect(yield* run()).toEqual({ action: "continue" })
+          expect(yield* run()).toEqual({ action: "continue" })
+          expect(yield* run()).toEqual({ action: "continue" })
+          expect(yield* run()).toMatchObject({ action: "stop" })
+          expect(yield* permission.list()).toEqual([])
+          const request = yield* database.db
+            .select()
+            .from(SessionActivityPermissionRequestTable)
+            .where(eq(SessionActivityPermissionRequestTable.activity_id, activityID))
+            .get()
+            .pipe(Effect.orDie)
+          expect(request).toMatchObject({ request_kind: "no_progress", state: "interrupted" })
+          if (!request) return
+          expect(
+            yield* database.db
+              .select()
+              .from(SessionActivityPermissionDecisionTable)
+              .where(eq(SessionActivityPermissionDecisionTable.request_id, request.request_id))
+              .get()
+              .pipe(Effect.orDie),
+          ).toMatchObject({ decision: "interrupted", actor_type: "system", actor_id: "permission-policy" })
+          expect(
+            (yield* DeepAgentActivityAuthority.reconstruct({ activityKind: "legacy", activityID })).objective,
+          ).toMatchObject({ state: "interrupted", terminalReason: "permission_interrupted" })
+        }),
+      { config: { ...cfg, permission: { doom_loop: "deny" } } },
     ),
   20_000,
 )
