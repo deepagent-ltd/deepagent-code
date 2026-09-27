@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
+import fs from "fs"
+import os from "os"
+import path from "path"
 import { ConfigMCPV1 } from "@deepagent-code/core/v1/config/mcp"
 import { SecretStore } from "@/mcp/secret-store"
+import { rewriteMcpEntry } from "@/mcp"
+import { parse } from "jsonc-parser"
 
 // M-CRED (S1-v3.5) acceptance (d): existing PLAINTEXT secrets in cfg.mcp are migrated into the
 // secret store and replaced with `secret://` handles — transactionally (put+verify before erase),
@@ -136,5 +141,52 @@ describe("M-CRED migration", () => {
     if (a.type !== "local" || b.type !== "local") throw new Error("expected local")
     expect(SecretStore.isHandle(a.environment!.DATABASE_URI)).toBe(true)
     expect(b.environment!.DATABASE_URI).toBe("postgres://b:secret@h/db") // preserved
+  })
+})
+
+// Win-acceptance §6: the migrated (handle-only) entry must be rewritten INTO THE ORIGIN FILE so the
+// plaintext is erased where it lives — a merged view persisted anywhere else leaves it behind.
+describe("M-CRED origin-file rewrite", () => {
+  const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "dac-mcp-mig-"))
+
+  test("rewrites the server entry in place, preserving comments and sibling keys", async () => {
+    const dir = tmp()
+    const file = path.join(dir, "config.jsonc")
+    fs.writeFileSync(
+      file,
+      [
+        `// managed by hand`,
+        `{`,
+        `  "theme": "dark",`,
+        `  "mcp": {`,
+        `    // team server`,
+        `    "github": { "type": "remote", "url": "https://api.example/mcp", "headers": { "Authorization": "Bearer ghp_plain" }, "enabled": true },`,
+        `    "other": { "type": "remote", "url": "https://other.example/mcp", "enabled": true }`,
+        `  }`,
+        `}`,
+      ].join("\n"),
+    )
+    const migrated = { type: "remote", url: "https://api.example/mcp", headers: { Authorization: "secret://mcp/github" }, enabled: true } as ConfigMCPV1.Info
+
+    expect(await rewriteMcpEntry(file, "github", migrated)).toBe(true)
+
+    const text = fs.readFileSync(file, "utf8")
+    expect(text).toContain("// managed by hand")
+    expect(text).toContain("// team server")
+    expect(text).toContain("secret://mcp/github")
+    expect(text).not.toContain("ghp_plain")
+    const parsed = parse(text) as { theme?: string; mcp?: Record<string, { url?: string; headers?: Record<string, string> }> }
+    expect(parsed.theme).toBe("dark")
+    expect(parsed.mcp!.other.url).toBe("https://other.example/mcp")
+    expect(parsed.mcp!.github.headers!.Authorization).toBe("secret://mcp/github")
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  test("returns false when the origin file no longer declares the server (raced removal)", async () => {
+    const dir = tmp()
+    const file = path.join(dir, "config.jsonc")
+    fs.writeFileSync(file, `{ "mcp": { "other": { "type": "remote", "url": "u", "enabled": true } } }`)
+    expect(await rewriteMcpEntry(file, "github", { type: "remote", url: "u", enabled: true })).toBe(false)
+    fs.rmSync(dir, { recursive: true, force: true })
   })
 })

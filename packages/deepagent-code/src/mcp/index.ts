@@ -35,6 +35,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
+import { applyEdits, modify, parse } from "jsonc-parser"
 
 const log = Log.create({ service: "mcp" })
 const DEFAULT_TIMEOUT = 30_000
@@ -42,6 +43,20 @@ const DEFAULT_TIMEOUT = 30_000
 const TolerantListToolsResultSchema = ListToolsResultSchema.extend({
   tools: ToolSchema.omit({ outputSchema: true }).array(),
 })
+
+// Replace one server entry in a jsonc config file in place, keeping comments and sibling keys
+// intact. Returns false when the file no longer declares that server (raced removal or a shadowed
+// origin) so the caller can surface that the plaintext may still live there.
+export async function rewriteMcpEntry(origin: string, server: string, entry: ConfigMCPV1.Info): Promise<boolean> {
+  const text = await Bun.file(origin).text()
+  const parsed = parse(text) as { mcp?: Record<string, unknown> } | undefined
+  if (!parsed || typeof parsed !== "object" || !parsed.mcp || !(server in parsed.mcp)) return false
+  const edits = modify(text, ["mcp", server], structuredClone(entry), {
+    formattingOptions: { tabSize: 2, insertSpaces: true },
+  })
+  await Bun.file(origin).write(applyEdits(text, edits))
+  return true
+}
 
 export const Resource = Schema.Struct({
   name: Schema.String,
@@ -520,23 +535,24 @@ export const layer = Layer.effect(
     })
     const cfgSvc = yield* Config.Service
 
-    // M-CRED (S1-v3.5): migrate any plaintext secrets in cfg.mcp into the secret store, persist the
-    // rewritten (handle-only) config so the plaintext is erased from disk, and return the migrated
-    // config for the connect loop. Best-effort + transactional: a failed move leaves THAT plaintext
-    // intact (logged) and never drops a credential. The whole step is wrapped so a migration error
-    // can never take down MCP startup — on failure we fall back to the original config.
-    const migrateOnStartup = Effect.fnUntraced(function* (mcp: NonNullable<ConfigV1.Info["mcp"]>) {
+    // M-CRED (S1-v3.5): migrate any plaintext secrets in cfg.mcp into the secret store, rewrite each
+    // migrated entry in the config FILE it was loaded from (cfg.mcp_origins) so the plaintext is
+    // erased at its source, and return the migrated config for the connect loop. Best-effort +
+    // transactional: a failed move leaves THAT plaintext intact (logged) and never drops a
+    // credential. The whole step is wrapped so a migration error can never take down MCP startup —
+    // on failure we fall back to the original config.
+    const migrateOnStartup = Effect.fnUntraced(function* (cfg: ConfigV1.Info & { mcp_origins?: Record<string, string> }) {
       // Only structurally-configured entries (type local/remote) can hold secrets; the
       // `{enabled:false}` shorthand and untyped entries pass through migratePlaintextSecrets
       // untouched (no `type` field → no match). Cast narrows for the migration contract.
-      const configured = mcp as Record<string, ConfigMCPV1.Info>
+      const configured = (cfg.mcp ?? {}) as Record<string, ConfigMCPV1.Info>
       const outcome = yield* SecretStore.migratePlaintextSecrets(configured, secrets).pipe(
         Effect.catch((e) => {
           log.warn("MCP secret migration failed; leaving config unchanged", { error: String(e) })
           return Effect.succeed(undefined)
         }),
       )
-      if (!outcome) return mcp
+      if (!outcome) return configured
       for (const f of outcome.failures) {
         // Audit by KEY NAME / server only — never the value.
         log.warn("MCP secret not migrated; plaintext preserved", { server: f.server, key: f.key, reason: f.error })
@@ -546,15 +562,49 @@ export const layer = Layer.effect(
           count: outcome.moved.length,
           backend: secrets.backendId,
         })
-        // Persist the rewritten config so the plaintext no longer lives on disk.
-        yield* cfgSvc.update({ mcp: outcome.config }).pipe(
-          Effect.catch((e) => {
-            log.warn("failed to persist migrated MCP config; plaintext may remain on disk", { error: String(e) })
-            return Effect.void
-          }),
-        )
+        // Erase the plaintext where it lives: rewrite only the servers that moved, each in its own
+        // origin file. Persisting a merged view to any single file would leave the plaintext in the
+        // origin behind — it still merges on the next load and the migration would re-run forever.
+        for (const server of new Set(outcome.moved.map((move) => move.server))) {
+          yield* persistMigratedServer(server, outcome.config[server], cfg.mcp_origins?.[server])
+        }
+        // The origin files are watched, but reload now so the rest of the process sees the
+        // handle-only config immediately instead of after the watcher debounce.
+        yield* cfgSvc.invalidate()
       }
       return outcome.config
+    })
+
+    // Rewrite one migrated server entry in the config file it was merged from, preserving comments
+    // and sibling keys (jsonc-parser — the same mechanism `mcp add/remove/edit` use). Non-file
+    // origins (remote well-known/console config, inline env content) cannot be erased on disk: warn
+    // and leave them alone — those sources are admin-controlled and re-supply the plaintext on
+    // every load, so a handle-only copy elsewhere would just mask it.
+    const persistMigratedServer = Effect.fnUntraced(function* (
+      server: string,
+      entry: ConfigMCPV1.Info,
+      origin: string | undefined,
+    ) {
+      if (!origin || /^https?:\/\//.test(origin) || origin === "DEEPAGENT_CODE_CONFIG_CONTENT") {
+        log.warn("migrated MCP secret sits in a non-writable config source; plaintext remains there", { server, origin })
+        return
+      }
+      const persisted = yield* Effect.tryPromise({
+        try: () => rewriteMcpEntry(origin, server, entry),
+        catch: (error) => error,
+      }).pipe(
+        Effect.catch((error) => {
+          log.warn("failed to rewrite migrated MCP entry in its config file; plaintext may remain on disk", {
+            server,
+            origin,
+            error: String(error),
+          })
+          return Effect.succeed(false)
+        }),
+      )
+      if (!persisted) {
+        log.warn("migrated MCP server not found in its origin config file; plaintext may remain on disk", { server, origin })
+      }
     })
 
     const descendants = Effect.fnUntraced(
@@ -603,9 +653,9 @@ export const layer = Layer.effect(
         // M-CRED (S1-v3.5): one-shot startup migration of any PLAINTEXT secrets already sitting in
         // cfg.mcp (legacy configs written before this layer). Each secret is moved into the secret
         // store and replaced with a `secret://` handle, transactionally (put+verify before erase, so
-        // a partial failure never loses a credential). We persist the rewritten config so the
-        // plaintext is erased from disk, then connect against the migrated config below.
-        const config = yield* migrateOnStartup(cfg.mcp ?? {})
+        // a partial failure never loses a credential). The origin file is rewritten in place so the
+        // plaintext is erased from disk, then we connect against the migrated config below.
+        const config = yield* migrateOnStartup(cfg)
         const s: State = {
           config: {},
           configured: { ...config },
