@@ -56,8 +56,15 @@ done:
   Push $R8 ; return the cleaned path
 FunctionEnd
 !macroend
-!insertmacro RemovePathSegment ""
-!insertmacro RemovePathSegment "un."
+; electron-builder compiles this include twice (installer pass + BUILD_UNINSTALLER
+; pass) and treats makensis warnings as errors. Each pass references only its own
+; function variant, so emit just that one — an unreferenced variant fails the
+; build with warning 6010.
+!ifdef BUILD_UNINSTALLER
+  !insertmacro RemovePathSegment "un."
+!else
+  !insertmacro RemovePathSegment ""
+!endif
 
 !macro WriteUserPath
   ; $R0 = new user Path value. REG_EXPAND_SZ keeps %VAR% references expandable
