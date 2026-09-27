@@ -2,9 +2,9 @@
 
 This changelog contains public, user-facing product changes. Internal incident identifiers, local paths, private environment topology, test credentials, release-gate evidence, and operational measurements are intentionally excluded.
 
-## Core 2.0.3 / Desktop 2.0.3
+## Core 2.0.2 / Desktop 2.0.2
 
-Release labels: `core-v2.0.3` and `desktop-v2.0.3` (`2.0.3`).
+Release labels: `core-v2.0.2` and `desktop-v2.0.2` (`2.0.2`).
 
 ### Windows
 
@@ -25,10 +25,6 @@ Release labels: `core-v2.0.3` and `desktop-v2.0.3` (`2.0.3`).
 
 - Windows release binaries are now built natively on Windows runners in CI instead of cross-compiled; the build pipeline executes the produced executable as a smoke test, so a non-starting Windows build fails the release instead of shipping.
 - Embedded web UI builds start from a clean output directory so stale chunks from an interrupted build cannot ship inside the binary.
-
-## Core 2.0.2 / Desktop 2.0.2
-
-Release labels: `core-v2.0.2` and `desktop-v2.0.2` (`2.0.2`).
 
 ### Sessions and history
 
