@@ -53,6 +53,10 @@ const createEmbeddedWebUIBundle = async () => {
   console.log(`Building Web UI to embed in the binary`)
   const appDir = path.join(import.meta.dirname, "../../app")
   const dist = path.join(appDir, "dist")
+  // Start from an empty dist so the embedded file map contains exactly what this build produced —
+  // a failed or interrupted previous build would otherwise leave stale hashed chunks next to the
+  // fresh ones and both would ship inside the binary.
+  await fs.promises.rm(dist, { recursive: true, force: true })
   await $`DEEPAGENT_CODE_CHANNEL=${Script.channel} bun run --cwd ${appDir} build`
   const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: dist })))
     .map((file) => file.replaceAll("\\", "/"))
