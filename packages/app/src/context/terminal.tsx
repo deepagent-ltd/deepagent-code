@@ -978,7 +978,11 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
     // Reactive effective session key: real session ID when available, draft UUID otherwise.
     const effectiveSessionKey = createMemo(() => params.id ?? draftKey)
 
-    let runtimeId: string | undefined
+    // runtimeId must be a signal: the terminal auto-create lifecycle gates on it, and on a cold
+    // load with a persisted-open panel the gate's only evaluation happens before the one-shot
+    // health probe resolves. A plain variable can never retrigger that effect, deadlocking the
+    // panel on "Loading terminal..." forever.
+    const [runtimeId, setRuntimeId] = createSignal<string | undefined>(undefined)
     let runtimeRequest: Promise<void> | undefined
     let bottomSession: TerminalSession | undefined
     let sideSession: TerminalSession | undefined
@@ -994,13 +998,13 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
         .health({ cache: "no-store" })
         .then((result) => {
           const next = result.data?.runtimeId ?? sdk.url
-          if (!runtimeId) {
-            runtimeId = next
+          if (!runtimeId()) {
+            setRuntimeId(next)
             return
           }
-          if (runtimeId === next) return
-          console.info("[terminal] server runtime changed", { previousRuntimeId: runtimeId, runtimeId: next })
-          runtimeId = next
+          if (runtimeId() === next) return
+          console.info("[terminal] server runtime changed", { previousRuntimeId: runtimeId(), runtimeId: next })
+          setRuntimeId(next)
           // Invalidate all cached snapshots for this scope — old PTY IDs are dead.
           invalidateScopeSnapshots(scope)
           bottomSession?.resetRuntime()
@@ -1015,7 +1019,7 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
       return runtimeRequest as Promise<void>
     }
 
-    const runtime = { id: () => runtimeId, ensure: ensureRuntime }
+    const runtime = { id: runtimeId, ensure: ensureRuntime }
     bottomSession = createWorkspaceTerminalSession(sdk, runtime)
     sideSession = createWorkspaceTerminalSession(sdk, runtime)
 
