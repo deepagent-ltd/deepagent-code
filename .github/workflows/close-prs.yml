@@ -1,8 +1,6 @@
 name: close-prs
 
 on:
-  schedule:
-    - cron: "0 22 * * *" # Daily at 10:00 PM UTC
   workflow_dispatch:
     inputs:
       dry-run:
