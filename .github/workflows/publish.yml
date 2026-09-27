@@ -2,13 +2,11 @@ name: publish
 run-name: "${{ format('release {0}', inputs.bump) }}"
 
 on:
+  # Only the dev->main merge (push to main) builds; releases themselves are
+  # workflow_dispatch with an explicit version.
   push:
     branches:
-      - ci
-      - dev
-      - beta
-      - fix/npm-native-binary-install
-      - snapshot-*
+      - main
   workflow_dispatch:
     inputs:
       bump:

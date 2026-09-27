@@ -1,8 +1,7 @@
 name: pr-routing
 
 on:
-  pull_request_target:
-    types: [opened, reopened, edited, synchronize, ready_for_review]
+  workflow_dispatch:
 
 permissions:
   contents: read
