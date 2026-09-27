@@ -1,4 +1,5 @@
 import { dynamicTool, type Tool, type ToolExecutionOptions, jsonSchema, type JSONSchema7 } from "ai"
+import path from "path"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
@@ -45,10 +46,12 @@ const TolerantListToolsResultSchema = ListToolsResultSchema.extend({
 })
 
 // Replace one server entry in a jsonc config file in place, keeping comments and sibling keys
-// intact. Returns false when the file no longer declares that server (raced removal or a shadowed
-// origin) so the caller can surface that the plaintext may still live there.
+// intact. Returns false when the file is absent or no longer declares that server (raced removal
+// or a shadowed origin) so the caller can surface that the plaintext may still live there.
 export async function rewriteMcpEntry(origin: string, server: string, entry: ConfigMCPV1.Info): Promise<boolean> {
-  const text = await Bun.file(origin).text()
+  const file = Bun.file(origin)
+  if (!(await file.exists())) return false
+  const text = await file.text()
   const parsed = parse(text) as { mcp?: Record<string, unknown> } | undefined
   if (!parsed || typeof parsed !== "object" || !parsed.mcp || !(server in parsed.mcp)) return false
   const edits = modify(text, ["mcp", server], structuredClone(entry), {
@@ -56,6 +59,16 @@ export async function rewriteMcpEntry(origin: string, server: string, entry: Con
   })
   await Bun.file(origin).write(applyEdits(text, edits))
   return true
+}
+
+// mcp_origins records the merge SOURCE: a file path for project configs, but the config DIRECTORY
+// for the global layer, whose loader folds several files into one merge step. A directory origin
+// resolves to the standard candidate files in load order (canonical last, mirroring the loader).
+export function mcpConfigCandidates(origin: string): string[] {
+  if (/\.(jsonc?)$/.test(origin)) return [origin]
+  return ["config.json", "deepagent-code.json", "deepagent-code.jsonc", "config.jsonc"].map((name) =>
+    path.join(origin, name),
+  )
 }
 
 export const Resource = Schema.Struct({
@@ -589,21 +602,26 @@ export const layer = Layer.effect(
         log.warn("migrated MCP secret sits in a non-writable config source; plaintext remains there", { server, origin })
         return
       }
-      const persisted = yield* Effect.tryPromise({
-        try: () => rewriteMcpEntry(origin, server, entry),
-        catch: (error) => error,
-      }).pipe(
-        Effect.catch((error) => {
+      let found = false
+      for (const file of mcpConfigCandidates(origin)) {
+        const outcome = yield* Effect.tryPromise({
+          try: () => rewriteMcpEntry(file, server, entry),
+          catch: (error) => error,
+        }).pipe(Effect.catch((error) => {
           log.warn("failed to rewrite migrated MCP entry in its config file; plaintext may remain on disk", {
             server,
-            origin,
+            origin: file,
             error: String(error),
           })
           return Effect.succeed(false)
-        }),
-      )
-      if (!persisted) {
-        log.warn("migrated MCP server not found in its origin config file; plaintext may remain on disk", { server, origin })
+        }))
+        if (outcome) {
+          found = true
+          break
+        }
+      }
+      if (!found) {
+        log.warn("migrated MCP server not found in its origin config files; plaintext may remain on disk", { server, origin })
       }
     })
 

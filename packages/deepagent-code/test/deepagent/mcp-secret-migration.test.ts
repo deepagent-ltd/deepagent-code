@@ -5,7 +5,7 @@ import os from "os"
 import path from "path"
 import { ConfigMCPV1 } from "@deepagent-code/core/v1/config/mcp"
 import { SecretStore } from "@/mcp/secret-store"
-import { rewriteMcpEntry } from "@/mcp"
+import { rewriteMcpEntry, mcpConfigCandidates } from "@/mcp"
 import { parse } from "jsonc-parser"
 
 // M-CRED (S1-v3.5) acceptance (d): existing PLAINTEXT secrets in cfg.mcp are migrated into the
@@ -188,5 +188,27 @@ describe("M-CRED origin-file rewrite", () => {
     fs.writeFileSync(file, `{ "mcp": { "other": { "type": "remote", "url": "u", "enabled": true } } }`)
     expect(await rewriteMcpEntry(file, "github", { type: "remote", url: "u", enabled: true })).toBe(false)
     fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  test("returns false for an absent candidate file without throwing", async () => {
+    const dir = tmp()
+    expect(await rewriteMcpEntry(path.join(dir, "config.jsonc"), "github", { type: "remote", url: "u", enabled: true })).toBe(false)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe("M-CRED origin candidate resolution", () => {
+  test("a file origin resolves to itself", () => {
+    expect(mcpConfigCandidates("/cfg/config.jsonc")).toEqual(["/cfg/config.jsonc"])
+  })
+
+  test("a directory origin (global config dir from mcp_origins) resolves to the loader's candidate files", () => {
+    const sep = path.sep
+    expect(mcpConfigCandidates(path.join(sep, "cfg"))).toEqual([
+      path.join(sep, "cfg", "config.json"),
+      path.join(sep, "cfg", "deepagent-code.json"),
+      path.join(sep, "cfg", "deepagent-code.jsonc"),
+      path.join(sep, "cfg", "config.jsonc"),
+    ])
   })
 })
