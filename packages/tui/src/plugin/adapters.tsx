@@ -218,7 +218,8 @@ export function createTuiApiAdapters(input: Input): Omit<TuiPluginApi, "lifecycl
         return <DialogConfirm {...props} />
       },
       DialogPrompt(props) {
-        return <DialogPrompt {...props} description={props.description} />
+        // The plugin-side contract keeps description as a lazy element; our DialogPrompt takes it directly.
+        return <DialogPrompt {...props} description={props.description?.()} />
       },
       DialogSelect(props) {
         return (

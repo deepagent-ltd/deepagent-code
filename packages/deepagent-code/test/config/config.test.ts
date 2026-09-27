@@ -363,12 +363,12 @@ it.instance("updates config and preserves empty shell sentinel", () =>
     yield* writeConfigEffect(
       test.directory,
       { $schema: "https://ai.deepagent.ltd/config.schema.json", shell: "bash" },
-      "config.json",
+      "deepagent-code.json",
     )
 
     yield* Config.Service.use((svc) => svc.update(ConfigParse.schema(ConfigV1.Info, { shell: "" }, "test:config")))
 
-    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "config.json"))
+    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "deepagent-code.json"))
     expect(writtenConfig).toMatchObject({ shell: "" })
   }),
 )
@@ -1024,14 +1024,14 @@ Nested command template`,
   }),
 )
 
-it.instance("updates config and writes to file", () =>
+it.instance("updates config and writes to the project config file", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance
     yield* Config.Service.use((svc) =>
       svc.update(ConfigParse.schema(ConfigV1.Info, { model: "updated/model" }, "test:config")),
     )
 
-    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "config.json"))
+    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "deepagent-code.json"))
     expect(writtenConfig).toMatchObject({ model: "updated/model" })
   }),
 )

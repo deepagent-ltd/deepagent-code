@@ -983,9 +983,11 @@ export const layer = Layer.effect(
       )
     })
 
+    // Project-scoped writes must land in a file the loader actually merges: ConfigPaths.files
+    // targets deepagent-code.json(c) at or above ctx.directory. A plain config.json next to the
+    // working directory is never read back, so writes there silently vanish on the next load.
     const update = Effect.fn("Config.update")(function* (config: Info) {
-      const dir = yield* InstanceState.directory
-      const file = path.join(dir, "config.json")
+      const file = path.join(yield* InstanceState.directory, "deepagent-code.json")
       const existing = yield* loadFile(file)
       yield* fs
         .writeFileString(file, JSON.stringify(mergeDeep(writable(existing), writable(config)), null, 2))
