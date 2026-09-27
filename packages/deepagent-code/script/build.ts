@@ -129,7 +129,13 @@ const allTargets: {
   },
 ]
 
-const targets = singleFlag
+// --exclude-win32 drops the Windows targets from a multi-target run — used by the release
+// pipeline, which builds Windows natively on a Windows runner (bun cross-compile with a large
+// embedded web UI produced non-starting Windows PEs when the build host was macOS; building
+// natively removes that entire risk class instead of per-host triage).
+const excludeWin32 = process.argv.includes("--exclude-win32")
+
+const targets = (singleFlag
   ? allTargets.filter((item) => {
       if (
         archFlag
@@ -153,6 +159,7 @@ const targets = singleFlag
       return true
     })
   : allTargets
+).filter((item) => !excludeWin32 || item.os !== "win32")
 
 await $`rm -rf dist`
 
