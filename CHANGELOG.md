@@ -2,6 +2,30 @@
 
 This changelog contains public, user-facing product changes. Internal incident identifiers, local paths, private environment topology, test credentials, release-gate evidence, and operational measurements are intentionally excluded.
 
+## Core 2.0.3 / Desktop 2.0.3
+
+Release labels: `core-v2.0.3` and `desktop-v2.0.3` (`2.0.3`).
+
+### Windows
+
+- Fixed a startup crash that hit Windows installs on every launch after the one-time data migration had completed, as well as in the migration-guarded and migration-failed paths.
+- The interactive TUI now starts on Windows; it previously crashed during the first draw.
+- Hardened the CLI runtime and file-search picker against two crash classes found in short-lived Windows commands.
+
+### Terminal (web & desktop)
+
+- The terminal panel no longer sticks on "Loading terminal..." when a session opens in a fresh page load: terminals now start automatically within seconds, and a failed readiness probe retries instead of deadlocking the panel.
+
+### Security and configuration
+
+- Plaintext MCP server secrets found in config files are now erased exactly where they came from: migration rewrites the originating file in place (comments preserved) after moving each secret into the OS credential store (DPAPI on Windows), transactionally and idempotently — the plaintext no longer survives on disk.
+- Instance-level configuration updates made through the HTTP config API now persist to the project config file that is actually loaded, instead of a file nothing reads back.
+
+### Release engineering
+
+- Windows release binaries are now built natively on Windows runners in CI instead of cross-compiled; the build pipeline executes the produced executable as a smoke test, so a non-starting Windows build fails the release instead of shipping.
+- Embedded web UI builds start from a clean output directory so stale chunks from an interrupted build cannot ship inside the binary.
+
 ## Core 2.0.2 / Desktop 2.0.2
 
 Release labels: `core-v2.0.2` and `desktop-v2.0.2` (`2.0.2`).
