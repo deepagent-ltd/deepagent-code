@@ -328,19 +328,21 @@ function AssistantMessage(props: {
         <MissingData label="Assistant content" detail={`Assistant message ${props.message.id} has no content items.`} />
       </Show>
       <Show when={props.message.error}>
-        <box
-          border={["left"]}
-          paddingTop={1}
-          paddingBottom={1}
-          paddingLeft={2}
-          marginTop={1}
-          backgroundColor={theme.backgroundPanel}
-          customBorderChars={SplitBorder.customBorderChars}
-          borderColor={theme.error}
-          flexShrink={0}
-        >
-          <text fg={theme.textMuted}>{props.message.error}</text>
-        </box>
+        {(error) => (
+          <box
+            border={["left"]}
+            paddingTop={1}
+            paddingBottom={1}
+            paddingLeft={2}
+            marginTop={1}
+            backgroundColor={theme.backgroundPanel}
+            customBorderChars={SplitBorder.customBorderChars}
+            borderColor={theme.error}
+            flexShrink={0}
+          >
+            <text fg={theme.textMuted}>{error().message}</text>
+          </box>
+        )}
       </Show>
       <Show when={props.last || final() || props.message.error}>
         <box paddingLeft={3} flexShrink={0}>
