@@ -212,7 +212,7 @@ function LeafPane(props: { node: PaneLeaf }) {
       data-terminal-pane={props.node.id}
       data-active-terminal={activeId()}
       data-focused={focused() ? "true" : undefined}
-      class="absolute inset-0 flex flex-col overflow-hidden border bg-background-stronger"
+      class="absolute inset-1.5 flex flex-col overflow-hidden rounded-lg border bg-background-stronger"
       classList={{
         "border-border-base ring-1 ring-inset ring-border-base": focused(),
         "border-border-weak-base": !focused(),
