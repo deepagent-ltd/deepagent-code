@@ -231,10 +231,7 @@ export function SessionHeader() {
     view().panel.reveal(id)
     setPanelViewsOpen(false)
   }
-  const movePanelView = (id: (typeof DOCK_PANEL_IDS)[number], target: "bottom" | "side") => {
-    view().panel.move(id, target)
-    setPanelViewsOpen(false)
-  }
+  
 
   const rightPanelOpen = createMemo(() => view().rightPanel.opened())
 
@@ -529,26 +526,7 @@ export function SessionHeader() {
                               {language.t(view().panel.location(id) === "bottom" ? "session.panel.location.bottom" : "session.panel.location.side")}
                             </span>
                           </button>
-                          <Show when={view().panel.location(id) === "side"}>
-                            <IconButton
-                              icon="layout-bottom"
-                              variant="ghost"
-                              iconSize="small"
-                              aria-label={`${language.t("session.panel.moveToBottom")}: ${language.t(PANEL_VIEW_META[id].titleKey)}`}
-                              title={`${language.t("session.panel.moveToBottom")}: ${language.t(PANEL_VIEW_META[id].titleKey)}`}
-                              onClick={() => movePanelView(id, "bottom")}
-                            />
-                          </Show>
-                          <Show when={view().panel.location(id) === "bottom" && view().panel.sideAvailable()}>
-                            <IconButton
-                              icon="layout-right"
-                              variant="ghost"
-                              iconSize="small"
-                              aria-label={`${language.t("session.panel.moveToSide")}: ${language.t(PANEL_VIEW_META[id].titleKey)}`}
-                              title={`${language.t("session.panel.moveToSide")}: ${language.t(PANEL_VIEW_META[id].titleKey)}`}
-                              onClick={() => movePanelView(id, "side")}
-                            />
-                          </Show>
+
                         </div>
                       )}
                     </For>

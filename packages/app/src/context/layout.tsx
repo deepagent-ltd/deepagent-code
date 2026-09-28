@@ -748,26 +748,19 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         // values making the bottom terminal unreachable. Move operations for terminal
         // are intentionally no-ops; only debug-console and problems remain movable.
         location(id: DockPanelID): DockLocation {
+          // Fixed hosts, mirroring each other: terminal is bottom-only, Debug Console and
+          // Problems are side-rail-only. Both ignore stale persisted values from before the
+          // split (a stored "side" terminal or "bottom" problems would be unreachable).
           if (id === "terminal") return "bottom"
+          if (id === "debug-console" || id === "problems") return "side"
           return store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]
         },
-        setLocation(id: DockPanelID, location: DockLocation) {
-          if (id === "terminal") return // terminal location is now fixed
-          if (!store.dock) {
-            setStore("dock", { location: { [id]: location } as Record<DockPanelID, DockLocation> })
-            return
-          }
-          setStore("dock", "location", id, location)
+        setLocation() {
+          // Every dock view has a fixed host (terminal → bottom; debug-console/problems → side
+          // rail). Kept as a no-op so existing callers stay valid; stored values are inert.
         },
-        move(id: DockPanelID) {
-          if (id === "terminal") return // terminal is no longer movable
-          const current = store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]
-          const next: DockLocation = current === "bottom" ? "side" : "bottom"
-          if (!store.dock) {
-            setStore("dock", { location: { [id]: next } as Record<DockPanelID, DockLocation> })
-            return
-          }
-          setStore("dock", "location", id, next)
+        move() {
+          // No movable views remain — see setLocation.
         },
         bottomCount: createMemo(
           () =>
