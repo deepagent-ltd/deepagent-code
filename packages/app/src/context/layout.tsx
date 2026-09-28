@@ -68,8 +68,10 @@ export type DockLocation = PanelLocation
 export const DOCK_PANEL_IDS: readonly DockPanelID[] = ["terminal", "debug-console", "problems"]
 const DOCK_DEFAULT_LOCATION: Record<DockPanelID, DockLocation> = {
   terminal: "bottom",
-  "debug-console": "bottom",
-  problems: "bottom",
+  // Debug Console and Problems live in the side rail by default — the bottom dock is
+  // terminal-only and the rail icon expands them with a single click.
+  "debug-console": "side",
+  problems: "side",
 }
 
 export function getAvatarColors(key?: string) {
