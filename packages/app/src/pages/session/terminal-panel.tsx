@@ -134,9 +134,9 @@ function TerminalPanelContent(props: Props) {
                     type="button"
                     role="tab"
                     aria-selected={active() === id}
-                    class="px-3 h-full shrink-0 flex items-center gap-1.5 text-13-regular border-b-2 -mb-px outline-none"
+                    class="px-3 h-full shrink-0 flex items-center gap-1.5 text-13-regular border-b -mb-px outline-none transition-colors"
                     classList={{
-                      "border-border-base text-text-stronger": active() === id,
+                      "border-border-interactive-active text-text-stronger": active() === id,
                       "border-transparent text-text-weak hover:text-text": active() !== id,
                     }}
                     onClick={() => panel().reveal(id)}
