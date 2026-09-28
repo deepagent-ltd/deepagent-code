@@ -14,7 +14,7 @@ import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
-import { DOCK_PANEL_IDS, useLayout } from "@/context/layout"
+import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { useSync } from "@/context/sync"
@@ -222,15 +222,7 @@ export function SessionHeader() {
     }
   }
 
-  const bottomPanelOpen = createMemo(() => view().panel.bottom.opened())
-  const bottomPanelAvailable = createMemo(() => view().panel.viewsAt("bottom").length > 0)
-  const toggleBottomPanel = () => view().panel.bottom.toggle()
-  const [panelViewsOpen, setPanelViewsOpen] = createSignal(false)
-  const panelViewIDs = createMemo(() => [...DOCK_PANEL_IDS])
-  const revealPanelView = (id: (typeof DOCK_PANEL_IDS)[number]) => {
-    view().panel.reveal(id)
-    setPanelViewsOpen(false)
-  }
+
   
 
   const rightPanelOpen = createMemo(() => view().rightPanel.opened())
@@ -482,56 +474,9 @@ export function SessionHeader() {
                     </Button>
                   </TooltipKeybind>
                 </Show>
-                <TooltipKeybind
-                  title={bottomPanelAvailable() ? language.t("command.panel.toggle") : language.t("session.panel.noBottomViews")}
-                  keybind={command.keybind("panel.toggle")}
-                >
-                  <Button
-                    variant="ghost"
-                    class="group/bottom-panel-toggle titlebar-icon w-8 h-6 p-0 box-border shrink-0"
-                    onClick={toggleBottomPanel}
-                    aria-label={bottomPanelAvailable() ? language.t("command.panel.toggle") : language.t("session.panel.noBottomViews")}
-                    aria-expanded={bottomPanelOpen()}
-                    aria-controls="bottom-panel"
-                    disabled={!bottomPanelAvailable()}
-                  >
-                    <Icon size="small" name={bottomPanelOpen() ? "layout-bottom-full" : "layout-bottom"} />
-                  </Button>
-                </TooltipKeybind>
+                
 
-                <Popover
-                  open={panelViewsOpen()}
-                  onOpenChange={setPanelViewsOpen}
-                  portal
-                  class="w-72 rounded-md border border-border-weaker-base bg-background-stronger p-1 shadow-lg"
-                  trigger={
-                    <span class="group/panel-views titlebar-icon w-8 h-6 p-0 box-border shrink-0 flex items-center justify-center" aria-label={language.t("session.panel.views")}>
-                      <Icon size="small" name="menu" />
-                    </span>
-                  }
-                >
-                  <div data-panel-views-menu>
-                    <div class="px-2 py-1.5 text-12-medium text-text-weak">{language.t("session.panel.views")}</div>
-                    <For each={panelViewIDs()}>
-                      {(id) => (
-                        <div class="mb-1 flex items-center gap-1 rounded-md px-1 py-1 hover:bg-surface-base-hover">
-                          <button
-                            type="button"
-                            class="min-w-0 flex flex-1 items-center gap-2 px-1 text-left text-13-regular text-text-strong"
-                            onClick={() => revealPanelView(id)}
-                          >
-                            <Icon size="small" name={PANEL_VIEW_META[id].icon} />
-                            <span class="flex-1 truncate">{language.t(PANEL_VIEW_META[id].titleKey)}</span>
-                            <span class="text-11-regular text-text-weak">
-                              {language.t(view().panel.location(id) === "bottom" ? "session.panel.location.bottom" : "session.panel.location.side")}
-                            </span>
-                          </button>
-
-                        </div>
-                      )}
-                    </For>
-                  </div>
-                </Popover>
+                
 
                 <div class="hidden md:flex items-center gap-1 shrink-0">
                   <TooltipKeybind
