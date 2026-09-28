@@ -70,9 +70,7 @@ async function launch() {
   const startupMs = Math.round(performance.now() - started)
   const childPID = app.process().pid
   if (childPID === undefined) throw new Error("electron app process pid unavailable")
-  const resources = packagedExecutable
-    ? await new Promise((resolve) => setTimeout(resolve, 5_000)).then(() => processTreeResources(childPID))
-    : undefined
+  const resources = packagedExecutable ? await settledResources(childPID) : undefined
   console.log("Electron startup ready", { packaged: Boolean(packagedExecutable), startupMs, resources })
   // Cold-start budget scales by runner arch: intel macOS CI boots the same packaged app
   // roughly 2x slower than Apple Silicon (first-ever x64 leg measured 25.4s while arm64
@@ -87,6 +85,21 @@ async function launch() {
     assert.equal(resources.rssMiB < 1_536, true, `packaged process tree retained ${resources.rssMiB} MiB RSS`)
   }
   return { app, page, server }
+}
+
+// Idle resources are only meaningful once startup work has drained. A single snapshot 5s
+// after boot measures mid-initialization CPU on slower runners (the x64 leg showed 156%
+// there while arm64 idled) — poll until the tree settles below the idle threshold instead
+// of assuming one timing fits every runner, and let the assertion see the settled value.
+async function settledResources(rootPID: number) {
+  const samples: (ReturnType<typeof processTreeResources> extends Promise<infer T> ? T : never)[] = []
+  for (let attempt = 0; attempt < 15; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 5_000 : 4_000))
+    const sample = await processTreeResources(rootPID)
+    samples.push(sample)
+    if (sample.cpuPercent < 50) return sample
+  }
+  return samples[samples.length - 1]
 }
 
 async function processTreeResources(rootPID: number) {
