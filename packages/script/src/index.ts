@@ -32,7 +32,9 @@ const CHANNEL = await (async () => {
 const IS_PREVIEW = CHANNEL !== "latest"
 
 const VERSION = await (async () => {
-  if (env.DEEPAGENT_CODE_VERSION) return env.DEEPAGENT_CODE_VERSION
+  // Strip a leading v so tag-triggered releases (DEEPAGENT_CODE_VERSION=v2.0.2 from the tag
+  // name) produce tag v${version} without doubling the prefix.
+  if (env.DEEPAGENT_CODE_VERSION) return env.DEEPAGENT_CODE_VERSION.replace(/^v/, "")
   if (IS_PREVIEW) return `0.0.0-${CHANNEL}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`
   const version = await fetch("https://registry.npmjs.org/deepagent-code/latest")
     .then((res) => {
