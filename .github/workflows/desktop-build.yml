@@ -72,7 +72,7 @@ jobs:
           GIT_REF: ${{ github.ref }}
         run: |
           mac_arm64='{"host":"macos-14","target":"darwin-arm64","platform_flag":"--mac dmg zip --arm64","group":"mac"}'
-          mac_x64='{"host":"macos-26-intel","target":"darwin-x64","platform_flag":"--mac dmg zip --x64","group":"mac"}'
+          mac_x64='{"host":"macos-15-intel","target":"darwin-x64","platform_flag":"--mac dmg zip --x64","group":"mac"}'
           linux='{"host":"ubuntu-24.04","target":"linux-amd64","platform_flag":"--linux deb --x64","group":"linux"}'
           win='{"host":"windows-2025","target":"win-x64","platform_flag":"--win nsis --x64","group":"win"}'
           # Dev mainline pushes exercise only the Windows packaging path (the newest and
