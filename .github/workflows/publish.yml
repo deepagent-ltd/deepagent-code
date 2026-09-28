@@ -2,11 +2,12 @@ name: publish
 run-name: "${{ format('release {0}', inputs.bump) }}"
 
 on:
-  # Only the dev->main merge (push to main) builds; releases themselves are
-  # workflow_dispatch with an explicit version.
   push:
     branches:
       - main
+    # Pushing (or moving) a vX.Y.Z tag releases that version.
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       bump:
@@ -36,7 +37,7 @@ permissions:
 
 jobs:
   version:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     if: github.repository == 'deepagent-ltd/deepagent-code'
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
@@ -62,8 +63,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
           DEEPAGENT_CODE_BUMP: ${{ inputs.bump }}
-          DEEPAGENT_CODE_VERSION: ${{ inputs.version }}
-          DEEPAGENT_CODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || ((inputs.bump || inputs.version) && 'latest') || github.ref_name }}
+          DEEPAGENT_CODE_VERSION: ${{ (startsWith(github.ref, 'refs/tags/') && github.ref_name) || inputs.version }}
+          DEEPAGENT_CODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || (startsWith(github.ref, 'refs/tags/') && 'latest') || ((inputs.bump || inputs.version) && 'latest') || github.ref_name }}
           DEEPAGENT_CODE_API_KEY: ${{ secrets.DEEPAGENT_CODE_API_KEY }}
           GH_REPO: ${{ (github.ref_name == 'beta' && 'deepagent-ltd/deepagent-code-beta') || github.repository }}
     outputs:
@@ -77,7 +78,7 @@ jobs:
 
   build-cli:
     needs: version
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     if: github.repository == 'deepagent-ltd/deepagent-code'
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
@@ -185,7 +186,7 @@ jobs:
     needs:
       - version
       - build-cli
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: windows-2025
     if: github.repository == 'deepagent-ltd/deepagent-code'
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
@@ -239,7 +240,7 @@ jobs:
     needs:
       - build-cli-windows
       - version
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: windows-2025
     if: github.repository == 'deepagent-ltd/deepagent-code'
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -352,10 +353,10 @@ jobs:
             target: aarch64-apple-darwin
             platform_flag: --mac --arm64
             bun_install_flags: --os=darwin --cpu=arm64
-          - host: "blacksmith-4vcpu-windows-2025"
+          - host: "windows-2025"
             target: x86_64-pc-windows-msvc
             platform_flag: --win
-          - host: "blacksmith-4vcpu-ubuntu-2404"
+          - host: "ubuntu-24.04"
             target: x86_64-unknown-linux-gnu
             platform_flag: --linux
     runs-on: ${{ matrix.settings.host }}
@@ -517,7 +518,7 @@ jobs:
       - sign-cli-windows
       - build-electron
     if: always() && !failure() && !cancelled() && needs.version.outputs.channel != 'beta'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     env:
       GH_REPO: ${{ needs.version.outputs.repo }}
       DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
