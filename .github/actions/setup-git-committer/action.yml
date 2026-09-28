@@ -1,33 +1,55 @@
 name: "Setup Git Committer"
-description: "Create app token and configure git user"
+description: "Create a write token (GitHub App when configured, else the job's GITHUB_TOKEN) and configure git user"
 inputs:
   deepagent-code-app-id:
-    description: "DeepAgent Code GitHub App ID"
-    required: true
+    description: "DeepAgent Code GitHub App ID (optional — falls back to GITHUB_TOKEN when unset)"
+    required: false
   deepagent-code-app-secret:
-    description: "DeepAgent Code GitHub App private key"
-    required: true
+    description: "DeepAgent Code GitHub App private key (optional)"
+    required: false
 outputs:
   token:
-    description: "GitHub App token"
-    value: ${{ steps.apptoken.outputs.token }}
+    description: "Write token (app token or GITHUB_TOKEN)"
+    value: ${{ steps.resolve.outputs.token }}
   app-slug:
-    description: "GitHub App slug"
-    value: ${{ steps.apptoken.outputs.app-slug }}
+    description: "Committer identity slug (app slug or github-actions)"
+    value: ${{ steps.resolve.outputs.slug }}
 runs:
   using: "composite"
   steps:
     - name: Create app token
       id: apptoken
+      if: ${{ inputs.deepagent-code-app-id != '' }}
       uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
       with:
         app-id: ${{ inputs.deepagent-code-app-id }}
         private-key: ${{ inputs.deepagent-code-app-secret }}
         owner: ${{ github.repository_owner }}
 
+    - name: Resolve committer identity
+      id: resolve
+      env:
+        APP_ID: ${{ inputs.deepagent-code-app-id }}
+        APP_TOKEN: ${{ steps.apptoken.outputs.token }}
+        APP_SLUG: ${{ steps.apptoken.outputs.app-slug }}
+      run: |
+        if [ -n "$APP_ID" ]; then
+          echo "token=$APP_TOKEN" >> "$GITHUB_OUTPUT"
+          echo "slug=$APP_SLUG" >> "$GITHUB_OUTPUT"
+        else
+          # No GitHub App configured (this fork never registered one): commit, push refs,
+          # and create releases with the job's GITHUB_TOKEN as github-actions[bot]. The
+          # workflows already carry contents:write, which covers everything the release
+          # pipeline does. Only behavioral difference: GITHUB_TOKEN pushes do not trigger
+          # other workflows — nothing here relies on that.
+          echo "token=${{ github.token }}" >> "$GITHUB_OUTPUT"
+          echo "slug=github-actions" >> "$GITHUB_OUTPUT"
+        fi
+      shell: bash
+
     - name: Configure git user
       run: |
-        slug="${{ steps.apptoken.outputs.app-slug }}"
+        slug="${{ steps.resolve.outputs.slug }}"
         git config --global user.name "${slug}[bot]"
         git config --global user.email "${slug}[bot]@users.noreply.github.com"
       shell: bash
@@ -39,5 +61,5 @@ runs:
 
     - name: Configure git remote
       run: |
-        git remote set-url origin https://x-access-token:${{ steps.apptoken.outputs.token }}@github.com/${{ github.repository }}
+        git remote set-url origin https://x-access-token:${{ steps.resolve.outputs.token }}@github.com/${{ github.repository }}
       shell: bash
