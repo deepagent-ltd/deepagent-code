@@ -27,7 +27,7 @@ permissions:
 jobs:
   qualification:
     if: github.repository == 'deepagent-ltd/deepagent-code'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     environment: release-qualification
     steps:
