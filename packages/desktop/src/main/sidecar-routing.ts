@@ -8,7 +8,12 @@ export const SIDECAR_SPAWN_FAILED = "SIDECAR_SPAWN_FAILED"
 // Budget for the local sidecar's API-ready health wait. The `ready` IPC message
 // only proves the listener socket is open, so startPrimarySidecar waits for the
 // health endpoint to answer before handing the URL to the renderer.
-export const LOCAL_HEALTH_TIMEOUT_MS = 15_000
+// Between listener-open and healthy the sidecar opens the database and runs any
+// pending migrations — on an upgraded install with real user data that can take
+// well over 15s (instance bootstrap alone measured ~26s on a cold Windows box),
+// so the budget is generous and DEEPAGENT_CODE_SIDECAR_HEALTH_TIMEOUT_MS can
+// override it for field diagnosis.
+export const LOCAL_HEALTH_TIMEOUT_MS = Number(process.env.DEEPAGENT_CODE_SIDECAR_HEALTH_TIMEOUT_MS) || 60_000
 
 export function sidecarSpawnFailure(message: string, cause?: unknown, phase?: "spawn" | "health"): Error {
   const error = cause === undefined ? new Error(message) : new Error(message, { cause })
