@@ -117,8 +117,154 @@
   }
 
   [data-component="composer-model-popover"][data-view="models"] {
-    height: 310px;
+    height: min(310px, calc(100vh - 24px));
     padding: 8px;
+  }
+
+  [data-component="composer-model-search-row"] {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 2px 9px;
+  }
+
+  [data-component="composer-model-search"] {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: light-dark(#e8e8e8, #242426);
+    color: light-dark(#777, #999);
+  }
+
+  [data-component="composer-model-search"]:focus-within {
+    border-color: light-dark(#aaa, #656565);
+  }
+
+  [data-component="composer-model-search"] input {
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: light-dark(#262626, #f2f2f2);
+    font: inherit;
+    font-size: 13px;
+  }
+
+  [data-component="composer-model-search"] input::placeholder {
+    color: light-dark(#777, #999);
+  }
+
+  [data-component="composer-model-groups"] {
+    min-height: 0;
+    flex: 1;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+
+  [data-component="composer-model-provider"] + [data-component="composer-model-provider"] {
+    margin-top: 3px;
+  }
+
+  [data-component="composer-model-provider-header"] {
+    display: flex;
+    width: 100%;
+    min-height: 32px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 5px 9px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: light-dark(#585858, #b5b5b5);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 19px;
+    text-align: left;
+  }
+
+  [data-component="composer-model-provider-header"][data-expanded="true"] {
+    color: light-dark(#262626, #e4e4e4);
+  }
+
+  button[data-component="composer-model-provider-header"] {
+    cursor: pointer;
+  }
+
+  button[data-component="composer-model-provider-header"]:hover,
+  button[data-component="composer-model-provider-header"]:focus-visible {
+    background: light-dark(#e9e9e9, #3c3b3d);
+  }
+
+  [data-component="composer-model-provider-header"][data-expanded="true"] svg {
+    transform: rotate(90deg);
+  }
+
+  [data-component="composer-model-options"] {
+    padding: 1px 2px 2px 9px;
+  }
+
+  [data-component="composer-model-options"] [data-action="prompt-model-option"] {
+    display: flex;
+    width: 100%;
+    min-height: 34px;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 9px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: light-dark(#3c3c3c, #dedede);
+    font-size: 13px;
+    line-height: 20px;
+    cursor: pointer;
+  }
+
+  [data-component="composer-model-options"] [data-action="prompt-model-option"]:hover,
+  [data-component="composer-model-options"] [data-action="prompt-model-option"]:focus-visible {
+    background: light-dark(#e8e8e8, #424143);
+  }
+
+  [data-component="composer-model-options"] [data-action="prompt-model-option"][data-selected="true"] {
+    background: light-dark(#dedede, #474648);
+    color: light-dark(#171717, #fff);
+  }
+
+  [data-component="composer-model-options"] [data-action="prompt-model-more"] {
+    display: flex;
+    width: 100%;
+    height: 28px;
+    align-items: center;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: light-dark(#777, #aaa);
+    font-size: 18px;
+    letter-spacing: 2px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  [data-component="composer-model-options"] [data-action="prompt-model-more"]:hover,
+  [data-component="composer-model-options"] [data-action="prompt-model-more"]:focus-visible {
+    background: light-dark(#e8e8e8, #424143);
+    color: light-dark(#333, #fff);
+  }
+
+  [data-component="composer-model-empty"] {
+    padding: 20px 8px;
+    color: light-dark(#666, #aaa);
+    font-size: 13px;
+    text-align: center;
   }
 
   [data-component="composer-effort-header"] {
