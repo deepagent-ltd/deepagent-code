@@ -68,8 +68,9 @@
   }
 
   [data-component="prompt-composer"] {
-    background: light-dark(#f8f8f8, #292929);
+    background: light-dark(#f2f2f2, #303030);
     border-color: light-dark(#d0d0d0, #454545);
+    background-image: none;
   }
 
   [data-component="prompt-composer"]:focus-within {
@@ -84,10 +85,6 @@
     background: transparent;
     border-radius: 0;
     box-shadow: none;
-  }
-
-  [data-component="prompt-composer"] [data-component="prompt-controls"] {
-    border-color: light-dark(#e1e1e1, #3b3b3b);
   }
 
   .workbench-sidebar-frame {
