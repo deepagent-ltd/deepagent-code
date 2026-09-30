@@ -318,7 +318,7 @@ export default function Page() {
     const mode = view().rightPanel.mode()
     const bucket = mode === "review" || mode === "files" ? "wide" : "narrow"
     const content = desktopRightPanelOpen() ? layout.rightPanel.width(bucket) : 0
-    return `calc(100% - ${RIGHT_PANEL_RAIL_PX + content}px)`
+    return `calc(100% - ${RIGHT_PANEL_RAIL_PX + content}px - var(--workbench-gap)${desktopRightPanelOpen() ? " - var(--workbench-gap)" : ""})`
   })
   // The composer is only truly centered when the panel content is closed AND the rail (a thin 44px
   // strip) is the only thing on the right — visually still effectively centered.
@@ -1111,7 +1111,7 @@ export default function Page() {
   )
 
   const reviewPanel = () => (
-    <div class="flex flex-col h-full overflow-hidden bg-background-stronger contain-strict">
+    <div class="flex flex-col h-full overflow-hidden bg-background-weak contain-strict">
       <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
         {reviewContent({
           diffStyle: layout.review.diffStyle(),
@@ -1827,10 +1827,10 @@ export default function Page() {
 
   return (
     <SessionLifecycle>
-      <div class="relative size-full overflow-hidden flex flex-col">
+      <div class="workbench-session relative size-full overflow-hidden flex flex-col">
         {sessionSync() ?? ""}
         <SessionHeader />
-      <div class="flex-1 min-h-0 flex flex-col md:flex-row ">
+      <div class="workbench-split flex-1 min-h-0 flex flex-col md:flex-row">
         <Show when={!isDesktop() && !!params.id}>
           <Tabs value={store.mobileTab} class="h-auto">
             <Tabs.List>
@@ -1858,7 +1858,7 @@ export default function Page() {
 
         <div
           classList={{
-            "@container relative shrink-0 flex flex-col min-h-0 h-full bg-background-stronger flex-1 md:flex-none": true,
+            "workbench-panel @container relative shrink-0 flex flex-col min-h-0 h-full flex-1 md:flex-none": true,
             "duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
               !size.active() && !ui.reviewSnap,
             "transition-[width]": true,

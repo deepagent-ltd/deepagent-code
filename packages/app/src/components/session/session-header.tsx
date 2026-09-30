@@ -3,26 +3,23 @@ import { Button } from "@deepagent-code/ui/button"
 import { DropdownMenu } from "@deepagent-code/ui/dropdown-menu"
 import { Popover } from "@deepagent-code/ui/popover"
 import { Icon } from "@deepagent-code/ui/icon"
-import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Keybind } from "@deepagent-code/ui/keybind"
 import { Spinner } from "@deepagent-code/ui/spinner"
 import { showToast } from "@/utils/toast"
 import { Tooltip, TooltipKeybind } from "@deepagent-code/ui/tooltip"
 import { getFilename } from "@deepagent-code/core/util/path"
-import { createEffect, createMemo, createSignal, For, onMount, Show, type ComponentProps } from "solid-js"
+import { createEffect, createMemo, For, onMount, Show, type ComponentProps } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
-import { DOCK_PANEL_IDS, useLayout } from "@/context/layout"
+import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { useSync } from "@/context/sync"
 import { useTerminalHosts } from "@/context/terminal"
 import { focusTerminalById } from "@/pages/session/helpers"
 import { useSessionLayout } from "@/pages/session/session-layout"
-import { PANEL_VIEW_META } from "@/pages/session/panel-view-registry"
-import { StatusPopover } from "@/components/status-popover"
 import { messageAgentColor } from "@/utils/agent"
 import { decode64 } from "@/utils/base64"
 import { Persist, persisted } from "@/utils/persist"
@@ -208,32 +205,14 @@ export function SessionHeader() {
     ]
   })
 
-  // Phase 3: terminal toggle button in the header controls the **bottom** terminal only.
-  const terminalOpen = createMemo(() =>
-    view().panel.bottom.opened() && view().panel.bottom.activeView() === "terminal",
-  )
+  const bottomPanelOpen = createMemo(() => view().panel.bottom.opened())
 
-  const toggleTerminal = () => {
-    view().panel.toggle("terminal")
-    // Focus the bottom terminal's active pane after opening.
-    if (terminalOpen()) {
+  const toggleBottomPanel = () => {
+    view().panel.bottom.toggle()
+    if (bottomPanelOpen() && view().panel.bottom.activeView() === "terminal") {
       const id = terminalHosts.bottom.active()
       if (id) focusTerminalById(id)
     }
-  }
-
-  const bottomPanelOpen = createMemo(() => view().panel.bottom.opened())
-  const bottomPanelAvailable = createMemo(() => view().panel.viewsAt("bottom").length > 0)
-  const toggleBottomPanel = () => view().panel.bottom.toggle()
-  const [panelViewsOpen, setPanelViewsOpen] = createSignal(false)
-  const panelViewIDs = createMemo(() => [...DOCK_PANEL_IDS])
-  const revealPanelView = (id: (typeof DOCK_PANEL_IDS)[number]) => {
-    view().panel.reveal(id)
-    setPanelViewsOpen(false)
-  }
-  const movePanelView = (id: (typeof DOCK_PANEL_IDS)[number], target: "bottom" | "side") => {
-    view().panel.move(id, target)
-    setPanelViewsOpen(false)
   }
 
   const rightPanelOpen = createMemo(() => view().rightPanel.opened())
@@ -311,16 +290,18 @@ export function SessionHeader() {
       .catch((err: unknown) => showRequestError(language, err))
   }
 
-  const [centerMount, setCenterMount] = createSignal<HTMLElement | null>(null)
-  const [rightMount, setRightMount] = createSignal<HTMLElement | null>(null)
+  const [mounts, setMounts] = createStore({
+    center: null as HTMLElement | null,
+    right: null as HTMLElement | null,
+  })
   onMount(() => {
-    setCenterMount(document.getElementById("deepagent-code-titlebar-center"))
-    setRightMount(document.getElementById("deepagent-code-titlebar-right"))
+    setMounts("center", document.getElementById("deepagent-code-titlebar-center"))
+    setMounts("right", document.getElementById("deepagent-code-titlebar-right"))
   })
 
   return (
     <>
-      <Show when={search() && centerMount()}>
+      <Show when={search() && mounts.center}>
         {(mount) => (
           <Portal mount={mount()}>
             <Button
@@ -350,48 +331,29 @@ export function SessionHeader() {
           </Portal>
         )}
       </Show>
-      <Show when={rightMount()}>
+      <Show when={mounts.right}>
         {(mount) => (
           <Portal mount={mount()}>
             <div class="flex items-center gap-2">
               <Show when={projectDirectory()}>
-                <div class="hidden xl:flex items-center">
+                <div class="hidden md:flex items-center">
                   <Show
                     when={canOpen()}
                     fallback={
                       <div class="flex h-[24px] box-border items-center rounded-md border border-border-weak-base bg-surface-panel overflow-hidden">
                         <Button
                           variant="ghost"
-                          class="rounded-none h-full py-0 pr-3 pl-0.5 gap-1.5 border-none shadow-none"
+                          class="titlebar-icon w-8 h-6 p-0 border-none shadow-none"
                           onClick={copyPath}
                           aria-label={language.t("session.header.open.copyPath")}
                         >
                           <Icon name="copy" size="small" class="text-icon-base" />
-                          <span class="text-12-regular text-text-strong">
-                            {language.t("session.header.open.copyPath")}
-                          </span>
                         </Button>
                       </div>
                     }
                   >
                     <div class="flex items-center">
                       <div class="flex h-[24px] box-border items-center rounded-md border border-border-weak-base bg-surface-panel overflow-hidden">
-                        <Button
-                          variant="ghost"
-                          class="rounded-none h-full px-0.5 border-none shadow-none disabled:!cursor-default"
-                          classList={{
-                            "bg-surface-raised-base-active": opening(),
-                          }}
-                          onClick={() => openDir(current().id)}
-                          disabled={opening()}
-                          aria-label={language.t("session.header.open.ariaLabel", { app: current().label })}
-                        >
-                          <div class="flex size-5 shrink-0 items-center justify-center [&_[data-component=app-icon]]:size-5">
-                            <Show when={opening()} fallback={<AppIcon id={current().icon} />}>
-                              <Spinner class="size-3.5" style={{ color: tint() ?? "var(--icon-base)" }} />
-                            </Show>
-                          </div>
-                        </Button>
                         <DropdownMenu
                           gutter={4}
                           placement="bottom-end"
@@ -399,16 +361,22 @@ export function SessionHeader() {
                           onOpenChange={(open) => setMenu("open", open)}
                         >
                           <DropdownMenu.Trigger
-                            as={IconButton}
-                            icon="chevron-down"
+                            as={Button}
                             variant="ghost"
                             disabled={opening()}
-                            class="rounded-none h-full w-[20px] p-0 border-none shadow-none data-[expanded]:bg-surface-raised-base-active disabled:!cursor-default"
+                            class="titlebar-icon h-full px-1 gap-0.5 border-none shadow-none data-[expanded]:bg-surface-raised-base-active disabled:!cursor-default"
                             classList={{
                               "bg-surface-raised-base-active": opening(),
                             }}
                             aria-label={language.t("session.header.open.menu")}
-                          />
+                          >
+                            <div class="flex size-5 shrink-0 items-center justify-center [&_[data-component=app-icon]]:size-5">
+                              <Show when={opening()} fallback={<AppIcon id={current().icon} />}>
+                                <Spinner class="size-3.5" style={{ color: tint() ?? "var(--icon-base)" }} />
+                              </Show>
+                            </div>
+                            <Icon name="chevron-down" size="small" />
+                          </DropdownMenu.Trigger>
                           <DropdownMenu.Portal>
                             <DropdownMenu.Content class="[&_[data-slot=dropdown-menu-item]]:pl-1 [&_[data-slot=dropdown-menu-radio-item]]:pl-1 [&_[data-slot=dropdown-menu-radio-item]+[data-slot=dropdown-menu-radio-item]]:mt-1">
                               <DropdownMenu.Group>
@@ -469,92 +437,19 @@ export function SessionHeader() {
               </Show>
               <div class="flex items-center gap-1">
                 <Show when={term()}>
-                  <TooltipKeybind
-                    title={language.t("command.terminal.toggle")}
-                    keybind={command.keybind("terminal.toggle")}
-                  >
+                  <TooltipKeybind title={language.t("command.panel.toggle")} keybind={command.keybind("panel.toggle")}>
                     <Button
                       variant="ghost"
                       class="group/terminal-toggle titlebar-icon w-8 h-6 p-0 box-border shrink-0"
-                      onClick={toggleTerminal}
-                      aria-label={language.t("command.terminal.toggle")}
-                      aria-expanded={terminalOpen()}
-                      aria-controls={view().panel.location("terminal") === "bottom" ? "bottom-panel" : "review-panel"}
+                      onClick={toggleBottomPanel}
+                      aria-label={language.t("command.panel.toggle")}
+                      aria-expanded={bottomPanelOpen()}
+                      aria-controls="bottom-panel"
                     >
-                      <Icon size="small" name={terminalOpen() ? "terminal-active" : "terminal"} />
+                      <Icon size="small" name={bottomPanelOpen() ? "terminal-active" : "terminal"} />
                     </Button>
                   </TooltipKeybind>
                 </Show>
-                <TooltipKeybind
-                  title={bottomPanelAvailable() ? language.t("command.panel.toggle") : language.t("session.panel.noBottomViews")}
-                  keybind={command.keybind("panel.toggle")}
-                >
-                  <Button
-                    variant="ghost"
-                    class="group/bottom-panel-toggle titlebar-icon w-8 h-6 p-0 box-border shrink-0"
-                    onClick={toggleBottomPanel}
-                    aria-label={bottomPanelAvailable() ? language.t("command.panel.toggle") : language.t("session.panel.noBottomViews")}
-                    aria-expanded={bottomPanelOpen()}
-                    aria-controls="bottom-panel"
-                    disabled={!bottomPanelAvailable()}
-                  >
-                    <Icon size="small" name={bottomPanelOpen() ? "layout-bottom-full" : "layout-bottom"} />
-                  </Button>
-                </TooltipKeybind>
-
-                <Popover
-                  open={panelViewsOpen()}
-                  onOpenChange={setPanelViewsOpen}
-                  portal
-                  class="w-72 rounded-md border border-border-weaker-base bg-background-stronger p-1 shadow-lg"
-                  trigger={
-                    <span class="group/panel-views titlebar-icon w-8 h-6 p-0 box-border shrink-0 flex items-center justify-center" aria-label={language.t("session.panel.views")}>
-                      <Icon size="small" name="menu" />
-                    </span>
-                  }
-                >
-                  <div data-panel-views-menu>
-                    <div class="px-2 py-1.5 text-12-medium text-text-weak">{language.t("session.panel.views")}</div>
-                    <For each={panelViewIDs()}>
-                      {(id) => (
-                        <div class="mb-1 flex items-center gap-1 rounded-md px-1 py-1 hover:bg-surface-base-hover">
-                          <button
-                            type="button"
-                            class="min-w-0 flex flex-1 items-center gap-2 px-1 text-left text-13-regular text-text-strong"
-                            onClick={() => revealPanelView(id)}
-                          >
-                            <Icon size="small" name={PANEL_VIEW_META[id].icon} />
-                            <span class="flex-1 truncate">{language.t(PANEL_VIEW_META[id].titleKey)}</span>
-                            <span class="text-11-regular text-text-weak">
-                              {language.t(view().panel.location(id) === "bottom" ? "session.panel.location.bottom" : "session.panel.location.side")}
-                            </span>
-                          </button>
-                          <Show when={view().panel.location(id) === "side"}>
-                            <IconButton
-                              icon="layout-bottom"
-                              variant="ghost"
-                              iconSize="small"
-                              aria-label={`${language.t("session.panel.moveToBottom")}: ${language.t(PANEL_VIEW_META[id].titleKey)}`}
-                              title={`${language.t("session.panel.moveToBottom")}: ${language.t(PANEL_VIEW_META[id].titleKey)}`}
-                              onClick={() => movePanelView(id, "bottom")}
-                            />
-                          </Show>
-                          <Show when={view().panel.location(id) === "bottom" && view().panel.sideAvailable()}>
-                            <IconButton
-                              icon="layout-right"
-                              variant="ghost"
-                              iconSize="small"
-                              aria-label={`${language.t("session.panel.moveToSide")}: ${language.t(PANEL_VIEW_META[id].titleKey)}`}
-                              title={`${language.t("session.panel.moveToSide")}: ${language.t(PANEL_VIEW_META[id].titleKey)}`}
-                              onClick={() => movePanelView(id, "side")}
-                            />
-                          </Show>
-                        </div>
-                      )}
-                    </For>
-                  </div>
-                </Popover>
-
                 <div class="hidden md:flex items-center gap-1 shrink-0">
                   <TooltipKeybind
                     title={language.t("session.sidePanel.toggle")}
@@ -579,7 +474,6 @@ export function SessionHeader() {
                     </Button>
                   </TooltipKeybind>
                 </div>
-                <StatusPopover />
               </div>
             </div>
           </Portal>

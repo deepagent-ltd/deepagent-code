@@ -166,6 +166,7 @@
   width: 32px;
   height: 24px;
   aspect-ratio: auto;
+  border-radius: 7px;
 }
 
 [data-component="icon-button"].titlebar-icon[data-variant="ghost"][aria-expanded="true"] {

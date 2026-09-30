@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, type JSX } from "solid-js"
 import { Tabs } from "@deepagent-code/ui/tabs"
 import { ResizeHandle } from "@deepagent-code/ui/resize-handle"
 import { IconButton } from "@deepagent-code/ui/icon-button"
@@ -162,7 +162,7 @@ function SplitPane(props: { node: Extract<PaneNode, { kind: "split" }> }) {
 
 // ─── Leaf node ────────────────────────────────────────────────────────────────
 
-function LeafPane(props: { node: PaneLeaf }) {
+function LeafPane(props: { node: PaneLeaf; actions?: JSX.Element }) {
   const terminal = useTerminal()
   const focused = createMemo(() => terminal.focusedPaneId() === props.node.id)
   let ref: HTMLDivElement | undefined
@@ -212,10 +212,12 @@ function LeafPane(props: { node: PaneLeaf }) {
       data-terminal-pane={props.node.id}
       data-active-terminal={activeId()}
       data-focused={focused() ? "true" : undefined}
-      class="absolute inset-0 flex flex-col overflow-hidden border bg-background-stronger"
+      class="absolute flex flex-col overflow-hidden bg-background-weak"
       classList={{
-        "border-border-base ring-1 ring-inset ring-border-base": focused(),
-        "border-border-weak-base": !focused(),
+        "inset-0": terminal.root()?.kind === "leaf",
+        "inset-1.5 rounded-lg border": terminal.root()?.kind === "split",
+        "border-border-base ring-1 ring-inset ring-border-base": focused() && terminal.root()?.kind === "split",
+        "border-border-weak-base": !focused() && terminal.root()?.kind === "split",
       }}
       onPointerDown={() => terminal.setFocusedPane(props.node.id)}
       onFocusIn={() => terminal.setFocusedPane(props.node.id)}
@@ -224,15 +226,16 @@ function LeafPane(props: { node: PaneLeaf }) {
         <FixedDragDropSensors />
         <ConstrainDragYAxis />
         <Tabs variant="alt" value={activeId()} class="!h-auto !flex-none">
-          <div class="flex items-stretch h-10 border-b border-border-weak-base bg-background-base">
+          <div class="flex items-stretch h-10">
             <Tabs.List class="h-10 min-w-0 flex-1 !border-b-0">
               <SortableProvider ids={ids()}>
                 <For each={ptys()}>{(pty) => <SortableTerminalTab terminal={pty} />}</For>
               </SortableProvider>
             </Tabs.List>
+            {props.actions}
           </div>
         </Tabs>
-        <div class="flex-1 min-h-0 relative bg-background-stronger">
+        <div class="flex-1 min-h-0 relative">
           <Show
             when={activeId()}
             fallback={
@@ -314,7 +317,7 @@ function TerminalSessionView(props: { pty: LocalPTY; focused: boolean }) {
           )}
         </Show>
         <Show when={props.pty.status !== "ready"}>
-          <div class="pointer-events-none absolute inset-0 flex items-center justify-center bg-background-stronger text-13-regular text-text-weak">
+          <div class="pointer-events-none absolute inset-0 flex items-center justify-center bg-background-weak text-13-regular text-text-weak">
             {status()}
           </div>
         </Show>
@@ -323,10 +326,10 @@ function TerminalSessionView(props: { pty: LocalPTY; focused: boolean }) {
   )
 }
 
-function PaneRenderer(props: { node: PaneNode }) {
+function PaneRenderer(props: { node: PaneNode; actions?: JSX.Element }) {
   const split = () => props.node.kind === "split"
   return (
-    <Show when={split()} fallback={<LeafPane node={props.node as PaneLeaf} />}>
+    <Show when={split()} fallback={<LeafPane node={props.node as PaneLeaf} actions={props.actions} />}>
       <SplitPane node={props.node as Extract<PaneNode, { kind: "split" }>} />
     </Show>
   )
@@ -371,12 +374,12 @@ export function TerminalActions() {
 }
 
 /** The pane tree is mounted only in the currently visible terminal host. */
-export function TerminalPanes() {
+export function TerminalPanes(props: { actions?: JSX.Element } = {}) {
   const terminal = useTerminal()
   return (
     <div class="absolute inset-0 flex">
       <Show when={terminal.root()} keyed>
-        {(node) => <PaneRenderer node={node} />}
+        {(node) => <PaneRenderer node={node} actions={props.actions} />}
       </Show>
     </div>
   )

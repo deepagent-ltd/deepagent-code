@@ -16,6 +16,140 @@
 }
 
 @layer components {
+  /* Portalled dialogs share the same window tokens as the workbench. */
+  :root {
+    --workbench-background: var(--background-base);
+    --workbench-panel-background: var(--background-weak);
+    --workbench-gap: 8px;
+    --workbench-radius: var(--radius-xl);
+    --workbench-nav-icon: light-dark(#626262, #b8b8b8);
+    --workbench-nav-icon-active: light-dark(#1e1e1e, #f2f2f2);
+    --workbench-nav-accent: light-dark(#006bdb, #5da9ff);
+    --workbench-nav-selected: light-dark(#e0edff, #253447);
+    --workbench-nav-hover: light-dark(#ececec, #303030);
+    --workbench-nav-divider: light-dark(#d5d5d5, #404040);
+    --workbench-session-selected: light-dark(#e8e8e8, #303030);
+  }
+
+  .workbench-main {
+    padding: 0 var(--workbench-gap) var(--workbench-gap);
+    background: var(--workbench-background);
+  }
+
+  /* Nested views share their window's neutral fill; the composer keeps the outer frame's fill. */
+  .workbench-panel,
+  [data-component="dialog"] [data-slot="dialog-content"],
+  [data-component="dialog-v2"] [data-slot="dialog-container"] {
+    --background-base: var(--workbench-panel-background);
+    --background-weak: var(--workbench-panel-background);
+    --background-strong: var(--workbench-panel-background);
+    --background-stronger: var(--workbench-panel-background);
+    /* Tailwind's inherited aliases must be scoped along with the source tokens. */
+    --color-background-base: var(--workbench-panel-background);
+    --color-background-weak: var(--workbench-panel-background);
+    --color-background-strong: var(--workbench-panel-background);
+    --color-background-stronger: var(--workbench-panel-background);
+  }
+
+  .workbench-panel {
+    background: var(--workbench-panel-background);
+    border-radius: var(--workbench-radius);
+    overflow: hidden;
+  }
+
+  .workbench-panel [data-component="session-prompt-dock"] [data-dock-surface] {
+    --background-base: var(--workbench-background);
+    --background-weak: var(--workbench-background);
+    --color-background-base: var(--workbench-background);
+    --color-background-weak: var(--workbench-background);
+    background: var(--workbench-background);
+    box-shadow: none;
+    border-color: transparent;
+  }
+
+  .workbench-sidebar-frame {
+    padding: 0 0 var(--workbench-gap) var(--workbench-gap);
+  }
+
+  .workbench-sidebar-panel,
+  .workbench-side-panel-rail,
+  .workbench [data-component="sidebar-rail"],
+  #deepagent-code-titlebar-right {
+    --icon-base: var(--workbench-nav-icon);
+    --color-icon-base: var(--workbench-nav-icon);
+  }
+
+  .workbench-sidebar-action[data-component="button"] {
+    background: var(--workbench-background);
+    border-color: transparent;
+    box-shadow: none;
+  }
+
+  .workbench-sidebar-action[data-component="button"]:is(:hover, :focus-visible):not(:disabled) {
+    background: light-dark(#e0e0e0, #383838);
+    box-shadow: none;
+  }
+
+  .workbench-session-item:is(:hover, :has(:focus-visible), :has([data-expanded])) {
+    background: var(--workbench-nav-hover);
+  }
+
+  .workbench-session-item:has(.active) {
+    background: var(--workbench-session-selected);
+  }
+
+  .workbench-session-item:has(.active)::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 7px;
+    bottom: 7px;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--workbench-nav-accent);
+  }
+
+  .workbench-side-panel-rail [role="tab"]:is(:hover, :focus-visible) {
+    background: var(--workbench-nav-hover);
+  }
+
+  .workbench-side-panel-rail [role="tab"][aria-selected="true"] {
+    --icon-base: var(--workbench-nav-icon-active);
+    --color-icon-base: var(--workbench-nav-icon-active);
+    background: var(--workbench-nav-selected);
+  }
+
+  .workbench-side-panel-rail [role="tab"][aria-selected="true"]::before {
+    content: "";
+    position: absolute;
+    left: -3px;
+    top: 8px;
+    bottom: 8px;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--workbench-nav-accent);
+  }
+
+  .workbench-side-panel-rail [role="tab"]:focus-visible,
+  .workbench-sidebar-action[data-component="button"]:focus-visible {
+    outline: 1px solid var(--workbench-nav-accent);
+    outline-offset: 1px;
+  }
+
+  .workbench-side-panel-rail [data-slot="side-panel-divider"] {
+    background: var(--workbench-nav-divider);
+  }
+
+  .workbench-side-panel-rail [data-slot="side-panel-badge"] {
+    background: var(--workbench-background);
+  }
+
+  @media (min-width: 768px) {
+    .workbench-split {
+      gap: var(--workbench-gap);
+    }
+  }
+
   @keyframes session-progress-whip {
     0% {
       clip-path: inset(0 100% 0 0 round 999px);

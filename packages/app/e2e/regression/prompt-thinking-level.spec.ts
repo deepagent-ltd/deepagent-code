@@ -8,6 +8,7 @@ const projectID = "proj_prompt_thinking_level_regression"
 const sessionID = "ses_prompt_thinking_level_regression"
 
 test("shows the V2 thinking level control while relevant", async ({ page }) => {
+  let submitted: unknown
   await mockDeepAgentCodeServer(page, {
     directory,
     project: {
@@ -49,6 +50,24 @@ test("shows the V2 thinking level control while relevant", async ({ page }) => {
     ],
     pageMessages: () => ({ items: [] }),
   })
+  await page.route("**/api/session/*/prompt", async (route) => {
+    const body = route.request().postDataJSON() as { id?: string; prompt: unknown }
+    submitted = body
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          admittedSeq: 1,
+          id: body.id ?? "msg_prompt_thinking_level_regression",
+          sessionID,
+          prompt: body.prompt,
+          delivery: "steer",
+          timeCreated: Date.now(),
+        },
+      }),
+    })
+  })
   await page.addInitScript(() => {
     localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true } }))
   })
@@ -76,4 +95,27 @@ test("shows the V2 thinking level control while relevant", async ({ page }) => {
   await expect(control).toHaveCount(0)
   await input.press("Backspace")
   await expect(control).toBeVisible()
+
+  const diagnostics = page.getByRole("button", { name: "Development performance diagnostics" })
+  await expect(diagnostics).toHaveAttribute("aria-expanded", "false")
+  await diagnostics.click()
+  await expect(diagnostics).toHaveAttribute("aria-expanded", "true")
+  await diagnostics.click()
+  await expect(diagnostics).toHaveAttribute("aria-expanded", "false")
+
+  await page.getByRole("radio", { name: "Send your prompt directly" }).click()
+  await input.focus()
+  await input.press("ControlOrMeta+A")
+  await input.press("Backspace")
+  await page.keyboard.type("GUI V2 parity smoke")
+  await expect(input).toContainText("GUI V2 parity smoke")
+  await composer.locator('[data-action="prompt-submit"]').click()
+  await expect.poll(() => submitted).not.toBeUndefined()
+  expect(submitted).toMatchObject({
+    prompt: {
+      text: "GUI V2 parity smoke",
+      model: { providerID: "deepagent-code", id: "thinking-model", variant: "high" },
+      intent: { source: "composer" },
+    },
+  })
 })

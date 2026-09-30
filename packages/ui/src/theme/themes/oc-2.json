@@ -235,7 +235,7 @@
   },
   "dark": {
     "palette": {
-      "neutral": "#1f1f1f",
+      "neutral": "#292929",
       "ink": "#f1ece8",
       "primary": "#fab283",
       "success": "#12c905",
@@ -249,7 +249,7 @@
     "overrides": {
       "text-strong": "#EDEDED",
       "text-base": "#A0A0A0",
-      "text-weak": "#707070",
+      "text-weak": "#a8a8a8",
       "text-weaker": "#505050",
       "border-weak-base": "#282828",
       "border-weaker-base": "#232323",
@@ -271,7 +271,14 @@
       "syntax-critical": "#fab283",
       "syntax-diff-delete": "#fab283",
       "syntax-diff-unknown": "#edb2f1",
-      "surface-critical-base": "#1F0603"
+      "surface-critical-base": "#1F0603",
+      "background-base": "#303030",
+      "background-weak": "#1e1e1e",
+      "background-strong": "#1e1e1e",
+      "background-stronger": "#1e1e1e",
+      "surface-raised-stronger-non-alpha": "#1e1e1e",
+      "surface-float-base": "#1e1e1e",
+      "input-base": "#303030"
     },
     "v2Overrides": {
       "v2-grey-100": "#ffffffff",
@@ -382,11 +389,11 @@
       "v2-pink-1000": "#8c2d61ff",
       "v2-pink-1100": "#6f284fff",
       "v2-pink-1200": "#5c1d3fff",
-      "v2-background-bg-base": "var(--v2-grey-1000)",
+      "v2-background-bg-base": "#303030",
       "v2-background-bg-deep": "var(--v2-grey-1100)",
-      "v2-background-bg-layer-01": "var(--v2-grey-900)",
-      "v2-background-bg-layer-02": "var(--v2-grey-800)",
-      "v2-background-bg-layer-03": "var(--v2-grey-700)",
+      "v2-background-bg-layer-01": "#1e1e1e",
+      "v2-background-bg-layer-02": "#303030",
+      "v2-background-bg-layer-03": "#383838",
       "v2-background-bg-layer-04": "var(--v2-grey-700)",
       "v2-background-bg-inverse": "var(--v2-grey-100)",
       "v2-background-bg-contrast": "var(--v2-grey-700)",
