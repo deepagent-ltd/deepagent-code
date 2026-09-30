@@ -25,59 +25,7 @@ import { TextReveal } from "./text-reveal"
 import { createAutoScroll } from "../hooks"
 import { useI18n } from "../context/i18n"
 import { normalize } from "./session-diff"
-
-function record(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value)
-}
-
-function unwrap(message: string) {
-  const text = message.replace(/^Error:\s*/, "").trim()
-
-  const parse = (value: string) => {
-    try {
-      return JSON.parse(value) as unknown
-    } catch {
-      return undefined
-    }
-  }
-
-  const read = (value: string) => {
-    const first = parse(value)
-    if (typeof first !== "string") return first
-    return parse(first.trim())
-  }
-
-  let json = read(text)
-
-  if (json === undefined) {
-    const start = text.indexOf("{")
-    const end = text.lastIndexOf("}")
-    if (start !== -1 && end > start) {
-      json = read(text.slice(start, end + 1))
-    }
-  }
-
-  if (!record(json)) return message
-
-  const err = record(json.error) ? json.error : undefined
-  if (err) {
-    const type = typeof err.type === "string" ? err.type : undefined
-    const msg = typeof err.message === "string" ? err.message : undefined
-    if (type && msg) return `${type}: ${msg}`
-    if (msg) return msg
-    if (type) return type
-    const code = typeof err.code === "string" ? err.code : undefined
-    if (code) return code
-  }
-
-  const msg = typeof json.message === "string" ? json.message : undefined
-  if (msg) return msg
-
-  const reason = typeof json.error === "string" ? json.error : undefined
-  if (reason) return reason
-
-  return message
-}
+import { describeSessionError } from "./session-turn-error"
 
 function same<T>(a: readonly T[], b: readonly T[]) {
   if (a === b) return true
@@ -314,15 +262,7 @@ export function SessionTurn(
 
     return undefined
   })
-  const errorText = createMemo(() => {
-    // Not every assistant error carries a `data.message` — OutputDegenerationError's data is
-    // { chars, ratio, detectorVersion }. Read `data` as a loose record and probe for `message`.
-    const msg = (error()?.data as Record<string, unknown> | undefined)?.message
-    if (typeof msg === "string") return unwrap(msg)
-    if (msg === undefined || msg === null) return ""
-    // oxlint-disable-next-line no-base-to-string -- msg is unknown from error data, coercion is intentional
-    return unwrap(String(msg))
-  })
+  const errorInfo = createMemo(() => (error() ? describeSessionError(error()!) : undefined))
 
   const status = createMemo(() => {
     if (props.status !== undefined) return props.status
@@ -529,7 +469,26 @@ export function SessionTurn(
               </Show>
               <Show when={error()}>
                 <Card variant="error" class="error-card">
-                  {errorText()}
+                  <div class="text-13-medium text-text-strong">
+                    {i18n.t(`ui.sessionTurn.error.${errorInfo()?.kind ?? "unknown"}.title`)}
+                  </div>
+                  <div class="mt-1 text-12-regular text-text-base">
+                    {i18n.t(`ui.sessionTurn.error.${errorInfo()?.kind ?? "unknown"}.description`)}
+                  </div>
+                  <Show when={errorInfo()?.detail}>
+                    <details class="mt-2 text-11-regular text-text-weak">
+                      <summary>{i18n.t("ui.sessionTurn.error.details")}</summary>
+                      <code class="mt-1 block break-all whitespace-pre-wrap">{errorInfo()?.detail}</code>
+                    </details>
+                  </Show>
+                  <a
+                    class="mt-2 inline-block text-12-regular underline"
+                    href="https://github.com/deepagent-ltd/deepagent-code/issues/new?template=bug-report.yml"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {i18n.t("ui.sessionTurn.error.report")}
+                  </a>
                 </Card>
               </Show>
             </div>
