@@ -633,3 +633,23 @@
 [data-component="tabs-drag-preview"] > * {
   position: relative;
 }
+
+/* Terminal pane tab strip (scoped via the pane container): VS Code-style — no square wrapper
+   borders, rounded hover surface, 1px accent underline on the active terminal tab. */
+[data-active-terminal] [data-slot="tabs-list"] {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+[data-active-terminal] [data-slot="tabs-trigger-wrapper"] {
+  border-radius: 8px 8px 0 0;
+  transition: background-color 120ms ease;
+}
+
+[data-active-terminal] [data-slot="tabs-trigger-wrapper"]:hover:not(:has([data-selected])) {
+  background-color: var(--surface-base-hover);
+}
+
+[data-active-terminal] [data-slot="tabs-trigger-wrapper"]:has([data-selected]) {
+  border-bottom-color: var(--border-interactive-active);
+}

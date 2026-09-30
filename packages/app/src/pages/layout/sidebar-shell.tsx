@@ -71,28 +71,34 @@ export const SidebarContent = (props: {
                   }}
                 </For>
               </SortableProvider>
-              <Tooltip
-                placement={placement()}
-                value={
-                  <div class="flex items-center gap-2">
-                    <span>{props.openProjectLabel}</span>
-                    <Show when={!props.mobile && !!props.openProjectKeybind()}>
-                      <span class="text-icon-base text-12-medium">{props.openProjectKeybind()}</span>
-                    </Show>
-                  </div>
-                }
-              >
-                <IconButton
-                  icon="folder-add-left"
-                  variant="ghost"
-                  size="large"
-                  onClick={props.onOpenProject}
-                  aria-label={typeof props.openProjectLabel === "string" ? props.openProjectLabel : undefined}
-                />
-              </Tooltip>
             </div>
             <DragOverlay>{props.renderProjectOverlay()}</DragOverlay>
           </DragDropProvider>
+        </div>
+        {/* Open-project lives OUTSIDE the scrollable project list: inside it, a few projects
+            scroll the button out of view when the rail is collapsed, and its collapsed
+            visibility otherwise depended on clip arithmetic. A fixed slot keeps the primary
+            "add project" entry permanently visible in both rail states. */}
+        <div class="shrink-0 w-full px-3 pb-1 flex justify-center">
+          <Tooltip
+            placement={placement()}
+            value={
+              <div class="flex items-center gap-2">
+                <span>{props.openProjectLabel}</span>
+                <Show when={!props.mobile && !!props.openProjectKeybind()}>
+                  <span class="text-icon-base text-12-medium">{props.openProjectKeybind()}</span>
+                </Show>
+              </div>
+            }
+          >
+            <IconButton
+              icon="folder-add-left"
+              variant="ghost"
+              size="large"
+              onClick={props.onOpenProject}
+              aria-label={typeof props.openProjectLabel === "string" ? props.openProjectLabel : undefined}
+            />
+          </Tooltip>
         </div>
         <div class="shrink-0 w-full pt-3 pb-6 flex flex-col items-center gap-2">
           <Tooltip placement={placement()} value={props.historyLabel()}>
@@ -143,7 +149,10 @@ export const SidebarContent = (props: {
         ref={(el) => {
           panel = el
         }}
-        classList={{ "flex-1 flex h-full min-h-0 min-w-0 overflow-hidden": true, "pointer-events-none": !expanded() }}
+        classList={{
+          "workbench-sidebar-frame flex-1 flex h-full min-h-0 min-w-0 overflow-hidden": true,
+          "pointer-events-none": !expanded(),
+        }}
         aria-hidden={!expanded()}
       >
         {props.renderPanel()}

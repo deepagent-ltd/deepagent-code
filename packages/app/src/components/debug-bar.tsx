@@ -80,6 +80,7 @@ export function DebugBar() {
   const location = useLocation()
   const routing = useIsRouting()
   const [state, setState] = createStore({
+    open: false,
     cls: undefined as number | undefined,
     delay: undefined as number | undefined,
     fps: undefined as number | undefined,
@@ -363,9 +364,23 @@ export function DebugBar() {
   return (
     <aside
       aria-label={language.t("debugBar.ariaLabel")}
-      class="pointer-events-auto fixed bottom-3 right-3 z-50 w-[308px] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-border-base bg-surface-raised-stronger-non-alpha p-0.5 text-text-strong shadow-[var(--shadow-lg-border-base)] sm:bottom-4 sm:right-4 sm:w-[324px]"
+      class={`pointer-events-auto fixed bottom-3 right-3 z-50 hidden max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-border-base bg-surface-raised-stronger-non-alpha p-0.5 text-text-strong shadow-[var(--shadow-lg-border-base)] sm:bottom-4 sm:right-4 sm:block ${state.open ? "w-[308px] sm:w-[324px]" : "w-auto"}`}
     >
-      <div class="grid grid-cols-5 gap-px font-mono">
+      <button
+        type="button"
+        aria-label={language.t("debugBar.ariaLabel")}
+        aria-expanded={state.open}
+        aria-controls="development-performance-diagnostics"
+        onClick={() => setState("open", !state.open)}
+        class="ml-auto flex h-5 items-center rounded-md px-1.5 font-mono text-[10px]"
+      >
+        {state.open ? "×" : "Perf"}
+      </button>
+      <div
+        id="development-performance-diagnostics"
+        class="grid grid-cols-5 gap-px font-mono"
+        style={{ display: state.open ? undefined : "none" }}
+      >
         <Cell
           label={language.t("debugBar.nav.label")}
           tip={language.t("debugBar.nav.tip")}
