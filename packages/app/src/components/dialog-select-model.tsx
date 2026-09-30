@@ -228,6 +228,13 @@ export function ComposerModelSelector(props: { model: ModelState; style?: JSX.CS
   )
   const selected = () => props.model.variant.current()
   const selectedIndex = createMemo(() => options().indexOf(selected() ?? ""))
+  const fill = createMemo(() => {
+    if (selectedIndex() < 0) return "0%"
+    if (options().length === 1) return "100%"
+    const progress = selectedIndex() / (options().length - 1)
+    const offset = 14 - progress * 28
+    return `calc(${progress * 100}% ${offset < 0 ? "-" : "+"} ${Math.abs(offset)}px)`
+  })
   const label = (value: string | undefined) => {
     if (!value) return language.t("common.default")
     if (value.toLowerCase() === "xhigh") return "XHigh"
@@ -284,8 +291,7 @@ export function ComposerModelSelector(props: { model: ModelState; style?: JSX.CS
         <Kobalte.Content
           data-component="composer-model-popover"
           data-view={store.view}
-          class="z-50 flex flex-col overflow-hidden rounded-2xl border border-border-base bg-surface-raised-stronger-non-alpha shadow-md outline-none"
-          classList={{ "w-72 p-4": store.view === "effort", "h-96 w-80 p-2": store.view === "models" }}
+          class="z-50 flex flex-col overflow-hidden outline-none"
           onEscapeKeyDown={(event) => {
             close("escape")
             event.preventDefault()
@@ -326,14 +332,16 @@ export function ComposerModelSelector(props: { model: ModelState; style?: JSX.CS
               </>
             }
           >
-            <div class="flex items-start justify-between gap-3">
-              <Icon name="intelligence" class="mt-1 size-4 shrink-0 text-text-weak" />
+            <div data-component="composer-effort-header" class="flex items-start justify-between gap-3">
+              <Icon name="intelligence" class="mt-0.5 size-4 shrink-0 text-text-weak" />
               <div class="min-w-0 flex-1 text-center">
-                <div class="text-16-medium text-[var(--workbench-nav-accent)]">{label(selected())}</div>
+                <div data-component="composer-effort-title" class="text-16-medium">
+                  {label(selected())}
+                </div>
                 <button
                   data-action="prompt-model-list"
                   type="button"
-                  class="mt-1 inline-flex max-w-full items-center gap-1 text-13-regular text-text-base hover:text-text-strong"
+                  class="inline-flex max-w-full items-center gap-1 text-13-regular text-text-base hover:text-text-strong"
                   onClick={() => setStore("view", "models")}
                 >
                   <span class="truncate">{props.model.current()?.name}</span>
@@ -348,7 +356,15 @@ export function ComposerModelSelector(props: { model: ModelState; style?: JSX.CS
                 onClick={() => props.model.variant.set(undefined)}
                 aria-label={language.t("prompt.model.effort.reset")}
               >
-                <Icon name="reset" size="small" />
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" class="size-4">
+                  <path
+                    d="M16.5 9.5A6.5 6.5 0 1 1 14.7 5M16.5 3.5V8H12"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
               </button>
             </div>
             <Show
@@ -360,30 +376,26 @@ export function ComposerModelSelector(props: { model: ModelState; style?: JSX.CS
               }
             >
               <div
-                class="mt-5 flex h-9 items-center overflow-hidden rounded-full bg-surface-base"
+                data-component="composer-effort-track"
+                data-count={options().length}
                 role="group"
                 aria-label={language.t("prompt.model.effort.label")}
               >
+                <div data-component="composer-effort-fill" style={{ width: fill() }} aria-hidden="true" />
                 <For each={options()}>
                   {(option, index) => (
                     <button
                       data-action="prompt-model-variant"
                       data-variant={option}
+                      data-selected={selected() === option ? "true" : undefined}
+                      data-before={index() < selectedIndex() ? "true" : undefined}
                       type="button"
-                      class="flex h-full min-w-0 flex-1 items-center justify-center transition-colors"
-                      classList={{
-                        "bg-[#3b82f6]": index() <= selectedIndex(),
-                        "bg-surface-base": index() > selectedIndex(),
-                      }}
                       onClick={() => props.model.variant.set(option)}
                       aria-label={label(option)}
                       aria-pressed={selected() === option}
                       title={label(option)}
                     >
-                      <span
-                        class="rounded-full bg-white transition-all"
-                        classList={{ "size-6": selected() === option, "size-1.5 opacity-60": selected() !== option }}
-                      />
+                      <span aria-hidden="true" />
                     </button>
                   )}
                 </For>
