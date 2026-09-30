@@ -72,7 +72,9 @@ export async function syncRetainedSessionPlanSnapshots(input: {
   )
 }
 
-const PROVIDER_MODEL_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000
+// The backend refreshes models.dev hourly; recheck its provider projection so an open app
+// picks up new models and effort variants without needing a restart.
+const PROVIDER_MODEL_REFRESH_INTERVAL_MS = 5 * 60 * 1000
 
 type GlobalStore = {
   ready: boolean
