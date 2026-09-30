@@ -246,11 +246,19 @@ async function acquireOsLock(lockDir: string, opts: LeaseOptions): Promise<OsHan
   let attempt = 0
   let waited = 0
   let delay = 100
+  let announced = false
   while (true) {
     const handle = await tryAcquireOsLock(lockDir, opts)
     if (handle) return handle
     if (clockNow(opts) - start > timeoutMs) throw new LeaseTimeout({ detail: lockDir })
     attempt += 1
+    // Waiting on a contended runtime lock used to be fully silent, which looked like a hung
+    // sidecar (zero output until the health watchdog fired). One line on stderr makes the
+    // contention visible to desktop-side watchers and log capture within a second.
+    if (!announced) {
+      announced = true
+      process.stderr.write(`[db-runtime-lock] waiting for ${lockDir} (held by another process)\n`)
+    }
     await opts.onWait?.(attempt, waited)
     await sleep(delay)
     waited += delay
