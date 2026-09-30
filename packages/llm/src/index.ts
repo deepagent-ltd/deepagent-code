@@ -2,7 +2,7 @@ export { LLMClient } from "./route/client"
 export { Middleware as ClientMiddlewareService, type ClientMiddleware } from "./route/client"
 export { Auth } from "./route/auth"
 export { Provider } from "./provider"
-export { isContextOverflow, isContextOverflowFailure } from "./provider-error"
+export { isContextOverflow, isContextOverflowFailure, isTerminalProviderFailure } from "./provider-error"
 export type {
   RouteModelInput,
   RouteRoutedModelInput,

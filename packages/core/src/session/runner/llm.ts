@@ -8,6 +8,7 @@ import {
   SystemPart,
   ToolDefinition,
   isContextOverflowFailure,
+  isTerminalProviderFailure,
   type ProviderErrorEvent,
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../../agent-gateway"
@@ -1881,11 +1882,9 @@ export const layer = Layer.effect(
         outcomeArtifact: () => providerEvents,
         errorCode: (error) => `provider_stream_failed:${Hash.sha256(String(error)).slice(0, 16)}`,
         ...(integrityIdentity === undefined ? {} : { integrityIdentity }),
-        // Context overflow is rejected by the provider before any generation or tool call, so it is a
-        // proven-terminal failure that may settle as `failed` and drive overflow compaction recovery.
-        // Any other post-dispatch typed failure cannot prove a terminal outcome and stays
-        // indeterminate/recovery_required.
-        terminalProviderFailure: isContextOverflowFailure,
+        // Context overflow and authentication rejection are known before generation. Other
+        // post-dispatch failures remain indeterminate until recovery confirms their outcome.
+        terminalProviderFailure: isTerminalProviderFailure,
       })
       const settledProviderStream = providerStream.pipe(
         Stream.runForEach((event) =>
