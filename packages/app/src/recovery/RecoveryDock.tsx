@@ -5,7 +5,6 @@ import {
   blockedReason,
   descriptorDeadEnd,
   exitCommandInput,
-  hasExecutableExit,
   initialDockState,
   pendingItems,
   queueActive,
@@ -37,7 +36,11 @@ import { useSessionLifecycle } from "./session-lifecycle"
 // a glance what the session last did), not a stale-zero-pixel bug. Only a session
 // that NEVER executed anything stays hidden.
 
-export function RecoveryDock(props: { sessionId: string; client: MaintenanceClient; onPendingChange?: (pending: boolean) => void }) {
+export function RecoveryDock(props: {
+  sessionId: string
+  client: MaintenanceClient
+  onPendingChange?: (pending: boolean) => void
+}) {
   const [state, setState] = createSignal<DockState>(initialDockState)
   const dispatch = (action: DockAction) => setState((prev) => reduceDock(prev, action))
   const lifecycle = useSessionLifecycle()
@@ -68,7 +71,12 @@ export function RecoveryDock(props: { sessionId: string; client: MaintenanceClie
   // terminal options are shown, so a command is never offered on stale evidence.
   const runQuery = async (item: DockItem) => {
     dispatch({ type: "checkStarted", id: item.id })
-    const input = exitCommandInput({ sessionId: props.sessionId, item, exit: { kind: "refresh", permission: "user", label: "refresh.query" }, actorType: "user" })
+    const input = exitCommandInput({
+      sessionId: props.sessionId,
+      item,
+      exit: { kind: "refresh", permission: "user", label: "refresh.query" },
+      actorType: "user",
+    })
     const result = await props.client.recoveryCommand(input)
     if ("error" in result) {
       dispatch({ type: "checkBlocked", id: item.id, reason: result.error.data.code, coordination: { actor: "admin" } })
@@ -100,68 +108,89 @@ export function RecoveryDock(props: { sessionId: string; client: MaintenanceClie
     else dispatch({ type: "exportDone" })
   }
 
-  const pending = () => pendingItems(state())
+  // A completed historical descriptor is diagnostic history, not a request for user action.
+  const pending = () => pendingItems(state()).filter((item) => item.descriptor.descriptorKind !== "resolved")
   const executionStatus = () => {
     const sessionState = lifecycle?.snapshot().sessions.get(props.sessionId)
     return sessionState ? executionStatusOf(sessionState) : undefined
   }
   const show = () =>
-    pending().length > 0 || executionStatus() !== undefined || state().loadStatus === "error" || queueActive(state()) || state().export.status === "error" || state().export.status === "done"
+    pending().length > 0 ||
+    executionStatus() !== undefined ||
+    state().loadStatus === "error" ||
+    queueActive(state()) ||
+    state().export.status === "error" ||
+    state().export.status === "done"
 
   return (
     <Show when={show()}>
       <div class="mb-2 flex flex-col gap-2">
-      <Show when={executionStatus() !== undefined}>
-        <div class="rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-12-regular text-text-weak">
-          {executionLabel(language, executionStatus()!)}
-        </div>
-      </Show>
-      <Show when={state().loadStatus === "error"}>
-        <div class="rounded-md border border-border-critical-base bg-surface-raised-base px-3 py-2.5 text-12-regular text-text-critical">
-          Recovery list failed ({state().loadError})
-          <button type="button" class="ml-2 underline" onClick={() => void load()}>
-            Retry
-          </button>
-        </div>
-      </Show>
-
-      <Show when={queueActive(state())}>
-        <div class="rounded-md border border-border-warning-base bg-surface-raised-base px-3 py-2 text-12-regular text-text-warning">
-          Serial command queue: {state().queue.length + (state().inFlight ? 1 : 0)} pending
-        </div>
-      </Show>
-
-      <For each={pending()}>
-        {(item) => (
-          <RecoveryDockItem
-            item={item}
-            queuedAhead={queuedPosition(state(), item.id)}
-            onQuery={() => void runQuery(item)}
-            onExit={(exit) => void runExit(item, exit)}
-          />
-        )}
-      </For>
-
-      <Show when={hasEvidencePermission(state())}>
-        <div class="mt-1 flex items-center gap-2">
-          <Show when={state().evidenceGate === "unchecked"}>
-            <button type="button" class="text-12-regular underline" onClick={() => dispatch({ type: "evidenceGate", state: "granted" })}>
-              Grant evidence export
+        <Show when={executionStatus() !== undefined}>
+          <div class="rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-12-regular text-text-weak">
+            {executionLabel(language, executionStatus()!)}
+          </div>
+        </Show>
+        <Show when={state().loadStatus === "error"}>
+          <div class="rounded-md border border-border-critical-base bg-surface-raised-base px-3 py-2.5 text-12-regular text-text-critical">
+            {language.t("recovery.list.failed")}
+            <button type="button" class="ml-2 underline" onClick={() => void load()}>
+              {language.t("recovery.list.retry")}
             </button>
-          </Show>
-          <Show when={state().evidenceGate === "denied"}>
-            <span class="text-11-regular text-text-weak">Evidence export denied.</span>
-          </Show>
-          <Show when={state().evidenceGate === "granted"}>
-            <button type="button" class="text-12-regular underline" disabled={state().export.status === "exporting"} onClick={() => void exportEvidence()}>
-              {state().export.status === "exporting" ? "Exporting…" : "Export recovery evidence"}
-            </button>
-          </Show>
-          <Show when={state().export.status === "error"}>
-            <span class="text-11-regular text-text-critical">Export failed ({state().export.error})</span>
-          </Show>
-        </div>
-      </Show>
+            <details class="mt-1 text-text-weak">
+              <summary>{language.t("recovery.details")}</summary>
+              {state().loadError}
+            </details>
+          </div>
+        </Show>
+
+        <Show when={queueActive(state())}>
+          <div class="rounded-md border border-border-warning-base bg-surface-raised-base px-3 py-2 text-12-regular text-text-warning">
+            {language.t("recovery.queue.pending")}
+          </div>
+        </Show>
+
+        <For each={pending()}>
+          {(item) => (
+            <RecoveryDockItem
+              item={item}
+              queuedAhead={queuedPosition(state(), item.id)}
+              onQuery={() => void runQuery(item)}
+              onExit={(exit) => void runExit(item, exit)}
+            />
+          )}
+        </For>
+
+        <Show when={hasEvidencePermission(state())}>
+          <div class="mt-1 flex items-center gap-2">
+            <Show when={state().evidenceGate === "unchecked"}>
+              <button
+                type="button"
+                class="text-12-regular underline"
+                onClick={() => dispatch({ type: "evidenceGate", state: "granted" })}
+              >
+                {language.t("recovery.evidence.grant")}
+              </button>
+            </Show>
+            <Show when={state().evidenceGate === "denied"}>
+              <span class="text-11-regular text-text-weak">{language.t("recovery.evidence.denied")}</span>
+            </Show>
+            <Show when={state().evidenceGate === "granted"}>
+              <button
+                type="button"
+                class="text-12-regular underline"
+                disabled={state().export.status === "exporting"}
+                onClick={() => void exportEvidence()}
+              >
+                {language.t(
+                  state().export.status === "exporting" ? "recovery.evidence.exporting" : "recovery.evidence.export",
+                )}
+              </button>
+            </Show>
+            <Show when={state().export.status === "error"}>
+              <span class="text-11-regular text-text-critical">{language.t("recovery.evidence.failed")}</span>
+            </Show>
+          </div>
+        </Show>
       </div>
     </Show>
   )
@@ -173,6 +202,7 @@ function RecoveryDockItem(props: {
   onQuery: () => void
   onExit: (exit: Exit) => void
 }) {
+  const language = useLanguage()
   // Narrow the item phase once into a flat view so JSX never touches a union member.
   const view = createMemo(() => {
     const phase = props.item.phase
@@ -181,25 +211,43 @@ function RecoveryDockItem(props: {
       kind: props.item.descriptor.descriptorKind,
       requestHash: props.item.descriptor.requestHash,
       exits: phase.status === "decided" ? phase.exits : undefined,
-      exit: phase.status === "running" || phase.status === "result" ? phase.exit : undefined,
       ok: phase.status === "result" ? phase.ok : undefined,
-      blocked: phase.status === "blocked" ? { reason: phase.reason, coordination: phase.coordination } : undefined,
     }
   })
-  const blocked = () => blockedReason(props.item)
+  const title = () => {
+    if (view().status === "verifying") return language.t("recovery.unknown.title")
+    if (view().kind === "coordination_required") return language.t("recovery.coordination.title")
+    if (view().kind === "repairable_exact") return language.t("recovery.repair.title")
+    if (view().kind === "fork_only") return language.t("recovery.fork.title")
+    return language.t("recovery.exact.title")
+  }
+  const description = () => {
+    if (view().status === "verifying") return language.t("recovery.unknown.description")
+    if (view().kind === "coordination_required") return language.t("recovery.coordination.description")
+    if (view().kind === "repairable_exact") return language.t("recovery.repair.description")
+    if (view().kind === "fork_only") return language.t("recovery.fork.description")
+    return language.t("recovery.exact.description")
+  }
+  const actions = {
+    recover: "recovery.action.recover",
+    abandon: "recovery.action.abandon",
+    repair: "recovery.action.repair",
+    fork: "recovery.action.fork",
+    confirm: "recovery.action.confirm",
+    refresh: "recovery.action.refresh",
+  } as const
   return (
     <div class="mb-2 rounded-md border border-border-warning-base bg-surface-raised-base px-3 py-2.5">
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0 flex-1">
-          <div class="text-12-medium text-text-strong">{view().kind}</div>
-          <div class="mt-1 truncate text-11-regular text-text-weak">{view().requestHash}</div>
+          <div class="text-12-medium text-text-strong">{title()}</div>
+          <div class="mt-1 text-12-regular text-text-weak">{description()}</div>
         </div>
       </div>
 
       <Show when={view().status === "verifying"}>
-        <div class="mt-2 text-12-regular text-text-warning">核对中… querying command first</div>
-        <button type="button" class="mt-1 text-12-regular underline" onClick={props.onQuery}>
-          Query command
+        <button type="button" class="mt-2 text-12-regular underline" onClick={props.onQuery}>
+          {language.t("recovery.check")}
         </button>
       </Show>
 
@@ -213,7 +261,8 @@ function RecoveryDockItem(props: {
                 disabled={props.queuedAhead >= 0}
                 onClick={() => props.onExit(exit)}
               >
-                {exit.label} <span class="text-11-regular text-text-weak">({exit.permission})</span>
+                {language.t(actions[exit.kind])}
+                <Show when={exit.permission === "administrator"}> {language.t("recovery.action.admin")}</Show>
               </button>
             )}
           </For>
@@ -221,25 +270,31 @@ function RecoveryDockItem(props: {
       </Show>
 
       <Show when={view().status === "running"}>
-        <div class="mt-2 text-12-regular text-text-weak">Running {view().exit?.label}…</div>
+        <div class="mt-2 text-12-regular text-text-weak">{language.t("recovery.action.running")}</div>
       </Show>
 
       <Show when={view().status === "result"}>
         <div class="mt-2 text-12-regular text-text-weak">
-          {view().exit?.label} {view().ok ? "succeeded" : "failed"}
+          {language.t(view().ok ? "recovery.action.succeeded" : "recovery.action.failed")}
         </div>
       </Show>
 
       <Show when={view().status === "blocked"}>
-        <div class="mt-2 text-11-regular text-text-critical">
-          No local exit in the current state: {blocked()?.reason}. Coordinate with {blocked()?.coordination.actor}
-          {blocked()?.coordination.evidenceExportRef ? ` (evidence: ${blocked()?.coordination.evidenceExportRef})` : ""}.
-        </div>
+        <div class="mt-2 text-11-regular text-text-critical">{language.t("recovery.blocked")}</div>
       </Show>
 
-      <Show when={hasExecutableExit(props.item) === false && view().status !== "blocked" && view().status !== "result" && view().status !== "settled"}>
-        <div class="mt-2 text-11-regular text-text-weak">No executable exit (query first).</div>
-      </Show>
+      <a
+        class="mt-2 inline-block text-12-regular underline text-text-base"
+        href="https://github.com/deepagent-ltd/deepagent-code/issues/new?template=bug-report.yml"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {language.t("recovery.report")}
+      </a>
+      <details class="mt-1 text-11-regular text-text-weak">
+        <summary>{language.t("recovery.details")}</summary>
+        <code class="break-all">{view().requestHash}</code>
+      </details>
     </div>
   )
 }
@@ -257,5 +312,7 @@ function requiresCoordination(item: DockItem): boolean {
  * the machine state vocabulary — kept raw, like the dock's other state literals). */
 function executionLabel(language: ReturnType<typeof useLanguage>, status: ExecutionStatusView): string {
   if (status.kind === "running") return language.t("recovery.execution.running", { number: status.number })
-  return language.t("recovery.execution.last", { state: status.state, number: status.number })
+  if (status.state === "succeeded") return language.t("recovery.execution.succeeded", { number: status.number })
+  if (status.state === "interrupted") return language.t("recovery.execution.interrupted", { number: status.number })
+  return language.t("recovery.execution.failed", { number: status.number })
 }
