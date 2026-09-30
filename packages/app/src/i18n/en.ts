@@ -431,6 +431,13 @@ export const dict = {
   "prompt.scenario.intelligence": "Intelligence",
   "prompt.scenario.direct.tooltip": "Send your prompt directly",
   "prompt.scenario.intelligence.tooltip": "DeepAgent prepares a prompt for you",
+  "prompt.scenario.enable.tooltip": "Enable intelligence mode",
+  "prompt.scenario.disable.tooltip": "Turn off intelligence mode and send directly",
+  "prompt.model.options": "Model and reasoning effort",
+  "prompt.model.effort.label": "Reasoning effort",
+  "prompt.model.effort.reset": "Reset reasoning effort to default",
+  "prompt.model.effort.back": "Back to reasoning effort",
+  "prompt.model.effort.unavailable": "This model has no adjustable reasoning effort",
 
   "prompt.toast.pasteUnsupported.title": "Unsupported attachment",
   "prompt.toast.pasteUnsupported.description": "Only images, PDFs, or text files can be attached here.",
