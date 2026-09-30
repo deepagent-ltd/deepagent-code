@@ -351,10 +351,10 @@
     --text-mix-blend-mode: plus-lighter;
 
     /* OC-2 fallback variables (dark) */
-    --background-base: #101010;
+    --background-base: #303030;
     --background-weak: #1e1e1e;
-    --background-strong: #121212;
-    --background-stronger: #151515;
+    --background-strong: #1e1e1e;
+    --background-stronger: #1e1e1e;
     --surface-base: rgba(255, 255, 255, 0.031);
     --base: rgba(255, 255, 255, 0.034);
     --surface-base-hover: rgba(255, 255, 255, 0.039);
@@ -367,7 +367,7 @@
     --surface-inset-strong: rgba(0, 0, 0, 0.8);
     --surface-inset-strong-hover: rgba(0, 0, 0, 0.8);
     --surface-raised-base: rgba(255, 255, 255, 0.059);
-    --surface-float-base: #161616;
+    --surface-float-base: #1e1e1e;
     --surface-float-base-hover: #1c1c1c;
     --surface-raised-base-hover: rgba(255, 255, 255, 0.078);
     --surface-raised-base-active: rgba(255, 255, 255, 0.102);
@@ -379,7 +379,7 @@
     --surface-weaker: rgba(255, 255, 255, 0.102);
     --surface-strong: rgba(255, 255, 255, 0.169);
     --surface-stronger-non-alpha: var(--surface-raised-stronger-non-alpha);
-    --surface-raised-stronger-non-alpha: #1c1c1c;
+    --surface-raised-stronger-non-alpha: #1e1e1e;
     --surface-brand-base: #fab283;
     --surface-brand-hover: #eda779;
     --surface-interactive-base: #091f52;
@@ -415,7 +415,7 @@
     --surface-diff-delete-weaker: #42120b;
     --surface-diff-delete-strong: #6a1206;
     --surface-diff-delete-stronger: #faa494;
-    --input-base: #1c1c1c;
+    --input-base: #303030;
     --input-hover: #1c1c1c;
     --input-active: #091123;
     --input-selected: #0b1730;

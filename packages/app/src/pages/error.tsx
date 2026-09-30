@@ -276,8 +276,8 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
   }
 
   return (
-    <div class="relative flex-1 h-screen w-screen min-h-0 flex flex-col items-center justify-center bg-background-base font-sans">
-      <div class="w-2/3 max-w-3xl flex flex-col items-center justify-center gap-8">
+    <div class="relative flex-1 h-dvh w-full min-h-0 flex flex-col items-center justify-center bg-background-base p-2 font-sans">
+      <div class="workbench-panel w-full max-w-3xl max-h-full overflow-y-auto flex flex-col items-center gap-8 p-6">
         <Logo class="w-58.5 opacity-12 shrink-0" />
         <div class="flex flex-col items-center gap-2 text-center">
           <h1 class="text-lg font-medium text-text-strong">{language.t("error.page.title")}</h1>
