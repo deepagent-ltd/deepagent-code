@@ -62,7 +62,7 @@ const editorTheme = EditorView.theme({
     height: "100%",
     fontSize: "13px",
     fontFamily: "var(--font-family-mono, 'JetBrains Mono', 'Fira Code', monospace)",
-    backgroundColor: "var(--background-stronger, #1e1e1e)",
+    backgroundColor: "transparent",
     color: "var(--text-base, #d4d4d4)",
   },
   ".cm-scroller": { overflow: "auto" },
@@ -71,7 +71,7 @@ const editorTheme = EditorView.theme({
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
     { backgroundColor: "var(--surface-base-active, #264f78)" },
   ".cm-gutters": {
-    backgroundColor: "var(--background-stronger, #1e1e1e)",
+    backgroundColor: "transparent",
     color: "var(--text-weaker, #858585)",
     border: "none",
     borderRight: "1px solid var(--border-weaker-base, #333)",

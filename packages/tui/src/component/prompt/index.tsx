@@ -32,6 +32,7 @@ import { promptOffsetWidth } from "../../prompt/display"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { usePromptHistory, type PromptInfo } from "../../prompt/history"
 import { computePromptTraits } from "../../prompt/traits"
+import { promptIntelligenceMode } from "../../prompt/intelligence-mode"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
@@ -268,8 +269,14 @@ export function Prompt(props: PromptProps) {
     if (current.type !== "recovery_required") return
     return current
   })
-  const intelligenceMode = createMemo(
-    () => props.sessionID && (kv.get("intelligence_mode", {}) as Record<string, boolean>)[props.sessionID] === true,
+  const kv = useKV()
+  const intelligenceMode = createMemo(() =>
+    promptIntelligenceMode({
+      configMode: sync.data.config.provider?.deepagent?.options?.promptMode,
+      overrides: kv.get("intelligence_mode", {}) as Record<string, boolean>,
+      sessionID: props.sessionID,
+      directory: sdk.directory,
+    }),
   )
   // GUI followup-dock parity: while the session is busy, `/followup <text>` parks the text in a
   // kv-persisted per-session FIFO; when the session returns to idle the head is sent as a normal
@@ -304,7 +311,6 @@ export function Prompt(props: PromptProps) {
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const { theme, syntax } = useTheme()
-  const kv = useKV()
   const animationsEnabled = createMemo(() => kv.get("animations_enabled", true))
   const list = createMemo(() => props.placeholders?.normal ?? [])
   const shell = createMemo(() => props.placeholders?.shell ?? [])
@@ -784,10 +790,11 @@ export function Prompt(props: PromptProps) {
         category: "Session",
         slashName: "intelligence",
         run: () => {
-          const sessionID = props.sessionID
-          if (!sessionID) return
           const next = !intelligenceMode()
-          kv.set("intelligence_mode", { ...(kv.get("intelligence_mode", {}) as Record<string, boolean>), [sessionID]: next })
+          kv.set("intelligence_mode", {
+            ...(kv.get("intelligence_mode", {}) as Record<string, boolean>),
+            [props.sessionID ?? `directory:${sdk.directory ?? ""}`]: next,
+          })
           toast.show({
             message: next ? i18n.t("tui.intelligence.on") : i18n.t("tui.intelligence.off"),
             variant: "info",
@@ -1424,9 +1431,7 @@ export function Prompt(props: PromptProps) {
       // through the prepare pipeline first — SSE progress + an editable draft review — then send
       // with the confirmed-draft metadata. Prepare failures degrade to direct_override (W1-3
       // semantics; W0-3b made refinement itself run under the V2-only profile).
-      const intelligenceOn = props.sessionID
-        ? kv.get("intelligence_mode", {})[props.sessionID] === true
-        : false
+      const intelligenceOn = intelligenceMode()
       let metadata: Record<string, unknown> | undefined
       if (intelligenceOn && inputText.trim()) {
         const prepared = await prepareIntelligenceDraft(sessionID!, inputText)

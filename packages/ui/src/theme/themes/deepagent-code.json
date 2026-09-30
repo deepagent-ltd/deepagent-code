@@ -46,7 +46,7 @@
   },
   "dark": {
     "palette": {
-      "neutral": "#0a0a0a",
+      "neutral": "#262626",
       "ink": "#eeeeee",
       "primary": "#fab283",
       "accent": "#9d7cd8",
@@ -58,7 +58,7 @@
       "diffDelete": "#e26a75"
     },
     "overrides": {
-      "text-weak": "#808080",
+      "text-weak": "#a8a8a8",
       "syntax-comment": "#808080",
       "syntax-keyword": "#9d7cd8",
       "syntax-string": "#7fd88f",
@@ -83,7 +83,20 @@
       "markdown-list-enumeration": "#56b6c2",
       "markdown-image": "#fab283",
       "markdown-image-text": "#56b6c2",
-      "markdown-code-block": "#eeeeee"
+      "markdown-code-block": "#eeeeee",
+      "background-base": "#303030",
+      "background-weak": "#1e1e1e",
+      "background-strong": "#1e1e1e",
+      "background-stronger": "#1e1e1e",
+      "surface-raised-stronger-non-alpha": "#1e1e1e",
+      "surface-float-base": "#1e1e1e",
+      "input-base": "#303030"
+    },
+    "v2Overrides": {
+      "v2-background-bg-base": "#303030",
+      "v2-background-bg-layer-01": "#1e1e1e",
+      "v2-background-bg-layer-02": "#303030",
+      "v2-background-bg-layer-03": "#383838"
     }
   }
 }
