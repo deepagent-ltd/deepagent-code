@@ -24,12 +24,7 @@ import { formatSessionTime } from "@/utils/session-time"
 import { showToast } from "@/utils/toast"
 import { DialogDeleteSession } from "./sidebar-delete-session"
 import { sessionPermissionRequest } from "../session/composer/session-request-tree"
-import {
-  directChildSessions,
-  getProjectAvatarSource,
-  hasProjectPermissions,
-  MAX_SESSION_TREE_LEVEL,
-} from "./helpers"
+import { directChildSessions, getProjectAvatarSource, hasProjectPermissions, MAX_SESSION_TREE_LEVEL } from "./helpers"
 
 export const ProjectIcon = (props: {
   project: LocalProject
@@ -214,7 +209,7 @@ const SessionRow = (props: {
       </Show>
       <Show when={time() && !props.editing()}>
         <span
-          class="shrink-0 text-12-regular text-text-weaker tabular-nums transition-opacity group-hover/session:opacity-0 group-focus-within/session:opacity-0"
+          class="shrink-0 text-12-regular text-text-weak tabular-nums transition-opacity group-hover/session:opacity-0 group-focus-within/session:opacity-0"
           aria-hidden="true"
         >
           {time()}
@@ -351,7 +346,7 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
         <ContextMenu.Trigger
           as="div"
           data-session-id={props.session.id}
-          class="group/session relative w-full min-w-0 rounded-md cursor-default pr-3 transition-colors hover:bg-surface-raised-base-hover [&:has(:focus-visible)]:bg-surface-raised-base-hover has-[[data-expanded]]:bg-surface-raised-base-hover has-[.active]:bg-surface-base-active"
+          class="workbench-session-item group/session relative w-full min-w-0 rounded-md cursor-default pr-3 transition-colors"
           style={{ "padding-left": `${8 + (props.level ?? 0) * 16}px` }}
         >
           <div class="flex min-w-0 items-center gap-1">
@@ -460,14 +455,14 @@ export const NewSessionItem = (props: {
       }}
     >
       <div class="shrink-0 size-6 flex items-center justify-center">
-        <Icon name="new-session" size="small" class="text-icon-weak" />
+        <Icon name="new-session" size="small" class="text-icon-base" />
       </div>
       <span class="text-14-regular text-text-strong min-w-0 flex-1 truncate">{label}</span>
     </A>
   )
 
   return (
-    <div class="group/session relative w-full min-w-0 rounded-md cursor-default transition-colors pl-2 pr-3 hover:bg-surface-raised-base-hover [&:has(:focus-visible)]:bg-surface-raised-base-hover has-[.active]:bg-surface-base-active">
+    <div class="workbench-session-item group/session relative w-full min-w-0 rounded-md cursor-default transition-colors pl-2 pr-3">
       <Show
         when={!tooltip()}
         fallback={

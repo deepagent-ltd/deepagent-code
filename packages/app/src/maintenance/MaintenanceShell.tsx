@@ -198,7 +198,10 @@ export function MaintenanceShell(props: {
         </div>
       </header>
 
-      <main class="mx-auto w-full max-w-3xl flex-1 px-6 py-6">
+      <main
+        class="workbench-panel mx-auto my-2 max-w-3xl flex-1 px-6 py-6"
+        style={{ width: "calc(100% - var(--workbench-gap) * 2)" }}
+      >
         <Show when={migrationReadOnly() && view().migration.status === "failed"}>
           <div
             class="mb-4 rounded-md border border-border-warning-base bg-surface-raised-base p-4"

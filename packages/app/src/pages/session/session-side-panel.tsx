@@ -440,7 +440,8 @@ export function SessionSidePanel(props: {
       <aside
         id="review-panel"
         aria-label={language.t("session.panel.reviewAndFiles")}
-        class="relative min-w-0 h-full flex shrink-0 overflow-hidden bg-background-base border-l border-border-weaker-base"
+        class="relative min-w-0 h-full flex shrink-0"
+        style={{ gap: open() ? "var(--workbench-gap)" : undefined }}
       >
         <SidePanelRail
           items={railItems}
@@ -449,7 +450,7 @@ export function SessionSidePanel(props: {
           collapseLabel={language.t("common.close")}
         />
         <div
-          class="relative min-w-0 h-full overflow-hidden bg-background-base border-l border-border-weaker-base"
+          class="workbench-panel relative min-w-0 h-full overflow-hidden"
           aria-hidden={!open()}
           inert={!open()}
           classList={{
@@ -501,7 +502,7 @@ export function SessionSidePanel(props: {
                               {language.t("session.files.all")}
                             </Tabs.Trigger>
                           </Tabs.List>
-                          <Tabs.Content value="changes" class="bg-background-stronger px-3 py-0">
+                          <Tabs.Content value="changes" class="px-3 py-0">
                             <Switch>
                               <Match when={props.hasReview() || !props.diffsReady()}>
                                 <Show
@@ -526,7 +527,7 @@ export function SessionSidePanel(props: {
                               </Match>
                             </Switch>
                           </Tabs.Content>
-                          <Tabs.Content value="all" class="bg-background-stronger px-3 py-0">
+                          <Tabs.Content value="all" class="px-3 py-0">
                             {/* V3.6 Phase 1B F5: file ops toolbar */}
                             <div class="flex items-center gap-1 py-1.5 -mx-3 px-3 border-b border-border-weaker-base">
                               <span class="flex-1 text-12-regular text-text-weak">
@@ -684,7 +685,7 @@ export function SessionSidePanel(props: {
                   <SidePanelDebugConsole onClose={() => view().panel.toggle("debug-console")} />
                 </Match>
                 <Match when={isActive("problems")}>
-                  <div class="h-full w-full min-w-0 flex flex-col overflow-hidden bg-background-stronger">
+                  <div class="h-full w-full min-w-0 flex flex-col overflow-hidden bg-background-base">
                     <SidePanelDockHeader
                       id="problems"
                       title={language.t("session.panel.problems")}
@@ -725,7 +726,7 @@ function SidePanelRail(props: {
 }) {
   return (
     <div
-      class="h-full shrink-0 flex flex-col items-center gap-0.5 py-2 overflow-y-auto bg-background-base"
+      class="workbench-panel workbench-side-panel-rail h-full shrink-0 flex flex-col items-center gap-[5px] py-[9px] overflow-y-auto"
       style={{ width: `${RIGHT_PANEL_RAIL_PX}px` }}
       role="tablist"
       aria-label={props.collapseLabel}
@@ -737,7 +738,7 @@ function SidePanelRail(props: {
             <Show when={groupItems().length > 0}>
               {/* divider between non-empty groups (not before the first) */}
               <Show when={gi() > 0}>
-                <div class="my-1 h-px w-6 bg-border-weaker-base shrink-0" aria-hidden />
+                <div data-slot="side-panel-divider" class="my-1 h-px w-[22px] shrink-0" aria-hidden />
               </Show>
               <For each={groupItems()}>
                 {(item) => (
@@ -751,16 +752,16 @@ function SidePanelRail(props: {
                       role="tab"
                       aria-selected={item.active}
                       aria-label={item.title}
-                      class="relative h-8 w-8 rounded-md flex items-center justify-center transition-colors text-icon-base hover:bg-surface-raised-base-hover"
-                      classList={{
-                        "bg-surface-raised-base-active text-text-strong ring-1 ring-border-strong-base": item.active,
-                      }}
+                      class="relative size-[34px] shrink-0 rounded-md flex items-center justify-center transition-colors"
                       onClick={() => props.onSelect(item.mode)}
                     >
-                      <Icon name={item.icon} size="small" class="shrink-0" />
+                      <Icon name={item.icon} size="normal" class="shrink-0" />
                       <Show when={item.badge}>
                         {(badge) => (
-                          <span class="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-surface-raised-base text-10-regular text-text-base flex items-center justify-center ring-1 ring-background-base">
+                          <span
+                            data-slot="side-panel-badge"
+                            class="absolute top-0 right-0 min-w-[14px] h-3.5 px-1 rounded text-10-regular text-text-strong flex items-center justify-center"
+                          >
                             {badge()}
                           </span>
                         )}
