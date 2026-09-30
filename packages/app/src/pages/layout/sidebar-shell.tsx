@@ -149,7 +149,10 @@ export const SidebarContent = (props: {
         ref={(el) => {
           panel = el
         }}
-        classList={{ "flex-1 flex h-full min-h-0 min-w-0 overflow-hidden": true, "pointer-events-none": !expanded() }}
+        classList={{
+          "workbench-sidebar-frame flex-1 flex h-full min-h-0 min-w-0 overflow-hidden": true,
+          "pointer-events-none": !expanded(),
+        }}
         aria-hidden={!expanded()}
       >
         {props.renderPanel()}

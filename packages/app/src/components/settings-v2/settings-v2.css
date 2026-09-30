@@ -3,24 +3,27 @@
 
 [data-component="tabs-v2"][data-variant="settings"] {
   height: 100%;
+  min-width: 0;
+  gap: var(--workbench-gap);
+  padding: var(--workbench-gap);
 }
 
-[data-component="dialog-v2"][data-variant="settings"] [data-slot="dialog-container"] {
-  background: var(--v2-background-bg-base);
+[data-component="dialog-v2"]:has(.settings-v2-dialog) [data-slot="dialog-container"] {
+  background: var(--workbench-background);
 }
 
 /* D4: the settings variant carries no title, so its header holds only the close button —
    right-align it and keep the body flush so the tab layout is unchanged. */
-[data-component="dialog-v2"][data-variant="settings"] [data-slot="dialog-header"] {
+[data-component="dialog-v2"] .settings-v2-dialog > [data-slot="dialog-header"] {
   position: absolute;
   top: 8px;
   right: 8px;
-  z-index: 1;
+  z-index: 20;
   padding: 8px;
   background: transparent;
 }
 
-[data-component="dialog-v2"][data-variant="settings"] [data-slot="dialog-body"] {
+[data-component="dialog-v2"] .settings-v2-dialog > [data-slot="dialog-body"] {
   padding: 0;
   overflow: hidden;
 }
@@ -42,7 +45,7 @@
   top: 0;
   z-index: 10;
   padding: 40px 40px 32px;
-  background: linear-gradient(to bottom, var(--v2-background-bg-base) calc(100% - 24px), transparent);
+  background: linear-gradient(to bottom, var(--v2-background-bg-layer-01) calc(100% - 24px), transparent);
 }
 
 .settings-v2-tab-title {
@@ -111,7 +114,7 @@
 
 [data-component="settings-v2-list"] {
   border-radius: 8px;
-  background-color: var(--v2-background-bg-layer-01);
+  background-color: var(--v2-background-bg-layer-02);
   padding-inline: 20px;
   box-shadow: inset 0 0 0 0.5px var(--v2-border-border-muted);
 }
@@ -225,7 +228,52 @@
 }
 
 [data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"] [data-slot="tabs-v2-list"] {
+  --icon-base: var(--workbench-nav-icon);
   background-color: var(--v2-background-bg-layer-01);
+  border-right: 0;
+  border-radius: var(--workbench-radius);
+}
+
+[data-component="tabs-v2"][data-variant="settings"] > [data-slot="tabs-v2-content"] {
+  min-width: 0;
+  border-radius: var(--workbench-radius);
+  background-color: var(--v2-background-bg-layer-01);
+}
+
+[data-component="tabs-v2"][data-variant="settings"] [data-slot="tabs-v2-trigger-wrapper"] {
+  position: relative;
+}
+
+[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"]
+  [data-slot="tabs-v2-trigger-wrapper"]:has([data-selected]) {
+  border-color: transparent;
+}
+
+[data-component="tabs-v2"][data-variant="settings"] [data-slot="tabs-v2-trigger-wrapper"]:has([data-selected])::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--workbench-nav-accent);
+}
+
+@media (max-width: 639px) {
+  [data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"] [data-slot="tabs-v2-list"] {
+    width: 144px;
+    min-width: 144px;
+    padding: 8px;
+  }
+
+  .settings-v2-tab-header {
+    padding: 32px 16px 24px;
+  }
+
+  .settings-v2-tab-body {
+    padding: 0 16px 24px;
+  }
 }
 
 .settings-v2-nav-footer {

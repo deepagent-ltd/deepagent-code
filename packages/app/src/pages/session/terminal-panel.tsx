@@ -2,7 +2,6 @@ import { Show, Switch, Match, createEffect, createMemo, onMount } from "solid-js
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { ResizeHandle } from "@deepagent-code/ui/resize-handle"
-import { Icon } from "@deepagent-code/ui/icon"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Tooltip } from "@deepagent-code/ui/tooltip"
 import { useLanguage } from "@/context/language"
@@ -30,6 +29,7 @@ function TerminalPanelContent(props: Props) {
   const panel = () => view().panel
   const opened = createMemo(() => panel().bottom.opened())
   const active = createMemo(() => panel().bottom.activeView())
+  const single = createMemo(() => terminal.root()?.kind === "leaf")
   // Bottom panel only shows the non-terminal dock panels (debug-console, problems).
   // Terminal is no longer a movable dock view — it is bottom-native here.
   const visible = createMemo(() => opened())
@@ -43,9 +43,7 @@ function TerminalPanelContent(props: Props) {
   const close = () => panel().bottom.toggle()
 
   // Bottom terminal is visible when the bottom panel is open with terminal as active view.
-  const terminalVisible = createMemo(() =>
-    panel().bottom.opened() && panel().bottom.activeView() === "terminal",
-  )
+  const terminalVisible = createMemo(() => panel().bottom.opened() && panel().bottom.activeView() === "terminal")
 
   // Lifecycle owner for the bottom host — auto-creates, auto-focuses, closes panel when empty.
   // Gate `active` on runtimeId being set to prevent pty.create firing before the server
@@ -79,6 +77,23 @@ function TerminalPanelContent(props: Props) {
     )
   })
 
+  const actions = () => (
+    <div class="flex h-full shrink-0 items-center gap-0.5 whitespace-nowrap px-1">
+      <Show when={active() === "terminal"}>
+        <TerminalActions />
+      </Show>
+      <Tooltip value={language.t("common.close")}>
+        <IconButton
+          icon="close"
+          variant="ghost"
+          iconSize="normal"
+          aria-label={language.t("common.close")}
+          onClick={close}
+        />
+      </Tooltip>
+    </div>
+  )
+
   return (
     <div
       ref={root}
@@ -87,7 +102,7 @@ function TerminalPanelContent(props: Props) {
       aria-label={language.t("session.panel.bottom")}
       aria-hidden={!visible()}
       inert={!visible()}
-      class="relative w-full shrink-0 overflow-hidden bg-background-stronger"
+      class="relative w-full shrink-0 overflow-hidden"
       classList={{
         // Suppress height animation until layout persisted state has loaded.
         // Without this guard the panel snaps from 0→pane() height on cold start
@@ -95,17 +110,17 @@ function TerminalPanelContent(props: Props) {
         "transition-[height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[height] motion-reduce:transition-none":
           !size.active() && layout.ready(),
       }}
-      style={{ height: visible() ? `${pane()}px` : "0px" }}
+      style={{ height: visible() ? `calc(${pane()}px + var(--workbench-gap))` : "0px" }}
     >
       <div
         class="absolute inset-x-0 top-0 flex flex-col"
         classList={{ "pointer-events-none": !visible() }}
-        style={{ height: `${pane()}px` }}
+        style={{ height: `calc(${pane()}px + var(--workbench-gap))` }}
       >
         <div class="hidden md:block" onPointerDown={() => size.start()}>
           <ResizeHandle
             direction="vertical"
-            class="resize-handle--dock"
+            style={{ top: "calc(var(--workbench-gap) / 2)" }}
             size={pane()}
             min={100}
             max={max()}
@@ -117,30 +132,15 @@ function TerminalPanelContent(props: Props) {
             onCollapse={close}
           />
         </div>
-        <div class="flex flex-col h-full">
-          <div class="flex h-9 shrink-0 items-center overflow-hidden border-b border-border-weaker-base bg-background-stronger">
-            <div class="flex min-w-0 flex-1 h-full items-center pl-3">
-              <span class="text-12-regular text-text-weak select-none">{language.t("session.panel.terminal")}</span>
+        <div class="workbench-panel flex flex-col flex-1 min-h-0 mt-[var(--workbench-gap)]">
+          <Show when={active() !== "terminal" || !single()}>
+            <div class="flex h-9 shrink-0 items-center pl-1.5 pr-1">
+              <div class="flex min-w-0 flex-1 h-full items-center pl-3">
+                <span class="text-12-regular text-text-weak select-none">{language.t("session.panel.bottom")}</span>
+              </div>
+              {actions()}
             </div>
-            <div class="flex h-full shrink-0 items-center gap-0.5 whitespace-nowrap px-1">
-              <Show when={active() === "terminal"}>
-                <TerminalActions />
-              </Show>
-              <Show when={active() === "terminal"}>
-                <div class="h-4 w-px shrink-0 bg-border-weaker-base" aria-hidden="true" />
-              </Show>
-              {/* "Move to side" button removed — bottom and side are now independent hosts. */}
-              <Tooltip value={language.t("common.close")}>
-                <IconButton
-                  icon="close"
-                  variant="ghost"
-                  iconSize="normal"
-                  aria-label={language.t("common.close")}
-                  onClick={close}
-                />
-              </Tooltip>
-            </div>
-          </div>
+          </Show>
           <div class="relative min-h-0 flex-1">
             <Show
               when={active()}
@@ -162,7 +162,7 @@ function TerminalPanelContent(props: Props) {
                       }
                     >
                       <div class="size-full relative" data-terminal-host="bottom">
-                        <TerminalPanes />
+                        <TerminalPanes actions={single() ? actions() : undefined} />
                       </div>
                     </Show>
                   </Match>

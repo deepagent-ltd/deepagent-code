@@ -177,7 +177,7 @@ export function SessionComposerRegion(props: {
       data-component="session-prompt-dock"
       classList={{
         "w-full flex flex-col justify-center items-center pointer-events-none": true,
-        "shrink-0 pb-3 bg-background-stronger": true,
+        "shrink-0 pb-3 bg-background-weak": true,
       }}
     >
       <div
@@ -313,7 +313,7 @@ export function SessionComposerRegion(props: {
                     (codex-style: hint occupies its own row, never blended into other content). */}
                 <div
                   data-component="steer-hint"
-                  class="flex items-center gap-1.5 px-2.5 py-1 text-11-regular text-text-muted bg-background-stronger"
+                  class="flex items-center gap-1.5 px-2.5 py-1 text-11-regular text-text-muted bg-background-weak"
                 >
                   <Icon name="intelligence" class="size-3.5 shrink-0" />
                   <span class="truncate">{language.t("composer.steer.hint")}</span>

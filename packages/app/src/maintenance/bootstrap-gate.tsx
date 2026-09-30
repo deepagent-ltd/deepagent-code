@@ -174,7 +174,7 @@ function OfflineScreen() {
 
   return (
     <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base gap-6 p-6">
-      <div class="flex flex-col items-center max-w-md text-center">
+      <div class="workbench-panel flex flex-col items-center max-w-md text-center p-6">
         <Splash class="w-12 h-15 mb-4" />
         <p class="text-14-regular text-text-base">
           {unreachable()[0]}
@@ -186,7 +186,7 @@ function OfflineScreen() {
       <Show when={others().length > 0}>
         <div class="flex flex-col gap-2 w-full max-w-sm">
           <span class="text-12-regular text-text-base text-center">{language.t("app.server.otherServers")}</span>
-          <div class="flex flex-col gap-1 bg-surface-base rounded-lg p-2">
+          <div class="workbench-panel flex flex-col gap-1 p-2">
             <For each={others()}>
               {(conn) => {
                 const key = ServerConnection.key(conn)
