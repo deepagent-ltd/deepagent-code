@@ -30,3 +30,8 @@ export const isContextOverflowFailure = (failure: unknown) =>
   failure instanceof LLMError
     ? failure.reason._tag === "InvalidRequest" && failure.reason.classification === "context-overflow"
     : Schema.is(ProviderErrorEvent)(failure) && failure.classification === "context-overflow"
+
+// A rejected API key never starts generation, so the provider turn can settle as failed instead
+// of claiming its outcome is unknown and blocking the conversation for manual recovery.
+export const isTerminalProviderFailure = (failure: unknown) =>
+  isContextOverflowFailure(failure) || (failure instanceof LLMError && failure.reason._tag === "Authentication")
