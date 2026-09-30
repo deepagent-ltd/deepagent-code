@@ -35,7 +35,7 @@ export async function mockDeepAgentCodeServer(page: Page, config: MockServerConf
     },
     "/project": [config.project],
     "/project/current": config.project,
-    "/agent": [{ name: "build", mode: "primary" }],
+    "/agent": [{ name: "auto", mode: "primary" }],
     "/vcs": { branch: "main", default_branch: "main" },
     "/session": config.sessions,
   }
