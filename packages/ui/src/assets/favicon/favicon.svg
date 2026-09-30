@@ -1,7 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512"><svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="512" height="512" fill="#131010"></rect>
-<path d="M320 224V352H192V224H320Z" fill="#5A5858"></path>
-<path fill-rule="evenodd" clip-rule="evenodd" d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z" fill="white"></path>
-</svg><style>@media (prefers-color-scheme: light) { :root { filter: none; } }
-@media (prefers-color-scheme: dark) { :root { filter: none; } }
-</style></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="96" fill="#0f1729"/>
+  <svg viewBox="128 96 256 320" width="320" height="400" x="96" y="56" fill="none">
+    <defs>
+      <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#38bdf8"/>
+        <stop offset="0.5" stop-color="#2563eb"/>
+        <stop offset="1" stop-color="#1e40af"/>
+      </linearGradient>
+    </defs>
+    <line x1="176" y1="120" x2="176" y2="392" stroke="#0284c7" stroke-width="44" stroke-linecap="butt"/>
+    <path d="M238 142 H336 V370 H238" stroke="url(#g)" stroke-width="44" stroke-linecap="square" stroke-linejoin="miter" fill="none"/>
+  </svg>
+</svg>

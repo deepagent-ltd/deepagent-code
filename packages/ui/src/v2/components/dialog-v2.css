@@ -17,14 +17,17 @@
   pointer-events: none;
 
   [data-slot="dialog-container"] {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     width: 480px;
     height: 368px;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
     background: var(--v2-background-bg-layer-01);
     box-shadow: var(--v2-elevation-overlay);
-    border-radius: 6px;
+    border-radius: var(--radius-xl);
     overflow: hidden;
     pointer-events: auto;
 
@@ -91,6 +94,7 @@
           border-radius: 4px;
           flex-shrink: 0;
           cursor: pointer;
+          color: var(--workbench-nav-icon, var(--v2-icon-icon-base));
 
           &:hover {
             background: var(--v2-overlay-simple-overlay-hover);

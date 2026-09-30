@@ -14,6 +14,7 @@ export * as DatabasePreflight from "./preflight"
 
 import { Database as BunDatabase } from "#sqlite-native"
 import { promises as fs } from "fs"
+import path from "path"
 import { DatabaseMigrationLease } from "./migration-lease"
 import { contentDigest } from "../contract/digest"
 
@@ -269,7 +270,15 @@ const defaultProbes: PreflightProbes = {
     }
   },
   async activeProcess(filename) {
-    return DatabaseMigrationLease.processLockActive(`${filename}.runtime.lock`, { staleMs: 15_000 })
+    const lockDir = `${filename}.runtime.lock`
+    const active = await DatabaseMigrationLease.processLockActive(lockDir, { staleMs: 15_000 })
+    if (active) {
+      // "Someone holds the database" is undiagnosable without the holder's identity — surface
+      // the lock metadata (pid/hostname/created) so the culprit process is immediately findable.
+      const meta = await fs.readFile(path.join(lockDir, "meta.json"), "utf8").catch(() => undefined)
+      if (meta) console.error("[preflight] database runtime lock held:", meta.trim())
+    }
+    return active
   },
 }
 
