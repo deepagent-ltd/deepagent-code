@@ -36,7 +36,7 @@
     background: var(--workbench-background);
   }
 
-  /* Nested views share their window's neutral fill; the composer keeps the outer frame's fill. */
+  /* Nested views share their window's neutral fill. */
   .workbench-panel,
   [data-component="dialog"] [data-slot="dialog-content"],
   [data-component="dialog-v2"] [data-slot="dialog-container"] {
@@ -65,6 +65,29 @@
     background: var(--workbench-background);
     box-shadow: none;
     border-color: transparent;
+  }
+
+  [data-component="prompt-composer"] {
+    background: light-dark(#f8f8f8, #292929);
+    border-color: light-dark(#d0d0d0, #454545);
+  }
+
+  [data-component="prompt-composer"]:focus-within {
+    border-color: var(--icon-info-active);
+  }
+
+  [data-component="prompt-composer"] [data-dock-surface="shell"],
+  .workbench-panel
+    [data-component="session-prompt-dock"]
+    [data-component="prompt-composer"]
+    [data-dock-surface="shell"] {
+    background: transparent;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  [data-component="prompt-composer"] [data-component="prompt-controls"] {
+    border-color: light-dark(#e1e1e1, #3b3b3b);
   }
 
   .workbench-sidebar-frame {
