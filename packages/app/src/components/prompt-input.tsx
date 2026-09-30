@@ -10,6 +10,7 @@ import {
   onCleanup,
   createMemo,
   createSignal,
+  createUniqueId,
   createResource,
   Switch,
   Match,
@@ -163,6 +164,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   let projectSearchRef: HTMLInputElement | undefined
   let draftReviewResolve: ((result: { editedGoal: string } | false) => void) | undefined
   let draftPreparePrompt: { prompt: Prompt; cursor: number } | undefined
+  const formID = createUniqueId()
 
   const [draftPreparing, setDraftPreparing] = createSignal(false)
   // Live text streamed from intelligence refinement. Shown in a panel BELOW the editor while the raw
@@ -179,7 +181,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   >()
 
   const mirror = { input: false }
-  const inset = 56
+  const inset = 16
   const space = `${inset}px`
 
   const scrollCursorIntoView = () => {
@@ -1812,10 +1814,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       />
       <div
         data-component="prompt-composer"
-        class="w-full overflow-hidden rounded-[12px] border"
+        class="w-full overflow-hidden rounded-[20px] border"
         classList={{ "border-dashed border-icon-info-active": store.draggingType !== null }}
       >
         <DockShellForm
+          id={formID}
           onSubmit={handlePromptSubmit}
           classList={{
             "group/prompt-input": true,
@@ -1852,22 +1855,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           {draftReviewBar()}
           <div
             class="relative"
-            onMouseDown={(e) => {
+            onMouseDown={() => {
               if (draftPreparing() || props.disabled) return
-              const target = e.target
-              if (!(target instanceof HTMLElement)) return
-              if (
-                target.closest(
-                  '[data-action="prompt-attach"], [data-action="prompt-submit"], [data-action="prompt-scenario-toggle"], [data-action="prompt-draft-confirm"], [data-action="prompt-draft-cancel"]',
-                )
-              ) {
-                return
-              }
               editorRef?.focus()
             }}
           >
             <div
-              class="relative max-h-[240px] overflow-y-auto no-scrollbar"
+              class="relative min-h-[112px] max-h-[240px] overflow-y-auto no-scrollbar"
               ref={(el) => (scrollRef = el)}
               style={{ "scroll-padding-bottom": space }}
             >
@@ -1896,7 +1890,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 onKeyDown={handleKeyDown}
                 classList={{
                   "select-text": true,
-                  "w-full pl-3 pr-2 pt-2 text-14-regular text-text-strong focus:outline-none whitespace-pre-wrap": true,
+                  "w-full pl-4 pr-4 pt-4 text-14-regular text-text-strong focus:outline-none whitespace-pre-wrap": true,
                   "[&_[data-type=file]]:text-syntax-property": true,
                   "[&_[data-type=agent]]:text-syntax-type": true,
                   "font-mono!": store.mode === "shell",
@@ -1907,80 +1901,49 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 style={{ "padding-bottom": space }}
               />
               <div
-                class="absolute top-0 inset-x-0 pl-3 pr-2 pt-2 text-14-regular text-text-weak pointer-events-none whitespace-nowrap truncate"
+                class="absolute top-0 inset-x-0 pl-4 pr-4 pt-4 text-14-regular text-text-weak pointer-events-none whitespace-nowrap truncate"
                 classList={{ "font-mono!": store.mode === "shell" }}
                 style={{ "padding-bottom": space, display: prompt.dirty() ? "none" : undefined }}
               >
                 {placeholder()}
               </div>
             </div>
-
-            <div class="pointer-events-none absolute bottom-2 right-2 flex items-center gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept={ACCEPTED_FILE_TYPES.join(",")}
-                class="hidden"
-                onChange={(e) => {
-                  const list = e.currentTarget.files
-                  if (list) void addAttachments(Array.from(list))
-                  e.currentTarget.value = ""
-                }}
-              />
-
-              <div class="flex items-center gap-1 pointer-events-auto">
-                <ScenarioToggle />
-                <Tooltip placement="top" inactive={!draftPreparing() && !working() && blank()} value={tip()}>
-                  <IconButton
-                    data-action="prompt-submit"
-                    type="submit"
-                    disabled={props.disabled || subagentFinished() || (!draftPreparing() && !working() && blank())}
-                    tabIndex={store.mode === "normal" ? undefined : -1}
-                    icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
-                    variant="primary"
-                    class="size-8"
-                    aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
-                  />
-                </Tooltip>
-              </div>
-            </div>
-
-            <div class="pointer-events-none absolute bottom-2 left-2">
-              <div
-                aria-hidden={store.mode !== "normal"}
-                class="pointer-events-auto"
-                style={{
-                  "pointer-events": buttonsSpring() > 0.5 ? "auto" : "none",
-                }}
-              >
-                <TooltipKeybind
-                  placement="top"
-                  title={language.t("prompt.action.attachFile")}
-                  keybind={command.keybind("file.attach")}
-                >
-                  <Button
-                    data-action="prompt-attach"
-                    type="button"
-                    variant="ghost"
-                    class="size-8 p-0"
-                    style={buttons()}
-                    onClick={pick}
-                    disabled={store.mode !== "normal"}
-                    tabIndex={store.mode === "normal" ? undefined : -1}
-                    aria-label={language.t("prompt.action.attachFile")}
-                  >
-                    <Icon name="plus" class="size-4.5" />
-                  </Button>
-                </TooltipKeybind>
-              </div>
-            </div>
           </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept={ACCEPTED_FILE_TYPES.join(",")}
+            class="hidden"
+            onChange={(e) => {
+              const list = e.currentTarget.files
+              if (list) void addAttachments(Array.from(list))
+              e.currentTarget.value = ""
+            }}
+          />
           {draftPreviewPanel()}
         </DockShellForm>
         <Show when={store.mode === "normal" || store.mode === "shell"}>
-          <div data-component="prompt-controls" class="border-t px-1.75 py-1.5 flex items-center gap-2 min-w-0">
-            <div class="flex items-center gap-2 min-w-0 w-full">
+          <div data-component="prompt-controls" class="flex min-w-0 items-center gap-2 px-3 pb-3 pt-1">
+            <Show when={store.mode === "normal"}>
+              <TooltipKeybind
+                placement="top"
+                title={language.t("prompt.action.attachFile")}
+                keybind={command.keybind("file.attach")}
+              >
+                <Button
+                  data-action="prompt-attach"
+                  type="button"
+                  variant="ghost"
+                  class="size-8 shrink-0 p-0"
+                  onClick={pick}
+                  aria-label={language.t("prompt.action.attachFile")}
+                >
+                  <Icon name="plus" class="size-4.5" />
+                </Button>
+              </TooltipKeybind>
+            </Show>
+            <div class="flex min-w-0 flex-1 items-center gap-2">
               <div class="flex items-center gap-1.5 min-w-0 flex-1 relative">
                 <div
                   class="h-7 flex items-center gap-1.5 min-w-0 absolute inset-0"
@@ -2043,6 +2006,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     <Show when={store.mode !== "shell"}>
                       <div
                         data-component="prompt-model-control"
+                        class="ml-auto min-w-0"
                         style={providersShouldFadeIn() ? { animation: "fade-in 0.3s" } : undefined}
                       >
                         <Show
@@ -2148,6 +2112,22 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   </Show>
                 </div>
               </div>
+            </div>
+            <div class="flex shrink-0 items-center gap-2">
+              <ScenarioToggle />
+              <Tooltip placement="top" inactive={!draftPreparing() && !working() && blank()} value={tip()}>
+                <IconButton
+                  data-action="prompt-submit"
+                  type="submit"
+                  form={formID}
+                  disabled={props.disabled || subagentFinished() || (!draftPreparing() && !working() && blank())}
+                  tabIndex={store.mode === "normal" ? undefined : -1}
+                  icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
+                  variant="primary"
+                  class="size-8 rounded-full"
+                  aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
+                />
+              </Tooltip>
             </div>
           </div>
         </Show>
