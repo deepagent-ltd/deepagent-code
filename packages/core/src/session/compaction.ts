@@ -1,6 +1,6 @@
 export * as SessionCompaction from "./compaction"
 
-import { LLM, LLMError, LLMEvent, Message, LLMRequest, isContextOverflowFailure, type Model } from "@deepagent-code/llm"
+import { LLM, LLMError, LLMEvent, Message, LLMRequest, isTerminalProviderFailure, type Model } from "@deepagent-code/llm"
 import { Context, DateTime, Effect, Schema, Stream } from "effect"
 import type { Config } from "../config"
 import type { SessionContext } from "../context-federation/session-context"
@@ -603,9 +603,9 @@ export const make = (dependencies: Dependencies) => {
           .pipe(Stream.tap((event) => Effect.sync(() => summaryEvents.push(event)))),
         outcomeArtifact: () => summaryEvents,
         errorCode: (error) => `compaction_stream_failed:${Hash.sha256(String(error)).slice(0, 16)}`,
-        // The summary request carries no tools, so an intake-time context-overflow refusal is the only
-        // failure that provably terminates before any side effect.
-        terminalProviderFailure: isContextOverflowFailure,
+        // The summary request carries no tools. Context overflow and authentication rejection
+        // both happen before generation and can settle without an ambiguous recovery state.
+        terminalProviderFailure: isTerminalProviderFailure,
       }).pipe(
         Stream.runForEach((event) => {
           if (LLMEvent.is.providerError(event)) failed = true
