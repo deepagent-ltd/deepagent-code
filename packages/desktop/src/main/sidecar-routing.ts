@@ -5,10 +5,16 @@ import type { ServerReadyData } from "../preload/types"
 // failed API-ready health check).
 export const SIDECAR_SPAWN_FAILED = "SIDECAR_SPAWN_FAILED"
 
-// Budget for the local sidecar's API-ready health wait. The `ready` IPC message
-// only proves the listener socket is open, so startPrimarySidecar waits for the
-// health endpoint to answer before handing the URL to the renderer.
-export const LOCAL_HEALTH_TIMEOUT_MS = 15_000
+// The API-ready health wait does NOT use a fixed wall-clock budget: between
+// listener-open and healthy the sidecar opens the database and runs pending
+// migrations, and that duration grows with the user's data — any fixed number
+// is eventually too small for someone's first launch after an upgrade. Instead
+// the wait is bounded by SILENCE: as long as the sidecar keeps producing
+// output (migration logs, bootstrap messages), the watchdog keeps waiting;
+// only a process that goes quiet for this long without answering health is
+// declared hung. A hard cap remains available through
+// DEEPAGENT_CODE_SIDECAR_HEALTH_TIMEOUT_MS for field diagnosis.
+export const LOCAL_HEALTH_SILENCE_MS = Number(process.env.DEEPAGENT_CODE_SIDECAR_HEALTH_TIMEOUT_MS) || 20_000
 
 export function sidecarSpawnFailure(message: string, cause?: unknown, phase?: "spawn" | "health"): Error {
   const error = cause === undefined ? new Error(message) : new Error(message, { cause })
@@ -53,13 +59,24 @@ export async function startPrimarySidecar(options: {
   onStderr: (message: string) => void
   onExit: (code: number) => void
 }): Promise<SidecarReady> {
-  const connection = await options.spawnLocalServer(options.hostname, options.port, options.password, {
-    onStdout: options.onStdout,
-    onStderr: options.onStderr,
+  // Sidecar output is progress: feed every line to the health watchdog so a
+  // long-but-working startup (big database, many pending migrations) keeps
+  // refreshing the silence window while still surfacing the caller's hooks.
+  let markProgress: (() => void) | undefined
+  const delegate = (hook: (message: string) => void) => (message: string) => {
+    markProgress?.()
+    hook(message)
+  }
+  const spawnHooks = {
+    onStdout: delegate(options.onStdout),
+    onStderr: delegate(options.onStderr),
     onExit: options.onExit,
-  })
+  }
+  const connection = await options.spawnLocalServer(options.hostname, options.port, options.password, spawnHooks)
   try {
-    await waitForLocalHealth(connection.health.wait, options.healthTimeoutMs ?? LOCAL_HEALTH_TIMEOUT_MS)
+    await waitForLocalHealth(connection.health.wait, options.healthTimeoutMs ?? LOCAL_HEALTH_SILENCE_MS, (refresh) => {
+      markProgress = refresh
+    })
   } catch (error) {
     await connection.listener.stop().catch(() => undefined)
     throw sidecarSpawnFailure(
@@ -78,9 +95,19 @@ export async function startPrimarySidecar(options: {
   }
 }
 
-function waitForLocalHealth(health: Promise<void>, timeoutMs: number): Promise<void> {
+function waitForLocalHealth(
+  health: Promise<void>,
+  silenceMs: number,
+  onWatchdog: (refresh: () => void) => void,
+): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`health check timed out after ${timeoutMs}ms`)), timeoutMs)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const refresh = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => reject(new Error(`sidecar made no progress for ${silenceMs}ms while waiting for health`)), silenceMs)
+    }
+    onWatchdog(refresh)
+    refresh()
     health.then(
       () => {
         clearTimeout(timer)
