@@ -2185,7 +2185,6 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
   }) => {
     const project = panelProps.project
     const merged = createMemo(() => panelProps.mobile || (panelProps.merged ?? layout.sidebar.opened()))
-    const hover = createMemo(() => !panelProps.mobile && panelProps.merged === false && !layout.sidebar.opened())
     const empty = createMemo(() => !params.dir && layout.projects.list().length === 0)
     const projectName = createMemo(() => {
       const item = project()
@@ -2227,16 +2226,11 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
     return (
       <div
         classList={{
-          "flex flex-col min-h-0 min-w-0 box-border rounded-tl-[12px] px-3": true,
-          "border border-b-0 border-border-weak-base": !merged(),
-          "border-l border-t border-border-weaker-base": merged(),
-          "bg-background-base": merged() || hover(),
-          "bg-background-stronger": !merged() && !hover(),
+          "workbench-panel workbench-sidebar-panel flex flex-col min-h-0 min-w-0 box-border px-2.5": true,
           "flex-1 min-w-0": panelProps.mobile,
-          "max-w-full overflow-hidden": panelProps.mobile,
         }}
         style={{
-          width: panelProps.mobile ? undefined : `${panel()}px`,
+          width: panelProps.mobile ? undefined : `calc(${panel()}px - var(--workbench-gap))`,
         }}
       >
         <Show
@@ -2379,7 +2373,7 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
                         <Button
                           size="large"
                           icon="new-session"
-                          class="w-full"
+                          class="workbench-sidebar-action w-full"
                           onClick={() => {
                             const dir = worktree()
                             if (!dir) return
@@ -2405,7 +2399,7 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
                       <Button
                         size="large"
                         icon="plus-small"
-                        class="w-full"
+                        class="workbench-sidebar-action w-full"
                         onClick={() => {
                           void createWorkspace(project)
                         }}
@@ -2525,7 +2519,7 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
   )
 
   return (
-    <div class="relative bg-background-base flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text">
+    <div class="workbench relative bg-background-base flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text">
       {autoselecting() ?? ""}
       <Titlebar update={titlebarUpdate} />
       <Show when={readyUpdate()}>
@@ -2580,11 +2574,6 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
               </div>
             </Show>
 
-            <div
-              class="hidden xl:block pointer-events-none absolute top-0 right-0 z-0 border-t border-border-weaker-base"
-              style={{ left: "calc(4rem + 12px)" }}
-            />
-
             <div class="xl:hidden">
               <div
                 classList={{
@@ -2624,7 +2613,7 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
             >
               <main
                 classList={{
-                  "size-full overflow-x-hidden flex flex-col items-start contain-strict border-t border-border-weak-base bg-background-base xl:border-l xl:rounded-tl-[12px]": true,
+                  "workbench-main size-full overflow-x-hidden flex flex-col items-start contain-strict": true,
                 }}
               >
                 {props.children}
@@ -2633,7 +2622,7 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
 
             <div
               classList={{
-                "hidden xl:flex absolute inset-y-0 left-16 z-30": true,
+                "workbench-sidebar-frame hidden xl:flex absolute inset-y-0 left-16 z-30": true,
                 "opacity-100 translate-x-0 pointer-events-auto": state.peeked && !layout.sidebar.opened(),
                 "opacity-0 -translate-x-2 pointer-events-none": !state.peeked || layout.sidebar.opened(),
                 "transition-[opacity,transform] motion-reduce:transition-none": true,

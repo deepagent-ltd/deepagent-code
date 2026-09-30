@@ -78,7 +78,7 @@ describe("desktop sidecar routing", () => {
       expect(calls).toEqual([])
     })
 
-    test("kills the sidecar and fails when the health check times out", async () => {
+    test("kills the sidecar and fails when it goes silent while waiting for health", async () => {
       let stops = 0
       const spawnLocalServer: SpawnLocalServer = async () => ({
         listener: {
@@ -92,9 +92,34 @@ describe("desktop sidecar routing", () => {
       await expect(promise).rejects.toMatchObject({
         code: "SIDECAR_SPAWN_FAILED",
         phase: "health",
-        message: expect.stringContaining("health check timed out after 20ms"),
+        message: expect.stringContaining("no progress for 20ms"),
       })
       expect(stops).toBe(1)
+      expect(calls).toEqual([])
+    })
+
+    test("keeps waiting through a long-but-working startup: sidecar output refreshes the watchdog", async () => {
+      // The user-facing scenario: a big database keeps the sidecar busy far beyond any
+      // fixed budget, but it keeps emitting progress — the wait must not give up.
+      let stops = 0
+      const spawnLocalServer: SpawnLocalServer = async (_host, _port, _password, hooks) => {
+        const chatter = setInterval(() => hooks.onStdout("migrating…"), 5)
+        return {
+          listener: {
+            stop: async () => {
+              stops++
+              clearInterval(chatter)
+            },
+          },
+          health: {
+            wait: new Promise<void>((resolve) => setTimeout(resolve, 120)),
+          },
+        }
+      }
+      const { calls, promise } = route({ spawnLocalServer, healthTimeoutMs: 20 })
+      const result = await promise
+      expect(result.ready.username).toBe("deepagent-code")
+      expect(stops).toBe(0)
       expect(calls).toEqual([])
     })
 
