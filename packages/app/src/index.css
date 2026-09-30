@@ -73,8 +73,34 @@
     background-image: none;
   }
 
-  [data-component="prompt-composer"]:focus-within {
-    border-color: var(--icon-info-active);
+  [data-action="prompt-scenario-toggle"] {
+    background: light-dark(#e8e8e8, #383838);
+    border-color: light-dark(#cfcfcf, #555);
+    color: light-dark(#666, #aaa);
+  }
+
+  [data-action="prompt-scenario-toggle"]:hover {
+    background: light-dark(#dedede, #444);
+  }
+
+  [data-action="prompt-scenario-toggle"][aria-pressed="true"] {
+    background: light-dark(#d5d5d5, #e4e4e4);
+    border-color: light-dark(#bdbdbd, #e4e4e4);
+    color: #202020;
+  }
+
+  [data-action="prompt-scenario-toggle"]:focus-visible {
+    outline: 2px solid light-dark(#777, #aaa);
+    outline-offset: 2px;
+  }
+
+  [data-component="prompt-composer"] [data-action="prompt-model"] {
+    background: light-dark(#e8e8e8, #404040);
+    border-radius: 9999px;
+  }
+
+  [data-component="prompt-composer"] [data-action="prompt-model"]:hover {
+    background: light-dark(#dedede, #4b4b4b);
   }
 
   [data-component="prompt-composer"] [data-dock-surface="shell"],
