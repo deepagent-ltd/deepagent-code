@@ -114,10 +114,30 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: ./.github/actions/setup-bun
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: ${{ matrix.target == 'darwin-arm64' && '1' || '' }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+
+      - name: Download Electron runtime for macOS arm64
+        if: matrix.target == 'darwin-arm64'
+        working-directory: packages/desktop
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            echo "Electron download attempt $attempt/3"
+            if node node_modules/electron/install.js &&
+               node -e 'require("node:fs").accessSync(require("electron"))'; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Electron runtime download failed after 3 attempts; check access to Electron release assets"
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
 
       # Import the Developer ID cert only when the secret is configured; otherwise the
       # build proceeds unsigned (DEEPAGENT_CODE_ALLOW_UNSIGNED below).

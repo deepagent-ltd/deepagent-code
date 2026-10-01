@@ -374,6 +374,8 @@ jobs:
       - uses: ./.github/actions/setup-bun
         with:
           install-flags: ${{ matrix.settings.bun_install_flags }}
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: ${{ matrix.settings.target == 'aarch64-apple-darwin' && '1' || '' }}
 
       - name: Azure login
         if: runner.os == 'Windows'
@@ -386,6 +388,24 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
+
+      - name: Download Electron runtime for macOS arm64
+        if: matrix.settings.target == 'aarch64-apple-darwin'
+        working-directory: packages/desktop
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            echo "Electron download attempt $attempt/3"
+            if node node_modules/electron/install.js &&
+               node -e 'require("node:fs").accessSync(require("electron"))'; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Electron runtime download failed after 3 attempts; check access to Electron release assets"
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
 
       - name: Cache apt packages
         if: contains(matrix.settings.host, 'ubuntu')
