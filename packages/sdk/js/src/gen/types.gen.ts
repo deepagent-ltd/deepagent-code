@@ -18032,6 +18032,7 @@ export type SessionPromptPrepareResponses = {
     goal: string
     preview: string
     intent_id?: string
+    degraded?: boolean
   }
 }
 
