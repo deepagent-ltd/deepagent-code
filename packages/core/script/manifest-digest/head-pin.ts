@@ -11,11 +11,11 @@
  * `bun run script/manifest-digest/generate-manifest.ts` and update both digests
  * here.
  *
- * V2.0.2 re-pin (2026-09-25): regenerate after aligning product package versions
- * and the four supported release targets.
+ * Release preparation re-pins this value after aligning product package versions;
+ * the digest gate still checks the exact committed release tree.
  */
 export const HeadPin = {
-  /** Commit whose tree the digests were pinned on. Informational; the digests are the gate. */
+  /** Source commit used to prepare the pinned tree. Informational; the digests are the gate. */
   commit: "e18f3e91",
   setTreeDigest: "280e5fc8fcbc01b87b461cd2ccfe94fe8eb3c35fc552e0aa55c2c0488e67c4e3",
   overallDigest: "c4d1b7b729d1bc804e9319557b660ee295dfd04eb96ff268ca54fd4373b5096a",
