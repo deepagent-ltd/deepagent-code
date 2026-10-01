@@ -37,6 +37,13 @@ if (!Script.preview) {
     baseCommit: baseSha,
     commit: (await $`git rev-parse HEAD`.text()).trim(),
   })
+  // A draft GitHub release does not create its Git tag.
+  const tagRef = `refs/tags/v${Script.version}`
+  const remoteTags = (await $`git ls-remote origin ${tagRef} ${`${tagRef}^{}`}`.text()).trim().split("\n")
+  const remoteTag = remoteTags.find((line) => line.endsWith(`${tagRef}^{}`)) ?? remoteTags.find((line) => line.endsWith(tagRef))
+  if (remoteTag && remoteTag.split("\t")[0] !== candidateSha)
+    throw new Error("release tag does not point at candidate commit")
+  if (!remoteTag) await $`git push origin ${`${candidateSha}:${tagRef}`}`
   const existingRelease =
     await $`gh release view v${Script.version} --json tagName,databaseId,isDraft --repo ${process.env.GH_REPO}`.nothrow()
   if (existingRelease.exitCode === 0) {
