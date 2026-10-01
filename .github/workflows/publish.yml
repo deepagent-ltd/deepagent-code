@@ -216,7 +216,6 @@ jobs:
       - name: Build (release identity pinned, native)
         shell: bash
         run: |
-          bun install
           cd packages/deepagent-code
           bun script/build.ts --single --baseline ${{ (needs.version.outputs.channel == 'beta' && '--sourcemaps') || '' }}
           for dir in dist/deepagent-code-*/bin; do

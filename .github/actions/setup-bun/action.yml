@@ -51,11 +51,18 @@ runs:
         # Workaround for patched peer variants
         # e.g. ./patches/ for standard-openapi
         # https://github.com/oven-sh/bun/issues/28147
-        if [ "$RUNNER_OS" = "Windows" ]; then
-          bun install --linker hoisted ${{ inputs.install-flags }}
-        else
-          bun install ${{ inputs.install-flags }}
-        fi
+        for attempt in 1 2 3; do
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            bun install --linker hoisted ${{ inputs.install-flags }} && exit 0
+          else
+            bun install ${{ inputs.install-flags }} && exit 0
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            echo "Dependency installation failed after $attempt attempts" >&2
+            exit 1
+          fi
+          sleep $((attempt * 10))
+        done
       shell: bash
 
     - name: Save Bun dependencies
