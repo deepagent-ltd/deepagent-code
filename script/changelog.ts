@@ -48,7 +48,7 @@ Examples:
 await rm(file, { force: true })
 
 const quiet = values.quiet
-const cmd = ["deepagent-code", "run"]
+const cmd = ["bun", "run", path.join(root, "packages/deepagent-code/src/index.ts"), "run"]
 cmd.push("--variant", values.variant)
 cmd.push("--command", "changelog", "--", ...args)
 
