@@ -19,11 +19,9 @@ const sourceSha = process.env.GITHUB_SHA ?? baseSha
 let candidateSha = baseSha
 
 if (!Script.preview) {
-  await $`bun script/changelog.ts --to ${sourceSha}`.cwd(process.cwd())
   const file = `${process.cwd()}/UPCOMING_CHANGELOG.md`
-  const body = await Bun.file(file)
-    .text()
-    .catch(() => "No notable changes")
+  const body = await $`bun script/raw-changelog.ts --to ${sourceSha}`.cwd(process.cwd()).text()
+  await Bun.write(file, body)
   const dir = process.env.RUNNER_TEMP ?? "/tmp"
   const notesFile = `${dir}/deepagent-code-release-notes.txt`
   await Bun.write(notesFile, body)
