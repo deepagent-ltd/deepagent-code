@@ -53,10 +53,6 @@ jobs:
           deepagent-code-app-id: ${{ vars.DEEPAGENT_CODE_APP_ID }}
           deepagent-code-app-secret: ${{ secrets.DEEPAGENT_CODE_APP_SECRET }}
 
-      - name: Install DeepAgent Code
-        if: inputs.bump || inputs.version
-        run: bun i -g deepagent-code
-
       - id: version
         run: |
           ./script/version.ts
