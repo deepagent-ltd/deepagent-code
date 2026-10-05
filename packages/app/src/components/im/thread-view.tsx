@@ -14,6 +14,7 @@ export const ThreadView: Component<{
   groupID: string
   root: LocalMessage
   agents: AgentDescriptor[]
+  selfMemberIDs?: readonly string[]
   onClose: () => void
 }> = (props) => {
   const client = useIMClient()
@@ -25,7 +26,7 @@ export const ThreadView: Component<{
   const load = (append: boolean) => {
     setLoading(true)
     client
-      .listThread(props.groupID, props.root.id, 50, append ? cursor() ?? undefined : undefined)
+      .listThread(props.groupID, props.root.id, 50, append ? (cursor() ?? undefined) : undefined)
       .then((page) => {
         const incoming = page.messages ?? []
         setReplies((prev) => (append ? [...prev, ...incoming] : incoming))
@@ -47,23 +48,16 @@ export const ThreadView: Component<{
     load(false)
   })
 
-  const sendReply = async (content: string) => {
-    try {
-      const created = await client.createMessage(props.groupID, {
-        content,
-        type: "text",
-        replyToID: props.root.id,
-      })
-      setReplies((prev) => [...prev, created as LocalMessage])
-    } catch (error) {
-      console.error("Failed to send reply:", error)
-      const { showToast } = await import("@/utils/toast")
-      showToast({
-        variant: "error",
-        title: "Failed to send reply",
-        description: error instanceof Error ? error.message : String(error),
-      })
-    }
+  const sendReply = async (content: string, clientRequestID: string) => {
+    const rootID = props.root.id
+    const created = await client.createMessage(props.groupID, {
+      content,
+      type: "text",
+      replyToID: rootID,
+      clientRequestID,
+    })
+    if (props.root.id !== rootID) return
+    setReplies((prev) => [...prev.filter((reply) => reply.id !== created.id), created])
   }
 
   return (
@@ -82,7 +76,7 @@ export const ThreadView: Component<{
       <div class="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
         {/* root message */}
         <div class="rounded-lg border border-border-weak-base bg-surface-base p-2">
-          <MessageItem message={props.root} />
+          <MessageItem message={props.root} selfMemberIDs={props.selfMemberIDs} />
         </div>
         <div class="text-11-regular text-text-weak">
           {replies().length} {replies().length === 1 ? "reply" : "replies"}
@@ -92,7 +86,7 @@ export const ThreadView: Component<{
           when={!loading() || replies().length > 0}
           fallback={<div class="text-12-regular text-text-weak">Loading thread…</div>}
         >
-          <For each={replies()}>{(reply) => <MessageItem message={reply} />}</For>
+          <For each={replies()}>{(reply) => <MessageItem message={reply} selfMemberIDs={props.selfMemberIDs} />}</For>
           <Show when={hasMore()}>
             <div class="flex justify-center">
               <Button variant="ghost" size="small" onClick={() => load(true)} disabled={loading()}>
@@ -103,11 +97,7 @@ export const ThreadView: Component<{
         </Show>
       </div>
 
-      <MessageComposer
-        onSend={sendReply}
-        agents={props.agents}
-        placeholder="Reply in thread…"
-      />
+      <MessageComposer onSend={sendReply} agents={props.agents} placeholder="Reply in thread…" />
     </div>
   )
 }

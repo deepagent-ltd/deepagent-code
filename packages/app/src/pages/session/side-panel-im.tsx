@@ -498,7 +498,13 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
                 </Show>
               </div>
             </Show>
-            <GroupChatPanel groupID={id()} threadsEnabled={threadsEnabled()} fileUploadEnabled={fileUploadEnabled()} />
+            <GroupChatPanel
+              groupID={id()}
+              name={selectedGroup()?.name}
+              selfMemberIDs={[facadeStatus()?.viewer?.memberID ?? "server", ...(identity() ? [identity()!.uuid] : [])]}
+              threadsEnabled={threadsEnabled()}
+              fileUploadEnabled={fileUploadEnabled()}
+            />
           </div>
         )}
       </Show>

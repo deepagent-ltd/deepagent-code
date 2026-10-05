@@ -166,6 +166,19 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
     props.onChanged()
   }
 
+  const retryRecovery = async () => {
+    if (busy()) return
+    setBusy(true)
+    setFailure(null)
+    await client
+      .facadeRetry()
+      .then(props.onChanged)
+      .catch(() => {
+        setFailure({ errorCode: "transport_error", errorMessage: "" })
+      })
+      .finally(() => setBusy(false))
+  }
+
   return (
     <div class="mx-3 mt-3 flex flex-col gap-1.5 rounded-md border border-border-weaker-base bg-surface-raised-base px-3 py-2">
       <div class="flex items-center justify-between gap-2 min-w-0">
@@ -259,6 +272,20 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
           </span>
         </Show>
       </div>
+      <Show when={props.status.recovery && props.status.recovery.status !== "ready"}>
+        <div class="flex flex-col gap-1" role="status">
+          <p class="text-12-regular text-text-weak">
+            {language.t(
+              props.status.recovery?.status === "failed" ? "im.facade.recovery.failed" : "im.facade.recovery.pending",
+            )}
+          </p>
+          <Show when={props.status.recovery?.status === "failed"}>
+            <Button variant="secondary" size="small" disabled={busy()} onClick={() => void retryRecovery()}>
+              {language.t("im.facade.retry")}
+            </Button>
+          </Show>
+        </div>
+      </Show>
       <Show when={failure()}>{(f) => <FailureText failure={f()} />}</Show>
     </div>
   )

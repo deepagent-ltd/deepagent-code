@@ -13,6 +13,7 @@ export const FACADE_ERROR_I18N = {
   im_unavailable: "im.facade.error.im_unavailable",
   im_not_claimed: "im.facade.error.im_not_claimed",
   im_identity_disabled: "im.facade.error.im_identity_disabled",
+  im_identity_changed: "im.facade.error.im_identity_changed",
   im_invalid_name: "im.facade.error.im_invalid_name",
   im_name_taken: "im.facade.error.im_name_taken",
   im_key_invalid: "im.facade.error.im_key_invalid",

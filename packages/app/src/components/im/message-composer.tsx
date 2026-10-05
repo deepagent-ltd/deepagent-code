@@ -1,8 +1,11 @@
 import { createSignal, createMemo, createEffect, onCleanup, Show, For } from "solid-js"
+import { createStore } from "solid-js/store"
+import { Button } from "@deepagent-code/ui/button"
+import { useLanguage } from "@/context/language"
 import type { AgentDescriptor } from "./types"
 
 interface MessageComposerProps {
-  onSend: (content: string) => void
+  onSend: (content: string, clientRequestID: string) => void | Promise<void>
   onTyping?: (typing: boolean) => void
   agents: AgentDescriptor[]
   disabled?: boolean
@@ -14,6 +17,8 @@ interface MessageComposerProps {
 }
 
 export function MessageComposer(props: MessageComposerProps) {
+  const language = useLanguage()
+  const [delivery, setDelivery] = createStore({ sending: false, failed: false, requestID: "", requestContent: "" })
   const [content, setContent] = createSignal("")
   const [showMentionMenu, setShowMentionMenu] = createSignal(false)
   const [mentionQuery, setMentionQuery] = createSignal("")
@@ -67,10 +72,11 @@ export function MessageComposer(props: MessageComposerProps) {
     const query = mentionQuery()
     if (!query) return props.agents
     const lowerQuery = query.toLowerCase()
-    return props.agents.filter((agent) =>
-      agent.id.toLowerCase().includes(lowerQuery) ||
-      agent.displayName?.toLowerCase().includes(lowerQuery) ||
-      agent.description?.toLowerCase().includes(lowerQuery)
+    return props.agents.filter(
+      (agent) =>
+        agent.id.toLowerCase().includes(lowerQuery) ||
+        agent.displayName?.toLowerCase().includes(lowerQuery) ||
+        agent.description?.toLowerCase().includes(lowerQuery),
     )
   })
 
@@ -103,6 +109,7 @@ export function MessageComposer(props: MessageComposerProps) {
   })
 
   const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.isComposing || e.keyCode === 229) return
     if (showMentionMenu() && filteredAgents().length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault()
@@ -135,13 +142,27 @@ export function MessageComposer(props: MessageComposerProps) {
     }
 
     // Normal message sending (Enter without Shift)
-    if (e.key === "Enter" && !e.shiftKey && !showMentionMenu()) {
+    if (e.key === "Enter" && !e.shiftKey && (!showMentionMenu() || filteredAgents().length === 0)) {
       e.preventDefault()
-      if (content().trim() && !props.disabled) {
-        props.onSend(content())
-        setContent("")
-        stopTyping()
-      }
+      void submit()
+    }
+  }
+
+  const submit = async () => {
+    if (!content().trim() || props.disabled || delivery.sending) return
+    const sent = content()
+    const requestID = delivery.requestID || crypto.randomUUID()
+    setDelivery({ sending: true, failed: false, requestID, requestContent: sent })
+    try {
+      await props.onSend(sent, requestID)
+      if (content() === sent) setContent("")
+      setDelivery({ requestID: "", requestContent: "" })
+      stopTyping()
+    } catch {
+      setDelivery("failed", true)
+    } finally {
+      setDelivery("sending", false)
+      textareaRef?.focus()
     }
   }
 
@@ -172,21 +193,30 @@ export function MessageComposer(props: MessageComposerProps) {
   }
 
   return (
-    <div class="relative border-t border-border-base p-4">
+    <div class="relative shrink-0 border-t border-border-weaker-base p-3">
       <textarea
         ref={textareaRef}
         value={content()}
         onInput={(e) => {
+          if (e.currentTarget.value !== delivery.requestContent) setDelivery({ requestID: "", requestContent: "" })
           setContent(e.currentTarget.value)
           if (e.currentTarget.value.trim()) signalTyping()
           else stopTyping()
         }}
         onKeyDown={handleKeyDown}
-        placeholder={props.placeholder ?? "Type a message... Use @ to mention agents"}
+        placeholder={props.placeholder ?? language.t("im.composer.placeholder")}
+        aria-label={props.placeholder ?? language.t("im.composer.placeholder")}
         disabled={props.disabled}
-        class="w-full p-3 bg-surface-base border border-border-base rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-accent-base text-text-base placeholder:text-text-weak"
+        readOnly={delivery.sending}
+        aria-busy={delivery.sending}
+        class="w-full p-2.5 bg-surface-panel border border-border-weak-base rounded-md resize-none focus:outline-none focus:border-border-active text-13-regular text-text-base placeholder:text-text-weak"
         rows={3}
       />
+      <Show when={delivery.failed}>
+        <p role="alert" class="mt-1 text-12-regular text-text-critical">
+          {language.t("im.composer.failed")}
+        </p>
+      </Show>
 
       <Show when={showMentionMenu() && filteredAgents().length > 0}>
         <div
@@ -218,23 +248,27 @@ export function MessageComposer(props: MessageComposerProps) {
       </Show>
 
       <div class="mt-2 flex items-center justify-between gap-2">
-        <div class="text-xs text-text-weak">
-          Press <kbd class="px-1 py-0.5 bg-surface-raised-base border border-border-base rounded">Enter</kbd> to
-          send, <kbd class="px-1 py-0.5 bg-surface-raised-base border border-border-base rounded">Shift+Enter</kbd>{" "}
-          for new line
-        </div>
+        <div class="min-w-0 text-11-regular text-text-weak">{language.t("im.composer.hint")}</div>
         <Show when={props.onAttach}>
           <input ref={fileInputRef} type="file" class="hidden" onChange={handleFileSelected} />
           <button
             type="button"
             class="shrink-0 flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-base hover:bg-surface-raised-base-hover disabled:opacity-50"
-            disabled={props.disabled || uploading()}
+            disabled={props.disabled || uploading() || delivery.sending}
             onClick={() => fileInputRef?.click()}
-            aria-label="Attach file"
+            aria-label={language.t("im.composer.attach")}
           >
-            {uploading() ? "Uploading…" : "Attach"}
+            {uploading() ? language.t("im.composer.uploading") : language.t("im.composer.attach")}
           </button>
         </Show>
+        <Button
+          variant="primary"
+          size="small"
+          disabled={props.disabled || delivery.sending || !content().trim()}
+          onClick={() => void submit()}
+        >
+          {delivery.sending ? language.t("im.composer.sending") : language.t("im.composer.send")}
+        </Button>
       </div>
     </div>
   )
@@ -246,10 +280,9 @@ function getCaretCoordinates(element: HTMLTextAreaElement, position: number) {
   const style = getComputedStyle(element)
 
   // Copy styles
-  for (const prop of style) {
-    // @ts-ignore
-    div.style[prop] = style[prop]
-  }
+  Array.from({ length: style.length }, (_, index) => style.item(index)).forEach((property) =>
+    div.style.setProperty(property, style.getPropertyValue(property)),
+  )
 
   div.style.position = "absolute"
   div.style.visibility = "hidden"

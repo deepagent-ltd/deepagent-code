@@ -21,6 +21,8 @@ export interface IMFacadeStatus {
   blocked: { code: string; message: string } | null
   kernel: "connecting" | "connected" | "disconnected" | "failed" | null
   keyOrigin: "stored" | "env" | "none"
+  viewer?: { memberID: string }
+  recovery?: { status: "pending" | "ready" | "failed"; message?: string }
 }
 
 export interface IMResolveResult {
@@ -186,7 +188,7 @@ export function createIMClient(config: () => IMClientConfig) {
       }),
     createMessage: (
       groupID: string,
-      payload: { content: string; type?: string; mentions?: string[]; replyToID?: string },
+      payload: { content: string; type?: string; mentions?: string[]; replyToID?: string; clientRequestID?: string },
     ) =>
       request<IMMessage>(`/api/v1/im/groups/${groupID}/messages`, {
         method: "POST",
@@ -250,8 +252,7 @@ export function createIMClient(config: () => IMClientConfig) {
     facadeRebind: (newKey: string) =>
       facadeRequest<IMFacadeIdentity>(`/api/v1/im/facade/rebind`, { method: "POST", body: { newKey } }),
     facadeRetry: () => facadeRequest<IMFacadeIdentity>(`/api/v1/im/facade/retry`, { method: "POST", body: {} }),
-    facadeResolve: (name: string) =>
-      facadeRequest<IMResolveResult>(`/api/v1/im/facade/resolve`, { query: { name } }),
+    facadeResolve: (name: string) => facadeRequest<IMResolveResult>(`/api/v1/im/facade/resolve`, { query: { name } }),
     facadeOpenDirect: (name: string) =>
       facadeRequest<IMGroup>(`/api/v1/im/facade/direct`, { method: "POST", body: { name } }),
     facadeCreateGroup: (name: string, memberNames: string[]) =>
@@ -287,10 +288,7 @@ export function createIMClient(config: () => IMClientConfig) {
       // Self-hosted: browsers can't set WS headers, so Basic travels as the
       // `auth_token` base64 query, exactly like the PTY connect endpoint.
       if (c.password) {
-        url.searchParams.set(
-          "auth_token",
-          authTokenFromCredentials({ username: c.username, password: c.password }),
-        )
+        url.searchParams.set("auth_token", authTokenFromCredentials({ username: c.username, password: c.password }))
       }
       return url.toString()
     },

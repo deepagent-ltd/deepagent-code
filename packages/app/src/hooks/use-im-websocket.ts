@@ -19,7 +19,7 @@ export interface AgentProgressPart {
 export type IMWebSocketEvent =
   | { type: "message_created"; data: IMMessage }
   | { type: "message_failed"; data: { clientMessageID?: string; code: string; message: string; retryable: boolean } }
-  | { type: "agent_status"; data: { messageID: string; agentID: string; status: string; error?: any } }
+  | { type: "agent_status"; data: { messageID: string; agentID: string; status: string; error?: unknown } }
   | { type: "agent_progress"; data: { messageID: string; agentID: string; parts: AgentProgressPart[] } }
   | { type: "typing"; data: { groupID: string; memberID: string; typing: boolean } }
   | { type: "read_receipt"; data: { groupID: string; memberID: string; readAt: number } }
@@ -53,10 +53,18 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
   // memberIDs currently typing (excluding self, resolved by the caller).
   const [typingMembers, setTypingMembers] = createSignal<Set<string>>(new Set())
   const typingTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const connection: { generation: number; cleanup?: () => void; retry?: ReturnType<typeof setTimeout> } = {
+    generation: 0,
+  }
 
   const connect = () => {
     const currentGroupID = groupID()
     if (!currentGroupID) return
+    const generation = ++connection.generation
+    connection.cleanup?.()
+    if (connection.retry) clearTimeout(connection.retry)
+    setConnected(false)
+    const current = () => generation === connection.generation && groupID() === currentGroupID
 
     // Construct authenticated WebSocket URL (base URL + directory + auth_token).
     // Browsers can't set headers on WebSocket, so auth travels as a query param
@@ -66,38 +74,42 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
     const socket = new WebSocket(client.webSocketURL(currentGroupID))
 
     socket.onopen = () => {
-      console.log("IM WebSocket connected")
+      if (!current()) return
       setConnected(true)
       setReconnectAttempt(0)
     }
 
     socket.onclose = (event) => {
-      console.log("IM WebSocket disconnected", event.code, event.reason)
+      clearInterval(pingInterval)
+      if (!current()) return
       setConnected(false)
       setWs(null)
 
       // Auto-reconnect with exponential backoff
       if (!event.wasClean) {
         const delay = Math.min(1000 * Math.pow(2, reconnectAttempt()), 30000)
-        console.log(`Reconnecting in ${delay}ms...`)
-        setTimeout(() => {
+        connection.retry = setTimeout(() => {
+          if (!current()) return
           setReconnectAttempt((prev) => prev + 1)
           connect()
         }, delay)
       }
     }
 
-    socket.onerror = (error) => {
-      console.error("IM WebSocket error:", error)
+    socket.onerror = () => {
+      if (!current()) return
+      setConnected(false)
     }
 
     socket.onmessage = (event) => {
+      if (!current()) return
       try {
         const wsEvent = JSON.parse(event.data) as IMWebSocketEvent
 
         switch (wsEvent.type) {
           case "message_created":
-            setMessages((prev) => [...prev, wsEvent.data])
+            if (wsEvent.data.groupID !== currentGroupID) return
+            setMessages((prev) => [...prev.filter((message) => message.id !== wsEvent.data.id), wsEvent.data])
             break
 
           case "message_failed":
@@ -190,8 +202,12 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
     setWs(socket)
 
     // Cleanup function
-    return () => {
+    connection.cleanup = () => {
       clearInterval(pingInterval)
+      socket.onopen = null
+      socket.onclose = null
+      socket.onmessage = null
+      socket.onerror = null
       socket.close()
     }
   }
@@ -211,10 +227,15 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
     for (const timer of typingTimers.values()) clearTimeout(timer)
     typingTimers.clear()
 
-    const cleanup = connect()
+    setReconnectAttempt(0)
+    connect()
 
     onCleanup(() => {
-      cleanup?.()
+      connection.generation++
+      connection.cleanup?.()
+      if (connection.retry) clearTimeout(connection.retry)
+      setConnected(false)
+      setWs(null)
       for (const timer of typingTimers.values()) clearTimeout(timer)
       typingTimers.clear()
     })
@@ -228,10 +249,6 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
   }
 
   const reconnect = () => {
-    const currentWs = ws()
-    if (currentWs) {
-      currentWs.close()
-    }
     setReconnectAttempt(0)
     connect()
   }
