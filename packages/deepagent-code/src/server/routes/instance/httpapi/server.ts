@@ -78,6 +78,8 @@ import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/reposito
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
 import { ServerAgentListProviderLive } from "@/im/agent-executor-server"
 import { IMReplyOutbox } from "@/im/im-reply-outbox"
+import { IMKernelSync } from "@/im/kernel/sync"
+import { KernelConfig } from "@/im/kernel/config"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
@@ -199,6 +201,21 @@ const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provi
 const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
 const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
 const imRepositoryLayer = IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))
+// IM-kernel (B1, design §2/§7): the kernel sync engine (JuggleIM WS ⇄ local sqlite authority).
+// Config comes from env in B1 (PoC direct-connect); B2 replaces it with the /api/im/exchange
+// client. Env absent ⇒ Layer.empty — the single-user path carries zero kernel footprint.
+// Error channel is unknown: providing imRepositoryLayer pulls in Database.defaultLayer, whose
+// bootstrap preflight rejects with unknown (same as every other consumer of imRuntimeLayer).
+const imKernelSyncLayer = Layer.unwrap(
+  Effect.sync((): Layer.Layer<IMKernelSync.Service, unknown> => {
+    const config = KernelConfig.fromEnv()
+    if (!config) return Layer.empty as unknown as Layer.Layer<IMKernelSync.Service, unknown>
+    return IMKernelSync.layerFromConfig(config).pipe(
+      Layer.provide(imRepositoryLayer),
+      Layer.provide(IMBroadcasterLive),
+    )
+  }),
+)
 // V4.0 §D2/§F — Oversight services (read-only projection of the durable V4 substrate). Both need only
 // the Database layer; provided independently to the oversight handler.
 const oversightServicesLayer = Layer.mergeAll(
@@ -223,6 +240,7 @@ const imRuntimeLayer = Layer.mergeAll(
   IMBroadcasterLive,
   ServerAgentListProviderLive,
   IMReplyOutbox.layer.pipe(Layer.provide(imRepositoryLayer), Layer.provide(IMBroadcasterLive)),
+  imKernelSyncLayer,
 )
 // V4.0 §A4/§C — the PRODUCTION event-runtime daemons (EventDispatcher router + tick + retry pump,
 // MultiAgentRuntime DispatchPort, RetentionSweeper). Without this the V4 daemons never start and

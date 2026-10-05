@@ -84,6 +84,7 @@ const repo: IMRepositoryInterface = {
             mentions: input.mentions ?? [],
             metadata: input.metadata ?? null,
             replyToID: null,
+            kernelMsgID: null,
             createdAt: Date.now(),
             updatedAt: Date.now(),
             deletedAt: null,
@@ -94,6 +95,15 @@ const repo: IMRepositoryInterface = {
   createAttachment: () => Effect.die("unused"),
   getAttachment: () => Effect.die("unused"),
   listAttachments: () => Effect.die("unused"),
+  getGroupByKernelConvID: () => Effect.die("unused"),
+  getGroupByID: () => Effect.die("unused"),
+  bindKernelConversation: () => Effect.die("unused"),
+  getMessageByKernelMsgID: () => Effect.die("unused"),
+  setMessageKernelMsgID: () => Effect.die("unused"),
+  listPendingKernelMessages: () => Effect.die("unused"),
+  listKernelBoundGroups: Effect.die("unused"),
+  getSyncCursor: () => Effect.die("unused"),
+  upsertSyncCursor: () => Effect.die("unused"),
 }
 const broadcasts: Array<{ groupID: string; type: string }> = []
 const broadcaster = {

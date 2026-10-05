@@ -170,6 +170,15 @@ describe("SecurityResolvers.actorHasWorkspacePermission — lookup error fails c
       createAttachment: err,
       getAttachment: err,
       listAttachments: err,
+      getGroupByKernelConvID: err,
+      getGroupByID: err,
+      bindKernelConversation: err,
+      getMessageByKernelMsgID: err,
+      setMessageKernelMsgID: err,
+      listPendingKernelMessages: err,
+      listKernelBoundGroups: err(),
+      getSyncCursor: err,
+      upsertSyncCursor: err,
     }),
   )
 

@@ -107,6 +107,11 @@ export const GroupTable = sqliteTable(
     type: text().$type<GroupType>().notNull(),
     name: text().notNull(),
     created_by: text().notNull(),
+    // IM-kernel conversation binding (JuggleIM B1): `k:<channel_type>:<id>` — channel_type 1 (private)
+    // holds the counterparty's kernel user id, 2 (group) the kernel group id. NULL for local-only
+    // groups (e.g. "我的 Agent"). SQLite treats NULLs as distinct in a unique index, so any number of
+    // unbound groups coexist.
+    kernel_conv_id: text(),
     created_at: integer().notNull().$default(() => Date.now()),
     updated_at: integer().notNull().$onUpdate(() => Date.now()),
     deleted_at: integer(),
@@ -114,6 +119,7 @@ export const GroupTable = sqliteTable(
   (table) => [
     index("im_groups_workspace_idx").on(table.workspace_id),
     index("im_groups_project_idx").on(table.project_id),
+    uniqueIndex("idx_im_groups_kernel_conv").on(table.kernel_conv_id),
   ],
 )
 
@@ -160,6 +166,12 @@ export const MessageTable = sqliteTable(
     // V4.0 §B4 — delivery lifecycle for event-driven messages: pending | delivered | failed. NULL ⇒
     // the legacy synchronous path (no delivery tracking). Nullable for V3.8 compatibility.
     delivery_status: text().$type<"pending" | "delivered" | "failed">(),
+    // IM-kernel dedup/identity key (JuggleIM B1): the kernel-assigned message id from the send ack
+    // (or from an inbound kernel push). NULL ⇒ the message never reached the kernel (locally
+    // persisted pending send, or a local-only group). At-least-once delivery + this unique index =
+    // exactly-once local persistence: an inbound redelivery whose kernel id already has a row is a
+    // no-op. SQLite admits any number of NULLs in a unique index.
+    kernel_msg_id: text(),
     created_at: integer().notNull().$default(() => Date.now()),
     updated_at: integer().notNull().$onUpdate(() => Date.now()),
     deleted_at: integer(),
@@ -172,8 +184,23 @@ export const MessageTable = sqliteTable(
     // V4.0 §B4 — thread pagination (reply_to_id chains) + event linkage lookups.
     index("idx_im_messages_thread").on(table.group_id, table.reply_to_id, table.created_at),
     index("idx_im_messages_event").on(table.event_id),
+    uniqueIndex("idx_im_messages_kernel_msg").on(table.kernel_msg_id),
   ],
 )
+
+// IM-kernel sync cursors (JuggleIM B1): per-kernel-conversation high-water marks for the offline
+// catch-up pass. `conversation_id` is the kernel conversation key (`k:<channel_type>:<id>`, the same
+// convention as im_groups.kernel_conv_id). `last_sync_time` is the newest kernel msgTime (ms)
+// persisted locally; the hismsgs backstop pages BACKWARD from the TTL window and stops once it hits
+// rows at or below this watermark (kernel WS sync queue only covers the recent window, so hismsgs is
+// the 72h catch-up channel). `last_sync_seq` reserves the kernel monotonic per-conversation sequence
+// for gap detection; NULL when the kernel did not supply one.
+export const SyncCursorTable = sqliteTable("im_sync_cursors", {
+  conversation_id: text().primaryKey(),
+  last_sync_time: integer().notNull().$default(() => 0),
+  last_sync_seq: integer(),
+  updated_at: integer().notNull().$onUpdate(() => Date.now()),
+})
 
 // V4.0 §B3/§B4 schema: im_attachments
 //

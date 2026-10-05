@@ -15,6 +15,7 @@ import type { IMBroadcaster } from "@deepagent-code/core/im/websocket"
 import { contentDigest } from "@deepagent-code/core/contract/digest"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { IMAgentExecution } from "./im-agent-execution"
+import { IMKernelSync } from "@/im/kernel/sync"
 import * as Log from "@deepagent-code/core/util/log"
 
 // V2 IM durable-only migration — the REPLY half of the slice. The terminal assistant reply of a
@@ -341,6 +342,9 @@ export interface DeliveryDeps {
   readonly db: Database.Interface["db"]
   readonly repo: IMRepositoryInterface
   readonly broadcaster: IMBroadcaster
+  // IM-kernel (B1): when present, a delivered reply bound to a kernel conversation is also
+  // forwarded to the kernel (best-effort — the sync engine owns ack write-back and pending retry).
+  readonly kernelSync?: IMKernelSync.Interface
 }
 
 /** The delivery side effect: persist the reply as a real agent IM message + broadcast it (the same
@@ -372,6 +376,8 @@ export function deliverReply(deps: DeliveryDeps, item: ClaimedReply) {
         updatedAt: message.updatedAt,
       },
     })
+    if (deps.kernelSync)
+      yield* deps.kernelSync.send({ groupID: item.groupID, messageID: message.id, content: item.replyText })
     return message
   })
 }
@@ -431,8 +437,9 @@ export const layer = Layer.effectDiscard(
     const repo = yield* IMRepository
     const broadcaster = yield* IMBroadcasterService
     const events = Option.getOrUndefined(yield* Effect.serviceOption(EventV2Bridge.Service))
+    const kernelSync = Option.getOrUndefined(yield* Effect.serviceOption(IMKernelSync.Service))
     const deps = { db, v2Session }
-    const delivery = { db, repo, broadcaster }
+    const delivery: DeliveryDeps = { db, repo, broadcaster, ...(kernelSync ? { kernelSync } : {}) }
     // The listener callback runs with R = never (EventV2.Listener), so the drain fiber is forked
     // into THIS layer's scope explicitly — post-commit collect+drain never delays the publisher.
     const scope = yield* Effect.scope

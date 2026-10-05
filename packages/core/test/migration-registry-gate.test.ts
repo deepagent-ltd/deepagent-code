@@ -78,7 +78,10 @@ import { migrations } from "../src/database/migration.gen"
 // registry appended exactly these nine ordered identities and body hashes.
 // X-08 request-identity hardening adds one nullable, immutable im_send request fingerprint
 // column; the 203-entry ordered registry is re-pinned after its fresh-apply oracle passed.
-const PINNED_DIGEST = "abf2cd4f393ede8c19eaca8db1f3108dcd2dc04b1ad0041dd9fcb1f5b9a8873e"
+// Successor pin (2026-10-05, JuggleIM B1): the im_kernel_sync migration joined the registry
+// (im_messages.kernel_msg_id + im_groups.kernel_conv_id unique-indexed dedup/binding columns and
+// the im_sync_cursors high-water table); `migration --check` green at re-pin time.
+const PINNED_DIGEST = "8f1195e3daed2437d0a4fda840eb247d3ca053b487236f3eb71682898af524fc"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

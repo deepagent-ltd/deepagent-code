@@ -1655,6 +1655,38 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     reachability: "im-websocket",
     verdict: "safe_bounded",
   },
+  // JuggleIM B1 kernel client (2026-10-05): liveInstances is the process-singleton guard counter for
+  // the websdk live layer (the SDK's dedup watermark is bundle-global) — 0|1, incremented at layer
+  // build and decremented by the layer finalizer (kernel/sdk.ts). The two FetchXHR entries are
+  // per-request browser-shim state (kernel/shims.ts): upload is the SDK-visible progress stub on the
+  // XHR instance; controller is the per-send AbortController, settled/aborted with the request.
+  "packages/deepagent-code/src/im/kernel/sdk.ts:liveInstances": {
+    owner: "KernelSdk.live-layer-guard",
+    keyScope: "process",
+    bound: "max-one-live-instance",
+    finalizer: "layer-finalizer-decrement",
+    durability: "singleton-guard-only",
+    reachability: "im-kernel",
+    verdict: "safe_bounded",
+  },
+  "packages/deepagent-code/src/im/kernel/shims.ts:FetchXHR.upload@64": {
+    owner: "FetchXHR.instance",
+    keyScope: "per-request",
+    bound: "request-lifetime",
+    finalizer: "request-settle-gc",
+    durability: "browser-shim-only",
+    reachability: "im-kernel",
+    verdict: "safe_scoped",
+  },
+  "packages/deepagent-code/src/im/kernel/shims.ts:send@83:84.controller": {
+    owner: "FetchXHR.send-invocation",
+    keyScope: "single-call",
+    bound: "request-duration",
+    finalizer: "request-settle-or-abort",
+    durability: "browser-shim-only",
+    reachability: "im-kernel",
+    verdict: "safe_scoped",
+  },
   "packages/core/src/util/effect-flock.ts:closure@99:104.ensuredDirs": {
     owner: "EffectFlock.process",
     keyScope: "lock-root-constant",

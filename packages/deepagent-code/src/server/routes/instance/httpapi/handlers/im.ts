@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import nodeFs from "node:fs/promises"
 import { Global } from "@deepagent-code/core/global"
@@ -28,6 +28,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { RateLimiter } from "@deepagent-code/core/deepagent/rate-limiter"
 import { defaultMentionReceiptPort, resolveMentioned } from "@/session/event-dispatcher"
 import { IMAgentExecution } from "@/im/im-agent-execution"
+import { IMKernelSync } from "@/im/kernel/sync"
 import { boundedPositiveInteger } from "./im-config"
 
 const IMAttachmentID = IMID.AttachmentID
@@ -102,6 +103,8 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
     // session_input per (message, agent), stable session per (group, agent)); the terminal reply
     // returns through the im_reply_outbox daemon, not a fire-and-forget fork.
     const v2Session = yield* SessionV2.Service
+    // IM-kernel (B1): absent ⇒ kernel integration off (single-user path untouched).
+    const kernelSync = Option.getOrUndefined(yield* Effect.serviceOption(IMKernelSync.Service))
 
     return handlers
       .handle("listGroups", ({ query }) =>
@@ -344,6 +347,14 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                   }),
                 ),
               )
+
+            // ── IM-kernel (B1): forward the locally persisted text to the kernel ──────────────────
+            // Best-effort and non-blocking: the local row IS the authoritative copy (design §2);
+            // the sync engine owns the kernel send, ack write-back (kernel_msg_id), and pending
+            // retry. B1 kernel path is text-only; other types stay purely local.
+            if (kernelSync && payload.type === "text") {
+              yield* kernelSync.send({ groupID: groupId, messageID: message.id, content: payload.content })
+            }
 
             // ── V2 IM durable-only: mention admission ────────────────────────────────────────────
             // Exactly ONE durable SessionV2 admission per mentioned agent, performed synchronously in

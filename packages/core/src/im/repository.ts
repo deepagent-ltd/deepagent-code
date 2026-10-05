@@ -1,8 +1,8 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { and, asc, desc, eq, gt, isNull, like, lt, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, isNotNull, isNull, like, lt, or, sql } from "drizzle-orm"
 import { Database } from "../database/database"
 import * as IMID from "./id"
-import { AttachmentTable, GroupTable, MemberTable, MessageTable, GroupType, MemberType, MemberRole, SenderType, MessageType, MessageMetadata } from "./sql"
+import { AttachmentTable, GroupTable, MemberTable, MessageTable, SyncCursorTable, GroupType, MemberType, MemberRole, SenderType, MessageType, MessageMetadata } from "./sql"
 
 // Repository errors
 export class IMRepositoryError extends Schema.ErrorClass<IMRepositoryError>("IMRepositoryError")({
@@ -20,6 +20,7 @@ export const IMGroup = Schema.Struct({
   type: Schema.String,
   name: Schema.String,
   createdBy: Schema.String,
+  kernelConvID: Schema.NullOr(Schema.String),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
   deletedAt: Schema.NullOr(Schema.Number),
@@ -36,6 +37,7 @@ export const IMMessage = Schema.Struct({
   mentions: Schema.NullOr(Schema.Array(Schema.String)),
   metadata: Schema.NullOr(Schema.Unknown),
   replyToID: Schema.NullOr(Schema.String),
+  kernelMsgID: Schema.NullOr(Schema.String),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
   deletedAt: Schema.NullOr(Schema.Number),
@@ -75,6 +77,15 @@ export const IMAttachment = Schema.Struct({
   deletedAt: Schema.NullOr(Schema.Number),
 })
 export type IMAttachment = typeof IMAttachment.Type
+
+// IM-kernel sync cursor (JuggleIM B1): per-conversation high-water mark, see SyncCursorTable.
+export const IMSyncCursor = Schema.Struct({
+  conversationID: Schema.String,
+  lastSyncTime: Schema.Number,
+  lastSyncSeq: Schema.NullOr(Schema.Number),
+  updatedAt: Schema.Number,
+})
+export type IMSyncCursor = typeof IMSyncCursor.Type
 
 // §B3 composite (created_at, id) keyset cursor for ASC-ordered scans (thread + search). Encoded as
 // `<createdAt>_<id>` so the tie-break is stable when many rows share a millisecond. Parsing is total:
@@ -129,6 +140,7 @@ const mapMessageRow = (m: {
   mentions: readonly string[] | null
   metadata: unknown
   reply_to_id: string | null
+  kernel_msg_id: string | null
   created_at: number
   updated_at: number
   deleted_at: number | null
@@ -142,6 +154,7 @@ const mapMessageRow = (m: {
   mentions: m.mentions ?? null,
   metadata: m.metadata ?? null,
   replyToID: m.reply_to_id ?? null,
+  kernelMsgID: m.kernel_msg_id ?? null,
   createdAt: m.created_at,
   updatedAt: m.updated_at,
   deletedAt: m.deleted_at ?? null,
@@ -230,6 +243,39 @@ export interface CreateMessageInput {
   mentions?: string[]
   metadata?: MessageMetadata
   replyToID?: string
+  // IM-kernel (JuggleIM B1): set for inbound kernel messages at insert time (dedup identity) and
+  // left unset for locally authored sends (written back on kernel ack via setMessageKernelMsgID).
+  kernelMsgID?: string
+  // Authoritative timestamp override — inbound kernel messages carry the kernel msgTime so local
+  // pagination reflects sender-side ordering; omitted ⇒ insertion time (Date.now()).
+  createdAt?: number
+}
+
+export interface BindKernelConversationInput {
+  groupID: string
+  // Kernel conversation key `k:<channel_type>:<id>`; pass null to unbind (B2 rebind flows).
+  kernelConvID: string | null
+}
+
+export interface SetMessageKernelMsgIDInput {
+  messageID: string
+  kernelMsgID: string
+}
+
+export interface ListPendingKernelMessagesInput {
+  limit: number
+}
+
+// A pending kernel send joined with its group's kernel conversation binding (the drain's work unit).
+export interface IMPendingKernelMessage {
+  readonly message: IMMessage
+  readonly kernelConvID: string
+}
+
+export interface UpsertSyncCursorInput {
+  conversationID: string
+  lastSyncTime: number
+  lastSyncSeq?: number
 }
 
 export interface ListGroupsInput {
@@ -285,6 +331,28 @@ export interface IMRepositoryInterface {
   readonly createAttachment: (input: CreateAttachmentInput) => Effect.Effect<IMAttachment, IMRepositoryError, never>
   readonly getAttachment: (attachmentID: string) => Effect.Effect<IMAttachment | undefined, IMRepositoryError, never>
   readonly listAttachments: (input: ListAttachmentsInput) => Effect.Effect<IMAttachment[], IMRepositoryError, never>
+  // IM-kernel (JuggleIM B1) — conversation binding + message dedup/ack + sync high-water marks.
+  // getGroupByKernelConvID is an INTERNAL lookup (no membership check; the kernel sync engine owns
+  // admission), unlike getGroup which enforces caller membership.
+  readonly getGroupByKernelConvID: (kernelConvID: string) => Effect.Effect<IMGroup | undefined, IMRepositoryError, never>
+  // INTERNAL plain group fetch (no membership check) — the kernel send path resolves a group's
+  // kernel binding from a message's groupID without an acting user.
+  readonly getGroupByID: (groupID: string) => Effect.Effect<IMGroup | undefined, IMRepositoryError, never>
+  readonly bindKernelConversation: (input: BindKernelConversationInput) => Effect.Effect<void, IMRepositoryError, never>
+  readonly getMessageByKernelMsgID: (kernelMsgID: string) => Effect.Effect<IMMessage | undefined, IMRepositoryError, never>
+  // Write the kernel ack's message id onto a locally authored row. Returns false when the row is
+  // gone (or already carries a different kernel id — the unique index refuses the update).
+  readonly setMessageKernelMsgID: (input: SetMessageKernelMsgIDInput) => Effect.Effect<boolean, IMRepositoryError, never>
+  // Locally authored text rows in kernel-bound groups still awaiting their kernel ack
+  // (kernel_msg_id IS NULL), oldest first — the pending-send drain's worklist.
+  readonly listPendingKernelMessages: (input: ListPendingKernelMessagesInput) => Effect.Effect<IMPendingKernelMessage[], IMRepositoryError, never>
+  // All groups bound to a kernel conversation (internal: the kernel catch-up pass iterates these;
+  // no membership check — the sync engine is process-global, not per-user).
+  readonly listKernelBoundGroups: Effect.Effect<IMGroup[], IMRepositoryError, never>
+  readonly getSyncCursor: (conversationID: string) => Effect.Effect<IMSyncCursor | undefined, IMRepositoryError, never>
+  // Monotonic: lastSyncTime only ever advances (an out-of-order/late redelivery never regresses the
+  // watermark the hismsgs catch-up pass stops at).
+  readonly upsertSyncCursor: (input: UpsertSyncCursorInput) => Effect.Effect<void, IMRepositoryError, never>
   // Note: listAgents removed - use AgentListProviderService instead
 }
 
@@ -341,6 +409,7 @@ export const IMRepositoryLive = Layer.effect(
             type: g.type,
             name: g.name,
             createdBy: g.created_by,
+            kernelConvID: g.kernel_conv_id ?? null,
             createdAt: g.created_at,
             updatedAt: g.updated_at,
             deletedAt: g.deleted_at ?? null,
@@ -395,6 +464,7 @@ export const IMRepositoryLive = Layer.effect(
             type: input.type,
             name: input.name,
             createdBy: input.createdBy,
+            kernelConvID: null,
             createdAt: now,
             updatedAt: now,
             deletedAt: null,
@@ -474,6 +544,7 @@ export const IMRepositoryLive = Layer.effect(
                 type: g.type,
                 name: g.name,
                 createdBy: g.created_by,
+                kernelConvID: g.kernel_conv_id ?? null,
                 createdAt: g.created_at,
                 updatedAt: g.updated_at,
                 deletedAt: g.deleted_at ?? null,
@@ -516,6 +587,7 @@ export const IMRepositoryLive = Layer.effect(
             type: "direct",
             name,
             createdBy: input.createdBy,
+            kernelConvID: null,
             createdAt: now,
             updatedAt: now,
             deletedAt: null,
@@ -555,6 +627,7 @@ export const IMRepositoryLive = Layer.effect(
             type: group.type,
             name: group.name,
             createdBy: group.created_by,
+            kernelConvID: group.kernel_conv_id ?? null,
             createdAt: group.created_at,
             updatedAt: group.updated_at,
             deletedAt: group.deleted_at ?? null,
@@ -624,6 +697,7 @@ export const IMRepositoryLive = Layer.effect(
               mentions: m.mentions ?? null,
               metadata: m.metadata ?? null,
               replyToID: m.reply_to_id ?? null,
+              kernelMsgID: m.kernel_msg_id ?? null,
               createdAt: m.created_at,
               updatedAt: m.updated_at,
               deletedAt: m.deleted_at ?? null,
@@ -754,6 +828,7 @@ export const IMRepositoryLive = Layer.effect(
         Effect.gen(function* () {
           const id = IMID.MessageID.create()
           const now = Date.now()
+          const createdAt = input.createdAt ?? now
 
           // Deduplicate mentions
           const mentions = input.mentions ? Array.from(new Set(input.mentions)) : null
@@ -768,7 +843,8 @@ export const IMRepositoryLive = Layer.effect(
             mentions,
             metadata: input.metadata ?? null,
             reply_to_id: (input.replyToID as IMID.MessageID | undefined) ?? null,
-            created_at: now,
+            kernel_msg_id: input.kernelMsgID ?? null,
+            created_at: createdAt,
             updated_at: now,
             deleted_at: null,
           }).pipe(Effect.mapError(dbError("Database operation failed")))
@@ -783,7 +859,8 @@ export const IMRepositoryLive = Layer.effect(
             mentions,
             metadata: input.metadata ?? null,
             replyToID: input.replyToID ?? null,
-            createdAt: now,
+            kernelMsgID: input.kernelMsgID ?? null,
+            createdAt,
             updatedAt: now,
             deletedAt: null,
           }
@@ -810,6 +887,7 @@ export const IMRepositoryLive = Layer.effect(
             mentions: message.mentions ?? null,
             metadata: message.metadata ?? null,
             replyToID: message.reply_to_id ?? null,
+            kernelMsgID: message.kernel_msg_id ?? null,
             createdAt: message.created_at,
             updatedAt: message.updated_at,
             deletedAt: message.deleted_at ?? null,
@@ -905,6 +983,179 @@ export const IMRepositoryLive = Layer.effect(
             .pipe(Effect.mapError(dbError("Database operation failed")))
 
           return rows.map(mapAttachmentRow)
+        }),
+
+      getGroupByKernelConvID: (kernelConvID) =>
+        Effect.gen(function* () {
+          const group = yield* db
+            .select()
+            .from(GroupTable)
+            .where(and(eq(GroupTable.kernel_conv_id, kernelConvID), isNull(GroupTable.deleted_at)))
+            .get()
+            .pipe(Effect.mapError(dbError("Database operation failed")))
+
+          if (!group) return undefined
+          return {
+            id: group.id,
+            workspaceID: group.workspace_id,
+            projectID: group.project_id ?? null,
+            type: group.type,
+            name: group.name,
+            createdBy: group.created_by,
+            kernelConvID: group.kernel_conv_id ?? null,
+            createdAt: group.created_at,
+            updatedAt: group.updated_at,
+            deletedAt: group.deleted_at ?? null,
+          }
+        }),
+
+      bindKernelConversation: (input) =>
+        Effect.gen(function* () {
+          yield* db
+            .update(GroupTable)
+            .set({ kernel_conv_id: input.kernelConvID })
+            .where(and(eq(GroupTable.id, input.groupID as IMID.GroupID), isNull(GroupTable.deleted_at)))
+            .pipe(Effect.mapError(dbError("Database operation failed")))
+        }),
+
+      getGroupByID: (groupID) =>
+        Effect.gen(function* () {
+          const group = yield* db
+            .select()
+            .from(GroupTable)
+            .where(and(eq(GroupTable.id, groupID as IMID.GroupID), isNull(GroupTable.deleted_at)))
+            .get()
+            .pipe(Effect.mapError(dbError("Database operation failed")))
+
+          if (!group) return undefined
+          return {
+            id: group.id,
+            workspaceID: group.workspace_id,
+            projectID: group.project_id ?? null,
+            type: group.type,
+            name: group.name,
+            createdBy: group.created_by,
+            kernelConvID: group.kernel_conv_id ?? null,
+            createdAt: group.created_at,
+            updatedAt: group.updated_at,
+            deletedAt: group.deleted_at ?? null,
+          }
+        }),
+
+      getMessageByKernelMsgID: (kernelMsgID) =>
+        Effect.gen(function* () {
+          const row = yield* db
+            .select()
+            .from(MessageTable)
+            .where(and(eq(MessageTable.kernel_msg_id, kernelMsgID), isNull(MessageTable.deleted_at)))
+            .get()
+            .pipe(Effect.mapError(dbError("Database operation failed")))
+          return row ? mapMessageRow(row) : undefined
+        }),
+
+      setMessageKernelMsgID: (input) =>
+        Effect.gen(function* () {
+          // Only fill a still-NULL kernel id: overwriting an acked row (or a row the inbound
+          // dedup already wrote) would break the at-least-once identity, and the unique index is
+          // the backstop if two writers race the same kernel id.
+          const updated = yield* db
+            .update(MessageTable)
+            .set({ kernel_msg_id: input.kernelMsgID })
+            .where(and(eq(MessageTable.id, input.messageID as IMID.MessageID), isNull(MessageTable.kernel_msg_id)))
+            .returning({ id: MessageTable.id })
+            .get()
+            .pipe(Effect.mapError(dbError("Database operation failed")))
+          return updated !== undefined
+        }),
+
+      listPendingKernelMessages: (input) =>
+        Effect.gen(function* () {
+          // Pending = locally authored, never-acked text/agent rows in a kernel-bound group. System
+          // rows and non-text types stay local in B1 (the kernel path is text-only).
+          const rows = yield* db
+            .select({ message: MessageTable, kernel_conv_id: GroupTable.kernel_conv_id })
+            .from(MessageTable)
+            .innerJoin(
+              GroupTable,
+              and(eq(GroupTable.id, MessageTable.group_id), isNotNull(GroupTable.kernel_conv_id)),
+            )
+            .where(
+              and(
+                isNull(MessageTable.kernel_msg_id),
+                isNull(MessageTable.deleted_at),
+                isNull(GroupTable.deleted_at),
+                eq(MessageTable.type, "text"),
+                or(eq(MessageTable.sender_type, "user"), eq(MessageTable.sender_type, "agent")),
+              ),
+            )
+            .orderBy(asc(MessageTable.created_at), asc(MessageTable.id))
+            .limit(input.limit)
+            .all()
+            .pipe(Effect.mapError(dbError("Database operation failed")))
+          return rows.flatMap((row) =>
+            row.kernel_conv_id === null ? [] : [{ message: mapMessageRow(row.message), kernelConvID: row.kernel_conv_id }],
+          )
+        }),
+
+      listKernelBoundGroups:
+        Effect.gen(function* () {
+          const rows = yield* db
+            .select()
+            .from(GroupTable)
+            .where(and(isNotNull(GroupTable.kernel_conv_id), isNull(GroupTable.deleted_at)))
+            .all()
+            .pipe(Effect.mapError(dbError("Database operation failed")))
+          return rows.map((group) => ({
+            id: group.id,
+            workspaceID: group.workspace_id,
+            projectID: group.project_id ?? null,
+            type: group.type,
+            name: group.name,
+            createdBy: group.created_by,
+            kernelConvID: group.kernel_conv_id ?? null,
+            createdAt: group.created_at,
+            updatedAt: group.updated_at,
+            deletedAt: group.deleted_at ?? null,
+          }))
+        }),
+
+      getSyncCursor: (conversationID) =>
+        Effect.gen(function* () {
+          const row = yield* db
+            .select()
+            .from(SyncCursorTable)
+            .where(eq(SyncCursorTable.conversation_id, conversationID))
+            .get()
+            .pipe(Effect.mapError(dbError("Database operation failed")))
+          if (!row) return undefined
+          return {
+            conversationID: row.conversation_id,
+            lastSyncTime: row.last_sync_time,
+            lastSyncSeq: row.last_sync_seq ?? null,
+            updatedAt: row.updated_at,
+          }
+        }),
+
+      upsertSyncCursor: (input) =>
+        Effect.gen(function* () {
+          const now = Date.now()
+          yield* db
+            .insert(SyncCursorTable)
+            .values({
+              conversation_id: input.conversationID,
+              last_sync_time: input.lastSyncTime,
+              last_sync_seq: input.lastSyncSeq ?? null,
+              updated_at: now,
+            })
+            .onConflictDoUpdate({
+              target: SyncCursorTable.conversation_id,
+              set: {
+                last_sync_time: sql`max(${SyncCursorTable.last_sync_time}, ${input.lastSyncTime})`,
+                last_sync_seq: sql`coalesce(${input.lastSyncSeq ?? null}, ${SyncCursorTable.last_sync_seq})`,
+                updated_at: now,
+              },
+            })
+            .pipe(Effect.mapError(dbError("Database operation failed")))
         }),
     })
   }),

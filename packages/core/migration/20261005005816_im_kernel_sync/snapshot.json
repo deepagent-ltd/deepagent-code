@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "32cdd5c2-2f4e-42fe-af1e-69541bc34a51",
+  "id": "9a3f1f5f-ddd1-4792-ba65-05553640dba5",
   "prevIds": [
-    "6797979b-83e3-5b9f-a1fb-a4bc4ebac885"
+    "32cdd5c2-2f4e-42fe-af1e-69541bc34a51"
   ],
   "ddl": [
     {
@@ -308,6 +308,10 @@
     },
     {
       "name": "im_messages",
+      "entityType": "tables"
+    },
+    {
+      "name": "im_sync_cursors",
       "entityType": "tables"
     },
     {
@@ -8523,6 +8527,16 @@
       "table": "im_groups"
     },
     {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kernel_conv_id",
+      "entityType": "columns",
+      "table": "im_groups"
+    },
+    {
       "type": "integer",
       "notNull": true,
       "autoincrement": false,
@@ -8723,6 +8737,16 @@
       "table": "im_messages"
     },
     {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kernel_msg_id",
+      "entityType": "columns",
+      "table": "im_messages"
+    },
+    {
       "type": "integer",
       "notNull": true,
       "autoincrement": false,
@@ -8751,6 +8775,46 @@
       "name": "deleted_at",
       "entityType": "columns",
       "table": "im_messages"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "conversation_id",
+      "entityType": "columns",
+      "table": "im_sync_cursors"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_sync_time",
+      "entityType": "columns",
+      "table": "im_sync_cursors"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_sync_seq",
+      "entityType": "columns",
+      "table": "im_sync_cursors"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "im_sync_cursors"
     },
     {
       "type": "integer",
@@ -16032,6 +16096,15 @@
     },
     {
       "columns": [
+        "conversation_id"
+      ],
+      "nameExplicit": false,
+      "name": "im_sync_cursors_pk",
+      "table": "im_sync_cursors",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "event_seq"
       ],
       "nameExplicit": false,
@@ -18071,6 +18144,20 @@
     {
       "columns": [
         {
+          "value": "kernel_conv_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_im_groups_kernel_conv",
+      "entityType": "indexes",
+      "table": "im_groups"
+    },
+    {
+      "columns": [
+        {
           "value": "group_id",
           "isExpression": false
         },
@@ -18167,6 +18254,20 @@
       "where": null,
       "origin": "manual",
       "name": "idx_im_messages_event",
+      "entityType": "indexes",
+      "table": "im_messages"
+    },
+    {
+      "columns": [
+        {
+          "value": "kernel_msg_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_im_messages_kernel_msg",
       "entityType": "indexes",
       "table": "im_messages"
     },
