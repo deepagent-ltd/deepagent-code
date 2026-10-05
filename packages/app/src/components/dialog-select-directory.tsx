@@ -200,6 +200,17 @@ function useDirectorySearch(args: { sdk: ServerSDK; start: () => string | undefi
       return results.map((rel) => joinPath(scopedInput.directory, rel)).slice(0, 50)
     }
 
+    // An absolute path already identifies its parent. Starting a project instance at `/`
+    // is deliberately forbidden by the server, so do not traverse through it to open a known path.
+    if (modeOf(raw) === "absolute") {
+      const parent = raw.endsWith("/") ? trimTrailing(raw) : parentOf(raw)
+      if (parent !== rootOf(raw)) {
+        const matches = await match(parent, raw.endsWith("/") ? "" : getFilename(raw), 50)
+        if (!active()) return []
+        if (matches.length) return matches
+      }
+    }
+
     const segments = query.replace(/^\/+/, "").split("/")
     const head = segments.slice(0, segments.length - 1).filter((x) => x && x !== ".")
     const tail = segments[segments.length - 1] ?? ""
