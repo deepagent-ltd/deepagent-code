@@ -145,7 +145,8 @@ export const dict = {
   "dialog.provider.deepagent-code.note": "Connect with an DeepAgent Code API key",
   "dialog.provider.deepagent-code.tagline": "DeepAgent Code managed model gateway",
   "dialog.provider.deepseek.note": "DeepSeek models via API key",
-  "dialog.provider.deepagent.note": "DeepAgent API — our own official gateway. One key for GPT-5.6, Claude 5, Grok, Gemini, DeepSeek, Qwen, GLM and Kimi models (OpenAI + Anthropic compatible). Get a key at https://api.deepagent.ltd",
+  "dialog.provider.deepagent.note":
+    "DeepAgent API — our own official gateway. One key for GPT-5.6, Claude 5, Grok, Gemini, DeepSeek, Qwen, GLM and Kimi models (OpenAI + Anthropic compatible). Get a key at https://api.deepagent.ltd",
   "dialog.provider.zhipuai.note": "GLM models from Zhipu AI via API key",
   "dialog.provider.zhipuai-coding-plan.note": "GLM Coding Plan subscription from Zhipu AI via API key",
   "dialog.provider.zai.note": "GLM models from Z.AI via API key",
@@ -418,7 +419,8 @@ export const dict = {
   "composer.goal.editPlan.save": "Apply changes",
   "composer.goal.editPlan.confirm": "Confirm replacement",
   "composer.goal.editPlan.cancel": "Cancel",
-  "composer.goal.editPlan.challenge": "This revision removes substantial plan detail. Confirm that the current plan should be replaced.",
+  "composer.goal.editPlan.challenge":
+    "This revision removes substantial plan detail. Confirm that the current plan should be replaced.",
   "composer.goal.editPlan.saved": "Plan updated — takes effect next tick",
   "composer.goal.editPlan.failed": "Couldn't update the plan (goal not running?)",
   "composer.goal.editPlan.status.pending": "Pending",
@@ -785,15 +787,21 @@ export const dict = {
   "im.facade.name.error.too_long": "Name is too long (max 20 characters)",
   "im.facade.name.error.invalid_chars": "Only CJK characters, letters, and digits are allowed",
   "im.facade.blocked.title": "IM is unavailable",
+  "im.facade.status.failed": "Unable to check your IM connection. Check the server connection and retry.",
+  "im.group.load.failed": "Unable to load conversations. Retry to refresh the list.",
+  "im.search.messages": "Search messages",
+  "im.direct.create": "New direct message",
+  "im.facade.blocked.recovery":
+    "In the platform console, create a replacement key and choose to inherit this IM identity. Then update your local key and retry. Your identity and conversation history are preserved.",
   "im.facade.retry": "Retry",
   "im.facade.retrying": "Retrying…",
   "im.facade.identity.uuid": "ID {{uuid}}",
   "im.facade.identity.rename": "Rename",
   "im.facade.identity.rename.placeholder": "New display name",
-  "im.facade.identity.rebind": "Recover with a new key",
-  "im.facade.rebind.title": "Recover IM identity with a new key",
+  "im.facade.identity.rebind": "Change key",
+  "im.facade.rebind.title": "Move IM identity to a new key",
   "im.facade.rebind.description":
-    "Move your IM identity to a new server key. The new key must belong to the same organization and must not be bound to another identity.",
+    "Your current key must still be valid. The new key must belong to the same organization and have no identity. Restore disabled identities through inheritance in the platform console.",
   "im.facade.rebind.placeholder": "sk-…",
   "im.facade.rebind.submit": "Rebind",
   "im.facade.kernel.connecting": "Kernel connecting",
@@ -805,7 +813,9 @@ export const dict = {
   "im.facade.badge.kernel": "Kernel",
   "im.facade.direct.placeholder": "Directory name, press Enter",
   "im.facade.group.members.placeholder": "Member names, Enter to add each",
-  "im.facade.group.members.hint": "Members are resolved against the org directory one by one.",
+  "im.facade.group.members.hint": "Add each member from the organization directory before creating the group.",
+  "im.facade.group.members.add": "Add member",
+  "im.facade.group.members.remove": "Remove {{name}}",
   "im.facade.invite": "Invite",
   "im.facade.invite.placeholder": "Directory name to invite",
   "im.facade.invite.success": "Invited {{name}}",
@@ -814,7 +824,7 @@ export const dict = {
   "im.facade.error.im_identity_disabled": "This IM identity has been disabled",
   "im.facade.error.im_invalid_name": "The name does not satisfy the naming rules",
   "im.facade.error.im_name_taken": "That name is already taken in your organization",
-  "im.facade.error.im_key_invalid": "The IM key is invalid — recover with a new key",
+  "im.facade.error.im_key_invalid": "The IM key is invalid or has expired",
   "im.facade.error.im_cross_org": "The target belongs to another organization",
   "im.facade.error.im_key_already_bound": "The new key is already bound to another IM identity",
   "im.facade.error.im_not_found": "No such name in the organization directory",
@@ -867,7 +877,7 @@ export const dict = {
   "fileTree.pasteFailed": "Failed to paste",
   "fileTree.deleted": "Deleted",
   "fileTree.deleteFailed": "Failed to delete",
-  "fileTree.deleteConfirm": "Are you sure you want to delete \"{name}\"?",
+  "fileTree.deleteConfirm": 'Are you sure you want to delete "{name}"?',
   "fileTree.renamed": "Renamed",
   "fileTree.renameFailed": "Failed to rename",
   "fileTree.archive": "Compress to ZIP",
@@ -1081,7 +1091,8 @@ export const dict = {
   "session.bundle.export.cancel": "Cancel",
   "session.bundle.export.success": "Session ZIP exported",
   "settings.import.bundle.file": "Session bundle",
-  "settings.import.bundle.file.hint": "Choose a session ZIP (.zip) or legacy snapshot (.json). Imports are read-only archives.",
+  "settings.import.bundle.file.hint":
+    "Choose a session ZIP (.zip) or legacy snapshot (.json). Imports are read-only archives.",
   "settings.import.bundle.done": "Session imported as a read-only archive",
   "settings.import.bundle.link": "Share link",
   "settings.import.bundle.link.hint": "Paste a DeepAgent bundle share link instead of choosing a file.",
@@ -1239,7 +1250,8 @@ export const dict = {
   "settings.import.preset.custom": "Custom",
   "settings.import.preset.deepagent": "DeepAgent Code (snapshot)",
   "settings.import.snapshot.file": "Snapshot bundle",
-  "settings.import.snapshot.file.hint": "Choose an exported session snapshot bundle (.json). It imports as a new continuable session.",
+  "settings.import.snapshot.file.hint":
+    "Choose an exported session snapshot bundle (.json). It imports as a new continuable session.",
   "settings.import.snapshot.noFile": "Choose a snapshot bundle file first",
   "settings.import.snapshot.done": "Snapshot imported as a new continuable session",
   "settings.import.customPath": "Path",
@@ -1450,7 +1462,8 @@ export const dict = {
   "settings.general.row.pinchZoom.title": "Pinch to zoom",
   "settings.general.row.pinchZoom.description": "Allow trackpad pinch and Ctrl-scroll gestures to zoom",
   "settings.general.row.preventSleep.title": "Prevent system sleep",
-  "settings.general.row.preventSleep.description": "Keep the system awake while the app is running; the display can still turn off",
+  "settings.general.row.preventSleep.description":
+    "Keep the system awake while the app is running; the display can still turn off",
   "settings.general.row.zoom.title": "Zoom level",
   "settings.general.row.zoom.description": "Set the interface zoom level",
 
@@ -1763,7 +1776,8 @@ export const dict = {
   "session.providerRecovery.loadFailed": "Could not verify provider recovery state",
   "session.providerRecovery.loadFailedDescription":
     "Message sending remains disabled until the server can confirm whether this session requires recovery.",
-  "session.providerRecovery.unsupported": "This continuation requires maintenance recovery and cannot be abandoned here.",
+  "session.providerRecovery.unsupported":
+    "This continuation requires maintenance recovery and cannot be abandoned here.",
   "session.providerRecovery.workspaceUnsupported":
     "This shared workspace requires coordinated recovery and cannot be resolved from this app instance.",
   "session.providerRecovery.baselineUnsupported":
@@ -1780,9 +1794,11 @@ export const dict = {
   "recovery.list.retry": "Try again",
   "recovery.queue.pending": "Processing a recovery action…",
   "recovery.unknown.title": "The last request's result is unclear",
-  "recovery.unknown.description": "Check its status before continuing. If it still cannot be confirmed, report the issue to us.",
+  "recovery.unknown.description":
+    "Check its status before continuing. If it still cannot be confirmed, report the issue to us.",
   "recovery.coordination.title": "This conversation needs help to recover",
-  "recovery.coordination.description": "We cannot confirm whether the last request ran. Report the issue with its diagnostic reference before continuing.",
+  "recovery.coordination.description":
+    "We cannot confirm whether the last request ran. Report the issue with its diagnostic reference before continuing.",
   "recovery.repair.title": "Conversation data needs repair",
   "recovery.repair.description": "The conversation record is incomplete. Repair it before continuing.",
   "recovery.fork.title": "Continue from a safe point",
@@ -1811,8 +1827,7 @@ export const dict = {
   "recovery.evidence.failed": "Could not export diagnostics.",
 
   "maintenance.degraded.banner.title": "Maintenance status unknown",
-  "maintenance.degraded.banner.description":
-    "The maintenance endpoint is unreachable; some protections are inactive.",
+  "maintenance.degraded.banner.description": "The maintenance endpoint is unreachable; some protections are inactive.",
   "maintenance.degraded.banner.dismiss": "Dismiss",
   // W-02 M-6 — migration-in-progress shell view (phase progress + recovery guidance).
   "maintenance.migration.title": "Data migration in progress",
@@ -1824,7 +1839,8 @@ export const dict = {
   "maintenance.migration.resume": "Resume migration",
   "maintenance.migration.resuming": "Resuming…",
   "maintenance.migration.readonly.title": "Migration paused — read-only maintenance",
-  "maintenance.migration.readonly.description": "Session writes and live runs are unavailable in this view. Review backups or return to migration status.",
+  "maintenance.migration.readonly.description":
+    "Session writes and live runs are unavailable in this view. Review backups or return to migration status.",
   "maintenance.migration.readonly.exit": "Continue in read-only maintenance",
   "maintenance.migration.readonly.return": "Return to migration status",
   "maintenance.migration.phase.md_export": "Export transcripts (Markdown)",
@@ -1838,5 +1854,4 @@ export const dict = {
   "maintenance.migration.state.running": "Running…",
   "maintenance.migration.state.completed": "Done",
   "maintenance.migration.state.failed": "Failed",
-
 }

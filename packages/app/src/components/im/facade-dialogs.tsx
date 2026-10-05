@@ -19,11 +19,8 @@ const inputClass =
 const DialogFailure: Component<{ failure: FacadeFailureLike }> = (props) => {
   const language = useLanguage()
   return (
-    <div>
+    <div role="alert">
       <div class="text-12-regular text-text-critical">{facadeFailureText(language.t, props.failure)}</div>
-      <Show when={!props.failure.invalidReason && props.failure.errorMessage}>
-        <div class="text-11-regular text-text-weak break-all">{props.failure.errorMessage}</div>
-      </Show>
     </div>
   )
 }
@@ -38,6 +35,7 @@ export const RebindDialog: Component<{ onRebound: () => void }> = (props) => {
   const [failure, setFailure] = createSignal<FacadeFailureLike | null>(null)
 
   const submit = async () => {
+    if (busy()) return
     setBusy(true)
     setFailure(null)
     const result = await submitFacadeRebind(key(), (k) => client.facadeRebind(k))
@@ -56,19 +54,25 @@ export const RebindDialog: Component<{ onRebound: () => void }> = (props) => {
       <div class="flex flex-col gap-2">
         <InlineInput
           autofocus
+          type="password"
+          autocomplete="off"
+          spellcheck={false}
           class={inputClass}
           value={key()}
           placeholder={language.t("im.facade.rebind.placeholder")}
+          aria-label={language.t("im.facade.rebind.title")}
+          aria-invalid={!!failure()}
           disabled={busy()}
           onInput={(event) => setKey(event.currentTarget.value)}
           onKeyDown={(event) => {
             event.stopPropagation()
+            if (event.isComposing || event.keyCode === 229) return
             if (event.key === "Enter") void submit()
           }}
         />
         <Show when={failure()}>{(f) => <DialogFailure failure={f()} />}</Show>
         <div>
-          <Button variant="primary" size="small" disabled={busy()} onClick={() => void submit()}>
+          <Button variant="primary" size="small" disabled={busy() || !key().trim()} onClick={() => void submit()}>
             {language.t("im.facade.rebind.submit")}
           </Button>
         </div>
@@ -90,6 +94,7 @@ export const KernelGroupDialog: Component<{ onCreated: (group: IMGroup) => void 
   const [failure, setFailure] = createSignal<FacadeFailureLike | null>(null)
 
   const addMember = async () => {
+    if (busy() || resolving()) return
     setResolving(true)
     setFailure(null)
     const result = await submitFacadeName(memberInput(), (n) => client.facadeResolve(n))
@@ -105,6 +110,7 @@ export const KernelGroupDialog: Component<{ onCreated: (group: IMGroup) => void 
   }
 
   const submit = async () => {
+    if (busy() || resolving() || memberInput().trim()) return
     setBusy(true)
     setFailure(null)
     const result = await submitFacadeGroupCreate(name(), members(), (n, ms) => client.facadeCreateGroup(n, ms))
@@ -126,6 +132,7 @@ export const KernelGroupDialog: Component<{ onCreated: (group: IMGroup) => void 
           class={inputClass}
           value={name()}
           placeholder={language.t("im.group.create.placeholder")}
+          aria-label={language.t("im.group.create.placeholder")}
           disabled={busy()}
           onInput={(event) => setName(event.currentTarget.value)}
           onKeyDown={(event) => event.stopPropagation()}
@@ -139,7 +146,8 @@ export const KernelGroupDialog: Component<{ onCreated: (group: IMGroup) => void 
                   <button
                     type="button"
                     class="text-text-weak hover:text-text-base"
-                    aria-label={`remove ${member}`}
+                    aria-label={language.t("im.facade.group.members.remove", { name: member })}
+                    disabled={busy() || resolving()}
                     onClick={() => setMembers((prev) => prev.filter((m) => m !== member))}
                   >
                     <Icon name="close-small" size="small" />
@@ -153,17 +161,34 @@ export const KernelGroupDialog: Component<{ onCreated: (group: IMGroup) => void 
           class={inputClass}
           value={memberInput()}
           placeholder={language.t("im.facade.group.members.placeholder")}
+          aria-label={language.t("im.facade.group.members.placeholder")}
           disabled={busy() || resolving()}
           onInput={(event) => setMemberInput(event.currentTarget.value)}
           onKeyDown={(event) => {
             event.stopPropagation()
+            if (event.isComposing || event.keyCode === 229) return
             if (event.key === "Enter") void addMember()
           }}
         />
+        <div>
+          <Button
+            variant="secondary"
+            size="small"
+            disabled={busy() || resolving() || !memberInput().trim()}
+            onClick={() => void addMember()}
+          >
+            {language.t("im.facade.group.members.add")}
+          </Button>
+        </div>
         <div class="text-11-regular text-text-weak">{language.t("im.facade.group.members.hint")}</div>
         <Show when={failure()}>{(f) => <DialogFailure failure={f()} />}</Show>
         <div>
-          <Button variant="primary" size="small" disabled={busy() || resolving()} onClick={() => void submit()}>
+          <Button
+            variant="primary"
+            size="small"
+            disabled={busy() || resolving() || !!memberInput().trim() || !name().trim()}
+            onClick={() => void submit()}
+          >
             {language.t("im.group.create")}
           </Button>
         </div>

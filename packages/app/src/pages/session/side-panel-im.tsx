@@ -1,4 +1,6 @@
-import { createEffect, createResource, createSignal, For, Show, type Component } from "solid-js"
+import { createEffect, createResource, createSignal, For, onCleanup, Show, type Component } from "solid-js"
+import { createStore } from "solid-js/store"
+import { Button } from "@deepagent-code/ui/button"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { InlineInput } from "@deepagent-code/ui/inline-input"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
@@ -7,7 +9,7 @@ import { useSDK } from "@/context/sdk"
 import { GroupChatPanel } from "@/components/im/group-chat-panel"
 import { MessageSearch } from "@/components/im/message-search"
 import { fetchIMCapabilities } from "@/components/im/capabilities"
-import { useIMClient, type IMFacadeStatus } from "@/utils/im-client"
+import { IMFacadeRequestError, useIMClient, type IMFacadeStatus } from "@/utils/im-client"
 import type { IMGroup } from "@/components/im/types"
 import { submitCreateDirect, submitCreateGroup, submitFacadeName } from "@/pages/session/im-panel-helpers"
 import { facadeFailureText, type FacadeFailureLike } from "@/components/im/facade-errors"
@@ -19,7 +21,7 @@ import { KernelGroupDialog } from "@/components/im/facade-dialogs"
 // instead of the old full-screen `h-screen` route. Group creation uses an inline
 // input — never window.prompt(), which throws in the Electron renderer.
 //
-// B2 多用户门面：status 端点永远可用（老 server 无端点 ⇒ catch 落 disabled，即单用户原样 UI）。
+// Only a missing status endpoint permits legacy mode; transient failures must not enable local-only creation.
 // active ⇒ 顶部身份卡 + 群徽标（全员群/内核群）+ 私聊/建群/邀请走门面端点（按名字，不按裸 id）；
 // claim_required ⇒ 认领卡；blocked ⇒ 逐码错误卡（重试 + 可找回码的 rebind 入口）。
 export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
@@ -42,6 +44,7 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
   // 邀请入口（群视图 header）：邀请中的群 id（null = 关闭）。
   const [invitingGroupID, setInvitingGroupID] = createSignal<string | null>(null)
   const [inviteName, setInviteName] = createSignal("")
+  const [availability, setAvailability] = createStore({ statusFailed: false, groupsFailed: false })
 
   const disabledFacadeStatus: IMFacadeStatus = {
     facade: "disabled",
@@ -50,11 +53,18 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
     kernel: null,
     keyOrigin: "none",
   }
-  const [facadeStatus, { refetch: refetchFacade }] = createResource<IMFacadeStatus>(() =>
-    client.facadeStatus().catch(() => disabledFacadeStatus),
-  )
-  const facadeState = () => facadeStatus()?.facade ?? "disabled"
+  const [facadeStatus, { refetch: refetchFacade }] = createResource(async () => {
+    const result = await client.facadeStatus().catch((error: unknown) => {
+      if (error instanceof IMFacadeRequestError && error.status === 404) return disabledFacadeStatus
+      return undefined
+    })
+    setAvailability("statusFailed", !result)
+    return result
+  })
+  const facadeState = () => facadeStatus()?.facade
   const facadeActive = () => facadeState() === "active"
+  const canCreate = () =>
+    !facadeStatus.loading && !availability.statusFailed && (facadeActive() || facadeState() === "disabled")
   const identity = () => facadeStatus()?.identity ?? null
 
   /** k:2:<orgAllGroupID> ⇒ 全员群；其余 k:2: ⇒ 内核群；k:1:/null 不挂徽标（direct/本地语义自明）。 */
@@ -76,16 +86,17 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
   const threadsEnabled = () => capabilities()?.v4ThreadEnabled ?? false
   const fileUploadEnabled = () => capabilities()?.v4FileUploadEnabled ?? false
 
-  const loadGroups = () => {
-    setLoading(true)
+  const loadGroups = (background = false) => {
+    if (!background) setLoading(true)
     client
       .listGroups()
       .then((data) => {
         setGroups(data)
+        setAvailability("groupsFailed", false)
         setLoading(false)
       })
-      .catch((error) => {
-        console.error("Failed to load IM groups:", error)
+      .catch(() => {
+        setAvailability("groupsFailed", true)
         setLoading(false)
       })
   }
@@ -93,6 +104,12 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
   createEffect(() => {
     loadGroups()
   })
+  const refreshTimer = setInterval(() => {
+    if (document.visibilityState === "hidden") return
+    void refetchFacade()
+    loadGroups(true)
+  }, 15_000)
+  onCleanup(() => clearInterval(refreshTimer))
 
   /** 门面状态变化（claim/rename/rebind/retry 成功）后的统一刷新：状态卡 + 群列表。 */
   const refreshFacade = () => {
@@ -106,6 +123,7 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
   }
 
   const startCreate = () => {
+    if (!canCreate()) return
     setInlineFailure(null)
     if (facadeActive()) {
       // 门面模式：建群即建内核群（群名 + 成员名 chips 对话框）。
@@ -124,6 +142,7 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
   const cancelCreate = () => setCreatingName(null)
 
   const submitCreate = async () => {
+    if (busy() || !canCreate()) return
     setBusy(true)
     const result = await submitCreateGroup(creatingName() ?? "", (payload) => client.createGroup(payload))
     setBusy(false)
@@ -142,12 +161,14 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
   }
 
   const startDirect = () => {
+    if (!canCreate()) return
     setInlineFailure(null)
     setDirectTarget("")
   }
   const cancelDirect = () => setDirectTarget(null)
 
   const submitDirect = async () => {
+    if (busy() || !canCreate()) return
     const target = directTarget()?.trim() ?? ""
     if (!target) {
       cancelDirect()
@@ -175,10 +196,8 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
     // 单用户（legacy）路径：裸 user id，或前缀 "@" 的 agent id。
     const isAgent = target.startsWith("@")
     const memberID = isAgent ? target.slice(1) : target
-    const result = await submitCreateDirect(
-      memberID,
-      { memberID, memberType: isAgent ? "agent" : "user" },
-      (payload) => client.createGroup(payload),
+    const result = await submitCreateDirect(memberID, { memberID, memberType: isAgent ? "agent" : "user" }, (payload) =>
+      client.createGroup(payload),
     )
     setBusy(false)
     if ("skipped" in result) {
@@ -195,6 +214,7 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
   }
 
   const submitInvite = async () => {
+    if (busy() || !facadeActive()) return
     const groupID = invitingGroupID()
     if (!groupID) return
     setBusy(true)
@@ -242,21 +262,21 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
               class="h-7 w-7 rounded-md"
               classList={{ "bg-surface-raised-base-active": searching() }}
               onClick={() => setSearching((v) => !v)}
-              aria-label="Search messages"
+              aria-label={language.t("im.search.messages")}
             />
             <IconButton
               icon="bubble-5"
               variant="ghost"
               class="h-7 w-7 rounded-md"
-              disabled={busy() || directTarget() !== null}
+              disabled={busy() || !canCreate() || directTarget() !== null}
               onClick={startDirect}
-              aria-label="New direct message"
+              aria-label={language.t("im.direct.create")}
             />
             <IconButton
               icon="plus-small"
               variant="ghost"
               class="h-7 w-7 rounded-md"
-              disabled={busy() || creatingName() !== null}
+              disabled={busy() || !canCreate() || creatingName() !== null}
               onClick={startCreate}
               aria-label={language.t("im.group.create")}
             />
@@ -291,6 +311,14 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
         when={selectedGroupID()}
         fallback={
           <div class="flex-1 min-h-0 flex flex-col overflow-y-auto">
+            <Show when={availability.statusFailed}>
+              <div class="m-3 flex flex-col gap-2 rounded-md border border-border-weaker-base p-3" role="alert">
+                <p class="text-12-regular text-text-critical">{language.t("im.facade.status.failed")}</p>
+                <Button size="small" variant="secondary" disabled={facadeStatus.loading} onClick={refreshFacade}>
+                  {language.t("im.facade.retry")}
+                </Button>
+              </div>
+            </Show>
             {/* B2 门面状态卡：claim_required ⇒ 认领引导；blocked ⇒ 逐码错误 + 重试/找回。 */}
             <Show when={facadeState() === "claim_required"}>
               <ClaimCard onClaimed={refreshFacade} />
@@ -327,15 +355,28 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
                   onInput={(event) => setDirectTarget(event.currentTarget.value)}
                   onKeyDown={(event) => {
                     event.stopPropagation()
+                    if (event.isComposing || event.keyCode === 229 || busy()) return
                     if (event.key === "Enter") void submitDirect()
                     else if (event.key === "Escape") cancelDirect()
                   }}
-                  onBlur={() => {
-                    if (!busy()) cancelDirect()
-                  }}
                 />
+                <div class="flex gap-2">
+                  <Button
+                    size="small"
+                    variant="primary"
+                    disabled={busy() || !canCreate() || !directTarget()?.trim()}
+                    onClick={() => void submitDirect()}
+                  >
+                    {language.t("im.direct.create")}
+                  </Button>
+                  <Button size="small" variant="secondary" disabled={busy()} onClick={cancelDirect}>
+                    {language.t("common.cancel")}
+                  </Button>
+                </div>
                 <Show when={inlineFailure()}>
-                  {(f) => <div class="text-12-regular text-text-critical px-1">{facadeFailureText(language.t, f())}</div>}
+                  {(f) => (
+                    <div class="text-12-regular text-text-critical px-1">{facadeFailureText(language.t, f())}</div>
+                  )}
                 </Show>
               </div>
             </Show>
@@ -350,13 +391,32 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
                   onInput={(event) => setCreatingName(event.currentTarget.value)}
                   onKeyDown={(event) => {
                     event.stopPropagation()
+                    if (event.isComposing || event.keyCode === 229 || busy()) return
                     if (event.key === "Enter") void submitCreate()
                     else if (event.key === "Escape") cancelCreate()
                   }}
-                  onBlur={() => {
-                    if (!busy()) cancelCreate()
-                  }}
                 />
+                <div class="flex gap-2 mt-2">
+                  <Button
+                    size="small"
+                    variant="primary"
+                    disabled={busy() || !canCreate() || !creatingName()?.trim()}
+                    onClick={() => void submitCreate()}
+                  >
+                    {language.t("im.group.create")}
+                  </Button>
+                  <Button size="small" variant="secondary" disabled={busy()} onClick={cancelCreate}>
+                    {language.t("common.cancel")}
+                  </Button>
+                </div>
+              </div>
+            </Show>
+            <Show when={availability.groupsFailed}>
+              <div class="m-3 flex flex-col gap-2" role="alert">
+                <p class="text-12-regular text-text-critical">{language.t("im.group.load.failed")}</p>
+                <Button size="small" variant="secondary" disabled={loading()} onClick={() => loadGroups()}>
+                  {language.t("im.facade.retry")}
+                </Button>
               </div>
             </Show>
             <Show
@@ -365,7 +425,11 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
             >
               <Show
                 when={groups().length > 0}
-                fallback={<div class="p-4 text-13-regular text-text-weak">{language.t("im.group.empty")}</div>}
+                fallback={
+                  <Show when={!availability.groupsFailed}>
+                    <div class="p-4 text-13-regular text-text-weak">{language.t("im.group.empty")}</div>
+                  </Show>
+                }
               >
                 <div class="flex flex-col gap-0.5 p-2">
                   <For each={groups()}>
@@ -409,23 +473,32 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
                   onInput={(event) => setInviteName(event.currentTarget.value)}
                   onKeyDown={(event) => {
                     event.stopPropagation()
+                    if (event.isComposing || event.keyCode === 229 || busy()) return
                     if (event.key === "Enter") void submitInvite()
                     else if (event.key === "Escape") setInvitingGroupID(null)
                   }}
-                  onBlur={() => {
-                    if (!busy()) setInvitingGroupID(null)
-                  }}
                 />
+                <div class="flex gap-2">
+                  <Button
+                    size="small"
+                    variant="primary"
+                    disabled={busy() || !facadeActive() || !inviteName().trim()}
+                    onClick={() => void submitInvite()}
+                  >
+                    {language.t("im.facade.invite")}
+                  </Button>
+                  <Button size="small" variant="secondary" disabled={busy()} onClick={() => setInvitingGroupID(null)}>
+                    {language.t("common.cancel")}
+                  </Button>
+                </div>
                 <Show when={inlineFailure()}>
-                  {(f) => <div class="text-12-regular text-text-critical px-1">{facadeFailureText(language.t, f())}</div>}
+                  {(f) => (
+                    <div class="text-12-regular text-text-critical px-1">{facadeFailureText(language.t, f())}</div>
+                  )}
                 </Show>
               </div>
             </Show>
-            <GroupChatPanel
-              groupID={id()}
-              threadsEnabled={threadsEnabled()}
-              fileUploadEnabled={fileUploadEnabled()}
-            />
+            <GroupChatPanel groupID={id()} threadsEnabled={threadsEnabled()} fileUploadEnabled={fileUploadEnabled()} />
           </div>
         )}
       </Show>

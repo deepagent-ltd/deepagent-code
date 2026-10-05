@@ -19,12 +19,8 @@ const inputClass =
 const FailureText: Component<{ failure: FacadeFailureLike }> = (props) => {
   const language = useLanguage()
   return (
-    <div class="px-1">
+    <div class="px-1" role="alert">
       <div class="text-12-regular text-text-critical">{facadeFailureText(language.t, props.failure)}</div>
-      {/* 服务端原始 message 作补充行（本地规则失败时 errorMessage 是 reason 枚举值，不重复展示） */}
-      <Show when={!props.failure.invalidReason && props.failure.errorMessage}>
-        <div class="text-11-regular text-text-weak break-all">{props.failure.errorMessage}</div>
-      </Show>
     </div>
   )
 }
@@ -38,6 +34,7 @@ export const ClaimCard: Component<{ onClaimed: () => void }> = (props) => {
   const [failure, setFailure] = createSignal<FacadeFailureLike | null>(null)
 
   const submit = async () => {
+    if (busy()) return
     setBusy(true)
     setFailure(null)
     const result = await submitFacadeName(name(), (n) => client.facadeClaim(n))
@@ -59,17 +56,20 @@ export const ClaimCard: Component<{ onClaimed: () => void }> = (props) => {
         class={inputClass}
         value={name()}
         placeholder={language.t("im.facade.claim.name.placeholder")}
+        aria-label={language.t("im.facade.claim.name.placeholder")}
+        aria-invalid={!!failure()}
         disabled={busy()}
         onInput={(event) => setName(event.currentTarget.value)}
         onKeyDown={(event) => {
           event.stopPropagation()
+          if (event.isComposing || event.keyCode === 229) return
           if (event.key === "Enter") void submit()
         }}
       />
       <div class="text-11-regular text-text-weak">{language.t("im.facade.name.rule")}</div>
       <Show when={failure()}>{(f) => <FailureText failure={f()} />}</Show>
       <div>
-        <Button variant="primary" size="small" disabled={busy()} onClick={() => void submit()}>
+        <Button variant="primary" size="small" disabled={busy() || !name().trim()} onClick={() => void submit()}>
           {language.t("im.facade.claim.submit")}
         </Button>
       </div>
@@ -77,8 +77,8 @@ export const ClaimCard: Component<{ onClaimed: () => void }> = (props) => {
   )
 }
 
-/** 哪些 blocked 码给 rebind 找回入口（key 已失效/身份被封/源身份丢失——env key 救不回来时换 key）。 */
-const REBINDABLE_CODES = new Set(["im_key_invalid", "im_identity_disabled", "im_source_identity_missing"])
+// Self-service rebind authenticates the existing active key. Revoked identities require console inheritance.
+const CONSOLE_RECOVERY_CODES = new Set(["im_key_invalid", "im_identity_disabled", "im_source_identity_missing"])
 
 /** blocked：逐码文案 + 重试（retryExchange）+ 可找回码的 rebind 入口。 */
 export const BlockedCard: Component<{ blocked: { code: string; message: string }; onRecovered: () => void }> = (
@@ -86,18 +86,19 @@ export const BlockedCard: Component<{ blocked: { code: string; message: string }
 ) => {
   const language = useLanguage()
   const client = useIMClient()
-  const dialog = useDialog()
   const [busy, setBusy] = createSignal(false)
   const [failure, setFailure] = createSignal<FacadeFailureLike | null>(null)
 
   const retry = async () => {
+    if (busy()) return
     setBusy(true)
     setFailure(null)
     try {
       await client.facadeRetry()
       props.onRecovered()
     } catch (error) {
-      const code = typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : "http_error"
+      const code =
+        typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : "http_error"
       setFailure({ errorCode: code, errorMessage: error instanceof Error ? error.message : String(error) })
     } finally {
       setBusy(false)
@@ -109,19 +110,13 @@ export const BlockedCard: Component<{ blocked: { code: string; message: string }
       <div class="text-13-medium text-text-strong">{language.t("im.facade.blocked.title")}</div>
       <FailureText failure={{ errorCode: props.blocked.code, errorMessage: props.blocked.message }} />
       <Show when={failure()}>{(f) => <FailureText failure={f()} />}</Show>
+      <Show when={CONSOLE_RECOVERY_CODES.has(props.blocked.code)}>
+        <p class="text-12-regular text-text-weak">{language.t("im.facade.blocked.recovery")}</p>
+      </Show>
       <div class="flex items-center gap-2">
         <Button variant="primary" size="small" disabled={busy()} onClick={() => void retry()}>
           {busy() ? language.t("im.facade.retrying") : language.t("im.facade.retry")}
         </Button>
-        <Show when={REBINDABLE_CODES.has(props.blocked.code)}>
-          <Button
-            variant="secondary"
-            size="small"
-            onClick={() => dialog.show(() => <RebindDialog onRebound={props.onRecovered} />)}
-          >
-            {language.t("im.facade.identity.rebind")}
-          </Button>
-        </Show>
       </div>
     </div>
   )
@@ -154,6 +149,7 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
   const kernel = () => props.status.kernel
 
   const submitRename = async () => {
+    if (busy()) return
     setBusy(true)
     setFailure(null)
     const result = await submitFacadeName(editing() ?? "", (name) => client.facadeRename(name))
@@ -182,15 +178,15 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
                 class={inputClass}
                 value={editing() ?? ""}
                 placeholder={language.t("im.facade.identity.rename.placeholder")}
+                aria-label={language.t("im.facade.identity.rename.placeholder")}
+                aria-invalid={!!failure()}
                 disabled={busy()}
                 onInput={(event) => setEditing(event.currentTarget.value)}
                 onKeyDown={(event) => {
                   event.stopPropagation()
+                  if (event.isComposing || event.keyCode === 229 || busy()) return
                   if (event.key === "Enter") void submitRename()
-                  else if (event.key === "Escape") setEditing(null)
-                }}
-                onBlur={() => {
-                  if (!busy()) setEditing(null)
+                  if (event.key === "Escape") setEditing(null)
                 }}
               />
             }
@@ -211,11 +207,35 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
         <button
           type="button"
           class="text-11-regular text-text-weak hover:text-text-base shrink-0"
+          disabled={busy()}
           onClick={() => dialog.show(() => <RebindDialog onRebound={props.onChanged} />)}
         >
           {language.t("im.facade.identity.rebind")}
         </button>
       </div>
+      <Show when={editing() !== null}>
+        <div class="flex gap-2">
+          <Button
+            variant="primary"
+            size="small"
+            disabled={busy() || !editing()?.trim()}
+            onClick={() => void submitRename()}
+          >
+            {language.t("common.save")}
+          </Button>
+          <Button
+            variant="secondary"
+            size="small"
+            disabled={busy()}
+            onClick={() => {
+              setEditing(null)
+              setFailure(null)
+            }}
+          >
+            {language.t("common.cancel")}
+          </Button>
+        </div>
+      </Show>
       <div class="flex items-center gap-2 text-11-regular text-text-weak">
         <span>{language.t("im.facade.identity.uuid", { uuid: identity().uuid.slice(0, 8) })}</span>
         <Show when={kernel()}>
@@ -231,7 +251,10 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
         </Show>
         <Show when={!kernel()}>
           <span class="flex items-center gap-1">
-            <span class="inline-block h-1.5 w-1.5 rounded-full" style={{ "background-color": KERNEL_COLORS.disconnected }} />
+            <span
+              class="inline-block h-1.5 w-1.5 rounded-full"
+              style={{ "background-color": KERNEL_COLORS.disconnected }}
+            />
             {language.t("im.facade.kernel.none")}
           </span>
         </Show>

@@ -161,7 +161,8 @@ export const dict = {
   "dialog.provider.deepagent-code.note": "使用 DeepAgent Code API key 连接 DeepAgent Code",
   "dialog.provider.deepagent-code.tagline": "DeepAgent Code 托管模型网关",
   "dialog.provider.deepseek.note": "使用 API key 连接 DeepSeek 模型",
-  "dialog.provider.deepagent.note": "DeepAgent API——我们自有的官方渠道。一个 Key 即可使用 GPT-5.6、Claude 5、Grok、Gemini、DeepSeek、Qwen、GLM、Kimi 全系模型（OpenAI + Anthropic 双兼容）。前往 https://api.deepagent.ltd 获取密钥",
+  "dialog.provider.deepagent.note":
+    "DeepAgent API——我们自有的官方渠道。一个 Key 即可使用 GPT-5.6、Claude 5、Grok、Gemini、DeepSeek、Qwen、GLM、Kimi 全系模型（OpenAI + Anthropic 双兼容）。前往 https://api.deepagent.ltd 获取密钥",
   "dialog.provider.zhipuai.note": "使用 API key 连接智谱 GLM 模型",
   "dialog.provider.zhipuai-coding-plan.note": "使用 API key 连接智谱 GLM Coding Plan 订阅",
   "dialog.provider.zai.note": "使用 API key 连接 Z.AI GLM 模型",
@@ -732,16 +733,23 @@ export const dict = {
   "im.facade.name.error.too_long": "名字过长（最多 20 个字符）",
   "im.facade.name.error.invalid_chars": "只允许汉字、字母和数字",
   "im.facade.blocked.title": "IM 暂不可用",
+  "im.facade.status.failed": "无法检查 IM 连接状态，请检查服务器连接后重试。",
+  "im.group.load.failed": "会话列表加载失败，请重试刷新。",
+  "im.search.messages": "搜索消息",
+  "im.direct.create": "发起私聊",
+  "im.facade.blocked.recovery":
+    "请在平台控制台创建替换 key，并选择继承原 IM 身份；随后更新本地 key 并重试。身份与聊天记录会保留。",
   "im.facade.retry": "重试",
   "im.facade.retrying": "重试中…",
   "im.facade.identity.uuid": "ID {{uuid}}",
   "im.facade.identity.rename": "改名",
   "im.facade.identity.rename.placeholder": "新的显示名",
-  "im.facade.identity.rebind": "换新 key 找回",
-  "im.facade.rebind.title": "用新 key 找回 IM 身份",
-  "im.facade.rebind.description": "把当前 IM 身份迁移到一个新服务器 key。新 key 必须属于同一组织、且未绑定其它身份。",
+  "im.facade.identity.rebind": "更换 key",
+  "im.facade.rebind.title": "将 IM 身份迁移到新 key",
+  "im.facade.rebind.description":
+    "当前 key 必须仍然有效。新 key 必须属于同一组织，且未绑定其它身份。已停用的身份请在平台控制台通过继承恢复。",
   "im.facade.rebind.placeholder": "sk-…",
-  "im.facade.rebind.submit": "找回",
+  "im.facade.rebind.submit": "更换",
   "im.facade.kernel.connecting": "内核连接中",
   "im.facade.kernel.connected": "内核已连接",
   "im.facade.kernel.disconnected": "内核已断开",
@@ -751,7 +759,9 @@ export const dict = {
   "im.facade.badge.kernel": "内核群",
   "im.facade.direct.placeholder": "通讯录名字，回车发起私聊",
   "im.facade.group.members.placeholder": "成员名字，逐个回车添加",
-  "im.facade.group.members.hint": "成员名会逐个在组织通讯录中解析。",
+  "im.facade.group.members.hint": "请先逐个添加组织通讯录中的成员，再创建群聊。",
+  "im.facade.group.members.add": "添加成员",
+  "im.facade.group.members.remove": "移除 {{name}}",
   "im.facade.invite": "邀请",
   "im.facade.invite.placeholder": "要邀请的通讯录名字",
   "im.facade.invite.success": "已邀请 {{name}}",
@@ -760,7 +770,7 @@ export const dict = {
   "im.facade.error.im_identity_disabled": "该 IM 身份已被禁用",
   "im.facade.error.im_invalid_name": "名字不符合命名规则",
   "im.facade.error.im_name_taken": "组织内已有同名成员，请换一个",
-  "im.facade.error.im_key_invalid": "IM key 无效——可用新 key 找回",
+  "im.facade.error.im_key_invalid": "IM key 无效或已过期",
   "im.facade.error.im_cross_org": "目标属于其它组织",
   "im.facade.error.im_key_already_bound": "新 key 已绑定其它 IM 身份",
   "im.facade.error.im_not_found": "组织通讯录中没有这个名字",
@@ -1090,7 +1100,6 @@ export const dict = {
 
   "settings.tab.general": "通用",
   "settings.tab.shortcuts": "快捷键",
-
 
   "settings.general.section.appearance": "外观",
   "settings.general.section.deepagent": "DeepAgent",
@@ -1693,8 +1702,10 @@ export const dict = {
   "session.providerRecovery.loadFailedDescription": "在服务器确认该会话是否需要恢复之前，消息发送将保持禁用。",
   "session.providerRecovery.unsupported": "该 continuation 需要维护恢复，当前不能在这里放弃。",
   "session.providerRecovery.workspaceUnsupported": "共享工作区需要协调恢复，当前应用实例不能直接处理。",
-  "session.providerRecovery.baselineUnsupported": "源 World State baseline 缺失或无效；维护恢复验证完成前，发送将保持锁定。",
-  "session.providerRecovery.maintenanceUnsupported": "该恢复记录不完整或属于其他恢复权威；维护修复完成前，发送将保持锁定。",
+  "session.providerRecovery.baselineUnsupported":
+    "源 World State baseline 缺失或无效；维护恢复验证完成前，发送将保持锁定。",
+  "session.providerRecovery.maintenanceUnsupported":
+    "该恢复记录不完整或属于其他恢复权威；维护修复完成前，发送将保持锁定。",
   "recovery.execution.running": "智能体执行中…（第 {{number}} 轮）",
   "recovery.execution.last": "上次请求：{{state}}（第 {{number}} 轮）",
   "recovery.execution.succeeded": "上次请求已完成（第 {{number}} 轮）",
@@ -1761,5 +1772,4 @@ export const dict = {
   "maintenance.migration.state.running": "进行中…",
   "maintenance.migration.state.completed": "已完成",
   "maintenance.migration.state.failed": "失败",
-
 } satisfies Partial<Record<Keys, string>>

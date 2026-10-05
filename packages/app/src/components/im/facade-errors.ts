@@ -31,7 +31,7 @@ export const FACADE_ERROR_I18N = {
   invalid_request: "im.facade.error.invalid_request",
 } as const satisfies Record<string, FacadeI18nKey>
 
-/** code → i18n key；未知码兜底 unknown（消息本体仍随 description 呈现，信息不丢）。 */
+/** Use classified messages only; upstream error text may contain credentials. */
 export const facadeErrorKey = (code: string): FacadeI18nKey =>
   (FACADE_ERROR_I18N as Record<string, FacadeI18nKey>)[code] ?? "im.facade.error.unknown"
 
@@ -48,7 +48,7 @@ export interface FacadeFailureLike {
   readonly invalidReason?: IMNameInvalidReason
 }
 
-/** 一次门面操作失败的呈现文案（逐码）。原始 errorMessage 由调用方决定是否作补充行。 */
+/** 一次门面操作失败的呈现文案（逐码）。 */
 export const facadeFailureText = (t: (key: FacadeI18nKey) => string, failure: FacadeFailureLike): string =>
   failure.invalidReason ? t(NAME_RULE_KEYS[failure.invalidReason]) : t(facadeErrorKey(failure.errorCode))
 
