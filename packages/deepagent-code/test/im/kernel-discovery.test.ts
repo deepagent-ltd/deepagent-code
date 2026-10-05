@@ -11,6 +11,7 @@ import { pollWithTimeout, testEffect } from "../lib/effect"
 let publish: (message: KernelClient.KernelTextMessage) => Effect.Effect<void>
 let proofs: Record<string, IMKernelExchange.InspectConversationPayload>
 let conversations: Array<{ conversationType: number; conversationID: string; sortTime: number }>
+let conversationPage: KernelClient.Interface["fetchConversations"]
 let history: KernelClient.KernelTextMessage[]
 let inspections: IMKernelExchange.InspectConversationInput[]
 
@@ -25,7 +26,7 @@ const client = Layer.effect(
       state: yield* SubscriptionRef.make<KernelClient.ConnectionState>("disconnected"),
       messages: Stream.fromPubSub(messages),
       sendText: () => Effect.succeed({ messageID: "sent" }),
-      fetchConversations: () => Effect.sync(() => ({ conversations, isFinished: true })),
+      fetchConversations: (input) => conversationPage(input),
       fetchHistory: (input) =>
         Effect.sync(() => {
           const messages = history.filter(
@@ -93,6 +94,7 @@ beforeEach(() => {
     },
   }
   conversations = []
+  conversationPage = () => Effect.sync(() => ({ conversations, isFinished: true }))
   history = []
   inspections = []
 })
@@ -165,6 +167,34 @@ describe("trusted receiving-side conversation discovery", () => {
         { conversationType: 2, conversationID: "invited", senderID: "bob" },
       ])
       expect((yield* SubscriptionRef.get(engine.recovery)).status).toBe("ready")
+    }),
+  )
+
+  it.live("a nonprogressing last discovery page exhausts the budget and keeps recovery failed", () =>
+    Effect.gen(function* () {
+      const requested: number[] = []
+      conversationPage = (input) =>
+        Effect.sync(() => {
+          requested.push(input.before)
+          return {
+            conversations: [
+              {
+                conversationType: 7,
+                conversationID: "unsupported",
+                sortTime: Number.MAX_SAFE_INTEGER - 2 - Math.floor((requested.length - 1) / 2) * 2,
+              },
+            ],
+            isFinished: false,
+          }
+        })
+      const engine = yield* IMKernelSync.Service
+      yield* engine.catchUp
+      expect(requested).toHaveLength(1_000)
+      expect(requested[999]).toBe(requested[998] - 2)
+      const recovery = yield* SubscriptionRef.get(engine.recovery)
+      expect(recovery.status).toBe("failed")
+      expect(recovery.message).not.toContain("KernelError")
+      expect(yield* (yield* IMRepository).getGroupByKernelConvID("k:7:unsupported")).toBeUndefined()
     }),
   )
 

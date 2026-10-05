@@ -61,7 +61,7 @@ const fakeClient = Layer.unwrap(
           Effect.suspend(() => {
             historyRequests.push(input)
             if (historyFailure(input))
-              return Effect.fail(new KernelSdk.KernelError({ operation: "fetchHistory", message: "test link down" }))
+              return KernelSdk.request("fetchHistory", () => Promise.reject(new Error("test link down")))
             const remaining = historyMessages
               .filter((message) => message.msgTime > input.after)
               .sort((a, b) => a.msgTime - b.msgTime)
@@ -363,7 +363,7 @@ describe("IMKernelSync outbound", () => {
       sendBehavior = (input) =>
         Effect.suspend(() => {
           sentTexts.push(input)
-          return Effect.fail(new KernelSdk.KernelError({ operation: "sendMessage", message: "link down" }))
+          return KernelSdk.request("sendMessage", () => Promise.reject({ code: 503, msg: "link down" }))
         })
       const { group, message } = yield* seedPendingMessage("offline hello")
       const sync = yield* IMKernelSync.Service
@@ -403,7 +403,7 @@ describe("IMKernelSync outbound", () => {
       sendBehavior = (input) =>
         Effect.suspend(() => {
           sentTexts.push(input)
-          return Effect.fail(new KernelSdk.KernelError({ operation: "sendMessage", message: "link down" }))
+          return KernelSdk.request("sendMessage", () => Promise.reject({ code: 503, msg: "link down" }))
         })
       const { message } = yield* seedPendingMessage("never deliverable")
       const sync = yield* IMKernelSync.Service

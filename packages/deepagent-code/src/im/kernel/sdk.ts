@@ -88,6 +88,14 @@ const describeError = (error: unknown): string => {
   return String(error)
 }
 
+// Rejected SDK promises are recoverable transport failures. Effect.promise would turn them into
+// defects, bypassing the sync engine's retry, recovery diagnostics, and pending-send preservation.
+export const request = <A>(operation: string, run: () => PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: run,
+    catch: (cause) => new KernelError({ operation, message: describeError(cause), cause }),
+  })
+
 export const liveFromConfig = (config: KernelConfig.Info) =>
   Layer.effect(
     Service,
@@ -127,19 +135,14 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
         offer({ tag: "message_received", payload })
       })
 
-      const connect = Effect.promise(() => im.connect({ token: config.token })).pipe(
+      const connect = request("connect", () => im.connect({ token: config.token })).pipe(
         Effect.timeoutOrElse({
           duration: "20 seconds",
           orElse: () => Effect.fail(new KernelError({ operation: "connect", message: "kernel connect timed out" })),
         }),
-        Effect.mapError((error) =>
-          error instanceof KernelError
-            ? error
-            : new KernelError({ operation: "connect", message: describeError(error), cause: error }),
-        ),
       )
       // 已连接后的断线由 SDK 自动重连（同一 token）；connect 本身的失败在这里有界重试。
-      // token 过期（TTL 数小时）后的持续失败是 B2 exchange 刷新 token 的接缝。
+      // facade 对有时效凭据在断线后重新 exchange，安装新 SDK 前关闭当前 scope。
       yield* connect.pipe(
         Effect.tapError((error) => Effect.sync(() => log.warn("kernel connect failed", { message: error.message }))),
         Effect.retry(Schedule.exponential("1 second").pipe(Schedule.both(Schedule.recurs(10)))),
@@ -147,10 +150,7 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
         Effect.forkScoped,
       )
 
-      yield* Effect.addFinalizer(() => Effect.promise(() => im.disconnect()).pipe(Effect.ignore))
-
-      const describe = (operation: string) => (error: unknown) =>
-        new KernelError({ operation, message: describeError(error), cause: error })
+      yield* Effect.addFinalizer(() => request("disconnect", () => im.disconnect()).pipe(Effect.ignore))
 
       return Service.of({
         rawEvents: Stream.fromQueue(queue),
@@ -158,7 +158,7 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
           Effect.gen(function* () {
             // d.ts 把 Message.conversationType 错标成枚举对象类型（协议实际是 number），且漏标
             // lifeTime（上方 module augmentation 已补类型）——边界处一次性收窄转换。
-            const ack = yield* Effect.promise(() =>
+            const ack = yield* request("sendMessage", () =>
               im.sendMessage({
                 conversationType: input.conversationType,
                 conversationId: input.conversationID,
@@ -166,7 +166,7 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
                 content: { content: input.text },
                 lifeTime: input.lifeTime,
               } as unknown as Parameters<typeof im.sendMessage>[0]),
-            ).pipe(Effect.mapError(describe("sendMessage")))
+            )
             const messageID = (ack as { messageId?: unknown }).messageId
             if (typeof messageID !== "string" || messageID.length === 0)
               return yield* new KernelError({ operation: "sendMessage", message: "kernel ack carried no messageId" })
@@ -174,7 +174,7 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
           }),
         fetchHistory: (input) =>
           Effect.gen(function* () {
-            const result = yield* Effect.promise(() =>
+            const result = yield* request("fetchHistory", () =>
               im.getMessages({
                 conversationId: input.conversationID,
                 conversationType: input.conversationType,
@@ -182,17 +182,16 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
                 count: input.count,
                 order: JuggleIM.MessageOrder.FORWARD,
               } as Parameters<typeof im.getMessages>[0]),
-            ).pipe(Effect.mapError(describe("fetchHistory")))
+            )
             return {
               messages: Array.isArray(result.messages) ? result.messages : [],
               isFinished: result.isFinished === true,
             }
           }),
         fetchConversations: (input) =>
-          Effect.tryPromise({
-            try: () => im.getConversations({ time: input.before, count: input.count, order: 0 }),
-            catch: describe("fetchConversations"),
-          }).pipe(
+          request("fetchConversations", () =>
+            im.getConversations({ time: input.before, count: input.count, order: 0 }),
+          ).pipe(
             Effect.map((page) => ({
               isFinished: page.isFinished === true,
               conversations: page.conversations.map((conversation) => ({
@@ -202,7 +201,7 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
               })),
             })),
           ),
-        disconnect: Effect.promise(() => im.disconnect()).pipe(Effect.ignore),
+        disconnect: request("disconnect", () => im.disconnect()).pipe(Effect.ignore),
       })
     }),
   )
