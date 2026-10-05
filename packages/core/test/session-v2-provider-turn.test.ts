@@ -373,11 +373,30 @@ describe("V2 provider turn authority", () => {
       const receipt = yield* admit(service, "msg-non-retryable-terminal")
       yield* service.abandon(receipt, "provider_unavailable")
 
-      // Only the pre-dispatch owner-loss code is re-openable; every other terminal state is refused.
+      // Only the pre-dispatch failure codes are re-openable; every other terminal state is refused.
       const refused = yield* admit(service, "msg-non-retryable-terminal").pipe(Effect.exit)
       expect(refused._tag).toBe("Failure")
       if (refused._tag === "Failure")
         expect(Cause.squash(refused.cause)).toMatchObject({ _tag: "V2ProviderTurn.UnsafeRetryError" })
+    }),
+  )
+
+  it.live("re-opens an exact retry of a turn abandoned before the wire seal", () =>
+    Effect.gen(function* () {
+      yield* seed()
+      const service = yield* V2ProviderTurn.Service
+      const receipt = yield* admit(service, "msg-seal-failed")
+      // A stream failure before the wire seal abandons the preparing receipt: the turn provably
+      // never dispatched (no generation, no billing), so the exact retry opens a fresh receipt.
+      yield* service.abandon(receipt, "wire_seal_failed_before_dispatch")
+      expect(yield* service.get(receipt.receiptId)).toMatchObject({
+        state: "failed",
+        errorCode: "wire_seal_failed_before_dispatch",
+      })
+
+      const retried = yield* admit(service, "msg-seal-failed")
+      expect(retried.receiptId).not.toBe(receipt.receiptId)
+      expect(retried.state).toBe("preparing")
     }),
   )
 

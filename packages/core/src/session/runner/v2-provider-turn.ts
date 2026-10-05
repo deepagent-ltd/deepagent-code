@@ -1601,11 +1601,15 @@ export function admitInTransaction(
         // A PRE-dispatch owner-loss recovery is the same situation one generation later: the fenced
         // owner never reached the provider (no generation, no billing), so the legitimate successor
         // may open a fresh attempt. A post-dispatch owner loss keeps the typed refusal — its outcome
-        // is unknown, and RI-11 forbids an automatic re-send.
+        // is unknown, and RI-11 forbids an automatic re-send. A turn abandoned while still
+        // `preparing` (the wire seal never ran) provably never dispatched either, so its exact
+        // retry is the same safe case.
         const sameOwnerQuarantine =
           existing.state === "indeterminate_after_crash" && existing.owner_token === ownerToken
-        const recoverableOwnerLoss =
-          existing.state === "failed" && existing.error_code === "owner_lost_before_dispatch"
+        const recoverablePreDispatchFailure =
+          existing.state === "failed" &&
+          (existing.error_code === "owner_lost_before_dispatch" ||
+            existing.error_code === "wire_seal_failed_before_dispatch")
         // A route change after admission is safe to rebuild only when the paired attempt
         // terminalized from prepared, before any wire seal or first provider event.
         const driftedAttempt = existing.error_code === "config_drift_rebuild_required" &&
@@ -1621,7 +1625,7 @@ export function admitInTransaction(
           !driftedAttempt.prepared_turn_hash &&
           !driftedAttempt.wire_request_hash &&
           !driftedAttempt.first_event_at
-        if (!sameOwnerQuarantine && !recoverableOwnerLoss && !recoverableConfigDrift)
+        if (!sameOwnerQuarantine && !recoverablePreDispatchFailure && !recoverableConfigDrift)
           return yield* new UnsafeRetryError({ state: existing.state })
       } else if (
         existing.provider_id !== input.providerId ||

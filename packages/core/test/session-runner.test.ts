@@ -6617,6 +6617,40 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("keeps a contentless failed turn out of the next request's history", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Fail the first turn" }), resume: false })
+
+      requests.length = 0
+      response = [LLMEvent.providerError({ message: "Provider unavailable" })]
+      yield* session.resume(sessionID)
+
+      // The failed turn stays durable for audit/usage — the fix is at history serialization.
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Fail the first turn" },
+        { type: "assistant", finish: "error", content: [] },
+      ])
+
+      response = fragmentFixture("text", "text-recovered", ["Recovered"]).completeEvents
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Recover after the failure" }) })
+      yield* execution.awaitIdle(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const request = requests[1]
+      if (!request) throw new Error("expected the second provider request")
+      // …but the contentless row never reaches the model: an empty assistant lowers to
+      // `"content": null` on the OpenAI-family wire, the provider rejects it, and the rejection
+      // used to fail every later turn the same way — the session poisoning this guards against.
+      expect(request.messages.filter((message) => message.role === "assistant")).toEqual([])
+      expect(request.messages.every((message) => message.content.length > 0)).toBe(true)
+      const prepared = yield* LLMClient.prepare(request)
+      expect(JSON.stringify(prepared.body)).not.toContain('"content":null')
+    }),
+  )
+
   it.effect("does not recover context overflow after durable assistant output", () =>
     Effect.gen(function* () {
       yield* setup
