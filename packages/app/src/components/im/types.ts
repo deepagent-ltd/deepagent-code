@@ -13,6 +13,9 @@ export interface IMGroup {
   type: string
   name: string
   createdBy: string
+  // B2 — k:<type>:<id> 内核会话绑定（1=私聊 2=内核群；null=纯本地群）。全员群判定见
+  // side-panel-im.tsx（kernelConvID === `k:2:${identity.orgAllGroupID}`）。
+  kernelConvID: string | null
   createdAt: number
   updatedAt: number
   deletedAt: number | null

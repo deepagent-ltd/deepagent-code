@@ -1,6 +1,6 @@
 export * as IMReplyOutbox from "./im-reply-outbox"
 
-import { Cause, Effect, Layer, Option, Schedule, Duration } from "effect"
+import { Cause, Effect, Layer, Option, Ref, Schedule, Duration } from "effect"
 import { and, asc, eq, isNull, like, lte, or } from "drizzle-orm"
 import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core"
 import { Database } from "@deepagent-code/core/database/database"
@@ -16,6 +16,7 @@ import { contentDigest } from "@deepagent-code/core/contract/digest"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { IMAgentExecution } from "./im-agent-execution"
 import { IMKernelSync } from "@/im/kernel/sync"
+import { IMFacade } from "./facade"
 import * as Log from "@deepagent-code/core/util/log"
 
 // V2 IM durable-only migration — the REPLY half of the slice. The terminal assistant reply of a
@@ -444,9 +445,15 @@ export const layer = Layer.effectDiscard(
     const repo = yield* IMRepository
     const broadcaster = yield* IMBroadcasterService
     const events = Option.getOrUndefined(yield* Effect.serviceOption(EventV2Bridge.Service))
-    const kernelSync = Option.getOrUndefined(yield* Effect.serviceOption(IMKernelSync.Service))
+    // IM 门面（B2）：内核引擎的唯一所有者。引擎在 claim/retry 后热启动，故不能在此固化
+    // kernelSync 快照——每个 drain pass 前从 facade.engine 现读（缺席 ⇒ 该 pass 纯本地投递）。
+    const facade = Option.getOrUndefined(yield* Effect.serviceOption(IMFacade.Service))
     const deps = { db, v2Session }
-    const delivery: DeliveryDeps = { db, repo, broadcaster, ...(kernelSync ? { kernelSync } : {}) }
+    const drainWithCurrentEngine = Effect.gen(function* () {
+      const kernelSync = facade ? Option.getOrUndefined(yield* Ref.get(facade.engine)) : undefined
+      const delivery: DeliveryDeps = { db, repo, broadcaster, ...(kernelSync ? { kernelSync } : {}) }
+      return yield* drainPass(delivery)
+    })
     // The listener callback runs with R = never (EventV2.Listener), so the drain fiber is forked
     // into THIS layer's scope explicitly — post-commit collect+drain never delays the publisher.
     const scope = yield* Effect.scope
@@ -457,7 +464,7 @@ export const layer = Layer.effectDiscard(
         if (!sessionID) return Effect.void
         return collectSessionReply(deps, sessionID)
           .pipe(
-            Effect.andThen(drainPass(delivery)),
+            Effect.andThen(drainWithCurrentEngine),
             Effect.catchCause((cause) =>
               Effect.sync(() => log.error("im reply settle drain failed", { sessionID, cause: Cause.pretty(cause) })),
             ),
@@ -469,7 +476,7 @@ export const layer = Layer.effectDiscard(
 
     yield* reconcileReplies(deps)
       .pipe(
-        Effect.andThen(drainPass(delivery)),
+        Effect.andThen(drainWithCurrentEngine),
         Effect.catchCause((cause) => Effect.sync(() => log.error("im reply reconcile pass failed", { cause: Cause.pretty(cause) }))),
         Effect.repeat(Schedule.spaced(Duration.millis(IM_REPLY_RECONCILE_INTERVAL_MS))),
         Effect.forkScoped,

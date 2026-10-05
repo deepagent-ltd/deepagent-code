@@ -25,6 +25,9 @@ const FACADE_ENV_KEYS = {
   key: "DEEPAGENT_IM_FACADE_KEY",
 } as const
 
+/** 门面 URL/key 的 env 键名（B2 facade.ts 的凭据解析复用，避免字面量两处漂移）。 */
+export const facadeEnvKeys = FACADE_ENV_KEYS
+
 export interface FacadeSource {
   readonly facadeURL: string
   readonly key: string
