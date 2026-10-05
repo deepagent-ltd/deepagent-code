@@ -273,14 +273,22 @@ const oversightServicesLayer = Layer.mergeAll(
 // work (src/im/im-agent-execution.ts) on the SHARED V2 runtime graph (V2RunnerFrame.sessionRuntimeLayer —
 // the real SessionExecutionLocal owner, not the noop-execution standalone default). The terminal
 // assistant reply returns through the im_reply_outbox daemon (IMReplyOutbox.layer), which draws
-// Database/SessionV2/EventV2Bridge from the shared graph and IMRepository/broadcaster from here.
+// Database/SessionV2/EventV2Bridge from the shared graph and IMRepository/broadcaster/kernelSync
+// from here — mergeAll siblings are invisible to each other, so the kernelSync edge is supplied
+// directly (same pattern as ServerAgentListProviderLive in resolveImKernelSyncLayer); without it
+// the outbox's prefixed `[Agent·<id>]` kernel copy never leaves and only the bare pending-drain
+// lane reaches the kernel.
 // ServerAgentListProviderLive still requires Agent/InstanceStore from the shared instance graph,
 // so it stays declared here WITHOUT those deps and resolved against that graph.
 const imRuntimeLayer = Layer.mergeAll(
   imRepositoryLayer,
   IMBroadcasterLive,
   ServerAgentListProviderLive,
-  IMReplyOutbox.layer.pipe(Layer.provide(imRepositoryLayer), Layer.provide(IMBroadcasterLive)),
+  IMReplyOutbox.layer.pipe(
+    Layer.provide(imRepositoryLayer),
+    Layer.provide(IMBroadcasterLive),
+    Layer.provide(imKernelSyncLayer),
+  ),
   imKernelSyncLayer,
 )
 // V4.0 §A4/§C — the PRODUCTION event-runtime daemons (EventDispatcher router + tick + retry pump,

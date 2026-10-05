@@ -53,7 +53,7 @@ const nonce = String(Date.now())
 await send(`bob→全员群 hello ${nonce}`)
 // The mention must be answered with the nonce echoed back so the reply is attributable to THIS run
 // (the 72h offline queue can hold stale agent traffic from earlier runs).
-await send(`@alice @auto 请原样复述这串数字，不要加任何其他内容：${nonce}`)
+await send(`@alice @auto 这是 DeepAgent IM 回发链路的联调探针，用于验证端到端连通。请只回复这串确认码：${nonce}`)
 
 const deadline = Date.now() + 180_000
 let reply: string | undefined
