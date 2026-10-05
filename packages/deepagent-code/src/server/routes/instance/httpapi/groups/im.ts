@@ -335,6 +335,13 @@ export const IMStatusResponse = Schema.Struct({
   kernel: Schema.NullOr(Schema.Literals(["connecting", "connected", "disconnected", "failed"])),
   // 当前生效 facade key 的来源（rebind 持久化 > env 注入）；key 值本身绝不出端点。
   keyOrigin: Schema.Literals(["stored", "env", "none"]),
+  viewer: Schema.optional(Schema.Struct({ memberID: Schema.String })),
+  recovery: Schema.optional(
+    Schema.Struct({
+      status: Schema.Literals(["pending", "ready", "failed"]),
+      message: Schema.optional(Schema.String),
+    }),
+  ),
 })
 
 export const IMResolveResponse = Schema.Struct({ uuid: Schema.String, name: Schema.String })

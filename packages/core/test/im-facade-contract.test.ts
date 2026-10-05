@@ -63,11 +63,12 @@ describe("validateIMName", () => {
 describe("facade error code catalog", () => {
   it("lists every contract code exactly once", () => {
     expect(new Set(FACADE_ERROR_CODES).size).toBe(FACADE_ERROR_CODES.length)
-    // 契约给定的 14 个业务码——漏了哪个，这里的快照先红。
+    // 契约给定的 15 个业务码——漏了哪个，这里的快照先红。
     expect([...FACADE_ERROR_CODES].sort() as string[]).toEqual(
       [
         "im_unavailable",
         "im_not_claimed",
+        "im_identity_changed",
         "im_identity_disabled",
         "im_invalid_name",
         "im_name_taken",
@@ -88,6 +89,7 @@ describe("facade error code catalog", () => {
     const expected: Record<string, number> = {
       im_unavailable: 503,
       im_not_claimed: 409,
+      im_identity_changed: 409,
       im_identity_disabled: 403,
       im_invalid_name: 400,
       im_name_taken: 409,

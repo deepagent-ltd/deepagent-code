@@ -4025,6 +4025,46 @@ export type ImUnsupportedMediaTypeError = {
   }
 }
 
+export type ImFacadeBadRequestError = {
+  name: "IM_FACADE_BAD_REQUEST"
+  data: {
+    code: string
+    message: string
+  }
+}
+
+export type ImFacadeForbiddenError = {
+  name: "IM_FACADE_FORBIDDEN"
+  data: {
+    code: string
+    message: string
+  }
+}
+
+export type ImFacadeNotFoundError = {
+  name: "IM_FACADE_NOT_FOUND"
+  data: {
+    code: string
+    message: string
+  }
+}
+
+export type ImFacadeConflictError = {
+  name: "IM_FACADE_CONFLICT"
+  data: {
+    code: string
+    message: string
+  }
+}
+
+export type ImFacadeUnavailableError = {
+  name: "IM_FACADE_UNAVAILABLE"
+  data: {
+    code: string
+    message: string
+  }
+}
+
 export type Path = {
   home: string
   data: string
@@ -14344,6 +14384,7 @@ export type ImGroupsListResponses = {
     type: string
     name: string
     createdBy: string
+    kernelConvID: string
     createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   }>
@@ -14397,6 +14438,7 @@ export type ImGroupsCreateResponses = {
     type: string
     name: string
     createdBy: string
+    kernelConvID: string
     createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   }
@@ -14475,6 +14517,10 @@ export type ImMessagesCreateData = {
     content: string
     mentions?: Array<string>
     metadata?:
+      | {
+          type: "kernel_sync"
+          liveEligible: boolean
+        }
       | {
           type: "file_ref"
           path: string
@@ -14994,6 +15040,540 @@ export type ImAttachmentsUploadResponses = {
 }
 
 export type ImAttachmentsUploadResponse = ImAttachmentsUploadResponses[keyof ImAttachmentsUploadResponses]
+
+export type ImFacadeStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/status"
+}
+
+export type ImFacadeStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+}
+
+export type ImFacadeStatusError = ImFacadeStatusErrors[keyof ImFacadeStatusErrors]
+
+export type ImFacadeStatusResponses = {
+  /**
+   * IM facade status
+   */
+  200: {
+    facade: "disabled" | "claim_required" | "blocked" | "active"
+    identity: {
+      uuid: string
+      name: string
+      orgID: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      orgAllGroupID: string
+    }
+    blocked: {
+      code: string
+      message: string
+    }
+    kernel: "connecting" | "connected" | "disconnected" | "failed"
+    keyOrigin: "stored" | "env" | "none"
+    viewer?: {
+      memberID: string
+    }
+    recovery?: {
+      status: "pending" | "ready" | "failed"
+      message?: string
+    }
+  }
+}
+
+export type ImFacadeStatusResponse = ImFacadeStatusResponses[keyof ImFacadeStatusResponses]
+
+export type ImFacadeClaimData = {
+  body: {
+    name: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/claim"
+}
+
+export type ImFacadeClaimErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeClaimError = ImFacadeClaimErrors[keyof ImFacadeClaimErrors]
+
+export type ImFacadeClaimResponses = {
+  /**
+   * Claimed IM identity
+   */
+  200: {
+    uuid: string
+    name: string
+    orgID: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    orgAllGroupID: string
+  }
+}
+
+export type ImFacadeClaimResponse = ImFacadeClaimResponses[keyof ImFacadeClaimResponses]
+
+export type ImFacadeRenameData = {
+  body: {
+    name: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/rename"
+}
+
+export type ImFacadeRenameErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeRenameError = ImFacadeRenameErrors[keyof ImFacadeRenameErrors]
+
+export type ImFacadeRenameResponses = {
+  /**
+   * Renamed IM identity
+   */
+  200: {
+    uuid: string
+    name: string
+    orgID: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    orgAllGroupID: string
+  }
+}
+
+export type ImFacadeRenameResponse = ImFacadeRenameResponses[keyof ImFacadeRenameResponses]
+
+export type ImFacadeRebindData = {
+  body: {
+    newKey: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/rebind"
+}
+
+export type ImFacadeRebindErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeRebindError = ImFacadeRebindErrors[keyof ImFacadeRebindErrors]
+
+export type ImFacadeRebindResponses = {
+  /**
+   * Rebound IM identity
+   */
+  200: {
+    uuid: string
+    name: string
+    orgID: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    orgAllGroupID: string
+  }
+}
+
+export type ImFacadeRebindResponse = ImFacadeRebindResponses[keyof ImFacadeRebindResponses]
+
+export type ImFacadeRetryData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/retry"
+}
+
+export type ImFacadeRetryErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeRetryError = ImFacadeRetryErrors[keyof ImFacadeRetryErrors]
+
+export type ImFacadeRetryResponses = {
+  /**
+   * Exchanged IM identity
+   */
+  200: {
+    uuid: string
+    name: string
+    orgID: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    orgAllGroupID: string
+  }
+}
+
+export type ImFacadeRetryResponse = ImFacadeRetryResponses[keyof ImFacadeRetryResponses]
+
+export type ImFacadeResolveData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    name: string
+  }
+  url: "/api/v1/im/facade/resolve"
+}
+
+export type ImFacadeResolveErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeResolveError = ImFacadeResolveErrors[keyof ImFacadeResolveErrors]
+
+export type ImFacadeResolveResponses = {
+  /**
+   * Resolved IM user
+   */
+  200: {
+    uuid: string
+    name: string
+  }
+}
+
+export type ImFacadeResolveResponse = ImFacadeResolveResponses[keyof ImFacadeResolveResponses]
+
+export type ImFacadeDirectData = {
+  body: {
+    name: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/direct"
+}
+
+export type ImFacadeDirectErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeDirectError = ImFacadeDirectErrors[keyof ImFacadeDirectErrors]
+
+export type ImFacadeDirectResponses = {
+  /**
+   * Direct chat group
+   */
+  200: {
+    id: string
+    workspaceID: string
+    projectID: string
+    type: string
+    name: string
+    createdBy: string
+    kernelConvID: string
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type ImFacadeDirectResponse = ImFacadeDirectResponses[keyof ImFacadeDirectResponses]
+
+export type ImFacadeGroupsCreateData = {
+  body: {
+    name: string
+    memberNames: Array<string>
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/groups"
+}
+
+export type ImFacadeGroupsCreateErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeGroupsCreateError = ImFacadeGroupsCreateErrors[keyof ImFacadeGroupsCreateErrors]
+
+export type ImFacadeGroupsCreateResponses = {
+  /**
+   * Kernel group
+   */
+  200: {
+    id: string
+    workspaceID: string
+    projectID: string
+    type: string
+    name: string
+    createdBy: string
+    kernelConvID: string
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type ImFacadeGroupsCreateResponse = ImFacadeGroupsCreateResponses[keyof ImFacadeGroupsCreateResponses]
+
+export type ImFacadeGroupsInviteData = {
+  body: {
+    name: string
+  }
+  path: {
+    groupId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/groups/{groupId}/invite"
+}
+
+export type ImFacadeGroupsInviteErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError | IMGroupNotFoundError
+   */
+  404: ImFacadeNotFoundError | ImGroupNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeGroupsInviteError = ImFacadeGroupsInviteErrors[keyof ImFacadeGroupsInviteErrors]
+
+export type ImFacadeGroupsInviteResponses = {
+  /**
+   * Invite result
+   */
+  200: {
+    ok: boolean
+  }
+}
+
+export type ImFacadeGroupsInviteResponse = ImFacadeGroupsInviteResponses[keyof ImFacadeGroupsInviteResponses]
 
 export type InstanceDisposeData = {
   body?: never
@@ -18032,6 +18612,7 @@ export type SessionPromptPrepareResponses = {
     goal: string
     preview: string
     intent_id?: string
+    degraded?: boolean
   }
 }
 

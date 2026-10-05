@@ -283,6 +283,7 @@ describe("IMKernelSync @Agent responder (B2)", () => {
       const sessionID = IMAgentExecution.imSessionIDFor(group.id, "general")
       const sync = yield* IMKernelSync.Service
       historyMessages = [inbound({ messageID: "history_mention", msgTime: 1_700_000_000_100 })]
+      yield* SubscriptionRef.set(sync.recovery, { status: "pending" })
       yield* sync.catchUp
       expect(yield* kernelLanded("history_mention")).toBeDefined()
       expect(yield* inputCount(sessionID)).toBe(0)
@@ -305,6 +306,25 @@ describe("IMKernelSync @Agent responder (B2)", () => {
       yield* sync.catchUp
       expect(yield* inputCount(sessionID)).toBe(1)
       expect(listScopes).toHaveLength(1)
+    }),
+  )
+
+  it.live("a periodic history poll cannot raise the recovery barrier or consume a pending live admission", () =>
+    Effect.gen(function* () {
+      const sync = yield* IMKernelSync.Service
+      const group = yield* orgGroup
+      const sessionID = IMAgentExecution.imSessionIDFor(group.id, "general")
+      yield* publishUntilAdmitted(inbound({ messageID: "warm_before_poll", msgTime: 1_700_000_000_100 }), sessionID, 1)
+      // Simulate periodic hismsgs arriving before the websocket event for a new online mention.
+      const message = inbound({ messageID: "history_wins_race", msgTime: 1_700_000_000_300 })
+      historyMessages = [message]
+      yield* sync.catchUp
+      expect(yield* kernelLanded(message.messageID)).toBeDefined()
+      expect(yield* inputCount(sessionID)).toBe(1)
+      yield* publishUntilAdmitted(message, sessionID, 2)
+      yield* publishUntilAdmitted(inbound({ messageID: "next_live", msgTime: message.msgTime + 1 }), sessionID, 3)
+      expect(yield* inputCount(sessionID)).toBe(3)
+      expect((yield* SubscriptionRef.get(sync.recovery)).status).toBe("ready")
     }),
   )
 

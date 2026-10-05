@@ -249,6 +249,24 @@ import type {
   ImAttachmentsListResponses,
   ImAttachmentsUploadErrors,
   ImAttachmentsUploadResponses,
+  ImFacadeClaimErrors,
+  ImFacadeClaimResponses,
+  ImFacadeDirectErrors,
+  ImFacadeDirectResponses,
+  ImFacadeGroupsCreateErrors,
+  ImFacadeGroupsCreateResponses,
+  ImFacadeGroupsInviteErrors,
+  ImFacadeGroupsInviteResponses,
+  ImFacadeRebindErrors,
+  ImFacadeRebindResponses,
+  ImFacadeRenameErrors,
+  ImFacadeRenameResponses,
+  ImFacadeResolveErrors,
+  ImFacadeResolveResponses,
+  ImFacadeRetryErrors,
+  ImFacadeRetryResponses,
+  ImFacadeStatusErrors,
+  ImFacadeStatusResponses,
   ImGroupsCreateErrors,
   ImGroupsCreateResponses,
   ImGroupsListErrors,
@@ -6128,6 +6146,10 @@ export class Messages extends HeyApiClient {
       mentions?: Array<string>
       metadata?:
         | {
+            type: "kernel_sync"
+            liveEligible: boolean
+          }
+        | {
             type: "file_ref"
             path: string
             line?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -6471,6 +6493,341 @@ export class Attachments extends HeyApiClient {
   }
 }
 
+export class Groups2 extends HeyApiClient {
+  /**
+   * Create a kernel group
+   *
+   * Create a kernel-backed group via the facade (member_names are org directory names) and mirror it locally with the k:2:<group_id> binding.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      name: string
+      memberNames: Array<string>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+            { in: "body", key: "memberNames" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ImFacadeGroupsCreateResponses,
+      ImFacadeGroupsCreateErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/im/facade/groups",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Invite a user to a kernel group
+   *
+   * Invite a directory name into a kernel-bound local group (the group must carry a k:2:<group_id> binding).
+   */
+  public invite<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      directory?: string
+      workspace?: string
+      name: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ImFacadeGroupsInviteResponses,
+      ImFacadeGroupsInviteErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/im/facade/groups/{groupId}/invite",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Facade extends HeyApiClient {
+  /**
+   * IM facade status
+   *
+   * Snapshot of the multi-user IM facade state machine (disabled / claim_required / blocked / active), the claimed identity, the kernel engine connection state, and the origin of the facade key in use (never the key itself).
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImFacadeStatusResponses, ImFacadeStatusErrors, ThrowOnError>({
+      url: "/api/v1/im/status",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Claim IM identity
+   *
+   * Claim the IM identity (an org-unique name) for the configured facade key. Idempotent for an already-claimed key.
+   */
+  public claim<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      name: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImFacadeClaimResponses, ImFacadeClaimErrors, ThrowOnError>({
+      url: "/api/v1/im/facade/claim",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Rename IM identity
+   *
+   * Rename the claimed IM identity. The uuid and group memberships are unchanged.
+   */
+  public rename<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      name: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImFacadeRenameResponses, ImFacadeRenameErrors, ThrowOnError>({
+      url: "/api/v1/im/facade/rename",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Rebind IM identity to a new key
+   *
+   * Migrate the IM identity from the current facade key to a new key (key-rotation recovery). The new key is persisted to auth.json on success.
+   */
+  public rebind<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      newKey: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "newKey" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImFacadeRebindResponses, ImFacadeRebindErrors, ThrowOnError>({
+      url: "/api/v1/im/facade/rebind",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Retry the boot exchange
+   *
+   * Re-run the boot exchange against the facade (recovery from the blocked / claim_required states).
+   */
+  public retry<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImFacadeRetryResponses, ImFacadeRetryErrors, ThrowOnError>({
+      url: "/api/v1/im/facade/retry",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resolve an IM user by name
+   *
+   * Exact-match directory lookup inside the org (no fuzzy search). 404 im_not_found when absent.
+   */
+  public resolve<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      name: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "name" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImFacadeResolveResponses, ImFacadeResolveErrors, ThrowOnError>({
+      url: "/api/v1/im/facade/resolve",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Open a direct chat by name
+   *
+   * Resolve a directory name and open (idempotently reuse) the local direct-chat group with that user, binding the k:1:<uuid> kernel conversation.
+   */
+  public direct<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      name: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImFacadeDirectResponses, ImFacadeDirectErrors, ThrowOnError>({
+      url: "/api/v1/im/facade/direct",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  private _groups?: Groups2
+  get groups(): Groups2 {
+    return (this._groups ??= new Groups2({ client: this.client }))
+  }
+}
+
 export class Websocket extends HeyApiClient {
   /**
    * Connect to IM WebSocket
@@ -6524,6 +6881,11 @@ export class Im extends HeyApiClient {
   private _attachments?: Attachments
   get attachments(): Attachments {
     return (this._attachments ??= new Attachments({ client: this.client }))
+  }
+
+  private _facade?: Facade
+  get facade(): Facade {
+    return (this._facade ??= new Facade({ client: this.client }))
   }
 
   private _websocket?: Websocket

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect } from "bun:test"
-import { Effect, Layer, PubSub, Stream, SubscriptionRef } from "effect"
+import { Context, Effect, Layer, PubSub, Stream, SubscriptionRef } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
@@ -265,10 +265,18 @@ describe("IMKernelSync durable history pagination", () => {
       expect(checkpoint?.lastSyncTime).toBe(1_700_000_000_098)
       historyRequests = []
       historyFailure = () => false
-      yield* sync.catchUp
+      // Rebuild the engine against the same durable repository: no in-memory pagination state survives.
+      const restarted = yield* Layer.build(
+        IMKernelSync.layer(config).pipe(
+          Layer.provide(Layer.succeed(IMRepository, repoSvc)),
+          Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)),
+          Layer.provide(fakeClient),
+        ),
+      )
+      yield* Context.get(restarted, IMKernelSync.Service).catchUp
       expect(historyRequests[0].after).toBe(checkpoint!.lastSyncTime)
       expect((yield* repoSvc.listMessages({ groupID: group.id, limit: 500 })).messages).toHaveLength(226)
-      expect((yield* SubscriptionRef.get(sync.recovery)).status).toBe("ready")
+      expect((yield* SubscriptionRef.get(Context.get(restarted, IMKernelSync.Service).recovery)).status).toBe("ready")
     }),
   )
 
@@ -282,7 +290,7 @@ describe("IMKernelSync durable history pagination", () => {
       yield* sync.catchUp
       const repoSvc = yield* IMRepository
       expect((yield* SubscriptionRef.get(sync.recovery)).status).toBe("failed")
-      expect((yield* SubscriptionRef.get(sync.recovery)).message).toContain("timestamp boundary")
+      expect((yield* SubscriptionRef.get(sync.recovery)).message).toContain("synchronization failed")
       expect((yield* repoSvc.getSyncCursor(IMKernelSync.historyCursorKey("k:1:bob")))?.lastSyncTime).toBe(
         1_699_999_999_999,
       )

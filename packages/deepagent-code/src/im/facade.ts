@@ -1,6 +1,19 @@
 export * as IMFacade from "./facade"
 
-import { Context, Effect, Layer, Option, Ref, Result, Schedule, Schema, Semaphore, SubscriptionRef } from "effect"
+import {
+  Context,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Ref,
+  Result,
+  Schedule,
+  Schema,
+  Scope,
+  Semaphore,
+  SubscriptionRef,
+} from "effect"
 import { HttpClient } from "effect/unstable/http"
 import { IMRepository } from "@deepagent-code/core/im/repository"
 import type { IMGroup, IMRepositoryError } from "@deepagent-code/core/im/repository"
@@ -22,12 +35,12 @@ import type { KernelClient } from "./kernel/client"
 //   1. boot 时按凭据解析结果决定状态机落点（disabled / claim_required / blocked / active），
 //      并在拿到内核坐标时建成同步引擎（B1 的 boot 路径，从 server.ts 收编至此）。
 //   2. claim / rename / rebind / retryExchange —— 引导流与身份管理。claim/retry 成功后热启动
-//      引擎（jugglechat-websdk 进程单例约束下安全：这两条路径只在引擎缺席时构建）。
+//      引擎；凭证替换前关闭旧 scope，保持 jugglechat-websdk 的进程单例约束。
 //   3. resolve / createGroup / openDirect / invite —— 通讯录与群管理：门面调用 + 本地
 //      sqlite 镜像（群行 + 成员 + k:<type>:<id> 绑定），发送/收消息仍走 B1 引擎。
 //
 // 凭据策略（项⑥，以 B1 落地方案为准）：kernel_token/navigator_url 只在内存（每次启动重新
-// exchange，refresh-on-restart，不落盘）。sk- key 来源：rebind 成功写入 auth.json（用户配置
+// exchange，短期凭证到期前或断线后续期，不落盘）。sk- key 来源：rebind 成功写入 auth.json（用户配置
 // 目录，0o600，不落仓库）优先；否则 DEEPAGENT_IM_FACADE_KEY env 注入（dev 路径）。URL 只认
 // DEEPAGENT_IM_FACADE_URL env。
 
@@ -59,6 +72,7 @@ export interface StatusSnapshot {
   readonly identity: Option.Option<IdentityInfo>
   readonly blocked: Option.Option<{ readonly code: string; readonly message: string }>
   readonly kernel: Option.Option<KernelClient.ConnectionState>
+  readonly recovery?: IMKernelSync.RecoveryState
   readonly keyOrigin: "stored" | "env" | "none"
 }
 
@@ -77,7 +91,7 @@ export interface Interface {
   readonly claim: (name: string) => Effect.Effect<IdentityInfo, IMKernelExchange.ExchangeError>
   readonly rename: (name: string) => Effect.Effect<IdentityInfo, IMKernelExchange.ExchangeError>
   readonly rebind: (newKey: string) => Effect.Effect<IdentityInfo, IMKernelExchange.ExchangeError>
-  /** blocked/claim_required 状态下重跑 boot exchange；成功 ⇒ 引擎热启动 + active。 */
+  /** 重读持久凭据并重新 exchange；先关闭旧连接，成功后替换引擎并进入 active。 */
   readonly retryExchange: Effect.Effect<IdentityInfo, IMKernelExchange.ExchangeError>
   /** 通讯录精确查找（名归一化后发送）。 */
   readonly resolve: (name: string) => Effect.Effect<IMKernelExchange.ResolvePayload, IMKernelExchange.ExchangeError>
@@ -108,6 +122,8 @@ export type EngineBuilder = (
 ) => Layer.Layer<IMKernelSync.Service, unknown, IMRepository | IMBroadcasterService | AgentListProviderService>
 
 export interface Options {
+  /** Credential renewal check interval in milliseconds; defaults to 30 seconds. */
+  readonly credentialRefreshInterval?: number
   readonly buildEngine?: EngineBuilder
   /** 门面坐标/PoC 配置的读取源（默认 process.env）。 */
   readonly env?: Readonly<Record<string, string | undefined>>
@@ -145,17 +161,29 @@ export const layer = (options?: Options) =>
       const engine = yield* Ref.make<Option.Option<IMKernelSync.Interface>>(Option.none())
       const sourceRef = yield* Ref.make<Option.Option<KernelConfig.FacadeSource>>(Option.none())
       const keyOriginRef = yield* Ref.make<"stored" | "env" | "none">("none")
+      const expiresAt = yield* Ref.make<number | undefined>(undefined)
       // 引擎构建串行化：并发 claim/retry 不能触发两次 SDK 实例化（进程单例防呆会 defect）。
       const engineLock = yield* Semaphore.make(1)
-      const scope = yield* Effect.scope
+      const identityLock = yield* Semaphore.make(1)
+      const engineScope = yield* Ref.make<Option.Option<Scope.Closeable>>(Option.none())
+      const stopEngine = engineLock.withPermits(1)(
+        Effect.gen(function* () {
+          yield* Ref.set(engine, Option.none())
+          const previous = yield* Ref.getAndSet(engineScope, Option.none())
+          if (Option.isSome(previous)) yield* Scope.close(previous.value, Exit.void)
+        }),
+      )
+      yield* Effect.addFinalizer(() => stopEngine)
 
       // 引擎装配：依赖从本服务构造期上下文现取（与 B1 server.ts 接线等价的 provide 集），
-      // 建进 facade 自己的 scope——与图层同生死，不再区分 boot/热启动两种生命周期。
+      // 每代引擎独占子 scope；换凭证和 facade 关闭时都先停止旧引擎。
       const startEngine = (config: KernelConfig.Info): Effect.Effect<IMKernelSync.Interface, unknown> =>
         engineLock.withPermits(1)(
           Effect.gen(function* () {
-            const existing = yield* Ref.get(engine)
-            if (Option.isSome(existing)) return existing.value
+            yield* Ref.set(engine, Option.none())
+            const previous = yield* Ref.getAndSet(engineScope, Option.none())
+            if (Option.isSome(previous)) yield* Scope.close(previous.value, Exit.void)
+            const scope = yield* Scope.make()
             const depsBase = Context.make(IMRepository, repo).pipe(
               Context.add(IMBroadcasterService, broadcaster),
               Context.add(AgentListProviderService, agentListProvider),
@@ -183,7 +211,8 @@ export const layer = (options?: Options) =>
                 Layer.succeedContext(deps),
               ),
               scope,
-            )
+            ).pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void)))
+            yield* Ref.set(engineScope, Option.some(scope))
             const instance = Context.get(built, IMKernelSync.Service)
             yield* Ref.set(engine, Option.some(instance))
             log.info("kernel sync engine started", { userID: config.userID, identity: config.identity?.name })
@@ -236,10 +265,11 @@ export const layer = (options?: Options) =>
               }),
             )
 
-      // exchange 成功 ⇒ active + 引擎启动（幂等）。引擎启动失败不拖垮激活——身份已认领是事实，
+      // exchange 成功 ⇒ active + 引擎替换。引擎启动失败不拖垮激活——身份已认领是事实，
       // engine 缺席由 status.kernel=None 表达（GUI 给重试入口；retry/restart 会再建）。
       const activate = Effect.fn("IMFacade.activate")(function* (payload: IMKernelExchange.ExchangePayload) {
         const identity = toIdentity(payload)
+        yield* Ref.set(expiresAt, payload.credential_expires_at)
         yield* SubscriptionRef.set(state, { kind: "active", identity })
         yield* startEngine(IMKernelExchange.toKernelConfig(payload)).pipe(
           Effect.catch((error) =>
@@ -253,7 +283,7 @@ export const layer = (options?: Options) =>
         return identity
       })
 
-      // boot：exchange 的失败不落错误通道（绝不阻塞 server 启动，refresh-on-restart），落状态机。
+      // boot：exchange 的失败不落错误通道（绝不阻塞 server 启动），落可重试的状态机。
       const boot = Effect.gen(function* () {
         const sourceOption = yield* resolveSource
         if (Option.isNone(sourceOption)) {
@@ -339,7 +369,55 @@ export const layer = (options?: Options) =>
         return validated.ok ? Effect.succeed(validated.name) : Effect.fail(invalidName(validated.reason))
       }
 
+      const retryExchange = identityLock.withPermits(1)(
+        Effect.gen(function* () {
+          // A console inheritance may have replaced auth.json since boot. Retire the old connection
+          // before consulting the newly resolved source, including when the replacement is rejected.
+          yield* stopEngine
+          const source = yield* resolveSource
+          yield* Ref.set(sourceRef, source)
+          const outcome = yield* Effect.result(
+            Option.isSome(source)
+              ? withClient(exchangeOnce(source.value))
+              : Effect.fail(
+                  new IMKernelExchange.ExchangeError({
+                    code: "im_unavailable",
+                    message: "No IM facade credential is configured",
+                    status: 503,
+                    retryable: false,
+                  }),
+                ),
+          )
+          if (Result.isFailure(outcome)) {
+            const error = outcome.failure
+            yield* SubscriptionRef.set(
+              state,
+              error.code === "im_not_claimed"
+                ? { kind: "claim_required" }
+                : { kind: "blocked", code: error.code, message: error.message },
+            )
+            return yield* error
+          }
+          return yield* activate(outcome.success)
+        }),
+      )
+
       yield* boot
+
+      yield* Effect.gen(function* () {
+        const expiration = yield* Ref.get(expiresAt)
+        if (expiration === undefined) return
+        const running = yield* Ref.get(engine)
+        const connection = Option.isSome(running) ? yield* SubscriptionRef.get(running.value.state) : undefined
+        if (Date.now() < expiration * 1_000 - 60_000 && connection !== "failed" && connection !== "disconnected") return
+        yield* retryExchange.pipe(
+          Effect.catch((error) =>
+            Effect.sync(() =>
+              log.warn("IM credential refresh failed; connection remains closed until retry", { code: error.code }),
+            ),
+          ),
+        )
+      }).pipe(Effect.repeat(Schedule.spaced(options?.credentialRefreshInterval ?? 30_000)), Effect.forkScoped)
 
       return Service.of({
         state,
@@ -358,72 +436,61 @@ export const layer = (options?: Options) =>
                 ? Option.some({ code: current.code, message: current.message })
                 : Option.none(),
             kernel,
+            ...(Option.isSome(running) ? { recovery: yield* SubscriptionRef.get(running.value.recovery) } : {}),
             keyOrigin: yield* Ref.get(keyOriginRef),
           } satisfies StatusSnapshot
         }),
         claim: (raw) =>
-          Effect.gen(function* () {
-            const source = yield* requireSource
-            const name = yield* validatedName(raw)
-            return yield* activate(yield* withClient(IMKernelExchange.claim({ ...source, name })))
-          }),
+          identityLock.withPermits(1)(
+            Effect.gen(function* () {
+              const source = yield* requireSource
+              const name = yield* validatedName(raw)
+              return yield* activate(yield* withClient(IMKernelExchange.claim({ ...source, name })))
+            }),
+          ),
         rename: (raw) =>
-          Effect.gen(function* () {
-            const { source } = yield* requireActive
-            const name = yield* validatedName(raw)
-            const payload = yield* withClient(IMKernelExchange.rename({ ...source, name }))
-            const identity = toIdentity(payload)
-            yield* SubscriptionRef.set(state, { kind: "active", identity })
-            // 引擎不重建：uuid/群关系不变，内核 token 长效（refresh-on-restart）。已知缝隙：运行中
-            // 引擎的 @我 匹配名（config.identity.name）重启后才是新名（responder 默认关，低频可接受）。
-            return identity
-          }),
+          identityLock.withPermits(1)(
+            Effect.gen(function* () {
+              const { source } = yield* requireActive
+              const name = yield* validatedName(raw)
+              const payload = yield* withClient(IMKernelExchange.rename({ ...source, name }))
+              return yield* activate(payload)
+            }),
+          ),
         rebind: (newKey) =>
-          Effect.gen(function* () {
-            const { source } = yield* requireActive
-            const key = newKey.trim()
-            if (!key)
-              return yield* new IMKernelExchange.ExchangeError({
-                code: "invalid_request",
-                message: "the new key must not be empty",
-                status: 400,
-                retryable: false,
-              })
-            if (key === source.key)
-              return yield* new IMKernelExchange.ExchangeError({
-                code: "invalid_request",
-                message: "the new key is the key currently in use",
-                status: 400,
-                retryable: false,
-              })
-            const payload = yield* withClient(IMKernelExchange.rebind({ ...source, newKey: key }))
-            // 身份已在门面侧迁移 ⇒ 后续门面调用立即改用新 key；持久化（auth.json，0o600）供下次
-            // 启动优先于 env。server mode 禁写 auth.json（gateway 托管 key）——记日志后继续。
-            yield* Ref.set(sourceRef, Option.some({ facadeURL: source.facadeURL, key }))
-            yield* auth.set(AUTH_KEY, new Auth.Api({ type: "api", key })).pipe(
-              Effect.tapError((error) =>
-                Effect.sync(() => log.warn("failed to persist the rebound IM key", { message: error.message })),
-              ),
-              Effect.ignore,
-              Effect.andThen(Ref.set(keyOriginRef, "stored")),
-            )
-            return yield* activate(payload)
-          }),
-        retryExchange: Effect.gen(function* () {
-          const source = yield* requireSource
-          const outcome = yield* Effect.result(withClient(exchangeOnce(source)))
-          if (Result.isFailure(outcome)) {
-            const error = outcome.failure
-            yield* SubscriptionRef.set(
-              state,
-              error.code === "im_not_claimed"
-                ? { kind: "claim_required" }
-                : { kind: "blocked", code: error.code, message: error.message },
-            )
-            return yield* error
-          }
-          return yield* activate(outcome.success)
-        }),
+          identityLock.withPermits(1)(
+            Effect.gen(function* () {
+              const { source } = yield* requireActive
+              const key = newKey.trim()
+              if (!key)
+                return yield* new IMKernelExchange.ExchangeError({
+                  code: "invalid_request",
+                  message: "the new key must not be empty",
+                  status: 400,
+                  retryable: false,
+                })
+              if (key === source.key)
+                return yield* new IMKernelExchange.ExchangeError({
+                  code: "invalid_request",
+                  message: "the new key is the key currently in use",
+                  status: 400,
+                  retryable: false,
+                })
+              const payload = yield* withClient(IMKernelExchange.rebind({ ...source, newKey: key }))
+              // 身份已在门面侧迁移 ⇒ 后续门面调用立即改用新 key；持久化（auth.json，0o600）供下次
+              // 启动优先于 env。server mode 禁写 auth.json（gateway 托管 key）——记日志后继续。
+              yield* Ref.set(sourceRef, Option.some({ facadeURL: source.facadeURL, key }))
+              yield* auth.set(AUTH_KEY, new Auth.Api({ type: "api", key })).pipe(
+                Effect.tapError((error) =>
+                  Effect.sync(() => log.warn("failed to persist the rebound IM key", { message: error.message })),
+                ),
+                Effect.ignore,
+                Effect.andThen(Ref.set(keyOriginRef, "stored")),
+              )
+              return yield* activate(payload)
+            }),
+          ),
+        retryExchange,
         resolve: (raw) =>
           Effect.gen(function* () {
             const { source } = yield* requireActive

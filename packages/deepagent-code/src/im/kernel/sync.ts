@@ -380,8 +380,36 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
             // 整条跳过（比 kernel_msg_id 命中已 ack 行更宽——ack 竞态下也不会写重）。
             if (msg.senderID === config.userID) return
             // at-least-once 去重：kernel_msg_id 的 unique index 是最终防线，这里先查一轮省一次写。
-            if (yield* repo.getMessageByKernelMsgID(msg.messageID)) {
+            const existing = yield* repo.getMessageByKernelMsgID(msg.messageID)
+            if (existing) {
               yield* advanceCursor(convKey, msg.msgTime)
+              // A periodic history poll may beat the live websocket delivery. Only rows explicitly
+              // observed while already online may reconcile that later live notification.
+              if (
+                origin === "live" &&
+                existing.metadata &&
+                typeof existing.metadata === "object" &&
+                "type" in existing.metadata &&
+                existing.metadata.type === "kernel_sync" &&
+                "liveEligible" in existing.metadata &&
+                existing.metadata.liveEligible === true &&
+                existing.senderID === msg.senderID &&
+                existing.content === msg.text &&
+                existing.createdAt === msg.msgTime
+              ) {
+                const group = yield* ensureConversation({
+                  conversationType: msg.conversationType,
+                  conversationID: msg.conversationID,
+                  senderID: existing.senderID,
+                })
+                if (
+                  group?.id === existing.groupID &&
+                  (yield* SubscriptionRef.get(recovery)).status === "ready" &&
+                  (yield* SubscriptionRef.get(client.state)) === "connected" &&
+                  msg.msgTime > (yield* Ref.get(replayBefore))
+                )
+                  yield* maybeAdmitMentions(existing.groupID, existing.id, msg)
+              }
               return
             }
             const group = yield* ensureConversation({
@@ -403,6 +431,10 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
               type: "text",
               content: msg.text,
               kernelMsgID: msg.messageID,
+              metadata:
+                origin === "history" && (yield* SubscriptionRef.get(recovery)).status === "ready"
+                  ? { type: "kernel_sync", liveEligible: true }
+                  : undefined,
               createdAt: msg.msgTime,
             })
             broadcaster.broadcast(group.id, {
@@ -468,7 +500,7 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
 
       // SDK cursors are strict timestamps, not message IDs. Keep the last millisecond open and
       // enlarge a saturated boundary page; advancing past that boundary would silently lose ties.
-      const catchUpConversation = (group: { kernelConvID: string | null }) =>
+      const catchUpConversation = (group: { kernelConvID: string | null }, recovering: boolean) =>
         Effect.gen(function* () {
           if (!group.kernelConvID) return
           const parsed = parseKernelConvKey(group.kernelConvID)
@@ -486,7 +518,7 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
                 })
               yield* handleInbound(msg, "history")
             }
-            yield* Ref.update(replayBefore, (time) => Math.max(time, page.latestTime))
+            if (recovering) yield* Ref.update(replayBefore, (time) => Math.max(time, page.latestTime))
             const next = Math.max(progress.after, page.latestTime - 1)
             // This checkpoint belongs only to fully persisted history pages, never realtime traffic.
             yield* repo.upsertSyncCursor({ conversationID: cursorKey, lastSyncTime: next })
@@ -511,8 +543,8 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
 
       const catchUp = recoveryLock.withPermits(1)(
         Effect.gen(function* () {
-          if ((yield* SubscriptionRef.get(recovery)).status !== "ready")
-            yield* SubscriptionRef.set(recovery, { status: "pending" })
+          const recovering = (yield* SubscriptionRef.get(recovery)).status !== "ready"
+          if (recovering) yield* SubscriptionRef.set(recovery, { status: "pending" })
           // getConversations discovers first DMs and invited groups even when the local database has
           // no binding yet. The list supplies hints only; the facade verifies each hint independently.
           if (options?.inspectConversation) {
@@ -520,7 +552,7 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
             for (let pageNumber = 0; pageNumber < 1_000; pageNumber++) {
               const page = yield* client.fetchConversations(progress)
               for (const conversation of page.conversations) {
-                yield* Ref.update(replayBefore, (time) => Math.max(time, conversation.sortTime))
+                if (recovering) yield* Ref.update(replayBefore, (time) => Math.max(time, conversation.sortTime))
                 if (conversation.conversationType !== 1 && conversation.conversationType !== 2) continue
                 yield* ensureConversation({
                   conversationType: conversation.conversationType,
@@ -528,6 +560,11 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
                 })
               }
               if (page.isFinished) break
+              if (pageNumber === 999)
+                return yield* new KernelSdk.KernelError({
+                  operation: "fetchConversations",
+                  message: "Conversation discovery exceeded its page budget",
+                })
               const next = Math.min(progress.before, ...page.conversations.map((item) => item.sortTime + 1))
               if (next >= progress.before) {
                 if (progress.count >= MAX_HISTORY_PAGE_SIZE)
@@ -540,20 +577,26 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
               }
               progress.before = next
               progress.count = HISTORY_PAGE_SIZE
-              if (pageNumber === 999)
-                return yield* new KernelSdk.KernelError({
-                  operation: "fetchConversations",
-                  message: "Conversation discovery exceeded its page budget",
-                })
             }
           }
-          for (const group of yield* repo.listKernelBoundGroups) yield* catchUpConversation(group)
+          for (const group of yield* repo.listKernelBoundGroups) yield* catchUpConversation(group, recovering)
           yield* SubscriptionRef.set(recovery, { status: "ready" })
         }).pipe(
           Effect.catchCause((cause) => {
-            const message = Cause.pretty(cause)
-            log.error("kernel recovery failed; Agent admission stays disabled until retry", { message })
-            return SubscriptionRef.set(recovery, { status: "failed", message })
+            const error = Cause.squash(cause)
+            log.error("kernel recovery failed; Agent admission stays disabled until retry", {
+              code:
+                error instanceof IMKernelExchange.ExchangeError
+                  ? error.code
+                  : error instanceof KernelSdk.KernelError
+                    ? error.operation
+                    : "unexpected_failure",
+            })
+            return SubscriptionRef.set(recovery, {
+              status: "failed",
+              message:
+                "IM history synchronization failed. Retry after the connection and conversation permissions recover.",
+            })
           }),
         ),
       )
@@ -568,9 +611,20 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
           yield* handleInbound(msg, origin)
         }).pipe(
           Effect.catchCause((cause) => {
-            const message = Cause.pretty(cause)
-            log.error("inbound kernel message failed; history recovery will retry", { message })
-            return SubscriptionRef.set(recovery, { status: "failed", message })
+            const error = Cause.squash(cause)
+            log.error("inbound kernel message failed; history recovery will retry", {
+              code:
+                error instanceof IMKernelExchange.ExchangeError
+                  ? error.code
+                  : error instanceof KernelSdk.KernelError
+                    ? error.operation
+                    : "unexpected_failure",
+            })
+            return SubscriptionRef.set(recovery, {
+              status: "failed",
+              message:
+                "IM history synchronization failed. Retry after the connection and conversation permissions recover.",
+            })
           }),
         ),
       ).pipe(Effect.forkScoped)

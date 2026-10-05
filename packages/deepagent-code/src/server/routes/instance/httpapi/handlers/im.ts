@@ -800,9 +800,11 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
       // ── B2 门面端点 ─────────────────────────────────────────────────────────────────
       // facade 服务缺席（图层未挂 IMFacade）⇒ status 返回 disabled 快照，mutation 一律
       // im_unavailable（与门面自身 fail-closed 语义一致）。ExchangeError 按状态归桶透传 code。
-      .handle("facadeStatus", () =>
+      .handle("facadeStatus", ({ query }) =>
         Effect.gen(function* () {
-          if (!facade) return { facade: "disabled" as const, identity: null, blocked: null, kernel: null, keyOrigin: "none" as const }
+          const context = yield* getWorkspaceContext(query)
+          const viewer = { memberID: context.userID }
+          if (!facade) return { facade: "disabled" as const, identity: null, blocked: null, kernel: null, keyOrigin: "none" as const, viewer }
           const snapshot = yield* facade.status
           return {
             facade: snapshot.facade,
@@ -810,6 +812,8 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
             blocked: Option.getOrNull(snapshot.blocked),
             kernel: Option.getOrNull(snapshot.kernel),
             keyOrigin: snapshot.keyOrigin,
+            recovery: snapshot.recovery,
+            viewer,
           }
         }),
       )

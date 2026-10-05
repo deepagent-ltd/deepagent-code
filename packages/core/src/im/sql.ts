@@ -83,7 +83,15 @@ export const NoTriggerMentionMetadata = Schema.Struct({
 })
 export type NoTriggerMentionMetadata = Schema.Schema.Type<typeof NoTriggerMentionMetadata>
 
+// A history poll on an established connection can precede the websocket notification.
+// Only that later verified live notification may reconcile Agent admission for this row.
+export const KernelSyncMetadata = Schema.Struct({
+  type: Schema.Literal("kernel_sync"),
+  liveEligible: Schema.Boolean,
+})
+
 export const MessageMetadata = Schema.Union([
+  KernelSyncMetadata,
   FileRefMetadata,
   CodeRefMetadata,
   AgentRunMetadata,

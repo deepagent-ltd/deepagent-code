@@ -12,7 +12,7 @@ import { IMKernelExchange } from "@/im/kernel/exchange"
 import { IMKernelSync } from "@/im/kernel/sync"
 import type { KernelConfig } from "@/im/kernel/config"
 import type { KernelClient } from "@/im/kernel/client"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 
 // IMFacade（B2 门面运行时）的单元测试：假 HttpClient（按路径分发罐装包络）+ 真内存 sqlite
 // 仓库 + 假引擎构建器（记录 config、返回固定引擎实例）。覆盖：boot 状态机四态、claim 引导
@@ -86,6 +86,7 @@ const makeAuth = (initial?: Readonly<Record<string, Auth.Info>>) => {
 
 interface Harness {
   readonly layer: Layer.Layer<IMFacade.Service | IMRepository, unknown, never>
+  readonly engineStops: KernelConfig.Info[]
   readonly engineStarts: KernelConfig.Info[]
   readonly engineState: SubscriptionRef.SubscriptionRef<KernelClient.ConnectionState>
 }
@@ -95,15 +96,18 @@ const makeHarness = (options: {
   env: Readonly<Record<string, string | undefined>>
   http: HttpClient.HttpClient
   auth?: Auth.Interface
+  credentialRefreshInterval?: number
   engineBehavior?: (config: KernelConfig.Info) => Effect.Effect<void, unknown>
 }): Effect.Effect<Harness, never, never> =>
   Effect.gen(function* () {
     const engineStarts: KernelConfig.Info[] = []
+    const engineStops: KernelConfig.Info[] = []
     const engineState = yield* SubscriptionRef.make<KernelClient.ConnectionState>("disconnected")
     const buildEngine = (config: KernelConfig.Info) =>
       Layer.unwrap(
         Effect.gen(function* () {
           engineStarts.push(config)
+          yield* Effect.addFinalizer(() => Effect.sync(() => void engineStops.push(config)))
           if (options.engineBehavior) yield* options.engineBehavior(config)
           return Layer.succeed(
             IMKernelSync.Service,
@@ -119,14 +123,18 @@ const makeHarness = (options: {
       )
     const database = Database.layerFromPath(":memory:")
     const repo = IMRepositoryLive.pipe(Layer.provide(database))
-    const facade = IMFacade.layer({ env: options.env, buildEngine }).pipe(
+    const facade = IMFacade.layer({
+      env: options.env,
+      buildEngine,
+      credentialRefreshInterval: options.credentialRefreshInterval,
+    }).pipe(
       Layer.provide(repo),
       Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)),
       Layer.provide(agentProvider),
       Layer.provide(Layer.succeed(Auth.Service, options.auth ?? makeAuth().service)),
       Layer.provide(Layer.succeed(HttpClient.HttpClient, options.http)),
     )
-    return { layer: Layer.mergeAll(facade, repo), engineStarts, engineState }
+    return { layer: Layer.mergeAll(facade, repo), engineStarts, engineStops, engineState }
   })
 
 const exchangeFail =
@@ -217,7 +225,7 @@ describe("IMFacade", () => {
     }),
   )
 
-  it.live("boot 409 im_not_claimed → claim_required; claim hot-starts the engine once", () =>
+  it.live("boot 409 im_not_claimed → claim_required; claim hot-starts and safely replaces the engine", () =>
     Effect.gen(function* () {
       const seen: Seen[] = []
       let claimed = false
@@ -240,7 +248,7 @@ describe("IMFacade", () => {
         expect(identity).toEqual({ uuid: "uuid-bob", name: "bob", orgID: 7, orgAllGroupID: "org7" })
         expect((yield* facade.status).facade).toBe("active")
 
-        // 同 key 重认领幂等：引擎不会被第二次构建（进程单例防呆）。
+        // Reclaim refreshes credentials; the previous SDK scope closes before rebuilding.
         yield* facade.claim("bob")
         const engine = yield* Ref.get(facade.engine)
         expect(Option.isSome(engine)).toBe(true)
@@ -248,7 +256,7 @@ describe("IMFacade", () => {
       expect(claimed).toBe(true)
       // 认领名归一化后发送
       expect(seen.find((s) => s.url.endsWith("/api/im/claim"))?.body).toEqual({ name: "bob" })
-      expect(harness.engineStarts.length).toBe(1)
+      expect(harness.engineStarts.length).toBe(2)
       expect(harness.engineStarts[0].userID).toBe("uuid-bob")
     }),
   )
@@ -320,7 +328,83 @@ describe("IMFacade", () => {
     }),
   )
 
-  it.live("rename updates the identity without rebuilding the engine", () =>
+  it.live("retry re-reads a replaced stored key, closes the old connection, and exposes recovery state", () =>
+    Effect.gen(function* () {
+      const auth = makeAuth({ [IMFacade.AUTH_KEY]: new Auth.Api({ type: "api", key: "sk-old" }) })
+      const seen: Seen[] = []
+      const harness = yield* makeHarness({
+        env: FACADE_ENV,
+        auth: auth.service,
+        http: httpStub(() => ok(payload()), seen),
+      })
+      yield* Effect.gen(function* () {
+        const facade = yield* IMFacade.Service
+        auth.store.set(IMFacade.AUTH_KEY, new Auth.Api({ type: "api", key: "sk-recovered" }))
+        yield* facade.retryExchange
+        expect(seen.map((request) => request.authorization)).toEqual(["Bearer sk-old", "Bearer sk-recovered"])
+        expect(harness.engineStarts).toHaveLength(2)
+        expect(harness.engineStops).toHaveLength(1)
+        expect((yield* facade.status).recovery).toEqual({ status: "ready" })
+      }).pipe(Effect.provide(harness.layer))
+    }),
+  )
+
+  it.live("a rejected replacement key leaves no old connection or active identity", () =>
+    Effect.gen(function* () {
+      const auth = makeAuth({ [IMFacade.AUTH_KEY]: new Auth.Api({ type: "api", key: "sk-old" }) })
+      const seen: Seen[] = []
+      let reject = false
+      const harness = yield* makeHarness({
+        env: FACADE_ENV,
+        auth: auth.service,
+        http: httpStub(() => (reject ? fail("im_key_invalid", "key rejected", 403) : ok(payload())), seen),
+      })
+      yield* Effect.gen(function* () {
+        const facade = yield* IMFacade.Service
+        reject = true
+        auth.store.set(IMFacade.AUTH_KEY, new Auth.Api({ type: "api", key: "sk-invalid" }))
+        expect((yield* facade.retryExchange.pipe(Effect.flip)).code).toBe("im_key_invalid")
+        expect(Option.isNone(yield* Ref.get(facade.engine))).toBe(true)
+        expect(harness.engineStops).toHaveLength(1)
+        expect((yield* facade.status).facade).toBe("blocked")
+        expect((yield* facade.resolve("bob").pipe(Effect.flip)).code).toBe("im_key_invalid")
+        expect(seen.map((request) => request.authorization)).toEqual(["Bearer sk-old", "Bearer sk-invalid"])
+      }).pipe(Effect.provide(harness.layer))
+    }),
+  )
+
+  it.live("renews expiring credentials before the lease ends and retires the previous SDK scope", () =>
+    Effect.gen(function* () {
+      const seen: Seen[] = []
+      const harness = yield* makeHarness({
+        env: FACADE_ENV,
+        credentialRefreshInterval: 10,
+        engineBehavior: () => Effect.void,
+        http: httpStub(
+          () =>
+            ok({
+              ...payload(),
+              kernel_token: `lease_${seen.length}`,
+              credential_expires_at: Math.floor(Date.now() / 1_000) + (seen.length === 1 ? 59 : 3600),
+            }),
+          seen,
+        ),
+      })
+      yield* Effect.gen(function* () {
+        const facade = yield* IMFacade.Service
+        yield* SubscriptionRef.set(harness.engineState, "connected")
+        yield* pollWithTimeout(
+          Effect.sync(() => (harness.engineStarts.length >= 2 ? true : undefined)),
+          "expiring credential was not refreshed",
+        )
+        expect(harness.engineStarts[1].token).toBe("lease_2")
+        expect(harness.engineStops).toHaveLength(1)
+        expect((yield* facade.status).facade).toBe("active")
+      }).pipe(Effect.provide(harness.layer))
+    }),
+  )
+
+  it.live("rename replaces the engine with the new name and retires the prior credential", () =>
     Effect.gen(function* () {
       const http = httpStub((req) => {
         if (req.url.endsWith("/api/im/exchange")) return ok(payload())
@@ -334,9 +418,10 @@ describe("IMFacade", () => {
         const identity = yield* facade.rename(" Alice2 ")
         expect(identity).toEqual({ uuid: "uuid-alice", name: "alice2", orgID: 7, orgAllGroupID: "org7" })
         const after = yield* Ref.get(facade.engine)
-        expect(Option.isSome(after) && Option.isSome(before) && after.value === before.value).toBe(true)
+        expect(Option.isSome(after) && Option.isSome(before) && after.value !== before.value).toBe(true)
+        expect(harness.engineStops).toHaveLength(1)
       }).pipe(Effect.provide(harness.layer))
-      expect(harness.engineStarts.length).toBe(1)
+      expect(harness.engineStarts.length).toBe(2)
     }),
   )
 

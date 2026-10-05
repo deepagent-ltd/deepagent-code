@@ -6,8 +6,8 @@ import type { KernelConfig } from "./config"
 
 // 门面 /api/im 的 typed 客户端（design §4：sk- key → 内核连接坐标）。B2 用 exchange 替换 B1 的
 // 直连 env 注入：key 已认领 ⇒ exchange 幂等地 RegisterUser + 确保加入全员群后返回内核 token；
-// 未认领 ⇒ 409 im_not_claimed（先 claim）。token 长效，refresh-on-restart（每次启动重新 exchange，
-// 门面侧自愈）；运行期 401 重换列 follow-up。
+// 未认领 ⇒ 409 im_not_claimed（先 claim）。灰度短期 token 携带 credential_expires_at，
+// facade 在到期前或断线后重新 exchange，并关闭旧 SDK 后安装新凭证。
 
 export class ExchangeError extends Schema.TaggedErrorClass<ExchangeError>()("IMKernelExchangeError", {
   /** 门面业务码（im_not_claimed/im_key_invalid/…）或客户端侧分类（transport_error/invalid_response）。 */
@@ -27,6 +27,7 @@ export const IdentityPayload = Schema.Struct({
 
 export const ExchangePayload = Schema.Struct({
   kernel_token: Schema.String,
+  credential_expires_at: Schema.optional(Schema.Number),
   navigator_url: Schema.String,
   appkey: Schema.String,
   identity: IdentityPayload,

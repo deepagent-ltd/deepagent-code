@@ -44,6 +44,7 @@ export function validateIMName(raw: string): IMNameValidation {
 export const FACADE_ERROR_CODES = [
   "im_unavailable", // 503 — IM 功能未上线/内核未配置
   "im_not_claimed", // 409 — key 未认领 IM 身份（→ 引导认领）
+  "im_identity_changed", // 409 — identity changed concurrently; exchange with the current key
   "im_identity_disabled", // 403 — key 已删/禁，身份封禁
   "im_invalid_name", // 400 — 命名规则不满足
   "im_name_taken", // 409 — 重名，换名重试
@@ -72,6 +73,7 @@ export type IMFacadeErrorCode = FacadeErrorCode | ClientErrorCode
 const STATUS: Record<FacadeErrorCode, number> = {
   im_unavailable: 503,
   im_not_claimed: 409,
+  im_identity_changed: 409,
   im_identity_disabled: 403,
   im_invalid_name: 400,
   im_name_taken: 409,
