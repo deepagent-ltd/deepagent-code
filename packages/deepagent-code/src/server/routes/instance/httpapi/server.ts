@@ -1,4 +1,4 @@
-import { Config as EffectConfig, Context, Effect, Layer } from "effect"
+import { Config as EffectConfig, Context, Effect, Layer, Option, Schedule } from "effect"
 import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
 import {
   FetchHttpClient,
@@ -14,6 +14,7 @@ import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { FileLock } from "@deepagent-code/core/file-lock"
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
+import { InstanceStore } from "@/project/instance-store"
 import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
 import { Config } from "@/config/config"
@@ -80,6 +81,7 @@ import { ServerAgentListProviderLive } from "@/im/agent-executor-server"
 import { IMReplyOutbox } from "@/im/im-reply-outbox"
 import { IMKernelSync } from "@/im/kernel/sync"
 import { KernelConfig } from "@/im/kernel/config"
+import { IMKernelExchange } from "@/im/kernel/exchange"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
@@ -201,21 +203,60 @@ const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provi
 const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
 const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
 const imRepositoryLayer = IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))
-// IM-kernel (B1, design §2/§7): the kernel sync engine (JuggleIM WS ⇄ local sqlite authority).
-// Config comes from env in B1 (PoC direct-connect); B2 replaces it with the /api/im/exchange
-// client. Env absent ⇒ Layer.empty — the single-user path carries zero kernel footprint.
+// IM-kernel (B1/B2, design §2/§4/§7): the kernel sync engine (JuggleIM WS ⇄ local sqlite authority).
+// Config source (B2): DEEPAGENT_IM_FACADE_URL+KEY ⇒ POST /api/im/exchange swaps the sk- key for
+// kernel coordinates (facade RegisterUser is idempotent, so every boot re-exchanges — refresh-on-
+// restart; org all-group membership self-heals facade-side); otherwise the B1 PoC direct env
+// (DEEPAGENT_IM_KERNEL_*). Both absent ⇒ Layer.empty — the single-user path carries zero kernel
+// footprint. An exchange failure (facade down, key invalid/unclaimed) logs the remediation and
+// disables the kernel for this boot rather than failing server startup; the next boot retries.
 // Error channel is unknown: providing imRepositoryLayer pulls in Database.defaultLayer, whose
-// bootstrap preflight rejects with unknown (same as every other consumer of imRuntimeLayer).
-const imKernelSyncLayer = Layer.unwrap(
-  Effect.sync((): Layer.Layer<IMKernelSync.Service, unknown> => {
-    const config = KernelConfig.fromEnv()
-    if (!config) return Layer.empty as unknown as Layer.Layer<IMKernelSync.Service, unknown>
-    return IMKernelSync.layerFromConfig(config).pipe(
+// bootstrap preflight rejects with unknown (same as every other consumer of imRuntimeLayer). The R
+// channel (Agent/InstanceStore for the roster provider) is satisfied by the shared instance graph —
+// the same requirements the sibling ServerAgentListProviderLive declaration already places on it.
+type IMKernelSyncGraph = Layer.Layer<IMKernelSync.Service, unknown, Agent.Service | InstanceStore.Service>
+const resolveImKernelSyncLayer: Effect.Effect<IMKernelSyncGraph> = Effect.gen(function* () {
+  const disabled = Layer.empty as unknown as IMKernelSyncGraph
+  const enabled = (config: KernelConfig.Info): IMKernelSyncGraph =>
+    IMKernelSync.layerFromConfig(config).pipe(
       Layer.provide(imRepositoryLayer),
       Layer.provide(IMBroadcasterLive),
+      // The @Agent responder's roster source. mergeAll siblings are invisible to each other, so
+      // (like IMRepository above) the provider layer is supplied here directly; its own deps
+      // (Agent/InstanceStore) flow in from the shared instance graph, same as the sibling
+      // declaration in imRuntimeLayer.
+      Layer.provide(ServerAgentListProviderLive),
     )
-  }),
-)
+  const facade = KernelConfig.facadeFromEnv()
+  if (!facade) {
+    const config = KernelConfig.fromEnv()
+    return config ? enabled(config) : disabled
+  }
+  const http = Option.getOrUndefined(yield* Effect.serviceOption(HttpClient.HttpClient))
+  if (!http) {
+    console.warn("[im-kernel] facade configured but the server graph has no HttpClient — kernel integration disabled")
+    return disabled
+  }
+  const exchanged = yield* IMKernelExchange.exchange(facade).pipe(
+    Effect.retry({
+      while: (error) => error.retryable,
+      schedule: Schedule.exponential("1 second").pipe(Schedule.both(Schedule.recurs(2))),
+    }),
+    Effect.tapError((error) =>
+      Effect.sync(() =>
+        console.warn(
+          `[im-kernel] facade exchange failed (${error.code}): ${error.message} — kernel integration disabled for this boot ` +
+            `(refresh-on-restart). An unclaimed key must claim an IM identity first (POST /api/im/claim).`,
+        ),
+      ),
+    ),
+    Effect.option,
+    Effect.provideService(HttpClient.HttpClient, http),
+  )
+  if (Option.isNone(exchanged)) return disabled
+  return enabled(IMKernelExchange.toKernelConfig(exchanged.value))
+})
+const imKernelSyncLayer = Layer.unwrap(resolveImKernelSyncLayer)
 // V4.0 §D2/§F — Oversight services (read-only projection of the durable V4 substrate). Both need only
 // the Database layer; provided independently to the oversight handler.
 const oversightServicesLayer = Layer.mergeAll(

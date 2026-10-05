@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import { mkdtempSync } from "node:fs"
 import os from "node:os"
 import * as DateTime from "effect/DateTime"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, SubscriptionRef } from "effect"
 import { eq } from "drizzle-orm"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -23,6 +23,8 @@ import { IMRepository, IMRepositoryError, IMMessage } from "@deepagent-code/core
 import type { IMRepositoryInterface } from "@deepagent-code/core/im/repository"
 import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
 import { IMReplyOutbox } from "@/im/im-reply-outbox"
+import { IMKernelSync } from "@/im/kernel/sync"
+import { KernelClient } from "@/im/kernel/client"
 import { testEffect } from "../lib/effect"
 
 // V2 IM durable-only — the reply half (src/im/im-reply-outbox.ts). The terminal assistant reply of
@@ -207,6 +209,43 @@ describe("IMReplyOutbox append/claim/settle", () => {
       expect(
         yield* IMReplyOutbox.claimDueReply(db, { ownerToken: "late", now: delivered!.available_at + 10_000 }),
       ).toBeUndefined()
+    }),
+  )
+
+  it.effect("a delivered reply forwards to the kernel with the [Agent·] marker; the local row stays bare", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const input = { ...baseAppend, sessionID: "ses_im_outbox_kernel", replyMessageID: "msg_reply_kernel" }
+      yield* IMReplyOutbox.appendReply(db, { ...input, now: 0 })
+      const kernelSends: Array<{ groupID: string; messageID: string; content: string }> = []
+      const kernelSync: IMKernelSync.Interface = {
+        state: yield* SubscriptionRef.make<KernelClient.ConnectionState>("connected"),
+        send: (send) => Effect.sync(() => void kernelSends.push(send)),
+        drainPending: Effect.void,
+      }
+
+      yield* IMReplyOutbox.drainPass({ db, repo, broadcaster, kernelSync }, { now: 0 })
+
+      // design §6：跨内核回发带 [Agent·<执行者>] 标记（内核只路由文本，senderType/metadata 到不了
+      // 对端）；本地行保持裸文（本地渲染已有 senderType="agent" + metadata）。createdMessages 跨
+      // 测试累积——只断言本次 drain 追加的末尾行。
+      const created = createdMessages.at(-1)
+      expect(created).toEqual({
+        groupID: input.groupID,
+        senderID: input.agentID,
+        content: input.replyText,
+        metadata: { type: "agent_run", sessionID: input.sessionID, status: "success" },
+      })
+      expect(kernelSends).toEqual([
+        {
+          groupID: input.groupID,
+          messageID: `im_created_${createdMessages.length}`,
+          content: `[Agent·${input.agentID}] ${input.replyText}`,
+        },
+      ])
+      expect((yield* outboxRow(IMReplyOutbox.replyOutboxID(input.sessionID, input.replyMessageID)))?.status).toBe(
+        "delivered",
+      )
     }),
   )
 

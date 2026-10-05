@@ -377,7 +377,14 @@ export function deliverReply(deps: DeliveryDeps, item: ClaimedReply) {
       },
     })
     if (deps.kernelSync)
-      yield* deps.kernelSync.send({ groupID: item.groupID, messageID: message.id, content: item.replyText })
+      // design §6：跨内核回发带 [Agent·<执行者>] 标记——内核只路由文本，sender_type="agent" 与
+      // metadata 都到不了对端，文本前缀是唯一跨内核可见的作者标记。本地行保持裸文（本地渲染
+      // 已有 senderType/metadata）。outbox 只有 agent 名没有模型名，标记用 agent 名。
+      yield* deps.kernelSync.send({
+        groupID: item.groupID,
+        messageID: message.id,
+        content: `[Agent·${item.agentID}] ${item.replyText}`,
+      })
     return message
   })
 }
