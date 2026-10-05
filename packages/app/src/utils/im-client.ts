@@ -3,6 +3,43 @@ import { useServer } from "@/context/server"
 import { authTokenFromCredentials } from "@/utils/server"
 import type { AgentDescriptor, IMAttachment, IMGroup, IMMessage } from "@/components/im/types"
 
+// ── B2 门面（多用户 IM）────────────────────────────────────────────────────────
+// 类型镜像服务端 groups/im.ts 的 IMStatusResponse/IMIdentityResponse/IMResolveResponse。
+// 门面错误体是 {name, data:{code, message}}——GUI 一律按 code 出文案（见
+// components/im/facade-errors.ts 的逐码映射），HTTP status 只作粗分类。
+
+export interface IMFacadeIdentity {
+  uuid: string
+  name: string
+  orgID: number
+  orgAllGroupID: string
+}
+
+export interface IMFacadeStatus {
+  facade: "disabled" | "claim_required" | "blocked" | "active"
+  identity: IMFacadeIdentity | null
+  blocked: { code: string; message: string } | null
+  kernel: "connecting" | "connected" | "disconnected" | "failed" | null
+  keyOrigin: "stored" | "env" | "none"
+}
+
+export interface IMResolveResult {
+  uuid: string
+  name: string
+}
+
+/** 门面调用失败：code 是 15 个业务码之一或 4 个客户端侧分类码（core facade-contract）。 */
+export class IMFacadeRequestError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+    this.name = "IMFacadeRequestError"
+  }
+}
+
 export interface IMClientConfig {
   /** Server base URL (e.g. http://127.0.0.1:PORT, or <gateway>/w in server mode). */
   url: string
@@ -78,6 +115,36 @@ export function createIMClient(config: () => IMClientConfig) {
     if (!response.ok) {
       const text = await response.text().catch(() => "")
       throw new Error(`IM request failed (${response.status}): ${text || response.statusText}`)
+    }
+    return (await response.json()) as T
+  }
+
+  // 门面调用（B2）与普通 request 的差别只在错误解析：门面错误体 {name, data:{code,message}}
+  // 必须逐码透出（IMFacadeRequestError.code），UI 按码给文案。
+  const facadeRequest = async <T>(
+    path: string,
+    options?: { method?: string; query?: Record<string, string | undefined>; body?: unknown },
+  ): Promise<T> => {
+    const c = config()
+    const headers: Record<string, string> = { ...authHeaders(c) }
+    if (c.directory) headers["x-deepagent-code-directory"] = c.directory
+    if (c.workspace) headers["x-deepagent-code-workspace"] = c.workspace
+    const init: RequestInit = { method: options?.method ?? "GET", headers }
+    if (options?.body !== undefined) {
+      headers["Content-Type"] = "application/json"
+      init.body = JSON.stringify(options.body)
+    }
+    const response = await fetch(buildURL(path, options?.query), init)
+    if (!response.ok) {
+      const parsed = (await response.json().catch(() => undefined)) as
+        | { name?: string; data?: { code?: unknown; message?: unknown } }
+        | undefined
+      const code = typeof parsed?.data?.code === "string" ? parsed.data.code : "http_error"
+      const message =
+        typeof parsed?.data?.message === "string" && parsed.data.message
+          ? parsed.data.message
+          : `IM facade request failed (${response.status})`
+      throw new IMFacadeRequestError(code, message, response.status)
     }
     return (await response.json()) as T
   }
@@ -174,6 +241,23 @@ export function createIMClient(config: () => IMClientConfig) {
           limit: opts?.limit !== undefined ? String(opts.limit) : undefined,
         },
       }),
+    // ── B2 门面端点 ───────────────────────────────────────────────────────────
+    facadeStatus: () => facadeRequest<IMFacadeStatus>(`/api/v1/im/status`),
+    facadeClaim: (name: string) =>
+      facadeRequest<IMFacadeIdentity>(`/api/v1/im/facade/claim`, { method: "POST", body: { name } }),
+    facadeRename: (name: string) =>
+      facadeRequest<IMFacadeIdentity>(`/api/v1/im/facade/rename`, { method: "POST", body: { name } }),
+    facadeRebind: (newKey: string) =>
+      facadeRequest<IMFacadeIdentity>(`/api/v1/im/facade/rebind`, { method: "POST", body: { newKey } }),
+    facadeRetry: () => facadeRequest<IMFacadeIdentity>(`/api/v1/im/facade/retry`, { method: "POST", body: {} }),
+    facadeResolve: (name: string) =>
+      facadeRequest<IMResolveResult>(`/api/v1/im/facade/resolve`, { query: { name } }),
+    facadeOpenDirect: (name: string) =>
+      facadeRequest<IMGroup>(`/api/v1/im/facade/direct`, { method: "POST", body: { name } }),
+    facadeCreateGroup: (name: string, memberNames: string[]) =>
+      facadeRequest<IMGroup>(`/api/v1/im/facade/groups`, { method: "POST", body: { name, memberNames } }),
+    facadeInvite: (groupID: string, name: string) =>
+      facadeRequest<{ ok: boolean }>(`/api/v1/im/facade/groups/${groupID}/invite`, { method: "POST", body: { name } }),
     // Server Edition only: set the `access_token` cookie the gateway reads to
     // authenticate the WebSocket upgrade (browsers can't set WS headers). No-op
     // for self-hosted (which uses the `auth_token` query instead) or outside a

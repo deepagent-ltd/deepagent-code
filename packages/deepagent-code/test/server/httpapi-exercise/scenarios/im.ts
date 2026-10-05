@@ -41,6 +41,61 @@ export const imScenarios: Scenario[] = [
     }))
     .json(404, object, "status"),
   http.protected.get("/api/v1/im/agents", "im.agents.list").json(200, array),
+  // ── B2 门面端点（exercise 环境无 DEEPAGENT_IM_FACADE_* ⇒ 门面 disabled）：status 永远 200
+  // （disabled 快照）；mutation 一律 502 im_unavailable（fail-closed，GUI 按 data.code 出文案）。
+  http.protected
+    .get("/api/v1/im/status", "im.facade.status")
+    .json(200, (body) => {
+      object(body)
+      check(body.facade === "disabled", "facade status should be disabled without facade env")
+    }),
+  http.protected
+    .post("/api/v1/im/facade/claim", "im.facade.claim")
+    .mutating()
+    .at((ctx) => ({ path: "/api/v1/im/facade/claim", headers: ctx.headers(), body: { name: "httpapi" } }))
+    .json(502, object, "status"),
+  http.protected
+    .post("/api/v1/im/facade/rename", "im.facade.rename")
+    .mutating()
+    .at((ctx) => ({ path: "/api/v1/im/facade/rename", headers: ctx.headers(), body: { name: "httpapi" } }))
+    .json(502, object, "status"),
+  http.protected
+    .post("/api/v1/im/facade/rebind", "im.facade.rebind")
+    .mutating()
+    .at((ctx) => ({ path: "/api/v1/im/facade/rebind", headers: ctx.headers(), body: { newKey: "sk-httpapi" } }))
+    .json(502, object, "status"),
+  http.protected
+    .post("/api/v1/im/facade/retry", "im.facade.retry")
+    .mutating()
+    .at((ctx) => ({ path: "/api/v1/im/facade/retry", headers: ctx.headers(), body: {} }))
+    .json(502, object, "status"),
+  http.protected
+    .get("/api/v1/im/facade/resolve", "im.facade.resolve")
+    .at((ctx) => ({ path: "/api/v1/im/facade/resolve?name=httpapi", headers: ctx.headers() }))
+    .json(502, object, "status"),
+  http.protected
+    .post("/api/v1/im/facade/direct", "im.facade.direct")
+    .mutating()
+    .at((ctx) => ({ path: "/api/v1/im/facade/direct", headers: ctx.headers(), body: { name: "httpapi" } }))
+    .json(502, object, "status"),
+  http.protected
+    .post("/api/v1/im/facade/groups", "im.facade.groups.create")
+    .mutating()
+    .at((ctx) => ({
+      path: "/api/v1/im/facade/groups",
+      headers: ctx.headers(),
+      body: { name: "httpapi", memberNames: [] },
+    }))
+    .json(502, object, "status"),
+  http.protected
+    .post("/api/v1/im/facade/groups/{groupId}/invite", "im.facade.groups.invite")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/api/v1/im/facade/groups/{groupId}/invite", { groupId: "group_httpapi_missing" }),
+      headers: ctx.headers(),
+      body: { name: "httpapi" },
+    }))
+    .json(502, object, "status"),
   http.protected
     .get("/api/v1/im/messages/{messageId}", "im.messages.get")
     .at((ctx) => ({

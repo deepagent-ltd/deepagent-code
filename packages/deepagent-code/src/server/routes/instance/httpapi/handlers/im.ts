@@ -1,9 +1,11 @@
-import { Effect, Option } from "effect"
+import { Effect, Option, Ref } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import nodeFs from "node:fs/promises"
 import { Global } from "@deepagent-code/core/global"
 import { AttachmentStorage } from "@deepagent-code/core/im/attachment-storage"
 import { IMRepository, IMRepositoryError } from "@deepagent-code/core/im/repository"
+import type { IMGroup } from "@deepagent-code/core/im/repository"
+import { facadeErrorStatus } from "@deepagent-code/core/im/facade-contract"
 import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
 import { InstanceHttpApi } from "../api"
 import {
@@ -17,6 +19,11 @@ import {
   IMThreadDisabledError,
   IMFileTooLargeError,
   IMUnsupportedMediaTypeError,
+  IMFacadeBadRequestError,
+  IMFacadeForbiddenError,
+  IMFacadeNotFoundError,
+  IMFacadeConflictError,
+  IMFacadeUnavailableError,
 } from "../groups/im"
 import { MentionParser } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
@@ -28,7 +35,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { RateLimiter } from "@deepagent-code/core/deepagent/rate-limiter"
 import { defaultMentionReceiptPort, resolveMentioned } from "@/session/event-dispatcher"
 import { IMAgentExecution } from "@/im/im-agent-execution"
-import { IMKernelSync } from "@/im/kernel/sync"
+import { IMFacade } from "@/im/facade"
+import { IMKernelExchange } from "@/im/kernel/exchange"
 import { boundedPositiveInteger } from "./im-config"
 
 const IMAttachmentID = IMID.AttachmentID
@@ -70,6 +78,46 @@ const toAttachmentResponse = (a: IMAttachment) => ({
   createdAt: a.createdAt,
 })
 
+const toGroupResponse = (g: IMGroup) => ({
+  id: g.id,
+  workspaceID: g.workspaceID,
+  projectID: g.projectID,
+  type: g.type,
+  name: g.name,
+  createdBy: g.createdBy,
+  kernelConvID: g.kernelConvID,
+  createdAt: g.createdAt,
+  updatedAt: g.updatedAt,
+})
+
+// B2 门面错误的归桶：ExchangeError.status（门面真实 HTTP 状态）优先，缺失时按 core
+// facadeErrorStatus(code) 归桶。Schema.ErrorClass 的状态是类级常量，故 5xx（含契约 503
+// im_unavailable）统一落 IMFacadeUnavailableError（wire 502）——GUI 一律按 data.code 出文案。
+const mapExchangeError = (error: IMKernelExchange.ExchangeError) => {
+  const data = { code: error.code, message: error.message }
+  switch (error.status ?? facadeErrorStatus(error.code)) {
+    case 400:
+      return new IMFacadeBadRequestError({ name: "IM_FACADE_BAD_REQUEST", data })
+    case 403:
+      return new IMFacadeForbiddenError({ name: "IM_FACADE_FORBIDDEN", data })
+    case 404:
+      return new IMFacadeNotFoundError({ name: "IM_FACADE_NOT_FOUND", data })
+    case 409:
+      return new IMFacadeConflictError({ name: "IM_FACADE_CONFLICT", data })
+    default:
+      return new IMFacadeUnavailableError({ name: "IM_FACADE_UNAVAILABLE", data })
+  }
+}
+
+const facadeUnavailable = (message: string) =>
+  new IMFacadeUnavailableError({ name: "IM_FACADE_UNAVAILABLE", data: { code: "im_unavailable", message } })
+
+// ExchangeError → 归桶 HTTP 错误；其它错误（如 facadeUnavailable 合成的 IMFacadeUnavailableError）原样透传。
+const mapFacadeErrors = <A, E, R>(effect: Effect.Effect<A, E | IMKernelExchange.ExchangeError, R>) =>
+  effect.pipe(
+    Effect.mapError((error) => (error instanceof IMKernelExchange.ExchangeError ? mapExchangeError(error) : error)),
+  )
+
 // Attachment mime allow-list, size cap, checksum, and server-derived storage path all live in the pure
 // AttachmentStorage core (@deepagent-code/core/im/attachment-storage) so they are unit-testable without
 // the multipart HTTP transport. The handler just calls into it.
@@ -103,8 +151,9 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
     // session_input per (message, agent), stable session per (group, agent)); the terminal reply
     // returns through the im_reply_outbox daemon, not a fire-and-forget fork.
     const v2Session = yield* SessionV2.Service
-    // IM-kernel (B1): absent ⇒ kernel integration off (single-user path untouched).
-    const kernelSync = Option.getOrUndefined(yield* Effect.serviceOption(IMKernelSync.Service))
+    // IM 门面（B2）：内核引擎的唯一所有者。缺席（图层未挂）⇒ 门面端点 fail-closed im_unavailable，
+    // 消息发送保持纯本地（单用户路径不动）。
+    const facade = Option.getOrUndefined(yield* Effect.serviceOption(IMFacade.Service))
 
     return handlers
       .handle("listGroups", ({ query }) =>
@@ -114,16 +163,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
 
             const groups = yield* repo.listGroups({ workspaceID, userID })
 
-            return groups.map((g) => ({
-              id: g.id,
-              workspaceID: g.workspaceID,
-              projectID: g.projectID,
-              type: g.type,
-              name: g.name,
-              createdBy: g.createdBy,
-              createdAt: g.createdAt,
-              updatedAt: g.updatedAt,
-            }))
+            return groups.map(toGroupResponse)
           }),
         ),
       )
@@ -169,16 +209,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                       ),
                   ),
                 )
-              return {
-                id: group.id,
-                workspaceID: group.workspaceID,
-                projectID: group.projectID,
-                type: group.type,
-                name: group.name,
-                createdBy: group.createdBy,
-                createdAt: group.createdAt,
-                updatedAt: group.updatedAt,
-              }
+              return toGroupResponse(group)
             }
 
             const group = yield* repo.createGroup({
@@ -189,16 +220,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
               createdBy: userID,
             })
 
-            return {
-              id: group.id,
-              workspaceID: group.workspaceID,
-              projectID: group.projectID,
-              type: group.type,
-              name: group.name,
-              createdBy: group.createdBy,
-              createdAt: group.createdAt,
-              updatedAt: group.updatedAt,
-            }
+            return toGroupResponse(group)
           }),
         ),
       )
@@ -348,12 +370,17 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                 ),
               )
 
-            // ── IM-kernel (B1): forward the locally persisted text to the kernel ──────────────────
+            // ── IM-kernel (B1/B2): forward the locally persisted text to the kernel ────────────────
             // Best-effort and non-blocking: the local row IS the authoritative copy (design §2);
             // the sync engine owns the kernel send, ack write-back (kernel_msg_id), and pending
-            // retry. B1 kernel path is text-only; other types stay purely local.
-            if (kernelSync && payload.type === "text") {
-              yield* kernelSync.send({ groupID: groupId, messageID: message.id, content: payload.content })
+            // retry. B1 kernel path is text-only; other types stay purely local. The engine is owned
+            // by the facade (B2) and read fresh per send — claim/retry hot-starts must not leave a
+            // stale None captured in this long-lived handler layer.
+            if (payload.type === "text" && facade) {
+              const engine = yield* Ref.get(facade.engine)
+              if (Option.isSome(engine)) {
+                yield* engine.value.send({ groupID: groupId, messageID: message.id, content: payload.content })
+              }
             }
 
             // ── V2 IM durable-only: mention admission ────────────────────────────────────────────
@@ -767,6 +794,98 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
             })
 
             return attachments.map(toAttachmentResponse)
+          }),
+        ),
+      )
+      // ── B2 门面端点 ─────────────────────────────────────────────────────────────────
+      // facade 服务缺席（图层未挂 IMFacade）⇒ status 返回 disabled 快照，mutation 一律
+      // im_unavailable（与门面自身 fail-closed 语义一致）。ExchangeError 按状态归桶透传 code。
+      .handle("facadeStatus", () =>
+        Effect.gen(function* () {
+          if (!facade) return { facade: "disabled" as const, identity: null, blocked: null, kernel: null, keyOrigin: "none" as const }
+          const snapshot = yield* facade.status
+          return {
+            facade: snapshot.facade,
+            identity: Option.getOrNull(snapshot.identity),
+            blocked: Option.getOrNull(snapshot.blocked),
+            kernel: Option.getOrNull(snapshot.kernel),
+            keyOrigin: snapshot.keyOrigin,
+          }
+        }),
+      )
+      .handle("facadeClaim", ({ payload }) =>
+        Effect.gen(function* () {
+          if (!facade) return yield* facadeUnavailable("IM facade is not configured on this server")
+          return yield* facade.claim(payload.name)
+        }).pipe(mapFacadeErrors),
+      )
+      .handle("facadeRename", ({ payload }) =>
+        Effect.gen(function* () {
+          if (!facade) return yield* facadeUnavailable("IM facade is not configured on this server")
+          return yield* facade.rename(payload.name)
+        }).pipe(mapFacadeErrors),
+      )
+      .handle("facadeRebind", ({ payload }) =>
+        Effect.gen(function* () {
+          if (!facade) return yield* facadeUnavailable("IM facade is not configured on this server")
+          return yield* facade.rebind(payload.newKey)
+        }).pipe(mapFacadeErrors),
+      )
+      .handle("facadeRetry", () =>
+        Effect.gen(function* () {
+          if (!facade) return yield* facadeUnavailable("IM facade is not configured on this server")
+          return yield* facade.retryExchange
+        }).pipe(mapFacadeErrors),
+      )
+      .handle("facadeResolve", ({ query }) =>
+        Effect.gen(function* () {
+          if (!facade) return yield* facadeUnavailable("IM facade is not configured on this server")
+          return yield* facade.resolve(query.name)
+        }).pipe(mapFacadeErrors),
+      )
+      .handle("facadeDirect", ({ query, payload }) =>
+        Effect.gen(function* () {
+          if (!facade) return yield* facadeUnavailable("IM facade is not configured on this server")
+          const { workspaceID } = yield* getWorkspaceContext(query)
+          const group = yield* facade.openDirect({ workspaceID, name: payload.name })
+          return toGroupResponse(group)
+        }).pipe(
+          Effect.mapError((error) => {
+            if (error instanceof IMKernelExchange.ExchangeError) return mapExchangeError(error)
+            if (error instanceof IMRepositoryError)
+              return new IMInternalServerError({ name: "INTERNAL_SERVER_ERROR", data: { message: error.message } })
+            return error
+          }),
+        ),
+      )
+      .handle("facadeCreateGroup", ({ query, payload }) =>
+        Effect.gen(function* () {
+          if (!facade) return yield* facadeUnavailable("IM facade is not configured on this server")
+          const { workspaceID } = yield* getWorkspaceContext(query)
+          const group = yield* facade.createGroup({ workspaceID, name: payload.name, memberNames: payload.memberNames })
+          return toGroupResponse(group)
+        }).pipe(
+          Effect.mapError((error) => {
+            if (error instanceof IMKernelExchange.ExchangeError) return mapExchangeError(error)
+            if (error instanceof IMRepositoryError)
+              return new IMInternalServerError({ name: "INTERNAL_SERVER_ERROR", data: { message: error.message } })
+            return error
+          }),
+        ),
+      )
+      .handle("facadeInvite", ({ params, payload }) =>
+        Effect.gen(function* () {
+          if (!facade) return yield* facadeUnavailable("IM facade is not configured on this server")
+          yield* facade.invite({ groupID: params.groupId, name: payload.name })
+          return { ok: true }
+        }).pipe(
+          Effect.mapError((error) => {
+            if (error instanceof IMFacade.GroupLookupError)
+              return new IMGroupNotFoundError({ name: "GROUP_NOT_FOUND", data: { message: error.message } })
+            if (error instanceof IMKernelExchange.ExchangeError) return mapExchangeError(error)
+            if (error instanceof IMRepositoryError)
+              return new IMInternalServerError({ name: "INTERNAL_SERVER_ERROR", data: { message: error.message } })
+            return error
           }),
         ),
       )

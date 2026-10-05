@@ -1,4 +1,4 @@
-import { Config as EffectConfig, Context, Effect, Layer, Option, Schedule } from "effect"
+import { Config as EffectConfig, Context, Effect, Layer } from "effect"
 import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
 import {
   FetchHttpClient,
@@ -79,9 +79,7 @@ import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/reposito
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
 import { ServerAgentListProviderLive } from "@/im/agent-executor-server"
 import { IMReplyOutbox } from "@/im/im-reply-outbox"
-import { IMKernelSync } from "@/im/kernel/sync"
-import { KernelConfig } from "@/im/kernel/config"
-import { IMKernelExchange } from "@/im/kernel/exchange"
+import { IMFacade } from "@/im/facade"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
@@ -203,60 +201,23 @@ const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provi
 const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
 const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
 const imRepositoryLayer = IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))
-// IM-kernel (B1/B2, design §2/§4/§7): the kernel sync engine (JuggleIM WS ⇄ local sqlite authority).
-// Config source (B2): DEEPAGENT_IM_FACADE_URL+KEY ⇒ POST /api/im/exchange swaps the sk- key for
-// kernel coordinates (facade RegisterUser is idempotent, so every boot re-exchanges — refresh-on-
-// restart; org all-group membership self-heals facade-side); otherwise the B1 PoC direct env
-// (DEEPAGENT_IM_KERNEL_*). Both absent ⇒ Layer.empty — the single-user path carries zero kernel
-// footprint. An exchange failure (facade down, key invalid/unclaimed) logs the remediation and
-// disables the kernel for this boot rather than failing server startup; the next boot retries.
-// Error channel is unknown: providing imRepositoryLayer pulls in Database.defaultLayer, whose
-// bootstrap preflight rejects with unknown (same as every other consumer of imRuntimeLayer). The R
-// channel (Agent/InstanceStore for the roster provider) is satisfied by the shared instance graph —
-// the same requirements the sibling ServerAgentListProviderLive declaration already places on it.
-type IMKernelSyncGraph = Layer.Layer<IMKernelSync.Service, unknown, Agent.Service | InstanceStore.Service>
-const resolveImKernelSyncLayer: Effect.Effect<IMKernelSyncGraph> = Effect.gen(function* () {
-  const disabled = Layer.empty as unknown as IMKernelSyncGraph
-  const enabled = (config: KernelConfig.Info): IMKernelSyncGraph =>
-    IMKernelSync.layerFromConfig(config).pipe(
-      Layer.provide(imRepositoryLayer),
-      Layer.provide(IMBroadcasterLive),
-      // The @Agent responder's roster source. mergeAll siblings are invisible to each other, so
-      // (like IMRepository above) the provider layer is supplied here directly; its own deps
-      // (Agent/InstanceStore) flow in from the shared instance graph, same as the sibling
-      // declaration in imRuntimeLayer.
-      Layer.provide(ServerAgentListProviderLive),
-    )
-  const facade = KernelConfig.facadeFromEnv()
-  if (!facade) {
-    const config = KernelConfig.fromEnv()
-    return config ? enabled(config) : disabled
-  }
-  const http = Option.getOrUndefined(yield* Effect.serviceOption(HttpClient.HttpClient))
-  if (!http) {
-    console.warn("[im-kernel] facade configured but the server graph has no HttpClient — kernel integration disabled")
-    return disabled
-  }
-  const exchanged = yield* IMKernelExchange.exchange(facade).pipe(
-    Effect.retry({
-      while: (error) => error.retryable,
-      schedule: Schedule.exponential("1 second").pipe(Schedule.both(Schedule.recurs(2))),
-    }),
-    Effect.tapError((error) =>
-      Effect.sync(() =>
-        console.warn(
-          `[im-kernel] facade exchange failed (${error.code}): ${error.message} — kernel integration disabled for this boot ` +
-            `(refresh-on-restart). An unclaimed key must claim an IM identity first (POST /api/im/claim).`,
-        ),
-      ),
-    ),
-    Effect.option,
-    Effect.provideService(HttpClient.HttpClient, http),
-  )
-  if (Option.isNone(exchanged)) return disabled
-  return enabled(IMKernelExchange.toKernelConfig(exchanged.value))
-})
-const imKernelSyncLayer = Layer.unwrap(resolveImKernelSyncLayer)
+// IM 门面（B2，design §2/§4/§7）：new-api 门面的客户端门户 + 内核引擎生命周期的唯一所有者。
+// boot 时按凭据解析落状态机（disabled / claim_required / blocked / active），拿到内核坐标即建成
+// 同步引擎（B1 的 boot 语义收编进 IMFacade.layer：URL 只认 env，key 优先级 auth.json(rebind 持久化)
+// > DEEPAGENT_IM_FACADE_KEY；exchange 失败不阻塞启动——blocked/claim_required 由 GUI 引导恢复）。
+// B1 PoC 直连 env（DEEPAGENT_IM_KERNEL_*）照跑引擎但门面功能关闭。两边都没有 ⇒ 状态 disabled——
+// 单用户路径零内核足迹。门面热路径（claim/retry 后的引擎热启动）在 facade 内部用 SDK 进程单例
+// 安全的串行化构建完成。Error channel is unknown: providing imRepositoryLayer pulls in
+// Database.defaultLayer, whose bootstrap preflight rejects with unknown (same as every other
+// consumer of imRuntimeLayer). The R channel (Agent/InstanceStore for the roster provider,
+// Auth.Service for rebind persistence, HttpClient for facade calls) is satisfied by the shared
+// instance graph — the same requirements the sibling ServerAgentListProviderLive declaration
+// already places on it.
+const imFacadeLayer = IMFacade.layer().pipe(
+  Layer.provide(imRepositoryLayer),
+  Layer.provide(IMBroadcasterLive),
+  Layer.provide(ServerAgentListProviderLive),
+)
 // V4.0 §D2/§F — Oversight services (read-only projection of the durable V4 substrate). Both need only
 // the Database layer; provided independently to the oversight handler.
 const oversightServicesLayer = Layer.mergeAll(
@@ -273,9 +234,9 @@ const oversightServicesLayer = Layer.mergeAll(
 // work (src/im/im-agent-execution.ts) on the SHARED V2 runtime graph (V2RunnerFrame.sessionRuntimeLayer —
 // the real SessionExecutionLocal owner, not the noop-execution standalone default). The terminal
 // assistant reply returns through the im_reply_outbox daemon (IMReplyOutbox.layer), which draws
-// Database/SessionV2/EventV2Bridge from the shared graph and IMRepository/broadcaster/kernelSync
-// from here — mergeAll siblings are invisible to each other, so the kernelSync edge is supplied
-// directly (same pattern as ServerAgentListProviderLive in resolveImKernelSyncLayer); without it
+// Database/SessionV2/EventV2Bridge from the shared graph and IMRepository/broadcaster/facade
+// from here — mergeAll siblings are invisible to each other, so the facade edge is supplied
+// directly (same pattern as ServerAgentListProviderLive in imFacadeLayer); without it
 // the outbox's prefixed `[Agent·<id>]` kernel copy never leaves and only the bare pending-drain
 // lane reaches the kernel.
 // ServerAgentListProviderLive still requires Agent/InstanceStore from the shared instance graph,
@@ -287,9 +248,9 @@ const imRuntimeLayer = Layer.mergeAll(
   IMReplyOutbox.layer.pipe(
     Layer.provide(imRepositoryLayer),
     Layer.provide(IMBroadcasterLive),
-    Layer.provide(imKernelSyncLayer),
+    Layer.provide(imFacadeLayer),
   ),
-  imKernelSyncLayer,
+  imFacadeLayer,
 )
 // V4.0 §A4/§C — the PRODUCTION event-runtime daemons (EventDispatcher router + tick + retry pump,
 // MultiAgentRuntime DispatchPort, RetentionSweeper). Without this the V4 daemons never start and
