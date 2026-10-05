@@ -59,6 +59,8 @@ function fixture(initial: IMFacadeStatus["facade"] = "active") {
     }[],
     failure: "",
     sends: 0,
+    loseReceipt: false,
+    receipts: new Map<string, IMMessage>(),
     delayed: undefined as (() => void) | undefined,
   }
   const server = Bun.serve({
@@ -78,7 +80,7 @@ function fixture(initial: IMFacadeStatus["facade"] = "active") {
         auth: request.headers.get("Authorization"),
         directory: request.headers.get("x-deepagent-code-directory"),
       })
-      const payload = body as { name?: string; content?: string }
+      const payload = body as { name?: string; content?: string; clientRequestID?: string }
       const response = (value: unknown) => Response.json(value)
       const error = () =>
         Response.json(
@@ -111,7 +113,15 @@ function fixture(initial: IMFacadeStatus["facade"] = "active") {
       if (url.pathname.endsWith("/messages")) {
         state.sends += 1
         if (state.failure) return error()
-        return response({ ...message("sent", payload.content!), senderID: "server" })
+        const receipt = payload.clientRequestID ? state.receipts.get(payload.clientRequestID) : undefined
+        if (receipt) return response(receipt)
+        const sent = { ...message(`sent-${state.sends}`, payload.content!), senderID: "server" }
+        if (payload.clientRequestID) state.receipts.set(payload.clientRequestID, sent)
+        if (state.loseReceipt) {
+          state.loseReceipt = false
+          return Response.json({ name: "ApiUnavailable", data: { code: "transport_error", message: "receipt unavailable" } }, { status: 503 })
+        }
+        return response(sent)
       }
       if (url.pathname.endsWith("/read")) return response({ ok: true })
       if (url.pathname.endsWith("/agents"))
@@ -288,6 +298,45 @@ test("shared group members use Tab, invite keeps failed name, failed send keeps 
   await ui.frame("you:")
   await ui.frame("hello team")
   expect(api.state.sends).toBe(2)
+})
+
+test("ambiguous sends retry the same request identity; edits and subsequent submissions get new identities", async () => {
+  await using tmp = await tmpdir()
+  using api = fixture()
+  api.state.groups.push(group("team", "k:2:team"))
+  using ui = await mountIM(tmp.path, api.url, () => <DialogIM />)
+  await ui.frame("Shared IM ready")
+  await ui.select("team")
+  await ui.frame("old hello")
+  ui.app.mockInput.pressKey("s", { ctrl: true })
+  await ui.type("same message")
+  api.state.loseReceipt = true
+  ui.app.mockInput.pressEnter()
+  await ui.frame("Cannot reach the IM facade")
+  expect(api.state.receipts.size).toBe(1)
+  expect((ui.app.renderer.currentFocusedEditor as TextareaRenderable).plainText).toBe("same message")
+  ui.app.mockInput.pressEnter()
+  await ui.frame("Connection: online")
+  expect(api.state.receipts.size).toBe(1)
+  const sent = () => api.state.calls.filter((call) => call.path.endsWith("/messages") && call.method === "POST")
+  expect(sent()[0].body).toEqual(sent()[1].body)
+
+  ui.app.mockInput.pressKey("s", { ctrl: true })
+  await ui.type("same message")
+  api.state.failure = "im_kernel_error"
+  ui.app.mockInput.pressEnter()
+  await ui.frame("kernel had an error")
+  await ui.type("edited message", true)
+  api.state.failure = ""
+  ui.app.mockInput.pressEnter()
+  await ui.frame("Connection: online")
+  await ui.frame("edited message")
+  const requests = sent().map((call) => call.body as { clientRequestID: string; content: string })
+  expect(requests.map((request) => request.content)).toEqual(["same message", "same message", "same message", "edited message"])
+  expect(requests[0].clientRequestID).toMatch(/^tui:[\w-]+$/)
+  expect(requests[2].clientRequestID).not.toBe(requests[1].clientRequestID)
+  expect(requests[3].clientRequestID).not.toBe(requests[2].clientRequestID)
+  expect(api.state.receipts.size).toBe(2)
 })
 
 test("key file validates type, size, single key and reads changed contents afresh", async () => {

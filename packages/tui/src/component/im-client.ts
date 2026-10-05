@@ -124,7 +124,7 @@ export function createIMClient(sdk: IMSDK) {
         method: "GET",
         url: `/api/v1/im/groups/${encodeURIComponent(groupID)}/messages?${new URLSearchParams({ limit: String(limit), ...(cursor ? { cursor } : {}) })}`,
       }),
-    createMessage: (groupID: string, payload: { content: string; type?: string; mentions?: string[] }) =>
+    createMessage: (groupID: string, payload: { content: string; type?: string; mentions?: string[]; clientRequestID?: string }) =>
       request<IMMessage>({
         method: "POST",
         url: `/api/v1/im/groups/${encodeURIComponent(groupID)}/messages`,

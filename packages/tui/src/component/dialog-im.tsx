@@ -363,6 +363,7 @@ export function DialogIMChat(props: {
   const [draft, setDraft] = createSignal("")
   let disposed = false
   let refreshPending = false
+  let pendingSend: { content: string; id: string } | undefined
   onCleanup(() => {
     disposed = true
   })
@@ -430,8 +431,14 @@ export function DialogIMChat(props: {
       ],
       submit: async (values, active) => {
         setDraft(values[0])
-        if (!values[0].trim()) throw new IMRequestError("invalid_request", "Empty message")
-        const message = await props.client.createMessage(props.group.id, { content: values[0].trim() })
+        const content = values[0].trim()
+        if (!content) throw new IMRequestError("invalid_request", "Empty message")
+        // Keep ambiguous failed sends on the same server receipt. An edited payload or a
+        // new successful submission is a new intent, even if its text is later identical.
+        if (pendingSend?.content !== content) pendingSend = { content, id: `tui:${crypto.randomUUID()}` }
+        const submitted = pendingSend
+        const message = await props.client.createMessage(props.group.id, { content, clientRequestID: submitted.id })
+        if (pendingSend === submitted) pendingSend = undefined
         if (disposed || !active()) return
         setMessages((current) => mergeIMMessages(current, [message]))
         setDraft("")
