@@ -28,7 +28,10 @@ import { ServerAuth } from "../../src/server/auth"
 import { Server } from "../../src/server/server"
 import { IMPaths } from "../../src/server/routes/instance/httpapi/groups/im"
 import { IMWebSocketApi, IMWebSocketPaths } from "../../src/server/routes/instance/httpapi/groups/im-websocket"
-import { MAX_OUTGOING_EVENTS, imWebSocketHandlers } from "../../src/server/routes/instance/httpapi/handlers/im-websocket"
+import {
+  MAX_OUTGOING_EVENTS,
+  imWebSocketHandlers,
+} from "../../src/server/routes/instance/httpapi/handlers/im-websocket"
 import { authorizationLayer } from "../../src/server/routes/instance/httpapi/middleware/authorization"
 import { instanceContextLayer } from "../../src/server/routes/instance/httpapi/middleware/instance-context"
 import { workspaceRoutingLayer } from "../../src/server/routes/instance/httpapi/middleware/workspace-routing"
@@ -73,12 +76,12 @@ function auth() {
 
 type Listener = Awaited<ReturnType<typeof Server.listen>>
 
-async function startListener() {
+async function startListener(cors?: string[]) {
   Flag.DEEPAGENT_CODE_SERVER_PASSWORD = credentials.password
   Flag.DEEPAGENT_CODE_SERVER_USERNAME = credentials.username
   process.env.DEEPAGENT_CODE_SERVER_PASSWORD = credentials.password
   process.env.DEEPAGENT_CODE_SERVER_USERNAME = credentials.username
-  return Server.listen({ hostname: "127.0.0.1", port: 0 })
+  return Server.listen({ hostname: "127.0.0.1", port: 0, cors })
 }
 
 function stop(listener: Listener, label: string) {
@@ -108,8 +111,8 @@ const WebSocketWithHeaders = WebSocket as unknown as new (
   init?: { headers?: Record<string, string> },
 ) => WebSocket
 
-function openSocket(url: URL) {
-  const ws = new WebSocketWithHeaders(url, { headers: auth() })
+function openSocket(url: URL, origin?: string) {
+  const ws = new WebSocketWithHeaders(url, { headers: { ...auth(), ...(origin ? { origin } : {}) } })
   return withTimeout(
     new Promise<WebSocket>((resolve, reject) => {
       ws.addEventListener("open", () => resolve(ws), { once: true })
@@ -150,10 +153,7 @@ function waitForMessage(ws: WebSocket, predicate: (message: string) => boolean) 
 
 async function postMessage(base: URL, groupId: string, directory: string, content: string) {
   const response = await fetch(
-    new URL(
-      `${IMPaths.createMessage.replace(":groupId", groupId)}?directory=${encodeURIComponent(directory)}`,
-      base,
-    ),
+    new URL(`${IMPaths.createMessage.replace(":groupId", groupId)}?directory=${encodeURIComponent(directory)}`, base),
     {
       method: "POST",
       headers: { ...auth(), "content-type": "application/json" },
@@ -210,6 +210,29 @@ async function settleLastSlotRace(racers: WebSocket[]) {
 }
 
 describe("IM WebSocket admission (real server)", () => {
+  test("accepts product and configured browser origins while retaining authentication and origin rejection", async () => {
+    await using tmp = await tmpdir({ git: true, config: { formatter: false, lsp: false } })
+    const listener = await startListener(["https://im-preview.example.test"])
+    try {
+      const groupId = await createGroup(listener.url, tmp.path)
+      const url = socketURL(listener.url, groupId, tmp.path)
+      for (const origin of ["oc://renderer", "http://127.0.0.1:4465", "https://im-preview.example.test"]) {
+        const socket = await openSocket(url, origin)
+        const pong = waitForMessage(socket, (message) => message.includes('"pong"'))
+        socket.send(JSON.stringify({ type: "ping", data: { ts: 1 } }))
+        expect(await pong).toContain('"pong"')
+        const closed = waitClose(socket)
+        socket.close(1000)
+        await closed
+      }
+      url.protocol = "http:"
+      expect((await fetch(url, { headers: { ...auth(), origin: "https://untrusted.example.test" } })).status).toBe(403)
+      expect((await fetch(url, { headers: { origin: "oc://renderer" } })).status).toBe(401)
+    } finally {
+      await stop(listener, "timed out cleaning up origin listener")
+    }
+  }, 30_000)
+
   test("caps one user at the per-group limit and reopens the slot after a close", async () => {
     await using tmp = await tmpdir({ git: true, config: { formatter: false, lsp: false } })
     const listener = await startListener()
@@ -625,11 +648,14 @@ describe("IM WebSocket broadcaster capacity gates (production handler, planted o
   itProbe.live("a group at MAX_CONNECTIONS_PER_GROUP refuses the next upgrade", () =>
     Effect.gen(function* () {
       const directory = yield* tmpdirScoped({ git: true, config: { formatter: false, lsp: false } })
-      const repo = yield* IMRepository.pipe(
-        Effect.provide(IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))),
-      )
+      const repo = yield* IMRepository.pipe(Effect.provide(IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))))
       const broadcaster = yield* IMBroadcasterService.pipe(Effect.provide(IMBroadcasterLive))
-      const capped = yield* repo.createGroup({ workspaceID: directory, type: "project", name: "cap", createdBy: "server" })
+      const capped = yield* repo.createGroup({
+        workspaceID: directory,
+        type: "project",
+        name: "cap",
+        createdBy: "server",
+      })
       for (let i = 0; i < MAX_CONNECTIONS_PER_GROUP; i++)
         broadcaster.register(fakeConnection(capped.id, `fake-${i}`, directory))
       const port = yield* serveWithOccupancy(repo, broadcaster)
@@ -645,11 +671,14 @@ describe("IM WebSocket broadcaster capacity gates (production handler, planted o
   itProbe.live("a broadcaster at MAX_CONNECTIONS refuses the next upgrade", () =>
     Effect.gen(function* () {
       const directory = yield* tmpdirScoped({ git: true, config: { formatter: false, lsp: false } })
-      const repo = yield* IMRepository.pipe(
-        Effect.provide(IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))),
-      )
+      const repo = yield* IMRepository.pipe(Effect.provide(IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))))
       const broadcaster = yield* IMBroadcasterService.pipe(Effect.provide(IMBroadcasterLive))
-      const capped = yield* repo.createGroup({ workspaceID: directory, type: "project", name: "cap", createdBy: "server" })
+      const capped = yield* repo.createGroup({
+        workspaceID: directory,
+        type: "project",
+        name: "cap",
+        createdBy: "server",
+      })
       const port = yield* serveWithOccupancy(repo, broadcaster)
 
       // Route liveness is proven BEFORE the total cap is planted.

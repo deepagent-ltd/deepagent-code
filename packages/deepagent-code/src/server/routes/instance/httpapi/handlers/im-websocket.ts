@@ -9,6 +9,7 @@ import { WebSocketTracker } from "../websocket-tracker"
 import { IMWebSocketApi } from "../groups/im-websocket"
 import { getWorkspaceContext } from "../utils/workspace-context"
 import { boundedPositiveInteger } from "./im-config"
+import { CorsConfig, isAllowedRequestOrigin } from "@/server/cors"
 
 // WebSocket configuration - can be overridden by environment variables
 const HEARTBEAT_INTERVAL = boundedPositiveInteger(process.env.IM_WEBSOCKET_HEARTBEAT_INTERVAL, 30_000, 300_000)
@@ -21,25 +22,11 @@ const MAX_CONNECTIONS_PER_USER_PER_GROUP = boundedPositiveInteger(
 export const MAX_OUTGOING_EVENTS = 128
 const decodeClientEvent = Schema.decodeUnknownOption(Schema.fromJsonString(ClientEvent))
 
-function isAllowedOrigin(request: HttpServerRequest.HttpServerRequest): boolean {
-  const origin = request.headers.origin
-  if (!origin) return true // Non-browser clients may omit Origin
-
-  const host = request.headers.host
-  if (!host) return false
-
-  try {
-    const originURL = new URL(origin)
-    return originURL.host === host
-  } catch {
-    return false
-  }
-}
-
 export const imWebSocketHandlers = HttpApiBuilder.group(IMWebSocketApi, "im-websocket", (handlers) =>
   Effect.gen(function* () {
     const repo = yield* IMRepository
     const broadcaster = yield* IMBroadcasterService
+    const cors = yield* CorsConfig
 
     return handlers.handleRaw(
       "connect",
@@ -48,7 +35,7 @@ export const imWebSocketHandlers = HttpApiBuilder.group(IMWebSocketApi, "im-webs
           const { workspaceID, userID } = yield* getWorkspaceContext()
           const groupId = ctx.params.groupId
 
-          if (!isAllowedOrigin(ctx.request)) {
+          if (!isAllowedRequestOrigin(ctx.request.headers.origin, ctx.request.headers.host, cors)) {
             return HttpServerResponse.text("Forbidden origin", { status: 403 })
           }
 
@@ -80,7 +67,12 @@ export const imWebSocketHandlers = HttpApiBuilder.group(IMWebSocketApi, "im-webs
           // loop before flushing — otherwise the close frame waits on the latch
           // until the 1s budget cuts it and the client hangs on a bare FIN.
           const refuseWithCloseFrame = Effect.gen(function* () {
-            yield* socket.runRaw(() => Effect.void).pipe(Effect.catch(() => Effect.void), Effect.forkScoped)
+            yield* socket
+              .runRaw(() => Effect.void)
+              .pipe(
+                Effect.catch(() => Effect.void),
+                Effect.forkScoped,
+              )
             yield* writeCloseFrame
           })
 
