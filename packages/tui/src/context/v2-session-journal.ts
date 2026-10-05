@@ -32,7 +32,6 @@ export type SessionJournalHandlers = {
 }
 
 const POLL_MS = 1000
-let pollMsOverride: number | undefined
 
 const isCursorGap = (error: unknown): boolean =>
   ((error as { data?: { code?: unknown } })?.data)?.code === "cursor_gap_exceeded"
@@ -48,18 +47,36 @@ export const openSessionJournal = async (
 ): Promise<{ close: () => void }> => {
   let closed = false
   let lastSeq = handlers.after === undefined ? undefined : Number(handlers.after)
-  let resynced = false
   let caughtUp = false
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  let failures = 0
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let wake: (() => void) | undefined
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => {
+      wake = resolve
+      timer = setTimeout(() => {
+        timer = undefined
+        wake = undefined
+        resolve()
+      }, ms)
+    })
 
   const drive = async () => {
     while (!closed) {
       try {
-        const cursorResult = await client.context.eventsCursor({ session_id: sessionID })
-        const watermark = cursorResult.data?.watermark ?? 0
-        const page = await client.context.events({ session_id: sessionID, after: lastSeq !== undefined ? String(lastSeq) : String(watermark) })
+        if (lastSeq === undefined) {
+          const cursorResult = await client.context.eventsCursor({ session_id: sessionID })
+          if (cursorResult.error) throw cursorResult.error
+          if (!cursorResult.data) throw new Error("Session journal returned no cursor")
+          lastSeq = cursorResult.data.watermark
+        }
+        if (closed) return
+        const page = await client.context.events({ session_id: sessionID, after: String(lastSeq) })
         if (page.error) throw page.error
-        const events = page.data?.events ?? []
+        if (!page.data) throw new Error("Session journal returned no page")
+        if (closed) return
+        const events = page.data.events
+        failures = 0
         if (events.length === 0) {
           if (!caughtUp) {
             caughtUp = true
@@ -70,26 +87,24 @@ export const openSessionJournal = async (
           for (const event of events) {
             if (closed) return
             if (lastSeq !== undefined && event.seq <= lastSeq) continue // duplicate absorption (seq-dedupe)
-            lastSeq = event.seq
             handlers.onEvent(event)
+            lastSeq = event.seq
           }
         }
         if (closed) return
         await sleep(handlers.pollMs ?? POLL_MS)
       } catch (error) {
+        if (closed) return
         if (isCursorGap(error)) {
-          // Bounded resync: one onResync; the caller re-syncs (closes + re-opens), so a
-          // replacement drive re-anchors at the fresh cursor — never silently accepts the gap.
-          if (!resynced) {
-            resynced = true
-            handlers.onResync()
-            return
-          }
-          handlers.onError?.(error)
-        } else {
-          handlers.onError?.(error)
+          // The owner replaces this drive after a fresh snapshot-at-watermark cycle.
+          handlers.onResync()
+          return
         }
-        return
+        handlers.onError?.(error)
+        failures += 1
+        // A transient transport failure keeps the exact durable cursor. An expired cursor
+        // follows the explicit snapshot path above instead of silently skipping its tail.
+        await sleep(Math.min(30_000, (handlers.pollMs ?? POLL_MS) * 2 ** Math.min(failures - 1, 5)))
       }
     }
   }
@@ -97,6 +112,8 @@ export const openSessionJournal = async (
   return {
     close: () => {
       closed = true
+      if (timer) clearTimeout(timer)
+      wake?.()
     },
   }
 }
