@@ -1,4 +1,5 @@
 import type { useSDK } from "../context/sdk"
+import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 
 export type IMGroup = {
   id: string
@@ -7,6 +8,7 @@ export type IMGroup = {
   type: string
   name: string
   createdBy: string
+  kernelConvID: string | null
   createdAt: number
   updatedAt: number
   deletedAt: number | null
@@ -42,59 +44,168 @@ export type IMMessagePage = {
   hasMore: boolean
 }
 
-// W4-3 — the TUI IM client. The IM API is its own HttpApi (not in the generated SDK), so these
-// calls ride the SDK client's low-level request escape hatch with the directory routed BOTH as
-// ?directory= and the x-deepagent-code-directory header (the gateway proxy drops query strings
-// on HTTP hops; only WS upgrades preserve them).
-export function createIMClient(sdk: ReturnType<typeof useSDK>) {
-  const request = <T,>(options: { method: string; url: string; body?: unknown }) =>
-    (
-      sdk.client as unknown as {
-        client: { request<D>(o: typeof options): Promise<{ data?: T; error?: unknown }> }
+export type IMFacadeIdentity = { uuid: string; name: string; orgID: number; orgAllGroupID: string }
+export type IMFacadeStatus = {
+  facade: "disabled" | "claim_required" | "blocked" | "active"
+  identity: IMFacadeIdentity | null
+  blocked: { code: string; message: string } | null
+  kernel: "connecting" | "connected" | "disconnected" | "failed" | null
+  keyOrigin: "stored" | "env" | "none"
+  viewer?: { memberID: string }
+  recovery?: { status: "pending" | "ready" | "failed"; message?: string }
+}
+export type IMSDK = Pick<ReturnType<typeof useSDK>, "client" | "url" | "directory"> & { fetch?: typeof fetch }
+
+export class IMRequestError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message)
+    this.name = "IMRequestError"
+  }
+}
+
+function transport(sdk: IMSDK) {
+  return (
+    sdk.client as unknown as {
+      client: {
+        getConfig(): { headers?: RequestInit["headers"]; signal?: AbortSignal | null }
       }
-    ).client.request<T>(options)
+    }
+  ).client
+}
+
+// Keep the SDK credentials, but preserve the routing header on GETs too. The SDK's generic
+// query rewrite strips it, while a gateway HTTP hop may drop the query string.
+export function createIMClient(sdk: IMSDK) {
+  const request = async <T>(options: { method: string; url: string; body?: unknown }): Promise<T> => {
+    const url = new URL(`${sdk.url.replace(/\/+$/, "")}${options.url}`)
+    const config = transport(sdk).getConfig()
+    const headers = new Headers(config.headers)
+    if (sdk.directory) {
+      url.searchParams.set("directory", sdk.directory)
+      url.searchParams.set("location[directory]", sdk.directory)
+      headers.set("x-deepagent-code-directory", encodeURIComponent(sdk.directory))
+    }
+    if (options.body !== undefined) headers.set("Content-Type", "application/json")
+    const response = await (sdk.fetch ?? fetch)(
+      new Request(url, {
+        method: options.method,
+        headers,
+        signal: config.signal,
+        ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+      }),
+    ).catch(() => {
+      throw new IMRequestError("transport_error", "IM server could not be reached")
+    })
+    const result: unknown = await response.json().catch(() => undefined)
+    if (!response.ok) {
+      const error = result as { data?: { code?: unknown; message?: unknown } } | undefined
+      throw new IMRequestError(
+        typeof error?.data?.code === "string" ? error.data.code : "http_error",
+        typeof error?.data?.message === "string" ? error.data.message : "IM request failed",
+      )
+    }
+    if (result === undefined || result === null)
+      throw new IMRequestError("invalid_response", "IM server returned no data")
+    return result as T
+  }
 
   return {
     listGroups: () => request<IMGroup[]>({ method: "GET", url: "/api/v1/im/groups" }),
-    createGroup: (payload: { name: string; type: "project" | "system" | "direct"; member?: { memberID: string; memberType: "user" | "agent" } }) =>
-      request<IMGroup>({ method: "POST", url: "/api/v1/im/groups", body: payload }),
-    listMessages: (groupID: string, limit = 50) =>
+    createGroup: (payload: {
+      name: string
+      type: "project" | "system" | "direct"
+      member?: { memberID: string; memberType: "user" | "agent" }
+    }) => request<IMGroup>({ method: "POST", url: "/api/v1/im/groups", body: payload }),
+    listMessages: (groupID: string, limit = 50, cursor?: string) =>
       request<IMMessagePage>({
         method: "GET",
-        url: `/api/v1/im/groups/${groupID}/messages?limit=${limit}`,
+        url: `/api/v1/im/groups/${encodeURIComponent(groupID)}/messages?${new URLSearchParams({ limit: String(limit), ...(cursor ? { cursor } : {}) })}`,
       }),
     createMessage: (groupID: string, payload: { content: string; type?: string; mentions?: string[] }) =>
       request<IMMessage>({
         method: "POST",
-        url: `/api/v1/im/groups/${groupID}/messages`,
+        url: `/api/v1/im/groups/${encodeURIComponent(groupID)}/messages`,
         body: { senderType: "user", type: payload.type ?? "text", ...payload },
       }),
     markRead: (groupID: string) =>
-      request<{ ok: boolean }>({ method: "POST", url: `/api/v1/im/groups/${groupID}/read` }),
-    listAgents: () => request<unknown[]>({ method: "GET", url: "/api/v1/im/agents" }),
+      request<{ ok: boolean }>({
+        method: "POST",
+        url: `/api/v1/im/groups/${encodeURIComponent(groupID)}/read`,
+        body: {},
+      }),
+    listAgents: () => request<AgentDescriptor[]>({ method: "GET", url: "/api/v1/im/agents" }),
+    facadeStatus: () => request<IMFacadeStatus>({ method: "GET", url: "/api/v1/im/status" }),
+    facadeClaim: (name: string) =>
+      request<IMFacadeIdentity>({ method: "POST", url: "/api/v1/im/facade/claim", body: { name } }),
+    facadeRename: (name: string) =>
+      request<IMFacadeIdentity>({ method: "POST", url: "/api/v1/im/facade/rename", body: { name } }),
+    facadeRebind: (newKey: string) =>
+      request<IMFacadeIdentity>({ method: "POST", url: "/api/v1/im/facade/rebind", body: { newKey } }),
+    storeFacadeKey: (key: string) =>
+      request<boolean>({ method: "PUT", url: "/auth/im-facade", body: { type: "api", key } }),
+    facadeRetry: () => request<IMFacadeIdentity>({ method: "POST", url: "/api/v1/im/facade/retry", body: {} }),
+    facadeResolve: (name: string) =>
+      request<{ uuid: string; name: string }>({
+        method: "GET",
+        url: `/api/v1/im/facade/resolve?${new URLSearchParams({ name })}`,
+      }),
+    facadeOpenDirect: (name: string) =>
+      request<IMGroup>({ method: "POST", url: "/api/v1/im/facade/direct", body: { name } }),
+    facadeCreateGroup: (name: string, memberNames: string[]) =>
+      request<IMGroup>({ method: "POST", url: "/api/v1/im/facade/groups", body: { name, memberNames } }),
+    facadeInvite: (groupID: string, name: string) =>
+      request<{ ok: boolean }>({
+        method: "POST",
+        url: `/api/v1/im/facade/groups/${encodeURIComponent(groupID)}/invite`,
+        body: { name },
+      }),
   }
+}
+
+export type IMClient = ReturnType<typeof createIMClient>
+
+export function mergeIMMessages(current: IMMessage[], incoming: IMMessage[]) {
+  return [...new Map([...current, ...incoming].map((message) => [message.id, message])).values()].sort(
+    (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),
+  )
 }
 
 // Live channel for one group. The WS event protocol (server → client): message_created,
 // message_failed, agent_status, typing, read_receipt, ping. Reconnect with backoff; only
 // message_created/message_failed matter for the TUI surface so far.
-export function openIMGroupSocket(sdk: ReturnType<typeof useSDK>, groupID: string, handlers: {
-  onMessage?: (message: IMMessage) => void
-  onFailed?: (payload: { clientMessageID?: string; code: string; message: string }) => void
-}) {
-  const http = sdk.url.replace(/^http/, "ws")
-  const url = new URL(`/ws/im/group/${groupID}`, http)
+export function openIMGroupSocket(
+  sdk: IMSDK,
+  groupID: string,
+  handlers: {
+    onMessage?: (message: IMMessage) => void
+    onFailed?: (payload: { clientMessageID?: string; code: string; message: string }) => void
+    onOpen?: () => void
+    onState?: (state: "connecting" | "connected" | "disconnected") => void
+  },
+) {
+  const url = new URL(`${sdk.url.replace(/\/+$/, "")}/ws/im/group/${encodeURIComponent(groupID)}`)
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
   if (sdk.directory) url.searchParams.set("directory", sdk.directory)
   let socket: WebSocket | undefined
   let closed = false
   let attempt = 0
   let heartbeat: ReturnType<typeof setInterval> | undefined
+  let retry: ReturnType<typeof setTimeout> | undefined
 
   const connect = () => {
     if (closed) return
-    socket = new WebSocket(url)
+    handlers.onState?.("connecting")
+    // TUI runs on Bun, whose WebSocket supports the same authenticated headers as HTTP.
+    const Socket = WebSocket as unknown as new (url: string, options: { headers?: RequestInit["headers"] }) => WebSocket
+    socket = new Socket(url.toString(), { headers: transport(sdk).getConfig().headers })
     socket.onopen = () => {
+      if (closed) return
       attempt = 0
+      handlers.onState?.("connected")
+      handlers.onOpen?.()
       heartbeat = setInterval(() => {
         if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "ping" }))
       }, 30_000)
@@ -103,7 +214,8 @@ export function openIMGroupSocket(sdk: ReturnType<typeof useSDK>, groupID: strin
       try {
         const payload = JSON.parse(String(event.data)) as { type: string; data?: unknown }
         if (payload.type === "message_created") handlers.onMessage?.(payload.data as IMMessage)
-        if (payload.type === "message_failed") handlers.onFailed?.(payload.data as { clientMessageID?: string; code: string; message: string })
+        if (payload.type === "message_failed")
+          handlers.onFailed?.(payload.data as { clientMessageID?: string; code: string; message: string })
       } catch {
         // Ignore malformed frames — the next HTTP re-sync heals.
       }
@@ -111,8 +223,9 @@ export function openIMGroupSocket(sdk: ReturnType<typeof useSDK>, groupID: strin
     socket.onclose = () => {
       if (heartbeat) clearInterval(heartbeat)
       if (closed) return
+      handlers.onState?.("disconnected")
       attempt += 1
-      setTimeout(connect, Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5)))
+      retry = setTimeout(connect, Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5)))
     }
   }
   connect()
@@ -121,6 +234,7 @@ export function openIMGroupSocket(sdk: ReturnType<typeof useSDK>, groupID: strin
     close() {
       closed = true
       if (heartbeat) clearInterval(heartbeat)
+      if (retry) clearTimeout(retry)
       socket?.close()
     },
   }
