@@ -66,5 +66,5 @@ if (reply === undefined) {
   console.error(`timed out waiting for alice's agent reply containing nonce ${nonce}; inbox=${JSON.stringify(fromAlice)}`)
   process.exit(1)
 }
-console.log(`BOB_LIVE_OK reply=${JSON.stringify(reply)}`)
+console.log(`BOB_LIVE_OK2 reply=${JSON.stringify(reply)}`)
 process.exit(0)

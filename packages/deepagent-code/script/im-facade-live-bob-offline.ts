@@ -57,5 +57,5 @@ if (!hit) {
   console.error(`offline probe ${probe} not in hismsgs; fromAlice=${JSON.stringify(fromAlice)} live=${JSON.stringify(live)}`)
   process.exit(1)
 }
-console.log(`BOB_OFFLINE_OK text=${JSON.stringify(hit.text)}`)
+console.log(`BOB_OFFLINE_OK2 text=${JSON.stringify(hit.text)}`)
 process.exit(0)
