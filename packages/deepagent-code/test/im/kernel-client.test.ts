@@ -27,7 +27,8 @@ const fakeSdk = Layer.unwrap(
             sentMessages.push(input)
             return sendResult
           }),
-        fetchHistory: () => Effect.suspend(() => Effect.succeed(historyPayloads)),
+        fetchHistory: () => Effect.suspend(() => Effect.succeed({ messages: historyPayloads, isFinished: true })),
+        fetchConversations: () => Effect.succeed({ conversations: [], isFinished: true }),
         disconnect: Effect.void,
       }),
     )
@@ -78,10 +79,9 @@ describe("KernelClient.normalizeTextMessage", () => {
     expect(KernelClient.normalizeTextMessage("jg:text")).toBeUndefined()
   })
 
-  test("falls back to local time when the payload carries no sentTime", () => {
-    const before = Date.now()
-    const msg = KernelClient.normalizeTextMessage(textPayload({ sentTime: undefined }))
-    expect(msg?.msgTime).toBeGreaterThanOrEqual(before)
+  test("rejects invalid timestamps instead of turning replay into a new local-time message", () => {
+    for (const sentTime of [undefined, null, NaN, Infinity, 0, -1, 1.5, "1700000000000"])
+      expect(KernelClient.normalizeTextMessage(textPayload({ sentTime }))).toBeUndefined()
   })
 })
 
@@ -177,9 +177,9 @@ describe("KernelClient messages", () => {
         textPayload({ name: "jg:file" }),
         textPayload({ messageId: "km_h2", content: { content: 42 } }),
       ]
-      const msgs = yield* client.fetchHistory({ conversationType: 1, conversationID: "bob" })
-      expect(msgs.map((msg) => msg.messageID)).toEqual(["km_h1"])
-      expect(msgs[0]?.msgTime).toBe(1_700_000_100_000)
+      const msgs = yield* client.fetchHistory({ conversationType: 1, conversationID: "bob", after: 0, count: 100 })
+      expect(msgs.messages.map((msg) => msg.messageID)).toEqual(["km_h1"])
+      expect(msgs.messages[0]?.msgTime).toBe(1_700_000_100_000)
     }),
   )
 })

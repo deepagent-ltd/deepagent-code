@@ -59,6 +59,7 @@ const createdMessages: Array<{ groupID: string; senderID: string; content: strin
 let deliveriesFail = false
 const repo: IMRepositoryInterface = {
   listGroups: () => Effect.die("unused"),
+  ensureKernelGroup: () => Effect.die("unused"),
   createGroup: () => Effect.die("unused"),
   createDirectGroup: () => Effect.die("unused"),
   getGroup: () => Effect.die("unused"),
@@ -222,6 +223,8 @@ describe("IMReplyOutbox append/claim/settle", () => {
         state: yield* SubscriptionRef.make<KernelClient.ConnectionState>("connected"),
         send: (send) => Effect.sync(() => void kernelSends.push(send)),
         drainPending: Effect.void,
+        recovery: yield* SubscriptionRef.make<IMKernelSync.RecoveryState>({ status: "ready" }),
+        catchUp: Effect.void,
       }
 
       yield* IMReplyOutbox.drainPass({ db, repo, broadcaster, kernelSync }, { now: 0 })

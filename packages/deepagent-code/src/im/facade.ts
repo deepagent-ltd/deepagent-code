@@ -104,6 +104,7 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 /** 引擎层构造函数——生产焊死真 SDK（layerFromConfig）；测试注入假引擎（见 test/im/im-facade.test.ts）。 */
 export type EngineBuilder = (
   config: KernelConfig.Info,
+  options?: IMKernelSync.LayerOptions,
 ) => Layer.Layer<IMKernelSync.Service, unknown, IMRepository | IMBroadcasterService | AgentListProviderService>
 
 export interface Options {
@@ -160,7 +161,29 @@ export const layer = (options?: Options) =>
               Context.add(AgentListProviderService, agentListProvider),
             )
             const deps = v2Session ? depsBase.pipe(Context.add(SessionV2.Service, v2Session)) : depsBase
-            const built = yield* Layer.buildWithScope(Layer.provide(buildEngine(config), Layer.succeedContext(deps)), scope)
+            const built = yield* Layer.buildWithScope(
+              Layer.provide(
+                buildEngine(config, {
+                  inspectConversation: config.identity
+                    ? (input) =>
+                        Effect.gen(function* () {
+                          const source = yield* Ref.get(sourceRef)
+                          if (!http || Option.isNone(source))
+                            return yield* new IMKernelExchange.ExchangeError({
+                              code: "im_unavailable",
+                              message: "Conversation verification is unavailable",
+                              retryable: true,
+                            })
+                          return yield* IMKernelExchange.inspectConversation({ ...source.value, ...input }).pipe(
+                            Effect.provideService(HttpClient.HttpClient, http),
+                          )
+                        })
+                    : undefined,
+                }),
+                Layer.succeedContext(deps),
+              ),
+              scope,
+            )
             const instance = Context.get(built, IMKernelSync.Service)
             yield* Ref.set(engine, Option.some(instance))
             log.info("kernel sync engine started", { userID: config.userID, identity: config.identity?.name })
@@ -180,7 +203,9 @@ export const layer = (options?: Options) =>
         const envKey = env[KernelConfig.facadeEnvKeys.key]
         const key = stored ?? envKey
         if (!key) {
-          log.warn("DEEPAGENT_IM_FACADE_URL is set but no facade key is available (auth.json override or DEEPAGENT_IM_FACADE_KEY) — IM facade disabled")
+          log.warn(
+            "DEEPAGENT_IM_FACADE_URL is set but no facade key is available (auth.json override or DEEPAGENT_IM_FACADE_KEY) — IM facade disabled",
+          )
           return Option.none<KernelConfig.FacadeSource>()
         }
         yield* Ref.set(keyOriginRef, stored ? "stored" : "env")
@@ -197,7 +222,9 @@ export const layer = (options?: Options) =>
 
       // 构造期捕获的 HttpClient 内供所有门面调用；缺席（无 URL 或图里无 HttpClient）⇒
       // requireSource 先行失败，这里只是类型收窄的兜底。
-      const withClient = <A, E>(effect: Effect.Effect<A, E, HttpClient.HttpClient>): Effect.Effect<A, E | IMKernelExchange.ExchangeError> =>
+      const withClient = <A, E>(
+        effect: Effect.Effect<A, E, HttpClient.HttpClient>,
+      ): Effect.Effect<A, E | IMKernelExchange.ExchangeError> =>
         http
           ? Effect.provideService(effect, HttpClient.HttpClient, http)
           : Effect.fail(
@@ -216,7 +243,11 @@ export const layer = (options?: Options) =>
         yield* SubscriptionRef.set(state, { kind: "active", identity })
         yield* startEngine(IMKernelExchange.toKernelConfig(payload)).pipe(
           Effect.catch((error) =>
-            Effect.sync(() => log.error("kernel engine start failed", { message: error instanceof Error ? error.message : String(error) })),
+            Effect.sync(() =>
+              log.error("kernel engine start failed", {
+                message: error instanceof Error ? error.message : String(error),
+              }),
+            ),
           ),
         )
         return identity
@@ -231,7 +262,11 @@ export const layer = (options?: Options) =>
           if (poc)
             yield* startEngine(poc).pipe(
               Effect.catch((error) =>
-                Effect.sync(() => log.error("PoC kernel engine start failed", { message: error instanceof Error ? error.message : String(error) })),
+                Effect.sync(() =>
+                  log.error("PoC kernel engine start failed", {
+                    message: error instanceof Error ? error.message : String(error),
+                  }),
+                ),
               ),
             )
           return
@@ -255,7 +290,9 @@ export const layer = (options?: Options) =>
           return
         }
         yield* SubscriptionRef.set(state, { kind: "blocked", code: error.code, message: error.message })
-        log.warn(`facade exchange failed (${error.code}): ${error.message} — kernel integration disabled for this boot (refresh-on-restart)`)
+        log.warn(
+          `facade exchange failed (${error.code}): ${error.message} — kernel integration disabled for this boot (refresh-on-restart)`,
+        )
       })
 
       // 门面调用前提：需要有效 source（claim 只要求 key 有效，不要求已认领）。
@@ -310,11 +347,16 @@ export const layer = (options?: Options) =>
         status: Effect.gen(function* () {
           const current = yield* SubscriptionRef.get(state)
           const running = yield* Ref.get(engine)
-          const kernel = Option.isSome(running) ? Option.some(yield* SubscriptionRef.get(running.value.state)) : Option.none()
+          const kernel = Option.isSome(running)
+            ? Option.some(yield* SubscriptionRef.get(running.value.state))
+            : Option.none()
           return {
             facade: current.kind,
             identity: current.kind === "active" ? Option.some(current.identity) : Option.none(),
-            blocked: current.kind === "blocked" ? Option.some({ code: current.code, message: current.message }) : Option.none(),
+            blocked:
+              current.kind === "blocked"
+                ? Option.some({ code: current.code, message: current.message })
+                : Option.none(),
             kernel,
             keyOrigin: yield* Ref.get(keyOriginRef),
           } satisfies StatusSnapshot
@@ -359,7 +401,9 @@ export const layer = (options?: Options) =>
             // 启动优先于 env。server mode 禁写 auth.json（gateway 托管 key）——记日志后继续。
             yield* Ref.set(sourceRef, Option.some({ facadeURL: source.facadeURL, key }))
             yield* auth.set(AUTH_KEY, new Auth.Api({ type: "api", key })).pipe(
-              Effect.tapError((error) => Effect.sync(() => log.warn("failed to persist the rebound IM key", { message: error.message }))),
+              Effect.tapError((error) =>
+                Effect.sync(() => log.warn("failed to persist the rebound IM key", { message: error.message })),
+              ),
               Effect.ignore,
               Effect.andThen(Ref.set(keyOriginRef, "stored")),
             )
@@ -372,7 +416,9 @@ export const layer = (options?: Options) =>
             const error = outcome.failure
             yield* SubscriptionRef.set(
               state,
-              error.code === "im_not_claimed" ? { kind: "claim_required" } : { kind: "blocked", code: error.code, message: error.message },
+              error.code === "im_not_claimed"
+                ? { kind: "claim_required" }
+                : { kind: "blocked", code: error.code, message: error.message },
             )
             return yield* error
           }
@@ -420,21 +466,14 @@ export const layer = (options?: Options) =>
                 status: 400,
                 retryable: false,
               })
-            const group = yield* repo.createDirectGroup({
+            return yield* repo.ensureKernelGroup({
               workspaceID: input.workspaceID,
               createdBy: SERVER_USER_ID,
               name: peer.name,
-              members: [
-                { memberID: SERVER_USER_ID, memberType: "user" },
-                { memberID: peer.uuid, memberType: "user" },
-              ],
+              type: "direct",
+              kernelConvID: kernelConvKey(1, peer.uuid),
+              members: [{ memberID: peer.uuid, memberType: "user" }],
             })
-            // 幂等复用的 direct 群可能还没有内核绑定（B2 前的本地私聊）；只在缺席时补绑。
-            // createDirectGroup 返回建行（kernelConvID 可能滞后于本次绑定）——重取保证返回形状新鲜。
-            if (group.kernelConvID) return group
-            const kernelConvID = kernelConvKey(1, peer.uuid)
-            yield* repo.bindKernelConversation({ groupID: group.id, kernelConvID })
-            return (yield* repo.getGroupByID(group.id)) ?? { ...group, kernelConvID }
           }),
         invite: (input) =>
           Effect.gen(function* () {
@@ -447,11 +486,19 @@ export const layer = (options?: Options) =>
               return yield* new GroupLookupError({ message: `group ${input.groupID} is not bound to a kernel group` })
             // resolve 先行：im_not_found 早判 + 本地成员行需要 uuid。
             const peer = yield* withClient(IMKernelExchange.resolve({ ...source, name }))
-            yield* withClient(IMKernelExchange.inviteToGroup({ ...source, groupID: conv.conversationID, name: peer.name }))
+            yield* withClient(
+              IMKernelExchange.inviteToGroup({ ...source, groupID: conv.conversationID, name: peer.name }),
+            )
             // 本地成员行幂等：唯一索引兜底，重复邀请（本地已有该成员）视为成功。
             yield* repo
               .addMember({ groupID: group.id, memberID: peer.uuid, memberType: "user", role: "member" })
-              .pipe(Effect.catch((error) => Effect.sync(() => log.warn("local member row insert skipped (already a member?)", { message: error.message }))))
+              .pipe(
+                Effect.catch((error) =>
+                  Effect.sync(() =>
+                    log.warn("local member row insert skipped (already a member?)", { message: error.message }),
+                  ),
+                ),
+              )
           }),
       })
     }),

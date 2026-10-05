@@ -14,6 +14,7 @@ export interface Info {
 }
 
 export interface Identity {
+  readonly orgID: number
   readonly uuid: string
   readonly name: string
   /** 组织全员群的内核 groupId（门面纯函数 org<orgId>）——本地 provision 的绑定目标。 */
@@ -36,12 +37,16 @@ export interface FacadeSource {
 // 门面坐标：URL 缺席 ⇒ undefined（走 PoC env 路径）；URL 在而 key 缺席 ⇒ undefined + 警告
 // （fail-closed：半截配置绝不连接）。不打日志 value——key 是凭证。
 // auth.json 的 sk- key 自动发现列 follow-up，dev 路径一律显式注入 DEEPAGENT_IM_FACADE_KEY。
-export const facadeFromEnv = (env: Readonly<Record<string, string | undefined>> = process.env): FacadeSource | undefined => {
+export const facadeFromEnv = (
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): FacadeSource | undefined => {
   const facadeURL = env[FACADE_ENV_KEYS.url]
   if (!facadeURL) return undefined
   const key = env[FACADE_ENV_KEYS.key]
   if (!key) {
-    console.warn(`[im-kernel] ${FACADE_ENV_KEYS.url} is set but ${FACADE_ENV_KEYS.key} is missing — kernel integration disabled`)
+    console.warn(
+      `[im-kernel] ${FACADE_ENV_KEYS.url} is set but ${FACADE_ENV_KEYS.key} is missing — kernel integration disabled`,
+    )
     return undefined
   }
   return { facadeURL, key }

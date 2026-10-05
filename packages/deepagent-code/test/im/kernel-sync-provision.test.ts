@@ -19,7 +19,7 @@ const config: KernelConfig.Info = {
   navigator: "http://127.0.0.1:9",
   token: "test-token",
   userID: "uuid-alice",
-  identity: { uuid: "uuid-alice", name: "alice", orgAllGroupID: "org7" },
+  identity: { uuid: "uuid-alice", name: "alice", orgAllGroupID: "org7", orgID: 7 },
 }
 
 let clientState: SubscriptionRef.SubscriptionRef<KernelClient.ConnectionState>
@@ -49,7 +49,8 @@ const fakeClient = Layer.unwrap(
         state,
         messages: Stream.fromPubSub(pubsub),
         sendText: () => Effect.succeed({ messageID: "km_ack_1" }),
-        fetchHistory: () => Effect.succeed([]),
+        fetchHistory: () => Effect.succeed({ messages: [], isFinished: true, latestTime: 0 }),
+        fetchConversations: () => Effect.succeed({ conversations: [], isFinished: true }),
         disconnect: Effect.void,
       }),
     )
@@ -58,11 +59,17 @@ const fakeClient = Layer.unwrap(
 
 const database = Database.layerFromPath(":memory:")
 const repo = IMRepositoryLive.pipe(Layer.provide(database))
-const syncLayer = IMKernelSync.layer(config, { workspaceID: "ws" }).pipe(
-  Layer.provide(repo),
-  Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)),
-  Layer.provide(fakeClient),
-)
+const syncLayer = IMKernelSync.layer(config, {
+  workspaceID: "ws",
+  inspectConversation: (input) =>
+    Effect.succeed({
+      conversation_type: input.conversationType,
+      conversation_id: input.conversationID,
+      name: "全员群",
+      member_uuids: ["uuid-alice", "uuid-bob"],
+      org_id: 7,
+    }),
+}).pipe(Layer.provide(repo), Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)), Layer.provide(fakeClient))
 
 const it = testEffect(Layer.mergeAll(database, repo, syncLayer))
 

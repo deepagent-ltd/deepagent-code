@@ -111,6 +111,8 @@ const makeHarness = (options: {
               state: engineState,
               send: () => Effect.void,
               drainPending: Effect.void,
+              recovery: yield* SubscriptionRef.make<IMKernelSync.RecoveryState>({ status: "ready" }),
+              catchUp: Effect.void,
             }),
           )
         }),
@@ -127,8 +129,10 @@ const makeHarness = (options: {
     return { layer: Layer.mergeAll(facade, repo), engineStarts, engineState }
   })
 
-const exchangeFail = (code: string, status: number, message = `${code} from stub`) => (_: { method: string; url: string }) =>
-  fail(code, message, status)
+const exchangeFail =
+  (code: string, status: number, message = `${code} from stub`) =>
+  (_: { method: string; url: string }) =>
+    fail(code, message, status)
 
 describe("IMFacade", () => {
   it.live("no facade env and no PoC env → disabled, no engine", () =>
@@ -187,7 +191,12 @@ describe("IMFacade", () => {
       ])
       expect(harness.engineStarts.length).toBe(1)
       expect(harness.engineStarts[0]).toMatchObject({ token: "kt_uuid-alice", userID: "uuid-alice" })
-      expect(harness.engineStarts[0].identity).toEqual({ uuid: "uuid-alice", name: "alice", orgAllGroupID: "org7" })
+      expect(harness.engineStarts[0].identity).toEqual({
+        uuid: "uuid-alice",
+        name: "alice",
+        orgAllGroupID: "org7",
+        orgID: 7,
+      })
     }),
   )
 
@@ -195,7 +204,11 @@ describe("IMFacade", () => {
     Effect.gen(function* () {
       const auth = makeAuth({ [IMFacade.AUTH_KEY]: new Auth.Api({ type: "api", key: "sk-stored" }) })
       const seen: Seen[] = []
-      const harness = yield* makeHarness({ env: FACADE_ENV, http: httpStub(() => ok(payload()), seen), auth: auth.service })
+      const harness = yield* makeHarness({
+        env: FACADE_ENV,
+        http: httpStub(() => ok(payload()), seen),
+        auth: auth.service,
+      })
       yield* Effect.gen(function* () {
         const facade = yield* IMFacade.Service
         expect((yield* facade.status).keyOrigin).toBe("stored")
@@ -209,7 +222,8 @@ describe("IMFacade", () => {
       const seen: Seen[] = []
       let claimed = false
       const http = httpStub((req) => {
-        if (req.url.endsWith("/api/im/exchange")) return fail("im_not_claimed", "im identity not claimed for this key", 409)
+        if (req.url.endsWith("/api/im/exchange"))
+          return fail("im_not_claimed", "im identity not claimed for this key", 409)
         if (req.url.endsWith("/api/im/claim")) {
           claimed = true
           return ok(payload("bob", "uuid-bob"))
@@ -242,7 +256,10 @@ describe("IMFacade", () => {
   it.live("claim rejects a rule-violating name locally without any HTTP call", () =>
     Effect.gen(function* () {
       const seen: Seen[] = []
-      const http = httpStub((req) => (req.url.endsWith("/api/im/exchange") ? fail("im_not_claimed", "unclaimed", 409) : ok(payload())), seen)
+      const http = httpStub(
+        (req) => (req.url.endsWith("/api/im/exchange") ? fail("im_not_claimed", "unclaimed", 409) : ok(payload())),
+        seen,
+      )
       const harness = yield* makeHarness({ env: FACADE_ENV, http })
       yield* Effect.gen(function* () {
         const facade = yield* IMFacade.Service
@@ -256,11 +273,13 @@ describe("IMFacade", () => {
 
   it.live("claim name_taken keeps the claim_required state and surfaces the code", () =>
     Effect.gen(function* () {
-      const http = httpStub((req) =>
-        req.url.endsWith("/api/im/exchange")
-          ? fail("im_not_claimed", "unclaimed", 409)
-          : fail("im_name_taken", "name taken in org", 409),
-      [])
+      const http = httpStub(
+        (req) =>
+          req.url.endsWith("/api/im/exchange")
+            ? fail("im_not_claimed", "unclaimed", 409)
+            : fail("im_name_taken", "name taken in org", 409),
+        [],
+      )
       const harness = yield* makeHarness({ env: FACADE_ENV, http })
       yield* Effect.gen(function* () {
         const facade = yield* IMFacade.Service
@@ -351,7 +370,10 @@ describe("IMFacade", () => {
     Effect.gen(function* () {
       const auth = makeAuth()
       const http = httpStub(
-        (req) => (req.url.endsWith("/api/im/rebind") ? fail("im_key_already_bound", "bound to another identity", 409) : ok(payload())),
+        (req) =>
+          req.url.endsWith("/api/im/rebind")
+            ? fail("im_key_already_bound", "bound to another identity", 409)
+            : ok(payload()),
         [],
       )
       const harness = yield* makeHarness({ env: FACADE_ENV, http, auth: auth.service })
@@ -380,7 +402,10 @@ describe("IMFacade", () => {
   it.live("resolve normalizes the name (full-width/case fold) before hitting the facade", () =>
     Effect.gen(function* () {
       const seen: Seen[] = []
-      const http = httpStub((req) => (req.url.includes("/api/im/resolve") ? ok({ uuid: "uuid-bob", name: "bob" }) : ok(payload())), seen)
+      const http = httpStub(
+        (req) => (req.url.includes("/api/im/resolve") ? ok({ uuid: "uuid-bob", name: "bob" }) : ok(payload())),
+        seen,
+      )
       const harness = yield* makeHarness({ env: FACADE_ENV, http })
       yield* Effect.gen(function* () {
         const facade = yield* IMFacade.Service
@@ -394,7 +419,8 @@ describe("IMFacade", () => {
   it.live("createGroup mirrors the kernel group locally with members + binding", () =>
     Effect.gen(function* () {
       const http = httpStub((req) => {
-        if (req.url.endsWith("/api/im/groups")) return ok({ group_id: "kg1", name: "设计群", member_uuids: ["uuid-bob", "uuid-carol"] })
+        if (req.url.endsWith("/api/im/groups"))
+          return ok({ group_id: "kg1", name: "设计群", member_uuids: ["uuid-bob", "uuid-carol"] })
         return ok(payload())
       }, [])
       const harness = yield* makeHarness({ env: FACADE_ENV, http })
@@ -455,7 +481,12 @@ describe("IMFacade", () => {
         const facade = yield* IMFacade.Service
         // 未绑定群 ⇒ GroupLookupError
         const repo = yield* IMRepository
-        const local = yield* repo.createGroup({ workspaceID: "ws", type: "project", name: "local-only", createdBy: "server" })
+        const local = yield* repo.createGroup({
+          workspaceID: "ws",
+          type: "project",
+          name: "local-only",
+          createdBy: "server",
+        })
         const unbound = yield* facade.invite({ groupID: local.id, name: "carol" }).pipe(Effect.flip)
         expect(unbound).toBeInstanceOf(IMFacade.GroupLookupError)
 
@@ -464,7 +495,10 @@ describe("IMFacade", () => {
         // 重复邀请幂等（本地成员行唯一索引兜底）
         yield* facade.invite({ groupID: group.id, name: "carol" })
       }).pipe(Effect.provide(harness.layer))
-      expect(invited).toEqual([{ group_id: "kg1", name: "carol" }, { group_id: "kg1", name: "carol" }])
+      expect(invited).toEqual([
+        { group_id: "kg1", name: "carol" },
+        { group_id: "kg1", name: "carol" },
+      ])
     }),
   )
 })

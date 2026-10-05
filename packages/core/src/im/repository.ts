@@ -314,6 +314,7 @@ export interface AddMemberInput {
 
 export interface IMRepositoryInterface {
   readonly listGroups: (input: ListGroupsInput) => Effect.Effect<IMGroup[], IMRepositoryError, never>
+  readonly ensureKernelGroup: (input: CreateGroupInput & { kernelConvID: string }) => Effect.Effect<IMGroup, IMRepositoryError>
   readonly createGroup: (input: CreateGroupInput) => Effect.Effect<IMGroup, IMRepositoryError, never>
   // §B3 私聊 — create-or-return the canonical direct group for a participant pair.
   readonly createDirectGroup: (input: CreateDirectGroupInput) => Effect.Effect<IMGroup, IMRepositoryError, never>
@@ -415,6 +416,69 @@ export const IMRepositoryLive = Layer.effect(
             deletedAt: g.deleted_at ?? null,
           }))
         }),
+
+      ensureKernelGroup: (input) =>
+        db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const existing = yield* tx
+                  .select()
+                  .from(GroupTable)
+                  .where(eq(GroupTable.kernel_conv_id, input.kernelConvID))
+                  .get()
+                if (existing?.deleted_at)
+                  return yield* new IMRepositoryError({ message: "Kernel conversation was locally deleted" })
+                const now = Date.now()
+                const group =
+                  existing ??
+                  (yield* tx
+                    .insert(GroupTable)
+                    .values({
+                      id: IMID.GroupID.create(),
+                      workspace_id: input.workspaceID,
+                      project_id: input.projectID ?? null,
+                      type: input.type,
+                      name: input.name,
+                      created_by: input.createdBy,
+                      kernel_conv_id: input.kernelConvID,
+                      created_at: now,
+                      updated_at: now,
+                    })
+                    .returning()
+                    .get())
+                if (!group) return yield* new IMRepositoryError({ message: "Kernel group insert returned no row" })
+                for (const member of [
+                  { memberID: input.createdBy, memberType: "user" as const, role: "owner" as const },
+                  ...(input.members ?? []),
+                ]) {
+                  yield* tx
+                    .insert(MemberTable)
+                    .values({
+                      group_id: group.id,
+                      member_id: member.memberID,
+                      member_type: member.memberType,
+                      role: member.role ?? "member",
+                      joined_at: now,
+                    })
+                    .onConflictDoNothing()
+                }
+                return {
+                  id: group.id,
+                  workspaceID: group.workspace_id,
+                  projectID: group.project_id ?? null,
+                  type: group.type,
+                  name: group.name,
+                  createdBy: group.created_by,
+                  kernelConvID: group.kernel_conv_id ?? null,
+                  createdAt: group.created_at,
+                  updatedAt: group.updated_at,
+                  deletedAt: group.deleted_at ?? null,
+                }
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.mapError(dbError("Kernel conversation mirror failed"))),
 
       createGroup: (input) =>
         Effect.gen(function* () {

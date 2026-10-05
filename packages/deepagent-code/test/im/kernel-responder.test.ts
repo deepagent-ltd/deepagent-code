@@ -34,7 +34,7 @@ const config: KernelConfig.Info = {
   navigator: "http://127.0.0.1:9",
   token: "test-token",
   userID: "uuid-alice",
-  identity: { uuid: "uuid-alice", name: "alice", orgAllGroupID: "org7" },
+  identity: { uuid: "uuid-alice", name: "alice", orgAllGroupID: "org7", orgID: 7 },
 }
 
 const roster: AgentDescriptor[] = [
@@ -46,6 +46,7 @@ const roster: AgentDescriptor[] = [
 let clientState: SubscriptionRef.SubscriptionRef<KernelClient.ConnectionState>
 let publishInbound: (msg: KernelClient.KernelTextMessage) => Effect.Effect<void>
 let broadcasts: Array<{ groupID: string; type: string; data?: unknown }>
+let historyMessages: KernelClient.KernelTextMessage[]
 let listScopes: AgentQueryScope[]
 
 const broadcaster: IMBroadcaster = {
@@ -61,7 +62,7 @@ const broadcaster: IMBroadcaster = {
 
 const fakeClient = Layer.unwrap(
   Effect.gen(function* () {
-    const state = yield* SubscriptionRef.make<KernelClient.ConnectionState>("disconnected")
+    const state = yield* SubscriptionRef.make<KernelClient.ConnectionState>("connected")
     const pubsub = yield* PubSub.bounded<KernelClient.KernelTextMessage>(16)
     clientState = state
     publishInbound = (msg) => PubSub.publish(pubsub, msg).pipe(Effect.asVoid)
@@ -71,7 +72,13 @@ const fakeClient = Layer.unwrap(
         state,
         messages: Stream.fromPubSub(pubsub),
         sendText: () => Effect.succeed({ messageID: "km_ack_1" }),
-        fetchHistory: () => Effect.succeed([]),
+        fetchHistory: () =>
+          Effect.sync(() => ({
+            messages: historyMessages,
+            isFinished: true,
+            latestTime: Math.max(0, ...historyMessages.map((message) => message.msgTime)),
+          })),
+        fetchConversations: () => Effect.succeed({ conversations: [], isFinished: true }),
         disconnect: Effect.void,
       }),
     )
@@ -105,8 +112,18 @@ const v2Session = SessionV2.layer.pipe(
   Layer.orDie,
 )
 const repo = IMRepositoryLive.pipe(Layer.provide(database))
+const inspectConversation = (input: { conversationType: 1 | 2; conversationID: string; senderID?: string }) =>
+  Effect.succeed({
+    conversation_type: input.conversationType,
+    conversation_id: input.conversationID,
+    name: input.conversationID,
+    member_uuids: ["uuid-alice", "uuid-bob"],
+    org_id: 7,
+  })
+
 const syncLayer = IMKernelSync.layer(config, {
   workspaceID: "ws",
+  inspectConversation,
   responder: { enabled: true, directory: "/tmp" },
 }).pipe(
   Layer.provide(repo),
@@ -121,6 +138,7 @@ const it = testEffect(Layer.mergeAll(database, events, projector, store, project
 beforeEach(() => {
   broadcasts = []
   listScopes = []
+  historyMessages = []
 })
 
 const orgGroup = Effect.gen(function* () {
@@ -143,9 +161,12 @@ const inbound = (overrides: Partial<KernelClient.KernelTextMessage> = {}): Kerne
 const inputCount = (sessionID: SessionV2.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
-    return (
-      yield* db.select({ id: SessionInputTable.id }).from(SessionInputTable).where(eq(SessionInputTable.session_id, sessionID)).all().pipe(Effect.orDie)
-    ).length
+    return (yield* db
+      .select({ id: SessionInputTable.id })
+      .from(SessionInputTable)
+      .where(eq(SessionInputTable.session_id, sessionID))
+      .all()
+      .pipe(Effect.orDie)).length
   })
 
 const kernelLanded = (kernelMsgID: string) =>
@@ -155,13 +176,17 @@ const kernelLanded = (kernelMsgID: string) =>
   })
 
 const publishUntilAdmitted = (msg: KernelClient.KernelTextMessage, sessionID: SessionV2.ID, expected: number) =>
-  pollWithTimeout(
-    Effect.gen(function* () {
-      yield* publishInbound(msg)
-      return (yield* inputCount(sessionID)) >= expected ? (true as const) : undefined
-    }),
-    `mention ${msg.messageID} never admitted`,
-  )
+  Effect.gen(function* () {
+    const sync = yield* IMKernelSync.Service
+    yield* sync.catchUp
+    yield* pollWithTimeout(
+      Effect.gen(function* () {
+        yield* publishInbound(msg)
+        return (yield* inputCount(sessionID)) >= expected ? (true as const) : undefined
+      }),
+      `mention ${msg.messageID} never admitted`,
+    )
+  })
 
 describe("IMKernelSync @Agent responder (B2)", () => {
   it.live("group message `@我 @Agent …` admits exactly one durable input on the stable (group, agent) session", () =>
@@ -201,7 +226,11 @@ describe("IMKernelSync @Agent responder (B2)", () => {
       yield* publishUntilAdmitted(inbound({ messageID: "km_gate_warm", text: "@alice @general warm" }), sessionID, 1)
       yield* publishInbound(inbound({ messageID: "km_gate_nome", text: "@general 没@我" }))
       yield* publishInbound(inbound({ messageID: "km_gate_noagent", text: "@alice 没@agent" }))
-      yield* publishUntilAdmitted(inbound({ messageID: "km_gate_marker", text: "@alice @general marker" }), sessionID, 2)
+      yield* publishUntilAdmitted(
+        inbound({ messageID: "km_gate_marker", text: "@alice @general marker" }),
+        sessionID,
+        2,
+      )
       expect(yield* inputCount(sessionID)).toBe(2)
     }),
   )
@@ -218,12 +247,17 @@ describe("IMKernelSync @Agent responder (B2)", () => {
         1,
       )
       const v2 = yield* SessionV2.Service
-      expect(IMAgentExecution.imSessionMetadata(yield* v2.get(sessionID))).toEqual({ groupID: group.id, agent: "general" })
+      expect(IMAgentExecution.imSessionMetadata(yield* v2.get(sessionID))).toEqual({
+        groupID: group.id,
+        agent: "general",
+      })
     }),
   )
 
   it.live("an undispatchable mention lands a local receipt instead of an admission", () =>
     Effect.gen(function* () {
+      const sync = yield* IMKernelSync.Service
+      yield* sync.catchUp
       const group = yield* orgGroup
       const sessionID = IMAgentExecution.imSessionIDFor(group.id, "quiet")
       const receipt = yield* pollWithTimeout(
@@ -231,13 +265,46 @@ describe("IMKernelSync @Agent responder (B2)", () => {
           yield* publishInbound(inbound({ messageID: "km_quiet_1", text: "@alice @quiet 你好" }))
           const repoSvc = yield* IMRepository
           const page = yield* repoSvc.listMessages({ groupID: group.id, limit: 20 })
-          return page.messages.find((m) => (m.metadata as { type?: unknown } | null)?.type === "agent_no_trigger_mention")
+          return page.messages.find(
+            (m) => (m.metadata as { type?: unknown } | null)?.type === "agent_no_trigger_mention",
+          )
         }),
         "mention receipt never landed",
       )
       expect((receipt.metadata as { agentID?: unknown }).agentID).toBe("quiet")
       // receipt 与准入在同一顺序纤维内：receipt 可见即准入已定论。
       expect(yield* inputCount(sessionID)).toBe(0)
+    }),
+  )
+
+  it.live("history and delayed WS replay land without durable admission; a new live mention admits once", () =>
+    Effect.gen(function* () {
+      const group = yield* orgGroup
+      const sessionID = IMAgentExecution.imSessionIDFor(group.id, "general")
+      const sync = yield* IMKernelSync.Service
+      historyMessages = [inbound({ messageID: "history_mention", msgTime: 1_700_000_000_100 })]
+      yield* sync.catchUp
+      expect(yield* kernelLanded("history_mention")).toBeDefined()
+      expect(yield* inputCount(sessionID)).toBe(0)
+      // A delayed SDK sync notification has a different message ID but predates recovery's kernel-time barrier.
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          yield* publishInbound(inbound({ messageID: "delayed_ws", msgTime: 1_700_000_000_050 }))
+          return yield* kernelLanded("delayed_ws")
+        }),
+        "delayed replay did not land",
+      )
+      expect(yield* inputCount(sessionID)).toBe(0)
+      yield* publishUntilAdmitted(
+        inbound({ messageID: "live_after_recovery", msgTime: 1_700_000_000_200 }),
+        sessionID,
+        1,
+      )
+      yield* publishInbound(inbound({ messageID: "live_after_recovery", msgTime: 1_700_000_000_200 }))
+      // Running another recovery settles the inbound semaphore and cannot admit history a second time.
+      yield* sync.catchUp
+      expect(yield* inputCount(sessionID)).toBe(1)
+      expect(listScopes).toHaveLength(1)
     }),
   )
 
@@ -248,7 +315,7 @@ describe("IMKernelSync @Agent responder (B2)", () => {
         // 这台引擎——本测试是文件内最后一台构建，重指向安全。
         const offDatabase = Database.layerFromPath(":memory:")
         const offRepo = IMRepositoryLive.pipe(Layer.provide(offDatabase))
-        const offSync = IMKernelSync.layer(config, { workspaceID: "ws" }).pipe(
+        const offSync = IMKernelSync.layer(config, { workspaceID: "ws", inspectConversation }).pipe(
           Layer.provide(offRepo),
           Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)),
           Layer.provide(fakeClient),

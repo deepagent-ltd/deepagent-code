@@ -25,6 +25,13 @@ export interface KernelTextMessage {
   readonly msgTime: number
 }
 
+export interface HistoryPage {
+  readonly messages: KernelTextMessage[]
+  readonly isFinished: boolean
+  /** Includes non-text messages so unsupported media cannot stall or truncate pagination. */
+  readonly latestTime: number
+}
+
 export interface SendTextInput {
   readonly conversationType: number
   readonly conversationID: string
@@ -39,7 +46,8 @@ export interface Interface {
   /** ack 后 resolve 出内核 messageId；失败（含 15s ack 超时）为 KernelError。 */
   readonly sendText: (input: SendTextInput) => Effect.Effect<{ readonly messageID: string }, KernelSdk.KernelError>
   /** hismsgs 历史拉取（离线补拉兜底通道），结果过同一条归一化。 */
-  readonly fetchHistory: (input: KernelSdk.FetchHistoryInput) => Effect.Effect<KernelTextMessage[], KernelSdk.KernelError>
+  readonly fetchHistory: (input: KernelSdk.FetchHistoryInput) => Effect.Effect<HistoryPage, KernelSdk.KernelError>
+  readonly fetchConversations: KernelSdk.Interface["fetchConversations"]
   readonly disconnect: Effect.Effect<void>
 }
 
@@ -66,12 +74,19 @@ export const normalizeTextMessage = (payload: unknown): KernelTextMessage | unde
   const text =
     typeof content === "object" && content !== null ? (content as Record<string, unknown>).content : undefined
   if (typeof text !== "string") return undefined
-  const sender = typeof msg.sender === "object" && msg.sender !== null ? (msg.sender as Record<string, unknown>) : undefined
+  const sender =
+    typeof msg.sender === "object" && msg.sender !== null ? (msg.sender as Record<string, unknown>) : undefined
   if (
     typeof msg.messageId !== "string" ||
+    msg.messageId.length === 0 ||
     typeof msg.conversationId !== "string" ||
+    msg.conversationId.length === 0 ||
     typeof msg.conversationType !== "number" ||
-    typeof sender?.id !== "string"
+    typeof sender?.id !== "string" ||
+    sender.id.length === 0 ||
+    typeof msg.sentTime !== "number" ||
+    !Number.isSafeInteger(msg.sentTime) ||
+    msg.sentTime <= 0
   )
     return undefined
   return {
@@ -80,7 +95,7 @@ export const normalizeTextMessage = (payload: unknown): KernelTextMessage | unde
     conversationID: msg.conversationId,
     senderID: sender.id,
     text,
-    msgTime: typeof msg.sentTime === "number" ? msg.sentTime : Date.now(),
+    msgTime: msg.sentTime,
   }
 }
 
@@ -122,13 +137,28 @@ export const layer = Layer.effect(
         ),
       fetchHistory: (input) =>
         sdk.fetchHistory(input).pipe(
-          Effect.map((payloads) =>
-            payloads.flatMap((payload) => {
-              const msg = normalizeTextMessage(payload)
-              return msg ? [msg] : []
-            }),
-          ),
+          Effect.flatMap((page) => {
+            const times = page.messages.map((payload) =>
+              typeof payload === "object" && payload !== null && "sentTime" in payload ? payload.sentTime : undefined,
+            )
+            if (times.some((time) => typeof time !== "number" || !Number.isSafeInteger(time) || time <= 0))
+              return Effect.fail(
+                new KernelSdk.KernelError({
+                  operation: "fetchHistory",
+                  message: "history page has an invalid timestamp",
+                }),
+              )
+            return Effect.succeed({
+              isFinished: page.isFinished,
+              latestTime: Math.max(input.after, ...(times as number[])),
+              messages: page.messages.flatMap((payload) => {
+                const msg = normalizeTextMessage(payload)
+                return msg ? [msg] : []
+              }),
+            })
+          }),
         ),
+      fetchConversations: sdk.fetchConversations,
       disconnect: sdk.disconnect,
     })
   }),

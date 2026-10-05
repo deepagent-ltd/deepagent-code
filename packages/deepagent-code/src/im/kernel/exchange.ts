@@ -49,6 +49,21 @@ export const CreateGroupPayload = Schema.Struct({
 })
 export type CreateGroupPayload = Schema.Schema.Type<typeof CreateGroupPayload>
 
+export const InspectConversationPayload = Schema.Struct({
+  conversation_type: Schema.Literals([1, 2]),
+  conversation_id: Schema.String,
+  name: Schema.String,
+  member_uuids: Schema.Array(Schema.String),
+  org_id: Schema.Number,
+})
+export type InspectConversationPayload = Schema.Schema.Type<typeof InspectConversationPayload>
+
+export interface InspectConversationInput {
+  readonly conversationType: 1 | 2
+  readonly conversationID: string
+  readonly senderID?: string
+}
+
 // new-api common.ApiSuccess / imError 的包封套：成功 {success:true, data}，失败 {success:false, code, message}。
 const Envelope = Schema.Struct({
   success: Schema.Boolean,
@@ -68,19 +83,29 @@ export interface ExchangeInput {
 // helper 边界会丢解码类型，故传 Schema.decodeUnknownOption(<具体 schema>) 的部分应用）。各端点
 // 只声明自己的 HttpClientRequest 与解码器。失败语义与 B1 一致：业务码原样进 ExchangeError.code，
 // 4xx 不可重试，5xx/传输层可重试，success 包络载荷畸形 ⇒ fail-closed invalid_response。
-const call = <A>(input: ExchangeInput, request: HttpClientRequest.HttpClientRequest, decode: (data: unknown) => Option.Option<A>) =>
+const call = <A>(
+  input: ExchangeInput,
+  request: HttpClientRequest.HttpClientRequest,
+  decode: (data: unknown) => Option.Option<A>,
+) =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
     const path = new URL(request.url).pathname
     const response = yield* http.execute(request).pipe(
       Effect.mapError(
         (error) =>
-          new ExchangeError({ code: "transport_error", message: `facade ${path} unreachable: ${error.message}`, retryable: true }),
+          new ExchangeError({
+            code: "transport_error",
+            message: `facade ${path} unreachable: ${error.message}`,
+            retryable: true,
+          }),
       ),
       Effect.timeoutOrElse({
         duration: "15 seconds",
         orElse: () =>
-          Effect.fail(new ExchangeError({ code: "transport_error", message: `facade ${path} timed out (15s)`, retryable: true })),
+          Effect.fail(
+            new ExchangeError({ code: "transport_error", message: `facade ${path} timed out (15s)`, retryable: true }),
+          ),
       }),
     )
     const invalid = (detail: string) =>
@@ -117,12 +142,17 @@ const post = <A>(input: ExchangeInput, path: string, body: unknown, decode: (dat
     Effect.mapError((error) =>
       error instanceof ExchangeError
         ? error
-        : new ExchangeError({ code: "invalid_response", message: `facade ${path} request body not JSON-encodable: ${error.message}`, retryable: false }),
+        : new ExchangeError({
+            code: "invalid_response",
+            message: `facade ${path} request body not JSON-encodable: ${error.message}`,
+            retryable: false,
+          }),
     ),
   )
 
 /** 已认领 key → 内核连接坐标（幂等：每次调用都刷新内核 token 并自愈全员群成员关系）。 */
-export const exchange = (input: ExchangeInput) => post(input, "/api/im/exchange", {}, Schema.decodeUnknownOption(ExchangePayload))
+export const exchange = (input: ExchangeInput) =>
+  post(input, "/api/im/exchange", {}, Schema.decodeUnknownOption(ExchangePayload))
 
 /** 认领：把 IM 身份（name，org 内唯一）绑定到 key 并返回内核连接坐标。同 key 重认领幂等。 */
 export const claim = (input: ExchangeInput & { readonly name: string }) =>
@@ -147,12 +177,37 @@ export const resolve = (input: ExchangeInput & { readonly name: string }) =>
   )
 
 /** 建群：创建者自动是群首成员；member_names 是 org 内成员名清单。 */
-export const createGroup = (input: ExchangeInput & { readonly name: string; readonly memberNames: ReadonlyArray<string> }) =>
-  post(input, "/api/im/groups", { name: input.name, member_names: [...input.memberNames] }, Schema.decodeUnknownOption(CreateGroupPayload))
+export const createGroup = (
+  input: ExchangeInput & { readonly name: string; readonly memberNames: ReadonlyArray<string> },
+) =>
+  post(
+    input,
+    "/api/im/groups",
+    { name: input.name, member_names: [...input.memberNames] },
+    Schema.decodeUnknownOption(CreateGroupPayload),
+  )
 
 /** 邀请：仅群成员可邀请；按名邀请（门面侧解析名 → uuid）。 */
 export const inviteToGroup = (input: ExchangeInput & { readonly groupID: string; readonly name: string }) =>
-  post(input, "/api/im/groups/invite", { group_id: input.groupID, name: input.name }, Schema.decodeUnknownOption(Schema.Struct({})))
+  post(
+    input,
+    "/api/im/groups/invite",
+    { group_id: input.groupID, name: input.name },
+    Schema.decodeUnknownOption(Schema.Struct({})),
+  )
+
+/** Platform authority for receiving a conversation; kernel payloads alone cannot establish membership. */
+export const inspectConversation = (input: ExchangeInput & InspectConversationInput) =>
+  post(
+    input,
+    "/api/im/conversations/inspect",
+    {
+      conversation_type: input.conversationType,
+      conversation_id: input.conversationID,
+      ...(input.senderID ? { sender_uuid: input.senderID } : {}),
+    },
+    Schema.decodeUnknownOption(InspectConversationPayload),
+  )
 
 /** exchange 返回 → 内核连接配置。内核 user_id 即身份 uuid（门面 RegisterUser(acc.Uuid, acc.Name)）。 */
 export const toKernelConfig = (payload: ExchangePayload): KernelConfig.Info => ({
@@ -164,5 +219,6 @@ export const toKernelConfig = (payload: ExchangePayload): KernelConfig.Info => (
     uuid: payload.identity.uuid,
     name: payload.identity.name,
     orgAllGroupID: payload.identity.org_all_group_id,
+    orgID: payload.identity.org_id,
   },
 })

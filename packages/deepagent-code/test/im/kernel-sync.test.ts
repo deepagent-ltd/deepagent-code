@@ -26,8 +26,12 @@ const config: KernelConfig.Info = {
 let clientState: SubscriptionRef.SubscriptionRef<KernelClient.ConnectionState>
 let publishInbound: (msg: KernelClient.KernelTextMessage) => Effect.Effect<void>
 let sentTexts: Array<KernelClient.SendTextInput>
-let sendBehavior: (input: KernelClient.SendTextInput) => Effect.Effect<{ readonly messageID: string }, KernelSdk.KernelError>
+let sendBehavior: (
+  input: KernelClient.SendTextInput,
+) => Effect.Effect<{ readonly messageID: string }, KernelSdk.KernelError>
 let historyMessages: Array<KernelClient.KernelTextMessage>
+let historyRequests: KernelSdk.FetchHistoryInput[]
+let historyFailure: (input: KernelSdk.FetchHistoryInput) => boolean
 let broadcasts: Array<{ groupID: string; type: string }>
 
 const broadcaster: IMBroadcaster = {
@@ -53,7 +57,22 @@ const fakeClient = Layer.unwrap(
         state,
         messages: Stream.fromPubSub(pubsub),
         sendText: (input) => Effect.suspend(() => sendBehavior(input)),
-        fetchHistory: () => Effect.suspend(() => Effect.succeed(historyMessages)),
+        fetchHistory: (input) =>
+          Effect.suspend(() => {
+            historyRequests.push(input)
+            if (historyFailure(input))
+              return Effect.fail(new KernelSdk.KernelError({ operation: "fetchHistory", message: "test link down" }))
+            const remaining = historyMessages
+              .filter((message) => message.msgTime > input.after)
+              .sort((a, b) => a.msgTime - b.msgTime)
+            const messages = remaining.slice(0, input.count)
+            return Effect.succeed({
+              messages,
+              isFinished: remaining.length <= input.count,
+              latestTime: Math.max(input.after, ...messages.map((message) => message.msgTime)),
+            })
+          }),
+        fetchConversations: () => Effect.succeed({ conversations: [], isFinished: true }),
         disconnect: Effect.void,
       }),
     )
@@ -74,6 +93,8 @@ beforeEach(() => {
   sentTexts = []
   broadcasts = []
   historyMessages = []
+  historyRequests = []
+  historyFailure = () => false
   sendBehavior = (input) =>
     Effect.sync(() => {
       sentTexts.push(input)
@@ -205,6 +226,72 @@ describe("IMKernelSync inbound", () => {
   )
 })
 
+describe("IMKernelSync durable history pagination", () => {
+  it.live("recovers more than 20 messages with overlapping pages and a saturated timestamp boundary", () =>
+    Effect.gen(function* () {
+      const group = yield* seedBoundGroup()
+      historyMessages = Array.from({ length: 255 }, (_, index) =>
+        inbound({ messageID: `history_${index}`, msgTime: 1_700_000_000_000 + (index < 205 ? 0 : index) }),
+      )
+      const sync = yield* IMKernelSync.Service
+      yield* sync.catchUp
+      const repoSvc = yield* IMRepository
+      const messages = yield* repoSvc.listMessages({ groupID: group.id, limit: 500 })
+      expect(messages.messages).toHaveLength(255)
+      expect(new Set(messages.messages.map((message) => message.kernelMsgID)).size).toBe(255)
+      expect(historyRequests.map((request) => request.count)).toContain(400)
+      expect((yield* SubscriptionRef.get(sync.recovery)).status).toBe("ready")
+      expect((yield* repoSvc.getSyncCursor(IMKernelSync.historyCursorKey("k:1:bob")))?.lastSyncTime).toBe(
+        1_700_000_000_253,
+      )
+      yield* sync.catchUp
+      expect((yield* repoSvc.listMessages({ groupID: group.id, limit: 500 })).messages).toHaveLength(255)
+    }),
+  )
+
+  it.live("a failed later page retains a durable checkpoint, and live traffic cannot skip the backlog", () =>
+    Effect.gen(function* () {
+      const group = yield* seedBoundGroup()
+      historyMessages = Array.from({ length: 225 }, (_, index) =>
+        inbound({ messageID: `retry_${index}`, msgTime: 1_700_000_000_000 + index }),
+      )
+      const sync = yield* IMKernelSync.Service
+      const repoSvc = yield* IMRepository
+      yield* publishUntilLanded(inbound({ messageID: "live_future", msgTime: 1_800_000_000_000 }))
+      historyFailure = (request) => request.after > 0
+      yield* sync.catchUp
+      expect((yield* SubscriptionRef.get(sync.recovery)).status).toBe("failed")
+      const checkpoint = yield* repoSvc.getSyncCursor(IMKernelSync.historyCursorKey("k:1:bob"))
+      expect(checkpoint?.lastSyncTime).toBe(1_700_000_000_098)
+      historyRequests = []
+      historyFailure = () => false
+      yield* sync.catchUp
+      expect(historyRequests[0].after).toBe(checkpoint!.lastSyncTime)
+      expect((yield* repoSvc.listMessages({ groupID: group.id, limit: 500 })).messages).toHaveLength(226)
+      expect((yield* SubscriptionRef.get(sync.recovery)).status).toBe("ready")
+    }),
+  )
+
+  it.live("reports a non-progressing timestamp page and never skips its boundary", () =>
+    Effect.gen(function* () {
+      yield* seedBoundGroup()
+      historyMessages = Array.from({ length: 12_801 }, (_, index) =>
+        inbound({ messageID: `saturated_${index}`, msgTime: 1_700_000_000_000 }),
+      )
+      const sync = yield* IMKernelSync.Service
+      yield* sync.catchUp
+      const repoSvc = yield* IMRepository
+      expect((yield* SubscriptionRef.get(sync.recovery)).status).toBe("failed")
+      expect((yield* SubscriptionRef.get(sync.recovery)).message).toContain("timestamp boundary")
+      expect((yield* repoSvc.getSyncCursor(IMKernelSync.historyCursorKey("k:1:bob")))?.lastSyncTime).toBe(
+        1_699_999_999_999,
+      )
+      expect(historyRequests.at(-1)?.count).toBe(12_800)
+      expect(yield* repoSvc.getMessageByKernelMsgID("saturated_12800")).toBeUndefined()
+    }),
+  )
+})
+
 describe("IMKernelSync outbound", () => {
   const seedPendingMessage = (content: string) =>
     Effect.gen(function* () {
@@ -242,7 +329,12 @@ describe("IMKernelSync outbound", () => {
   it.live("send is a no-op for a group with no kernel binding (pure-local conversation)", () =>
     Effect.gen(function* () {
       const repoSvc = yield* IMRepository
-      const group = yield* repoSvc.createGroup({ workspaceID: "ws", type: "project", name: "local", createdBy: "alice" })
+      const group = yield* repoSvc.createGroup({
+        workspaceID: "ws",
+        type: "project",
+        name: "local",
+        createdBy: "alice",
+      })
       const message = yield* repoSvc.createMessage({
         groupID: group.id,
         senderID: "alice",

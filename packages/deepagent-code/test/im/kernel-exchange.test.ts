@@ -26,8 +26,10 @@ const json = (body: unknown, status = 200) =>
 const stubHttp = (respond: (req: Parameters<typeof HttpClientResponse.fromWeb>[0]) => Response) =>
   HttpClient.make((req) => Effect.succeed(HttpClientResponse.fromWeb(req, respond(req))))
 
-const run = <A>(effect: Effect.Effect<A, IMKernelExchange.ExchangeError, HttpClient.HttpClient>, http: HttpClient.HttpClient) =>
-  effect.pipe(Effect.provideService(HttpClient.HttpClient, http))
+const run = <A>(
+  effect: Effect.Effect<A, IMKernelExchange.ExchangeError, HttpClient.HttpClient>,
+  http: HttpClient.HttpClient,
+) => effect.pipe(Effect.provideService(HttpClient.HttpClient, http))
 
 describe("IMKernelExchange", () => {
   it.live("exchange posts to /api/im/exchange with the Bearer key and unwraps the success envelope", () =>
@@ -39,7 +41,10 @@ describe("IMKernelExchange", () => {
           return HttpClientResponse.fromWeb(req, json({ success: true, message: "", data: payload }))
         }),
       )
-      const result = yield* run(IMKernelExchange.exchange({ facadeURL: "http://facade.local:3100/", key: "sk-alice" }), http)
+      const result = yield* run(
+        IMKernelExchange.exchange({ facadeURL: "http://facade.local:3100/", key: "sk-alice" }),
+        http,
+      )
 
       expect(seen).toEqual([
         { method: "POST", url: "http://facade.local:3100/api/im/exchange", authorization: "Bearer sk-alice" },
@@ -60,6 +65,45 @@ describe("IMKernelExchange", () => {
       })
       yield* run(IMKernelExchange.claim({ facadeURL: "http://facade.local", key: "sk-bob", name: "bob" }), http)
       expect(seen).toEqual(["http://facade.local/api/im/claim"])
+    }),
+  )
+
+  it.live("inspectConversation carries the exact conversation and sender for platform authorization", () =>
+    Effect.gen(function* () {
+      const proof = {
+        conversation_type: 2 as const,
+        conversation_id: "group1",
+        name: "研发",
+        member_uuids: ["alice", "bob"],
+        org_id: 7,
+      }
+      const seen: unknown[] = []
+      const http = stubHttp((request) => {
+        const body =
+          request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined
+        seen.push({ method: request.method, url: request.url, body, authorization: request.headers.authorization })
+        return json({ success: true, data: proof })
+      })
+      expect(
+        yield* run(
+          IMKernelExchange.inspectConversation({
+            facadeURL: "http://facade.local",
+            key: "sk-alice",
+            conversationType: 2,
+            conversationID: "group1",
+            senderID: "bob",
+          }),
+          http,
+        ),
+      ).toEqual(proof)
+      expect(seen).toEqual([
+        {
+          method: "POST",
+          url: "http://facade.local/api/im/conversations/inspect",
+          body: { conversation_type: 2, conversation_id: "group1", sender_uuid: "bob" },
+          authorization: "Bearer sk-alice",
+        },
+      ])
     }),
   )
 
@@ -124,7 +168,7 @@ describe("IMKernelExchange", () => {
         navigator: "http://127.0.0.1:9002",
         token: "kt_1",
         userID: "uuid-alice",
-        identity: { uuid: "uuid-alice", name: "alice", orgAllGroupID: "org7" },
+        identity: { uuid: "uuid-alice", name: "alice", orgAllGroupID: "org7", orgID: 7 },
       })
     }),
   )
@@ -167,11 +211,19 @@ describe("IMKernelExchange", () => {
       const http = HttpClient.make((req) =>
         Effect.sync(() => {
           seen.push({ method: req.method, url: req.url })
-          return HttpClientResponse.fromWeb(req, json({ success: true, message: "", data: { uuid: "uuid-bob", name: "bob" } }))
+          return HttpClientResponse.fromWeb(
+            req,
+            json({ success: true, message: "", data: { uuid: "uuid-bob", name: "bob" } }),
+          )
         }),
       )
-      const result = yield* run(IMKernelExchange.resolve({ facadeURL: "http://facade.local", key: "sk-alice", name: "张伟" }), http)
-      expect(seen).toEqual([{ method: "GET", url: `http://facade.local/api/im/resolve?name=${encodeURIComponent("张伟")}` }])
+      const result = yield* run(
+        IMKernelExchange.resolve({ facadeURL: "http://facade.local", key: "sk-alice", name: "张伟" }),
+        http,
+      )
+      expect(seen).toEqual([
+        { method: "GET", url: `http://facade.local/api/im/resolve?name=${encodeURIComponent("张伟")}` },
+      ])
       expect(result).toEqual({ uuid: "uuid-bob", name: "bob" })
     }),
   )
@@ -179,9 +231,10 @@ describe("IMKernelExchange", () => {
   it.live("an unresolved name maps to im_not_found (404)", () =>
     Effect.gen(function* () {
       const http = stubHttp(() => json({ success: false, code: "im_not_found", message: "no such user" }, 404))
-      const error = yield* run(IMKernelExchange.resolve({ facadeURL: "http://facade.local", key: "sk-alice", name: "nobody" }), http).pipe(
-        Effect.flip,
-      )
+      const error = yield* run(
+        IMKernelExchange.resolve({ facadeURL: "http://facade.local", key: "sk-alice", name: "nobody" }),
+        http,
+      ).pipe(Effect.flip)
       expect(error.code).toBe("im_not_found")
       expect(error.status).toBe(404)
       expect(error.retryable).toBe(false)
@@ -196,15 +249,27 @@ describe("IMKernelExchange", () => {
           seen.push(req.url)
           // bodyJson 的请求体是 { _tag: "Uint8Array", body }——在假 client 边界直接解码断言。
           const body = req.body as { readonly body: Uint8Array }
-          expect(JSON.parse(new TextDecoder().decode(body.body))).toEqual({ name: "设计群", member_names: ["bob", "carol"] })
+          expect(JSON.parse(new TextDecoder().decode(body.body))).toEqual({
+            name: "设计群",
+            member_names: ["bob", "carol"],
+          })
           return HttpClientResponse.fromWeb(
             req,
-            json({ success: true, message: "", data: { group_id: "g123", name: "设计群", member_uuids: ["u-bob", "u-carol"] } }),
+            json({
+              success: true,
+              message: "",
+              data: { group_id: "g123", name: "设计群", member_uuids: ["u-bob", "u-carol"] },
+            }),
           )
         }),
       )
       const result = yield* run(
-        IMKernelExchange.createGroup({ facadeURL: "http://facade.local", key: "sk-alice", name: "设计群", memberNames: ["bob", "carol"] }),
+        IMKernelExchange.createGroup({
+          facadeURL: "http://facade.local",
+          key: "sk-alice",
+          name: "设计群",
+          memberNames: ["bob", "carol"],
+        }),
         http,
       )
       expect(seen).toEqual(["http://facade.local/api/im/groups"])
@@ -219,16 +284,31 @@ describe("IMKernelExchange", () => {
         seen.push(req.url)
         return json({ success: true, message: "", data: {} })
       })
-      yield* run(IMKernelExchange.inviteToGroup({ facadeURL: "http://facade.local", key: "sk-alice", groupID: "g123", name: "bob" }), http)
+      yield* run(
+        IMKernelExchange.inviteToGroup({
+          facadeURL: "http://facade.local",
+          key: "sk-alice",
+          groupID: "g123",
+          name: "bob",
+        }),
+        http,
+      )
       expect(seen).toEqual(["http://facade.local/api/im/groups/invite"])
     }),
   )
 
   it.live("a non-member invite maps to im_not_group_member (403)", () =>
     Effect.gen(function* () {
-      const http = stubHttp(() => json({ success: false, code: "im_not_group_member", message: "not a group member" }, 403))
+      const http = stubHttp(() =>
+        json({ success: false, code: "im_not_group_member", message: "not a group member" }, 403),
+      )
       const error = yield* run(
-        IMKernelExchange.inviteToGroup({ facadeURL: "http://facade.local", key: "sk-alice", groupID: "g123", name: "bob" }),
+        IMKernelExchange.inviteToGroup({
+          facadeURL: "http://facade.local",
+          key: "sk-alice",
+          groupID: "g123",
+          name: "bob",
+        }),
         http,
       ).pipe(Effect.flip)
       expect(error.code).toBe("im_not_group_member")

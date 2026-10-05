@@ -157,6 +157,7 @@ describe("SecurityResolvers.actorHasWorkspacePermission — lookup error fails c
     IMRepository,
     IMRepository.of({
       listGroups: err,
+      ensureKernelGroup: err,
       createGroup: err,
       createDirectGroup: err,
       getGroup: err,

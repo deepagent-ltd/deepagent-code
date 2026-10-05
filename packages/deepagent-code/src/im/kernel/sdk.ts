@@ -49,12 +49,28 @@ export interface OutboundTextMessage {
 export interface FetchHistoryInput {
   readonly conversationType: number
   readonly conversationID: string
+  readonly after: number
+  readonly count: number
+}
+
+export interface HistoryPage {
+  readonly messages: readonly unknown[]
+  readonly isFinished: boolean
+}
+
+export interface ConversationPage {
+  readonly conversations: ReadonlyArray<{ conversationType: number; conversationID: string; sortTime: number }>
+  readonly isFinished: boolean
 }
 
 export interface Interface {
   readonly rawEvents: Stream.Stream<RawEvent>
   readonly sendMessage: (input: OutboundTextMessage) => Effect.Effect<{ readonly messageID: string }, KernelError>
-  readonly fetchHistory: (input: FetchHistoryInput) => Effect.Effect<readonly unknown[], KernelError>
+  readonly fetchHistory: (input: FetchHistoryInput) => Effect.Effect<HistoryPage, KernelError>
+  readonly fetchConversations: (input: {
+    readonly before: number
+    readonly count: number
+  }) => Effect.Effect<ConversationPage, KernelError>
   readonly disconnect: Effect.Effect<void>
 }
 
@@ -97,7 +113,7 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
       // shims 必须先于 SDK bundle 求值（SDK 在 import 时捕获浏览器全局）。
       yield* Effect.promise(() => import("./shims"))
       const JuggleIM = (yield* Effect.promise(() => import("jugglechat-websdk"))).default
-      const im = JuggleIM.init({ appkey: config.appkey, navList: [config.navigator] })
+      const im = JuggleIM.init({ appkey: config.appkey, navList: [config.navigator], isSync: false })
 
       im.on(JuggleIM.Event.STATE_CHANGED, (event: { state?: unknown; code?: unknown }) => {
         if (typeof event?.state !== "number") return
@@ -117,7 +133,9 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
           orElse: () => Effect.fail(new KernelError({ operation: "connect", message: "kernel connect timed out" })),
         }),
         Effect.mapError((error) =>
-          error instanceof KernelError ? error : new KernelError({ operation: "connect", message: describeError(error), cause: error }),
+          error instanceof KernelError
+            ? error
+            : new KernelError({ operation: "connect", message: describeError(error), cause: error }),
         ),
       )
       // 已连接后的断线由 SDK 自动重连（同一 token）；connect 本身的失败在这里有界重试。
@@ -157,10 +175,33 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
         fetchHistory: (input) =>
           Effect.gen(function* () {
             const result = yield* Effect.promise(() =>
-              im.getMessages({ conversationId: input.conversationID, conversationType: input.conversationType }),
+              im.getMessages({
+                conversationId: input.conversationID,
+                conversationType: input.conversationType,
+                time: input.after,
+                count: input.count,
+                order: JuggleIM.MessageOrder.FORWARD,
+              } as Parameters<typeof im.getMessages>[0]),
             ).pipe(Effect.mapError(describe("fetchHistory")))
-            return Array.isArray(result.messages) ? result.messages : []
+            return {
+              messages: Array.isArray(result.messages) ? result.messages : [],
+              isFinished: result.isFinished === true,
+            }
           }),
+        fetchConversations: (input) =>
+          Effect.tryPromise({
+            try: () => im.getConversations({ time: input.before, count: input.count, order: 0 }),
+            catch: describe("fetchConversations"),
+          }).pipe(
+            Effect.map((page) => ({
+              isFinished: page.isFinished === true,
+              conversations: page.conversations.map((conversation) => ({
+                conversationType: conversation.conversationType,
+                conversationID: conversation.conversationId,
+                sortTime: conversation.sortTime ?? 0,
+              })),
+            })),
+          ),
         disconnect: Effect.promise(() => im.disconnect()).pipe(Effect.ignore),
       })
     }),

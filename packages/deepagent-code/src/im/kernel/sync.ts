@@ -1,7 +1,7 @@
 export * as IMKernelSync from "./sync"
 
 import { realpath } from "node:fs/promises"
-import { Cause, Context, Effect, Layer, Option, Queue, Ref, Schedule, Stream, SubscriptionRef } from "effect"
+import { Cause, Context, Effect, Layer, Option, Queue, Ref, Schedule, Semaphore, Stream, SubscriptionRef } from "effect"
 import { IMRepository } from "@deepagent-code/core/im/repository"
 import type { IMPendingKernelMessage, IMRepositoryInterface } from "@deepagent-code/core/im/repository"
 import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
@@ -15,6 +15,7 @@ import { SERVER_USER_ID } from "@/server/routes/instance/httpapi/utils/workspace
 import { KernelClient } from "./client"
 import { KernelSdk } from "./sdk"
 import type { KernelConfig } from "./config"
+import { IMKernelExchange } from "./exchange"
 
 // 内核↔本地同步引擎（design §2/§7：本地 sqlite 是消息权威存储，内核只做在线路由 + TTL 离线队列）。
 //
@@ -23,11 +24,9 @@ import type { KernelConfig } from "./config"
 //   发：本地先落库（handlers/im.ts 或 im-reply-outbox）→ send() 入队 → 内核（带 72h TTL）
 //       → ack 回写 kernel_msg_id；失败行保持 pending（kernel_msg_id IS NULL），drainPending
 //       在连接恢复 + 每 30s 重投，内存计次封顶后死信（进程重启后恢复重试）。
-//   补：连接建立时 hismsgs 拉最近一页兜底（WS sync 队列只覆盖近窗，72h 窗口靠它，design §9
-//       双通道）；按 im_sync_cursors 游标向前分页留 follow-up。
-//   B2：门面身份的组织全员群在引擎启动时幂等 provision（建群+绑定）；群内 `@我 @Agent` 触发
-//       本地 durable admission（design §6，响应器默认关）。私聊会话 provision、文件消息、
-//       已读回执留 follow-up。
+//   补：平台验证 SDK 会话列表后发现新私聊/群；hismsgs 显式正序分页，独立历史水位在落库后推进。
+//       时间边界保留重叠，饱和页扩容到上限仍不前进则显式失败，避免跳过同毫秒消息。
+//   @Agent 仅接受完成恢复后的新实时消息；历史与 SDK 延迟补推只同步本地视图。
 
 const log = Log.create({ service: "im-kernel-sync" })
 
@@ -65,6 +64,8 @@ export interface Interface {
   readonly send: (input: SendInput) => Effect.Effect<void>
   /** pending（未 ack）本地行 → 内核 的一轮重投。连接恢复时、每 30s、测试显式驱动。 */
   readonly drainPending: Effect.Effect<void>
+  readonly recovery: SubscriptionRef.SubscriptionRef<RecoveryState>
+  readonly catchUp: Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/im/kernel/Sync") {}
@@ -74,8 +75,20 @@ const SEND_MAX_ATTEMPTS = 8
 const DRAIN_INTERVAL = "30 seconds"
 // 与门面 service/imfacade 的 orgAllGroupName 常量对齐（组织全员群的显示名）。
 const ORG_ALL_GROUP_NAME = "全员群"
+const HISTORY_PAGE_SIZE = 100
+const MAX_HISTORY_PAGE_SIZE = 12_800
+export const historyCursorKey = (convKey: string) => `history:v2:${convKey}`
+
+export interface RecoveryState {
+  readonly status: "pending" | "ready" | "failed"
+  readonly message?: string
+}
 
 export interface LayerOptions {
+  readonly inspectConversation?: (
+    input: IMKernelExchange.InspectConversationInput,
+  ) => Effect.Effect<IMKernelExchange.InspectConversationPayload, IMKernelExchange.ExchangeError>
+
   /** 全员群 provision 与 agent 名册查询的本地 workspace 身份（前端按 directory 路由时的查询键）。
    *  缺省 DEEPAGENT_IM_WORKSPACE_ID ?? process.cwd()——单用户本地 server 的 cwd 即项目目录。 */
   readonly workspaceID?: string
@@ -102,8 +115,7 @@ const canonicalPath = (p: string) => Effect.tryPromise(() => realpath(p)).pipe(E
 // B2 全员群 provision：门面身份的组织全员群（内核 groupId = org<orgId>，认领时 facade 已把本身份
 // 加入内核群）幂等镜像到本地群表并绑定内核会话。creator 坐本地操作者身份（listGroups 按
 // membership 过滤——不坐进去本地 GUI 看不到这个群）；facade uuid 坐普通成员。
-// 导出供 layer build 调用一次 + 测试直接驱动幂等重跑。任何失败只记日志（provision 是增强，
-// 绝不阻塞引擎启动）；失败后入站 org 群消息按未绑定跳过并告警。
+// 导出供 layer build 调用一次 + 测试直接驱动幂等重跑。失败由后续可信发现重试。
 export const provisionOrgAllGroup = (
   repo: IMRepositoryInterface,
   identity: KernelConfig.Identity,
@@ -111,27 +123,19 @@ export const provisionOrgAllGroup = (
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
     const convKey = kernelConvKey(2, identity.orgAllGroupID)
-    const bound = yield* repo.getGroupByKernelConvID(convKey).pipe(
-      Effect.tapError((error) =>
-        Effect.sync(() => log.error("org all-group binding lookup failed", { convKey, message: error.message })),
-      ),
-      Effect.orElseSucceed(() => undefined),
-    )
-    if (bound) return
     yield* repo
-      .createGroup({
+      .ensureKernelGroup({
         workspaceID,
         type: "project",
         name: ORG_ALL_GROUP_NAME,
         createdBy: SERVER_USER_ID,
+        kernelConvID: convKey,
         members: [{ memberID: identity.uuid, memberType: "user" }],
       })
       .pipe(
-        Effect.flatMap((group) => repo.bindKernelConversation({ groupID: group.id, kernelConvID: convKey })),
-        Effect.tap(() => Effect.sync(() => log.info("org all-group provisioned", { convKey, workspaceID }))),
         Effect.catch((error) =>
           Effect.sync(() =>
-            log.error("org all-group provision failed; inbound org-group messages will be skipped", {
+            log.error("org all-group provision failed; conversation discovery will retry", {
               convKey,
               message: error.message,
             }),
@@ -160,13 +164,59 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
       // 在投消息 id（即时发送与 drain 可能同时拣起同一条：ack 回写幂等，但内核会发重）。
       const inflight = yield* Ref.make<ReadonlySet<string>>(new Set())
       const attempts = yield* Ref.make<ReadonlyMap<string, number>>(new Map())
+      const inboundLock = yield* Semaphore.make(1)
+      const recoveryLock = yield* Semaphore.make(1)
+      const recovery = yield* SubscriptionRef.make<RecoveryState>({ status: "pending" })
+      const replayBefore = yield* Ref.make(0)
+
+      const ensureConversation = (input: IMKernelExchange.InspectConversationInput) =>
+        Effect.gen(function* () {
+          const convKey = kernelConvKey(input.conversationType, input.conversationID)
+          if (!options?.inspectConversation) {
+            if (config.identity)
+              return yield* new KernelSdk.KernelError({
+                operation: "inspectConversation",
+                message: "Facade conversation verification is unavailable",
+              })
+            return yield* repo.getGroupByKernelConvID(convKey)
+          }
+          const verified = yield* options.inspectConversation(input)
+          if (
+            verified.conversation_type !== input.conversationType ||
+            verified.conversation_id !== input.conversationID ||
+            verified.org_id !== config.identity?.orgID ||
+            !verified.member_uuids.includes(config.userID) ||
+            (input.senderID && !verified.member_uuids.includes(input.senderID)) ||
+            (input.conversationType === 1 &&
+              (!verified.member_uuids.includes(input.conversationID) ||
+                (input.senderID && input.senderID !== input.conversationID && input.senderID !== config.userID)))
+          )
+            return yield* new KernelSdk.KernelError({
+              operation: "inspectConversation",
+              message: "Platform conversation proof does not match the requested identity or members",
+            })
+          const group = yield* repo.ensureKernelGroup({
+            workspaceID,
+            type: input.conversationType === 1 ? "direct" : "project",
+            name: verified.name,
+            createdBy: SERVER_USER_ID,
+            kernelConvID: convKey,
+            members: verified.member_uuids
+              .filter((uuid) => input.conversationType === 2 || uuid !== config.userID)
+              .map((uuid) => ({ memberID: uuid, memberType: "user" as const })),
+          })
+          return group
+        })
 
       // B2 @Agent 触发链的依赖：SessionV2 admission 与 agent 名册。生产 server 图里恒在；
       // 缺席（孤立嵌入/单测）⇒ 响应器强制关闭并响亮告警——入站落库主路径不受影响。
       const v2Session = Option.getOrUndefined(yield* Effect.serviceOption(SessionV2.Service))
       const agentListProvider = Option.getOrUndefined(yield* Effect.serviceOption(AgentListProviderService))
       const responderActive =
-        responder?.enabled === true && v2Session !== undefined && agentListProvider !== undefined && config.identity !== undefined
+        responder?.enabled === true &&
+        v2Session !== undefined &&
+        agentListProvider !== undefined &&
+        config.identity !== undefined
       if (responder?.enabled && !responderActive)
         log.warn(
           "IM agent responder is on but cannot activate (needs facade identity + SessionV2 + AgentListProvider); @Agent triggers will not run",
@@ -238,11 +288,13 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
         })
 
       const advanceCursor = (convKey: string, msgTime: number) =>
-        repo.upsertSyncCursor({ conversationID: convKey, lastSyncTime: msgTime }).pipe(
-          Effect.catch((error) =>
-            Effect.sync(() => log.error("sync cursor advance failed", { convKey, message: error.message })),
-          ),
-        )
+        repo
+          .upsertSyncCursor({ conversationID: convKey, lastSyncTime: msgTime })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.sync(() => log.error("sync cursor advance failed", { convKey, message: error.message })),
+            ),
+          )
 
       // B2 @Agent 触发链（design §6）：群内 `@我 @Agent <问题>` → 本地 durable admission（复用
       // im-agent-execution 的幂等准入：prompt id 由 (消息 id, agent) 派生，重放是 exact-retry
@@ -276,14 +328,16 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
             // 与 handlers/im.ts 的准入链对齐：不可派发 ⇒ durable receipt；可派发 ⇒ agent_status
             // 广播 + 恰好一次 durable admission（终端回复经 im_reply_outbox 回到群里）。
             if (!mention.dispatchable || !mention.agent) {
-              yield* defaultMentionReceiptPort.receipt({
-                eventID: messageID,
-                groupID,
-                messageID,
-                agentID: mention.agent?.id,
-                agentNames: [mention.name],
-                reason: mention.agent ? "agent_no_trigger_mention" : "no_declared_trigger",
-              }).pipe(Effect.catch(() => Effect.void))
+              yield* defaultMentionReceiptPort
+                .receipt({
+                  eventID: messageID,
+                  groupID,
+                  messageID,
+                  agentID: mention.agent?.id,
+                  agentNames: [mention.name],
+                  reason: mention.agent ? "agent_no_trigger_mention" : "no_declared_trigger",
+                })
+                .pipe(Effect.catch(() => Effect.void))
               continue
             }
             broadcaster.broadcast(groupID, {
@@ -311,60 +365,72 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
           }
         })
 
-      const handleInbound = (msg: KernelClient.KernelTextMessage) =>
-        Effect.gen(function* () {
-          if (msg.conversationType !== 1 && msg.conversationType !== 2) {
-            log.warn("kernel message on an unsupported conversation type; skipped", {
+      const handleInbound = (msg: KernelClient.KernelTextMessage, origin: "live" | "history") =>
+        inboundLock.withPermits(1)(
+          Effect.gen(function* () {
+            if (msg.conversationType !== 1 && msg.conversationType !== 2) {
+              log.warn("kernel message on an unsupported conversation type; skipped", {
+                conversationType: msg.conversationType,
+                messageID: msg.messageID,
+              })
+              return
+            }
+            const convKey = kernelConvKey(msg.conversationType, msg.conversationID)
+            // 自己的回声（内核回推本机消息）：v1 无跨设备（约束⑦），本机消息已由本地发送路径落库，
+            // 整条跳过（比 kernel_msg_id 命中已 ack 行更宽——ack 竞态下也不会写重）。
+            if (msg.senderID === config.userID) return
+            // at-least-once 去重：kernel_msg_id 的 unique index 是最终防线，这里先查一轮省一次写。
+            if (yield* repo.getMessageByKernelMsgID(msg.messageID)) {
+              yield* advanceCursor(convKey, msg.msgTime)
+              return
+            }
+            const group = yield* ensureConversation({
               conversationType: msg.conversationType,
-              messageID: msg.messageID,
+              conversationID: msg.conversationID,
+              senderID: msg.senderID,
             })
-            return
-          }
-          const convKey = kernelConvKey(msg.conversationType, msg.conversationID)
-          // 自己的回声（内核回推本机消息）：v1 无跨设备（约束⑦），本机消息已由本地发送路径落库，
-          // 整条跳过（比 kernel_msg_id 命中已 ack 行更宽——ack 竞态下也不会写重）。
-          if (msg.senderID === config.userID) return
-          // at-least-once 去重：kernel_msg_id 的 unique index 是最终防线，这里先查一轮省一次写。
-          if (yield* repo.getMessageByKernelMsgID(msg.messageID)) {
+            if (!group) {
+              log.warn("kernel conversation is not verified or bound", {
+                convKey,
+                messageID: msg.messageID,
+              })
+              return
+            }
+            const message = yield* repo.createMessage({
+              groupID: group.id,
+              senderID: msg.senderID,
+              senderType: "user",
+              type: "text",
+              content: msg.text,
+              kernelMsgID: msg.messageID,
+              createdAt: msg.msgTime,
+            })
+            broadcaster.broadcast(group.id, {
+              type: "message_created",
+              data: {
+                id: message.id,
+                groupID: message.groupID,
+                senderID: message.senderID,
+                senderType: message.senderType,
+                messageType: message.type,
+                content: message.content,
+                mentions: message.mentions,
+                metadata: message.metadata,
+                replyToID: message.replyToID,
+                createdAt: message.createdAt,
+                updatedAt: message.updatedAt,
+              },
+            })
             yield* advanceCursor(convKey, msg.msgTime)
-            return
-          }
-          const group = yield* repo.getGroupByKernelConvID(convKey)
-          if (!group) {
-            log.warn("kernel message for an unbound conversation; skipped (bindings are provisioned via the facade in B2)", {
-              convKey,
-              messageID: msg.messageID,
-            })
-            return
-          }
-          const message = yield* repo.createMessage({
-            groupID: group.id,
-            senderID: msg.senderID,
-            senderType: "user",
-            type: "text",
-            content: msg.text,
-            kernelMsgID: msg.messageID,
-            createdAt: msg.msgTime,
-          })
-          broadcaster.broadcast(group.id, {
-            type: "message_created",
-            data: {
-              id: message.id,
-              groupID: message.groupID,
-              senderID: message.senderID,
-              senderType: message.senderType,
-              messageType: message.type,
-              content: message.content,
-              mentions: message.mentions,
-              metadata: message.metadata,
-              replyToID: message.replyToID,
-              createdAt: message.createdAt,
-              updatedAt: message.updatedAt,
-            },
-          })
-          yield* advanceCursor(convKey, msg.msgTime)
-          yield* maybeAdmitMentions(group.id, message.id, msg)
-        })
+            if (
+              origin === "live" &&
+              (yield* SubscriptionRef.get(recovery)).status === "ready" &&
+              (yield* SubscriptionRef.get(client.state)) === "connected" &&
+              msg.msgTime > (yield* Ref.get(replayBefore))
+            )
+              yield* maybeAdmitMentions(group.id, message.id, msg)
+          }),
+        )
 
       const drainPending: Effect.Effect<void> = Effect.gen(function* () {
         if ((yield* SubscriptionRef.get(client.state)) !== "connected") return
@@ -400,40 +466,112 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
         }
       })
 
-      // 离线补拉兜底（design §9 双通道）：WS sync 队列覆盖近窗（isSync 默认开，消息经
-      // message_received 正常进 handleInbound）；hismsgs 拉 72h 窗口。B1 拉最近一页 +
-      // 去重落库；按 im_sync_cursors 游标向前分页留 B2。
-      const catchUp = Effect.gen(function* () {
-        const groups = yield* repo.listKernelBoundGroups
-        for (const group of groups) {
-          if (!group.kernelConvID) continue
+      // SDK cursors are strict timestamps, not message IDs. Keep the last millisecond open and
+      // enlarge a saturated boundary page; advancing past that boundary would silently lose ties.
+      const catchUpConversation = (group: { kernelConvID: string | null }) =>
+        Effect.gen(function* () {
+          if (!group.kernelConvID) return
           const parsed = parseKernelConvKey(group.kernelConvID)
-          if (!parsed) continue
-          const history = yield* client.fetchHistory(parsed).pipe(
-            Effect.tapError((error) =>
-              Effect.sync(() =>
-                log.warn("kernel history catch-up failed", { convKey: group.kernelConvID, message: error.message }),
-              ),
-            ),
-            Effect.option,
-          )
-          if (Option.isNone(history)) continue
-          for (const msg of history.value) {
-            yield* handleInbound(msg).pipe(
-              Effect.catchCause((cause) =>
-                Effect.sync(() => log.error("catch-up inbound failed", { cause: Cause.pretty(cause) })),
-              ),
-            )
+          if (!parsed) return
+          const cursorKey = historyCursorKey(group.kernelConvID)
+          const cursor = yield* repo.getSyncCursor(cursorKey)
+          const progress = { after: cursor?.lastSyncTime ?? 0, count: HISTORY_PAGE_SIZE }
+          for (let pageNumber = 0; pageNumber < 1_000; pageNumber++) {
+            const page = yield* client.fetchHistory({ ...parsed, ...progress })
+            for (const msg of page.messages) {
+              if (msg.conversationType !== parsed.conversationType || msg.conversationID !== parsed.conversationID)
+                return yield* new KernelSdk.KernelError({
+                  operation: "fetchHistory",
+                  message: "History page crossed a conversation boundary",
+                })
+              yield* handleInbound(msg, "history")
+            }
+            yield* Ref.update(replayBefore, (time) => Math.max(time, page.latestTime))
+            const next = Math.max(progress.after, page.latestTime - 1)
+            // This checkpoint belongs only to fully persisted history pages, never realtime traffic.
+            yield* repo.upsertSyncCursor({ conversationID: cursorKey, lastSyncTime: next })
+            if (page.isFinished) return
+            if (next <= progress.after) {
+              if (progress.count >= MAX_HISTORY_PAGE_SIZE)
+                return yield* new KernelSdk.KernelError({
+                  operation: "fetchHistory",
+                  message: "History timestamp boundary exceeds the page limit; cursor retained for retry",
+                })
+              progress.count *= 2
+              continue
+            }
+            progress.after = next
+            progress.count = HISTORY_PAGE_SIZE
           }
-        }
-      })
+          return yield* new KernelSdk.KernelError({
+            operation: "fetchHistory",
+            message: "History pass exceeded its page budget; cursor retained for retry",
+          })
+        })
+
+      const catchUp = recoveryLock.withPermits(1)(
+        Effect.gen(function* () {
+          if ((yield* SubscriptionRef.get(recovery)).status !== "ready")
+            yield* SubscriptionRef.set(recovery, { status: "pending" })
+          // getConversations discovers first DMs and invited groups even when the local database has
+          // no binding yet. The list supplies hints only; the facade verifies each hint independently.
+          if (options?.inspectConversation) {
+            const progress = { before: Number.MAX_SAFE_INTEGER, count: HISTORY_PAGE_SIZE }
+            for (let pageNumber = 0; pageNumber < 1_000; pageNumber++) {
+              const page = yield* client.fetchConversations(progress)
+              for (const conversation of page.conversations) {
+                yield* Ref.update(replayBefore, (time) => Math.max(time, conversation.sortTime))
+                if (conversation.conversationType !== 1 && conversation.conversationType !== 2) continue
+                yield* ensureConversation({
+                  conversationType: conversation.conversationType,
+                  conversationID: conversation.conversationID,
+                })
+              }
+              if (page.isFinished) break
+              const next = Math.min(progress.before, ...page.conversations.map((item) => item.sortTime + 1))
+              if (next >= progress.before) {
+                if (progress.count >= MAX_HISTORY_PAGE_SIZE)
+                  return yield* new KernelSdk.KernelError({
+                    operation: "fetchConversations",
+                    message: "Conversation timestamp boundary exceeds the page limit",
+                  })
+                progress.count *= 2
+                continue
+              }
+              progress.before = next
+              progress.count = HISTORY_PAGE_SIZE
+              if (pageNumber === 999)
+                return yield* new KernelSdk.KernelError({
+                  operation: "fetchConversations",
+                  message: "Conversation discovery exceeded its page budget",
+                })
+            }
+          }
+          for (const group of yield* repo.listKernelBoundGroups) yield* catchUpConversation(group)
+          yield* SubscriptionRef.set(recovery, { status: "ready" })
+        }).pipe(
+          Effect.catchCause((cause) => {
+            const message = Cause.pretty(cause)
+            log.error("kernel recovery failed; Agent admission stays disabled until retry", { message })
+            return SubscriptionRef.set(recovery, { status: "failed", message })
+          }),
+        ),
+      )
 
       // 收消息主路径：内核 WS → 归一化 → 去重落库 → 广播。
       yield* Stream.runForEach(client.messages, (msg) =>
-        handleInbound(msg).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => log.error("inbound kernel message failed", { cause: Cause.pretty(cause) })),
-          ),
+        Effect.gen(function* () {
+          const ready =
+            (yield* SubscriptionRef.get(recovery)).status === "ready" &&
+            (yield* SubscriptionRef.get(client.state)) === "connected"
+          const origin = ready && msg.msgTime > (yield* Ref.get(replayBefore)) ? "live" : "history"
+          yield* handleInbound(msg, origin)
+        }).pipe(
+          Effect.catchCause((cause) => {
+            const message = Cause.pretty(cause)
+            log.error("inbound kernel message failed; history recovery will retry", { message })
+            return SubscriptionRef.set(recovery, { status: "failed", message })
+          }),
         ),
       ).pipe(Effect.forkScoped)
 
@@ -445,16 +583,22 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
       // 连接恢复：pending 重投 + hismsgs 兜底。
       yield* Stream.runForEach(SubscriptionRef.changes(client.state), (state) =>
         state === "connected"
-          ? Effect.zip(drainPending, catchUp).pipe(
+          ? SubscriptionRef.set(recovery, { status: "pending" }).pipe(
+              Effect.andThen(Effect.zip(drainPending, catchUp)),
               Effect.catchCause((cause) =>
                 Effect.sync(() => log.error("post-connect sync pass failed", { cause: Cause.pretty(cause) })),
               ),
             )
-          : Effect.void,
+          : SubscriptionRef.set(recovery, { status: "pending" }),
       ).pipe(Effect.forkScoped)
 
       // 周期兜底：内核一直连着但某次发送失败的场景。
-      yield* drainPending.pipe(
+      yield* Effect.zip(
+        drainPending,
+        Effect.gen(function* () {
+          if ((yield* SubscriptionRef.get(client.state)) === "connected") yield* catchUp
+        }),
+      ).pipe(
         Effect.catchCause((cause) =>
           Effect.sync(() => log.error("pending drain pass failed", { cause: Cause.pretty(cause) })),
         ),
@@ -468,7 +612,9 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
           Effect.gen(function* () {
             const group = yield* repo.getGroupByID(input.groupID).pipe(
               Effect.tapError((error) =>
-                Effect.sync(() => log.error("kernel send group lookup failed", { groupID: input.groupID, message: error.message })),
+                Effect.sync(() =>
+                  log.error("kernel send group lookup failed", { groupID: input.groupID, message: error.message }),
+                ),
               ),
               Effect.orElseSucceed(() => undefined),
             )
@@ -481,6 +627,8 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
             })
           }),
         drainPending,
+        recovery,
+        catchUp,
       })
     }),
   )
