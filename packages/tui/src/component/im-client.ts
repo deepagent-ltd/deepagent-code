@@ -167,6 +167,27 @@ export function createIMClient(sdk: IMSDK) {
 
 export type IMClient = ReturnType<typeof createIMClient>
 
+// Recover the entire gap to the oldest displayed message. Stopping at any shared ID is
+// unsafe: a WS message received during the HTTP request can overlap the first page while
+// the disconnected interval is still missing farther down the history.
+export async function recoverIMMessages(client: IMClient, groupID: string, oldestID?: string) {
+  const messages: IMMessage[] = []
+  const cursors = new Set<string>()
+  let cursor: string | undefined
+  for (let pageCount = 0; pageCount < 256; pageCount += 1) {
+    const page = await client.listMessages(groupID, 50, cursor)
+    const boundary = page.messages.findIndex((message) => message.id === oldestID)
+    messages.push(...(boundary < 0 ? page.messages : page.messages.slice(0, boundary + 1)))
+    if (!oldestID || boundary >= 0 || !page.hasMore)
+      return { ...page, messages }
+    if (!page.nextCursor || cursors.has(page.nextCursor))
+      throw new IMRequestError("invalid_response", "IM history did not advance; retry the recovery")
+    cursors.add(page.nextCursor)
+    cursor = page.nextCursor
+  }
+  throw new IMRequestError("invalid_response", "IM history recovery exceeded its page limit; retry the recovery")
+}
+
 export function mergeIMMessages(current: IMMessage[], incoming: IMMessage[]) {
   return [...new Map([...current, ...incoming].map((message) => [message.id, message])).values()].sort(
     (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),
@@ -188,29 +209,45 @@ export function openIMGroupSocket(
 ) {
   const url = new URL(`${sdk.url.replace(/\/+$/, "")}/ws/im/group/${encodeURIComponent(groupID)}`)
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
-  if (sdk.directory) url.searchParams.set("directory", sdk.directory)
+  if (sdk.directory) {
+    url.searchParams.set("directory", sdk.directory)
+    url.searchParams.set("location[directory]", sdk.directory)
+  }
+  const signal = transport(sdk).getConfig().signal
   let socket: WebSocket | undefined
   let closed = false
   let attempt = 0
   let heartbeat: ReturnType<typeof setInterval> | undefined
   let retry: ReturnType<typeof setTimeout> | undefined
 
+  const close = () => {
+    closed = true
+    if (heartbeat) clearInterval(heartbeat)
+    if (retry) clearTimeout(retry)
+    signal?.removeEventListener("abort", close)
+    socket?.close()
+  }
+
   const connect = () => {
     if (closed) return
     handlers.onState?.("connecting")
     // TUI runs on Bun, whose WebSocket supports the same authenticated headers as HTTP.
     const Socket = WebSocket as unknown as new (url: string, options: { headers?: RequestInit["headers"] }) => WebSocket
-    socket = new Socket(url.toString(), { headers: transport(sdk).getConfig().headers })
-    socket.onopen = () => {
-      if (closed) return
+    const headers = new Headers(transport(sdk).getConfig().headers)
+    if (sdk.directory) headers.set("x-deepagent-code-directory", encodeURIComponent(sdk.directory))
+    const active = new Socket(url.toString(), { headers })
+    socket = active
+    active.onopen = () => {
+      if (closed || socket !== active) return
       attempt = 0
       handlers.onState?.("connected")
       handlers.onOpen?.()
       heartbeat = setInterval(() => {
-        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "ping" }))
+        if (active.readyState === WebSocket.OPEN) active.send(JSON.stringify({ type: "ping" }))
       }, 30_000)
     }
-    socket.onmessage = (event) => {
+    active.onmessage = (event) => {
+      if (closed || socket !== active) return
       try {
         const payload = JSON.parse(String(event.data)) as { type: string; data?: unknown }
         if (payload.type === "message_created") handlers.onMessage?.(payload.data as IMMessage)
@@ -220,7 +257,11 @@ export function openIMGroupSocket(
         // Ignore malformed frames — the next HTTP re-sync heals.
       }
     }
-    socket.onclose = () => {
+    active.onerror = () => {
+      // Bun emits close after a failed handshake; that single owner schedules the retry.
+    }
+    active.onclose = () => {
+      if (socket !== active) return
       if (heartbeat) clearInterval(heartbeat)
       if (closed) return
       handlers.onState?.("disconnected")
@@ -228,14 +269,9 @@ export function openIMGroupSocket(
       retry = setTimeout(connect, Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5)))
     }
   }
-  connect()
+  signal?.addEventListener("abort", close, { once: true })
+  if (signal?.aborted) close()
+  if (!closed) connect()
 
-  return {
-    close() {
-      closed = true
-      if (heartbeat) clearInterval(heartbeat)
-      if (retry) clearTimeout(retry)
-      socket?.close()
-    },
-  }
+  return { close }
 }

@@ -12,6 +12,7 @@ import {
   createIMClient,
   openIMGroupSocket,
   mergeIMMessages,
+  recoverIMMessages,
   IMRequestError,
   type IMClient,
   type IMFacadeStatus,
@@ -361,15 +362,21 @@ export function DialogIMChat(props: {
   const [form, setForm] = createSignal<Form>()
   const [draft, setDraft] = createSignal("")
   let disposed = false
+  let refreshPending = false
   onCleanup(() => {
     disposed = true
   })
 
   const load = async (older = false) => {
-    if (busy() || (older && !hasMore())) return
+    if (busy()) {
+      if (!older) refreshPending = true
+      return
+    }
+    if (older && !hasMore()) return
     setBusy(true)
-    await props.client
-      .listMessages(props.group.id, 50, older ? (cursor() ?? undefined) : undefined)
+    await (older
+      ? props.client.listMessages(props.group.id, 50, cursor() ?? undefined)
+      : recoverIMMessages(props.client, props.group.id, messages()[0]?.id))
       .then((page) => {
         if (disposed) return
         setMessages((current) => mergeIMMessages(current, page.messages))
@@ -385,7 +392,11 @@ export function DialogIMChat(props: {
         if (!disposed) setFailure(imErrorText(error, i18n))
       })
       .finally(() => {
-        if (!disposed) setBusy(false)
+        if (disposed) return
+        setBusy(false)
+        if (!refreshPending) return
+        refreshPending = false
+        void load()
       })
   }
 
