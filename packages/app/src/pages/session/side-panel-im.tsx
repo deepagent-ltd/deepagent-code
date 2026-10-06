@@ -7,6 +7,7 @@ import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
 import { GroupChatPanel } from "@/components/im/group-chat-panel"
+import { createComposerDrafts } from "@/components/im/composer-draft"
 import { MessageSearch } from "@/components/im/message-search"
 import { fetchIMCapabilities } from "@/components/im/capabilities"
 import { IMFacadeRequestError, useIMClient, type IMFacadeStatus } from "@/utils/im-client"
@@ -29,6 +30,7 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
   const client = useIMClient()
   const sdk = useSDK()
   const dialog = useDialog()
+  const drafts = createComposerDrafts()
 
   const [groups, setGroups] = createSignal<IMGroup[]>([])
   const [loading, setLoading] = createSignal(true)
@@ -499,6 +501,7 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
               </div>
             </Show>
             <GroupChatPanel
+              drafts={drafts}
               groupID={id()}
               name={selectedGroup()?.name}
               selfMemberIDs={[facadeStatus()?.viewer?.memberID ?? "server", ...(identity() ? [identity()!.uuid] : [])]}

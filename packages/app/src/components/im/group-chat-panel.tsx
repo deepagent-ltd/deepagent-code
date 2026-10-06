@@ -9,6 +9,7 @@ import { useIMWebSocket } from "@/hooks/use-im-websocket"
 import type { LocalMessage } from "@/hooks/use-im-websocket"
 import { useIMClient } from "@/utils/im-client"
 import type { AgentDescriptor } from "./types"
+import { createComposerDrafts } from "./composer-draft"
 
 interface GroupChatPanelProps {
   groupID: string
@@ -21,9 +22,21 @@ interface GroupChatPanelProps {
   // v4FileUploadEnabled capability so we don't render an affordance the route fails-closed on
   // (a click would otherwise 404 FILE_UPLOAD_DISABLED and toast an error).
   fileUploadEnabled?: boolean
+  drafts?: ReturnType<typeof createComposerDrafts>
 }
 
 export function GroupChatPanel(props: GroupChatPanelProps) {
+  const drafts = props.drafts ?? createComposerDrafts()
+  // A new conversation owns its requests, composer and socket lifecycle. Returning
+  // to a conversation reuses only its draft, never another conversation's UI state.
+  return (
+    <Show when={props.groupID} keyed>
+      {(groupID) => <GroupConversation {...props} groupID={groupID} drafts={drafts} />}
+    </Show>
+  )
+}
+
+function GroupConversation(props: GroupChatPanelProps & { drafts: ReturnType<typeof createComposerDrafts> }) {
   const language = useLanguage()
   const client = useIMClient()
   const [state, setState] = createStore({
@@ -168,7 +181,7 @@ export function GroupChatPanel(props: GroupChatPanelProps) {
     const byId = new Map<string, LocalMessage>()
     for (const m of historicalMessages()) byId.set(m.id, m)
     for (const m of realtimeMessages()) byId.set(m.id, m)
-    return Array.from(byId.values()).sort((a, b) => a.createdAt - b.createdAt)
+    return Array.from(byId.values()).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
   }
 
   // Mark the group read whenever new messages land (and on first load). Sends
@@ -198,9 +211,10 @@ export function GroupChatPanel(props: GroupChatPanelProps) {
   // §B3 file attachment — upload the file scoped to this group, then post a `file` message so it
   // surfaces in the timeline (the metadata carries the uploaded path).
   const handleAttach = async (file: File) => {
+    const groupID = props.groupID
     try {
-      const attachment = await client.uploadAttachment(file, { groupId: props.groupID })
-      await client.createMessage(props.groupID, {
+      const attachment = await client.uploadAttachment(file, { groupId: groupID })
+      await client.createMessage(groupID, {
         content: attachment.filename,
         type: "file",
       })
@@ -262,6 +276,7 @@ export function GroupChatPanel(props: GroupChatPanelProps) {
         </Show>
 
         <MessageComposer
+          draft={props.drafts(props.groupID)}
           onSend={handleSendMessage}
           onTyping={handleTyping}
           agents={agents()}
@@ -277,6 +292,7 @@ export function GroupChatPanel(props: GroupChatPanelProps) {
             root={root()}
             agents={agents()}
             selfMemberIDs={props.selfMemberIDs}
+            drafts={props.drafts}
             onClose={() => setThreadRoot(null)}
           />
         )}

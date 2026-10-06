@@ -93,6 +93,25 @@ describe("IM text conversations", () => {
     await waitFor(() => expect(send).toHaveBeenCalledWith("@unknown", expect.any(String)))
   })
 
+  it("creates a new request identity when mention completion edits a failed draft", async () => {
+    const send = vi.fn().mockRejectedValueOnce(new Error("unconfirmed delivery")).mockResolvedValue(undefined)
+    render(() => (
+      <MessageComposer onSend={send} agents={[{ id: "auto", name: "auto", displayName: "Auto", visible: true }]} />
+    ))
+    const input = screen.getByRole("textbox") as HTMLTextAreaElement
+    fireEvent.input(input, { target: { value: "@a" } })
+    input.setSelectionRange(2, 2)
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    await screen.findByRole("alert")
+    fireEvent.click(screen.getByRole("button", { name: "@auto" }))
+    expect(input.value).toBe("@auto ")
+    expect(screen.queryByRole("alert")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    await waitFor(() => expect(input.value).toBe(""))
+    expect(send.mock.calls[1][0]).toBe("@auto ")
+    expect(send.mock.calls[1][1]).not.toBe(send.mock.calls[0][1])
+  })
+
   it("labels only the current member as You, retaining the remote sender identity", () => {
     render(() => (
       <>

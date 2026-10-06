@@ -1,14 +1,16 @@
-import { createSignal, createMemo, createEffect, onCleanup, Show, For } from "solid-js"
+import { createMemo, createEffect, onCleanup, Show, For } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Button } from "@deepagent-code/ui/button"
 import { useLanguage } from "@/context/language"
 import type { AgentDescriptor } from "./types"
+import { createComposerDraft, type ComposerDraft } from "./composer-draft"
 
 interface MessageComposerProps {
   onSend: (content: string, clientRequestID: string) => void | Promise<void>
   onTyping?: (typing: boolean) => void
   agents: AgentDescriptor[]
   disabled?: boolean
+  draft?: ComposerDraft
   // §B3 file attachments — when provided, a paperclip button lets the user upload a file. The panel
   // owns the upload (uploadAttachment → file message) so the composer stays presentation-only.
   onAttach?: (file: File) => Promise<void>
@@ -18,27 +20,37 @@ interface MessageComposerProps {
 
 export function MessageComposer(props: MessageComposerProps) {
   const language = useLanguage()
-  const [delivery, setDelivery] = createStore({ sending: false, failed: false, requestID: "", requestContent: "" })
-  const [content, setContent] = createSignal("")
-  const [showMentionMenu, setShowMentionMenu] = createSignal(false)
-  const [mentionQuery, setMentionQuery] = createSignal("")
-  const [mentionPosition, setMentionPosition] = createSignal({ top: 0, left: 0 })
-  const [selectedIndex, setSelectedIndex] = createSignal(0)
-  const [uploading, setUploading] = createSignal(false)
+  const draft = props.draft ?? createComposerDraft()
+  const delivery = draft.state
+  const setDelivery = draft.setState
+  const content = () => draft.state.content
+  const setContent = (value: string) =>
+    draft.setState({
+      content: value,
+      ...(value !== delivery.requestContent ? { failed: false, requestID: "", requestContent: "" } : {}),
+    })
+  const [editor, setEditor] = createStore({
+    showMentionMenu: false,
+    mentionQuery: "",
+    mentionPosition: { top: 0, left: 0 },
+    selectedIndex: 0,
+    uploading: false,
+  })
   let textareaRef: HTMLTextAreaElement | undefined
   let fileInputRef: HTMLInputElement | undefined
   let typingActive = false
   let typingStopTimer: ReturnType<typeof setTimeout> | undefined
+  let disposed = false
 
   const handleFileSelected = async (e: Event & { currentTarget: HTMLInputElement }) => {
     const file = e.currentTarget.files?.[0]
     e.currentTarget.value = ""
     if (!file || !props.onAttach) return
-    setUploading(true)
+    setEditor("uploading", true)
     try {
       await props.onAttach(file)
     } finally {
-      setUploading(false)
+      setEditor("uploading", false)
     }
   }
 
@@ -65,11 +77,14 @@ export function MessageComposer(props: MessageComposerProps) {
     }
   }
 
-  onCleanup(stopTyping)
+  onCleanup(() => {
+    disposed = true
+    stopTyping()
+  })
 
   // Filter agents based on mention query
   const filteredAgents = createMemo(() => {
-    const query = mentionQuery()
+    const query = editor.mentionQuery
     if (!query) return props.agents
     const lowerQuery = query.toLowerCase()
     return props.agents.filter(
@@ -92,57 +107,57 @@ export function MessageComposer(props: MessageComposerProps) {
     const mentionMatch = textBeforeCursor.match(/@(\w*)$/)
 
     if (mentionMatch) {
-      setMentionQuery(mentionMatch[1])
-      setShowMentionMenu(true)
-      setSelectedIndex(0)
+      setEditor("mentionQuery", mentionMatch[1])
+      setEditor("showMentionMenu", true)
+      setEditor("selectedIndex", 0)
 
       // Calculate position for the dropdown
       const coords = getCaretCoordinates(textareaRef, cursorPos)
-      setMentionPosition({
+      setEditor("mentionPosition", {
         top: coords.top - textareaRef.scrollTop,
         left: coords.left,
       })
     } else {
-      setShowMentionMenu(false)
-      setMentionQuery("")
+      setEditor("showMentionMenu", false)
+      setEditor("mentionQuery", "")
     }
   })
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (e.isComposing || e.keyCode === 229) return
-    if (showMentionMenu() && filteredAgents().length > 0) {
+    if (editor.showMentionMenu && filteredAgents().length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault()
-        setSelectedIndex((prev) => (prev + 1) % filteredAgents().length)
+        setEditor("selectedIndex", (prev) => (prev + 1) % filteredAgents().length)
         return
       }
       if (e.key === "ArrowUp") {
         e.preventDefault()
-        setSelectedIndex((prev) => (prev - 1 + filteredAgents().length) % filteredAgents().length)
+        setEditor("selectedIndex", (prev) => (prev - 1 + filteredAgents().length) % filteredAgents().length)
         return
       }
       if (e.key === "Tab" || e.key === "Enter") {
         if (e.key === "Enter" && !e.shiftKey) {
-          // Only handle Tab and Shift+Enter for mention completion
+          // Enter completes the selected mention; Shift+Enter keeps its newline behavior.
           e.preventDefault()
-          insertMention(filteredAgents()[selectedIndex()])
+          insertMention(filteredAgents()[editor.selectedIndex])
           return
         }
         if (e.key === "Tab") {
           e.preventDefault()
-          insertMention(filteredAgents()[selectedIndex()])
+          insertMention(filteredAgents()[editor.selectedIndex])
           return
         }
       }
       if (e.key === "Escape") {
         e.preventDefault()
-        setShowMentionMenu(false)
+        setEditor("showMentionMenu", false)
         return
       }
     }
 
     // Normal message sending (Enter without Shift)
-    if (e.key === "Enter" && !e.shiftKey && (!showMentionMenu() || filteredAgents().length === 0)) {
+    if (e.key === "Enter" && !e.shiftKey && (!editor.showMentionMenu || filteredAgents().length === 0)) {
       e.preventDefault()
       void submit()
     }
@@ -162,12 +177,12 @@ export function MessageComposer(props: MessageComposerProps) {
       setDelivery("failed", true)
     } finally {
       setDelivery("sending", false)
-      textareaRef?.focus()
+      if (!disposed) textareaRef?.focus()
     }
   }
 
   const insertMention = (agent: AgentDescriptor) => {
-    if (!textareaRef) return
+    if (delivery.sending || !textareaRef) return
 
     const cursorPos = textareaRef.selectionStart
     const textBeforeCursor = content().slice(0, cursorPos)
@@ -182,14 +197,14 @@ export function MessageComposer(props: MessageComposerProps) {
 
       // Set cursor position after the mention
       setTimeout(() => {
-        if (!textareaRef) return
+        if (disposed || !textareaRef) return
         const newCursorPos = beforeMention.length + agent.id.length + 2
         textareaRef.setSelectionRange(newCursorPos, newCursorPos)
         textareaRef.focus()
       }, 0)
     }
 
-    setShowMentionMenu(false)
+    setEditor("showMentionMenu", false)
   }
 
   return (
@@ -198,7 +213,6 @@ export function MessageComposer(props: MessageComposerProps) {
         ref={textareaRef}
         value={content()}
         onInput={(e) => {
-          if (e.currentTarget.value !== delivery.requestContent) setDelivery({ requestID: "", requestContent: "" })
           setContent(e.currentTarget.value)
           if (e.currentTarget.value.trim()) signalTyping()
           else stopTyping()
@@ -218,13 +232,11 @@ export function MessageComposer(props: MessageComposerProps) {
         </p>
       </Show>
 
-      <Show when={showMentionMenu() && filteredAgents().length > 0}>
+      <Show when={editor.showMentionMenu && filteredAgents().length > 0}>
         <div
-          class="absolute bg-surface-raised-base border border-border-base rounded-lg shadow-lg max-h-60 overflow-y-auto z-50"
+          class="absolute left-3 right-3 min-w-0 bg-surface-raised-base border border-border-base rounded-lg shadow-lg max-h-60 overflow-y-auto z-50"
           style={{
-            bottom: `calc(100% - ${mentionPosition().top}px + 8px)`,
-            left: `${mentionPosition().left}px`,
-            "min-width": "250px",
+            bottom: `calc(100% - ${editor.mentionPosition.top}px + 8px)`,
           }}
         >
           <For each={filteredAgents()}>
@@ -232,10 +244,10 @@ export function MessageComposer(props: MessageComposerProps) {
               <button
                 type="button"
                 class={`w-full px-4 py-2 text-left hover:bg-surface-raised-base-hover ${
-                  index() === selectedIndex() ? "bg-surface-raised-base-hover" : ""
+                  index() === editor.selectedIndex ? "bg-surface-raised-base-hover" : ""
                 }`}
                 onClick={() => insertMention(agent)}
-                onMouseEnter={() => setSelectedIndex(index())}
+                onMouseEnter={() => setEditor("selectedIndex", index())}
               >
                 <div class="font-medium text-text-strong">@{agent.id}</div>
                 <Show when={agent.description}>
@@ -254,14 +266,15 @@ export function MessageComposer(props: MessageComposerProps) {
           <button
             type="button"
             class="shrink-0 flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-base hover:bg-surface-raised-base-hover disabled:opacity-50"
-            disabled={props.disabled || uploading() || delivery.sending}
+            disabled={props.disabled || editor.uploading || delivery.sending}
             onClick={() => fileInputRef?.click()}
             aria-label={language.t("im.composer.attach")}
           >
-            {uploading() ? language.t("im.composer.uploading") : language.t("im.composer.attach")}
+            {editor.uploading ? language.t("im.composer.uploading") : language.t("im.composer.attach")}
           </button>
         </Show>
         <Button
+          class="shrink-0"
           variant="primary"
           size="small"
           disabled={props.disabled || delivery.sending || !content().trim()}
