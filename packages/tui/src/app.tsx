@@ -46,6 +46,7 @@ import { DialogKnowledgeReview } from "./component/dialog-knowledge-review"
 import { DialogOversight } from "./component/dialog-oversight"
 import { DialogDeepAgentSettings } from "./component/dialog-deepagent-settings"
 import { DialogIM } from "./component/dialog-im"
+import { attentionCommand } from "./component/dialog-attention"
 import { DialogStats } from "./component/dialog-stats"
 import { DialogGitTimeline } from "./component/dialog-git-timeline"
 import { DialogTerminal } from "./component/dialog-terminal"
@@ -955,6 +956,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         },
         category: i18n.t("tui.category.system"),
       },
+      attentionCommand(dialog, i18n),
       {
         // W4-3 — IM panel: group list, chat view with live WS messages, send.
         name: "im.list",

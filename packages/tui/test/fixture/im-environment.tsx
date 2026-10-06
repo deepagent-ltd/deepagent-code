@@ -2,7 +2,7 @@
 import { TextareaRenderable } from "@opentui/core"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { testRender, useRenderer } from "@opentui/solid"
-import { onCleanup, onMount, type JSX } from "solid-js"
+import { createComponent, onCleanup, onMount, type JSX } from "solid-js"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { TestTuiContexts } from "./tui-environment"
@@ -24,7 +24,13 @@ export async function until(predicate: () => boolean, message = "condition", tim
   }
 }
 
-export async function mountIM(root: string, url: string, component: () => JSX.Element, width = 100) {
+export async function mountIM(
+  root: string,
+  url: string,
+  component: () => JSX.Element,
+  width = 100,
+  setup?: () => JSX.Element,
+) {
   const state = path.join(root, "state")
   await mkdir(state, { recursive: true })
   await Bun.write(path.join(state, "kv.json"), '{"tui_locale":"en","animations_enabled":false}')
@@ -53,6 +59,7 @@ export async function mountIM(root: string, url: string, component: () => JSX.El
                     headers={{ Authorization: "Bearer fixture-token" }}
                   >
                     <DialogProvider>
+                      {setup ? createComponent(setup, {}) : undefined}
                       <Open />
                     </DialogProvider>
                   </SDKProvider>

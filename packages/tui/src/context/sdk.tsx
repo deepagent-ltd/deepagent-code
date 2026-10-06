@@ -20,11 +20,11 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     const abort = new AbortController()
     let sse: AbortController | undefined
 
-    function createSDK() {
+    function createSDK(directory = props.directory) {
       return createOpencodeClient({
         baseUrl: props.url,
         signal: abort.signal,
-        directory: props.directory,
+        directory,
         fetch: props.fetch,
         headers: props.headers,
       })
@@ -141,6 +141,11 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     return {
       get client() {
         return sdk
+      },
+      // Read a server-resolved placement without changing the active project's SDK,
+      // event stream, configuration, or prompt state.
+      forDirectory(directory: string) {
+        return createSDK(directory)
       },
       directory: props.directory,
       event: emitter,
