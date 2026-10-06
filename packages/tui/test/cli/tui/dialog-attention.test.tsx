@@ -297,10 +297,10 @@ test("Attention is reachable from the real command palette and slash-command reg
     )
   }
   using ui = await mountIM(tmp.path, api.url, () => <CommandPaletteDialog />, 100, Register)
-  await ui.frame("Attention inbox")
+  await ui.frame("Needs attention")
   expect(api.state.calls).toHaveLength(0)
   expect(slash).toBeFunction()
-  await ui.select("Attention inbox")
+  await ui.select("Needs attention")
   await ui.frame("Project A recovery")
   const before = api.state.calls.length
   slash!()

@@ -4,7 +4,7 @@ export const dict = {
   "tui.attention.scrollDown": "Scroll down",
   "tui.attention.scrollUp": "Scroll up",
   "tui.attention.scrollHint": "Ctrl+D / Ctrl+U to scroll",
-  "tui.attention.title": "Attention inbox",
+  "tui.attention.title": "Needs attention",
   "tui.attention.actions": "Actions",
   "tui.attention.back": "Back",
   "tui.attention.refresh": "Refresh",
