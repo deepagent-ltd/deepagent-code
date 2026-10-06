@@ -468,6 +468,8 @@ export const dict = {
   "composer.goal.editPlan.status.done": "已完成",
   "composer.goal.editPlan.status.blocked": "受阻",
   "composer.goal.editPlan.status.cancelled": "已取消",
+  "composer.recovery.hint": "此会话存在待处理的执行状态。请先核对并明确处理恢复，再继续发送消息。",
+  "composer.recovery.action": "需处理恢复",
   "composer.steer.hint": "会话正在运行——你的消息将引导当前回合",
   "prompt.scenario.label": "情景模式",
   "prompt.scenario.direct": "直接",

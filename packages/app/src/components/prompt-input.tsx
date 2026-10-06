@@ -278,7 +278,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       // D1: prepare locked the editor (blur + cursor-wait). When no draft surface remains —
       // including a server-side degrade that ends preparation without ever producing a draft —
       // hand focus back so the composer is usable again instead of looking stuck.
-      if (!props.disabled) {
+      if (!disabled()) {
         editorRef.focus()
         queueScroll()
       }
@@ -393,6 +393,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   })
   const info = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
   const working = createMemo(() => sync.data.session_working(params.id ?? ""))
+  const recoveryRequired = createMemo(() => sync.data.session_status[params.id ?? ""]?.type === "recovery_required")
+  const disabled = createMemo(() => props.disabled || recoveryRequired())
   // A finished subagent is read-only: it did its one turn and was marked done by the task tool
   // (metadata.deepagent.subagent.finished). The panel still lists it so its history is viewable,
   // but new prompts must be refused — the parent orchestrates work, you don't chat with a done child.
@@ -450,8 +452,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       .join("")
     return text.trim().length === 0 && imageAttachments().length === 0 && commentCount() === 0
   })
-  const stopping = createMemo(() => draftPreparing() || (working() && blank()))
+  const stopping = createMemo(() => !recoveryRequired() && (draftPreparing() || (working() && blank())))
   const tip = () => {
+    if (recoveryRequired()) return language.t("composer.recovery.hint")
     if (stopping()) {
       return (
         <div class="flex items-center gap-2">
@@ -1354,7 +1357,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   onCleanup(() => props.controlRef?.(undefined))
 
   const handlePromptSubmit = (event: Event) => {
-    if (props.disabled) {
+    if (disabled()) {
       event.preventDefault()
       return
     }
@@ -1383,7 +1386,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
-    if (props.disabled) {
+    if (disabled()) {
       event.preventDefault()
       event.stopPropagation()
       return
@@ -1853,7 +1856,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           <div
             class="relative"
             onMouseDown={() => {
-              if (draftPreparing() || props.disabled) return
+              if (draftPreparing() || disabled()) return
               editorRef?.focus()
             }}
           >
@@ -1871,8 +1874,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 role="textbox"
                 aria-multiline="true"
                 aria-label={placeholder()}
-                aria-disabled={draftPreparing() || props.disabled}
-                contenteditable={draftPreparing() || props.disabled ? "false" : "true"}
+                aria-disabled={draftPreparing() || disabled()}
+                contenteditable={draftPreparing() || disabled() ? "false" : "true"}
                 autocapitalize={store.mode === "normal" ? "sentences" : "off"}
                 autocorrect={store.mode === "normal" ? "on" : "off"}
                 spellcheck={store.mode === "normal"}
@@ -1893,7 +1896,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   "font-mono!": store.mode === "shell",
                   // Editor keeps the raw user input during preparation (the streamed draft shows in the
                   // panel below), so it reads normally — locked to edits, not greyed as a placeholder.
-                  "cursor-wait": draftPreparing() || props.disabled,
+                  "cursor-wait": draftPreparing() || disabled(),
                 }}
                 style={{ "padding-bottom": space }}
               />
@@ -2025,12 +2028,18 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   data-action="prompt-submit"
                   type="submit"
                   form={formID}
-                  disabled={props.disabled || subagentFinished() || (!draftPreparing() && !working() && blank())}
+                  disabled={disabled() || subagentFinished() || (!draftPreparing() && !working() && blank())}
                   tabIndex={store.mode === "normal" ? undefined : -1}
                   icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
                   variant="primary"
                   class="size-8 rounded-full"
-                  aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
+                  aria-label={
+                    recoveryRequired()
+                      ? language.t("composer.recovery.action")
+                      : stopping()
+                        ? language.t("prompt.action.stop")
+                        : language.t("prompt.action.send")
+                  }
                 />
               </Tooltip>
             </div>

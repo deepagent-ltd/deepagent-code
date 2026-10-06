@@ -2,7 +2,7 @@ import { Show, createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useNavigate } from "@solidjs/router"
 import { useSpring } from "@deepagent-code/ui/motion-spring"
-import { Icon } from "@deepagent-code/ui/icon"
+import { SessionExecutionHint } from "./session-execution-hint"
 import { useLayout } from "@/context/layout"
 import { PromptInput, type PromptInputControl } from "@/components/prompt-input"
 import { useLanguage } from "@/context/language"
@@ -77,7 +77,8 @@ export function SessionComposerRegion(props: {
   // V4.1 §S1 — when the session is WORKING, a message the user sends is absorbed as a steer for the
   // running turn (the server buffers it at the next turn boundary, never a BusyError). Surface a subtle
   // hint so the user knows the send won't be dropped or start a competing turn.
-  const working = createMemo(() => (route.params.id ? sync.data.session_working(route.params.id) : false))
+  const executionStatus = createMemo(() => sync.data.session_status[route.params.id ?? ""])
+  const recoveryRequired = createMemo(() => executionStatus()?.type === "recovery_required")
   const info = createMemo(() => (route.params.id ? sync.session.get(route.params.id) : undefined))
   const parentID = createMemo(() => info()?.parentID)
   const child = createMemo(() => !!parentID())
@@ -305,25 +306,12 @@ export function SessionComposerRegion(props: {
                 <GoalStatusBar sessionID={route.params.id!} />
                 <GoalStartButton sessionID={route.params.id!} />
               </Show>
-              <Show when={working()}>
-                {/* S41-1: the composer stack is pulled up over the todo dock by a negative margin
-                    (the "sacrificial overlap" the opaque PromptInput normally absorbs). A transparent
-                    hint row inside that zone draws directly over the todo window's scrolled content.
-                    Give the hint its own opaque surface so it reads as a reserved status row
-                    (codex-style: hint occupies its own row, never blended into other content). */}
-                <div
-                  data-component="steer-hint"
-                  class="flex items-center gap-1.5 px-2.5 py-1 text-11-regular text-text-muted bg-background-weak"
-                >
-                  <Icon name="intelligence" class="size-3.5 shrink-0" />
-                  <span class="truncate">{language.t("composer.steer.hint")}</span>
-                </div>
-              </Show>
+              <SessionExecutionHint status={executionStatus()} />
               <Show when={props.followup?.items.length}>
                 <SessionFollowupDock
                   items={props.followup!.items}
                   sending={props.followup!.sending}
-                  disabled={props.followup!.disabled}
+                  disabled={props.followup!.disabled || recoveryRequired()}
                   onSend={props.followup!.onSend}
                   onEdit={props.followup!.onEdit}
                   onDelete={props.followup!.onDelete}
@@ -344,7 +332,7 @@ export function SessionComposerRegion(props: {
                       onQueue={props.followup?.onQueue}
                       onAbort={props.followup?.onAbort}
                       onSubmit={props.onSubmit}
-                      disabled={props.inputDisabled || recoveryStore.pending}
+                      disabled={props.inputDisabled || recoveryStore.pending || recoveryRequired()}
                       controlRef={props.inputControlRef}
                     />
                   </Show>

@@ -1,5 +1,5 @@
 export const dict = {
-  "attention.title": "Attention inbox",
+  "attention.title": "Needs attention",
   "attention.description": "Failures and recovery states across projects on this server.",
   "attention.filter.kind": "Type",
   "attention.filter.view": "Viewed status",
@@ -477,6 +477,8 @@ export const dict = {
   "composer.goal.editPlan.status.done": "Done",
   "composer.goal.editPlan.status.blocked": "Blocked",
   "composer.goal.editPlan.status.cancelled": "Cancelled",
+  "composer.recovery.hint": "This session requires recovery review. Resolve its execution state explicitly before sending another message.",
+  "composer.recovery.action": "Recovery review required",
   "composer.steer.hint": "Session is working — your message will steer the current turn",
   "prompt.scenario.label": "Scenario mode",
   "prompt.scenario.direct": "Direct",
