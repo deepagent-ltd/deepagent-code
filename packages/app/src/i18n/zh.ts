@@ -3,6 +3,15 @@ import { dict as en } from "./en"
 type Keys = keyof typeof en
 
 export const dict = {
+  "im.media.attachment": "附件",
+  "im.media.unavailable": "附件不可用，可能已过期或访问权限已变化。",
+  "im.media.expired": "附件已过期",
+  "im.media.download": "下载",
+  "im.media.preview": "预览图片",
+  "im.media.localOnly": "仅在当前本地会话中可用。",
+  "im.media.uploadFailed": "附件发送失败",
+  "im.media.retry": "重试发送附件",
+  "im.media.discard": "放弃发送附件",
   "attention.title": "待处理",
   "attention.description": "查看当前服务器各项目的失败与恢复事项。",
   "attention.filter.kind": "类型",

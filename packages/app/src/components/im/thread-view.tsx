@@ -14,6 +14,7 @@ type ThreadViewProps = {
   groupID: string
   root: LocalMessage
   agents: AgentDescriptor[]
+  mediaEnabled?: boolean
   selfMemberIDs?: readonly string[]
   senderNames?: ReadonlyMap<string, string>
   drafts?: ReturnType<typeof createComposerDrafts>
@@ -99,7 +100,12 @@ function ThreadConversation(props: ThreadViewProps & { drafts: ReturnType<typeof
 
       <div class="flex-1 min-h-0 overflow-y-auto p-3 space-y-4">
         <div class="rounded-lg border border-border-weak-base bg-surface-base p-2">
-          <MessageItem message={props.root} selfMemberIDs={props.selfMemberIDs} senderNames={props.senderNames} />
+          <MessageItem
+            mediaEnabled={props.mediaEnabled}
+            message={props.root}
+            selfMemberIDs={props.selfMemberIDs}
+            senderNames={props.senderNames}
+          />
         </div>
         <div class="text-11-regular text-text-weak">
           {language.t("im.thread.count", { count: state.replies.length })}
@@ -118,7 +124,12 @@ function ThreadConversation(props: ThreadViewProps & { drafts: ReturnType<typeof
         >
           <For each={state.replies}>
             {(reply) => (
-              <MessageItem message={reply} selfMemberIDs={props.selfMemberIDs} senderNames={props.senderNames} />
+              <MessageItem
+                mediaEnabled={props.mediaEnabled}
+                message={reply}
+                selfMemberIDs={props.selfMemberIDs}
+                senderNames={props.senderNames}
+              />
             )}
           </For>
           <Show when={state.hasMore && !state.failedLoad}>

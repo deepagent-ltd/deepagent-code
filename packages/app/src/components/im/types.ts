@@ -22,6 +22,7 @@ export interface IMGroup {
 }
 
 export type MessageMetadata =
+  | { type: "attachment_ref"; attachmentID: string }
   | { type: "file_ref"; path: string; line?: number }
   | { type: "code_ref"; path?: string; startLine?: number; endLine?: number }
   | { type: "agent_run"; sessionID?: string; status: string }
@@ -71,4 +72,6 @@ export interface IMAttachment {
   sizeBytes: number
   checksum: string
   createdAt: number
+  expiresAt: number
+  preview: boolean
 }

@@ -188,7 +188,14 @@ export function createIMClient(config: () => IMClientConfig) {
       }),
     createMessage: (
       groupID: string,
-      payload: { content: string; type?: string; mentions?: string[]; replyToID?: string; clientRequestID?: string },
+      payload: {
+        content: string
+        type?: string
+        mentions?: string[]
+        replyToID?: string
+        clientRequestID?: string
+        attachmentID?: string
+      },
     ) =>
       request<IMMessage>(`/api/v1/im/groups/${groupID}/messages`, {
         method: "POST",
@@ -226,13 +233,35 @@ export function createIMClient(config: () => IMClientConfig) {
           cursor: params.cursor,
         },
       }),
-    // §B3 文件 — upload a file (multipart). `groupId`/`messageId` optionally scope it to a message.
-    uploadAttachment: (file: File, opts?: { groupId?: string; messageId?: string }) => {
+    // Upload only to a local conversation; the file-message transaction owns message binding.
+    uploadAttachment: (file: File, opts: { groupId: string }) => {
       const form = new FormData()
       form.append("file", file, file.name)
-      if (opts?.groupId) form.append("groupId", opts.groupId)
-      if (opts?.messageId) form.append("messageId", opts.messageId)
+      form.append("groupId", opts.groupId)
       return uploadRequest<IMAttachment>(`/api/v1/im/attachments`, form)
+    },
+    getAttachment: (id: string) => request<IMAttachment>(`/api/v1/im/attachments/${encodeURIComponent(id)}`),
+    downloadAttachment: async (attachment: IMAttachment) => {
+      const c = config()
+      const headers: Record<string, string> = { ...authHeaders(c) }
+      if (c.directory) headers["x-deepagent-code-directory"] = c.directory
+      if (c.workspace) headers["x-deepagent-code-workspace"] = c.workspace
+      const response = await fetch(buildURL(`/api/v1/im/attachments/${encodeURIComponent(attachment.id)}/content`), {
+        headers,
+        cache: "no-store",
+      })
+      if (!response.ok) throw new Error("Attachment is unavailable")
+      const bytes = await response.arrayBuffer()
+      const checksum = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (value) =>
+        value.toString(16).padStart(2, "0"),
+      ).join("")
+      if (
+        bytes.byteLength !== attachment.sizeBytes ||
+        checksum !== attachment.checksum ||
+        attachment.expiresAt <= Date.now()
+      )
+        throw new Error("Attachment integrity or expiration check failed")
+      return new Blob([bytes], { type: attachment.preview ? attachment.mime : "application/octet-stream" })
     },
     // §B3 文件 — list attachment records for a group / message / the workspace.
     listAttachments: (opts?: { groupId?: string; messageId?: string; limit?: number }) =>

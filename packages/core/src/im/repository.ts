@@ -4,13 +4,14 @@ import { Database } from "../database/database"
 import { contentDigest } from "../contract/digest"
 import { stringify } from "../util/canonical-json"
 import { IMMentionIntentTable } from "./mention-intent.sql"
+import { AttachmentStorage } from "./attachment-storage"
 import * as IMID from "./id"
 import { AttachmentTable, GroupTable, MemberTable, MessageTable, SyncCursorTable, GroupType, MemberType, MemberRole, SenderType, MessageType, MessageMetadata } from "./sql"
 
 // Repository errors
 export class IMRepositoryError extends Schema.ErrorClass<IMRepositoryError>("IMRepositoryError")({
   message: Schema.String,
-  code: Schema.optional(Schema.Literal("message_identity_conflict")),
+  code: Schema.optional(Schema.Literals(["message_identity_conflict", "attachment_unavailable"])),
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
@@ -219,6 +220,7 @@ export interface SearchMessagesInput {
 }
 
 export interface CreateAttachmentInput {
+  id?: string
   workspaceID: string
   projectID?: string
   groupID?: string
@@ -256,6 +258,7 @@ export interface CreateMessageInput {
   /** Trusted internal stable identity, e.g. one reply-outbox delivery. */
   id?: string
   clientRequestID?: string
+  attachment?: { id: string; workspaceID: string }
   /** Server-only verified live provenance; never populated by history or HTTP payload metadata. */
   mentionIntent?: LiveMentionContext
   groupID: string
@@ -358,6 +361,9 @@ export interface IMRepositoryInterface {
   readonly createAttachment: (input: CreateAttachmentInput) => Effect.Effect<IMAttachment, IMRepositoryError, never>
   readonly getAttachment: (attachmentID: string) => Effect.Effect<IMAttachment | undefined, IMRepositoryError, never>
   readonly listAttachments: (input: ListAttachmentsInput) => Effect.Effect<IMAttachment[], IMRepositoryError, never>
+  readonly listExpiredAttachments: (workspaceID: string) => Effect.Effect<IMAttachment[], IMRepositoryError, never>
+  /** Tombstone expired or unbound records only after the caller has removed their bytes. */
+  readonly expireAttachment: (attachmentID: string) => Effect.Effect<void, IMRepositoryError, never>
   // IM-kernel (JuggleIM B1) — conversation binding + message dedup/ack + sync high-water marks.
   // getGroupByKernelConvID is an INTERNAL lookup (no membership check; the kernel sync engine owns
   // admission), unlike getGroup which enforces caller membership.
@@ -913,6 +919,55 @@ export const IMRepositoryLive = Layer.effect(
             : input.kernelMsgID ? IMID.MessageID.make(`imsg_kernel_${contentDigest(input.kernelMsgID).slice(0, 40)}`)
             : IMID.MessageID.create()
           const now = Date.now()
+          if (input.attachment) {
+            const attachment = yield* tx
+              .select()
+              .from(AttachmentTable)
+              .where(
+                and(
+                  eq(AttachmentTable.id, IMID.AttachmentID.make(input.attachment.id)),
+                  eq(AttachmentTable.workspace_id, input.attachment.workspaceID),
+                  eq(AttachmentTable.group_id, IMID.GroupID.make(input.groupID)),
+                  eq(AttachmentTable.uploaded_by, input.senderID),
+                  isNull(AttachmentTable.deleted_at),
+                ),
+              )
+              .get()
+            const group = yield* tx
+              .select({ id: GroupTable.id })
+              .from(GroupTable)
+              .innerJoin(
+                MemberTable,
+                and(
+                  eq(MemberTable.group_id, GroupTable.id),
+                  eq(MemberTable.member_id, input.senderID),
+                  eq(MemberTable.member_type, "user"),
+                ),
+              )
+              .where(
+                and(
+                  eq(GroupTable.id, IMID.GroupID.make(input.groupID)),
+                  eq(GroupTable.workspace_id, input.attachment.workspaceID),
+                  isNull(GroupTable.kernel_conv_id),
+                  isNull(GroupTable.deleted_at),
+                ),
+              )
+              .get()
+            if (
+              !attachment ||
+              !group ||
+              AttachmentStorage.expiresAt(attachment.created_at) <= now ||
+              (attachment.message_id !== null && attachment.message_id !== id) ||
+              input.type !== "file" ||
+              input.metadata?.type !== "attachment_ref" ||
+              input.metadata.attachmentID !== attachment.id
+            )
+              return yield* new IMRepositoryError({
+                code: "attachment_unavailable",
+                message: "Attachment is unavailable for this message",
+              })
+            yield* tx.update(AttachmentTable).set({ message_id: id }).where(eq(AttachmentTable.id, attachment.id)).run()
+          }
           const mentions = input.mentions ? Array.from(new Set(input.mentions)).sort() : null
           const inserted = yield* tx.insert(MessageTable).values({
             id,
@@ -1034,7 +1089,7 @@ export const IMRepositoryLive = Layer.effect(
 
       createAttachment: (input) =>
         Effect.gen(function* () {
-          const id = IMID.AttachmentID.create()
+          const id = input.id ? IMID.AttachmentID.make(input.id) : IMID.AttachmentID.create()
           const now = Date.now()
 
           yield* db.insert(AttachmentTable).values({
@@ -1108,6 +1163,41 @@ export const IMRepositoryLive = Layer.effect(
 
           return rows.map(mapAttachmentRow)
         }),
+
+      listExpiredAttachments: (workspaceID) =>
+        db
+          .select()
+          .from(AttachmentTable)
+          .where(
+            and(
+              eq(AttachmentTable.workspace_id, workspaceID),
+              isNull(AttachmentTable.deleted_at),
+              lt(AttachmentTable.created_at, Date.now() - AttachmentStorage.ttlMs()),
+            ),
+          )
+          .limit(32)
+          .all()
+          .pipe(
+            Effect.map((rows) => rows.map(mapAttachmentRow)),
+            Effect.mapError(dbError("Attachment cleanup lookup failed")),
+          ),
+
+      expireAttachment: (attachmentID) =>
+        db
+          .update(AttachmentTable)
+          .set({ deleted_at: Date.now() })
+          .where(
+            and(
+              eq(AttachmentTable.id, IMID.AttachmentID.make(attachmentID)),
+              // Failed, unbound uploads may be tombstoned after the caller removes partial bytes.
+              or(
+                isNull(AttachmentTable.message_id),
+                lt(AttachmentTable.created_at, Date.now() - AttachmentStorage.ttlMs()),
+              ),
+            ),
+          )
+          .run()
+          .pipe(Effect.asVoid, Effect.mapError(dbError("Attachment expiration failed"))),
 
       getGroupByKernelConvID: (kernelConvID) =>
         Effect.gen(function* () {

@@ -3973,6 +3973,20 @@ export type ImPermissionDeniedError = {
   }
 }
 
+export type ImFileUploadDisabledError = {
+  name: "FILE_UPLOAD_DISABLED"
+  data: {
+    message: string
+  }
+}
+
+export type ImAttachmentNotFoundError = {
+  name: "ATTACHMENT_UNAVAILABLE"
+  data: {
+    message: string
+  }
+}
+
 export type ImMessageTooLargeError = {
   name: "MESSAGE_TOO_LARGE"
   data: {
@@ -4005,13 +4019,6 @@ export type ImMessageNotFoundError = {
 
 export type ImThreadDisabledError = {
   name: "THREAD_DISABLED"
-  data: {
-    message: string
-  }
-}
-
-export type ImFileUploadDisabledError = {
-  name: "FILE_UPLOAD_DISABLED"
   data: {
     message: string
   }
@@ -14569,6 +14576,7 @@ export type ImMessagesListResponse = ImMessagesListResponses[keyof ImMessagesLis
 
 export type ImMessagesCreateData = {
   body: {
+    attachmentID?: string
     clientRequestID?: string
     senderType: "user" | "agent" | "system"
     type: "text" | "code" | "file" | "agent_status" | "system"
@@ -14639,9 +14647,9 @@ export type ImMessagesCreateData = {
 
 export type ImMessagesCreateErrors = {
   /**
-   * BadRequest | InvalidRequestError
+   * IMValidationFailedError | BadRequest | InvalidRequestError
    */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  400: ImValidationFailedError | EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
    * Unauthorized
    */
@@ -14651,9 +14659,9 @@ export type ImMessagesCreateErrors = {
    */
   403: ImPermissionDeniedError
   /**
-   * IMGroupNotFoundError
+   * IMGroupNotFoundError | IMFileUploadDisabledError | IMAttachmentNotFoundError
    */
-  404: ImGroupNotFoundError
+  404: ImGroupNotFoundError | ImFileUploadDisabledError | ImAttachmentNotFoundError
   /**
    * IMMessageIdentityConflictError
    */
@@ -15003,17 +15011,17 @@ export type ImAttachmentsListData = {
 
 export type ImAttachmentsListErrors = {
   /**
-   * InvalidRequestError
+   * IMValidationFailedError | InvalidRequestError
    */
-  400: InvalidRequestError
+  400: ImValidationFailedError | InvalidRequestError
   /**
    * Unauthorized
    */
   401: unknown
   /**
-   * IMFileUploadDisabledError | IMGroupNotFoundError
+   * IMFileUploadDisabledError | IMGroupNotFoundError | IMAttachmentNotFoundError
    */
-  404: ImFileUploadDisabledError | ImGroupNotFoundError
+  404: ImFileUploadDisabledError | ImGroupNotFoundError | ImAttachmentNotFoundError
   /**
    * IMInternalServerError
    */
@@ -15035,9 +15043,11 @@ export type ImAttachmentsListResponses = {
     uploadedBy: string
     filename: string
     mime: string
-    sizeBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    sizeBytes: number
     checksum: string
-    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    createdAt: number
+    expiresAt: number
+    preview: boolean
   }>
 }
 
@@ -15046,7 +15056,7 @@ export type ImAttachmentsListResponse = ImAttachmentsListResponses[keyof ImAttac
 export type ImAttachmentsUploadData = {
   body: {
     file: Blob | File
-    groupId?: string | null
+    groupId: string
     messageId?: string | null
   }
   path?: never
@@ -15067,9 +15077,9 @@ export type ImAttachmentsUploadErrors = {
    */
   401: unknown
   /**
-   * IMFileUploadDisabledError | IMGroupNotFoundError
+   * IMFileUploadDisabledError | IMAttachmentNotFoundError | IMGroupNotFoundError
    */
-  404: ImFileUploadDisabledError | ImGroupNotFoundError
+  404: ImFileUploadDisabledError | ImAttachmentNotFoundError | ImGroupNotFoundError
   /**
    * IMFileTooLargeError
    */
@@ -15099,13 +15109,113 @@ export type ImAttachmentsUploadResponses = {
     uploadedBy: string
     filename: string
     mime: string
-    sizeBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    sizeBytes: number
     checksum: string
-    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    createdAt: number
+    expiresAt: number
+    preview: boolean
   }
 }
 
 export type ImAttachmentsUploadResponse = ImAttachmentsUploadResponses[keyof ImAttachmentsUploadResponses]
+
+export type ImAttachmentsGetData = {
+  body?: never
+  path: {
+    attachmentId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/attachments/{attachmentId}"
+}
+
+export type ImAttachmentsGetErrors = {
+  /**
+   * IMValidationFailedError | InvalidRequestError
+   */
+  400: ImValidationFailedError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFileUploadDisabledError | IMGroupNotFoundError | IMAttachmentNotFoundError
+   */
+  404: ImFileUploadDisabledError | ImGroupNotFoundError | ImAttachmentNotFoundError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+}
+
+export type ImAttachmentsGetError = ImAttachmentsGetErrors[keyof ImAttachmentsGetErrors]
+
+export type ImAttachmentsGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    workspaceID: string
+    projectID: string
+    groupID: string
+    messageID: string
+    uploadedBy: string
+    filename: string
+    mime: string
+    sizeBytes: number
+    checksum: string
+    createdAt: number
+    expiresAt: number
+    preview: boolean
+  }
+}
+
+export type ImAttachmentsGetResponse = ImAttachmentsGetResponses[keyof ImAttachmentsGetResponses]
+
+export type ImAttachmentsDownloadData = {
+  body?: never
+  path: {
+    attachmentId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/attachments/{attachmentId}/content"
+}
+
+export type ImAttachmentsDownloadErrors = {
+  /**
+   * IMValidationFailedError | InvalidRequestError
+   */
+  400: ImValidationFailedError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFileUploadDisabledError | IMGroupNotFoundError | IMAttachmentNotFoundError
+   */
+  404: ImFileUploadDisabledError | ImGroupNotFoundError | ImAttachmentNotFoundError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+}
+
+export type ImAttachmentsDownloadError = ImAttachmentsDownloadErrors[keyof ImAttachmentsDownloadErrors]
+
+export type ImAttachmentsDownloadResponses = {
+  /**
+   * Success
+   */
+  200: Blob | File
+}
+
+export type ImAttachmentsDownloadResponse = ImAttachmentsDownloadResponses[keyof ImAttachmentsDownloadResponses]
 
 export type ImFacadeStatusData = {
   body?: never

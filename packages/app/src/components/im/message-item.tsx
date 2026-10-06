@@ -2,6 +2,7 @@ import { Show } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { AgentStatusChip } from "./agent-status-chip"
 import { AgentReasoningCard } from "./agent-reasoning-card"
+import { AttachmentCard } from "./attachment-card"
 import { MessageMetadataCard } from "./message-metadata-card"
 import type { AgentProgressPart, LocalMessage } from "@/hooks/use-im-websocket"
 
@@ -12,6 +13,7 @@ interface MessageItemProps {
   agentProgress?: AgentProgressPart[]
   /** §B3 thread — open this message's reply chain. Hidden when undefined. */
   onOpenThread?: (message: LocalMessage) => void
+  mediaEnabled?: boolean
   selfMemberIDs?: readonly string[]
   senderNames?: ReadonlyMap<string, string>
 }
@@ -54,7 +56,16 @@ export function MessageItem(props: MessageItemProps) {
         >
           <div class="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{props.message.content}</div>
 
-          <Show when={props.message.metadata}>
+          <Show
+            when={
+              props.mediaEnabled && props.message.metadata?.type === "attachment_ref"
+                ? props.message.metadata
+                : undefined
+            }
+          >
+            {(metadata) => <AttachmentCard attachmentID={metadata().attachmentID} />}
+          </Show>
+          <Show when={props.message.metadata && props.message.metadata.type !== "attachment_ref"}>
             <div class="mt-2">
               <MessageMetadataCard metadata={props.message.metadata!} />
             </div>

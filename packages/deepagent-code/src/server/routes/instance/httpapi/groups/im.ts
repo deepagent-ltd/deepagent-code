@@ -155,6 +155,7 @@ export const MessagePageResponse = Schema.Struct({
 })
 
 export const CreateMessagePayload = Schema.Struct({
+  attachmentID: Schema.optional(Schema.String),
   clientRequestID: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128))),
   senderType: Schema.Literals(["user", "agent", "system"]),
   type: Schema.Literals(["text", "code", "file", "agent_status", "system"]),
@@ -211,9 +212,11 @@ export const IMAttachmentResponse = Schema.Struct({
   uploadedBy: Schema.String,
   filename: Schema.String,
   mime: Schema.String,
-  sizeBytes: Schema.Number,
+  sizeBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   checksum: Schema.String,
-  createdAt: Schema.Number,
+  createdAt: Schema.Finite,
+  expiresAt: Schema.Finite,
+  preview: Schema.Boolean,
 })
 
 export const ListAttachmentsQuery = Schema.Struct({
@@ -228,11 +231,10 @@ export const ListAttachmentsQuery = Schema.Struct({
 // persisted bytes (defense in depth).
 export const IM_MAX_ATTACHMENT_BYTES = AttachmentStorage.maxAttachmentBytes()
 
-// §B3 文件 — multipart upload payload. `file` is the uploaded file part; the remaining OPTIONAL text
-// fields scope the attachment (a file may be decoupled from any message: groupId/messageId omitted).
+// Local gray media requires a group; messageId remains decodable only to reject the old bypass explicitly.
 export const UploadAttachmentPayload = Schema.Struct({
   file: Multipart.SingleFileSchema,
-  groupId: Schema.optional(Schema.String),
+  groupId: Schema.String,
   messageId: Schema.optional(Schema.String),
 }).pipe(HttpApiSchema.asMultipart({ maxFileSize: IM_MAX_ATTACHMENT_BYTES }))
 
@@ -247,6 +249,11 @@ export class IMFileUploadDisabledError extends Schema.ErrorClass<IMFileUploadDis
   },
   { httpApiStatus: 404 },
 ) {}
+
+export class IMAttachmentNotFoundError extends Schema.ErrorClass<IMAttachmentNotFoundError>("IMAttachmentNotFoundError")({
+  name: Schema.Literal("ATTACHMENT_UNAVAILABLE"),
+  data: Schema.Struct({ message: Schema.String }),
+}, { httpApiStatus: 404 }) {}
 
 // §B3 threads — fail-closed error when the v4ThreadEnabled flag is off, mirroring IMFileUploadDisabledError
 // (404: the endpoint does not exist for the caller). Keeps thread gating consistent with the upload gate.
@@ -438,6 +445,9 @@ export const IMApi = HttpApi.make("im")
           success: described(IMMessageResponse, "Created message"),
           error: [
             IMGroupNotFoundError,
+            IMFileUploadDisabledError,
+            IMAttachmentNotFoundError,
+            IMValidationFailedError,
             IMMessageTooLargeError,
             IMMessageIdentityConflictError,
             IMRateLimitExceededError,
@@ -514,14 +524,14 @@ export const IMApi = HttpApi.make("im")
               "Full-text search across messages in groups the caller belongs to, with optional group / sender / type / metadata filters and keyset pagination.",
           }),
         ),
-        // §B3 文件 — upload a file (multipart). Stored on local disk under the workspace data dir; the
-        // record is decoupled from any message unless groupId/messageId are supplied.
+        // Upload remains unbound until a file-message transaction claims its attachmentID.
         HttpApiEndpoint.post("uploadAttachment", IMPaths.uploadAttachment, {
           query: WorkspaceRoutingQuery,
           payload: UploadAttachmentPayload,
           success: described(IMAttachmentResponse, "Uploaded attachment"),
           error: [
             IMFileUploadDisabledError,
+            IMAttachmentNotFoundError,
             IMFileTooLargeError,
             IMUnsupportedMediaTypeError,
             IMGroupNotFoundError,
@@ -534,21 +544,33 @@ export const IMApi = HttpApi.make("im")
             identifier: "im.attachments.upload",
             summary: "Upload attachment",
             description:
-              "Upload a file to local disk under the workspace data directory. Validates mime + size and computes a sha256 checksum. Gated on the v4FileUploadEnabled flag.",
+              "Upload to an authorized local group. Validates bytes, MIME and size, computes SHA-256, and returns an expiring unbound ID. Requires v4FileUploadEnabled; kernel conversations are unsupported.",
           }),
         ),
         // §B3 文件 — list attachments for a group / message (or the whole workspace).
         HttpApiEndpoint.get("listAttachments", IMPaths.listAttachments, {
           query: ListAttachmentsQuery,
           success: described(Schema.Array(IMAttachmentResponse), "Attachments"),
-          error: [IMFileUploadDisabledError, IMGroupNotFoundError, IMInternalServerError],
+          error: [IMFileUploadDisabledError, IMGroupNotFoundError, IMValidationFailedError, IMAttachmentNotFoundError, IMInternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.attachments.list",
             summary: "List attachments",
-            description: "List attachment records for a group, message, or the workspace.",
+            description: "List authorized attachment records for a required local group or message.",
           }),
         ),
+        HttpApiEndpoint.get("getAttachment", `${root}/attachments/:attachmentId`, {
+          params: { attachmentId: Schema.String },
+          query: WorkspaceRoutingQuery,
+          success: IMAttachmentResponse,
+          error: [IMFileUploadDisabledError, IMGroupNotFoundError, IMAttachmentNotFoundError, IMValidationFailedError, IMInternalServerError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.attachments.get", summary: "Read an authorized local attachment" })),
+        HttpApiEndpoint.get("downloadAttachment", `${root}/attachments/:attachmentId/content`, {
+          params: { attachmentId: Schema.String },
+          query: WorkspaceRoutingQuery,
+          success: Schema.Uint8Array.pipe(HttpApiSchema.asUint8Array()),
+          error: [IMFileUploadDisabledError, IMGroupNotFoundError, IMAttachmentNotFoundError, IMValidationFailedError, IMInternalServerError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.attachments.download", summary: "Download authorized local attachment bytes" })),
         // ── B2 门面端点 ─────────────────────────────────────────────────────────────
         // 状态快照永远可用（facade 缺席 ⇒ disabled 快照而非错误）；门面操作在 facade 缺席时
         // 由 handler 侧合成 im_unavailable (IMFacadeUnavailableError)。

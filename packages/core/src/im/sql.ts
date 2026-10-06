@@ -32,6 +32,11 @@ export const FileRefMetadata = Schema.Struct({
 })
 export type FileRefMetadata = Schema.Schema.Type<typeof FileRefMetadata>
 
+export const AttachmentRefMetadata = Schema.Struct({
+  type: Schema.Literal("attachment_ref"),
+  attachmentID: Schema.String,
+})
+
 export const CodeRefMetadata = Schema.Struct({
   type: Schema.Literal("code_ref"),
   path: Schema.optional(Schema.String),
@@ -91,6 +96,7 @@ export const KernelSyncMetadata = Schema.Struct({
 })
 
 export const MessageMetadata = Schema.Union([
+  AttachmentRefMetadata,
   KernelSyncMetadata,
   FileRefMetadata,
   CodeRefMetadata,

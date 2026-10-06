@@ -8,7 +8,7 @@ import { ThreadView } from "./thread-view"
 import { useIMWebSocket } from "@/hooks/use-im-websocket"
 import type { LocalMessage } from "@/hooks/use-im-websocket"
 import { useIMClient } from "@/utils/im-client"
-import type { AgentDescriptor } from "./types"
+import type { AgentDescriptor, IMAttachment } from "./types"
 import { createComposerDrafts } from "./composer-draft"
 
 interface GroupChatPanelProps {
@@ -41,6 +41,8 @@ function GroupConversation(props: GroupChatPanelProps & { drafts: ReturnType<typ
   const language = useLanguage()
   const client = useIMClient()
   const [state, setState] = createStore({
+    pendingAttachment: undefined as { attachment: IMAttachment; requestID: string } | undefined,
+    sendingAttachment: false,
     failed: false,
     cursor: null as string | null,
     hasMore: false,
@@ -210,24 +212,48 @@ function GroupConversation(props: GroupChatPanelProps & { drafts: ReturnType<typ
   }
 
   // §B3 file attachment — upload the file scoped to this group, then post a `file` message so it
-  // surfaces in the timeline (the metadata carries the uploaded path).
+  // surfaces in the timeline with a server-owned attachment reference.
   const handleAttach = async (file: File) => {
     const groupID = props.groupID
+    if (!props.fileUploadEnabled || state.pendingAttachment) return
     try {
       const attachment = await client.uploadAttachment(file, { groupId: groupID })
-      await client.createMessage(groupID, {
-        content: attachment.filename,
-        type: "file",
-      })
+      if (history.disposed || !props.fileUploadEnabled || props.groupID !== groupID) return
+      setState("pendingAttachment", { attachment, requestID: crypto.randomUUID() })
+      await sendAttachment()
     } catch (error) {
+      if (history.disposed || !props.fileUploadEnabled || props.groupID !== groupID) return
       console.error("Failed to upload attachment:", error)
       const { showToast } = await import("@/utils/toast")
+      if (history.disposed || !props.fileUploadEnabled || props.groupID !== groupID) return
       showToast({
         variant: "error",
-        title: "Failed to upload attachment",
-        description: error instanceof Error ? error.message : String(error),
+        title: language.t("im.media.uploadFailed"),
+        description: language.t("im.media.unavailable"),
       })
     }
+  }
+
+  const sendAttachment = async () => {
+    const pending = state.pendingAttachment && {
+      requestID: state.pendingAttachment.requestID,
+      attachment: { ...state.pendingAttachment.attachment },
+    }
+    if (!pending || state.sendingAttachment || history.disposed || !props.fileUploadEnabled) return
+    setState("sendingAttachment", true)
+    const created = await client
+      .createMessage(props.groupID, {
+        content: pending.attachment.filename,
+        type: "file",
+        attachmentID: pending.attachment.id,
+        clientRequestID: pending.requestID,
+      })
+      .catch(() => undefined)
+    if (history.disposed) return
+    setState("sendingAttachment", false)
+    if (!created) return
+    setHistoricalMessages((previous) => [...previous.filter((message) => message.id !== created.id), created])
+    setState("pendingAttachment", undefined)
   }
 
   return (
@@ -263,6 +289,7 @@ function GroupConversation(props: GroupChatPanelProps & { drafts: ReturnType<typ
         </Show>
 
         <MessageList
+          mediaEnabled={props.fileUploadEnabled}
           messages={allMessages()}
           agentStatuses={agentStatuses()}
           agentProgress={agentProgress()}
@@ -277,12 +304,30 @@ function GroupConversation(props: GroupChatPanelProps & { drafts: ReturnType<typ
           <div class="px-3 py-1 text-11-regular text-text-weak">{language.t("im.message.typing")}</div>
         </Show>
 
+        <Show when={props.fileUploadEnabled && state.pendingAttachment}>
+          {(pending) => (
+            <div class="px-3 py-2 flex flex-wrap items-center gap-2 text-12-regular">
+              <span class="break-all">{pending().attachment.filename}</span>
+              <Button size="small" disabled={state.sendingAttachment} onClick={() => void sendAttachment()}>
+                {language.t("im.media.retry")}
+              </Button>
+              <Button
+                size="small"
+                variant="ghost"
+                disabled={state.sendingAttachment}
+                onClick={() => setState("pendingAttachment", undefined)}
+              >
+                {language.t("im.media.discard")}
+              </Button>
+            </div>
+          )}
+        </Show>
         <MessageComposer
           draft={props.drafts(props.groupID)}
           onSend={handleSendMessage}
           onTyping={handleTyping}
           agents={agents()}
-          onAttach={props.fileUploadEnabled ? handleAttach : undefined}
+          onAttach={props.fileUploadEnabled && !state.pendingAttachment ? handleAttach : undefined}
         />
       </div>
 
@@ -290,6 +335,7 @@ function GroupConversation(props: GroupChatPanelProps & { drafts: ReturnType<typ
       <Show when={threadRoot()}>
         {(root) => (
           <ThreadView
+            mediaEnabled={props.fileUploadEnabled}
             groupID={props.groupID}
             root={root()}
             agents={agents()}

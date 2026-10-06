@@ -1,5 +1,6 @@
-import { Effect, Option, Ref } from "effect"
+import { Effect, Option, Ref, Schema } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpServerResponse, Multipart } from "effect/unstable/http"
 import nodeFs from "node:fs/promises"
 import { Global } from "@deepagent-code/core/global"
 import { AttachmentStorage } from "@deepagent-code/core/im/attachment-storage"
@@ -25,6 +26,7 @@ import {
   IMFacadeNotFoundError,
   IMFacadeConflictError,
   IMFacadeUnavailableError,
+  UploadAttachmentPayload,
 } from "../groups/im"
 import { MentionParser } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
@@ -38,6 +40,7 @@ import { IMAgentExecution } from "@/im/im-agent-execution"
 import { IMFacade } from "@/im/facade"
 import { IMKernelExchange } from "@/im/kernel/exchange"
 import { boundedPositiveInteger } from "./im-config"
+import { IMMedia } from "./im-media"
 
 const IMAttachmentID = IMID.AttachmentID
 
@@ -76,6 +79,8 @@ const toAttachmentResponse = (a: IMAttachment) => ({
   sizeBytes: a.sizeBytes,
   checksum: a.checksum,
   createdAt: a.createdAt,
+  expiresAt: AttachmentStorage.expiresAt(a.createdAt),
+  preview: AttachmentStorage.isPreviewMime(a.mime),
 })
 
 const toGroupResponse = (g: IMGroup) => ({
@@ -314,8 +319,30 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
               )
             }
 
+            if (payload.type === "file" || payload.attachmentID || payload.metadata?.type === "attachment_ref") {
+              yield* IMMedia.enabled(flags.v4FileUploadEnabled)
+              if (payload.type !== "file" || !payload.attachmentID || !payload.clientRequestID || payload.metadata) {
+                return yield* new IMValidationFailedError({
+                  name: "VALIDATION_FAILED",
+                  data: { message: "A file message requires attachmentID and clientRequestID; metadata is server-owned." },
+                })
+              }
+              yield* IMMedia.cleanup(repo, workspaceID)
+            }
+            const attachment = payload.attachmentID
+              ? yield* IMMedia.attachment(repo, {
+                  id: payload.attachmentID,
+                  workspaceID,
+                  userID,
+                  bound: false,
+                })
+              : undefined
+            if (attachment && attachment.groupID !== groupId) return yield* IMMedia.unavailable()
+            // A record is committed before bytes are written; do not bind an incomplete upload.
+            if (attachment) yield* IMMedia.read(attachment)
+
             // Parse mentions from content
-            const mentionedAgentNames = MentionParser.parse(payload.content)
+            const mentionedAgentNames = payload.type === "text" ? MentionParser.parse(payload.content) : []
             const responderEnabled = IMAgentExecution.responderEnabled()
 
             // Create message.
@@ -326,15 +353,16 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
               .createMessage({
                 groupID: groupId,
                 clientRequestID: payload.clientRequestID,
+                attachment: attachment ? { id: attachment.id, workspaceID } : undefined,
                 mentionIntent: responderEnabled
                   ? { names: mentionedAgentNames, directory, workspaceID, userID, origin: "local" }
                   : undefined,
                 senderID: userID,
                 senderType: "user",
                 type: payload.type,
-                content: payload.content,
+                content: attachment ? attachment.filename : payload.content,
                 mentions: mentionedAgentNames, // Use parsed mentions
-                metadata: payload.metadata,
+                metadata: attachment ? { type: "attachment_ref", attachmentID: attachment.id } : payload.metadata,
                 replyToID: payload.replyToID,
               })
               .pipe(
@@ -371,9 +399,13 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                         retryable: true,
                       },
                     })
-                    return yield* Effect.fail(error.code === "message_identity_conflict"
-                      ? new IMMessageIdentityConflictError({ name: "MESSAGE_IDENTITY_CONFLICT", data: { message: error.message } })
-                      : error)
+                    return yield* Effect.fail(
+                      error.code === "message_identity_conflict"
+                        ? new IMMessageIdentityConflictError({ name: "MESSAGE_IDENTITY_CONFLICT", data: { message: error.message } })
+                        : error.code === "attachment_unavailable"
+                          ? IMMedia.unavailable()
+                          : error,
+                    )
                   }),
                 ),
               )
@@ -592,7 +624,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
           }),
         ),
       )
-      .handle("uploadAttachment", ({ query, payload }) =>
+      .handleRaw("uploadAttachment", ({ request }) =>
         mapRepositoryError(
           Effect.gen(function* () {
             // §B3 文件 — fail-closed when the flag is off (404: the endpoint does not exist for the
@@ -606,8 +638,48 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
               )
             }
 
-            const { workspaceID, userID } = yield* getWorkspaceContext(query)
+            const parts = yield* request.multipart.pipe(
+              Effect.provideContext(
+                Multipart.limitsServices({
+                  maxFileSize: AttachmentStorage.maxAttachmentBytes(),
+                  maxTotalSize: AttachmentStorage.maxAttachmentBytes() + 8192,
+                  maxParts: 3,
+                }),
+              ),
+              Effect.mapError((error) =>
+                ["FileTooLarge", "BodyTooLarge"].includes(error.reason._tag)
+                  ? new IMFileTooLargeError({
+                      name: "FILE_TOO_LARGE",
+                      data: {
+                        message: "Attachment exceeds the upload limit.",
+                        maxBytes: AttachmentStorage.maxAttachmentBytes(),
+                      },
+                    })
+                  : new IMValidationFailedError({
+                      name: "VALIDATION_FAILED",
+                      data: { message: "Invalid multipart attachment." },
+                    }),
+              ),
+            )
+            const payload = yield* Schema.decodeUnknownEffect(UploadAttachmentPayload)(parts).pipe(
+              Effect.mapError(
+                () =>
+                  new IMValidationFailedError({
+                    name: "VALIDATION_FAILED",
+                    data: { message: "Expected one file attachment." },
+                  }),
+              ),
+            )
+            const { workspaceID, userID } = yield* getWorkspaceContext()
             const file = payload.file
+
+            if (!payload.groupId || payload.messageId)
+              return yield* new IMValidationFailedError({
+                name: "VALIDATION_FAILED",
+                data: { message: "Upload to a local group, then bind using a file message." },
+              })
+            yield* IMMedia.group(repo, { groupID: payload.groupId, workspaceID, userID })
+            yield* IMMedia.cleanup(repo, workspaceID)
 
             // If the upload is scoped to a group, the caller must be a member (membership + IDOR guard).
             if (payload.groupId) {
@@ -674,32 +746,47 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
               )
             }
 
-            yield* Effect.tryPromise({
-              try: async () => {
-                await nodeFs.mkdir(derived.baseDir, { recursive: true })
-                await nodeFs.writeFile(derived.storagePath, bytes)
-              },
-              catch: (e) =>
-                new IMInternalServerError({
-                  name: "INTERNAL_SERVER_ERROR",
-                  data: { message: `Failed to store uploaded file: ${String(e)}` },
-                }),
-            })
-
+            // Persist the cleanup owner first. A crash during the file write leaves a tracked,
+            // unbound record whose fixed TTL permits later cleanup, never an untracked file.
             const attachment = yield* repo.createAttachment({
+              id: attachmentId,
               workspaceID,
               groupID: payload.groupId,
               messageID: payload.messageId,
               uploadedBy: userID,
               storagePath: derived.storagePath,
               // Keep the original filename for display/download; it is never used to build a path.
-              filename: file.name || "upload",
+              filename: Array.from((file.name || "upload").replace(/[\x00-\x1f\x7f/\\]/g, "_"))
+                .slice(0, 255)
+                .join(""),
               mime: validated.mime,
               sizeBytes: validated.sizeBytes,
               checksum: validated.checksum,
             })
 
-            return toAttachmentResponse(attachment)
+            yield* Effect.tryPromise({
+              try: async () => {
+                await nodeFs.mkdir(derived.baseDir, { recursive: true })
+                await nodeFs.writeFile(derived.storagePath, bytes, { flag: "wx" })
+              },
+              catch: (e) =>
+                new IMInternalServerError({
+                  name: "INTERNAL_SERVER_ERROR",
+                  data: { message: `Failed to store uploaded file: ${String(e)}` },
+                }),
+            }).pipe(
+              Effect.onError(() =>
+                Effect.tryPromise(() => nodeFs.rm(derived.storagePath, { force: true })).pipe(
+                  // Tombstone only after removing partial bytes; on cleanup failure retain the owner row.
+                  Effect.flatMap(() => repo.expireAttachment(attachment.id)),
+                  Effect.ignore,
+                ),
+              ),
+            )
+
+            return HttpServerResponse.jsonUnsafe(toAttachmentResponse(attachment), {
+              headers: { "cache-control": "no-store" },
+            })
           }),
         ),
       )
@@ -717,29 +804,64 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
 
             const { workspaceID, userID } = yield* getWorkspaceContext(query)
 
-            // If scoped to a group, membership is required (IDOR guard) so a caller can't enumerate
-            // attachments in a group they don't belong to.
-            if (query.groupId) {
-              const group = yield* repo.getGroup({ groupID: query.groupId, userID })
-              if (!group) {
-                return yield* Effect.fail(
-                  new IMGroupNotFoundError({
-                    name: "GROUP_NOT_FOUND",
-                    data: { message: `Group ${query.groupId} not found` },
-                  }),
-                )
+            const groupID =
+              query.groupId ?? (query.messageId ? (yield* repo.getMessage(query.messageId))?.groupID : undefined)
+            if (!groupID)
+              return yield* new IMValidationFailedError({
+                name: "VALIDATION_FAILED",
+                data: { message: "A group or message is required." },
+              })
+            yield* IMMedia.group(repo, { groupID, workspaceID, userID })
+            yield* IMMedia.cleanup(repo, workspaceID)
+            const records = yield* repo.listAttachments({
+              workspaceID,
+              groupID,
+              messageID: query.messageId,
+              limit: clampLimit(query.limit),
+            })
+            const attachments: IMAttachment[] = []
+            for (const item of records) {
+              if (AttachmentStorage.expiresAt(item.createdAt) <= Date.now()) continue
+              if (!item.messageID && item.uploadedBy === userID) {
+                attachments.push(item)
+                continue
               }
+              const allowed = yield* IMMedia.attachment(repo, { id: item.id, workspaceID, userID }).pipe(Effect.option)
+              if (Option.isSome(allowed)) attachments.push(allowed.value)
             }
 
-            const limit = clampLimit(query.limit)
-            const attachments = yield* repo.listAttachments({
-              workspaceID,
-              groupID: query.groupId,
-              messageID: query.messageId,
-              limit,
-            })
-
             return attachments.map(toAttachmentResponse)
+          }),
+        ),
+      )
+      .handle("getAttachment", ({ params, query }) =>
+        mapRepositoryError(
+          Effect.gen(function* () {
+            yield* IMMedia.enabled(flags.v4FileUploadEnabled)
+            const context = yield* getWorkspaceContext(query)
+            yield* IMMedia.cleanup(repo, context.workspaceID)
+            const attachment = yield* IMMedia.attachment(repo, { ...context, id: params.attachmentId })
+            return toAttachmentResponse(attachment)
+          }),
+        ),
+      )
+      .handleRaw("downloadAttachment", ({ params }) =>
+        mapRepositoryError(
+          Effect.gen(function* () {
+            yield* IMMedia.enabled(flags.v4FileUploadEnabled)
+            const context = yield* getWorkspaceContext()
+            yield* IMMedia.cleanup(repo, context.workspaceID)
+            const attachment = yield* IMMedia.attachment(repo, { ...context, id: params.attachmentId })
+            const bytes = yield* IMMedia.read(attachment)
+            return HttpServerResponse.uint8Array(bytes, {
+              contentType: AttachmentStorage.isPreviewMime(attachment.mime) ? attachment.mime : "application/octet-stream",
+              headers: {
+                "cache-control": "no-store",
+                "x-content-type-options": "nosniff",
+                "content-security-policy": "default-src 'none'; sandbox",
+                "content-disposition": `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(attachment.filename).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16)}`)}`,
+              },
+            })
           }),
         ),
       )

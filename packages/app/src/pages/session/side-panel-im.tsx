@@ -516,7 +516,7 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
               selfMemberIDs={[facadeStatus()?.viewer?.memberID ?? "server", ...(identity() ? [identity()!.uuid] : [])]}
               senderNames={senderNames()}
               threadsEnabled={threadsEnabled()}
-              fileUploadEnabled={fileUploadEnabled()}
+              fileUploadEnabled={fileUploadEnabled() && !!selectedGroup() && !selectedGroup()?.kernelConvID}
             />
           </div>
         )}

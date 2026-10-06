@@ -245,6 +245,10 @@ import type {
   GlobalUpgradeResponses,
   ImAgentsListErrors,
   ImAgentsListResponses,
+  ImAttachmentsDownloadErrors,
+  ImAttachmentsDownloadResponses,
+  ImAttachmentsGetErrors,
+  ImAttachmentsGetResponses,
   ImAttachmentsListErrors,
   ImAttachmentsListResponses,
   ImAttachmentsUploadErrors,
@@ -6148,6 +6152,7 @@ export class Messages extends HeyApiClient {
       groupId: string
       directory?: string
       workspace?: string
+      attachmentID?: string
       clientRequestID?: string
       senderType: "user" | "agent" | "system"
       type: "text" | "code" | "file" | "agent_status" | "system"
@@ -6216,6 +6221,7 @@ export class Messages extends HeyApiClient {
             { in: "path", key: "groupId" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "body", key: "attachmentID" },
             { in: "body", key: "clientRequestID" },
             { in: "body", key: "senderType" },
             { in: "body", key: "type" },
@@ -6429,7 +6435,7 @@ export class Attachments extends HeyApiClient {
   /**
    * List attachments
    *
-   * List attachment records for a group, message, or the workspace.
+   * List authorized attachment records for a required local group or message.
    */
   public list<ThrowOnError extends boolean = false>(
     parameters?: {
@@ -6465,14 +6471,14 @@ export class Attachments extends HeyApiClient {
   /**
    * Upload attachment
    *
-   * Upload a file to local disk under the workspace data directory. Validates mime + size and computes a sha256 checksum. Gated on the v4FileUploadEnabled flag.
+   * Upload to an authorized local group. Validates bytes, MIME and size, computes SHA-256, and returns an expiring unbound ID. Requires v4FileUploadEnabled; kernel conversations are unsupported.
    */
   public upload<ThrowOnError extends boolean = false>(
     parameters: {
       directory?: string
       workspace?: string
       file: Blob | File
-      groupId?: string | null
+      groupId: string
       messageId?: string | null
     },
     options?: Options<never, ThrowOnError>,
@@ -6504,6 +6510,70 @@ export class Attachments extends HeyApiClient {
         },
       },
     )
+  }
+
+  /**
+   * Read an authorized local attachment
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      attachmentId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "attachmentId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImAttachmentsGetResponses, ImAttachmentsGetErrors, ThrowOnError>({
+      url: "/api/v1/im/attachments/{attachmentId}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Download authorized local attachment bytes
+   */
+  public download<ThrowOnError extends boolean = false>(
+    parameters: {
+      attachmentId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "attachmentId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ImAttachmentsDownloadResponses,
+      ImAttachmentsDownloadErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/im/attachments/{attachmentId}/content",
+      ...options,
+      ...params,
+    })
   }
 }
 

@@ -1,4 +1,13 @@
 export const dict = {
+  "im.media.attachment": "Attachment",
+  "im.media.unavailable": "Attachment unavailable. It may have expired or access may have changed.",
+  "im.media.expired": "Attachment expired",
+  "im.media.download": "Download",
+  "im.media.preview": "Preview image",
+  "im.media.localOnly": "Available in this local conversation only.",
+  "im.media.uploadFailed": "Unable to send attachment",
+  "im.media.retry": "Retry attachment",
+  "im.media.discard": "Discard attachment",
   "attention.title": "Needs attention",
   "attention.description": "Failures and recovery states across projects on this server.",
   "attention.filter.kind": "Type",

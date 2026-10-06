@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createIMClient } from "./im-client"
+import type { IMAttachment } from "@/components/im/types"
 
 describe("createIMClient.webSocketURL", () => {
   test("routes directory and auth_token into the websocket URL", () => {
@@ -60,6 +61,48 @@ describe("createIMClient.webSocketURL", () => {
 })
 
 describe("createIMClient HTTP auth + routing", () => {
+  test("media download preserves auth/routing, disables HTTP caching, and verifies returned bytes", async () => {
+    const data = new TextEncoder().encode("verified fixture bytes")
+    const attachment: IMAttachment = {
+      id: "ima_fixture",
+      workspaceID: "workspace",
+      projectID: null,
+      groupID: "group",
+      messageID: "message",
+      uploadedBy: "server",
+      filename: "fixture.txt",
+      mime: "text/plain",
+      preview: false,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      sizeBytes: data.byteLength,
+      checksum: new Bun.CryptoHasher("sha256").update(data).digest("hex"),
+    }
+    const client = createIMClient(() => ({
+      url: "https://gateway.test/w",
+      directory: "/fixture",
+      workspace: "workspace",
+      bearer: "fixture-token",
+    }))
+    const original = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input))
+      expect(url.pathname).toBe("/w/api/v1/im/attachments/ima_fixture/content")
+      expect(url.searchParams.get("workspace")).toBe("workspace")
+      expect(url.searchParams.has("auth_token")).toBe(false)
+      expect(init?.cache).toBe("no-store")
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-token")
+      return new Response(data)
+    }) as typeof fetch
+    try {
+      expect(await (await client.downloadAttachment(attachment)).text()).toBe("verified fixture bytes")
+      await expect(client.downloadAttachment({ ...attachment, checksum: "wrong" })).rejects.toThrow("integrity")
+      await expect(client.downloadAttachment({ ...attachment, sizeBytes: 0 })).rejects.toThrow("integrity")
+      await expect(client.downloadAttachment({ ...attachment, expiresAt: 0 })).rejects.toThrow("expiration")
+    } finally {
+      globalThis.fetch = original
+    }
+  })
   test("server mode sends Bearer and directory header (survives gateway proxy)", async () => {
     let seenHeaders: Record<string, string> = {}
     const client = createIMClient(() => ({

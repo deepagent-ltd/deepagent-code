@@ -21,16 +21,34 @@ export const maxAttachmentBytes = (): number => {
 
 // Generous but explicit mime allow-list. Extend via IM_ATTACHMENT_EXTRA_MIME (comma-separated).
 const BASE_ALLOWED_MIME = [
-  "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp", "image/tiff",
-  "application/pdf", "application/json", "application/zip", "application/gzip", "application/x-tar",
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/svg+xml",
+  "image/bmp",
+  "image/tiff",
+  "application/pdf",
+  "application/json",
+  "application/zip",
+  "application/gzip",
+  "application/x-tar",
   "application/octet-stream",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "text/plain", "text/markdown", "text/csv", "text/html", "text/xml",
-  "audio/mpeg", "audio/wav", "audio/ogg",
-  "video/mp4", "video/webm", "video/quicktime",
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  "text/html",
+  "text/xml",
+  "audio/mpeg",
+  "audio/wav",
+  "audio/ogg",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
 ]
 
 export const allowedMimeSet = (): Set<string> =>
@@ -58,6 +76,33 @@ export const sanitizeSegment = (s: string): string => {
 }
 
 export const sha256Hex = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex")
+
+// Fixed until expiry is persisted: changing a runtime TTL could revive an expired record after restart.
+export const ttlMs = (): number => 86_400_000
+
+export const expiresAt = (createdAt: number): number => createdAt + ttlMs()
+
+// Only raster signatures may become an image preview. SVG/HTML remain download-only files.
+export const previewMime = (bytes: Uint8Array): string | undefined => {
+  if (
+    bytes.length >= 24 &&
+    Buffer.from(bytes.subarray(0, 8)).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
+    Buffer.from(bytes.subarray(12, 16)).toString("ascii") === "IHDR"
+  )
+    return "image/png"
+  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg"
+  if (bytes.length >= 13 && ["GIF87a", "GIF89a"].includes(Buffer.from(bytes.subarray(0, 6)).toString("ascii")))
+    return "image/gif"
+  if (
+    bytes.length >= 20 &&
+    Buffer.from(bytes.subarray(0, 4)).toString("ascii") === "RIFF" &&
+    Buffer.from(bytes.subarray(8, 12)).toString("ascii") === "WEBP"
+  )
+    return "image/webp"
+}
+
+export const isPreviewMime = (mime: string): boolean =>
+  ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(mime)
 
 /**
  * Derive the server-controlled storage path for an attachment: `<dataDir>/im-attachments/<ws>/<id>`.
@@ -102,13 +147,15 @@ export const validateUpload = (input: {
   maxBytes?: number
   allow?: Set<string>
 }): ValidateResult => {
-  const mime = normalizeMime(input.contentType)
-  if (!isAllowedMime(mime, input.allow ?? allowedMimeSet())) {
-    return { ok: false, error: "unsupported_media_type", mime }
+  const declared = normalizeMime(input.contentType)
+  if (!isAllowedMime(declared, input.allow ?? allowedMimeSet())) {
+    return { ok: false, error: "unsupported_media_type", mime: declared }
   }
   const maxBytes = input.maxBytes ?? maxAttachmentBytes()
   if (input.bytes.byteLength > maxBytes) {
     return { ok: false, error: "file_too_large", maxBytes }
   }
-  return { ok: true, mime, sizeBytes: input.bytes.byteLength, checksum: sha256Hex(input.bytes) }
+  const raster = previewMime(input.bytes)
+  if (isPreviewMime(declared) && !raster) return { ok: false, error: "unsupported_media_type", mime: declared }
+  return { ok: true, mime: raster ?? declared, sizeBytes: input.bytes.byteLength, checksum: sha256Hex(input.bytes) }
 }

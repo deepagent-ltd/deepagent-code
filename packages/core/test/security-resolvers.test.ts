@@ -174,6 +174,8 @@ describe("SecurityResolvers.actorHasWorkspacePermission — lookup error fails c
       createAttachment: err,
       getAttachment: err,
       listAttachments: err,
+      listExpiredAttachments: err,
+      expireAttachment: err,
       getGroupByKernelConvID: err,
       getGroupByID: err,
       bindKernelConversation: err,
