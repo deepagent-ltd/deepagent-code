@@ -59,7 +59,10 @@ describe("C0-01 caller inventory gate", () => {
     // V2.0.2 adds 20 production entries, including project-switch learning, proxy routes,
     // and X-07 bundle/share handlers. Every newly extracted route is classified below.
     // X-10c proxy audit adds one EventV2 ledger reader to the production route surface.
-    expect(inventory.entries.length).toBe(434)
+    // B2 facade portal re-pin (fb93a563, 2026-10-05, +9): the IM facade claim/rename/
+    // rebind/retry/resolve/direct/createGroup/invite/status endpoints joined the
+    // instance httpapi surface (434→443); the pin was left stale at that merge.
+    expect(inventory.entries.length).toBe(443)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)
