@@ -1126,6 +1126,12 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
         onSelect: () => openServer(),
       },
       {
+        id: "attention.open",
+        title: language.t("attention.title"),
+        category: language.t("command.category.view"),
+        onSelect: () => void openAttention(),
+      },
+      {
         id: "settings.open",
         title: language.t("command.settings.open"),
         category: language.t("command.category.settings"),
@@ -1325,6 +1331,22 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
       if (dialogDead || dialogRun !== run) return
       dialog.show(() => <x.DialogSelectServer />)
     })
+  }
+
+  async function openAttention() {
+    const run = ++dialogRun
+    const { DialogAttention } = await import("@/components/dialog-attention")
+    if (dialogDead || dialogRun !== run) return
+    layout.mobileSidebar.hide()
+    dialog.show(() => (
+      <DialogAttention
+        onOpenSession={(session) => {
+          openProject(session.directory, false)
+          navigateWithSidebarReset(`/${base64Encode(session.directory)}/session/${session.id}`)
+          dialog.close()
+        }}
+      />
+    ))
   }
 
   function openSettings() {
@@ -2508,6 +2530,8 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
       knowledgeLabel={() => language.t("knowledge.title")}
       onOpenKnowledge={() => openKnowledge()}
       reviewPending={() => !!reviewPending.latest}
+      attentionLabel={() => language.t("attention.title")}
+      onOpenAttention={() => void openAttention()}
       historyLabel={() => language.t("sidebar.history")}
       onOpenHistory={openHistoryProjects}
       archivedLabel={() => language.t("session.archived.title")}
