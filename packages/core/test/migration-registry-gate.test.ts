@@ -81,7 +81,11 @@ import { migrations } from "../src/database/migration.gen"
 // Successor pin (2026-10-05, JuggleIM B1): the im_kernel_sync migration joined the registry
 // (im_messages.kernel_msg_id + im_groups.kernel_conv_id unique-indexed dedup/binding columns and
 // the im_sync_cursors high-water table); `migration --check` green at re-pin time.
-const PINNED_DIGEST = "8f1195e3daed2437d0a4fda840eb247d3ca053b487236f3eb71682898af524fc"
+// Successor pin (2026-10-06, IM delivery authority L1): 20261005162725_im_delivery_authority
+// (im_mention_intents durable admission intents + im_messages.client_request_id) and
+// 20261005162726_im_activity_final_message (session_activity final-message pointer) joined the
+// registry; fresh-apply oracle and `migration --check` green at re-pin time.
+const PINNED_DIGEST = "5ad8bdd8d0a224f7b0ea6a18f1433591d6e6fbbcf7a5ff603443c5afa1b4cebb"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

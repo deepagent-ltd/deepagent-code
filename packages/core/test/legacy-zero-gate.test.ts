@@ -207,7 +207,9 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     // X-10c proxy audit adds one EventV2 ledger query (+7 read-only); the checked V2 bridge
     // publisher retains its existing V2 event dimension after its evidence anchor is updated.
     expect(counters.adapterDims).toBe(474)
-    expect(counters.readOnlyDims).toBe(2351)
+    // B2 facade portal re-pin (fb93a563, 2026-10-05): the 9 IM facade endpoints are thin
+    // HTTP adapters classified read_only on all seven dimensions — read-only 2351→2414.
+    expect(counters.readOnlyDims).toBe(2414)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -326,9 +328,11 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     // v2w-j4 (2026-09-19): github.agent-execution is declared (+1 entry, +7 roles — v2 on
     // admission/execution, read_only on the rest).
     // X-10c proxy audit contributes one read-only entry and seven classified roles.
-    expect(snapshot.entries).toBe(434)
+    // B2 facade portal re-pin (fb93a563, 2026-10-05): +9 IM facade entries (434→443),
+    // +63 roles (3038→3101), all read_only.
+    expect(snapshot.entries).toBe(443)
     // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
-    expect(snapshot.roles).toBe(3038)
+    expect(snapshot.roles).toBe(3101)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 
