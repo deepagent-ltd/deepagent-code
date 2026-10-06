@@ -12,7 +12,7 @@ import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
 import { MentionParser } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { SessionV2 } from "@deepagent-code/core/session"
-import * as Log from "@deepagent-code/core/util/log"
+import { Log } from "@deepagent-code/core/util/log"
 import { IMAgentExecution } from "@/im/im-agent-execution"
 import { SERVER_USER_ID } from "@/server/routes/instance/httpapi/utils/workspace-context"
 import { KernelClient } from "./client"
@@ -81,6 +81,15 @@ const ORG_ALL_GROUP_NAME = "全员群"
 const HISTORY_PAGE_SIZE = 100
 const MAX_HISTORY_PAGE_SIZE = 12_800
 export const historyCursorKey = (convKey: string) => `history:v2:${convKey}`
+
+// Inspect deliberately hides missing, disabled, and foreign identities behind item-scoped
+// denials. A rejected history item is discarded, never trusted; credentials, malformed proofs,
+// transport failures, and unknown error codes must still prevent recovery from becoming ready.
+const isPermanentConversationDenial = (error: IMKernelExchange.ExchangeError) =>
+  !error.retryable &&
+  ((error.code === "im_not_found" && error.status === 404) ||
+    (error.code === "im_not_group_member" && error.status === 403) ||
+    (error.code === "im_invalid_group" && error.status === 400))
 
 export interface RecoveryState {
   readonly status: "pending" | "ready" | "failed"
@@ -521,11 +530,25 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
                   operation: "fetchHistory",
                   message: "History page crossed a conversation boundary",
                 })
-              yield* handleInbound(msg, "history")
+              yield* handleInbound(msg, "history").pipe(
+                Effect.catchTag("IMKernelExchangeError", (error) =>
+                  isPermanentConversationDenial(error)
+                    ? Effect.sync(() =>
+                        log.warn("historical kernel message rejected by platform; discarded", {
+                          convKey: group.kernelConvID,
+                          messageID: msg.messageID,
+                          senderID: msg.senderID,
+                          code: error.code,
+                        }),
+                      )
+                    : Effect.fail(error),
+                ),
+              )
             }
             if (recovering) yield* Ref.update(replayBefore, (time) => Math.max(time, page.latestTime))
             const next = Math.max(progress.after, page.latestTime - 1)
-            // This checkpoint belongs only to fully persisted history pages, never realtime traffic.
+            // Advance only after every item is persisted or explicitly rejected by platform policy.
+            // A transient or systemic failure retains the previous checkpoint; realtime never moves it.
             yield* repo.upsertSyncCursor({ conversationID: cursorKey, lastSyncTime: next })
             if (page.isFinished) return
             if (next <= progress.after) {
@@ -562,7 +585,19 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
                 yield* ensureConversation({
                   conversationType: conversation.conversationType,
                   conversationID: conversation.conversationID,
-                })
+                }).pipe(
+                  Effect.catchTag("IMKernelExchangeError", (error) =>
+                    isPermanentConversationDenial(error)
+                      ? Effect.sync(() =>
+                          log.warn("kernel conversation hint rejected by platform; discarded", {
+                            conversationType: conversation.conversationType,
+                            conversationID: conversation.conversationID,
+                            code: error.code,
+                          }),
+                        )
+                      : Effect.fail(error),
+                  ),
+                )
               }
               if (page.isFinished) break
               if (pageNumber === 999)
