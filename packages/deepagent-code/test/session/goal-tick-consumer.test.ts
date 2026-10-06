@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer } from "effect"
+import { TestClock } from "effect/testing"
 import { GoalTickConsumer } from "../../src/session/goal-tick-consumer"
 import { recoverGoalTickRequest } from "../../src/session/goal-tick-port"
 import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
@@ -7,6 +8,8 @@ import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-even
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { Database } from "@deepagent-code/core/database/database"
+import { DeepAgentEventDeliveryTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
+import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { testEffect } from "../lib/effect"
 
@@ -22,13 +25,19 @@ const database = Database.layerFromPath(":memory:")
 
 // A stub runTick that returns a scripted sequence of progress results, recording each call.
 type StubResult = GoalTickConsumer.GoalTickPortResult
-const makeLayer = (opts: { flag?: boolean; goalFlag?: boolean; runTick: GoalTickConsumer.GoalTickPort }) => {
+const makeLayer = (opts: {
+  flag?: boolean
+  goalFlag?: boolean
+  runTick: GoalTickConsumer.GoalTickPort
+  leaseMs?: number
+  renewalIntervalMs?: number
+}) => {
   const busLayer = DeepAgentEventBus.layerWith({ now }).pipe(Layer.provideMerge(database))
   const flagLayer = RuntimeFlags.layer({
     v4MultiAgentRuntime: opts.flag ?? true,
     v4GoalTickEventDriven: opts.goalFlag ?? false,
   })
-  const consumer = GoalTickConsumer.layerWith({ runTick: opts.runTick, runLoop: false }).pipe(
+  const consumer = GoalTickConsumer.layerWith({ ...opts, runLoop: false, now }).pipe(
     Layer.provide(busLayer),
     Layer.provide(flagLayer),
   )
@@ -50,6 +59,7 @@ const seq0Command = (
 const publishTick = (req: ReturnType<typeof seq0Command>) =>
   Effect.gen(function* () {
     const bus = yield* DeepAgentEventBus.Service
+    yield* bus.registerConsumerGroup(GoalTickConsumer.TICK_GROUP, LMNEvents.GOAL_TICK_REQUESTED)
     return yield* bus.publish(GoalTickConsumer.tickCommand(req))
   })
 
@@ -338,4 +348,204 @@ describe("GoalTickConsumer — C5-10 receipt stays pending on failure", () => {
       expect(receipt?.lastError).toContain("tick failed")
     }),
   )
+})
+
+describe("GoalTickConsumer — durable quiet-hours deferral", () => {
+  let calls = 0
+  const busLayer = DeepAgentEventBus.layerWith({ now }).pipe(Layer.provideMerge(database))
+  const configLayer = WorkspaceConfig.layer.pipe(Layer.provide(database))
+  const consumerLayer = GoalTickConsumer.layerWith({
+    runLoop: false,
+    now,
+    runTick: () =>
+      Effect.sync(() => {
+        calls++
+        return { progress: "terminal", nextSeq: 1, nextExpectedPlanVersion: 1 } as StubResult
+      }),
+  }).pipe(
+    Layer.provide(busLayer),
+    Layer.provide(configLayer),
+    Layer.provide(RuntimeFlags.layer({ v4GoalTickEventDriven: true })),
+  )
+  const it = testEffect(Layer.mergeAll(consumerLayer, busLayer, configLayer))
+
+  it.effect("quiet hours retain the original pending delivery without consuming attempts", () =>
+    Effect.gen(function* () {
+      clock = Date.UTC(2026, 9, 6, 23, 30)
+      calls = 0
+      const bus = yield* DeepAgentEventBus.Service
+      const config = yield* WorkspaceConfig.Service
+      const consumer = yield* GoalTickConsumer.Service
+      const { db } = yield* Database.Service
+      const hour = new Date(clock).getUTCHours()
+      yield* config.set("wrk_quiet", {
+        quietHours: { startHour: hour, endHour: (hour + 1) % 24, tzOffsetMinutes: 0 },
+      })
+      yield* bus.registerConsumerGroup(GoalTickConsumer.TICK_GROUP, LMNEvents.GOAL_TICK_REQUESTED)
+      const event = yield* publishTick(seq0Command({ workspaceID: "wrk_quiet" }))
+      yield* consumer.handle(event)
+      const rows = yield* db.select().from(DeepAgentEventDeliveryTable).all().pipe(Effect.orDie)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({
+        event_id: event.id,
+        status: "pending",
+        attempts: 0,
+        next_attempt_at: Math.floor(clock / 3_600_000) * 3_600_000 + 3_600_000,
+        claim_token: null,
+      })
+      expect(yield* ConsumerReceipts.receiptFor(db, "goal_tick", event.id)).toBeUndefined()
+      expect(calls).toBe(0)
+    }),
+  )
+
+  it.effect("live and retry cannot bypass quiet due time, re-read a changed window, and execute once when due", () =>
+    Effect.gen(function* () {
+      clock = Date.UTC(2026, 9, 6, 23, 30)
+      calls = 0
+      const bus = yield* DeepAgentEventBus.Service
+      const config = yield* WorkspaceConfig.Service
+      const consumer = yield* GoalTickConsumer.Service
+      const { db } = yield* Database.Service
+      yield* config.set("wrk_quiet", { quietHours: { startHour: 22, endHour: 6, tzOffsetMinutes: 0 } })
+      const event = yield* publishTick(seq0Command({ workspaceID: "wrk_quiet" }))
+      yield* consumer.handle(event)
+      clock = Date.UTC(2026, 9, 7, 5, 59, 59, 999)
+      yield* consumer.handle(event)
+      expect(yield* consumer.pumpRetries()).toBe(0)
+      expect(calls).toBe(0)
+      yield* config.set("wrk_quiet", { quietHours: { startHour: 22, endHour: 8, tzOffsetMinutes: 0 } })
+      clock = Date.UTC(2026, 9, 7, 6)
+      expect(yield* consumer.pumpRetries()).toBe(1)
+      expect(calls).toBe(0)
+      expect(yield* db.select().from(DeepAgentEventDeliveryTable).get().pipe(Effect.orDie)).toMatchObject({
+        attempts: 0,
+        status: "pending",
+        next_attempt_at: Date.UTC(2026, 9, 7, 8),
+      })
+      clock = Date.UTC(2026, 9, 7, 8)
+      yield* Effect.all([consumer.handle(event), consumer.pumpRetries()], { concurrency: 2 })
+      yield* consumer.handle(event)
+      expect(calls).toBe(1)
+      expect(yield* db.select().from(DeepAgentEventDeliveryTable).get().pipe(Effect.orDie)).toMatchObject({
+        status: "delivered",
+        attempts: 0,
+      })
+      expect(yield* ConsumerReceipts.receiptFor(db, "goal_tick", event.id)).toMatchObject({
+        status: "done",
+        attempts: 1,
+      })
+      expect(
+        (yield* bus.recentByType({ type: LMNEvents.GOAL_TICK_REQUESTED, now: clock, windowMs: 86_400_000 })).map(
+          (item) => item.id,
+        ),
+      ).toEqual([event.id])
+    }),
+  )
+
+  it.effect("a fixed timezone offset crossing midnight persists its actual UTC deadline", () =>
+    Effect.gen(function* () {
+      clock = Date.UTC(2026, 9, 6, 20) // 01:30 next day at UTC+05:30.
+      calls = 0
+      const config = yield* WorkspaceConfig.Service
+      const consumer = yield* GoalTickConsumer.Service
+      const { db } = yield* Database.Service
+      yield* config.set("wrk_quiet", { quietHours: { startHour: 22, endHour: 6, tzOffsetMinutes: 330 } })
+      const event = yield* publishTick(seq0Command({ workspaceID: "wrk_quiet" }))
+      yield* consumer.handle(event)
+      expect(yield* db.select().from(DeepAgentEventDeliveryTable).get().pipe(Effect.orDie)).toMatchObject({
+        status: "pending",
+        next_attempt_at: Date.UTC(2026, 9, 7, 0, 30),
+      })
+      expect(calls).toBe(0)
+    }),
+  )
+})
+
+const leaseFixture = () => {
+  const entered = Deferred.makeUnsafe<void>()
+  const release = Deferred.makeUnsafe<void>()
+  let interrupted = false
+  const layer = makeLayer({
+    leaseMs: 90,
+    renewalIntervalMs: 20,
+    runTick: () =>
+      Effect.gen(function* () {
+        yield* Deferred.succeed(entered, undefined)
+        yield* Deferred.await(release)
+        return { progress: "terminal", nextSeq: 1, nextExpectedPlanVersion: 1 } as StubResult
+      }).pipe(
+        Effect.onInterrupt(() =>
+          Effect.sync(() => {
+            interrupted = true
+          }),
+        ),
+      ),
+  })
+  return { entered, release, layer, interrupted: () => interrupted }
+}
+
+describe("GoalTickConsumer — claim maintenance", () => {
+  const held = leaseFixture()
+  testEffect(held.layer).effect(
+    "a long tick renews beyond its first lease while competing live/pump paths cannot enter",
+    () =>
+      Effect.gen(function* () {
+        clock = 1_000
+        const bus = yield* DeepAgentEventBus.Service
+        const consumer = yield* GoalTickConsumer.Service
+        const event = yield* publishTick(seq0Command())
+        const running = yield* consumer.handle(event).pipe(Effect.forkScoped)
+        yield* Deferred.await(held.entered)
+        for (const at of [1_020, 1_040, 1_060, 1_080, 1_100, 1_120]) {
+          clock = at
+          yield* TestClock.adjust("20 millis")
+          expect(
+            (yield* bus.claimDue({ subscriptionGroup: GoalTickConsumer.TICK_GROUP, claimantId: "competitor" }))
+              .deliveries,
+          ).toEqual([])
+          yield* consumer.handle(event)
+          expect(yield* consumer.pumpRetries()).toBe(0)
+        }
+        yield* Deferred.succeed(held.release, undefined)
+        yield* Fiber.join(running)
+        expect(held.interrupted()).toBe(false)
+      }),
+  )
+
+  for (const failure of ["replaced", "storage", "expired"] as const) {
+    const lost = leaseFixture()
+    testEffect(lost.layer).effect(`a ${failure} lease interrupts the current fiber without unclaimed ack or nack`, () =>
+      Effect.gen(function* () {
+        clock = 1_000
+        const consumer = yield* GoalTickConsumer.Service
+        const { db } = yield* Database.Service
+        const event = yield* publishTick(seq0Command())
+        const running = yield* consumer.handle(event).pipe(Effect.forkScoped)
+        yield* Deferred.await(lost.entered)
+        if (failure === "replaced")
+          yield* db.run("UPDATE deepagent_event_delivery SET claim_token = 'replacement'").pipe(Effect.orDie)
+        if (failure === "storage")
+          yield* db
+            .run(
+              "CREATE TRIGGER reject_renew BEFORE UPDATE OF lease_expires_at ON deepagent_event_delivery BEGIN SELECT RAISE(ABORT, 'renew unavailable'); END",
+            )
+            .pipe(Effect.orDie)
+        clock = failure === "expired" ? 1_100 : 1_020
+        yield* TestClock.adjust("20 millis")
+        const outcome = yield* Fiber.await(running)
+        expect(outcome._tag).toBe("Failure")
+        if (outcome._tag === "Failure")
+          expect(Cause.pretty(outcome.cause)).toContain(
+            failure === "storage" ? "renew unavailable" : "delivery lease lost",
+          )
+        expect(lost.interrupted()).toBe(true)
+        expect(yield* db.select().from(DeepAgentEventDeliveryTable).get().pipe(Effect.orDie)).toMatchObject({
+          status: "pending",
+          attempts: 0,
+          next_attempt_at: 1_000,
+        })
+        if (failure === "storage") yield* db.run("DROP TRIGGER reject_renew").pipe(Effect.orDie)
+      }),
+    )
+  }
 })

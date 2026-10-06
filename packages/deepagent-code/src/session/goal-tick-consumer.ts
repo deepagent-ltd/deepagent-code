@@ -1,6 +1,7 @@
 export * as GoalTickConsumer from "./goal-tick-consumer"
 
 import { Context, Deferred, Effect, Layer, Option, Stream, Schedule, Duration, Cause } from "effect"
+import { randomUUID } from "node:crypto"
 import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
 import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
@@ -140,7 +141,8 @@ export const resumeTickCommand = (request: Parameters<typeof tickCommand>[0]): D
 
 export interface Interface {
   /**
-   * Handle ONE goal.tick.requested delivery and discharge it. Flag off ⇒ ack (discharge) + drive nothing.
+   * Claim ONE due goal.tick.requested delivery. A future or already-owned delivery is a no-op.
+   * Flag off ⇒ ack (discharge) + drive nothing; quiet hours ⇒ defer the original pending row.
    * Otherwise: run one tick via the port, then re-emit the next command (progress==="continue") or stop
    * the chain (terminal/paused/stopped), and ack. A port DEFECT nacks (the bus retries the real tick).
    * Exposed for deterministic testing; the background subscription calls it.
@@ -158,6 +160,9 @@ export interface LayerOptions {
   /** Start the background bus subscription + retry pump. Default true; tests set false + call handle(). */
   readonly runLoop?: boolean
   readonly retryPumpIntervalMs?: number
+  readonly now?: () => number
+  readonly leaseMs?: number
+  readonly renewalIntervalMs?: number
 }
 
 export const layerWith = (options: LayerOptions) =>
@@ -170,16 +175,28 @@ export const layerWith = (options: LayerOptions) =>
       const runTick = options.runTick
       const runLoop = options.runLoop ?? true
       const retryPumpIntervalMs = options.retryPumpIntervalMs ?? DEFAULT_RETRY_PUMP_INTERVAL_MS
+      const now = options.now ?? Date.now
+      const leaseMs = options.leaseMs ?? 300_000
+      const renewalIntervalMs = options.renewalIntervalMs ?? Math.max(1, Math.floor(leaseMs / 3))
+      if (
+        !Number.isSafeInteger(leaseMs) ||
+        leaseMs < 2 ||
+        leaseMs > 86_400_000 ||
+        !Number.isSafeInteger(renewalIntervalMs) ||
+        renewalIntervalMs < 1 ||
+        renewalIntervalMs >= leaseMs
+      )
+        return yield* Effect.die("invalid goal tick delivery lease configuration")
+      const claimantId = `goal-tick:${randomUUID()}`
 
       // §E4/§N quiet-hours gate — WorkspaceConfig is OPTIONAL (same discipline as event-dispatcher and
       // agent-push): absent ⇒ never quiet (the correct fail-safe), so the consumer stays testable with
       // just Bus + Flags. When present, a CONFIGURED quiet-hours window defers a low/normal tick past the
-      // window by acking the current delivery and forking a fiber that sleeps until the window ends before
-      // re-publishing a resume command. Goal ticks are always normal priority, so they are always deferred.
+      // window on the original pending delivery. Goal ticks are always normal priority.
       const workspaceConfig = yield* Effect.serviceOption(WorkspaceConfig.Service)
 
       // §E4/§N — resolve whether `at` falls inside the workspace's configured quiet window, and if so
-      // compute the window's END epoch (ms) for the sleep-and-re-seed deferral. Mirrors the same
+      // compute the window's END epoch (ms) for durable deferral. Mirrors the same
       // arithmetic used by event-dispatcher.ts fireOrDefer so the two paths behave identically.
       // Returns { quiet:false } when: no WorkspaceConfig service, no configured window, or a lookup fails
       // (fail-safe: never quiet ⇒ execute normally — identical to the scheduler path's fail-safe).
@@ -214,67 +231,53 @@ export const layerWith = (options: LayerOptions) =>
               Effect.orElseSucceed(() => ({ quiet: false as const })),
             )
 
-      const ack = (event: DeepAgentEvent.Event) => bus.ack(TICK_GROUP, event.id)
-
-      const handle: Interface["handle"] = (event) =>
+      const handleClaimed = (event: DeepAgentEvent.Event, claimToken: string) =>
         Effect.gen(function* () {
+          const claim = { subscriptionGroup: TICK_GROUP, eventID: event.id, claimToken }
+          const ack = () => bus.ackClaim(claim).pipe(Effect.asVoid)
           // Both flags off ⇒ the event-driven path is dormant; the in-process driver is authoritative. Still ACK
           // to discharge the durable delivery row (this group wildcard-less-subscribes only this type, but
           // a stray delivery must not pile up).
           if (!flags.v4MultiAgentRuntime && !flags.v4GoalTickEventDriven) {
-            yield* ack(event)
+            yield* ack()
             return
           }
           const request = parseRequest(event.payload)
           if (request == null) {
             log.warn("goal.tick.requested with malformed payload; acking (dropped)", { eventID: event.id })
-            yield* ack(event)
+            yield* ack()
             return
           }
 
-          // §E4/§N quiet-hours gate: goal ticks are NORMAL priority — they must NOT run autonomously
-          // during the workspace's configured quiet window. If quiet: ACK (no DLQ risk) + fork a fiber
-          // that sleeps until the window end then re-publishes a resume command so the chain self-heals
-          // after quiet hours. The resume command uses a fresh one-shot idempotency key so it bypasses
-          // the bus dedup and always re-seeds the chain. workspaceID comes from the request payload
-          // (stamped by goal-manager's tickCommand); absent on old commands ⇒ "never quiet" fail-safe.
+          // Keep the original obligation pending. Neither a process-local timer nor a fresh resume
+          // event is the authority for deferred work; restart reclaims this row after its due time.
           if (request.workspaceID != null) {
-            const at = Date.now()
+            const at = now()
             const qh = yield* resolveTickQuietHours(request.workspaceID, at)
             if (qh.quiet) {
-              const delayMs = qh.endAt != null && qh.endAt > at ? qh.endAt - at : 3_600_000
+              const until = qh.endAt ?? at + 3_600_000
+              const deferred = yield* bus.deferClaim({ ...claim, until })
+              if (!deferred) return yield* Effect.die("goal tick deferral lost its live claim or due time")
               log.info("goal tick deferred by quiet hours", {
+                eventID: event.id,
                 goalId: request.goalId,
+                seq: request.seq,
                 workspaceID: request.workspaceID,
-                deferMs: delayMs,
+                until,
+                reason: "quiet_hours",
               })
-              yield* ack(event) // discharge cleanly — no DLQ consumption
-              // Re-seed the chain after the quiet window. Best-effort: a re-seed failure is logged and
-              // swallowed — the goal stays dormant until the user resumes it or a monitor re-seeds it.
-              yield* Effect.sleep(Duration.millis(delayMs)).pipe(
-                Effect.andThen(bus.publish(resumeTickCommand(request))),
-                Effect.catchCause((cause) =>
-                  Effect.sync(() =>
-                    log.warn("quiet-hours re-seed failed; goal chain will need manual resume", {
-                      goalId: request.goalId,
-                      cause: Cause.pretty(cause),
-                    }),
-                  ),
-                ),
-                Effect.forkScoped,
-              ) as Effect.Effect<unknown>
               return
             }
           }
 
-          // Execute exactly ONE tick — C5-10 durable side-effect receipt. The tick + the self-driving
-          // chain re-emit are ONE idempotency unit for this (goal_tick, event) pair:
+          // C5-10 deduplicates completed receipts, not unknown in-flight side effects:
           //   - first delivery → receipt `pending` → runTick → re-emit (if continue) → receipt `done`;
           //   - redelivery     → a `done` receipt returns "existing" and runs NOTHING again (the receipt
           //                       is the durable dedupe of the completed tick — cold-recovery safe);
           //   - sink failure   → the receipt STAYS `pending` and the bus nack re-drives the real side
-          //                       effect (the port's seq guard makes the re-run a no-op; the re-emit
-          //                       rides the bus idempotencyKey `goal:tick:<goalId>:<seq>`).
+          //                       effect. The port's seq guard skips execution only AFTER the tick
+          //                       checkpoint committed; a pre-checkpoint crash remains F15. Re-emit
+          //                       uses the bus idempotencyKey `goal:tick:<goalId>:<seq>`.
           // A defect degrades to a nack so the bus retries the REAL tick.
           const outcome = yield* ConsumerReceipts.runOnce(db, {
             consumerKind: "goal_tick",
@@ -312,7 +315,7 @@ export const layerWith = (options: LayerOptions) =>
                     }),
               ),
             ),
-            now: Date.now(),
+            now: now(),
           }).pipe(Effect.exit)
 
           if (outcome._tag === "Failure") {
@@ -321,7 +324,7 @@ export const layerWith = (options: LayerOptions) =>
               goalId: request.goalId,
               cause: Cause.pretty(outcome.cause),
             })
-            yield* bus.nack({ subscriptionGroup: TICK_GROUP, eventID: event.id, reason: "goal tick execution failed" })
+            yield* bus.nackClaim({ ...claim, reason: "goal tick execution failed" })
             return
           }
           if (outcome.value.kind === "existing") {
@@ -332,24 +335,60 @@ export const layerWith = (options: LayerOptions) =>
               goalId: request.goalId,
               seq: request.seq,
             })
-            yield* ack(event)
+            yield* ack()
             return
           }
-          yield* ack(event)
+          yield* ack()
         })
 
-      const pumpRetries: Interface["pumpRetries"] = (now) =>
+      const processClaim = (eventID: DeepAgentEvent.ID, claimToken: string) => {
+        const claim = { subscriptionGroup: TICK_GROUP, eventID, claimToken }
+        const work = Effect.gen(function* () {
+          const event = yield* bus.getByID(eventID)
+          if (!event) return yield* Effect.die("pending goal tick event missing")
+          yield* handleClaimed(event, claimToken)
+        })
+        const renew = Effect.gen(function* () {
+          while (true) {
+            yield* Effect.sleep(Duration.millis(renewalIntervalMs))
+            if (yield* bus.renewClaim({ ...claim, leaseMs })) continue
+            return yield* Effect.die("goal tick delivery lease lost")
+          }
+        })
+        // Losing the lease interrupts only this handling fiber. This is delivery ownership, not
+        // an exactly-once fence for a provider/tool that already dispatched (F15 remains separate).
+        return Effect.raceFirst(work, renew)
+      }
+
+      const handle: Interface["handle"] = (event) =>
         Effect.gen(function* () {
-          const due = yield* bus.dueRetries(now)
+          const claim = yield* bus.claimDue({
+            subscriptionGroup: TICK_GROUP,
+            claimantId,
+            eventID: event.id,
+            now: now(),
+            limit: 1,
+            leaseMs,
+          })
+          if (claim.deliveries.length === 0) return
+          yield* processClaim(event.id, claim.claimToken)
+        })
+
+      const pumpRetries: Interface["pumpRetries"] = (at) =>
+        Effect.gen(function* () {
           let redriven = 0
-          for (const delivery of due) {
-            if (delivery.subscriptionGroup !== TICK_GROUP) continue // only OUR group's deliveries.
-            const event = yield* bus.getByID(delivery.eventID)
-            if (!event) {
-              log.warn("retry: event missing for pending goal-tick delivery", { eventID: delivery.eventID })
-              continue
-            }
-            yield* handle(event) // re-runs the full ack/nack cycle (idempotent via the seq key).
+          // Claim only the row about to execute, not a batch whose leases expire while queued.
+          while (redriven < 50) {
+            const claim = yield* bus.claimDue({
+              subscriptionGroup: TICK_GROUP,
+              claimantId,
+              now: at ?? now(),
+              limit: 1,
+              leaseMs,
+            })
+            const delivery = claim.deliveries[0]
+            if (!delivery) break
+            yield* processClaim(delivery.eventID, claim.claimToken)
             redriven++
           }
           return redriven

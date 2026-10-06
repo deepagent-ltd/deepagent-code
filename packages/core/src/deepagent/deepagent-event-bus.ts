@@ -147,6 +147,8 @@ export interface Interface {
   readonly claimDue: (input: {
     readonly subscriptionGroup: string
     readonly claimantId: string
+    /** Live notifications must still satisfy the durable due/lease gate. */
+    readonly eventID?: DeepAgentEvent.ID
     readonly now?: number
     readonly limit?: number
     readonly leaseMs?: number
@@ -163,6 +165,20 @@ export interface Interface {
     readonly eventID: DeepAgentEvent.ID
     readonly claimToken: string
     readonly reason: string
+  }) => Effect.Effect<boolean>
+  /** Keep the original delivery pending until a future instant, without consuming failure attempts. */
+  readonly deferClaim: (input: {
+    readonly subscriptionGroup: string
+    readonly eventID: DeepAgentEvent.ID
+    readonly claimToken: string
+    readonly until: number
+  }) => Effect.Effect<boolean>
+  /** Renew a still-live claim. Expired tokens cannot resurrect ownership; leaseMs is bounded to one day. */
+  readonly renewClaim: (input: {
+    readonly subscriptionGroup: string
+    readonly eventID: DeepAgentEvent.ID
+    readonly claimToken: string
+    readonly leaseMs: number
   }) => Effect.Effect<boolean>
   /**
    * K40-4: real pending-delivery count per workspace — the durable backlog depth for the
@@ -883,6 +899,7 @@ export const layerWith = (options?: LayerOptions) =>
                     .where(
                       and(
                         eq(DeepAgentEventDeliveryTable.subscription_group, input.subscriptionGroup),
+                        input.eventID ? eq(DeepAgentEventDeliveryTable.event_id, input.eventID) : undefined,
                         eq(DeepAgentEventDeliveryTable.status, "pending"),
                         lte(DeepAgentEventDeliveryTable.next_attempt_at, at),
                         or(
@@ -949,6 +966,62 @@ export const layerWith = (options?: LayerOptions) =>
             Effect.map((rows) => rows.length > 0),
             Effect.orDie,
           )
+
+      const deferClaim: Interface["deferClaim"] = (input) =>
+        Effect.suspend(() => {
+          const at = now()
+          if (!Number.isSafeInteger(input.until) || input.until <= at) return Effect.succeed(false)
+          return db
+            .update(DeepAgentEventDeliveryTable)
+            .set({
+              next_attempt_at: input.until,
+              claim_token: null,
+              claimant_id: null,
+              claimed_at: null,
+              lease_expires_at: null,
+              updated_at: at,
+            })
+            .where(
+              and(
+                eq(DeepAgentEventDeliveryTable.event_id, input.eventID),
+                eq(DeepAgentEventDeliveryTable.subscription_group, input.subscriptionGroup),
+                eq(DeepAgentEventDeliveryTable.claim_token, input.claimToken),
+                eq(DeepAgentEventDeliveryTable.status, "pending"),
+                gt(DeepAgentEventDeliveryTable.lease_expires_at, at),
+              ),
+            )
+            .returning({ eventID: DeepAgentEventDeliveryTable.event_id })
+            .all()
+            .pipe(
+              Effect.map((rows) => rows.length > 0),
+              Effect.orDie,
+            )
+        })
+
+      const renewClaim: Interface["renewClaim"] = (input) =>
+        Effect.suspend(() => {
+          const at = now()
+          if (!Number.isSafeInteger(input.leaseMs) || input.leaseMs <= 0 || input.leaseMs > 86_400_000)
+            return Effect.succeed(false)
+          return db
+            .update(DeepAgentEventDeliveryTable)
+            .set({ lease_expires_at: at + input.leaseMs, updated_at: at })
+            .where(
+              and(
+                eq(DeepAgentEventDeliveryTable.event_id, input.eventID),
+                eq(DeepAgentEventDeliveryTable.subscription_group, input.subscriptionGroup),
+                eq(DeepAgentEventDeliveryTable.claim_token, input.claimToken),
+                eq(DeepAgentEventDeliveryTable.status, "pending"),
+                gt(DeepAgentEventDeliveryTable.lease_expires_at, at),
+              ),
+            )
+            .returning({ eventID: DeepAgentEventDeliveryTable.event_id })
+            .all()
+            .pipe(
+              Effect.map((rows) => rows.length > 0),
+              Effect.orDie,
+            )
+        })
 
       const nackClaim: Interface["nackClaim"] = (input) =>
         Effect.gen(function* () {
@@ -1198,6 +1271,8 @@ export const layerWith = (options?: LayerOptions) =>
         claimDue,
         ackClaim,
         nackClaim,
+        deferClaim,
+        renewClaim,
         replay,
         recentByType,
         deadLetters,

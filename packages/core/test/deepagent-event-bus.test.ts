@@ -264,39 +264,37 @@ describe("DeepAgentEventBus", () => {
     }),
   )
 
+  it.live("§A3 at-least-once: an offline registered group gets a durable pending delivery on publish", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const bus = yield* DeepAgentEventBus.Service
+      // The durable group is authoritative for recovery even while no live PubSub consumer is
+      // attached. Live grouped delivery is exercised by the priority test below.
+      yield* bus.registerConsumerGroup("router")
+      const event = yield* bus.publish(input({ idempotencyKey: "alo-1" }))
+      // No subscriber has acked; a crash or offline interval must remain recoverable.
+      const due = yield* bus.dueRetries(0)
+      expect(due.map((d) => ({ id: d.eventID, group: d.subscriptionGroup, status: d.status }))).toEqual([
+        { id: event.id, group: "router", status: "pending" },
+      ])
+      expect(due[0]?.attempts).toBe(0) // no failed attempt yet — just owed
+      // once acked, it drops out of the retry-eligible set
+      yield* bus.ack("router", event.id)
+      const afterAck = yield* bus.dueRetries(0)
+      expect(afterAck.length).toBe(0)
+    }),
+  )
+
   it.live(
-    "§A3 at-least-once: an offline registered group gets a durable pending delivery on publish",
+    "grouped subscribers deliver each priority exactly once while anonymous sees the full stream",
     () =>
       Effect.gen(function* () {
         setNow(0)
         const bus = yield* DeepAgentEventBus.Service
-        // The durable group is authoritative for recovery even while no live PubSub consumer is
-        // attached. Live grouped delivery is exercised by the priority test below.
-        yield* bus.registerConsumerGroup("router")
-        const event = yield* bus.publish(input({ idempotencyKey: "alo-1" }))
-        // No subscriber has acked; a crash or offline interval must remain recoverable.
-        const due = yield* bus.dueRetries(0)
-        expect(due.map((d) => ({ id: d.eventID, group: d.subscriptionGroup, status: d.status }))).toEqual([
-          { id: event.id, group: "router", status: "pending" },
-        ])
-        expect(due[0]?.attempts).toBe(0) // no failed attempt yet — just owed
-        // once acked, it drops out of the retry-eligible set
-        yield* bus.ack("router", event.id)
-        const afterAck = yield* bus.dueRetries(0)
-        expect(afterAck.length).toBe(0)
-      }),
-  )
-
-  it.live("grouped subscribers deliver each priority exactly once while anonymous sees the full stream", () =>
-    Effect.gen(function* () {
-      setNow(0)
-      const bus = yield* DeepAgentEventBus.Service
-      const groupedNormalReady = yield* Deferred.make<void>()
-      const groupedHighReady = yield* Deferred.make<void>()
-      const anonymousReady = yield* Deferred.make<void>()
-      const groupedFiber = yield* bus
-        .subscribe({ group: "priority-once" })
-        .pipe(
+        const groupedNormalReady = yield* Deferred.make<void>()
+        const groupedHighReady = yield* Deferred.make<void>()
+        const anonymousReady = yield* Deferred.make<void>()
+        const groupedFiber = yield* bus.subscribe({ group: "priority-once" }).pipe(
           Stream.tap((event) =>
             event.idempotencyKey.startsWith("priority-ready-normal-")
               ? Deferred.succeed(groupedNormalReady, undefined)
@@ -672,6 +670,149 @@ describe("DeepAgentEventBus publish latency (§F1)", () => {
       yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "boom" })
       const claim = yield* bus.claimDue({ subscriptionGroup: "router", claimantId: "w", now: 51_000 })
       expect(claim.deliveries.map((d) => d.eventID)).toEqual([event.id])
+    }),
+  )
+})
+
+describe("DeepAgentEventBus durable deferral", () => {
+  it.effect("single-event claims preserve sibling deliveries and honor the future due time", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      yield* bus.registerConsumerGroup("goal", "ci.failure")
+      setNow(1_000)
+      const first = yield* bus.publish(input())
+      const second = yield* bus.publish(input())
+      const claim = yield* bus.claimDue({ subscriptionGroup: "goal", claimantId: "a", eventID: second.id })
+      expect(claim.deliveries.map((row) => row.eventID)).toEqual([second.id])
+      expect(
+        yield* bus.deferClaim({
+          subscriptionGroup: "goal",
+          eventID: second.id,
+          claimToken: claim.claimToken,
+          until: 5_000,
+        }),
+      ).toBe(true)
+      const early = yield* bus.claimDue({ subscriptionGroup: "goal", claimantId: "b", eventID: second.id })
+      expect(early.deliveries).toEqual([])
+      const sibling = yield* bus.claimDue({ subscriptionGroup: "goal", claimantId: "b" })
+      expect(sibling.deliveries.map((row) => row.eventID)).toEqual([first.id])
+      setNow(5_000)
+      const due = yield* bus.claimDue({ subscriptionGroup: "goal", claimantId: "c", eventID: second.id })
+      expect(due.deliveries.map((row) => row.eventID)).toEqual([second.id])
+    }),
+  )
+
+  it.effect("repeated deferral preserves previous failures without exhausting the retry budget", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const { db } = yield* Database.Service
+      setNow(1_000)
+      const event = yield* bus.publish(input())
+      yield* bus.nack({ subscriptionGroup: "goal", eventID: event.id, reason: "previous failure" })
+      for (const at of [2_000, 4_000, 6_000, 8_000]) {
+        setNow(at)
+        const claim = yield* bus.claimDue({ subscriptionGroup: "goal", claimantId: "a" })
+        expect(claim.deliveries).toHaveLength(1)
+        expect(
+          yield* bus.deferClaim({
+            subscriptionGroup: "goal",
+            eventID: event.id,
+            claimToken: claim.claimToken,
+            until: at + 2_000,
+          }),
+        ).toBe(true)
+      }
+      const row = yield* db.select().from(DeepAgentEventDeliveryTable).get().pipe(Effect.orDie)
+      expect(row).toMatchObject({
+        status: "pending",
+        attempts: 1,
+        last_error: "previous failure",
+        next_attempt_at: 10_000,
+        claim_token: null,
+        lease_expires_at: null,
+      })
+      expect(yield* bus.deadLetters()).toEqual([])
+      setNow(10_000)
+      const claim = yield* bus.claimDue({ subscriptionGroup: "goal", claimantId: "a" })
+      yield* bus.nackClaim({
+        subscriptionGroup: "goal",
+        eventID: event.id,
+        claimToken: claim.claimToken,
+        reason: "new execution failure",
+      })
+      expect(yield* db.select().from(DeepAgentEventDeliveryTable).get().pipe(Effect.orDie)).toMatchObject({
+        attempts: 2,
+        next_attempt_at: 12_000,
+      })
+    }),
+  )
+
+  it.effect("expired or replaced claim tokens cannot defer, renew, or settle another owner", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      yield* bus.registerConsumerGroup("goal")
+      setNow(1_000)
+      const event = yield* bus.publish(input())
+      const old = yield* bus.claimDue({ subscriptionGroup: "goal", claimantId: "old", leaseMs: 100 })
+      const stale = { subscriptionGroup: "goal", eventID: event.id, claimToken: old.claimToken }
+      setNow(1_100)
+      expect(yield* bus.renewClaim({ ...stale, leaseMs: 100 })).toBe(false)
+      expect(yield* bus.deferClaim({ ...stale, until: 2_000 })).toBe(false)
+      const fresh = yield* bus.claimDue({ subscriptionGroup: "goal", claimantId: "new" })
+      expect(fresh.deliveries).toHaveLength(1)
+      expect(yield* bus.deferClaim({ ...stale, until: 2_000 })).toBe(false)
+      expect(yield* bus.renewClaim({ ...stale, leaseMs: 100 })).toBe(false)
+      expect(yield* bus.ackClaim(stale)).toBe(false)
+      expect(yield* bus.nackClaim({ ...stale, reason: "stale" })).toBe(false)
+      expect(yield* bus.ackClaim({ ...stale, claimToken: fresh.claimToken })).toBe(true)
+    }),
+  )
+
+  it.effect("renewal fences competing claimants beyond the initial lease and rejects invalid time values", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      yield* bus.registerConsumerGroup("goal")
+      setNow(1_000)
+      const event = yield* bus.publish(input())
+      const claimed = yield* bus.claimDue({ subscriptionGroup: "goal", claimantId: "a", leaseMs: 100 })
+      const claim = { subscriptionGroup: "goal", eventID: event.id, claimToken: claimed.claimToken }
+      for (const until of [NaN, Infinity, 999, 1_000, 2_000.5])
+        expect(yield* bus.deferClaim({ ...claim, until })).toBe(false)
+      for (const leaseMs of [NaN, Infinity, 0, -1, 1.5, 86_400_001])
+        expect(yield* bus.renewClaim({ ...claim, leaseMs })).toBe(false)
+      setNow(1_050)
+      expect(yield* bus.renewClaim({ ...claim, leaseMs: 1_000 })).toBe(true)
+      setNow(1_101)
+      expect((yield* bus.claimDue({ subscriptionGroup: "goal", claimantId: "b" })).deliveries).toEqual([])
+      setNow(2_050)
+      expect((yield* bus.claimDue({ subscriptionGroup: "goal", claimantId: "b" })).deliveries).toHaveLength(1)
+    }),
+  )
+
+  it.effect("a real SQL deferral failure leaves the pending obligation and claim intact", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const { db } = yield* Database.Service
+      yield* bus.registerConsumerGroup("goal")
+      setNow(1_000)
+      const event = yield* bus.publish(input())
+      const claimed = yield* bus.claimDue({ subscriptionGroup: "goal", claimantId: "a" })
+      const claim = { subscriptionGroup: "goal", eventID: event.id, claimToken: claimed.claimToken }
+      yield* db
+        .run(
+          "CREATE TRIGGER reject_defer BEFORE UPDATE OF next_attempt_at ON deepagent_event_delivery BEGIN SELECT RAISE(ABORT, 'defer unavailable'); END",
+        )
+        .pipe(Effect.orDie)
+      const failed = yield* bus.deferClaim({ ...claim, until: 2_000 }).pipe(Effect.exit)
+      expect(failed._tag).toBe("Failure")
+      expect(yield* db.select().from(DeepAgentEventDeliveryTable).get().pipe(Effect.orDie)).toMatchObject({
+        status: "pending",
+        attempts: 0,
+        next_attempt_at: 1_000,
+        claim_token: claimed.claimToken,
+      })
+      yield* db.run("DROP TRIGGER reject_defer").pipe(Effect.orDie)
+      expect(yield* bus.deferClaim({ ...claim, until: 2_000 })).toBe(true)
     }),
   )
 })
