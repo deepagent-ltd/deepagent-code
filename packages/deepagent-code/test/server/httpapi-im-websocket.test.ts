@@ -290,6 +290,44 @@ describe("IM WebSocket admission (real server)", () => {
   }, 30_000)
 })
 
+describe("IM WebSocket liveness (real server)", () => {
+  test("keeps an idle connection alive past the close-frame write timeout", async () => {
+    await using tmp = await tmpdir({ git: true, config: { formatter: false, lsp: false } })
+    const listener = await startListener()
+    try {
+      const groupId = await createGroup(listener.url, tmp.path)
+      const socket = await openSocket(socketURL(listener.url, groupId, tmp.path))
+
+      // Regression: the close-frame writer used to apply its 1s timeout to the
+      // whole Deferred.await(closeRequested) chain, so an idle connection with
+      // no pending close was failed by that timeout, won the race, and closed
+      // with 1000 roughly one second after connect. The sleep below IS the
+      // assertion (test/AGENTS.md fixed-sleep exception): crossing the old 1s
+      // window with the socket still answering ping/pong proves the fix.
+      let closedEarly: { code: number; reason: string } | undefined
+      socket.addEventListener("close", (event) => {
+        closedEarly = { code: event.code, reason: event.reason }
+      })
+
+      const ping = async (ts: number) => {
+        const pong = waitForMessage(socket, (message) => message.includes('"pong"'))
+        socket.send(JSON.stringify({ type: "ping", data: { ts } }))
+        await pong
+      }
+
+      await ping(1)
+      await new Promise((resolve) => setTimeout(resolve, 2_500))
+      expect(closedEarly).toBeUndefined()
+      await ping(2)
+
+      socket.close(1000)
+      await waitClose(socket)
+    } finally {
+      await stop(listener, "timed out cleaning up liveness listener")
+    }
+  }, 30_000)
+})
+
 describe("IM WebSocket slow consumer (real server)", () => {
   test("a stalled consumer overflows the dropping queue and is closed with 1013", async () => {
     await using tmp = await tmpdir({ git: true, config: { formatter: false, lsp: false } })

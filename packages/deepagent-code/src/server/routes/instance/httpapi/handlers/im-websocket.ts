@@ -56,8 +56,7 @@ export const imWebSocketHandlers = HttpApiBuilder.group(IMWebSocketApi, "im-webs
           const closeRequested = yield* Deferred.make<Socket.CloseEvent>()
 
           const writeCloseFrame = Deferred.await(closeRequested).pipe(
-            Effect.flatMap(write),
-            Effect.timeout("1 second"),
+            Effect.flatMap((event) => write(event).pipe(Effect.timeout("1 second"))),
             Effect.catch(() => Effect.void),
           )
 
