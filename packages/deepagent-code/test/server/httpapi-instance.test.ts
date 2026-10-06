@@ -327,7 +327,7 @@ describe("instance HttpApi", () => {
         Effect.flatMap(HttpClient.execute),
       )
 
-      expect(response.status).toBe(200)
+      expect(response.status, yield* response.text).toBe(200)
       expect(JSON.parse(response.headers[FenceHeader] ?? "{}")).not.toEqual({})
     }),
   )

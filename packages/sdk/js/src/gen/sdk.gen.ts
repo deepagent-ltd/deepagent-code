@@ -610,6 +610,14 @@ import type {
   TuiSubmitPromptResponses,
   V2AgentListErrors,
   V2AgentListResponses,
+  V2AttentionCapabilityErrors,
+  V2AttentionCapabilityResponses,
+  V2AttentionGetErrors,
+  V2AttentionGetResponses,
+  V2AttentionListErrors,
+  V2AttentionListResponses,
+  V2AttentionSeenErrors,
+  V2AttentionSeenResponses,
   V2CommandListErrors,
   V2CommandListResponses,
   V2EventSubscribeErrors,
@@ -6146,6 +6154,10 @@ export class Messages extends HeyApiClient {
       content: string
       mentions?: Array<string>
       metadata?:
+        | {
+            type: "attachment_ref"
+            attachmentID: string
+          }
         | {
             type: "kernel_sync"
             liveEligible: boolean
@@ -12503,6 +12515,145 @@ export class Question3 extends HeyApiClient {
   }
 }
 
+export class Attention extends HeyApiClient {
+  /**
+   * Read local attention capability
+   */
+  public capability<ThrowOnError extends boolean = false>(
+    parameters?: {
+      workspace?: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "workspace" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      V2AttentionCapabilityResponses,
+      V2AttentionCapabilityErrors,
+      ThrowOnError
+    >({
+      url: "/api/attention/capability",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List durable local attention items
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      workspace?: string
+      directory?: string
+      project?: string
+      kind?: "activity_failed" | "execution_recovery"
+      view?: "all" | "unseen"
+      cursor?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "workspace" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "project" },
+            { in: "query", key: "kind" },
+            { in: "query", key: "view" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2AttentionListResponses, V2AttentionListErrors, ThrowOnError>({
+      url: "/api/attention",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read an attention item without resuming execution
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      itemID: string
+      workspace?: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "itemID" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2AttentionGetResponses, V2AttentionGetErrors, ThrowOnError>({
+      url: "/api/attention/{itemID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Mark only an observed attention revision as viewed
+   */
+  public seen<ThrowOnError extends boolean = false>(
+    parameters: {
+      itemID: string
+      workspace?: string
+      directory?: string
+      revision: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "itemID" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "revision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<V2AttentionSeenResponses, V2AttentionSeenErrors, ThrowOnError>({
+      url: "/api/attention/{itemID}/seen",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class V2 extends HeyApiClient {
   private _health?: Health
   get health(): Health {
@@ -12557,6 +12708,11 @@ export class V2 extends HeyApiClient {
   private _question?: Question3
   get question(): Question3 {
     return (this._question ??= new Question3({ client: this.client }))
+  }
+
+  private _attention?: Attention
+  get attention(): Attention {
+    return (this._attention ??= new Attention({ client: this.client }))
   }
 }
 

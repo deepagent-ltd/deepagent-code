@@ -14,22 +14,24 @@ import { EventHandler } from "./handlers/event"
 import { AgentHandler } from "./handlers/agent"
 import { HealthHandler } from "./handlers/health"
 import { QuestionHandler } from "./handlers/question"
+import { Attention } from "@deepagent-code/core/attention"
+import { createAttentionHandler } from "./handlers/attention"
 
-export const handlers = Layer.mergeAll(
-  HealthHandler,
-  AgentHandler,
-  SessionHandler,
-  MessageHandler,
-  ModelHandler,
-  ProviderHandler,
-  PermissionHandler,
-  FileSystemHandler,
-  CommandHandler,
-  SkillHandler,
-  EventHandler,
-  QuestionHandler,
-).pipe(
-  Layer.provide(sessionLocationLayer),
-  Layer.provide(locationLayer),
-  Layer.provide(PermissionSaved.defaultLayer),
-)
+export const createHandlers = () =>
+  Layer.mergeAll(
+    HealthHandler,
+    AgentHandler,
+    SessionHandler,
+    MessageHandler,
+    ModelHandler,
+    ProviderHandler,
+    PermissionHandler,
+    FileSystemHandler,
+    CommandHandler,
+    SkillHandler,
+    EventHandler,
+    QuestionHandler,
+    createAttentionHandler().pipe(Layer.provide(Attention.layer())),
+  ).pipe(Layer.provide(sessionLocationLayer), Layer.provide(locationLayer), Layer.provide(PermissionSaved.defaultLayer))
+
+export const handlers = createHandlers()

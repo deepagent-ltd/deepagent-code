@@ -116,7 +116,11 @@ function openSocket(url: URL, origin?: string) {
   return withTimeout(
     new Promise<WebSocket>((resolve, reject) => {
       ws.addEventListener("open", () => resolve(ws), { once: true })
-      ws.addEventListener("error", () => reject(new Error("websocket failed before open")), { once: true })
+      ws.addEventListener(
+        "error",
+        () => reject(new Error(`websocket failed before open (origin: ${origin ?? "none"})`)),
+        { once: true },
+      )
     }),
     5_000,
     "timed out waiting for websocket open",
@@ -210,26 +214,51 @@ async function settleLastSlotRace(racers: WebSocket[]) {
 }
 
 describe("IM WebSocket admission (real server)", () => {
-  test("accepts product and configured browser origins while retaining authentication and origin rejection", async () => {
-    await using tmp = await tmpdir({ git: true, config: { formatter: false, lsp: false } })
-    const listener = await startListener(["https://im-preview.example.test"])
+  // Auth belongs to the process startup contract. A prior suite may already have
+  // built an unauthenticated root, so changing env in this process cannot test a
+  // password-protected listener. The private child fixes auth before any imports.
+  test("warm shared root accepts product origins and isolates two listeners' IM/PTY origins with startup authentication", async () => {
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    const child = Bun.spawn(
+      [process.execPath, path.resolve(import.meta.dir, "../fixture/listener-cors.ts"), tmp.path],
+      {
+        cwd: path.resolve(import.meta.dir, "../.."),
+        env: {
+          ...process.env,
+          HOME: tmp.path,
+          TMPDIR: tmp.path,
+          XDG_DATA_HOME: path.join(tmp.path, "data"),
+          XDG_CONFIG_HOME: path.join(tmp.path, "config"),
+          XDG_CACHE_HOME: path.join(tmp.path, "cache"),
+          DEEPAGENT_CODE_TEST_HOME: tmp.path,
+          DEEPAGENT_CODE_HOME: "",
+          DEEPAGENT_CODE_DB: path.join(tmp.path, "listener.db"),
+          DEEPAGENT_CODE_SERVER_PASSWORD: credentials.password,
+          DEEPAGENT_CODE_SERVER_USERNAME: credentials.username,
+          DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1",
+          DEEPAGENT_IM_FACADE_URL: "",
+          DEEPAGENT_IM_FACADE_KEY: "",
+          DEEPAGENT_IM_KERNEL_APPKEY: "",
+          DEEPAGENT_IM_KERNEL_NAVIGATOR: "",
+          DEEPAGENT_IM_KERNEL_TOKEN: "",
+          DEEPAGENT_IM_KERNEL_USER_ID: "",
+          DEEPAGENT_IM_AGENT_RESPONDER: "off",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    )
     try {
-      const groupId = await createGroup(listener.url, tmp.path)
-      const url = socketURL(listener.url, groupId, tmp.path)
-      for (const origin of ["oc://renderer", "http://127.0.0.1:4465", "https://im-preview.example.test"]) {
-        const socket = await openSocket(url, origin)
-        const pong = waitForMessage(socket, (message) => message.includes('"pong"'))
-        socket.send(JSON.stringify({ type: "ping", data: { ts: 1 } }))
-        expect(await pong).toContain('"pong"')
-        const closed = waitClose(socket)
-        socket.close(1000)
-        await closed
-      }
-      url.protocol = "http:"
-      expect((await fetch(url, { headers: { ...auth(), origin: "https://untrusted.example.test" } })).status).toBe(403)
-      expect((await fetch(url, { headers: { origin: "oc://renderer" } })).status).toBe(401)
+      const [code, stdout, stderr] = await withTimeout(
+        Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]),
+        25_000,
+        "shared-root CORS subprocess timed out",
+      )
+      if (code !== 0) throw new Error(`shared-root CORS subprocess failed: ${stdout}\n${stderr}`)
+      expect(stdout).toContain("LISTENER_CORS_SHARED_ROOT_PASS")
     } finally {
-      await stop(listener, "timed out cleaning up origin listener")
+      if (child.exitCode === null) child.kill()
+      await child.exited
     }
   }, 30_000)
 
@@ -607,7 +636,7 @@ function serveWithOccupancy(repo: IMRepositoryInterface, broadcaster: IMBroadcas
       socket.once("close", () => upgraded.delete(socket))
     })
     yield* HttpApiBuilder.layer(IMWebSocketApi).pipe(
-      Layer.provide(imWebSocketHandlers),
+      Layer.provide(imWebSocketHandlers()),
       Layer.provide([probeAuthorization, probeWorkspaceRouting, instanceContextLayer]),
       Layer.provide(Layer.succeed(IMRepository, repo)),
       Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)),

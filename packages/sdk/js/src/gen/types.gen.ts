@@ -5489,6 +5489,56 @@ export type ProviderNotFoundError = {
   message: string
 }
 
+export type AttentionCapability = {
+  enabled: boolean
+  scope: "implicit-local"
+  actor: "server"
+  reason: "enabled" | "profile_disabled" | "unsupported_host"
+}
+
+export type AttentionItem = {
+  id: string
+  revision: string
+  kind: "activity_failed" | "execution_recovery"
+  state: "failed" | "recovery_required" | "authority_conflict" | "owned_elsewhere" | "execution_claim_pending"
+  reasonCode:
+    | "activity_failed"
+    | "claim_only"
+    | "safe_before_dispatch"
+    | "terminal_consistent"
+    | "recovery_required"
+    | "authority_conflict"
+    | "owned_elsewhere"
+  occurredAt: number | null
+  observedAt: number
+  session: {
+    id: string
+    title: string
+    projectID: string
+    directory: string
+    workspaceID: null
+    parentID?: string
+  }
+  source: {
+    activityID?: string
+  }
+  seen: boolean
+  seenAt: number | null
+}
+
+export type AttentionList = {
+  data: Array<AttentionItem>
+  nextCursor?: string
+  asOf: number
+  scope: "implicit-local"
+  unseenCount: number
+}
+
+export type AttentionNotFoundError = {
+  _tag: "AttentionNotFoundError"
+  message: string
+}
+
 export type EffectHttpApiErrorForbidden = {
   _tag: "Forbidden"
 }
@@ -14526,6 +14576,10 @@ export type ImMessagesCreateData = {
     mentions?: Array<string>
     metadata?:
       | {
+          type: "attachment_ref"
+          attachmentID: string
+        }
+      | {
           type: "kernel_sync"
           liveEligible: boolean
         }
@@ -22608,6 +22662,173 @@ export type V2SessionQuestionRejectResponses = {
 }
 
 export type V2SessionQuestionRejectResponse = V2SessionQuestionRejectResponses[keyof V2SessionQuestionRejectResponses]
+
+export type V2AttentionCapabilityData = {
+  body?: never
+  path?: never
+  query?: {
+    workspace?: string
+    directory?: string
+  }
+  url: "/api/attention/capability"
+}
+
+export type V2AttentionCapabilityErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2AttentionCapabilityError = V2AttentionCapabilityErrors[keyof V2AttentionCapabilityErrors]
+
+export type V2AttentionCapabilityResponses = {
+  /**
+   * AttentionCapability
+   */
+  200: AttentionCapability
+}
+
+export type V2AttentionCapabilityResponse = V2AttentionCapabilityResponses[keyof V2AttentionCapabilityResponses]
+
+export type V2AttentionListData = {
+  body?: never
+  path?: never
+  query?: {
+    workspace?: string
+    directory?: string
+    project?: string
+    kind?: "activity_failed" | "execution_recovery"
+    view?: "all" | "unseen"
+    cursor?: string
+    limit?: string
+  }
+  url: "/api/attention"
+}
+
+export type V2AttentionListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2AttentionListError = V2AttentionListErrors[keyof V2AttentionListErrors]
+
+export type V2AttentionListResponses = {
+  /**
+   * AttentionList
+   */
+  200: AttentionList
+}
+
+export type V2AttentionListResponse = V2AttentionListResponses[keyof V2AttentionListResponses]
+
+export type V2AttentionGetData = {
+  body?: never
+  path: {
+    itemID: string
+  }
+  query?: {
+    workspace?: string
+    directory?: string
+  }
+  url: "/api/attention/{itemID}"
+}
+
+export type V2AttentionGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * AttentionNotFoundError
+   */
+  404: AttentionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2AttentionGetError = V2AttentionGetErrors[keyof V2AttentionGetErrors]
+
+export type V2AttentionGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: AttentionItem
+  }
+}
+
+export type V2AttentionGetResponse = V2AttentionGetResponses[keyof V2AttentionGetResponses]
+
+export type V2AttentionSeenData = {
+  body: {
+    revision: string
+  }
+  path: {
+    itemID: string
+  }
+  query?: {
+    workspace?: string
+    directory?: string
+  }
+  url: "/api/attention/{itemID}/seen"
+}
+
+export type V2AttentionSeenErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * AttentionNotFoundError
+   */
+  404: AttentionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2AttentionSeenError = V2AttentionSeenErrors[keyof V2AttentionSeenErrors]
+
+export type V2AttentionSeenResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: AttentionItem
+  }
+}
+
+export type V2AttentionSeenResponse = V2AttentionSeenResponses[keyof V2AttentionSeenResponses]
 
 export type PtyConnectData = {
   body?: never

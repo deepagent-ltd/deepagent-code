@@ -1,7 +1,7 @@
 export * as SessionRestart from "./restart"
 
 import { Context, Effect, Layer } from "effect"
-import { and, eq, inArray, sql } from "drizzle-orm"
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm"
 import { Database } from "../../database/database"
 import {
   SessionProviderAttemptResolutionTable,
@@ -16,7 +16,7 @@ import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { V2ProviderTurnReceiptTable } from "../runner/v2-provider-turn.sql"
 import { V2ToolEffectAdmissionTable, V2ToolEffectTable } from "../runner/v2-tool-effect.sql"
-import { SessionInputTable } from "../sql"
+import { SessionInputTable, SessionTable } from "../sql"
 
 export type RecoveryReceipt = {
   readonly receiptId: string
@@ -222,6 +222,8 @@ export interface Interface {
   readonly suspendActiveSessions: Effect.Effect<void>
   /** Lists unowned claims requiring explicit recovery classification. Never starts provider work. */
   readonly pendingRecovery: Effect.Effect<ReadonlyArray<PendingRecovery>>
+  /** Read-only classification restricted before inventory queries to already-authorized Sessions. */
+  readonly pendingRecoveryFor: (sessionIDs: readonly SessionSchema.ID[]) => Effect.Effect<ReadonlyArray<PendingRecovery>>
   /** Exact-releases and re-wakes only provably safe startup work. Past-dispatch work remains fenced. */
   readonly redriveStartup: Effect.Effect<StartupRedrive, SessionRunner.RunError>
 }
@@ -235,22 +237,22 @@ export const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const execution = yield* SessionExecution.Service
     const db = (yield* Database.Service).db
-    const service = Service.of({
-      suspendActiveSessions: Effect.gen(function* () {
-        yield* Effect.forEach(
-          yield* execution.active,
-          (sessionID) =>
-            store.claimToken(sessionID).pipe(
-              Effect.flatMap((token) =>
-                token === undefined ? Effect.die(`Active Session has no durable claim: ${sessionID}`) : Effect.void,
-              ),
-            ),
-          { discard: true },
-        )
-      }),
-      pendingRecovery: Effect.gen(function* () {
+    const pendingRecovery = (allowed?: readonly SessionSchema.ID[]) =>
+      Effect.gen(function* () {
         const active = yield* execution.active
-        const claims = (yield* store.listSuspendedClaims()).filter((claim) => !active.has(claim.sessionID))
+        if (allowed?.length === 0) return []
+        const candidates = allowed === undefined
+          ? yield* store.listSuspendedClaims()
+          : yield* db
+              .select({ sessionID: SessionTable.id, token: SessionTable.execution_claim_token })
+              .from(SessionTable)
+              .where(and(inArray(SessionTable.id, [...allowed]), isNotNull(SessionTable.execution_claim_token)))
+              .all()
+              .pipe(Effect.orDie)
+        const claims = candidates.filter(
+          (claim): claim is { sessionID: SessionSchema.ID; token: number } =>
+            claim.token !== null && !active.has(claim.sessionID),
+        )
         const sessionIDs = claims.map((claim) => claim.sessionID)
         if (sessionIDs.length === 0) return []
         const inventory = yield* db
@@ -492,7 +494,22 @@ export const layer = Layer.effect(
             ]),
           }
         })
+      })
+    const service = Service.of({
+      suspendActiveSessions: Effect.gen(function* () {
+        yield* Effect.forEach(
+          yield* execution.active,
+          (sessionID) =>
+            store.claimToken(sessionID).pipe(
+              Effect.flatMap((token) =>
+                token === undefined ? Effect.die(`Active Session has no durable claim: ${sessionID}`) : Effect.void,
+              ),
+            ),
+          { discard: true },
+        )
       }),
+      pendingRecovery: pendingRecovery(),
+      pendingRecoveryFor: (sessionIDs) => pendingRecovery(sessionIDs),
       redriveStartup: Effect.gen(function* () {
         const recoveries = yield* Effect.suspend(() => service.pendingRecovery)
         const active = yield* execution.active

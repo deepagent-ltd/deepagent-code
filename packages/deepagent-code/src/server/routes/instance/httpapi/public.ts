@@ -340,6 +340,11 @@ function applyLegacySchemaOverrides(spec: OpenApiSpec) {
   }
   if (schemas.GlobalSession?.properties?.project)
     schemas.GlobalSession.properties.project = nullable(schemas.GlobalSession.properties.project)
+  // These required native fields use null as durable absence (unknown recovery
+  // occurrence and no seen receipt), not as optional legacy properties.
+  const attention = schemas.AttentionItem?.properties
+  if (attention?.occurredAt) attention.occurredAt = nullable(attention.occurredAt)
+  if (attention?.seenAt) attention.seenAt = nullable(attention.seenAt)
   const providerOptions = schemas.ProviderConfig?.properties?.options
   if (providerOptions) providerOptions.additionalProperties = {}
   const model = schemas.ProviderConfig?.properties?.models?.additionalProperties

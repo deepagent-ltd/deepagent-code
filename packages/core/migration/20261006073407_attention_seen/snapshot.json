@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "a635c9cc-b3c2-4765-9b79-30adfb5d3385",
+  "id": "8b580634-1148-4fd1-936d-f0464743ddc5",
   "prevIds": [
-    "9a3f1f5f-ddd1-4792-ba65-05553640dba5"
+    "a635c9cc-b3c2-4765-9b79-30adfb5d3385"
   ],
   "ddl": [
     {
@@ -212,6 +212,10 @@
     },
     {
       "name": "control_account",
+      "entityType": "tables"
+    },
+    {
+      "name": "attention_seen",
       "entityType": "tables"
     },
     {
@@ -6999,6 +7003,66 @@
       "name": "time_updated",
       "entityType": "columns",
       "table": "control_account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_key",
+      "entityType": "columns",
+      "table": "attention_seen"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "actor_id",
+      "entityType": "columns",
+      "table": "attention_seen"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "item_id",
+      "entityType": "columns",
+      "table": "attention_seen"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_revision",
+      "entityType": "columns",
+      "table": "attention_seen"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "attention_seen"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "seen_at",
+      "entityType": "columns",
+      "table": "attention_seen"
     },
     {
       "type": "text",
@@ -14755,6 +14819,21 @@
     },
     {
       "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_attention_seen_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "attention_seen"
+    },
+    {
+      "columns": [
         "security_namespace_id"
       ],
       "tableTo": "context_security_namespace",
@@ -15591,6 +15670,18 @@
       "name": "control_account_pk",
       "entityType": "pks",
       "table": "control_account"
+    },
+    {
+      "columns": [
+        "scope_key",
+        "actor_id",
+        "item_id",
+        "source_revision"
+      ],
+      "nameExplicit": false,
+      "name": "attention_seen_pk",
+      "entityType": "pks",
+      "table": "attention_seen"
     },
     {
       "columns": [
