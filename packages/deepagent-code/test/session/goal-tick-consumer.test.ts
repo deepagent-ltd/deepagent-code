@@ -22,12 +22,12 @@ const database = Database.layerFromPath(":memory:")
 
 // A stub runTick that returns a scripted sequence of progress results, recording each call.
 type StubResult = GoalTickConsumer.GoalTickPortResult
-const makeLayer = (opts: {
-  flag?: boolean
-  runTick: GoalTickConsumer.GoalTickPort
-}) => {
+const makeLayer = (opts: { flag?: boolean; goalFlag?: boolean; runTick: GoalTickConsumer.GoalTickPort }) => {
   const busLayer = DeepAgentEventBus.layerWith({ now }).pipe(Layer.provideMerge(database))
-  const flagLayer = RuntimeFlags.layer({ v4MultiAgentRuntime: opts.flag ?? true })
+  const flagLayer = RuntimeFlags.layer({
+    v4MultiAgentRuntime: opts.flag ?? true,
+    v4GoalTickEventDriven: opts.goalFlag ?? false,
+  })
   const consumer = GoalTickConsumer.layerWith({ runTick: opts.runTick, runLoop: false }).pipe(
     Layer.provide(busLayer),
     Layer.provide(flagLayer),
@@ -91,7 +91,7 @@ describe("GoalTickConsumer — command identity", () => {
     expect(cmd.actorID).toBe("s1") // the actor stays the session; only the routing column changes
   })
 
-  test("tickCommand without a known workspace falls back to the bus global semantics (\"\")", () => {
+  test('tickCommand without a known workspace falls back to the bus global semantics ("")', () => {
     const cmd = GoalTickConsumer.tickCommand(seq0Command())
     expect(cmd.workspaceID).toBe("")
     const resumed = GoalTickConsumer.resumeTickCommand(seq0Command())
@@ -116,9 +116,7 @@ describe("GoalTickConsumer — command handling", () => {
       const next = yield* bus.getByID(cmd.id) // sanity: original exists
       expect(next?.type).toBe(LMNEvents.GOAL_TICK_REQUESTED)
       // re-emit produced a second stored event; assert by re-publishing the SAME next key is a dedup no-op
-      const dup = yield* bus.publish(
-        GoalTickConsumer.tickCommand(seq0Command({ seq: 1 })),
-      )
+      const dup = yield* bus.publish(GoalTickConsumer.tickCommand(seq0Command({ seq: 1 })))
       // if the consumer already emitted seq=1, this returns the SAME event id (dedup); prove the chain fired.
       expect(dup.idempotencyKey).toBe("goal:tick:g1:1")
     }),
@@ -213,6 +211,39 @@ describe("GoalTickConsumer — flag OFF drives nothing", () => {
       const cmd = yield* publishTick(seq0Command({ goalId: "goff" }))
       yield* consumer.handle(cmd)
       expect(executed).toBe(0) // flag off ⇒ runTick never called
+    }),
+  )
+})
+
+describe("GoalTickConsumer — independent goal flag", () => {
+  let executed = 0
+  const it = testEffect(
+    makeLayer({
+      flag: false,
+      goalFlag: true,
+      runTick: () =>
+        Effect.sync(() => {
+          executed++
+          return { progress: "continue", nextSeq: 1, nextExpectedPlanVersion: 1 } as StubResult
+        }),
+    }),
+  )
+
+  it.effect("goal-only mode executes and durably emits the next tick with the runtime master off", () =>
+    Effect.gen(function* () {
+      executed = 0
+      const consumer = yield* GoalTickConsumer.Service
+      const bus = yield* DeepAgentEventBus.Service
+      const cmd = yield* publishTick(seq0Command({ goalId: "goal-only" }))
+      yield* consumer.handle(cmd)
+      expect(executed).toBe(1)
+      const events = yield* bus.recentByType({ type: LMNEvents.GOAL_TICK_REQUESTED, windowMs: 100_000, now: clock })
+      expect(events.map((event) => event.idempotencyKey).sort()).toEqual([
+        "goal:tick:goal-only:0",
+        "goal:tick:goal-only:1",
+      ])
+      yield* consumer.handle(cmd)
+      expect(executed).toBe(1)
     }),
   )
 })

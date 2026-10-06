@@ -9,7 +9,7 @@ import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { QuietHours } from "@deepagent-code/core/deepagent/quiet-hours"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import * as Log from "@deepagent-code/core/util/log"
+import { Log } from "@deepagent-code/core/util/log"
 
 // V4.1 §N — the GOAL TICK CONSUMER: the piece that makes the goal-loop tick GENUINELY event-driven.
 //
@@ -31,9 +31,9 @@ import * as Log from "@deepagent-code/core/util/log"
 // advancing state. The production port compares request.seq with durable state before executing, so a
 // delivery retried after its tick persisted only repairs the successor and never runs a second tick.
 //
-// FLAG-GATED: v4MultiAgentRuntime (the event-driven layer master flag). Off ⇒ handle() still ACKS every
-// delivery (discharges the durable row) but drives nothing — the in-process BackgroundJob driver
-// (goal-manager, flag-OFF path) is authoritative.
+// FLAG-GATED: either v4MultiAgentRuntime or the independent v4GoalTickEventDriven flag enables this
+// consumer, matching GoalManager's driver selection. Both off ⇒ handle() ACKS deliveries but drives
+// nothing — the in-process BackgroundJob driver (goal-manager, flags-OFF path) is authoritative.
 
 const log = Log.create({ service: "goal-tick-consumer" })
 
@@ -218,10 +218,10 @@ export const layerWith = (options: LayerOptions) =>
 
       const handle: Interface["handle"] = (event) =>
         Effect.gen(function* () {
-          // Flag off ⇒ the event-driven path is dormant; the in-process driver is authoritative. Still ACK
+          // Both flags off ⇒ the event-driven path is dormant; the in-process driver is authoritative. Still ACK
           // to discharge the durable delivery row (this group wildcard-less-subscribes only this type, but
           // a stray delivery must not pile up).
-          if (!flags.v4MultiAgentRuntime) {
+          if (!flags.v4MultiAgentRuntime && !flags.v4GoalTickEventDriven) {
             yield* ack(event)
             return
           }
@@ -282,24 +282,26 @@ export const layerWith = (options: LayerOptions) =>
             sideEffect: runTick(request).pipe(
               Effect.tap(({ progress, nextSeq, nextExpectedPlanVersion }) =>
                 progress === "continue"
-                  ? bus.publish(
-                      tickCommand({
-                        sessionID: request.sessionID,
-                        goalId: request.goalId,
-                        planDocId: request.planDocId,
-                        seq: nextSeq,
-                        expectedPlanVersion: nextExpectedPlanVersion,
-                        workspaceID: request.workspaceID,
-                      }),
-                    ).pipe(
-                      Effect.tap(() =>
-                        Effect.logInfo("goal tick executed; re-emitted next command", {
+                  ? bus
+                      .publish(
+                        tickCommand({
+                          sessionID: request.sessionID,
                           goalId: request.goalId,
-                          seq: request.seq,
-                          nextSeq,
+                          planDocId: request.planDocId,
+                          seq: nextSeq,
+                          expectedPlanVersion: nextExpectedPlanVersion,
+                          workspaceID: request.workspaceID,
                         }),
-                      ),
-                    )
+                      )
+                      .pipe(
+                        Effect.tap(() =>
+                          Effect.logInfo("goal tick executed; re-emitted next command", {
+                            goalId: request.goalId,
+                            seq: request.seq,
+                            nextSeq,
+                          }),
+                        ),
+                      )
                   : // terminal / paused / stopped: do NOT re-emit. The terminal FACT (goal.completed /
                     // needs_human / rolled_back) is emitted by the tick's own onStatus port; resume
                     // re-seeds the chain for a paused goal.
@@ -356,34 +358,31 @@ export const layerWith = (options: LayerOptions) =>
       if (runLoop) {
         yield* bus.registerConsumerGroup(TICK_GROUP, LMNEvents.GOAL_TICK_REQUESTED)
         const ready = yield* Deferred.make<void>()
-        yield* bus
-          .subscribe({ type: LMNEvents.GOAL_TICK_REQUESTED, group: TICK_GROUP })
-          .pipe(
-            Stream.onStart(Deferred.succeed(ready, undefined)),
-            Stream.runForEach((event) =>
-              handle(event).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.sync(() => log.error("goal tick handle failed", { cause: Cause.pretty(cause) })),
-                ),
+        yield* bus.subscribe({ type: LMNEvents.GOAL_TICK_REQUESTED, group: TICK_GROUP }).pipe(
+          Stream.onStart(Deferred.succeed(ready, undefined)),
+          Stream.runForEach((event) =>
+            handle(event).pipe(
+              Effect.catchCause((cause) =>
+                Effect.sync(() => log.error("goal tick handle failed", { cause: Cause.pretty(cause) })),
               ),
             ),
-            Effect.forkScoped,
-          )
+          ),
+          Effect.forkScoped,
+        )
         // Timeout guards against DB-stall (busy WAL/retention sweep): durable registration already
         // happened via registerConsumerGroup above, so a brief live-stream miss is recoverable via
         // the retry pump. 500ms is well above normal fiber-schedule latency (<1ms).
         yield* Deferred.await(ready).pipe(Effect.timeout(Duration.millis(500)), Effect.ignore)
 
-        yield* pumpRetries()
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.sync(() => log.error("goal tick retry pump failed", { cause: Cause.pretty(cause) })).pipe(
-                Effect.as(0),
-              ),
+        yield* pumpRetries().pipe(
+          Effect.catchCause((cause) =>
+            Effect.sync(() => log.error("goal tick retry pump failed", { cause: Cause.pretty(cause) })).pipe(
+              Effect.as(0),
             ),
-            Effect.repeat(Schedule.spaced(Duration.millis(retryPumpIntervalMs))),
-            Effect.forkScoped,
-          )
+          ),
+          Effect.repeat(Schedule.spaced(Duration.millis(retryPumpIntervalMs))),
+          Effect.forkScoped,
+        )
       }
 
       return Service.of({ handle, pumpRetries })
