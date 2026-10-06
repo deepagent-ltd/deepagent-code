@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer, Stream } from "effect"
+import { sql } from "drizzle-orm"
 import { EventDispatcher } from "../../src/session/event-dispatcher"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
@@ -157,6 +158,120 @@ describe("EventDispatcher", () => {
   )
 })
 
+describe("EventDispatcher durable schedule publication", () => {
+  const it = testEffect(makeLayer())
+
+  it.effect("a failed publication stays due while another schedule fires, then retries the same logical key", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const database = yield* Database.Service
+      const scheduler = yield* Scheduler.Service
+      const dispatcher = yield* EventDispatcher.Service
+      const bus = yield* DeepAgentEventBus.Service
+      const failed = yield* scheduler.scheduleDelay({
+        workspaceID: "wrk_1",
+        fireAt: 0,
+        eventTemplate: input({ type: "test.failed.schedule", source: "schedule" }),
+      })
+      yield* scheduler.scheduleDelay({
+        workspaceID: "wrk_1",
+        fireAt: 0,
+        eventTemplate: input({ type: "test.healthy.schedule", source: "schedule" }),
+      })
+      yield* database.db
+        .run(
+          sql`CREATE TRIGGER block_schedule_publish BEFORE INSERT ON deepagent_event
+        WHEN new.type = 'test.failed.schedule' BEGIN SELECT RAISE(ABORT, 'injected publication failure'); END`,
+        )
+        .pipe(Effect.orDie)
+      expect(yield* dispatcher.tick(100)).toBe(1)
+      expect(
+        (yield* scheduler.due(100)).map((row) => ({ id: row.id, fireAt: row.fireAt, lastFiredAt: row.lastFiredAt })),
+      ).toEqual([{ id: failed.id, fireAt: 0, lastFiredAt: undefined }])
+      yield* database.db.run(sql`DROP TRIGGER block_schedule_publish`).pipe(Effect.orDie)
+      expect(yield* dispatcher.tick(200)).toBe(1)
+      const events = yield* bus.recentByType({ type: "test.failed.schedule", windowMs: 1000, now: 200 })
+      expect(events).toHaveLength(1)
+      expect(events[0].idempotencyKey).toBe(`sched:${failed.id}:0`)
+      expect(yield* dispatcher.tick(300)).toBe(0)
+    }),
+  )
+
+  it.effect("a post-publish mark failure retries against the existing durable event", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const database = yield* Database.Service
+      const scheduler = yield* Scheduler.Service
+      const dispatcher = yield* EventDispatcher.Service
+      const bus = yield* DeepAgentEventBus.Service
+      const scheduled = yield* scheduler.schedulePeriodic({
+        workspaceID: "wrk_1",
+        firstFireAt: 0,
+        intervalMs: 1000,
+        eventTemplate: input({ type: "test.mark.failure", source: "schedule" }),
+      })
+      yield* database.db
+        .run(
+          sql`CREATE TRIGGER block_schedule_mark BEFORE UPDATE ON deepagent_schedule
+        WHEN new.kind = 'periodic' AND new.last_fired_at IS NOT NULL
+        BEGIN SELECT RAISE(ABORT, 'injected mark failure'); END`,
+        )
+        .pipe(Effect.orDie)
+      expect(yield* dispatcher.tick(100)).toBe(0)
+      expect((yield* scheduler.due(100))[0].fireAt).toBe(0)
+      expect(yield* bus.recentByType({ type: "test.mark.failure", windowMs: 1000, now: 100 })).toHaveLength(1)
+      yield* database.db.run(sql`DROP TRIGGER block_schedule_mark`).pipe(Effect.orDie)
+      expect(yield* dispatcher.tick(200)).toBe(1)
+      const events = yield* bus.recentByType({ type: "test.mark.failure", windowMs: 1000, now: 200 })
+      expect(events).toHaveLength(1)
+      expect(events[0].idempotencyKey).toBe(`sched:${scheduled.id}:0`)
+      expect(yield* scheduler.due(200)).toEqual([])
+    }),
+  )
+
+  it.effect("a partially published per-repo condition retains its logical key and fills only the missing repo", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const database = yield* Database.Service
+      const scheduler = yield* Scheduler.Service
+      const dispatcher = yield* EventDispatcher.Service
+      const bus = yield* DeepAgentEventBus.Service
+      const scheduled = yield* scheduler.scheduleCondition({
+        workspaceID: "wrk_1",
+        firstCheckAt: 0,
+        recheckEveryMs: 1000,
+        condition: { eventType: "ci.failure", threshold: 1, windowMs: 60000, groupByRepo: true },
+        eventTemplate: input({ type: "test.repo.repair", source: "schedule" }),
+      })
+      yield* bus.publish(input({ payload: { repo: "B" }, idempotencyKey: "repo-b-failure" }))
+      setNow(1)
+      yield* bus.publish(input({ payload: { repo: "A" }, idempotencyKey: "repo-a-failure" }))
+      yield* database.db
+        .run(
+          sql`CREATE TRIGGER block_repo_publish BEFORE INSERT ON deepagent_event
+        WHEN new.type = 'test.repo.repair' AND json_extract(new.payload, '$.repo') = 'B'
+        BEGIN SELECT RAISE(ABORT, 'injected repo publication failure'); END`,
+        )
+        .pipe(Effect.orDie)
+      expect(yield* dispatcher.tick(100)).toBe(0)
+      const retry = (yield* scheduler.due(100))[0]
+      expect(retry).toMatchObject({ id: scheduled.id, fireAt: 0 })
+      expect(retry.lastFiredAt).toBeUndefined()
+      const partial = yield* bus.recentByType({ type: "test.repo.repair", windowMs: 1000, now: 100 })
+      expect(partial).toHaveLength(1)
+      expect(partial[0].idempotencyKey).toBe(`sched:${scheduled.id}:A:0`)
+      yield* database.db.run(sql`DROP TRIGGER block_repo_publish`).pipe(Effect.orDie)
+      expect(yield* dispatcher.tick(200)).toBe(1)
+      const complete = yield* bus.recentByType({ type: "test.repo.repair", windowMs: 1000, now: 200 })
+      expect(complete.map((event) => event.idempotencyKey).sort()).toEqual([
+        `sched:${scheduled.id}:A:0`,
+        `sched:${scheduled.id}:B:0`,
+      ])
+      expect(yield* dispatcher.tick(1200)).toBe(0)
+    }),
+  )
+})
+
 describe("EventDispatcher flag gating", () => {
   const it = testEffect(makeLayer({ v4MultiAgentRuntime: false }))
 
@@ -173,6 +288,33 @@ describe("EventDispatcher flag gating", () => {
     }),
   )
 })
+
+for (const master of [false, true]) {
+  describe(`EventDispatcher ordinary schedules with runtime=${master}, goal=${!master}`, () => {
+    const it = testEffect(makeLayer({ v4MultiAgentRuntime: master, v4GoalTickEventDriven: !master }, wildcardAgentList))
+
+    it.effect("ordinary schedule dispatch follows the runtime flag independently of the goal flag", () =>
+      Effect.gen(function* () {
+        resetRecorder()
+        setNow(0)
+        const scheduler = yield* Scheduler.Service
+        const bus = yield* DeepAgentEventBus.Service
+        const dispatcher = yield* EventDispatcher.Service
+        yield* scheduler.scheduleDelay({
+          workspaceID: "wrk_1",
+          fireAt: 0,
+          eventTemplate: input({ type: "schedule.scan", source: "schedule" }),
+        })
+        expect(yield* dispatcher.tick(0)).toBe(1)
+        const events = yield* bus.recentByType({ type: "schedule.scan", windowMs: 1000, now: 0 })
+        expect(events).toHaveLength(1)
+        const decision = yield* dispatcher.handle(events[0])
+        expect(decision).toMatchObject(master ? { type: "dispatch" } : { type: "dropped", reason: "flag_disabled" })
+        expect(recorded.length).toBe(master ? 1 : 0)
+      }),
+    )
+  })
+}
 
 describe("EventDispatcher dispatch failure + retry pump", () => {
   const it = testEffect(makeLayer())
@@ -426,6 +568,29 @@ describe("EventDispatcher quiet-hours tick filter", () => {
       expect(fired.map((r) => (r.payload as { via?: string }).via)).toContain("sched")
     }),
   )
+
+  for (const groupByRepo of [false, true]) {
+    it.effect(`a quiet condition keeps its persisted window-end deferral (groupByRepo=${groupByRepo})`, () =>
+      Effect.gen(function* () {
+        setNow(QUIET_AT)
+        yield* setQuiet(yield* WorkspaceConfig.Service)
+        const scheduler = yield* Scheduler.Service
+        const bus = yield* DeepAgentEventBus.Service
+        const dispatcher = yield* EventDispatcher.Service
+        const scheduled = yield* scheduler.scheduleCondition({
+          workspaceID: "wrk_1",
+          firstCheckAt: QUIET_AT,
+          recheckEveryMs: 1000,
+          condition: { eventType: "ci.failure", threshold: 1, windowMs: 60000, groupByRepo },
+          eventTemplate: input({ type: "test.quiet.condition", source: "schedule" }),
+        })
+        yield* bus.publish(input({ idempotencyKey: "quiet-trigger", payload: { repo: "A" } }))
+        expect(yield* dispatcher.tick(QUIET_AT)).toBe(0)
+        expect((yield* scheduler.list("wrk_1")).find((row) => row.id === scheduled.id)?.fireAt).toBe(6 * 3600000)
+        expect(yield* dispatcher.tick(QUIET_AT + 1000)).toBe(0)
+      }),
+    )
+  }
 
   it.effect("a HIGH-priority scheduled fire ALWAYS fires, even during quiet hours (§E4 允许即时送达)", () =>
     Effect.gen(function* () {

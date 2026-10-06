@@ -21,7 +21,7 @@ export { resolveMentioned } from "@deepagent-code/core/im/mention-parser"
 export type { MentionedAgent } from "@deepagent-code/core/im/mention-parser"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventNotRegisteredError } from "./v2-admission-bridge"
-import * as Log from "@deepagent-code/core/util/log"
+import { Log } from "@deepagent-code/core/util/log"
 
 // V4.0 §A4 — the Event Router + Scheduler RUNTIME WIRING (Wave 2b). This is the deepagent-code half
 // that core (event-router.ts / scheduler.ts) deliberately cannot be: it reads feature flags, resolves
@@ -646,7 +646,7 @@ export const layerWith = (options?: LayerOptions) =>
       // discriminator into the payload + scope the workspaceID to the failing repo's workspace, and
       // `keySuffix` lets it distinguish each repo's fire in the idempotency key. Does NOT markFired — the
       // caller does that ONCE per schedule (a per-repo tick publishes N events but marks the schedule
-      // fired once). No-op-safe: a publish failure is logged + swallowed so one bad fire can't kill the tick.
+      // fired once). Failures propagate to the per-schedule boundary: they must never advance its fire.
       const publishScheduleEvent = (
         schedule: Scheduler.Schedule,
         at: number,
@@ -670,20 +670,12 @@ export const layerWith = (options?: LayerOptions) =>
             typeof template.payload === "object" && template.payload != null
               ? (template.payload as Record<string, unknown>)
               : {}
-          yield* bus
-            .publish({
-              ...template,
-              ...(overrides?.workspaceID ? { workspaceID: overrides.workspaceID } : {}),
-              ...(overrides?.payload ? { payload: { ...basePayload, ...overrides.payload } } : {}),
-              idempotencyKey,
-            })
-            .pipe(
-              Effect.catchCause((cause) =>
-                Effect.sync(() =>
-                  log.error("schedule publish failed", { scheduleID: schedule.id, cause: Cause.pretty(cause) }),
-                ),
-              ),
-            )
+          yield* bus.publish({
+            ...template,
+            ...(overrides?.workspaceID ? { workspaceID: overrides.workspaceID } : {}),
+            ...(overrides?.payload ? { payload: { ...basePayload, ...overrides.payload } } : {}),
+            idempotencyKey,
+          })
         })
 
       const fireSchedule = (schedule: Scheduler.Schedule, at: number) =>
@@ -695,8 +687,9 @@ export const layerWith = (options?: LayerOptions) =>
       // §E4/§N — fire a due schedule UNLESS it is a side-effecting low/normal fire during the workspace's
       // quiet hours, in which case DEFER it past the window (reschedule fire_at = the window end via
       // recheckCondition — works for every kind: it pushes the next eligibility without marking fired).
-      // high/critical schedules ALWAYS fire (§E4 允许即时送达). Returns whether it actually fired.
-      const fireOrDefer = (schedule: Scheduler.Schedule, at: number): Effect.Effect<boolean> =>
+      // high/critical schedules ALWAYS fire (§E4 允许即时送达). Preserve the deferral outcome so the
+      // condition recheck path cannot overwrite the already-persisted quiet-hours boundary.
+      const fireOrDefer = (schedule: Scheduler.Schedule, at: number): Effect.Effect<"fired" | "deferred"> =>
         Effect.gen(function* () {
           const priority = schedule.eventTemplate.priority ?? "normal"
           if (priority !== "high" && priority !== "critical") {
@@ -710,11 +703,11 @@ export const layerWith = (options?: LayerOptions) =>
                 deferUntil: nextAt,
               })
               yield* scheduler.recheckCondition(schedule.id, nextAt)
-              return false
+              return "deferred" as const
             }
           }
           yield* fireSchedule(schedule, at)
-          return true
+          return "fired" as const
         })
 
       // §C3.2 / P4.5b — the PER-REPO condition fire. Partition `recent` trigger events by their
@@ -723,7 +716,8 @@ export const layerWith = (options?: LayerOptions) =>
       // workspace. Marks the schedule fired ONCE (a per-repo tick emits N events for one schedule). Honors
       // quiet hours on the schedule's workspace for low/normal fires exactly like fireOrDefer (defers the
       // whole evaluation past the window); the CI-repair template is high priority so it always fires.
-      // Returns whether the schedule fired (≥1 repo repair emitted) so the tick advances its recheck.
+      // A partially published batch never marks the schedule fired. Retry keeps the logical fire key
+      // for every repo, so the bus unique idempotency key preserves already-published events.
       const readRepo = (event: DeepAgentEvent.Event): string | undefined => {
         const repo = (event.payload as { repo?: unknown } | null)?.repo
         return typeof repo === "string" && repo.length > 0 ? repo : undefined
@@ -733,7 +727,7 @@ export const layerWith = (options?: LayerOptions) =>
         spec: Scheduler.ConditionSpec,
         recent: ReadonlyArray<DeepAgentEvent.Event>,
         at: number,
-      ): Effect.Effect<boolean> =>
+      ): Effect.Effect<"fired" | "deferred" | "not_met"> =>
         Effect.gen(function* () {
           const priority = schedule.eventTemplate.priority ?? "normal"
           if (priority !== "high" && priority !== "critical") {
@@ -746,7 +740,7 @@ export const layerWith = (options?: LayerOptions) =>
                 deferUntil: nextAt,
               })
               yield* scheduler.recheckCondition(schedule.id, nextAt)
-              return false
+              return "deferred" as const
             }
           }
           // Group the window's trigger events by repo; keep each repo's count + the workspace its latest
@@ -777,7 +771,7 @@ export const layerWith = (options?: LayerOptions) =>
             firedAny = true
           }
           if (firedAny) yield* scheduler.markFired(schedule.id, at)
-          return firedAny
+          return firedAny ? ("fired" as const) : ("not_met" as const)
         })
 
       const tick: Interface["tick"] = (nowArg) =>
@@ -786,52 +780,42 @@ export const layerWith = (options?: LayerOptions) =>
           const due = yield* scheduler.due(at)
           let fired = 0
           for (const schedule of due) {
-            if (schedule.kind === "condition" && schedule.condition) {
-              // §A4 条件触发: fire ONLY when the threshold of trigger events is met in the window; else
-              // reschedule the next re-check WITHOUT publishing (and without leaving it hot-looping).
+            const didFire = yield* Effect.gen(function* () {
+              if (schedule.kind !== "condition" || !schedule.condition)
+                return (yield* fireOrDefer(schedule, at)) === "fired"
               const spec = schedule.condition
-              // §A4 跨 workspace 计数: a crossWorkspace condition (e.g. the SYSTEM-level "3× CI failure →
-              // repair" trigger) counts trigger events across ALL workspaces — so it observes CI failures
-              // that land in per-project workspaces, not just its own. recentByType omits the workspaceID
-              // filter when it's undefined (bus counts cross-tenant). Non-crossWorkspace conditions keep
-              // the historical per-workspace scoping (pass the schedule's own workspaceID).
               const recent = yield* bus.recentByType({
                 type: spec.eventType,
                 ...(spec.crossWorkspace ? {} : { workspaceID: schedule.workspaceID }),
                 windowMs: spec.windowMs,
                 now: at,
               })
-              // §C3.2 / P4.5b — a groupByRepo condition evaluates the threshold PER REPO (partitioning the
-              // window by payload.repo) and fires ONE repair per repo that hits it, carrying repo=<repo>.
-              // A plain condition keeps the single-counter behavior (fire once when the total meets it).
-              const didFire = spec.groupByRepo
+              const outcome = spec.groupByRepo
                 ? yield* firePerRepoOrDefer(schedule, spec, recent, at)
                 : Scheduler.conditionMet(spec, recent.length)
-                  ? // §E4 — fireOrDefer holds the fire for quiet hours (low/normal) and reschedules it past
-                    // the window; a deferred fire already advanced fire_at, so skip the recheck below.
-                    yield* fireOrDefer(schedule, at)
-                  : false
-              if (didFire) {
-                // A fired condition must not re-fire while the SAME trigger events are still inside the
-                // window. markFired (called inside fireOrDefer / firePerRepoOrDefer) advances fire_at by
-                // only the recheck CADENCE (e.g. 60s), so a cadenced condition (the production 3×-CI
-                // trigger: recheck 60s, window 30min) would otherwise become due again 60s later with the
-                // same ≥3 failures still in-window and re-fire ~once per recheck for the whole window
-                // (~30 duplicate high-priority repair goals — the bus idempotency key is per-fireAt, and
-                // the router only dedups LOW priority, so nothing collapses them). Push the next recheck
-                // PAST the window so those events have aged out before the condition is eligible again.
-                // This applies to EVERY fired condition, cadenced or not (the old `intervalMs == null`
-                // guard left the cadenced production trigger unprotected). New events landing after this
-                // still start a fresh window and legitimately re-trigger.
-                yield* scheduler.recheckCondition(schedule.id, at + (spec.windowMs || 1))
-                fired++
-              } else {
-                const nextCheck = at + (schedule.intervalMs ?? (spec.windowMs || 1))
-                yield* scheduler.recheckCondition(schedule.id, nextCheck)
+                  ? yield* fireOrDefer(schedule, at)
+                  : "not_met"
+              if (outcome === "deferred") return false
+              if (outcome === "not_met") {
+                yield* scheduler.recheckCondition(schedule.id, at + (schedule.intervalMs ?? (spec.windowMs || 1)))
+                return false
               }
-              continue
-            }
-            if (yield* fireOrDefer(schedule, at)) fired++
+              // A completed condition waits out the triggering window, so the same source events
+              // cannot produce a new logical fire on every shorter recheck cadence.
+              yield* scheduler.recheckCondition(schedule.id, at + (spec.windowMs || 1))
+              return true
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.sync(() => {
+                  log.error("schedule processing failed", {
+                    scheduleID: schedule.id,
+                    cause: Cause.pretty(cause),
+                  })
+                  return false
+                }),
+              ),
+            )
+            if (didFire) fired++
           }
           return fired
         })
