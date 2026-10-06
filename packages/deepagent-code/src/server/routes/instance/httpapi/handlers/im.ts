@@ -316,6 +316,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
 
             // Parse mentions from content
             const mentionedAgentNames = MentionParser.parse(payload.content)
+            const responderEnabled = IMAgentExecution.responderEnabled()
 
             // Create message.
             // Force senderType to "user" — this endpoint is authenticated as a user,
@@ -325,7 +326,9 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
               .createMessage({
                 groupID: groupId,
                 clientRequestID: payload.clientRequestID,
-                mentionIntent: { names: mentionedAgentNames, directory, workspaceID, userID, origin: "local" },
+                mentionIntent: responderEnabled
+                  ? { names: mentionedAgentNames, directory, workspaceID, userID, origin: "local" }
+                  : undefined,
                 senderID: userID,
                 senderType: "user",
                 type: payload.type,
@@ -390,7 +393,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
 
             // The transaction above owns the live intent. Immediate repair lowers latency;
             // the daemon retries persisted pending intents after process or transport failure.
-            if (!message.replayed && mentionedAgentNames.length > 0)
+            if (responderEnabled && !message.replayed && mentionedAgentNames.length > 0)
               yield* IMAgentExecution.reconcileMentions({ repo, v2Session, agents: agentListProvider, broadcaster, origin: "local" }).pipe(Effect.ignore)
 
             return {

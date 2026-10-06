@@ -11,6 +11,7 @@ const run = async (root: string, stage: string, exit = 0) => {
       env: {
         ...process.env,
         IM_ORACLE_ROOT: root,
+        DEEPAGENT_IM_AGENT_RESPONDER: "on",
         DEEPAGENT_CODE_TEST_HOME: root,
         XDG_CONFIG_HOME: `${root}/config`,
         XDG_DATA_HOME: `${root}/data`,

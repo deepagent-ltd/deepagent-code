@@ -936,7 +936,9 @@ export const IMRepositoryLive = Layer.effect(
           ]) !== stringify([
             input.groupID, input.senderID, input.senderType, input.type, input.content, mentions, input.metadata ?? null, input.replyToID ?? null,
           ])) return yield* new IMRepositoryError({ code: "message_identity_conflict", message: "Message request identity was already used with a different payload" })
-          if (input.mentionIntent) {
+          // A local retry cannot retroactively authorize chat sent with the responder off.
+          // Kernel live proof may still reconcile an earlier history-only observation.
+          if (input.mentionIntent && (inserted || input.mentionIntent.origin === "kernel_live")) {
             const intent = input.mentionIntent
             for (const name of Array.from(new Set(intent.names.map((name) => name.toLowerCase())))) {
               yield* tx.insert(IMMentionIntentTable).values({

@@ -13,6 +13,9 @@ import type { AgentListProvider } from "@deepagent-code/core/im/agent-list-provi
 import type { IMBroadcaster } from "@deepagent-code/core/im/websocket"
 import { resolveMentioned } from "@deepagent-code/core/im/mention-parser"
 
+/** The same explicit opt-in used by the kernel responder also gates local IM admission. */
+export const responderEnabled = () => process.env.DEEPAGENT_IM_AGENT_RESPONDER === "on"
+
 // V2 IM durable-only migration (design: DEEPAGENTCODE-2.0-DURABLE-MIGRATION handoff §5.3). The legacy
 // IM path (ServerAgentExecutor → fresh V1 Session per turn → SessionPrompt.promptOrSteer) is deleted;
 // this module is its durable V2-native replacement for the ADMISSION half of the slice:
@@ -127,9 +130,11 @@ export const reconcileMentions = (deps: {
   readonly authorize?: (intent: IMMentionIntent) => Effect.Effect<void, unknown>
 }) =>
   Effect.gen(function* () {
+    if (deps.origin === "local" && !responderEnabled()) return
     const intents = yield* deps.repo.listPendingMentions({ origin: deps.origin, receiverID: deps.receiverID })
     for (const intent of intents) {
       yield* Effect.gen(function* () {
+        if (deps.origin === "local" && !responderEnabled()) return
         if (deps.origin === "kernel_live") {
           if (!deps.authorize) return
           yield* deps.authorize(intent)
@@ -172,6 +177,7 @@ export const reconcileMentions = (deps: {
           inputID: imPromptIDFor(intent.message_id, target.agent.name),
         })
         if (!bound) return
+        if (deps.origin === "local" && !responderEnabled()) return
         yield* admitMention(deps.v2Session, {
           groupID: bound.message.groupID,
           messageID: bound.message_id,
