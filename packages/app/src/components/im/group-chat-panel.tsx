@@ -15,6 +15,7 @@ interface GroupChatPanelProps {
   groupID: string
   name?: string
   selfMemberIDs?: readonly string[]
+  senderNames?: ReadonlyMap<string, string>
   // §B3 thread — when true, clicking a message opens its reply thread. Gated by the caller on the
   // server's v4ThreadEnabled capability so the affordance only appears where the route is live.
   threadsEnabled?: boolean
@@ -267,6 +268,7 @@ function GroupConversation(props: GroupChatPanelProps & { drafts: ReturnType<typ
           agentProgress={agentProgress()}
           onOpenThread={props.threadsEnabled ? (m) => setThreadRoot(m) : undefined}
           selfMemberIDs={props.selfMemberIDs}
+          senderNames={props.senderNames}
           onLoadOlder={state.hasMore ? loadOlder : undefined}
           loadingOlder={state.loadingOlder}
         />
@@ -292,6 +294,7 @@ function GroupConversation(props: GroupChatPanelProps & { drafts: ReturnType<typ
             root={root()}
             agents={agents()}
             selfMemberIDs={props.selfMemberIDs}
+            senderNames={props.senderNames}
             drafts={props.drafts}
             onClose={() => setThreadRoot(null)}
           />

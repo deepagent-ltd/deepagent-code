@@ -1,4 +1,4 @@
-import { createEffect, createResource, createSignal, For, onCleanup, Show, type Component } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, onCleanup, Show, type Component } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Button } from "@deepagent-code/ui/button"
 import { IconButton } from "@deepagent-code/ui/icon-button"
@@ -80,6 +80,15 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
   /** 群视图 header 的邀请入口只对内核群（k:2: 绑定）开放。 */
   const selectedGroup = () => groups().find((g) => g.id === selectedGroupID())
   const inviteable = () => facadeActive() && selectedGroup()?.kernelConvID?.startsWith("k:2:")
+  const senderNames = createMemo(() => {
+    const group = selectedGroup()
+    if (group?.type !== "direct" || !group.name.trim()) return undefined
+    const peer = /^k:1:([^:]+)$/.exec(group.kernelConvID ?? "")
+    if (!peer) return undefined
+    // The facade resolves this peer name and ID together; inbound discovery
+    // verifies the same direct conversation. Group names prove no sender name.
+    return new Map([[peer[1], group.name]])
+  })
 
   // §B3/§H3 capability gate — thread view + file upload only where the server's flags are ON.
   const [capabilities] = createResource(() =>
@@ -505,6 +514,7 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
               groupID={id()}
               name={selectedGroup()?.name}
               selfMemberIDs={[facadeStatus()?.viewer?.memberID ?? "server", ...(identity() ? [identity()!.uuid] : [])]}
+              senderNames={senderNames()}
               threadsEnabled={threadsEnabled()}
               fileUploadEnabled={fileUploadEnabled()}
             />

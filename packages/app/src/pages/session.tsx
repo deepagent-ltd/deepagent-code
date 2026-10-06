@@ -24,7 +24,6 @@ import { useLocal } from "@/context/local"
 import { selectionFromLines, useFile, type FileSelection, type SelectedLineRange } from "@/context/file"
 import { createStore } from "solid-js/store"
 import { Select } from "@deepagent-code/ui/select"
-import { Tabs } from "@deepagent-code/ui/tabs"
 import { createAutoScroll } from "@deepagent-code/ui/hooks"
 import { previewSelectedLines } from "@deepagent-code/ui/pierre/selection-bridge"
 import { Button } from "@deepagent-code/ui/button"
@@ -70,6 +69,7 @@ import { useSessionLayout } from "@/pages/session/session-layout"
 import { useServer } from "@/context/server"
 import { syncSessionModel } from "@/pages/session/session-model-helpers"
 import { SessionSidePanel } from "@/pages/session/session-side-panel"
+import { SessionMobileTabs } from "@/pages/session/session-mobile-tabs"
 import { TerminalPanel } from "@/pages/session/terminal-panel"
 import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
@@ -310,6 +310,7 @@ export default function Page() {
   const desktopReviewOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "review")
   const desktopFileTreeOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "files")
   const desktopRightPanelOpen = createMemo(() => isDesktop() && view().rightPanel.opened())
+  const mobileMessagesOpen = createMemo(() => !isDesktop() && view().rightPanel.mode() === "im")
   // T3.2: the icon rail is ALWAYS present on desktop, so the session content always yields the rail
   // width; the content-panel width (wide bucket for review/files, else narrow) is subtracted on top only
   // when a panel is open.
@@ -852,6 +853,7 @@ export default function Page() {
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    if (mobileMessagesOpen()) return
     const path = event.composedPath()
     const target = path.find((item): item is HTMLElement => item instanceof HTMLElement)
     const activeElement = deepActiveElement()
@@ -1831,32 +1833,18 @@ export default function Page() {
         {sessionSync() ?? ""}
         <SessionHeader />
       <div class="workbench-split flex-1 min-h-0 flex flex-col md:flex-row">
-        <Show when={!isDesktop() && !!params.id}>
-          <Tabs value={store.mobileTab} class="h-auto">
-            <Tabs.List>
-              <Tabs.Trigger
-                value="session"
-                class="!w-1/2 !max-w-none"
-                classes={{ button: "w-full" }}
-                onClick={() => setStore("mobileTab", "session")}
-              >
-                {language.t("session.tab.session")}
-              </Tabs.Trigger>
-              <Tabs.Trigger
-                value="changes"
-                class="!w-1/2 !max-w-none !border-r-0"
-                classes={{ button: "w-full" }}
-                onClick={() => setStore("mobileTab", "changes")}
-              >
-                {hasReview()
-                  ? language.t("session.review.filesChanged", { count: reviewCount() })
-                  : language.t("session.review.change.other")}
-              </Tabs.Trigger>
-            </Tabs.List>
-          </Tabs>
+        <Show when={!isDesktop()}>
+          <SessionMobileTabs
+            tab={store.mobileTab}
+            onChange={(tab) => setStore("mobileTab", tab)}
+            hasSession={!!params.id}
+            reviewCount={hasReview() ? reviewCount() : 0}
+          />
         </Show>
 
         <div
+          aria-hidden={mobileMessagesOpen()}
+          inert={mobileMessagesOpen()}
           classList={{
             "workbench-panel @container relative shrink-0 flex flex-col min-h-0 h-full flex-1 md:flex-none": true,
             "duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
@@ -1865,6 +1853,7 @@ export default function Page() {
           }}
           style={{
             width: sessionPanelWidth(),
+            display: mobileMessagesOpen() ? "none" : undefined,
           }}
         >
           <div class="flex-1 min-h-0 overflow-hidden">

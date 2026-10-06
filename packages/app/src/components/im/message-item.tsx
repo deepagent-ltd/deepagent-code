@@ -13,6 +13,7 @@ interface MessageItemProps {
   /** §B3 thread — open this message's reply chain. Hidden when undefined. */
   onOpenThread?: (message: LocalMessage) => void
   selfMemberIDs?: readonly string[]
+  senderNames?: ReadonlyMap<string, string>
 }
 
 export function MessageItem(props: MessageItemProps) {
@@ -24,7 +25,7 @@ export function MessageItem(props: MessageItemProps) {
     isSelf()
       ? language.t("im.sender.you")
       : isUser()
-        ? props.message.senderID
+        ? (props.senderNames?.get(props.message.senderID) ?? props.message.senderID)
         : isAgent()
           ? props.message.senderID
           : language.t("im.sender.system")
@@ -36,7 +37,7 @@ export function MessageItem(props: MessageItemProps) {
     >
       <div class={`min-w-0 max-w-[90%] ${isSelf() ? "items-end" : "items-start"} flex flex-col gap-1`}>
         <div class="max-w-full flex gap-2 text-11-regular text-text-weak px-1">
-          <span class="truncate" title={senderLabel()}>
+          <span class="truncate" title={props.message.senderID}>
             {senderLabel()}
           </span>
           <time class="shrink-0" dateTime={new Date(props.message.createdAt).toISOString()}>
