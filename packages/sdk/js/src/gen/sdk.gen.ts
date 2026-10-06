@@ -6140,6 +6140,7 @@ export class Messages extends HeyApiClient {
       groupId: string
       directory?: string
       workspace?: string
+      clientRequestID?: string
       senderType: "user" | "agent" | "system"
       type: "text" | "code" | "file" | "agent_status" | "system"
       content: string
@@ -6203,6 +6204,7 @@ export class Messages extends HeyApiClient {
             { in: "path", key: "groupId" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "body", key: "clientRequestID" },
             { in: "body", key: "senderType" },
             { in: "body", key: "type" },
             { in: "body", key: "content" },

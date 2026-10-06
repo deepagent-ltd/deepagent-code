@@ -3,14 +3,17 @@ export * as IMKernelSync from "./sync"
 import { realpath } from "node:fs/promises"
 import { Cause, Context, Effect, Layer, Option, Queue, Ref, Schedule, Semaphore, Stream, SubscriptionRef } from "effect"
 import { IMRepository } from "@deepagent-code/core/im/repository"
-import type { IMPendingKernelMessage, IMRepositoryInterface } from "@deepagent-code/core/im/repository"
+import type {
+  IMPendingKernelMessage,
+  IMRepositoryInterface,
+  LiveMentionContext,
+} from "@deepagent-code/core/im/repository"
 import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
 import { MentionParser } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { SessionV2 } from "@deepagent-code/core/session"
 import * as Log from "@deepagent-code/core/util/log"
 import { IMAgentExecution } from "@/im/im-agent-execution"
-import { defaultMentionReceiptPort, resolveMentioned } from "@/session/event-dispatcher"
 import { SERVER_USER_ID } from "@/server/routes/instance/httpapi/utils/workspace-context"
 import { KernelClient } from "./client"
 import { KernelSdk } from "./sdk"
@@ -296,76 +299,53 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
             ),
           )
 
-      // B2 @Agent 触发链（design §6）：群内 `@我 @Agent <问题>` → 本地 durable admission（复用
-      // im-agent-execution 的幂等准入：prompt id 由 (消息 id, agent) 派生，重放是 exact-retry
-      // 空操作）。私聊免 @我（会话天然点对点）。非 dispatchable 的 mention 落本地 receipt——
-      // receipt 不上内核，远程发送者不可见。整条链 best-effort：任何失败只记日志，绝不影响落库。
-      const maybeAdmitMentions = (
-        groupID: string,
-        messageID: string,
-        msg: KernelClient.KernelTextMessage,
-      ): Effect.Effect<void> =>
-        Effect.gen(function* () {
-          if (!responderActive || !v2Session || !agentListProvider || !responder) return
-          const self = config.identity
-          if (!self) return
-          // 群聊必须 @我（`@某人 @Agent` 的 `@某人` 半）；子串匹配是门槛，agent 名解析才是权威。
-          if (msg.conversationType === 2 && !msg.text.toLowerCase().includes(`@${self.name.toLowerCase()}`)) return
-          const names = MentionParser.parse(msg.text).filter((name) => name.toLowerCase() !== self.name.toLowerCase())
-          if (names.length === 0) return
-          const agents = yield* agentListProvider.listAgents({ workspaceID, userID: SERVER_USER_ID }).pipe(
-            Effect.tapError((error) =>
-              Effect.sync(() =>
-                log.warn("kernel @Agent admission: agent registry unavailable; mention not admitted", {
-                  message: error.message,
-                }),
-              ),
-            ),
-            Effect.option,
-          )
-          if (Option.isNone(agents)) return
-          for (const mention of resolveMentioned(agents.value, names)) {
-            // 与 handlers/im.ts 的准入链对齐：不可派发 ⇒ durable receipt；可派发 ⇒ agent_status
-            // 广播 + 恰好一次 durable admission（终端回复经 im_reply_outbox 回到群里）。
-            if (!mention.dispatchable || !mention.agent) {
-              yield* defaultMentionReceiptPort
-                .receipt({
-                  eventID: messageID,
-                  groupID,
-                  messageID,
-                  agentID: mention.agent?.id,
-                  agentNames: [mention.name],
-                  reason: mention.agent ? "agent_no_trigger_mention" : "no_declared_trigger",
-                })
-                .pipe(Effect.catch(() => Effect.void))
-              continue
-            }
-            broadcaster.broadcast(groupID, {
-              type: "agent_status",
-              data: { messageID, agentID: mention.agent.id, status: "started" },
-            })
-            yield* IMAgentExecution.admitMention(v2Session, {
-              groupID,
-              messageID,
-              agent: mention.agent.name,
-              senderID: msg.senderID,
-              content: msg.text,
-              directory: responder.directory,
-            }).pipe(
-              Effect.catch((error) =>
-                Effect.sync(() =>
-                  log.error("kernel @Agent admission failed", {
-                    messageID,
-                    agent: mention.agent?.name,
-                    message: error instanceof Error ? error.message : String(error),
-                  }),
-                ),
-              ),
-            )
-          }
+      const liveIntentFor = (msg: KernelClient.KernelTextMessage): LiveMentionContext | undefined => {
+        if (!responderActive || !v2Session || !agentListProvider || !responder || !config.identity) return
+        const names = MentionParser.parse(msg.text)
+        const ownName = config.identity.name.toLowerCase()
+        if (msg.conversationType === 2 && !names.some((name) => name.toLowerCase() === ownName)) return
+        const targets = names.filter((name) => name.toLowerCase() !== ownName)
+        if (targets.length === 0) return
+        return {
+          names: targets,
+          directory: responder.directory,
+          workspaceID,
+          userID: SERVER_USER_ID,
+          origin: "kernel_live",
+          receiverID: config.identity.uuid,
+          conversationType: msg.conversationType,
+          conversationID: msg.conversationID,
+        }
+      }
+      const reconcileMentions = Effect.gen(function* () {
+        if (!responderActive || !v2Session || !agentListProvider || !responder || !config.identity) return
+        yield* IMAgentExecution.reconcileMentions({
+          repo,
+          v2Session,
+          agents: agentListProvider,
+          broadcaster,
+          origin: "kernel_live",
+          receiverID: config.identity.uuid,
+          authorize: (intent) =>
+            Effect.gen(function* () {
+              if (
+                intent.directory !== responder.directory ||
+                intent.workspace_id !== workspaceID ||
+                !intent.conversation_id ||
+                (intent.conversation_type !== 1 && intent.conversation_type !== 2)
+              )
+                return yield* Effect.fail(new Error("IM intent routing changed"))
+              const group = yield* ensureConversation({
+                conversationType: intent.conversation_type,
+                conversationID: intent.conversation_id,
+                senderID: intent.message.senderID,
+              })
+              if (group?.id !== intent.message.groupID) return yield* Effect.fail(new Error("IM membership changed"))
+            }),
         })
+      })
 
-      const handleInbound = (msg: KernelClient.KernelTextMessage, origin: "live" | "history") =>
+      const handleInbound = (msg: KernelClient.KernelTextMessage, origin: "live" | "history" | "unverified") =>
         inboundLock.withPermits(1)(
           Effect.gen(function* () {
             if (msg.conversationType !== 1 && msg.conversationType !== 2) {
@@ -407,8 +387,21 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
                   (yield* SubscriptionRef.get(recovery)).status === "ready" &&
                   (yield* SubscriptionRef.get(client.state)) === "connected" &&
                   msg.msgTime > (yield* Ref.get(replayBefore))
-                )
-                  yield* maybeAdmitMentions(existing.groupID, existing.id, msg)
+                ) {
+                  yield* repo.createMessage({
+                    id: existing.id,
+                    groupID: existing.groupID,
+                    senderID: existing.senderID,
+                    senderType: "user",
+                    type: "text",
+                    content: existing.content,
+                    kernelMsgID: msg.messageID,
+                    createdAt: existing.createdAt,
+                    metadata: { type: "kernel_sync", liveEligible: true },
+                    mentionIntent: liveIntentFor(msg),
+                  })
+                  yield* reconcileMentions
+                }
               }
               return
             }
@@ -431,10 +424,19 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
               type: "text",
               content: msg.text,
               kernelMsgID: msg.messageID,
+              mentionIntent: origin === "live" ? liveIntentFor(msg) : undefined,
               metadata:
                 origin === "history" && (yield* SubscriptionRef.get(recovery)).status === "ready"
                   ? { type: "kernel_sync", liveEligible: true }
-                  : undefined,
+                  : origin === "unverified" && liveIntentFor(msg)
+                    ? {
+                        type: "error",
+                        code: "IM_EXECUTION_NOT_ADMITTED",
+                        message:
+                          "This mention was not executed because realtime delivery could not be verified during recovery. Send a new request after recovery.",
+                        retryable: false,
+                      }
+                    : undefined,
               createdAt: msg.msgTime,
             })
             broadcaster.broadcast(group.id, {
@@ -460,7 +462,7 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
               (yield* SubscriptionRef.get(client.state)) === "connected" &&
               msg.msgTime > (yield* Ref.get(replayBefore))
             )
-              yield* maybeAdmitMentions(group.id, message.id, msg)
+              yield* reconcileMentions
           }),
         )
 
@@ -478,7 +480,10 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
           const acked = yield* deliver({
             kernelConvID: row.kernelConvID,
             messageID: row.message.id,
-            content: row.message.content,
+            content:
+              row.message.senderType === "agent"
+                ? `[Agent·${row.message.senderID}] ${row.message.content}`
+                : row.message.content,
           })
           if (acked) {
             yield* Ref.update(attempts, (map) => {
@@ -581,6 +586,7 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
           }
           for (const group of yield* repo.listKernelBoundGroups) yield* catchUpConversation(group, recovering)
           yield* SubscriptionRef.set(recovery, { status: "ready" })
+          yield* reconcileMentions
         }).pipe(
           Effect.catchCause((cause) => {
             const error = Cause.squash(cause)
@@ -607,7 +613,7 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
           const ready =
             (yield* SubscriptionRef.get(recovery)).status === "ready" &&
             (yield* SubscriptionRef.get(client.state)) === "connected"
-          const origin = ready && msg.msgTime > (yield* Ref.get(replayBefore)) ? "live" : "history"
+          const origin = ready && msg.msgTime > (yield* Ref.get(replayBefore)) ? "live" : "unverified"
           yield* handleInbound(msg, origin)
         }).pipe(
           Effect.catchCause((cause) => {
@@ -650,7 +656,9 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => {
       yield* Effect.zip(
         drainPending,
         Effect.gen(function* () {
-          if ((yield* SubscriptionRef.get(client.state)) === "connected") yield* catchUp
+          if ((yield* SubscriptionRef.get(client.state)) === "connected") {
+            yield* catchUp
+          }
         }),
       ).pipe(
         Effect.catchCause((cause) =>

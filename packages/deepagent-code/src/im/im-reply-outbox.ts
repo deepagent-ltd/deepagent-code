@@ -6,6 +6,9 @@ import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqli
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionTable } from "@deepagent-code/core/session/sql"
+import { SessionActivityInputTable, SessionActivityTable } from "@deepagent-code/core/context-federation/session-sql"
+import { IMMentionIntentTable } from "@deepagent-code/core/im/mention-intent.sql"
+import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import type { Payload } from "@deepagent-code/core/event"
@@ -277,13 +280,9 @@ export interface CollectDeps {
   readonly v2Session: SessionV2.Interface
 }
 
-/**
- * Collect the terminal assistant reply of one IM session into the outbox. Reads the session's IM
- * metadata binding (group + agent — non-IM sessions are skipped), the newest assistant message with
- * text (the terminal reply of the settled activity), and the newest user input older than it (the
- * activity's trigger). Appending is idempotent per (session, assistant message), so this is safe to
- * re-run on every settle signal AND on every reconcile pass.
- */
+/** Collect only an admitted IM input's settled Activity and its explicit final message. The
+ * Activity pointer is written by the existing runner at settlement; projected intermediate text,
+ * failed/interrupted activities, and old rows without terminal evidence are skipped. */
 export function collectSessionReply(deps: CollectDeps, sessionID: string, now?: number) {
   return Effect.gen(function* () {
     const info = yield* deps.v2Session.get(SessionV2.ID.make(sessionID)).pipe(Effect.option)
@@ -291,26 +290,38 @@ export function collectSessionReply(deps: CollectDeps, sessionID: string, now?: 
     const meta = IMAgentExecution.imSessionMetadata(info.value)
     if (!meta) return false
 
-    // Newest-first: the first assistant IS the terminal reply; the first user message after it is
-    // the trigger input that seeded the activity.
-    const messages = yield* deps.v2Session
-      .messages({ sessionID: SessionV2.ID.make(sessionID), order: "desc", limit: 50 })
-      .pipe(Effect.orElseSucceed(() => [] as const))
-    const terminal = messages.findIndex((message) => assistantText(message) !== undefined)
-    if (terminal < 0) return false
-    const trigger = messages
-      .slice(terminal + 1)
-      .find((message) => message.type === "user")
-
-    return yield* appendReply(deps.db, {
-      sessionID,
-      groupID: meta.groupID,
-      agentID: meta.agent,
-      ...(trigger ? { triggerMessageID: trigger.id } : {}),
-      replyMessageID: messages[terminal]!.id,
-      replyText: assistantText(messages[terminal]!)!,
-      now: now ?? Date.now(),
-    })
+    // The input membership and the settled Activity's explicit final pointer are authority.
+    // Older activities without a pointer remain uncollected; never guess from newest text.
+    const activities = yield* deps.db.selectDistinct({
+      activityID: SessionActivityTable.activity_id,
+      triggerInputID: SessionActivityTable.trigger_input_id,
+      finalMessageID: SessionActivityTable.final_message_id,
+    }).from(SessionActivityTable)
+      .innerJoin(SessionActivityInputTable, eq(SessionActivityInputTable.activity_id, SessionActivityTable.activity_id))
+      .innerJoin(IMMentionIntentTable, and(
+        eq(IMMentionIntentTable.input_id, SessionActivityInputTable.input_id),
+        eq(IMMentionIntentTable.session_id, SessionActivityTable.session_id),
+        eq(IMMentionIntentTable.status, "admitted"),
+      ))
+      .where(and(eq(SessionActivityTable.session_id, sessionID), eq(SessionActivityTable.state, "settled")))
+      .all().pipe(Effect.orDie)
+    let appended = false
+    for (const activity of activities) {
+      if (!activity.finalMessageID) continue
+      const final = yield* deps.v2Session.message({
+        sessionID: SessionV2.ID.make(sessionID), messageID: SessionMessage.ID.make(activity.finalMessageID),
+      })
+      if (!final || final.type !== "assistant" || final.error) continue
+      const text = assistantText(final)
+      if (!text) continue
+      const created = yield* appendReply(deps.db, {
+        sessionID, groupID: meta.groupID, agentID: meta.agent,
+        triggerMessageID: activity.triggerInputID,
+        replyMessageID: activity.finalMessageID, replyText: text, now: now ?? Date.now(),
+      })
+      appended = appended || created
+    }
+    return appended
   })
 }
 
@@ -353,6 +364,7 @@ export interface DeliveryDeps {
 export function deliverReply(deps: DeliveryDeps, item: ClaimedReply) {
   return Effect.gen(function* () {
     const message = yield* deps.repo.createMessage({
+      id: `imsg_reply_${contentDigest(item.id).slice(0, 40)}`,
       groupID: item.groupID,
       senderID: item.agentID,
       senderType: "agent",
@@ -361,7 +373,7 @@ export function deliverReply(deps: DeliveryDeps, item: ClaimedReply) {
       mentions: [],
       metadata: { type: "agent_run", sessionID: item.sessionID, status: "success" },
     })
-    deps.broadcaster.broadcast(item.groupID, {
+    if (!message.replayed) deps.broadcaster.broadcast(item.groupID, {
       type: "message_created",
       data: {
         id: message.id,
@@ -377,7 +389,7 @@ export function deliverReply(deps: DeliveryDeps, item: ClaimedReply) {
         updatedAt: message.updatedAt,
       },
     })
-    if (deps.kernelSync)
+    if (deps.kernelSync && !message.replayed)
       // design §6：跨内核回发带 [Agent·<执行者>] 标记——内核只路由文本，sender_type="agent" 与
       // metadata 都到不了对端，文本前缀是唯一跨内核可见的作者标记。本地行保持裸文（本地渲染
       // 已有 senderType/metadata）。outbox 只有 agent 名没有模型名，标记用 agent 名。
@@ -444,6 +456,7 @@ export const layer = Layer.effectDiscard(
     const v2Session = yield* SessionV2.Service
     const repo = yield* IMRepository
     const broadcaster = yield* IMBroadcasterService
+    const agents = yield* AgentListProviderService
     const events = Option.getOrUndefined(yield* Effect.serviceOption(EventV2Bridge.Service))
     // IM 门面（B2）：内核引擎的唯一所有者。引擎在 claim/retry 后热启动，故不能在此固化
     // kernelSync 快照——每个 drain pass 前从 facade.engine 现读（缺席 ⇒ 该 pass 纯本地投递）。
@@ -474,8 +487,9 @@ export const layer = Layer.effectDiscard(
       })
     }
 
-    yield* reconcileReplies(deps)
+    yield* IMAgentExecution.reconcileMentions({ repo, v2Session, agents, broadcaster, origin: "local" })
       .pipe(
+        Effect.andThen(reconcileReplies(deps)),
         Effect.andThen(drainWithCurrentEngine),
         Effect.catchCause((cause) => Effect.sync(() => log.error("im reply reconcile pass failed", { cause: Cause.pretty(cause) }))),
         Effect.repeat(Schedule.spaced(Duration.millis(IM_REPLY_RECONCILE_INTERVAL_MS))),

@@ -8,6 +8,10 @@ import { contentDigest } from "@deepagent-code/core/contract/digest"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
+import type { IMRepositoryInterface, IMMentionIntent } from "@deepagent-code/core/im/repository"
+import type { AgentListProvider } from "@deepagent-code/core/im/agent-list-provider"
+import type { IMBroadcaster } from "@deepagent-code/core/im/websocket"
+import { resolveMentioned } from "@deepagent-code/core/im/mention-parser"
 
 // V2 IM durable-only migration (design: DEEPAGENTCODE-2.0-DURABLE-MIGRATION handoff §5.3). The legacy
 // IM path (ServerAgentExecutor → fresh V1 Session per turn → SessionPrompt.promptOrSteer) is deleted;
@@ -108,4 +112,87 @@ export const admitMention = (v2Session: SessionV2.Interface, input: MentionAdmis
       resume: true,
     })
     return { sessionID, admitted }
+  })
+
+/** Compensate only explicit live intents. Re-check current membership and Agent eligibility on
+ * every attempt; the immutable source message and stable prompt identity are never reconstructed
+ * from chat history. This is admission repair, not another execution loop. */
+export const reconcileMentions = (deps: {
+  readonly repo: IMRepositoryInterface
+  readonly v2Session: SessionV2.Interface
+  readonly agents: AgentListProvider
+  readonly broadcaster: IMBroadcaster
+  readonly origin: "local" | "kernel_live"
+  readonly receiverID?: string
+  readonly authorize?: (intent: IMMentionIntent) => Effect.Effect<void, unknown>
+}) =>
+  Effect.gen(function* () {
+    const intents = yield* deps.repo.listPendingMentions({ origin: deps.origin, receiverID: deps.receiverID })
+    for (const intent of intents) {
+      yield* Effect.gen(function* () {
+        if (deps.origin === "kernel_live") {
+          if (!deps.authorize) return
+          yield* deps.authorize(intent)
+        }
+        const group = yield* deps.repo.getGroup({ groupID: intent.message.groupID, userID: intent.user_id })
+        if (!group) {
+          yield* deps.repo.settleMention({ id: intent.id, status: "rejected", error: "group_access_revoked" })
+          return
+        }
+        const agents = yield* deps.agents.listAgents({ workspaceID: intent.workspace_id, userID: intent.user_id })
+        const target = resolveMentioned(agents, [intent.resolved_agent ?? intent.agent_name])[0]
+        if (!target?.dispatchable || !target.agent) {
+          const receipt = yield* deps.repo.createMessage({
+            id: `imsg_receipt_${contentDigest(intent.id).slice(0, 40)}`,
+            groupID: intent.message.groupID,
+            senderID: "system",
+            senderType: "system",
+            type: "system",
+            content: `@${intent.agent_name} was not executed: the Agent is unavailable or does not accept mentions.`,
+            metadata: {
+              type: "agent_no_trigger_mention",
+              agentID: target?.agent?.id,
+              agentNames: [intent.agent_name],
+              messageID: intent.message_id,
+            },
+            replyToID: intent.message_id,
+          })
+          if (!receipt.replayed)
+            deps.broadcaster.broadcast(receipt.groupID, {
+              type: "message_created",
+              data: { ...receipt, messageType: receipt.type },
+            })
+          yield* deps.repo.settleMention({ id: intent.id, status: "rejected", error: "agent_mention_not_allowed" })
+          return
+        }
+        const bound = yield* deps.repo.bindMention({
+          id: intent.id,
+          agent: target.agent.name,
+          sessionID: imSessionIDFor(intent.message.groupID, target.agent.name),
+          inputID: imPromptIDFor(intent.message_id, target.agent.name),
+        })
+        if (!bound) return
+        yield* admitMention(deps.v2Session, {
+          groupID: bound.message.groupID,
+          messageID: bound.message_id,
+          agent: bound.resolved_agent!,
+          senderID: bound.message.senderID,
+          content: bound.message.content,
+          directory: bound.directory,
+        })
+        yield* deps.repo.settleMention({ id: bound.id, status: "admitted" })
+        deps.broadcaster.broadcast(bound.message.groupID, {
+          type: "agent_status",
+          data: { messageID: bound.message_id, agentID: target.agent.id, status: "started" },
+        })
+      }).pipe(
+        Effect.catchCause(() =>
+          deps.repo.settleMention({
+            id: intent.id,
+            status: "pending",
+            error: "admission_unavailable_or_authorization_failed",
+          }),
+        ),
+      )
+    }
   })

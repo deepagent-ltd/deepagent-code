@@ -16,7 +16,9 @@ import type { IMRepositoryInterface } from "@deepagent-code/core/im/repository"
 import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
 import { isEventV2AdmissionEnabled } from "@deepagent-code/core/deepagent/event-admission"
 import type { RuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
-import { declaresMentionTrigger, MENTION_TRIGGER } from "@/agent/agent"
+import { MENTION_TRIGGER, resolveMentioned } from "@deepagent-code/core/im/mention-parser"
+export { resolveMentioned } from "@deepagent-code/core/im/mention-parser"
+export type { MentionedAgent } from "@deepagent-code/core/im/mention-parser"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventNotRegisteredError } from "./v2-admission-bridge"
 import * as Log from "@deepagent-code/core/util/log"
@@ -237,32 +239,6 @@ export const mentionNamesFor = (event: DeepAgentEvent.Event): string[] => {
  * mention), and whether it is dispatchable (visible agent + declares the mention trigger). Visible
  * agents always win over same-name hidden builtins (the built-ins reuse "auto"/"general" names for
  * matchable-but-hidden trigger routers). */
-export interface MentionedAgent {
-  readonly name: string
-  readonly agent: AgentDescriptor | undefined
-  readonly dispatchable: boolean
-}
-
-export const resolveMentioned = (
-  agents: ReadonlyArray<AgentDescriptor>,
-  mentions: ReadonlyArray<string>,
-): ReadonlyArray<MentionedAgent> => {
-  const byName = new Map<string, AgentDescriptor>()
-  for (const agent of agents) {
-    const existing = byName.get(agent.name)
-    if (existing && existing.visible && !agent.visible) continue
-    byName.set(agent.name, agent)
-  }
-  return mentions.map((name) => {
-    const agent = byName.get(name)
-    return {
-      name,
-      agent,
-      dispatchable: agent !== undefined && agent.visible && declaresMentionTrigger(agent.triggers),
-    }
-  })
-}
-
 // Map an event type to the feature flag that gates its dispatch path (fail-closed: flag OFF ⇒ dropped).
 //   agent.push.*    → v4AgentPushEnabled  (proactive agent-initiated push)
 //   everything else → v4MultiAgentRuntime (git/ci/pr/monitor/schedule — and im.*: the dedicated

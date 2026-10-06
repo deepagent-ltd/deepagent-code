@@ -36,6 +36,11 @@ export class IMMessageNotFoundError extends Schema.ErrorClass<IMMessageNotFoundE
   { httpApiStatus: 404 },
 ) {}
 
+export class IMMessageIdentityConflictError extends Schema.ErrorClass<IMMessageIdentityConflictError>("IMMessageIdentityConflictError")({
+  name: Schema.Literal("MESSAGE_IDENTITY_CONFLICT"),
+  data: Schema.Struct({ message: Schema.String }),
+}, { httpApiStatus: 409 }) {}
+
 export class IMMessageTooLargeError extends Schema.ErrorClass<IMMessageTooLargeError>("IMMessageTooLargeError")(
   {
     name: Schema.Literal("MESSAGE_TOO_LARGE"),
@@ -150,6 +155,7 @@ export const MessagePageResponse = Schema.Struct({
 })
 
 export const CreateMessagePayload = Schema.Struct({
+  clientRequestID: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128))),
   senderType: Schema.Literals(["user", "agent", "system"]),
   type: Schema.Literals(["text", "code", "file", "agent_status", "system"]),
   content: Schema.String,
@@ -433,6 +439,7 @@ export const IMApi = HttpApi.make("im")
           error: [
             IMGroupNotFoundError,
             IMMessageTooLargeError,
+            IMMessageIdentityConflictError,
             IMRateLimitExceededError,
             IMPermissionDeniedError,
             HttpApiError.BadRequest,

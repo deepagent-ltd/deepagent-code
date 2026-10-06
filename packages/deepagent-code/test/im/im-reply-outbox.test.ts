@@ -58,6 +58,9 @@ const v2Session = SessionV2.layer.pipe(
 const createdMessages: Array<{ groupID: string; senderID: string; content: string; metadata: unknown }> = []
 let deliveriesFail = false
 const repo: IMRepositoryInterface = {
+  listPendingMentions: () => Effect.succeed([]),
+  bindMention: () => Effect.die("unused"),
+  settleMention: () => Effect.void,
   listGroups: () => Effect.die("unused"),
   ensureKernelGroup: () => Effect.die("unused"),
   createGroup: () => Effect.die("unused"),
@@ -308,7 +311,7 @@ const zero = DateTime.makeUnsafe(0)
 const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") }
 
 describe("IMReplyOutbox.collectSessionReply", () => {
-  it.effect("appends the terminal assistant reply of a projected IM session; re-collection is a no-op", () =>
+  it.effect("does not infer a terminal Activity from an assistant text projection", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
       const { db } = yield* Database.Service
@@ -352,11 +355,9 @@ describe("IMReplyOutbox.collectSessionReply", () => {
         text: "the projected terminal reply",
       })
 
-      expect(yield* IMReplyOutbox.collectSessionReply({ db, v2Session: session }, sessionID, 10_000)).toBe(true)
+      expect(yield* IMReplyOutbox.collectSessionReply({ db, v2Session: session }, sessionID, 10_000)).toBe(false)
       const row = yield* outboxRow(IMReplyOutbox.replyOutboxID(sessionID, assistantID))
-      expect(row?.reply_text).toBe("the projected terminal reply")
-      expect(row?.group_id).toBe("grp_collect")
-      expect(row?.trigger_message_id).toBe("msg_collect_trigger")
+      expect(row).toBeUndefined()
 
       // Re-collection (the periodic reconcile) is a no-op.
       expect(yield* IMReplyOutbox.collectSessionReply({ db, v2Session: session }, sessionID, 11_000)).toBe(false)

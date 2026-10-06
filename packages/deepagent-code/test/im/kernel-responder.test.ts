@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect } from "bun:test"
+import { realpath } from "node:fs/promises"
 import { Effect, Layer, PubSub, Stream, SubscriptionRef } from "effect"
 import { eq } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
@@ -43,6 +44,7 @@ const roster: AgentDescriptor[] = [
   { id: "quiet", name: "quiet", displayName: "Quiet", visible: true, triggers: [{ event: "ci.failure" }] },
 ]
 
+let inspectAllowed = true
 let clientState: SubscriptionRef.SubscriptionRef<KernelClient.ConnectionState>
 let publishInbound: (msg: KernelClient.KernelTextMessage) => Effect.Effect<void>
 let broadcasts: Array<{ groupID: string; type: string; data?: unknown }>
@@ -113,13 +115,13 @@ const v2Session = SessionV2.layer.pipe(
 )
 const repo = IMRepositoryLive.pipe(Layer.provide(database))
 const inspectConversation = (input: { conversationType: 1 | 2; conversationID: string; senderID?: string }) =>
-  Effect.succeed({
+  Effect.sync(() => ({
     conversation_type: input.conversationType,
     conversation_id: input.conversationID,
     name: input.conversationID,
-    member_uuids: ["uuid-alice", "uuid-bob"],
+    member_uuids: inspectAllowed ? ["uuid-alice", "uuid-bob"] : ["uuid-alice"],
     org_id: 7,
-  })
+  }))
 
 const syncLayer = IMKernelSync.layer(config, {
   workspaceID: "ws",
@@ -139,6 +141,7 @@ beforeEach(() => {
   broadcasts = []
   listScopes = []
   historyMessages = []
+  inspectAllowed = true
 })
 
 const orgGroup = Effect.gen(function* () {
@@ -189,6 +192,65 @@ const publishUntilAdmitted = (msg: KernelClient.KernelTextMessage, sessionID: Se
   })
 
 describe("IMKernelSync @Agent responder (B2)", () => {
+  it.live("repair rechecks current remote sender membership before admitting a persisted live intent", () =>
+    Effect.gen(function* () {
+      const group = yield* orgGroup
+      const engine = yield* IMKernelSync.Service
+      yield* engine.catchUp
+      const repoSvc = yield* IMRepository
+      yield* repoSvc.createMessage({
+        groupID: group.id,
+        senderID: "uuid-bob",
+        senderType: "user",
+        type: "text",
+        content: "@alice @general repair",
+        kernelMsgID: "pending-live-intent",
+        mentionIntent: {
+          names: ["general"],
+          directory: yield* Effect.promise(() => realpath("/tmp")),
+          workspaceID: "ws",
+          userID: "server",
+          origin: "kernel_live",
+          receiverID: "uuid-alice",
+          conversationType: 2,
+          conversationID: "org7",
+        },
+      })
+      inspectAllowed = false
+      yield* engine.catchUp
+      const sessionID = IMAgentExecution.imSessionIDFor(group.id, "general")
+      expect(yield* inputCount(sessionID)).toBe(0)
+      expect(yield* repoSvc.listPendingMentions({ origin: "kernel_live", receiverID: "uuid-alice" })).toHaveLength(1)
+      inspectAllowed = true
+      yield* engine.catchUp
+      expect(yield* inputCount(sessionID)).toBe(1)
+    }),
+  )
+
+  it.live("an unverified recovery-time mention has a durable non-execution diagnostic and no intent", () =>
+    Effect.gen(function* () {
+      const group = yield* orgGroup
+      const engine = yield* IMKernelSync.Service
+      // 内核时间屏障先于该消息：恢复窗口内（pending）到达、无法验证为 live 的 WS 通知一律按
+      // unverified 处理。屏障让 origin 判定不依赖启动期并发 recovery pass 的完成时点。
+      historyMessages = [inbound({ messageID: "recovery_boundary", msgTime: 1_700_000_000_100 })]
+      yield* SubscriptionRef.set(engine.recovery, { status: "pending" })
+      yield* engine.catchUp
+      const message = inbound({ messageID: "during-recovery", msgTime: 1_700_000_000_050 })
+      const landed = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          yield* publishInbound(message)
+          return yield* kernelLanded(message.messageID)
+        }),
+        "recovery message missing",
+      )
+      expect(landed.metadata).toMatchObject({ type: "error", code: "IM_EXECUTION_NOT_ADMITTED" })
+      expect(yield* (yield* IMRepository).listPendingMentions({ origin: "kernel_live" })).toHaveLength(0)
+      yield* engine.catchUp
+      expect(yield* inputCount(IMAgentExecution.imSessionIDFor(group.id, "general"))).toBe(0)
+    }),
+  )
+
   it.live("group message `@我 @Agent …` admits exactly one durable input on the stable (group, agent) session", () =>
     Effect.gen(function* () {
       const group = yield* orgGroup

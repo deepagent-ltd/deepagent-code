@@ -3981,6 +3981,13 @@ export type ImMessageTooLargeError = {
   }
 }
 
+export type ImMessageIdentityConflictError = {
+  name: "MESSAGE_IDENTITY_CONFLICT"
+  data: {
+    message: string
+  }
+}
+
 export type ImRateLimitExceededError = {
   name: "RATE_LIMIT_EXCEEDED"
   data: {
@@ -14512,6 +14519,7 @@ export type ImMessagesListResponse = ImMessagesListResponses[keyof ImMessagesLis
 
 export type ImMessagesCreateData = {
   body: {
+    clientRequestID?: string
     senderType: "user" | "agent" | "system"
     type: "text" | "code" | "file" | "agent_status" | "system"
     content: string
@@ -14592,6 +14600,10 @@ export type ImMessagesCreateErrors = {
    * IMGroupNotFoundError
    */
   404: ImGroupNotFoundError
+  /**
+   * IMMessageIdentityConflictError
+   */
+  409: ImMessageIdentityConflictError
   /**
    * IMMessageTooLargeError
    */

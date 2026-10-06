@@ -3,7 +3,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import nodeFs from "node:fs/promises"
 import { Global } from "@deepagent-code/core/global"
 import { AttachmentStorage } from "@deepagent-code/core/im/attachment-storage"
-import { IMRepository, IMRepositoryError } from "@deepagent-code/core/im/repository"
+import { clientMessageID, IMRepository, IMRepositoryError } from "@deepagent-code/core/im/repository"
 import type { IMGroup } from "@deepagent-code/core/im/repository"
 import { facadeErrorStatus } from "@deepagent-code/core/im/facade-contract"
 import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
@@ -12,6 +12,7 @@ import {
   IMGroupNotFoundError,
   IMMessageNotFoundError,
   IMMessageTooLargeError,
+  IMMessageIdentityConflictError,
   IMRateLimitExceededError,
   IMValidationFailedError,
   IMInternalServerError,
@@ -33,7 +34,6 @@ import * as IMID from "@deepagent-code/core/im/id"
 import { getWorkspaceContext } from "../utils/workspace-context"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { RateLimiter } from "@deepagent-code/core/deepagent/rate-limiter"
-import { defaultMentionReceiptPort, resolveMentioned } from "@/session/event-dispatcher"
 import { IMAgentExecution } from "@/im/im-agent-execution"
 import { IMFacade } from "@/im/facade"
 import { IMKernelExchange } from "@/im/kernel/exchange"
@@ -291,7 +291,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
             // Check rate limit
             const rateLimit = getRateLimit()
             const rateLimitKey = `${userID}:${groupId}`
-            if (!rateLimiter.check(rateLimitKey, rateLimit, 60 * 1000)) {
+            if (!(payload.clientRequestID && (yield* repo.getMessage(clientMessageID(userID, payload.clientRequestID)))) && !rateLimiter.check(rateLimitKey, rateLimit, 60 * 1000)) {
               return yield* Effect.fail(
                 new IMRateLimitExceededError({
                   name: "RATE_LIMIT_EXCEEDED",
@@ -324,6 +324,8 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
             const message = yield* repo
               .createMessage({
                 groupID: groupId,
+                clientRequestID: payload.clientRequestID,
+                mentionIntent: { names: mentionedAgentNames, directory, workspaceID, userID, origin: "local" },
                 senderID: userID,
                 senderType: "user",
                 type: payload.type,
@@ -335,6 +337,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
               .pipe(
                 Effect.tap((msg) =>
                   Effect.gen(function* () {
+                    if (msg.replayed) return
                     // Broadcast message_created event via WebSocket
                     broadcaster.broadcast(groupId, {
                       type: "message_created",
@@ -365,7 +368,9 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                         retryable: true,
                       },
                     })
-                    return yield* Effect.fail(error)
+                    return yield* Effect.fail(error.code === "message_identity_conflict"
+                      ? new IMMessageIdentityConflictError({ name: "MESSAGE_IDENTITY_CONFLICT", data: { message: error.message } })
+                      : error)
                   }),
                 ),
               )
@@ -376,79 +381,17 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
             // retry. B1 kernel path is text-only; other types stay purely local. The engine is owned
             // by the facade (B2) and read fresh per send — claim/retry hot-starts must not leave a
             // stale None captured in this long-lived handler layer.
-            if (payload.type === "text" && facade) {
+            if (!message.replayed && payload.type === "text" && facade) {
               const engine = yield* Ref.get(facade.engine)
               if (Option.isSome(engine)) {
                 yield* engine.value.send({ groupID: groupId, messageID: message.id, content: payload.content })
               }
             }
 
-            // ── V2 IM durable-only: mention admission ────────────────────────────────────────────
-            // Exactly ONE durable SessionV2 admission per mentioned agent, performed synchronously in
-            // the request (the durable session_input row IS the execution record — keying by the
-            // deterministic prompt message id makes a duplicate delivery an exact-retry no-op). The
-            // agent runs through SessionExecution's advisory wake; the terminal assistant reply is
-            // delivered by the im_reply_outbox daemon. NOTHING rides a droppable fire-and-forget
-            // channel: a mention that cannot be admitted fails the request (the user sees the send
-            // error) instead of vanishing.
-            if (mentionedAgentNames.length > 0) {
-              const agents = yield* agentListProvider
-                .listAgents({ workspaceID, userID })
-                .pipe(
-                  Effect.catch(() =>
-                    Effect.fail(
-                      new IMInternalServerError({
-                        name: "INTERNAL_SERVER_ERROR",
-                        data: { message: "agent registry unavailable; mention not admitted (retry the send)" },
-                      }),
-                    ),
-                  ),
-                )
-              const resolved = resolveMentioned(agents, mentionedAgentNames)
-              for (const mention of resolved) {
-                // The mention itself is the authorization (W0.4); a mentioned agent that did not
-                // declare the mention trigger — or a name that resolved to nothing — gets the durable
-                // user-visible receipt instead of a silent drop.
-                if (!mention.dispatchable || !mention.agent) {
-                  yield* defaultMentionReceiptPort.receipt({
-                    eventID: message.id,
-                    groupID: groupId,
-                    messageID: message.id,
-                    agentID: mention.agent?.id,
-                    agentNames: [mention.name],
-                    reason: mention.agent ? "agent_no_trigger_mention" : "no_declared_trigger",
-                  }).pipe(
-                    Effect.catch(() => Effect.void),
-                  )
-                  continue
-                }
-                broadcaster.broadcast(groupId, {
-                  type: "agent_status",
-                  data: { messageID: message.id, agentID: mention.agent.id, status: "started" },
-                })
-                yield* IMAgentExecution.admitMention(v2Session, {
-                  groupID: groupId,
-                  messageID: message.id,
-                  agent: mention.agent.name,
-                  senderID: userID,
-                  content: payload.content,
-                  directory,
-                }).pipe(
-                  Effect.catch((error) =>
-                    Effect.fail(
-                      new IMInternalServerError({
-                        name: "INTERNAL_SERVER_ERROR",
-                        data: {
-                          message: `failed to admit @${mention.name} mention as durable session work: ${
-                            error instanceof Error ? error.message : String(error)
-                          }`,
-                        },
-                      }),
-                    ),
-                  ),
-                )
-              }
-            }
+            // The transaction above owns the live intent. Immediate repair lowers latency;
+            // the daemon retries persisted pending intents after process or transport failure.
+            if (!message.replayed && mentionedAgentNames.length > 0)
+              yield* IMAgentExecution.reconcileMentions({ repo, v2Session, agents: agentListProvider, broadcaster, origin: "local" }).pipe(Effect.ignore)
 
             return {
               id: message.id,

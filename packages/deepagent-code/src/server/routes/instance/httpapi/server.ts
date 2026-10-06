@@ -246,6 +246,7 @@ const imRuntimeLayer = Layer.mergeAll(
   IMBroadcasterLive,
   ServerAgentListProviderLive,
   IMReplyOutbox.layer.pipe(
+    Layer.provide(ServerAgentListProviderLive),
     Layer.provide(imRepositoryLayer),
     Layer.provide(IMBroadcasterLive),
     Layer.provide(imFacadeLayer),
