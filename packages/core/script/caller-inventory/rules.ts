@@ -830,7 +830,7 @@ export const RULE_PACKS: readonly RulePack[] = [
   // ---- im ----
   // v2f-d IM durable-only migration: ServerAgentExecutor (fresh V1 session per turn through
   // SessionPrompt.promptOrSteer) is deleted. createMessage now performs exactly ONE durable
-  // SessionV2 admission per @mention in-request (IMAgentExecution.admitMention on the
+  // SessionV2 admission from a transactional live intent (IMAgentExecution.reconcileMentions on the
   // SessionV2.Service captured by the handler group); the terminal reply returns through the
   // im_reply_outbox daemon, never a fire-and-forget publish. adapter: IM wire-protocol
   // translation over the durable V2 admission — the same adapter family the HTTP prompt
@@ -839,7 +839,7 @@ export const RULE_PACKS: readonly RulePack[] = [
     match: (id) => id === "http.instance.im.createMessage",
     rules: all7(adapter([
       { kind: "productionProfile" },
-      body("IMAgentExecution.admitMention"),
+      body("IMAgentExecution.reconcileMentions"),
       { kind: "reach", pathSuffix: "packages/deepagent-code/src/im/im-agent-execution.ts" },
       V2_SESSION_CORE,
       V2_EXEC_LOCAL,

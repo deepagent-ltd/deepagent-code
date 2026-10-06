@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "9a3f1f5f-ddd1-4792-ba65-05553640dba5",
+  "id": "a635c9cc-b3c2-4765-9b79-30adfb5d3385",
   "prevIds": [
-    "32cdd5c2-2f4e-42fe-af1e-69541bc34a51"
+    "9a3f1f5f-ddd1-4792-ba65-05553640dba5"
   ],
   "ddl": [
     {
@@ -120,6 +120,10 @@
     },
     {
       "name": "file_part_artifact",
+      "entityType": "tables"
+    },
+    {
+      "name": "im_mention_intent",
       "entityType": "tables"
     },
     {
@@ -4065,6 +4069,176 @@
       "name": "created_at",
       "entityType": "columns",
       "table": "file_part_artifact"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "message_id",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent_name",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "receiver_id",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "conversation_type",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "conversation_id",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "resolved_agent",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input_id",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'pending'",
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_error",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "im_mention_intent"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "im_mention_intent"
     },
     {
       "type": "text",
@@ -8743,6 +8917,16 @@
       "default": null,
       "generated": null,
       "name": "kernel_msg_id",
+      "entityType": "columns",
+      "table": "im_messages"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "client_request_id",
       "entityType": "columns",
       "table": "im_messages"
     },
@@ -14376,6 +14560,21 @@
     },
     {
       "columns": [
+        "message_id"
+      ],
+      "tableTo": "im_messages",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_im_mention_intent_message_id_im_messages_id_fk",
+      "entityType": "fks",
+      "table": "im_mention_intent"
+    },
+    {
+      "columns": [
         "session_id"
       ],
       "tableTo": "session",
@@ -15795,6 +15994,15 @@
       "nameExplicit": false,
       "name": "file_part_artifact_pk",
       "table": "file_part_artifact",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "im_mention_intent_pk",
+      "table": "im_mention_intent",
       "entityType": "pks"
     },
     {
@@ -17240,6 +17448,50 @@
     {
       "columns": [
         {
+          "value": "message_id",
+          "isExpression": false
+        },
+        {
+          "value": "agent_name",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_mention_intent_source_agent",
+      "entityType": "indexes",
+      "table": "im_mention_intent"
+    },
+    {
+      "columns": [
+        {
+          "value": "origin",
+          "isExpression": false
+        },
+        {
+          "value": "status",
+          "isExpression": false
+        },
+        {
+          "value": "receiver_id",
+          "isExpression": false
+        },
+        {
+          "value": "updated_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "im_mention_intent_pending",
+      "entityType": "indexes",
+      "table": "im_mention_intent"
+    },
+    {
+      "columns": [
+        {
           "value": "session_id",
           "isExpression": false
         },
@@ -18268,6 +18520,24 @@
       "where": null,
       "origin": "manual",
       "name": "idx_im_messages_kernel_msg",
+      "entityType": "indexes",
+      "table": "im_messages"
+    },
+    {
+      "columns": [
+        {
+          "value": "sender_id",
+          "isExpression": false
+        },
+        {
+          "value": "client_request_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "idx_im_messages_client_request",
       "entityType": "indexes",
       "table": "im_messages"
     },

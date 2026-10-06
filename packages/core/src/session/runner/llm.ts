@@ -2194,6 +2194,10 @@ export const layer = Layer.effect(
             needsContinuation: !publisher.hasProviderError() && needsContinuation,
             step: currentStep,
             activityId: selectionAdmission.activityId,
+            failed: publisher.hasProviderError(),
+            finalMessageId: !publisher.hasProviderError() && !needsContinuation && finish === "stop"
+              ? publisher.currentAssistantMessageID()
+              : undefined,
           }
         }),
       )
@@ -2206,7 +2210,7 @@ export const layer = Layer.effect(
       providerRetry?: number,
       ownerFencedRetries?: number,
     ) => Effect.Effect<
-      { readonly needsContinuation: boolean; readonly step: number; readonly activityId?: string },
+      { readonly needsContinuation: boolean; readonly step: number; readonly activityId?: string; readonly finalMessageId?: string; readonly failed?: boolean },
       RunError
     >
 
@@ -2601,7 +2605,7 @@ export const layer = Layer.effect(
         .all()
         .pipe(Effect.orDie)
       const earliest = calls.at(-1)
-      if (!earliest) return { activityID: active.activityID, stepsUsed: spent?.value ?? 0, terminalStop }
+      if (!earliest) return { activityID: active.activityID, stepsUsed: spent?.value ?? 0, terminalStop, finalMessageId: terminalStop && typeof lastAssistantMessageID === "string" ? lastAssistantMessageID : undefined }
       const terminal = yield* db
         .select({ data: EventTable.data })
         .from(EventTable)
@@ -2631,7 +2635,7 @@ export const layer = Layer.effect(
           ),
         )
       }
-      return { activityID: active.activityID, stepsUsed: spent?.value ?? 0, terminalStop }
+      return { activityID: active.activityID, stepsUsed: spent?.value ?? 0, terminalStop, finalMessageId: terminalStop && typeof lastAssistantMessageID === "string" ? lastAssistantMessageID : undefined }
     })
 
     const runDrain = Effect.fn("SessionRunner.run")(function* (input: {
@@ -2747,7 +2751,7 @@ export const layer = Layer.effect(
             Effect.orDie,
           )
           yield* Effect.uninterruptible(
-            contexts.settleActivity({ activityId: restored.activityID, state: "settled" }),
+            contexts.settleActivity({ activityId: restored.activityID, state: "settled", finalMessageId: restored.finalMessageId }),
           ).pipe(Effect.orDie)
           openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
           promotion = openActivity ? "queue" : undefined
@@ -2756,6 +2760,7 @@ export const layer = Layer.effect(
         let step = pendingSteer ? 1 : (restored?.stepsUsed ?? 0) + 1
         let attempts = pendingSteer ? 0 : (restored?.stepsUsed ?? 0)
         let activityId: string | undefined = restored?.activityID
+        let finalMessageId: string | undefined
         let needsContinuation = true
         while (attempts < stepCeiling) {
           const result = yield* runTurn(input.sessionID, promotion, step, loopBudget)
@@ -2767,6 +2772,11 @@ export const layer = Layer.effect(
           step = result.step + 1
           promotion = "steer"
           activityId = result.activityId ?? activityId
+          finalMessageId = result.finalMessageId
+          if (result.failed && activityId !== undefined) {
+            yield* Effect.uninterruptible(contexts.settleActivity({ activityId, state: "failed" })).pipe(Effect.orDie)
+            return
+          }
           attempts += 1
           if (activityId !== undefined) {
             const waitingForPermission = yield* observeV2Progress(input.sessionID, activityId, needsContinuation).pipe(
@@ -2821,7 +2831,7 @@ export const layer = Layer.effect(
         // finalizer in runTurnAttempt.
         if (activityId !== undefined) {
           settledActivityId = settledActivityId ?? activityId
-          yield* Effect.uninterruptible(contexts.settleActivity({ activityId, state: "settled" })).pipe(Effect.ignore)
+          yield* Effect.uninterruptible(contexts.settleActivity({ activityId, state: "settled", finalMessageId })).pipe(Effect.ignore)
         }
         openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = openActivity ? "queue" : undefined

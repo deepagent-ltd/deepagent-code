@@ -20,8 +20,8 @@ const runMigration = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
   )
 
 describe("im_kernel_sync migration", () => {
-  test("is the newest registry entry", () => {
-    expect(migrations.at(-1)?.id).toBe(migrationID)
+  test("is registered once before later authority migrations", () => {
+    expect(migrations.filter((migration) => migration.id === migrationID)).toHaveLength(1)
   })
 
   test("upgrades an old-lineage database: new columns/table appear, pre-existing rows survive", async () => {
@@ -29,7 +29,7 @@ describe("im_kernel_sync migration", () => {
       Effect.gen(function* () {
         const db = yield* makeDb
         yield* db.run(`PRAGMA foreign_keys = ON`)
-        const prior = migrations.filter((migration) => migration.id !== migrationID)
+        const prior = migrations.slice(0, migrations.findIndex((migration) => migration.id === migrationID))
         const kernel = migrations.find((migration) => migration.id === migrationID)
         expect(kernel).toBeDefined()
         yield* DatabaseMigration.applyOnly(db, prior)

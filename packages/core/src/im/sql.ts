@@ -180,6 +180,7 @@ export const MessageTable = sqliteTable(
     // exactly-once local persistence: an inbound redelivery whose kernel id already has a row is a
     // no-op. SQLite admits any number of NULLs in a unique index.
     kernel_msg_id: text(),
+    client_request_id: text(),
     created_at: integer().notNull().$default(() => Date.now()),
     updated_at: integer().notNull().$onUpdate(() => Date.now()),
     deleted_at: integer(),
@@ -193,6 +194,7 @@ export const MessageTable = sqliteTable(
     index("idx_im_messages_thread").on(table.group_id, table.reply_to_id, table.created_at),
     index("idx_im_messages_event").on(table.event_id),
     uniqueIndex("idx_im_messages_kernel_msg").on(table.kernel_msg_id),
+    uniqueIndex("idx_im_messages_client_request").on(table.sender_id, table.client_request_id),
   ],
 )
 

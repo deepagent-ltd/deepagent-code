@@ -1,12 +1,16 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import { and, asc, desc, eq, gt, isNotNull, isNull, like, lt, or, sql } from "drizzle-orm"
 import { Database } from "../database/database"
+import { contentDigest } from "../contract/digest"
+import { stringify } from "../util/canonical-json"
+import { IMMentionIntentTable } from "./mention-intent.sql"
 import * as IMID from "./id"
 import { AttachmentTable, GroupTable, MemberTable, MessageTable, SyncCursorTable, GroupType, MemberType, MemberRole, SenderType, MessageType, MessageMetadata } from "./sql"
 
 // Repository errors
 export class IMRepositoryError extends Schema.ErrorClass<IMRepositoryError>("IMRepositoryError")({
   message: Schema.String,
+  code: Schema.optional(Schema.Literal("message_identity_conflict")),
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
@@ -234,7 +238,26 @@ export interface ListAttachmentsInput {
   limit: number
 }
 
+export interface LiveMentionContext {
+  readonly names: readonly string[]
+  readonly directory: string
+  readonly workspaceID: string
+  readonly userID: string
+  readonly origin: "local" | "kernel_live"
+  readonly receiverID?: string
+  readonly conversationType?: number
+  readonly conversationID?: string
+}
+export type IMMentionIntent = typeof IMMentionIntentTable.$inferSelect & { readonly message: IMMessage }
+export const clientMessageID = (senderID: string, requestID: string) =>
+  IMID.MessageID.make(`imsg_req_${contentDigest(stringify([senderID, requestID])).slice(0, 40)}`)
+
 export interface CreateMessageInput {
+  /** Trusted internal stable identity, e.g. one reply-outbox delivery. */
+  id?: string
+  clientRequestID?: string
+  /** Server-only verified live provenance; never populated by history or HTTP payload metadata. */
+  mentionIntent?: LiveMentionContext
   groupID: string
   senderID: string
   senderType: SenderType
@@ -325,7 +348,10 @@ export interface IMRepositoryInterface {
   readonly listThread: (input: ListThreadInput) => Effect.Effect<MessagePage, IMRepositoryError, never>
   // §B3 搜索 — full-text + metadata search scoped to the caller's group memberships.
   readonly searchMessages: (input: SearchMessagesInput) => Effect.Effect<MessagePage, IMRepositoryError, never>
-  readonly createMessage: (input: CreateMessageInput) => Effect.Effect<IMMessage, IMRepositoryError, never>
+  readonly createMessage: (input: CreateMessageInput) => Effect.Effect<IMMessage & { readonly replayed?: boolean }, IMRepositoryError, never>
+  readonly listPendingMentions: (input: { origin: LiveMentionContext["origin"]; receiverID?: string; limit?: number }) => Effect.Effect<readonly IMMentionIntent[], IMRepositoryError>
+  readonly bindMention: (input: { id: string; agent: string; sessionID: string; inputID: string }) => Effect.Effect<IMMentionIntent | undefined, IMRepositoryError>
+  readonly settleMention: (input: { id: string; status: "pending" | "admitted" | "rejected"; error?: string }) => Effect.Effect<void, IMRepositoryError>
   readonly getMessage: (messageID: string) => Effect.Effect<IMMessage | undefined, IMRepositoryError, never>
   readonly markRead: (input: MarkReadInput) => Effect.Effect<void, IMRepositoryError, never>
   // §B3 文件 — attachment records (decoupled from messages).
@@ -715,17 +741,8 @@ export const IMRepositoryLive = Layer.effect(
         Effect.gen(function* () {
           const limit = input.limit + 1
 
-          // Validate and parse cursor to prevent SQL injection
-          let cursorTimestamp: number | undefined
-          if (input.cursor) {
-            const parsed = parseInt(input.cursor, 10)
-            if (isNaN(parsed) || parsed < 0) {
-              // Invalid cursor, ignore it and return from the beginning
-              cursorTimestamp = undefined
-            } else {
-              cursorTimestamp = parsed
-            }
-          }
+          const cursor = parseCompositeCursor(input.cursor)
+          const cursorTimestamp = input.cursor && !cursor ? Number(input.cursor) : undefined
 
           // Build the full WHERE clause in a single .where() call. Drizzle's
           // .where() REPLACES any previous clause rather than merging, so the
@@ -735,14 +752,15 @@ export const IMRepositoryLive = Layer.effect(
           const whereClause = and(
             eq(MessageTable.group_id, input.groupID as IMID.GroupID),
             isNull(MessageTable.deleted_at),
-            cursorTimestamp !== undefined ? lt(MessageTable.created_at, cursorTimestamp) : undefined,
+            cursor ? or(lt(MessageTable.created_at, cursor.createdAt), and(eq(MessageTable.created_at, cursor.createdAt), lt(MessageTable.id, cursor.id as IMID.MessageID)))
+              : cursorTimestamp !== undefined && Number.isFinite(cursorTimestamp) ? lt(MessageTable.created_at, cursorTimestamp) : undefined,
           )
 
           const messages = yield* db
             .select()
             .from(MessageTable)
             .where(whereClause)
-            .orderBy(desc(MessageTable.created_at))
+            .orderBy(desc(MessageTable.created_at), desc(MessageTable.id))
             .limit(limit)
             .all()
             .pipe(Effect.mapError(dbError("Database operation failed")))
@@ -766,7 +784,7 @@ export const IMRepositoryLive = Layer.effect(
               updatedAt: m.updated_at,
               deletedAt: m.deleted_at ?? null,
             })),
-            nextCursor: hasMore ? resultMessages[resultMessages.length - 1].created_at.toString() : null,
+            nextCursor: hasMore ? encodeCompositeCursor(resultMessages[resultMessages.length - 1].created_at, resultMessages[resultMessages.length - 1].id) : null,
             hasMore,
           }
         }),
@@ -889,15 +907,14 @@ export const IMRepositoryLive = Layer.effect(
         }),
 
       createMessage: (input) =>
-        Effect.gen(function* () {
-          const id = IMID.MessageID.create()
+        db.transaction((tx) => Effect.gen(function* () {
+          const id = input.clientRequestID ? clientMessageID(input.senderID, input.clientRequestID)
+            : input.id ? IMID.MessageID.make(input.id)
+            : input.kernelMsgID ? IMID.MessageID.make(`imsg_kernel_${contentDigest(input.kernelMsgID).slice(0, 40)}`)
+            : IMID.MessageID.create()
           const now = Date.now()
-          const createdAt = input.createdAt ?? now
-
-          // Deduplicate mentions
-          const mentions = input.mentions ? Array.from(new Set(input.mentions)) : null
-
-          yield* db.insert(MessageTable).values({
+          const mentions = input.mentions ? Array.from(new Set(input.mentions)).sort() : null
+          const inserted = yield* tx.insert(MessageTable).values({
             id,
             group_id: input.groupID as IMID.GroupID,
             sender_id: input.senderID,
@@ -908,27 +925,68 @@ export const IMRepositoryLive = Layer.effect(
             metadata: input.metadata ?? null,
             reply_to_id: (input.replyToID as IMID.MessageID | undefined) ?? null,
             kernel_msg_id: input.kernelMsgID ?? null,
-            created_at: createdAt,
+            client_request_id: input.clientRequestID ?? null,
+            created_at: input.createdAt ?? now,
             updated_at: now,
             deleted_at: null,
-          }).pipe(Effect.mapError(dbError("Database operation failed")))
-
-          return {
-            id,
-            groupID: input.groupID,
-            senderID: input.senderID,
-            senderType: input.senderType,
-            type: input.type,
-            content: input.content,
-            mentions,
-            metadata: input.metadata ?? null,
-            replyToID: input.replyToID ?? null,
-            kernelMsgID: input.kernelMsgID ?? null,
-            createdAt,
-            updatedAt: now,
-            deletedAt: null,
+          }).onConflictDoNothing().returning().get()
+          const row = inserted ?? (yield* tx.select().from(MessageTable).where(eq(MessageTable.id, id)).get())
+          if (!row || row.deleted_at !== null || stringify([
+            row.group_id, row.sender_id, row.sender_type, row.type, row.content, row.mentions, row.metadata, row.reply_to_id,
+          ]) !== stringify([
+            input.groupID, input.senderID, input.senderType, input.type, input.content, mentions, input.metadata ?? null, input.replyToID ?? null,
+          ])) return yield* new IMRepositoryError({ code: "message_identity_conflict", message: "Message request identity was already used with a different payload" })
+          if (input.mentionIntent) {
+            const intent = input.mentionIntent
+            for (const name of Array.from(new Set(intent.names.map((name) => name.toLowerCase())))) {
+              yield* tx.insert(IMMentionIntentTable).values({
+                id: `imi_${contentDigest(stringify([id, name])).slice(0, 40)}`,
+                message_id: id,
+                agent_name: name,
+                directory: intent.directory,
+                workspace_id: intent.workspaceID,
+                user_id: intent.userID,
+                origin: intent.origin,
+                receiver_id: intent.receiverID ?? null,
+                conversation_type: intent.conversationType ?? null,
+                conversation_id: intent.conversationID ?? null,
+                status: "pending",
+                created_at: now,
+                updated_at: now,
+              }).onConflictDoNothing().run()
+            }
           }
-        }),
+          return { ...mapMessageRow(row), replayed: inserted === undefined }
+        })).pipe(Effect.mapError((cause) => cause instanceof IMRepositoryError ? cause : dbError("Database operation failed")(cause))),
+
+      listPendingMentions: (input) => db.select({ intent: IMMentionIntentTable, message: MessageTable })
+        .from(IMMentionIntentTable)
+        .innerJoin(MessageTable, eq(MessageTable.id, IMMentionIntentTable.message_id))
+        .where(and(
+          eq(IMMentionIntentTable.status, "pending"), eq(IMMentionIntentTable.origin, input.origin),
+          ...(input.receiverID ? [eq(IMMentionIntentTable.receiver_id, input.receiverID)] : []),
+          isNull(MessageTable.deleted_at),
+        ))
+        .orderBy(asc(IMMentionIntentTable.updated_at), asc(IMMentionIntentTable.id))
+        .limit(input.limit ?? 64).all()
+        .pipe(Effect.map((rows) => rows.map((row) => ({ ...row.intent, message: mapMessageRow(row.message) }))), Effect.mapError(dbError("Mention intent lookup failed"))),
+
+      bindMention: (input) => db.transaction((tx) => Effect.gen(function* () {
+        yield* tx.update(IMMentionIntentTable).set({ resolved_agent: input.agent, session_id: input.sessionID, input_id: input.inputID, updated_at: Date.now() })
+          .where(and(eq(IMMentionIntentTable.id, input.id), eq(IMMentionIntentTable.status, "pending"), isNull(IMMentionIntentTable.resolved_agent))).run()
+        const row = yield* tx.select({ intent: IMMentionIntentTable, message: MessageTable }).from(IMMentionIntentTable)
+          .innerJoin(MessageTable, eq(MessageTable.id, IMMentionIntentTable.message_id))
+          .where(eq(IMMentionIntentTable.id, input.id)).get()
+        if (!row || row.intent.status !== "pending") return
+        if (row.intent.resolved_agent !== input.agent || row.intent.session_id !== input.sessionID || row.intent.input_id !== input.inputID)
+          return yield* new IMRepositoryError({ message: "Mention target changed after durable binding" })
+        return { ...row.intent, message: mapMessageRow(row.message) }
+      })).pipe(Effect.mapError((cause) => cause instanceof IMRepositoryError ? cause : dbError("Mention binding failed")(cause))),
+
+      settleMention: (input) => db.update(IMMentionIntentTable)
+        .set({ status: input.status, last_error: input.error ?? null, updated_at: Date.now() })
+        .where(and(eq(IMMentionIntentTable.id, input.id), eq(IMMentionIntentTable.status, "pending"))).run()
+        .pipe(Effect.asVoid, Effect.mapError(dbError("Mention settlement failed"))),
 
       getMessage: (messageID) =>
         Effect.gen(function* () {

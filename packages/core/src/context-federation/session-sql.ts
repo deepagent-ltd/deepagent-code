@@ -20,6 +20,7 @@ export const SessionActivityTable = sqliteTable(
     state: text().$type<"active" | "settled" | "failed" | "interrupted">().notNull(),
     created_at: integer().notNull(),
     settled_at: integer(),
+    final_message_id: text(),
   },
   (table) => [
     uniqueIndex("session_activity_ordinal_idx").on(table.session_id, table.ordinal),

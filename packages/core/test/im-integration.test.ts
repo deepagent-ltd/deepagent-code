@@ -68,6 +68,7 @@ describe("IM Integration Tests", () => {
         event_id TEXT,
         delivery_status TEXT,
         kernel_msg_id TEXT,
+        client_request_id TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         deleted_at INTEGER,

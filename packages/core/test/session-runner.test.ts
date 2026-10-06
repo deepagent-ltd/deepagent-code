@@ -6576,6 +6576,26 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("settles final IM result identity after the complete tool chain", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Finish after a tool" }), resume: false })
+      requests.length = 0
+      responses = [
+        [LLMEvent.stepStart({ index: 0 }), LLMEvent.toolCall({ id: "im-final-tool", name: "echo", input: { text: "work" } }), LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }), LLMEvent.finish({ reason: "tool-calls" })],
+        fragmentFixture("text", "im-final", ["Complete ", "answer"]).completeEvents,
+      ]
+      yield* session.resume(sessionID)
+      const activity = yield* (yield* Database.Service).db.select().from(SessionActivityTable).where(eq(SessionActivityTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      const messages = yield* session.context(sessionID)
+      expect(requests).toHaveLength(2)
+      expect(activity?.state).toBe("settled")
+      expect(activity?.final_message_id).toBe(messages.at(-1)?.id)
+      expect(activity?.final_message_id).not.toBe(messages[1]?.id)
+    }),
+  )
+
   it.effect("projects provider errors as terminal assistant step failures", () =>
     Effect.gen(function* () {
       yield* setup
@@ -6591,6 +6611,9 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
+      const activity = yield* (yield* Database.Service).db.select().from(SessionActivityTable).where(eq(SessionActivityTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      expect(activity?.state).toBe("failed")
+      expect(activity?.final_message_id).toBeNull()
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Fail durably" },
         { type: "assistant", finish: "error", error: { type: "unknown", message: "Provider unavailable" } },

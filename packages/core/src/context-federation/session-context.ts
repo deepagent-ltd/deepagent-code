@@ -5,7 +5,7 @@ import { and, asc, desc, eq, inArray, max, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { Hash } from "../util/hash"
-import { SessionInputTable } from "../session/sql"
+import { SessionInputTable, SessionMessageTable } from "../session/sql"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
 import { DeepAgentReleasedSnapshot, type Binding } from "../deepagent/released-snapshot"
@@ -33,6 +33,7 @@ export type Activity = {
   readonly state: "active" | "settled" | "failed" | "interrupted"
   readonly createdAt: number
   readonly settledAt?: number
+  readonly finalMessageId?: string
 }
 
 export type SelectedRef = {
@@ -194,6 +195,7 @@ export interface Interface {
   readonly settleActivity: (input: {
     readonly activityId: string
     readonly state: "settled" | "failed" | "interrupted"
+    readonly finalMessageId?: string
     readonly now?: number
   }) => Effect.Effect<Activity | undefined, Error>
   readonly commitSelection: (input: CommitSelectionInput) => Effect.Effect<Selection, Error>
@@ -337,6 +339,7 @@ export const layer = Layer.effect(
               state: "active" as const,
               created_at: now,
               settled_at: null,
+              final_message_id: null,
             }
             yield* tx.insert(SessionActivityTable).values(created).run()
             yield* tx
@@ -429,6 +432,7 @@ export const layer = Layer.effect(
     const settleActivity = Effect.fn("SessionContext.settleActivity")(function* (input: {
       readonly activityId: string
       readonly state: "settled" | "failed" | "interrupted"
+      readonly finalMessageId?: string
       readonly now?: number
     }) {
       return yield* db
@@ -444,9 +448,19 @@ export const layer = Layer.effect(
               .where(eq(SessionActivityTable.activity_id, input.activityId))
               .get()
             if (!current || current.state !== "active") return undefined
+            if (input.state === "settled" && input.finalMessageId) {
+              const final = yield* tx.select().from(SessionMessageTable)
+                .where(and(eq(SessionMessageTable.id, SessionMessage.ID.make(input.finalMessageId)), eq(SessionMessageTable.session_id, SessionSchema.ID.make(current.session_id)))).get()
+              const membership = yield* tx.select({ promoted: max(SessionInputTable.promoted_seq) })
+                .from(SessionActivityInputTable).innerJoin(SessionInputTable, eq(SessionInputTable.id, SessionActivityInputTable.input_id))
+                .where(eq(SessionActivityInputTable.activity_id, current.activity_id)).get()
+              if (!final || final.type !== "assistant" || !("finish" in final.data) || final.data.finish !== "stop" ||
+                ("error" in final.data && final.data.error) || membership?.promoted == null || final.seq <= membership.promoted)
+                return yield* new ActivityStateError()
+            }
             const settled = yield* tx
               .update(SessionActivityTable)
-              .set({ state: input.state, settled_at: input.now ?? Date.now() })
+              .set({ state: input.state, settled_at: input.now ?? Date.now(), final_message_id: input.state === "settled" ? input.finalMessageId ?? null : null })
               .where(
                 and(eq(SessionActivityTable.activity_id, input.activityId), eq(SessionActivityTable.state, "active")),
               )
@@ -735,6 +749,7 @@ function activity(row: typeof SessionActivityTable.$inferSelect): Activity {
     state: row.state,
     createdAt: row.created_at,
     ...(row.settled_at !== null ? { settledAt: row.settled_at } : {}),
+    ...(row.final_message_id !== null ? { finalMessageId: row.final_message_id } : {}),
   }
 }
 

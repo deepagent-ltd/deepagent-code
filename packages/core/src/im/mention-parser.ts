@@ -15,8 +15,8 @@ export class MentionParser {
     // Remove fenced code blocks and inline code
     const withoutCode = this.removeCode(content)
 
-    // Extract mentions: @word (alphanumeric, underscore, hyphen)
-    const mentionRegex = /@([\w-]+)/g
+    // Extract Unicode names, including facade identities written in Chinese.
+    const mentionRegex = /@([\p{L}\p{N}_-]+)/gu
     const matches = withoutCode.matchAll(mentionRegex)
 
     const mentions = new Set<string>()
@@ -134,3 +134,28 @@ export const AgentDescriptor = Schema.Struct({
 })
 
 export type AgentDescriptor = Schema.Schema.Type<typeof AgentDescriptor>
+
+// Shared mention policy is pure so admission repair need not import the event dispatcher or
+// the legacy model-facing Agent service.
+export const MENTION_TRIGGER = "mention"
+export const MENTION_TRIGGER_WORDS = [MENTION_TRIGGER, "im.mention"] as const
+export const declaresMentionTrigger = (triggers: readonly Trigger[] | undefined): boolean =>
+  triggers === undefined || triggers.some((trigger) => (MENTION_TRIGGER_WORDS as readonly string[]).includes(trigger.event))
+export interface MentionedAgent {
+  readonly name: string
+  readonly agent: AgentDescriptor | undefined
+  readonly dispatchable: boolean
+}
+export const resolveMentioned = (agents: readonly AgentDescriptor[], mentions: readonly string[]): readonly MentionedAgent[] => {
+  const byName = new Map<string, AgentDescriptor>()
+  for (const agent of agents) {
+    const name = agent.name.toLowerCase()
+    const existing = byName.get(name)
+    if (existing?.visible && !agent.visible) continue
+    byName.set(name, agent)
+  }
+  return mentions.map((name) => {
+    const agent = byName.get(name.toLowerCase())
+    return { name, agent, dispatchable: agent !== undefined && agent.visible && declaresMentionTrigger(agent.triggers) }
+  })
+}

@@ -156,6 +156,9 @@ describe("SecurityResolvers.actorHasWorkspacePermission — lookup error fails c
   const failingIM = Layer.succeed(
     IMRepository,
     IMRepository.of({
+  listPendingMentions: () => Effect.succeed([]),
+  bindMention: () => Effect.die("unused"),
+  settleMention: () => Effect.void,
       listGroups: err,
       ensureKernelGroup: err,
       createGroup: err,
