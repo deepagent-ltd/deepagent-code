@@ -1,13 +1,15 @@
 export * as SessionRunnerModel from "./model"
 
-import { type Model } from "@deepagent-code/llm"
+import { LLMClient, type Model } from "@deepagent-code/llm"
+import { createHmac, randomBytes } from "node:crypto"
 import * as AnthropicMessages from "@deepagent-code/llm/protocols/anthropic-messages"
 import * as OpenAICompatibleChat from "@deepagent-code/llm/protocols/openai-compatible-chat"
 import { OpenAICompatibleResponses } from "@deepagent-code/llm/protocols"
 import * as OpenAIResponses from "@deepagent-code/llm/protocols/openai-responses"
-import { Auth, type AnyRoute } from "@deepagent-code/llm/route"
+import { Auth, Route, type AnyRoute, type LLMClientShape } from "@deepagent-code/llm/route"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { produce } from "immer"
+import { Config } from "../../config"
 import { Catalog } from "../../catalog"
 import { ModelProtocolDisabledReason } from "../../contract/model-protocol"
 import { ModelV2 } from "../../model"
@@ -15,6 +17,7 @@ import { ModelRequest } from "../../model-request"
 import { resolveModelProtocol } from "../../model-protocol"
 import { PluginBoot } from "../../plugin/boot"
 import { ProviderV2 } from "../../provider"
+import { Location } from "../../location"
 import { SessionSchema } from "../schema"
 
 export class ModelNotSelectedError extends Schema.TaggedErrorClass<ModelNotSelectedError>()(
@@ -88,6 +91,55 @@ export interface ResolvedModel {
   readonly provider?: ProviderV2.Info
 }
 
+type Resolution = {
+  readonly current: () => boolean
+  readonly client: LLMClientShape
+  readonly location: Location.Ref
+  readonly sourceHash: string
+}
+const resolutions = new WeakMap<ResolvedModel, Resolution>()
+
+declare const configurationIdentity: unique symbol
+export interface ConfigurationWitness {
+  readonly [configurationIdentity]: true
+}
+const configuredSources = new WeakMap<
+  ResolvedModel,
+  {
+    readonly service: Config.Interface
+    readonly entries: readonly Config.Entry[]
+    readonly current: () => boolean
+  }
+>()
+const configurationWitnesses = new WeakMap<ConfigurationWitness, () => boolean>()
+/** An identity check only: no raw configuration, secret digest, caller callback or signer.
+ * The host already has the actual Location Config service and must present that exact object. */
+export function configuration(resolved: ResolvedModel, service: Config.Interface, entries: readonly Config.Entry[]) {
+  const source = configuredSources.get(resolved)
+  if (!source || source.service !== service || source.entries !== entries || !source.current()) return undefined
+  const witness = Object.freeze(Object.create(null)) as ConfigurationWitness
+  configurationWitnesses.set(witness, source.current)
+  return witness
+}
+export const configurationCurrent = (witness: ConfigurationWitness) => configurationWitnesses.get(witness)?.() === true
+
+/** Only the real post-PluginBoot catalog path records this identity. layerWith/fromCatalogModel,
+ * object copies and caller-supplied metadata cannot produce it. Closing the Location revokes it. */
+export const construction = (resolved: ResolvedModel) => {
+  const entry = resolutions.get(resolved)
+  return entry?.current() ? entry : undefined
+}
+
+function modelSnapshot(resolved: ResolvedModel) {
+  return JSON.stringify({
+    id: resolved.model.id,
+    provider: resolved.model.provider,
+    model: Object.fromEntries(Object.entries(resolved.model).filter(([key]) => key !== "route")),
+    info: resolved.info,
+    providerInfo: resolved.provider,
+  })
+}
+
 export interface Interface {
   readonly resolve: (session: SessionSchema.Info) => Effect.Effect<ResolvedModel, Error>
   /** RI-18: resolve an EXPLICIT provider/model pair (manual compaction fixes its summary model). */
@@ -154,7 +206,9 @@ const routeFor = (
       )
     case "openai-compatible.responses":
       if (model.api.url === undefined) {
-        return Effect.fail(new UnsupportedApiError({ providerID: model.providerID, modelID: model.id, api: apiName(model) }))
+        return Effect.fail(
+          new UnsupportedApiError({ providerID: model.providerID, modelID: model.id, api: apiName(model) }),
+        )
       }
       return Effect.succeed(
         withDefaults(model, OpenAICompatibleResponses.route)
@@ -169,7 +223,9 @@ const routeFor = (
       )
     case "openai-compatible.chat":
       if (model.api.url === undefined) {
-        return Effect.fail(new UnsupportedApiError({ providerID: model.providerID, modelID: model.id, api: apiName(model) }))
+        return Effect.fail(
+          new UnsupportedApiError({ providerID: model.providerID, modelID: model.id, api: apiName(model) }),
+        )
       }
       return Effect.succeed(
         withDefaults(model, OpenAICompatibleChat.route)
@@ -224,6 +280,67 @@ export const locationLayer = Layer.effect(
   Effect.gen(function* () {
     const catalog = yield* Catalog.Service
     const boot = yield* PluginBoot.Service
+    const client = Option.getOrUndefined(yield* Effect.serviceOption(LLMClient.Service))
+    const location = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
+    const configurationService = Option.getOrUndefined(yield* Effect.serviceOption(Config.Service))
+    const entries = configurationService ? yield* configurationService.entries() : undefined
+    const entriesReader = configurationService?.entries
+    const lifetime = { active: true }
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        lifetime.active = false
+      }),
+    )
+    const record = (resolved: ResolvedModel) => {
+      if (!client || !location) return resolved
+      const model = resolved.model
+      const route = model.route
+      const auth = Auth.construction(route.auth)
+      const snapshot = modelSnapshot(resolved)
+      resolutions.set(
+        resolved,
+        Object.freeze({
+          client,
+          location: Object.freeze({
+            directory: location.directory,
+            ...(location.workspaceID === undefined ? {} : { workspaceID: location.workspaceID }),
+          }),
+          // One actual resolution's private generation. Model metadata can contain secrets;
+          // callers must not use this process-random fingerprint as durable route authority.
+          sourceHash: createHmac("sha256", randomBytes(32))
+            .update("dac.native-model.source.v1\0")
+            .update(snapshot)
+            .digest("hex"),
+          current: () =>
+            lifetime.active &&
+            resolved.model === model &&
+            model.route === route &&
+            Route.hasIntegrity(route) &&
+            auth !== undefined &&
+            Auth.construction(route.auth) === auth &&
+            snapshot === modelSnapshot(resolved),
+        }),
+      )
+      if (configurationService && entries && resolved.info) {
+        const providerID = resolved.info.providerID
+        const modelID = resolved.info.id
+        const provider = Config.latest(entries, "providers")?.[providerID]
+        const configured = provider?.models?.[modelID]
+        const source = JSON.stringify([provider, configured])
+        if (provider && configured)
+          configuredSources.set(resolved, {
+            service: configurationService,
+            entries,
+            current: () =>
+              configurationService.entries === entriesReader &&
+              !!construction(resolved) &&
+              provider === Config.latest(entries, "providers")?.[providerID] &&
+              configured === provider.models?.[modelID] &&
+              source === JSON.stringify([provider, configured]),
+          })
+      }
+      return resolved
+    }
     return Service.of({
       resolve: Effect.fn("SessionRunnerModel.resolve")(function* (session) {
         // Location plugins populate and filter the catalog asynchronously during layer startup.
@@ -234,14 +351,14 @@ export const locationLayer = Layer.effect(
             (yield* catalog.model.available()).find(supported))
         if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
         const provider = yield* catalog.provider.get(selected.providerID)
-        return { model: yield* resolve(session, selected, provider), info: selected, provider }
+        return record({ model: yield* resolve(session, selected, provider), info: selected, provider })
       }),
       resolveRef: Effect.fn("SessionRunnerModel.resolveRef")(function* (session, providerID, modelID) {
         yield* boot.wait()
         const selected = yield* catalog.model.get(providerID, modelID)
         if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
         const provider = yield* catalog.provider.get(selected.providerID)
-        return { model: yield* resolve(session, selected, provider), info: selected, provider }
+        return record({ model: yield* resolve(session, selected, provider), info: selected, provider })
       }),
     })
   }),

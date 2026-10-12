@@ -26,6 +26,8 @@ export interface Options<State extends Objectish, Editor> {
    * caller-defined metadata for exceptional update origins.
    */
   readonly finalize?: (editor: Editor, reason?: string) => Effect.Effect<void>
+  /** Internal observation after visibility changes. Must be synchronous and non-throwing. */
+  readonly committed?: (state: State) => undefined
 }
 
 export interface Interface<State extends Objectish, Editor> {
@@ -61,6 +63,7 @@ export function create<State extends Objectish, Editor>(options: Options<State, 
     const api = options.editor(next as Draft<State>)
     if (options.finalize) yield* options.finalize(api, reason)
     state = next
+    options.committed?.(state)
   })
 
   const rebuild = Effect.fnUntraced(function* () {
@@ -106,6 +109,7 @@ export function create<State extends Objectish, Editor>(options: Options<State, 
       const api = options.editor(state as Draft<State>)
       yield* update(api)
       if (options.finalize) yield* options.finalize(api, reason)
+      options.committed?.(state)
     }, semaphore.withPermit),
   }
   return result

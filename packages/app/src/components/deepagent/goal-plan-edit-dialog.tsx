@@ -1,252 +1,477 @@
-import { For, Index, Show, createSignal } from "solid-js"
+import { For, Index, Show, createEffect, onCleanup, onMount } from "solid-js"
+import { createStore, unwrap } from "solid-js/store"
 import { Dialog, DialogFooter } from "@deepagent-code/ui/v2/dialog-v2"
 import { Button } from "@deepagent-code/ui/button"
-import { Icon } from "@deepagent-code/ui/icon"
+import { GoalPlanClient } from "@deepagent-code/core/deepagent/goal-plan-client"
+import { createGoalPlanDraftStore } from "@/utils/goal-plan-draft"
 import { useLanguage } from "@/context/language"
-import { showToast } from "@/utils/toast"
-import {
-  buildGoalPlanWrite,
-  editPlanGoal,
-  type GoalPlanEditChallenge,
-  type GoalPlanStepInput,
-  type GoalPlanWriteInput,
-  type PanelGoalClient,
-} from "./panel-goal.api"
-import type { SessionPlan } from "@/context/global-sync/types"
-
-/**
- * V4.1 §S2 — the goal plan HOT-EDIT dialog. Opened from the goal status bar for a running/paused goal.
- * Pre-fills from the live session_plan (the same plan the status bar reads), lets the user revise the
- * goal text + step titles/statuses (add/remove steps), and POSTs the revision via editPlanGoal. The
- * backend applies it between ticks (durable-doc upsert + stall re-baseline) — see goal-loop.applyPlanEdit.
- *
- * A step keeps its id only while its title/acceptance/assignment identity is unchanged. Structural
- * edits allocate new ids before submission, so runtime evidence cannot follow a renamed step.
- */
-
-// The status values a user can pick — mirrors PlanStepStatus. `active` is included so a user can point
-// the goal at a specific step; the backend re-derives active_step_id from the first active step.
-const STATUS_OPTIONS = ["pending", "active", "done", "blocked", "cancelled"] as const
-type StatusOption = (typeof STATUS_OPTIONS)[number]
-
-const STATUS_LABEL_KEY: Record<StatusOption, string> = {
-  pending: "composer.goal.editPlan.status.pending",
-  active: "composer.goal.editPlan.status.active",
-  done: "composer.goal.editPlan.status.done",
-  blocked: "composer.goal.editPlan.status.blocked",
-  cancelled: "composer.goal.editPlan.status.cancelled",
-}
-
-// A local editable step row. `step_id` is undefined for a freshly-added step (the backend assigns one).
-type EditStep = GoalPlanStepInput & { status: StatusOption }
-
-type PendingEditRequest = {
-  requestID: string
-  planWrite: GoalPlanWriteInput
-  qualityChallengeID?: string
-}
-
-type PendingChallenge = {
-  challenge: GoalPlanEditChallenge
-  planWrite: GoalPlanWriteInput
-}
-
-const normStatus = (s: string): StatusOption =>
-  (STATUS_OPTIONS as readonly string[]).includes(s) ? (s as StatusOption) : "pending"
+import { useServer } from "@/context/server"
 
 export function GoalPlanEditDialog(props: {
-  sessionID: string
-  plan: SessionPlan | undefined
-  client: PanelGoalClient
+  scope: Omit<GoalPlanClient.Scope, "operator">
+  client: GoalPlanClient.SDK
+  current: () => boolean
   onClose: () => void
 }) {
   const language = useLanguage()
-  const [goal, setGoal] = createSignal(props.plan?.goal ?? "")
-  const [steps, setSteps] = createSignal<EditStep[]>(
-    (props.plan?.steps ?? []).map((s) => ({
-      step_id: s.step_id,
-      title: s.title,
-      status: normStatus(s.status),
-      acceptance: s.acceptance ?? null,
-      assigned_agent: s.assigned_agent ?? null,
-      note: s.note ?? null,
-    })),
-  )
-  const [busy, setBusy] = createSignal(false)
-  const [pending, setPending] = createSignal<PendingEditRequest>()
-  const [challenge, setChallenge] = createSignal<PendingChallenge>()
-
-  const resetAdmission = () => {
-    setPending(undefined)
-    setChallenge(undefined)
+  const server = useServer()
+  const scope = { ...props.scope, operator: server.current?.http.username ?? "deepagent-code" }
+  const generated = GoalPlanClient.sdk(props.client, { directory: scope.directory, workspace: scope.workspace })
+  const transport = {
+    ...generated,
+    send(command: GoalPlanClient.Command) {
+      if (!live())
+        throw new GoalPlanClient.RequestError("CLIENT_SCOPE_CHANGED", "Plan edit view changed before dispatch", false)
+      return generated.send(command)
+    },
   }
-  const editGoal = (value: string) => {
-    resetAdmission()
-    setGoal(value)
+  const store = createGoalPlanDraftStore()
+  const [state, setState] = createStore<{
+    draft?: GoalPlanClient.Draft
+    candidate?: GoalPlanClient.Candidate
+    reason: string
+    busy: boolean
+    loading: boolean
+    reading: boolean
+    saving: boolean
+    error?: string
+  }>({ reason: "", busy: false, loading: true, reading: false, saving: false })
+  let disposed = false
+  let reading: AbortController | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let observations = 0
+  let draftRef: GoalPlanClient.Draft | undefined
+  let saves: Promise<void> = Promise.resolve()
+  const t = (key: string) => language.t(`goal.plan.${key}` as Parameters<typeof language.t>[0])
+  const live = () => !disposed && props.current()
+  const current = () => state.draft?.response?.current
+  const source = () => state.draft?.response?.current.editSource
+  const editable = () =>
+    current()?.state === "ready" && !state.busy && state.draft?.phase !== "sending" && state.draft?.phase !== "unknown"
+  const fail = (error: unknown) => {
+    if (live()) setState("error", error instanceof Error ? error.message : t("unavailable"))
   }
-  const setStep = (i: number, patch: Partial<EditStep>) => {
-    resetAdmission()
-    setSteps((prev) =>
-      prev.map((step, index) => {
-        if (index === i) return { ...step, ...patch }
-        if (patch.status === "active" && step.status === "active") return { ...step, status: "pending" }
-        return step
-      }),
-    )
-  }
-  const addStep = () => {
-    resetAdmission()
-    setSteps((prev) => [...prev, { title: "", status: "pending" }])
-  }
-  const removeStep = (i: number) => {
-    resetAdmission()
-    setSteps((prev) => prev.filter((_, idx) => idx !== i))
-  }
-
-  // Valid to submit: a non-empty goal and at least one step whose title is non-empty. Empty-title steps
-  // are dropped on submit (a user adding a row then leaving it blank shouldn't create a titleless step).
-  const canSave = () =>
-    props.plan != null &&
-    goal().trim().length > 0 &&
-    steps().some((s) => s.title.trim().length > 0) &&
-    steps().every((s) => s.status !== "blocked" || (s.note ?? "").trim().length > 0)
-
-  const onSave = async () => {
-    if (busy() || !canSave()) return
-    setBusy(true)
-    try {
-      const request =
-        pending() ??
-        ({
-          requestID: globalThis.crypto.randomUUID(),
-          planWrite:
-            challenge()?.planWrite ??
-            buildGoalPlanWrite(props.plan!, {
-              goal: goal(),
-              assumptions: [...props.plan!.assumptions],
-              steps: steps().filter((step) => step.title.trim().length > 0),
-            }),
-          ...(challenge() ? { qualityChallengeID: challenge()!.challenge.challenge_id } : {}),
-        } satisfies PendingEditRequest)
-      setPending(request)
-      const receipt = await editPlanGoal(props.client, {
-        sessionID: props.sessionID,
-        requestID: request.requestID,
-        planWrite: request.planWrite,
-        ...(request.qualityChallengeID ? { qualityChallengeID: request.qualityChallengeID } : {}),
-      })
-      if (!receipt || receipt.request_id !== request.requestID) throw new Error("Invalid plan edit receipt")
-      if (receipt.state === "challenged") {
-        if (
-          !receipt.challenge ||
-          receipt.challenge.candidate_hash !== receipt.candidate_hash ||
-          receipt.challenge.expected_plan_id !== request.planWrite.expected_plan_id ||
-          receipt.challenge.expected_version !== request.planWrite.expected_version
-        ) {
-          throw new Error("Invalid plan edit challenge")
-        }
-        setChallenge({ challenge: receipt.challenge, planWrite: request.planWrite })
-        setPending(undefined)
-        return
-      }
-      if (receipt.state === "queued" || receipt.state === "applied") {
-        showToast({ title: language.t("composer.goal.editPlan.saved"), variant: "success" })
-        props.onClose()
-        return
-      }
-      setPending(undefined)
-      showToast({ title: language.t("composer.goal.editPlan.failed") })
-      if (receipt.state === "conflict") props.onClose()
-    } catch {
-      showToast({ title: language.t("composer.goal.editPlan.failed") })
-    } finally {
-      setBusy(false)
+  const accept = (draft: GoalPlanClient.Draft, initialize = false) => {
+    draftRef = draft
+    if (!live()) return
+    setState("draft", draft)
+    if (draft.response?.current.editSource && (initialize || !state.candidate)) {
+      setState("candidate", draft.candidate ?? GoalPlanClient.candidate(draft.response))
+      setState("reason", draft.reason ?? "")
     }
   }
-
+  const refresh = async (draft = state.draft) => {
+    if (!draft || reading || !live()) return
+    const controller = new AbortController()
+    reading = controller
+    setState("reading", true)
+    const deadline = setTimeout(() => controller.abort(), 10000)
+    try {
+      await saves
+      if (!live() || controller.signal.aborted || !draftRef) return
+      const next = await GoalPlanClient.refresh(store, transport, draftRef, controller.signal)
+      accept(next)
+      if (live() && next.response?.current.state === "waiting_boundary" && observations++ < 15)
+        timer = setTimeout(() => void refresh(), 2000)
+    } catch (error) {
+      fail(error)
+    } finally {
+      clearTimeout(deadline)
+      if (reading === controller) {
+        reading = undefined
+        if (live()) setState("reading", false)
+      }
+    }
+  }
+  onMount(async () => {
+    try {
+      const goal = await transport.goal(scope.sessionID)
+      if (!goal || goal.goalId !== scope.goalID) throw new Error(t("changed"))
+      const existing = (await store.list(scope)).sort((a, b) => b.updatedAt - a.updatedAt)[0]
+      if (!live()) return
+      if (existing) {
+        accept(existing, true)
+        await refresh(existing)
+      }
+    } catch (error) {
+      fail(error)
+    } finally {
+      if (live()) setState("loading", false)
+    }
+  })
+  createEffect(() => {
+    if (!props.current()) {
+      reading?.abort()
+      if (timer) clearTimeout(timer)
+    }
+  })
+  onCleanup(() => {
+    disposed = true
+    reading?.abort()
+    if (timer) clearTimeout(timer)
+    void saves
+      .finally(() => {
+        if (!state.busy) store.close()
+      })
+      .catch(() => undefined)
+  })
+  function saveDraft() {
+    const candidate = state.candidate ? structuredClone(unwrap(state.candidate)) : undefined
+    const reason = state.reason
+    setState("saving", true)
+    const operation = saves.then(async () => {
+      const draft = draftRef
+      if (!draft) throw new Error(t("unavailable"))
+      const next = {
+        ...draft,
+        revision: draft.revision + 1,
+        ...(candidate ? { candidate } : {}),
+        reason,
+        updatedAt: Date.now(),
+      }
+      await store.put(next, draft.revision)
+      accept(next)
+      return next
+    })
+    saves = operation.then(() => undefined, fail)
+    void saves.then(() => {
+      if (live()) setState("saving", false)
+    })
+    return operation
+  }
+  function autosave() {
+    void saveDraft().catch(fail)
+  }
+  async function begin() {
+    if (!live() || state.busy || state.loading) return
+    setState({ busy: true, error: undefined })
+    try {
+      const goal = await transport.goal(scope.sessionID)
+      if (!live() || !goal || goal.goalId !== scope.goalID) throw new Error(t("changed"))
+      await saves
+      setState({ candidate: undefined, reason: "" })
+      const draft = await GoalPlanClient.create(scope, goal.revision)
+      await store.put(draft)
+      accept(draft)
+      const next = await GoalPlanClient.send(store, transport, draft, { action: "begin", request: draft.begin })
+      accept(next, true)
+      if (next.response?.current.state === "waiting_boundary") timer = setTimeout(() => void refresh(), 2000)
+    } catch (error) {
+      await reloadDraft()
+      fail(error)
+    } finally {
+      if (live()) setState("busy", false)
+      if (disposed) store.close()
+    }
+  }
+  async function reloadDraft() {
+    const records = await store.list(scope).catch(() => [])
+    const existing = records.find((entry) => entry.id === state.draft?.id)
+    if (existing) accept(existing)
+  }
+  async function action(action: "apply" | "cancel" | "reconcile" | "retry") {
+    if (!live() || state.busy || !state.draft) return
+    setState({ busy: true, error: undefined })
+    if (timer) clearTimeout(timer)
+    reading?.abort()
+    try {
+      await saves
+      const draft = action === "apply" ? await saveDraft() : draftRef!
+      const command =
+        action === "retry"
+          ? (draft.command ?? { action: "begin" as const, request: draft.begin })
+          : action === "apply"
+            ? GoalPlanClient.apply(draft)
+            : { action, request: GoalPlanClient.target(draft) }
+      accept(await GoalPlanClient.send(store, transport, draft, command))
+    } catch (error) {
+      await reloadDraft()
+      fail(error)
+    } finally {
+      if (live()) setState("busy", false)
+      if (disposed) store.close()
+    }
+  }
+  const change = (index: number, patch: Partial<GoalPlanClient.Candidate["steps"][number]>) => {
+    if (!editable() || !state.candidate || state.candidate.steps[index].status === "done") return
+    setState("candidate", {
+      ...state.candidate,
+      steps: state.candidate.steps.map((step, i) => (i === index ? { ...step, ...patch } : step)),
+      activeStepID:
+        patch.status === "active"
+          ? state.candidate.steps[index].step_id
+          : patch.status && state.candidate.activeStepID === state.candidate.steps[index].step_id
+            ? null
+            : state.candidate.activeStepID,
+    })
+    autosave()
+  }
+  async function close() {
+    if (!state.busy && state.draft && state.candidate) {
+      try {
+        await saveDraft()
+      } catch (error) {
+        fail(error)
+        return
+      }
+    }
+    await saves
+    props.onClose()
+  }
   return (
-    <Dialog
-      size="large"
-      variant="settings"
-      title={language.t("composer.goal.editPlan.title")}
-      description={language.t("composer.goal.editPlan.desc")}
-    >
-      <div class="flex flex-col gap-4 p-1" data-component="goal-plan-edit">
-        <label class="flex flex-col gap-1">
-          <span class="text-13-medium text-text-base">{language.t("composer.goal.editPlan.goalLabel")}</span>
-          <textarea
-            class="w-full rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-13-regular text-text-strong outline-none resize-none focus:ring-2 focus:ring-accent-base"
-            rows={2}
-            value={goal()}
-            onInput={(e) => editGoal(e.currentTarget.value)}
-          />
-        </label>
-
-        <Show when={challenge()}>
-          <div class="border-l-2 border-icon-warning-base bg-surface-raised-base px-3 py-2 text-13-regular text-text-strong">
-            {language.t("composer.goal.editPlan.challenge")}
+    <Dialog size="large" variant="settings" title={t("title")} description={t("description")}>
+      <div class="flex flex-col gap-3 min-w-0 p-4" data-component="goal-plan-edit">
+        <Show when={state.error}>
+          <div role="alert" class="text-13-regular text-text-strong break-words">
+            {state.error}
           </div>
         </Show>
-
-        <div class="flex flex-col gap-2">
-          <span class="text-13-medium text-text-base">{language.t("composer.goal.editPlan.stepsLabel")}</span>
-          {/* Index (not For): the rows are keyed by POSITION, so editing a step's title in place updates
-              the existing DOM node rather than remounting it. With <For> (keyed by object reference) every
-              keystroke — which replaces the step object via setStep — would re-create the row and the
-              <input> would lose focus after one character. */}
-          <Index each={steps()}>
-            {(s, i) => (
-              <div class="flex flex-col gap-1">
-                <div class="flex items-center gap-2">
-                  <input
-                    class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-13-regular text-text-strong outline-none focus:ring-2 focus:ring-accent-base"
-                    placeholder={language.t("composer.goal.editPlan.stepPlaceholder")}
-                    value={s().title}
-                    onInput={(e) => setStep(i, { title: e.currentTarget.value })}
-                  />
+        <Show when={state.saving}>
+          <p role="status">{t("saving")}</p>
+        </Show>
+        <Show when={state.loading}>
+          <p>{t("loading")}</p>
+        </Show>
+        <Show when={!state.loading && !state.draft}>
+          <p class="text-13-regular text-text-weak">{t("beginHint")}</p>
+        </Show>
+        <Show when={current()}>
+          {(value) => (
+            <div
+              class="rounded-md border border-border-weak-base bg-surface-raised-base p-3 text-13-regular"
+              role="status"
+            >
+              <p>{t(`state.${value().state}`)}</p>
+              <p class="text-text-weak">{t(`execution.${value().execution}`)}</p>
+              <Show when={value().totalDocuments > 0}>
+                <p>
+                  {value().confirmedDocuments}/{value().totalDocuments} {t("documents")}
+                </p>
+              </Show>
+              <Show when={state.draft?.response?.originalReceipt}>
+                <p class="text-12-regular text-text-weak">
+                  {t("historical")} · {t(`state.${state.draft?.response?.originalReceipt?.state}`)}
+                </p>
+              </Show>
+            </div>
+          )}
+        </Show>
+        <Show when={state.busy}>
+          <p role="status">{t("waitingApproval")}</p>
+        </Show>
+        <Show
+          when={
+            state.draft?.phase === "unknown" ||
+            state.draft?.phase === "sending" ||
+            (state.draft?.phase === "draft" && !!state.draft.command)
+          }
+        >
+          <p>{t("unknown")}</p>
+        </Show>
+        <Show when={source()}>
+          <p class="text-13-regular text-text-weak">{t("immutable")}</p>
+          <p class="text-14-medium break-words">
+            {state.draft?.response && GoalPlanClient.plan(state.draft.response).goal}
+          </p>
+        </Show>
+        <Index each={state.candidate?.steps}>
+          {(step, index) => (
+            <div class="flex flex-col gap-2 border border-border-weak-base rounded-md p-2 min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <input
+                  aria-label={`${t("step")} ${index + 1}`}
+                  class="min-w-0 flex-1 basis-full sm:basis-auto rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-13-regular"
+                  disabled={!editable() || step().status === "done"}
+                  value={step().title}
+                  onInput={(event) => change(index, { title: event.currentTarget.value })}
+                />
+                <Show
+                  when={source()?.attemptedStepIDs.includes(step().step_id) && step().status !== "done"}
+                  fallback={
+                    <span class="text-12-regular text-text-weak">
+                      {step().status === "done" ? t("completedReadonly") : t(`stepState.${step().status}`)}
+                    </span>
+                  }
+                >
                   <select
-                    class="shrink-0 rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-13-regular text-text-strong outline-none focus:ring-2 focus:ring-accent-base"
-                    value={s().status}
-                    onChange={(e) => setStep(i, { status: normStatus(e.currentTarget.value) })}
+                    aria-label={`${t("status")} ${index + 1}`}
+                    disabled={!editable()}
+                    class="rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5"
+                    value={step().status}
+                    onChange={(event) => {
+                      const status = event.currentTarget.value
+                      if (status !== "pending" && status !== "active" && status !== "blocked" && status !== "cancelled")
+                        return
+                      change(index, { status })
+                    }}
                   >
-                    <For each={STATUS_OPTIONS}>
-                      {(opt) => <option value={opt}>{language.t(STATUS_LABEL_KEY[opt] as never)}</option>}
+                    <For each={["pending", "active", "blocked", "cancelled"]}>
+                      {(status) => <option value={status}>{t(`stepState.${status}`)}</option>}
                     </For>
                   </select>
+                </Show>
+                <Show when={step().status !== "done" && !source()?.attemptedStepIDs.includes(step().step_id)}>
                   <Button
                     variant="ghost"
                     size="small"
-                    class="size-8 p-0 shrink-0"
-                    onClick={() => removeStep(i)}
-                    aria-label={language.t("composer.goal.editPlan.removeStep")}
+                    disabled={!editable() || state.candidate!.steps.length <= 1}
+                    onClick={() => {
+                      if (!editable() || !state.candidate) return
+                      setState("candidate", {
+                        ...state.candidate,
+                        steps: state.candidate.steps.filter((_, i) => i !== index),
+                        activeStepID:
+                          state.candidate.activeStepID === step().step_id ? null : state.candidate.activeStepID,
+                      })
+                      autosave()
+                    }}
                   >
-                    <Icon name="trash" class="size-4" />
+                    {t("remove")}
                   </Button>
-                </div>
-                <Show when={s().status === "blocked"}>
-                  <input
-                    class="w-full rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-13-regular text-text-strong outline-none focus:ring-2 focus:ring-accent-base"
-                    placeholder={language.t("composer.goal.editPlan.blockedNotePlaceholder")}
-                    value={s().note ?? ""}
-                    onInput={(e) => setStep(i, { note: e.currentTarget.value })}
-                  />
                 </Show>
               </div>
-            )}
-          </Index>
-          <Button variant="ghost" size="small" class="self-start" icon="plus" onClick={addStep}>
-            {language.t("composer.goal.editPlan.addStep")}
+              <label class="flex flex-col gap-1 text-12-regular text-text-weak">
+                {t("acceptance")}
+                <textarea
+                  rows={2}
+                  class="rounded-md border border-border-weak-base bg-surface-base px-2 py-1 text-text-base"
+                  disabled={!editable() || step().status === "done"}
+                  value={step().acceptance ?? ""}
+                  onInput={(event) => change(index, { acceptance: event.currentTarget.value || null })}
+                />
+              </label>
+              <Show when={source()?.attemptedStepIDs.includes(step().step_id) && step().status !== "done"}>
+                <label class="text-12-regular">
+                  {t("disposition")}
+                  <input
+                    class="w-full rounded-md border border-border-weak-base bg-surface-base px-2 py-1"
+                    disabled={!editable()}
+                    value={state.candidate?.dispositions.find((entry) => entry.stepID === step().step_id)?.reason ?? ""}
+                    onInput={(event) => {
+                      if (state.candidate) {
+                        setState("candidate", {
+                          ...state.candidate,
+                          dispositions: [
+                            ...state.candidate.dispositions.filter((entry) => entry.stepID !== step().step_id),
+                            { stepID: step().step_id, reason: event.currentTarget.value },
+                          ],
+                        })
+                        autosave()
+                      }
+                    }}
+                  />
+                </label>
+              </Show>
+              <For each={step().evidence}>
+                {(evidence) => <p class="text-12-regular text-text-weak break-words">{evidence}</p>}
+              </For>
+            </div>
+          )}
+        </Index>
+        <Show when={state.candidate}>
+          <Button
+            variant="ghost"
+            class="self-start"
+            disabled={!editable() || state.candidate!.steps.length >= 128}
+            onClick={() => {
+              if (editable() && state.candidate) {
+                setState("candidate", {
+                  ...state.candidate,
+                  steps: [
+                    ...state.candidate.steps,
+                    { step_id: `step_${crypto.randomUUID()}`, title: "", status: "pending" },
+                  ],
+                })
+                autosave()
+              }
+            }}
+          >
+            {t("add")}
           </Button>
-        </div>
+          <label class="flex flex-col gap-1 text-13-regular">
+            {t("reason")}
+            <textarea
+              rows={2}
+              class="rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5"
+              disabled={!editable()}
+              value={state.reason}
+              onInput={(event) => {
+                setState("reason", event.currentTarget.value)
+                autosave()
+              }}
+            />
+          </label>
+        </Show>
       </div>
-
       <DialogFooter>
-        <Button variant="ghost" onClick={() => props.onClose()} disabled={busy()}>
-          {language.t("composer.goal.editPlan.cancel")}
-        </Button>
-        <Button variant="primary" onClick={onSave} disabled={busy() || !canSave()}>
-          {language.t(challenge() ? "composer.goal.editPlan.confirm" : "composer.goal.editPlan.save")}
-        </Button>
+        <div class="flex flex-wrap justify-end gap-2 w-full min-w-0">
+          <Button variant="ghost" onClick={() => void close()}>
+            {state.busy ? t("goToApproval") : t("close")}
+          </Button>
+          <Show when={state.draft}>
+            <Button
+              variant="secondary"
+              disabled={state.busy || state.reading || state.saving}
+              onClick={() => {
+                observations = 0
+                void refresh()
+              }}
+            >
+              {t("refresh")}
+            </Button>
+            <Show
+              when={
+                state.draft?.phase === "unknown" ||
+                state.draft?.phase === "sending" ||
+                (state.draft?.phase === "draft" && !!state.draft.command)
+              }
+            >
+              <Button disabled={state.busy} onClick={() => void action("retry")}>
+                {t("retry")}
+              </Button>
+            </Show>
+            <Show when={current()?.retry === "reconcile"}>
+              <Button disabled={state.busy} onClick={() => void action("reconcile")}>
+                {t("reconcile")}
+              </Button>
+            </Show>
+            <Show when={current()?.state === "waiting_boundary" || current()?.state === "ready"}>
+              <Button variant="ghost" disabled={state.busy} onClick={() => void action("cancel")}>
+                {t("cancel")}
+              </Button>
+            </Show>
+            <Show
+              when={
+                current()?.state === "committed" ||
+                current()?.state === "cancelled" ||
+                current()?.state === "superseded"
+              }
+            >
+              <Button disabled={state.busy || state.reading || state.saving} onClick={() => void begin()}>
+                {t("newEdit")}
+              </Button>
+            </Show>
+            <Show when={current()?.safeToResume}>
+              <Button disabled={state.busy} onClick={() => void close()}>
+                {t("resume")}
+              </Button>
+            </Show>
+            <Show when={current()?.state === "ready"}>
+              <Button
+                variant="primary"
+                disabled={!editable() || !state.reason.trim()}
+                onClick={() => void action("apply")}
+              >
+                {t("apply")}
+              </Button>
+            </Show>
+          </Show>
+          <Show when={!state.loading && !state.draft}>
+            <Button variant="primary" disabled={state.busy} onClick={() => void begin()}>
+              {t("begin")}
+            </Button>
+          </Show>
+        </div>
       </DialogFooter>
     </Dialog>
   )

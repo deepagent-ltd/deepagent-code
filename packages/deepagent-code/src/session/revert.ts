@@ -35,7 +35,10 @@ export type RevertInput = Schema.Schema.Type<typeof RevertInput>
 
 export interface Interface {
   readonly revert: (input: RevertInput) => Effect.Effect<Session.Info, Session.BusyError | LimitError>
-  readonly unrevert: (input: { sessionID: SessionID; notice?: boolean }) => Effect.Effect<Session.Info, Session.BusyError>
+  readonly unrevert: (input: {
+    sessionID: SessionID
+    notice?: boolean
+  }) => Effect.Effect<Session.Info, Session.BusyError>
   readonly cleanup: (session: Session.Info, mutationEpoch?: number) => Effect.Effect<void>
 }
 
@@ -53,22 +56,50 @@ export const layer = Layer.effect(
       yield* state.assertNotBusy(input.sessionID)
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       const target = Option.getOrUndefined(
-        yield* sessions.getClientMessage({ sessionID: input.sessionID, messageID: input.messageID }).pipe(Effect.option),
+        yield* sessions
+          .getClientMessage({ sessionID: input.sessionID, messageID: input.messageID })
+          .pipe(Effect.option),
       )
       if (!target) return session
-      const lastUser = Option.getOrUndefined(
-        yield* sessions
-          .findMessage(
-            input.sessionID,
-            (message) =>
-              message.info.role === "user" &&
-              message.info.id <= input.messageID &&
-              // Revert itself publishes a user-shaped Synthetic notice. It is not a turn anchor.
-              (message.parts.length === 0 ||
-                message.parts.some((part) => part.type !== "text" || !part.synthetic)),
-          )
-          .pipe(Effect.orDie),
-      )?.info as SessionV1.User | undefined
+      const legacyUser =
+        target.info.canonicalSeq === undefined
+          ? (Option.getOrUndefined(
+              yield* sessions
+                .findMessage(
+                  input.sessionID,
+                  (message) =>
+                    message.info.role === "user" &&
+                    message.info.id <= input.messageID &&
+                    // Revert itself publishes a user-shaped Synthetic notice. It is not a turn anchor.
+                    (message.parts.length === 0 ||
+                      message.parts.some((part) => part.type !== "text" || !part.synthetic)),
+                )
+                .pipe(Effect.orDie),
+            )?.info as SessionV1.User | undefined)
+          : undefined
+      let lastUser = legacyUser
+      if (target.info.canonicalSeq !== undefined) {
+        let before: string | undefined
+        while (true) {
+          const page = yield* sessions
+            .messagesPage({ sessionID: input.sessionID, limit: pageSize, before })
+            .pipe(Effect.orDie)
+          for (const message of page.items) {
+            if (
+              message.info.role !== "user" ||
+              message.info.canonicalSeq === undefined ||
+              message.info.canonicalSeq > target.info.canonicalSeq ||
+              (lastUser?.canonicalSeq !== undefined && message.info.canonicalSeq <= lastUser.canonicalSeq) ||
+              (message.parts.length > 0 && message.parts.every((part) => part.type === "text" && part.synthetic))
+            )
+              continue
+            lastUser = message.info
+          }
+          if (!page.more || !page.cursor) break
+          before = page.cursor
+        }
+        if (!lastUser) return session
+      }
       const remaining = [] as SessionV1.Part[]
       let rev: Session.Info["revert"] | undefined
       const patches: Snapshot.Patch[] = []
@@ -100,15 +131,51 @@ export const layer = Layer.effect(
       }
       if (!rev) return session
 
-      let after = MessageV2.cursor.encode({ id: target.info.id, time: target.info.time.created })
+      // A queued input keeps its admission time but joins history at promotion. Time cursors
+      // still page the wire rows; only durable sequence decides which patches are later.
+      let after =
+        target.info.canonicalSeq === undefined
+          ? MessageV2.cursor.encode({ id: target.info.id, time: target.info.time.created })
+          : undefined
+      const canonicalPatches = new Map<string, { seq: number; patch: Snapshot.Patch }>()
       while (true) {
-        const page = yield* sessions.messagesForwardPage({ sessionID: input.sessionID, limit: pageSize, after })
+        const page = yield* target.info.canonicalSeq === undefined
+          ? sessions.messagesForwardPage({ sessionID: input.sessionID, limit: pageSize, after: after! })
+          : sessions.messagesPage({ sessionID: input.sessionID, limit: pageSize, before: after }).pipe(Effect.orDie)
         for (const message of page.items) {
-          for (const part of message.parts) yield* collect(part)
+          if (
+            target.info.canonicalSeq !== undefined &&
+            (message.info.canonicalSeq === undefined || message.info.canonicalSeq <= target.info.canonicalSeq)
+          )
+            continue
+          for (const part of message.parts) {
+            if (target.info.canonicalSeq === undefined) {
+              yield* collect(part)
+              continue
+            }
+            if (part.type !== "patch") continue
+            const novel = part.files.filter((file) => !files.has(file))
+            const added = novel.filter((file) => !canonicalPatches.has(file))
+            if (files.size + canonicalPatches.size + added.length > Snapshot.DiffLimits.captureCandidateFiles)
+              return yield* new LimitError({
+                sessionID: input.sessionID,
+                maxFiles: Snapshot.DiffLimits.captureCandidateFiles,
+              })
+            for (const file of novel) {
+              const previous = canonicalPatches.get(file)
+              if (previous && previous.seq <= message.info.canonicalSeq!) continue
+              canonicalPatches.set(file, { seq: message.info.canonicalSeq!, patch: { hash: part.hash, files: [file] } })
+            }
+          }
         }
         if (!page.more || !page.cursor) break
         after = page.cursor
       }
+      patches.push(
+        ...Array.from(canonicalPatches.values())
+          .sort((a, b) => a.seq - b.seq)
+          .map((item) => item.patch),
+      )
 
       rev.snapshot = session.revert?.snapshot ?? (yield* snap.track())
       if (session.revert?.snapshot) yield* snap.restore(session.revert.snapshot)
@@ -192,13 +259,23 @@ export const layer = Layer.effect(
       if (JSON.stringify(current.revert) !== JSON.stringify(session.revert)) return
       const sessionID = session.id
       const messageID = session.revert.messageID
+      const boundary = Option.getOrUndefined(
+        yield* sessions.getClientMessage({ sessionID, messageID }).pipe(Effect.option),
+      )
+      if (!boundary) return
       let target: SessionV1.WithParts | undefined
       let before: string | undefined
       while (true) {
         const page = yield* sessions.messagesPage({ sessionID, limit: pageSize, before }).pipe(Effect.orDie)
-        const reachedTarget = page.items.some((message) => message.info.id <= messageID)
+        const reachedTarget =
+          boundary.info.canonicalSeq === undefined && page.items.some((message) => message.info.id <= messageID)
         for (const message of page.items) {
-          if (message.info.id < messageID) continue
+          if (
+            boundary.info.canonicalSeq === undefined
+              ? message.info.id < messageID
+              : message.info.canonicalSeq === undefined || message.info.canonicalSeq < boundary.info.canonicalSeq
+          )
+            continue
           if (message.info.id === messageID && session.revert.partID) {
             target = message
             continue

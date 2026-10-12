@@ -31,10 +31,8 @@ describe("parseRedirectUri", () => {
     expect(result.path).toBe("/oauth/callback")
   })
 
-  test("returns defaults for invalid URI", () => {
-    const result = parseRedirectUri("not-a-valid-url")
-    expect(result.port).toBe(19876)
-    expect(result.path).toBe("/mcp/oauth/callback")
+  test("rejects an invalid explicit URI instead of binding another address", () => {
+    expect(() => parseRedirectUri("not-a-valid-url")).toThrow()
   })
 })
 
@@ -75,6 +73,7 @@ describe("McpOAuthCallback.ensureRunning", () => {
   })
 
   test("rejects duplicate pending state without replacing the original callback", async () => {
+    await McpOAuthCallback.ensureRunning(`http://127.0.0.1:${await freePort()}/custom/callback`)
     const original = McpOAuthCallback.waitForCallback("oauth-state", "demo").catch((error) => error)
     await expect(McpOAuthCallback.waitForCallback("oauth-state", "demo")).rejects.toThrow(
       "OAuth state is already pending",
@@ -83,17 +82,95 @@ describe("McpOAuthCallback.ensureRunning", () => {
     expect(await original).toBeInstanceOf(Error)
   })
 
-  test("escapes provider-controlled error descriptions in the callback page", async () => {
+  test("suppresses provider-controlled error descriptions in the callback page", async () => {
     const port = await freePort()
     const state = "escaped-error-state"
-    const pending = McpOAuthCallback.waitForCallback(state, "escaped-error").catch((error) => error)
     await McpOAuthCallback.ensureRunning(`http://127.0.0.1:${port}/custom/callback`)
+    const pending = McpOAuthCallback.waitForCallback(state, "escaped-error").catch((error) => error)
     const response = await fetch(
       `http://127.0.0.1:${port}/custom/callback?state=${state}&error=denied&error_description=${encodeURIComponent("<script>alert(1)</script>")}`,
     )
     const html = await response.text()
     expect(html).not.toContain("<script>alert(1)</script>")
-    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;")
+    expect(html).not.toContain("alert(1)")
     expect(await pending).toBeInstanceOf(Error)
   })
+
+  test("duplicate and wrong issuer callbacks preserve the validated complete response waiter", async () => {
+    const port = await freePort()
+    await McpOAuthCallback.ensureRunning(`http://127.0.0.1:${port}/custom/callback`)
+    const issuer = `http://127.0.0.1:${port}/issuer`
+    const { validateAuthorizationResponseIssuer } = await import("@modelcontextprotocol/client")
+    const pending = McpOAuthCallback.waitForResponse("issuer-state", "issuer-server", async (params) => {
+      validateAuthorizationResponseIssuer({
+        iss: params.get("iss") ?? undefined,
+        expectedIssuer: issuer,
+        issParameterSupported: true,
+      })
+    })
+    const request = (query: string) => fetch(`http://127.0.0.1:${port}/custom/callback?${query}`)
+    for (const query of [
+      "state=issuer-state&code=first&code=second",
+      "state=issuer-state&code=first",
+      "state=issuer-state&code=first&iss=https://wrong.invalid",
+      `state=issuer-state&code=first&iss=${encodeURIComponent(issuer)}&iss=${encodeURIComponent(issuer)}`,
+      `state=issuer-state&code=${"x".repeat(8193)}&iss=${encodeURIComponent(issuer)}`,
+    ])
+      expect((await request(query)).status).toBe(400)
+    const received = await request(`state=issuer-state&code=real-code&iss=${encodeURIComponent(issuer)}`)
+    expect(received.status).toBe(200)
+    const html = await received.text()
+    expect(html).toContain("Authorization Response Received")
+    expect(html).not.toContain("Authorization Successful")
+    expect(Object.fromEntries(await pending)).toEqual({ state: "issuer-state", code: "real-code", iss: issuer })
+  })
+})
+
+test("independent exact leases support shared static ports, IPv6, manual URIs and bounded ownership", async () => {
+  const dynamic = await McpOAuthCallback.acquire()
+  const second = await McpOAuthCallback.acquire()
+  expect(dynamic.redirectUri).not.toBe(second.redirectUri)
+  const port = new URL(dynamic.redirectUri).port
+  const shared = await McpOAuthCallback.acquire(`http://127.0.0.1:${port}/second?fixed=value`)
+  const response = shared.waitForResponse("shared-static-state")
+  await dynamic.close()
+  expect((await fetch(`http://127.0.0.1:${port}/second?fixed=wrong&state=shared-static-state&code=one`)).status).toBe(
+    400,
+  )
+  expect((await fetch(`http://127.0.0.1:${port}/second?fixed=value&state=shared-static-state&code=one`)).status).toBe(
+    200,
+  )
+  expect((await response).get("code")).toBe("one")
+  await shared.close()
+  await second.close()
+  const manual = await McpOAuthCallback.acquire("https://example.invalid/manual?fixed=value")
+  expect(manual.automatic).toBe(false)
+  expect(McpOAuthCallback.isRunning()).toBe(false)
+  await manual.close()
+  await expect(McpOAuthCallback.acquire("http://127.0.0.1:0/callback")).rejects.toThrow()
+  const leases = await Promise.all(
+    Array.from({ length: 64 }, () => McpOAuthCallback.acquire("https://example.invalid/manual")),
+  )
+  await expect(McpOAuthCallback.acquire()).rejects.toThrow("Too many pending")
+  await Promise.all(leases.map((lease) => lease.close()))
+  const v6probe = createServer()
+  await new Promise<void>((resolve, reject) => {
+    v6probe.once("error", reject)
+    v6probe.listen(0, "::1", resolve)
+  })
+  const address = v6probe.address()
+  if (!address || typeof address === "string") throw new Error("IPv6 probe unavailable")
+  const v6port = address.port
+  await new Promise<void>((resolve, reject) => v6probe.close((error) => (error ? reject(error) : resolve())))
+  const v6 = await McpOAuthCallback.acquire(`http://[::1]:${v6port}/callback`)
+  const v6result = v6.waitForResponse("ipv6-state")
+  expect((await fetch(`http://[::1]:${v6port}/callback?state=ipv6-state&code=ipv6`)).status).toBe(200)
+  expect((await v6result).get("code")).toBe("ipv6")
+  await v6.close()
+  const localhost = await McpOAuthCallback.acquire(`http://localhost:${await freePort()}/callback`)
+  const localhostResult = localhost.waitForResponse("localhost-state")
+  expect((await fetch(`${localhost.redirectUri}?state=localhost-state&code=local`)).status).toBe(200)
+  expect((await localhostResult).get("code")).toBe("local")
+  await localhost.close()
+  expect(McpOAuthCallback.isRunning()).toBe(false)
 })

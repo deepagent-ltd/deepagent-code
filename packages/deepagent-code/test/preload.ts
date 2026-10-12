@@ -7,8 +7,11 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { afterAll } from "bun:test"
 
 // Set XDG env vars FIRST, before any src/ imports
-const dir = path.join(os.tmpdir(), "deepagent-code-test-data-" + process.pid)
-await fs.mkdir(dir, { recursive: true })
+const scratch = path.join(os.tmpdir(), "deepagent-code-test-data-" + process.pid)
+await fs.mkdir(scratch, { recursive: true })
+// macOS exposes /var through an alias. Fixtures use the actual private root,
+// preserving the production installation reader's canonical-path requirement.
+const dir = await fs.realpath(scratch)
 
 // Best-effort sweep of orphaned test tmpdirs from interrupted prior runs. The fixture
 // disposes its `deepagent-code-test-<rand>` instance dirs on scope close, but a hard

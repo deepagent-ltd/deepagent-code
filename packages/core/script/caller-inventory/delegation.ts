@@ -18,9 +18,6 @@ const NOT_WRITE: readonly Requirement[] = [
   { kind: "noBodyChain", chain: "EventV2.Cursor" },
 ]
 
-function del(targetId: string): VerdictRule {
-  return { verdict: "legacy", requirements: [{ kind: "delegatesTo", targetId }] }
-}
 // An EntryRules where EVERY dimension delegates to targetId (placeholder verdict overwritten in pass 2).
 function delAll(targetId: string): EntryRules {
   const reqs: readonly Requirement[] = [{ kind: "delegatesTo", targetId }]
@@ -37,12 +34,12 @@ function readOnlyWith(reqs: readonly Requirement[]): EntryRules {
 }
 
 export const DELEGATION_RULE_PACKS: readonly RulePack[] = [
-  // ---- Spawner/sidecar launchers: their subprocess runs the dacode server (dacode-cli-entry). ----
+  // ---- Spawner/sidecar launchers load the sealed physical Node Server entry. ----
   {
     match: (id) =>
       id === "desktop.spawn-local-server" || id === "desktop.sidecar-server-listen" ||
       id === "composition.desktop-sidecar-start",
-    rules: delAll("composition.dacode-cli-entry"),
+    rules: delAll("composition.dacode-node-server"),
   },
   {
     match: (id) => id === "desktop.app-main",
@@ -50,15 +47,14 @@ export const DELEGATION_RULE_PACKS: readonly RulePack[] = [
   },
   {
     match: (id) => id === "desktop.check-health",
-    rules: {
-      admission_owner: del("composition.dacode-cli-entry"),
-      execution_owner: del("composition.dacode-cli-entry"),
-      context_writer: del("composition.dacode-cli-entry"),
-      provider_tool_writer: del("composition.dacode-cli-entry"),
-      event_producer_consumer: del("composition.dacode-cli-entry"),
-      projector: del("composition.dacode-cli-entry"),
-      recovery_owner: del("composition.dacode-cli-entry"),
-    },
+    rules: readOnlyWith([
+      { kind: "bodyChain", chain: "res.ok" },
+      { kind: "bodyChain", chain: "AbortSignal.timeout" },
+      { kind: "noBodyChain", chain: "utilityProcess.fork" },
+      { kind: "noBodyChain", chain: "SessionV2.prompt" },
+      { kind: "noBodyChain", chain: "SessionExecution.wake" },
+      { kind: "noBodyChain", chain: "llm.stream" },
+    ]),
   },
   // ---- lildax daemon-CLIENT commands: their handler performs a daemon client invocation (call-site). ----
   {

@@ -5,14 +5,12 @@ export type ClientOptions = {
 }
 
 export type Event =
+  | EventSessionMcpAppAdmitted
+  | EventSessionMcpAppChanged
   | EventSessionCreated
   | EventSessionUpdated
-  | EventSessionDeleted
   | EventSessionDiff
-  | EventMessageUpdated
-  | EventMessageRemoved
-  | EventMessagePartUpdated
-  | EventMessagePartRemoved
+  | EventSessionDeleted
   | EventSessionNextAgentSwitched
   | EventSessionNextModelSwitched
   | EventSessionNextPermissionsChanged
@@ -53,9 +51,16 @@ export type Event =
   | EventSessionNextCompactionStarted
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
+  | EventMessageUpdated
+  | EventMessageRemoved
+  | EventMessagePartUpdated
+  | EventMessagePartDelta
+  | EventMessagePartRemoved
   | EventProxyRequestAdmitted
   | EventProxyResponseCompleted
   | EventProxyMechanismTraced
+  | EventSessionDomainPackLoaded
+  | EventSessionKnowledgeProposeReserved
   | EventModelsDevRefreshed
   | EventPluginAdded
   | EventCatalogModelUpdated
@@ -75,7 +80,6 @@ export type Event =
   | EventQuestionV2Replied
   | EventQuestionV2Rejected
   | EventTodoUpdated
-  | EventMessagePartDelta
   | EventTuiPromptAppend2
   | EventTuiCommandExecute2
   | EventTuiToastShow2
@@ -174,6 +178,70 @@ export type ConflictError = {
   resource?: string
 }
 
+export type WorkRecoveryInvalid = {
+  code: string
+  message: string
+  status: 400
+}
+
+export type WorkRecoveryForbidden = {
+  code: string
+  message: string
+  status: 403
+}
+
+export type WorkRecoveryNotFound = {
+  code: string
+  message: string
+  status: 404
+}
+
+export type WorkRecoveryConflict = {
+  code: string
+  message: string
+  status: 409
+}
+
+export type WorkRecoveryUnavailable = {
+  code: string
+  message: string
+  status: 503
+}
+
+export type McpAppInvocationStatus = {
+  version: 1
+  invocationID: string
+  sessionID: string
+  viewID: string
+  rpcID: string | number
+  admittedSeq: number
+  state:
+    | "queued"
+    | "awaiting_permission"
+    | "dispatching"
+    | "settled"
+    | "failed"
+    | "cancelled_before_dispatch"
+    | "unknown"
+  expiresAt: number
+  errorCode?:
+    | "invalid"
+    | "unavailable"
+    | "changed"
+    | "expired"
+    | "conflict"
+    | "capacity"
+    | "permission_denied"
+    | "not_dispatched"
+    | "unknown"
+    | "result_retired"
+    | "not_found"
+    | "restricted"
+    | "interrupted"
+  resultHash?: string
+  resultAvailable: boolean
+}
+
 export type SnapshotFileDiff = {
   file?: string
   patch?: string
@@ -269,6 +337,28 @@ export type Session = {
   preview?: string
 }
 
+export type Prompt = {
+  text: string
+  files?: Array<PromptFileAttachment>
+  agents?: Array<PromptAgentAttachment>
+  references?: Array<PromptReferenceAttachment>
+  format?: PromptOutputFormat
+  metadata?: {
+    [key: string]: unknown
+  }
+  intent?: {
+    id?: string
+    source?: string
+    variant?: string
+  }
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+}
+
 export type OutputFormatText = {
   type: "text"
 }
@@ -304,6 +394,7 @@ export type SnapshotDiffArtifactDescriptor =
 export type UserMessage = {
   id: string
   sessionID: string
+  canonicalSeq?: number
   role: "user"
   time: {
     created: number
@@ -442,6 +533,7 @@ export type ActivityProgress = {
 export type AssistantMessage = {
   id: string
   sessionID: string
+  canonicalSeq?: number
   role: "assistant"
   time: {
     created: number
@@ -762,28 +854,6 @@ export type Part =
   | RetryPart
   | CompactionPart
 
-export type Prompt = {
-  text: string
-  files?: Array<PromptFileAttachment>
-  agents?: Array<PromptAgentAttachment>
-  references?: Array<PromptReferenceAttachment>
-  format?: PromptOutputFormat
-  metadata?: {
-    [key: string]: unknown
-  }
-  intent?: {
-    id?: string
-    source?: string
-    variant?: string
-  }
-  agent?: string
-  model?: {
-    id: string
-    providerID: string
-    variant?: string
-  }
-}
-
 export type Pty = {
   id: string
   title: string
@@ -863,6 +933,27 @@ export type GlobalEvent = {
   payload:
     | {
         id: string
+        type: "session.mcp-app.admitted"
+        properties: {
+          sessionID: string
+          invocationID: string
+          sourceHash: string
+          inputHash: string
+          timestamp: number
+        }
+      }
+    | {
+        id: string
+        type: "session.mcp-app.changed"
+        properties: {
+          sessionID: string
+          invocationID: string
+          status: McpAppInvocationStatus
+          timestamp: number
+        }
+      }
+    | {
+        id: string
         type: "session.created"
         properties: {
           sessionID: string
@@ -879,14 +970,6 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "session.deleted"
-        properties: {
-          sessionID: string
-          info: Session
-        }
-      }
-    | {
-        id: string
         type: "session.diff"
         properties: {
           sessionID: string
@@ -896,41 +979,15 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "message.updated"
-        properties: {
-          sessionID: string
-          info: Message
-        }
-      }
-    | {
-        id: string
-        type: "message.removed"
-        properties: {
-          sessionID: string
-          messageID: string
-        }
-      }
-    | {
-        id: string
-        type: "message.part.updated"
-        properties: {
-          sessionID: string
-          part: Part
-          time: number
-        }
-      }
-    | {
-        id: string
-        type: "message.part.removed"
-        properties: {
-          sessionID: string
-          messageID: string
-          partID: string
-        }
-      }
-    | {
-        id: string
         type: "session.updated"
+        properties: {
+          sessionID: string
+          info: Session
+        }
+      }
+    | {
+        id: string
+        type: "session.deleted"
         properties: {
           sessionID: string
           info: Session
@@ -1440,6 +1497,51 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "message.updated"
+        properties: {
+          sessionID: string
+          info: Message
+        }
+      }
+    | {
+        id: string
+        type: "message.removed"
+        properties: {
+          sessionID: string
+          messageID: string
+        }
+      }
+    | {
+        id: string
+        type: "message.part.updated"
+        properties: {
+          sessionID: string
+          part: Part
+          time: number
+        }
+      }
+    | {
+        id: string
+        type: "message.part.delta"
+        properties: {
+          sessionID: string
+          messageID: string
+          partID: string
+          field: string
+          delta: string
+        }
+      }
+    | {
+        id: string
+        type: "message.part.removed"
+        properties: {
+          sessionID: string
+          messageID: string
+          partID: string
+        }
+      }
+    | {
+        id: string
         type: "proxy.request.admitted"
         properties: {
           requestID: string
@@ -1501,6 +1603,26 @@ export type GlobalEvent = {
             selectedRefs: string
             truncated: boolean
           }>
+        }
+      }
+    | {
+        id: string
+        type: "session.domain_pack.loaded"
+        properties: {
+          sessionID: string
+          assistantMessageID: string
+          toolCallID: string
+          ref: string
+        }
+      }
+    | {
+        id: string
+        type: "session.knowledge_propose.reserved"
+        properties: {
+          sessionID: string
+          assistantMessageID: string
+          toolCallID: string
+          inputHash: string
         }
       }
     | {
@@ -1658,17 +1780,6 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           todos: Array<SessionTodoInfo>
-        }
-      }
-    | {
-        id: string
-        type: "message.part.delta"
-        properties: {
-          sessionID: string
-          messageID: string
-          partID: string
-          field: string
-          delta: string
         }
       }
     | {
@@ -2050,14 +2161,8 @@ export type GlobalEvent = {
         }
       }
     | EventServerInstanceDisposed
-    | SyncEventSessionCreated1
-    | SyncEventSessionUpdated1
-    | SyncEventSessionDeleted1
-    | SyncEventSessionDiff1
-    | SyncEventMessageUpdated1
-    | SyncEventMessageRemoved1
-    | SyncEventMessagePartUpdated1
-    | SyncEventMessagePartRemoved1
+    | SyncEventSessionMcpAppAdmitted1
+    | SyncEventSessionMcpAppChanged1
     | SyncEventSessionCreated2
     | SyncEventSessionUpdated2
     | SyncEventSessionDiff2
@@ -2100,9 +2205,19 @@ export type GlobalEvent = {
     | SyncEventSessionNextCompactionStarted1
     | SyncEventSessionNextCompactionEnded1
     | SyncEventSessionNextCompactionEnded2
+    | SyncEventSessionCreated1
+    | SyncEventSessionUpdated1
+    | SyncEventSessionDeleted1
+    | SyncEventSessionDiff1
+    | SyncEventMessageUpdated1
+    | SyncEventMessageRemoved1
+    | SyncEventMessagePartUpdated1
+    | SyncEventMessagePartRemoved1
     | SyncEventProxyRequestAdmitted1
     | SyncEventProxyResponseCompleted1
     | SyncEventProxyMechanismTraced1
+    | SyncEventSessionDomainPackLoaded1
+    | SyncEventSessionKnowledgeProposeReserved1
     | SyncEventSessionCompacted1
 }
 
@@ -2384,11 +2499,16 @@ export type McpLocalConfig = {
    * Display-only risk tier persisted by the preset catalog. NOT trusted for permission decisions — the gate re-derives the tier by matching the live config against the catalog. Absent/non-matching servers fail closed to ask.
    */
   riskTier?: "read_only" | "write_guarded" | "external_fetch"
+  /**
+   * MCP protocol negotiation. Defaults to legacy; auto explicitly probes; 2026-07-28 requires modern support without fallback.
+   */
+  protocol?: "legacy" | "auto" | "2026-07-28"
 }
 
 export type McpOAuthConfig = {
   clientId?: string
   clientSecret?: string
+  expectedIssuer?: string
   scope?: string
   callbackPort?: number
   redirectUri?: string
@@ -2416,6 +2536,10 @@ export type McpRemoteConfig = {
    * Display-only risk tier persisted by the preset catalog. NOT trusted for permission decisions — the gate re-derives the tier by matching the live config against the catalog. Absent/non-matching servers fail closed to ask.
    */
   riskTier?: "read_only" | "write_guarded" | "external_fetch"
+  /**
+   * MCP protocol negotiation. Defaults to legacy; auto explicitly probes; 2026-07-28 requires modern support without fallback.
+   */
+  protocol?: "legacy" | "auto" | "2026-07-28"
 }
 
 /**
@@ -2477,6 +2601,7 @@ export type Config = {
   disabled_providers?: Array<string>
   enabled_providers?: Array<string>
   model?: string
+  im?: ConfigIm
   small_model?: string
   default_agent?: string
   username?: string
@@ -2579,10 +2704,285 @@ export type Config = {
   }
 }
 
+export type ImportRequest = {
+  source: "codex" | "claude"
+  sourcePath?: string
+  scopes?: Array<"session" | "memory" | "skill">
+  dryRun?: boolean
+  copyLiveDb?: boolean
+  mode?: "copy_to_new_db" | "merge_into_live"
+  confirmLiveMerge?: boolean
+  cwdFilter?: string
+}
+
+export type ImportRequestError = {
+  error: string
+  detail?: string
+  body?: string
+}
+
+export type ImportBusyError = {
+  error: string
+}
+
+export type ImportJobRequest = {
+  requestID: string
+  source: "codex" | "claude"
+  sourcePath?: string
+  scopes?: Array<"session" | "memory" | "skill">
+  dryRun?: boolean
+  mode?: "copy_to_new_db" | "merge_into_live"
+  copyLiveDb?: boolean
+  confirmLiveMerge?: boolean
+  cwdFilter?: string
+}
+
+export type ImportJobTarget = {
+  id: string
+  mode: "copy_to_new_db" | "merge_into_live"
+  sourcePath: string
+  dbPath: string
+  dataRoot: string
+  configDir: string
+  dryRun: boolean
+  backup?: {
+    path: string
+    manifestPath: string
+    sha256: string
+  }
+}
+
+export type ImportJobInfo = {
+  id: string
+  requestID: string
+  source: "codex" | "claude"
+  state:
+    | "preflight"
+    | "ready"
+    | "running"
+    | "cancel_requested"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "cancelled_partial"
+    | "recovery_required"
+  revision: number
+  dryRun: boolean
+  scopes?: Array<"session" | "memory" | "skill">
+  target?: ImportJobTarget
+  sourceDigest?: string
+  totalSessions: number
+  committedBatches: number
+  committedSessions?: number
+  fileResults?: Array<
+    | {
+        kind: "file_set.v1"
+        phase: "published"
+        sourceId: string
+        targetId: string
+        manifestHash: string
+        directoryRef: {
+          area: "data" | "config"
+          relative: string
+        }
+        bytes: number
+        fileCount: number
+        scope: "memory"
+        summary: {
+          staged: number
+          approved: number
+          pending: number
+          writtenToInstructions: false
+        }
+      }
+    | {
+        kind: "file_set.v1"
+        phase: "published"
+        sourceId: string
+        targetId: string
+        manifestHash: string
+        directoryRef: {
+          area: "data" | "config"
+          relative: string
+        }
+        bytes: number
+        fileCount: number
+        scope: "skill"
+        summary: {
+          written: number
+          skipped: number
+        }
+      }
+  >
+  failedBatches: number
+  activeBatchID?: string
+  cancelRequestedAt?: number
+  stopConfirmedAt?: number
+  createdAt: number
+  updatedAt: number
+  settledAt?: number
+  error?: {
+    code: string
+    message: string
+  }
+}
+
+export type ImportNotFoundError = {
+  error: string
+}
+
 export type ProjectListItem = {
   id: string
   worktree: string
   name?: string
+}
+
+export type BrowserForbidden = {
+  code:
+    | "BROWSER_UNAVAILABLE"
+    | "BROWSER_HOST_UNAVAILABLE"
+    | "BROWSER_NOT_FOUND"
+    | "BROWSER_CONFLICT"
+    | "BROWSER_INVALID_RECORD"
+    | "BROWSER_CAPACITY"
+    | "BROWSER_SCOPE_DENIED"
+    | "BROWSER_AUTHORITY_REQUIRED"
+    | "BROWSER_OWNER_LOST"
+    | "BROWSER_STALE_TARGET"
+    | "BROWSER_EXPIRED"
+    | "BROWSER_CANCELLED"
+    | "BROWSER_UNKNOWN"
+    | "BROWSER_NETWORK_DENIED"
+    | "BROWSER_OUTPUT_LIMIT"
+    | "BROWSER_DRIVER_UNAVAILABLE"
+    | "BROWSER_FILE_UNAVAILABLE"
+    | "BROWSER_FILE_INVALID"
+    | "BROWSER_FILE_CHANGED"
+    | "BROWSER_FILE_CONFLICT"
+    | "BROWSER_FILE_CAPACITY"
+    | "BROWSER_FILE_UNKNOWN"
+    | "BROWSER_FILE_SCOPE_DENIED"
+  message: string
+}
+
+export type BrowserMissing = {
+  code:
+    | "BROWSER_UNAVAILABLE"
+    | "BROWSER_HOST_UNAVAILABLE"
+    | "BROWSER_NOT_FOUND"
+    | "BROWSER_CONFLICT"
+    | "BROWSER_INVALID_RECORD"
+    | "BROWSER_CAPACITY"
+    | "BROWSER_SCOPE_DENIED"
+    | "BROWSER_AUTHORITY_REQUIRED"
+    | "BROWSER_OWNER_LOST"
+    | "BROWSER_STALE_TARGET"
+    | "BROWSER_EXPIRED"
+    | "BROWSER_CANCELLED"
+    | "BROWSER_UNKNOWN"
+    | "BROWSER_NETWORK_DENIED"
+    | "BROWSER_OUTPUT_LIMIT"
+    | "BROWSER_DRIVER_UNAVAILABLE"
+    | "BROWSER_FILE_UNAVAILABLE"
+    | "BROWSER_FILE_INVALID"
+    | "BROWSER_FILE_CHANGED"
+    | "BROWSER_FILE_CONFLICT"
+    | "BROWSER_FILE_CAPACITY"
+    | "BROWSER_FILE_UNKNOWN"
+    | "BROWSER_FILE_SCOPE_DENIED"
+  message: string
+}
+
+export type BrowserConflict = {
+  code:
+    | "BROWSER_UNAVAILABLE"
+    | "BROWSER_HOST_UNAVAILABLE"
+    | "BROWSER_NOT_FOUND"
+    | "BROWSER_CONFLICT"
+    | "BROWSER_INVALID_RECORD"
+    | "BROWSER_CAPACITY"
+    | "BROWSER_SCOPE_DENIED"
+    | "BROWSER_AUTHORITY_REQUIRED"
+    | "BROWSER_OWNER_LOST"
+    | "BROWSER_STALE_TARGET"
+    | "BROWSER_EXPIRED"
+    | "BROWSER_CANCELLED"
+    | "BROWSER_UNKNOWN"
+    | "BROWSER_NETWORK_DENIED"
+    | "BROWSER_OUTPUT_LIMIT"
+    | "BROWSER_DRIVER_UNAVAILABLE"
+    | "BROWSER_FILE_UNAVAILABLE"
+    | "BROWSER_FILE_INVALID"
+    | "BROWSER_FILE_CHANGED"
+    | "BROWSER_FILE_CONFLICT"
+    | "BROWSER_FILE_CAPACITY"
+    | "BROWSER_FILE_UNKNOWN"
+    | "BROWSER_FILE_SCOPE_DENIED"
+  message: string
+}
+
+export type BrowserUnavailable = {
+  code:
+    | "BROWSER_UNAVAILABLE"
+    | "BROWSER_HOST_UNAVAILABLE"
+    | "BROWSER_NOT_FOUND"
+    | "BROWSER_CONFLICT"
+    | "BROWSER_INVALID_RECORD"
+    | "BROWSER_CAPACITY"
+    | "BROWSER_SCOPE_DENIED"
+    | "BROWSER_AUTHORITY_REQUIRED"
+    | "BROWSER_OWNER_LOST"
+    | "BROWSER_STALE_TARGET"
+    | "BROWSER_EXPIRED"
+    | "BROWSER_CANCELLED"
+    | "BROWSER_UNKNOWN"
+    | "BROWSER_NETWORK_DENIED"
+    | "BROWSER_OUTPUT_LIMIT"
+    | "BROWSER_DRIVER_UNAVAILABLE"
+    | "BROWSER_FILE_UNAVAILABLE"
+    | "BROWSER_FILE_INVALID"
+    | "BROWSER_FILE_CHANGED"
+    | "BROWSER_FILE_CONFLICT"
+    | "BROWSER_FILE_CAPACITY"
+    | "BROWSER_FILE_UNKNOWN"
+    | "BROWSER_FILE_SCOPE_DENIED"
+  message: string
+}
+
+export type ValidationInvalid = {
+  code: string
+  message: string
+  status: 400
+}
+
+export type ValidationForbidden = {
+  code: string
+  message: string
+  status: 403
+}
+
+export type ValidationNotFound = {
+  code: string
+  message: string
+  status: 404
+}
+
+export type ValidationConflict = {
+  code: string
+  message: string
+  status: 409
+}
+
+export type ValidationCapacity = {
+  code: string
+  message: string
+  status: 429
+}
+
+export type ValidationUnavailable = {
+  code: string
+  message: string
+  status: 503
 }
 
 export type BootstrapDiagnostics = {
@@ -3584,6 +3984,31 @@ export type DeepAgentKnowledgeReviewConflictError = {
   id: string
 }
 
+export type DeepAgentGoalControlConflict = {
+  code: string
+  message: string
+}
+
+export type DeepAgentGoalControlMissing = {
+  code: string
+  message: string
+}
+
+export type DeepAgentGoalControlUnavailable = {
+  code: string
+  message: string
+}
+
+export type DeepAgentGoalRebaseUnauthorized = {
+  code: string
+  message: string
+}
+
+export type DeepAgentGoalRebaseError = {
+  code: string
+  message: string
+}
+
 export type DeepAgentGoalPlanValidationError = {
   message: string
   code: string
@@ -3612,6 +4037,10 @@ export type DeepAgentGoalPlanChallengeError = {
 
 export type DeepAgentGoalPlanUnavailableError = {
   message: string
+}
+
+export type EffectHttpApiErrorNotFound = {
+  _tag: "NotFound"
 }
 
 export type ConsoleState = {
@@ -3799,6 +4228,12 @@ export type McpResource = {
   client: string
 }
 
+export type ServiceUnavailableError = {
+  _tag: "ServiceUnavailableError"
+  message: string
+  service?: string
+}
+
 export type Symbol = {
   name: string
   kind: number
@@ -3851,6 +4286,7 @@ export type FileWriteBody = {
   path: string
   content: string
   expected?: string
+  lockId?: string
 }
 
 export type FileMutationResult = {
@@ -3945,6 +4381,65 @@ export type LockReleaseBody = {
   lockId: string
 }
 
+export type ImFacadeBadRequestError = {
+  name: "IM_FACADE_BAD_REQUEST"
+  data: {
+    code: string
+    message: string
+  }
+}
+
+export type ImFacadeConflictError = {
+  name: "IM_FACADE_CONFLICT"
+  data: {
+    code: string
+    message: string
+  }
+}
+
+export type ImFacadeUnavailableError = {
+  name: "IM_FACADE_UNAVAILABLE"
+  data: {
+    code: string
+    message: string
+  }
+}
+
+export type ImReaderUnavailableError = {
+  name: "IM_READER_UNAVAILABLE"
+  data: {
+    code:
+      | "reader_required"
+      | "reader_upgrade_required"
+      | "reader_unavailable"
+      | "reader_stale"
+      | "reader_unknown"
+      | "reader_capacity"
+      | "reader_scope_mismatch"
+      | "reader_legacy_unverified"
+      | "reader_cleanup_required"
+      | "reader_mapping_conflict"
+    operation: string
+    wireCode?: number
+    message: string
+  }
+}
+
+export type ImGroupNotFoundError = {
+  name: "GROUP_NOT_FOUND"
+  data: {
+    message: string
+  }
+}
+
+export type ImDacCommandError = {
+  name: "IM_DAC_COMMAND_REJECTED"
+  data: {
+    code: string
+    admitted?: false
+  }
+}
+
 export type ImInternalServerError = {
   name: "INTERNAL_SERVER_ERROR"
   data: {
@@ -3959,15 +4454,22 @@ export type ImValidationFailedError = {
   }
 }
 
-export type ImGroupNotFoundError = {
-  name: "GROUP_NOT_FOUND"
+export type ImPermissionDeniedError = {
+  name: "PERMISSION_DENIED"
   data: {
     message: string
   }
 }
 
-export type ImPermissionDeniedError = {
-  name: "PERMISSION_DENIED"
+export type ImFileUploadDisabledError = {
+  name: "FILE_UPLOAD_DISABLED"
+  data: {
+    message: string
+  }
+}
+
+export type ImAttachmentNotFoundError = {
+  name: "ATTACHMENT_UNAVAILABLE"
   data: {
     message: string
   }
@@ -3978,6 +4480,13 @@ export type ImMessageTooLargeError = {
   data: {
     message: string
     maxLength: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type ImMessageIdentityConflictError = {
+  name: "MESSAGE_IDENTITY_CONFLICT"
+  data: {
+    message: string
   }
 }
 
@@ -3996,15 +4505,16 @@ export type ImMessageNotFoundError = {
   }
 }
 
-export type ImThreadDisabledError = {
-  name: "THREAD_DISABLED"
+export type ImTaskResultUnavailableError = {
+  name: "IM_TASK_RESULT_UNAVAILABLE"
   data: {
+    code: "result_unavailable"
     message: string
   }
 }
 
-export type ImFileUploadDisabledError = {
-  name: "FILE_UPLOAD_DISABLED"
+export type ImThreadDisabledError = {
+  name: "THREAD_DISABLED"
   data: {
     message: string
   }
@@ -4023,6 +4533,218 @@ export type ImUnsupportedMediaTypeError = {
   data: {
     message: string
   }
+}
+
+export type ImFacadeForbiddenError = {
+  name: "IM_FACADE_FORBIDDEN"
+  data: {
+    code: string
+    message: string
+  }
+}
+
+export type ImFacadeNotFoundError = {
+  name: "IM_FACADE_NOT_FOUND"
+  data: {
+    code: string
+    message: string
+  }
+}
+
+export type EventWorkCandidate = {
+  originID: string
+  targetID: string
+  sourceSessionID: string
+  mode: "single" | "dag"
+  profile: {
+    id: string
+    version: number
+    hash: string
+  }
+  providerID: string
+  modelID: string
+  budget: {
+    maxTotalTokens: number
+    maxInputTokens: number
+    maxCompletionTokens: number
+    maxProviderDispatches: number
+    maxToolCalls: number
+    maxChildren: number
+    maxDurationMs: number
+    hourTokensMax: number
+    hourWindowMinutes: number
+  }
+  serverNow: number
+  maxExpiresAt: number
+  plan?: {
+    version: 1
+    id: string
+    nodes: Array<{
+      id: string
+      agentID: string
+      instruction: string
+      dependencies: Array<string>
+      toolIDs: Array<string>
+      budget: {
+        maxTotalTokens: number
+        maxInputTokens: number
+        maxCompletionTokens: number
+        maxProviderDispatches: number
+        maxToolCalls: number
+        maxChildren: number
+        maxDurationMs: number
+        hourTokensMax: number
+        hourWindowMinutes: number
+      }
+      requiresWriteIsolation: boolean
+    }>
+    maxConcurrent: number
+  }
+  planHash?: string
+  available: boolean
+  reason?: string
+}
+
+export type EventWorkInvalid = {
+  code: string
+  message: string
+  status: 400
+}
+
+export type EventWorkForbidden = {
+  code: string
+  message: string
+  status: 403
+}
+
+export type EventWorkConflict = {
+  code: string
+  message: string
+  status: 409
+}
+
+export type EventWorkUnavailable = {
+  code: string
+  message: string
+  status: 503
+}
+
+export type EventWorkRule = {
+  ruleID: string
+  revision: number
+  epoch: number
+  originID: string
+  targetID: string
+  mode: "single" | "dag"
+  state: "disabled" | "enabled" | "paused" | "revoked"
+  instruction: string
+  expiresAt: number
+  enabledAfterOrdinal: number
+  planID?: string
+  planHash?: string
+  allowedActions: Array<"enable" | "pause" | "revoke">
+}
+
+export type EventWorkRulesPage = {
+  items: Array<EventWorkRule>
+  nextCursor: string | null
+}
+
+export type EventWorkNode = {
+  nodeID: string
+  agentID: string
+  dependencies: Array<string>
+  state: "awaiting_dependencies" | "reserved" | "ready" | "running" | "succeeded" | "failed" | "unknown" | "cancelled"
+  workID?: string
+  sessionID?: string
+  inputID?: string
+  controlRevision?: number
+  reservedTokens: number
+  actualUsage?: {
+    inputTokens: number
+    completionTokens: number
+    reasoningTokens?: number
+  }
+  resultHash?: string
+  terminalHash?: string
+  reason?: string
+  sessionAvailable: boolean
+}
+
+export type EventWorkRoot = {
+  rootID: string
+  receiptID: string
+  ruleID: string
+  revision: number
+  mode: "single" | "dag"
+  state: "pending" | "running" | "succeeded" | "failed" | "unknown"
+  controlState: "active" | "paused" | "revoked" | "cancelled" | "expired"
+  expiresAt: number
+  planID?: string
+  planHash?: string
+  budget: {
+    maxTotalTokens: number
+    maxInputTokens: number
+    maxCompletionTokens: number
+    maxProviderDispatches: number
+    maxToolCalls: number
+    maxChildren: number
+    maxDurationMs: number
+    hourTokensMax: number
+    hourWindowMinutes: number
+  }
+  reservedTokens: number
+  actualUsage?: {
+    inputTokens: number
+    completionTokens: number
+    reasoningTokens?: number
+  }
+  providerConcurrency: 1
+  schedulingConcurrency: number
+  nodes: Array<EventWorkNode>
+  allowedActions: Array<"cancel">
+  reason?: string
+}
+
+export type EventWorkRootsPage = {
+  items: Array<EventWorkRoot>
+  nextCursor: string | null
+}
+
+export type EventWorkRuleCommandResult = {
+  requestID: string
+  expectedRevision: number
+  action: "create" | "enable" | "pause" | "revoke"
+  replayed: boolean
+  rule: EventWorkRule
+}
+
+export type EventWorkRootCommandResult = {
+  requestID: string
+  expectedRevision: number
+  action: "cancel"
+  replayed: boolean
+  root: EventWorkRoot
+}
+
+export type EventWorkSessionPointer = {
+  version: 1
+  rootID: string
+  nodeID: string
+  workID: string
+  sessionID: string
+  inputID: string
+  rootRevision: number
+  controlRevision: number
+  bindingHash: string
+  placement: {
+    directory: string
+    workspaceID: string | null
+    projectID: string
+    securityNamespaceID: string
+    namespaceBindingHash: string
+  }
+  expiresAt: number
 }
 
 export type Path = {
@@ -4114,15 +4836,16 @@ export type VcsApplyError = {
   }
 }
 
-export type Command = {
+export type CommandRead = {
   name: string
   description?: string
   agent?: string
   model?: string
   source?: "command" | "mcp" | "skill"
-  template: string
+  template?: unknown
   subtask?: boolean
   hints: Array<string>
+  availability?: "available" | "connect_required" | "unavailable"
 }
 
 export type Agent = {
@@ -4331,12 +5054,84 @@ export type SystemContextSnapshot = {
   loadedCapabilities: Array<SystemContextLoadedCapability>
 }
 
+export type McpAppOperationError = {
+  code: "invalid" | "consent_required" | "changed" | "expired" | "capacity" | "unavailable" | "unsupported"
+  error: string
+}
+
+export type McpAuthenticationRequired = {
+  error: string
+}
+
+export type McpAppInvocationOperationError = {
+  code:
+    | "invalid"
+    | "unavailable"
+    | "changed"
+    | "expired"
+    | "conflict"
+    | "capacity"
+    | "permission_denied"
+    | "not_dispatched"
+    | "unknown"
+    | "result_retired"
+    | "not_found"
+    | "restricted"
+    | "interrupted"
+  error: string
+}
+
+export type McpAppInvocationResult = {
+  version: 1
+  invocationID: string
+  sessionID: string
+  viewID: string
+  rpcID: string | number
+  admittedSeq: number
+  state:
+    | "queued"
+    | "awaiting_permission"
+    | "dispatching"
+    | "settled"
+    | "failed"
+    | "cancelled_before_dispatch"
+    | "unknown"
+  expiresAt: number
+  errorCode?:
+    | "invalid"
+    | "unavailable"
+    | "changed"
+    | "expired"
+    | "conflict"
+    | "capacity"
+    | "permission_denied"
+    | "not_dispatched"
+    | "unknown"
+    | "result_retired"
+    | "not_found"
+    | "restricted"
+    | "interrupted"
+  resultHash?: string
+  resultAvailable: boolean
+  result: {
+    [key: string]: unknown
+  }
+}
+
 export type McpStatusConnected = {
   status: "connected"
+  protocolEra?: "legacy" | "modern"
+  protocolVersion?: string
 }
 
 export type McpStatusDisabled = {
   status: "disabled"
+}
+
+export type McpStatusDisconnected = {
+  status: "disconnected"
+  authStatus: "authenticated" | "expired" | "not_authenticated" | "legacy_unverified" | "unknown"
+  reason: "explicit_connect_required" | "scope_changed" | "unknown_outcome"
 }
 
 export type McpStatusFailed = {
@@ -4356,9 +5151,15 @@ export type McpStatusNeedsClientRegistration = {
 export type McpStatus =
   | McpStatusConnected
   | McpStatusDisabled
+  | McpStatusDisconnected
   | McpStatusFailed
   | McpStatusNeedsAuth
   | McpStatusNeedsClientRegistration
+
+export type McpConfigRemovalError = {
+  code: "readonly" | "changed" | "unknown"
+  error: string
+}
 
 export type McpServerNotFoundError = {
   _tag: "McpServerNotFoundError"
@@ -4370,7 +5171,41 @@ export type McpCatalogInstantiateError = {
   error: string
 }
 
+export type McpSecretUnavailableError = {
+  code: "unavailable"
+  error: string
+}
+
+export type McpSecretOperationError = {
+  code: "invalid" | "changed" | "unknown" | "capacity" | "work_unsettled"
+  error: string
+}
+
+export type McpBindingRepairPreview = {
+  name: string
+  source: string
+  previewID: string
+  old: {
+    securityNamespaceId: string
+    locationKey: string
+    projectScopeKey: string
+    indexSpaceId: string
+    canonicalRoot: string
+    observedProjectId?: string
+    locationCreatedAt: number
+    projectCreatedAt: number
+    projectIdentityHash: string
+    locationObservedProjectId: string | null
+    projectObservedProjectId: string | null
+  }
+  nextObservedProjectId: string
+}
+
 export type McpUnsupportedOAuthError = {
+  error: string
+}
+
+export type McpOAuthFlowError = {
   error: string
 }
 
@@ -4623,6 +5458,89 @@ export type Session1 = {
   preview?: string
 }
 
+export type SessionReadInfo = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+    diffManifest?: {
+      completeness: "complete" | "truncated"
+      truncationReasons: Array<
+        | "candidate_file_limit"
+        | "discovery_output_limit"
+        | "discovery_failed"
+        | "manifest_bytes_limit"
+        | "source_file_limit"
+        | "source_total_limit"
+        | "patch_file_limit"
+        | "patch_total_limit"
+        | "materialization_failed"
+        | "time_limit"
+      >
+      manifestHash: string
+      totalFiles: number
+      totalFilesExact: boolean
+      statisticsExact?: boolean
+      includedFiles: number
+      truncatedFiles: number
+    }
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  preview?: string
+  ordinaryEligible: boolean
+}
+
+export type NotFoundError = {
+  name: "NotFoundError"
+  data: {
+    message: string
+  }
+}
+
 export type Session2 = {
   id: string
   slug: string
@@ -4696,19 +5614,6 @@ export type Session2 = {
     diff?: string
   }
   preview?: string
-}
-
-export type NotFoundError = {
-  name: "NotFoundError"
-  data: {
-    message: string
-  }
-}
-
-export type ServiceUnavailableError = {
-  _tag: "ServiceUnavailableError"
-  message: string
-  service?: string
 }
 
 export type Session3 = {
@@ -5011,6 +5916,60 @@ export type Session6 = {
   preview?: string
 }
 
+export type TextPartInput = {
+  id?: string
+  type: "text"
+  text: string
+  synthetic?: boolean
+  ignored?: boolean
+  time?: {
+    start: number
+    end?: number
+  }
+  metadata?: {
+    [key: string]: unknown
+  }
+}
+
+export type FilePartInput = {
+  id?: string
+  type: "file"
+  mime: string
+  filename?: string
+  url: string
+  source?: FilePartSource
+}
+
+export type AgentPartInput = {
+  id?: string
+  type: "agent"
+  name: string
+  source?: {
+    value: string
+    start: number
+    end: number
+  }
+}
+
+export type SubtaskPartInput = {
+  id?: string
+  type: "subtask"
+  prompt: string
+  description: string
+  agent: string
+  model?: {
+    providerID: string
+    modelID: string
+  }
+  command?: string
+}
+
+export type SessionBusyError = {
+  _tag: "SessionBusyError"
+  sessionID: string
+  message: string
+}
+
 export type Session7 = {
   id: string
   slug: string
@@ -5086,136 +6045,7 @@ export type Session7 = {
   preview?: string
 }
 
-export type TextPartInput = {
-  id?: string
-  type: "text"
-  text: string
-  synthetic?: boolean
-  ignored?: boolean
-  time?: {
-    start: number
-    end?: number
-  }
-  metadata?: {
-    [key: string]: unknown
-  }
-}
-
-export type FilePartInput = {
-  id?: string
-  type: "file"
-  mime: string
-  filename?: string
-  url: string
-  source?: FilePartSource
-}
-
-export type AgentPartInput = {
-  id?: string
-  type: "agent"
-  name: string
-  source?: {
-    value: string
-    start: number
-    end: number
-  }
-}
-
-export type SubtaskPartInput = {
-  id?: string
-  type: "subtask"
-  prompt: string
-  description: string
-  agent: string
-  model?: {
-    providerID: string
-    modelID: string
-  }
-  command?: string
-}
-
-export type SessionBusyError = {
-  _tag: "SessionBusyError"
-  sessionID: string
-  message: string
-}
-
 export type Session8 = {
-  id: string
-  slug: string
-  projectID: string
-  workspaceID?: string
-  directory: string
-  path?: string
-  parentID?: string
-  summary?: {
-    additions: number
-    deletions: number
-    files: number
-    diffs?: Array<SnapshotFileDiff>
-    diffManifest?: {
-      completeness: "complete" | "truncated"
-      truncationReasons: Array<
-        | "candidate_file_limit"
-        | "discovery_output_limit"
-        | "discovery_failed"
-        | "manifest_bytes_limit"
-        | "source_file_limit"
-        | "source_total_limit"
-        | "patch_file_limit"
-        | "patch_total_limit"
-        | "materialization_failed"
-        | "time_limit"
-      >
-      manifestHash: string
-      totalFiles: number
-      totalFilesExact: boolean
-      statisticsExact?: boolean
-      includedFiles: number
-      truncatedFiles: number
-    }
-  }
-  cost?: number
-  tokens?: {
-    input: number
-    output: number
-    reasoning: number
-    cache: {
-      read: number
-      write: number
-    }
-  }
-  share?: {
-    url: string
-  }
-  title: string
-  agent?: string
-  model?: {
-    id: string
-    providerID: string
-    variant?: string
-  }
-  version: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  time: {
-    created: number
-    updated: number
-    compacting?: number
-    archived?: number
-  }
-  permission?: PermissionRuleset
-  revert?: {
-    messageID: string
-    partID?: string
-    snapshot?: string
-    diff?: string
-  }
-  preview?: string
-}
-
-export type Session9 = {
   id: string
   slug: string
   projectID: string
@@ -5439,6 +6269,256 @@ export type SessionMessagesResponse = {
 export type ProviderNotFoundError = {
   _tag: "ProviderNotFoundError"
   providerID: string
+  message: string
+}
+
+export type PermissionRequestView = {
+  id: string
+  sessionID: string
+  action: string
+  resources: Array<string>
+  save?: Array<string>
+  metadata?: {
+    [key: string]: unknown
+  }
+  source?: PermissionV2Source
+}
+
+export type TaskHumanControlInput = {
+  runID: string
+  parentSessionID: string
+  childSessionID: string | null
+  generation: number
+  expectedVersion: number
+  itemID: string
+  itemRevision: string
+  requestID: string
+  action: "request_close" | "resolve_failed" | "resolve_closed"
+  reason: string
+}
+
+export type TaskHumanControlReceipt = {
+  contract: "task-human-control-v1"
+  receiptID: string
+  requestHash: string
+  request: TaskHumanControlInput
+  authority: {
+    scope: "implicit-local"
+    principal: string
+    projectID: string
+    directory: string
+    permissionEpoch: number
+  }
+  recordedChildSessionID: string
+  version: number
+  state: string
+  controlState: "open" | "close_requested" | "closed"
+  terminalReceiptID: string | null
+  affectedRuns: number
+  time: number
+}
+
+export type TaskControlInvalidError = {
+  _tag: "TaskControlInvalidError"
+  code:
+    | "unavailable"
+    | "auth_required"
+    | "scope_changed"
+    | "source_changed"
+    | "request_conflict"
+    | "command_limit"
+    | "custody_required"
+    | "unsupported"
+    | "invalid_request"
+  message: string
+}
+
+export type TaskControlAuthenticationError = {
+  _tag: "TaskControlAuthenticationError"
+  code:
+    | "unavailable"
+    | "auth_required"
+    | "scope_changed"
+    | "source_changed"
+    | "request_conflict"
+    | "command_limit"
+    | "custody_required"
+    | "unsupported"
+    | "invalid_request"
+  message: string
+}
+
+export type TaskControlForbiddenError = {
+  _tag: "TaskControlForbiddenError"
+  code:
+    | "unavailable"
+    | "auth_required"
+    | "scope_changed"
+    | "source_changed"
+    | "request_conflict"
+    | "command_limit"
+    | "custody_required"
+    | "unsupported"
+    | "invalid_request"
+  message: string
+}
+
+export type TaskControlConflictError = {
+  _tag: "TaskControlConflictError"
+  code:
+    | "unavailable"
+    | "auth_required"
+    | "scope_changed"
+    | "source_changed"
+    | "request_conflict"
+    | "command_limit"
+    | "custody_required"
+    | "unsupported"
+    | "invalid_request"
+  message: string
+}
+
+export type TaskControlLimitError = {
+  _tag: "TaskControlLimitError"
+  code:
+    | "unavailable"
+    | "auth_required"
+    | "scope_changed"
+    | "source_changed"
+    | "request_conflict"
+    | "command_limit"
+    | "custody_required"
+    | "unsupported"
+    | "invalid_request"
+  message: string
+}
+
+export type TaskControlUnavailableError = {
+  _tag: "TaskControlUnavailableError"
+  code:
+    | "unavailable"
+    | "auth_required"
+    | "scope_changed"
+    | "source_changed"
+    | "request_conflict"
+    | "command_limit"
+    | "custody_required"
+    | "unsupported"
+    | "invalid_request"
+  message: string
+}
+
+export type AttentionCapability = {
+  enabled: boolean
+  scope: "implicit-local"
+  actor: "server"
+  reason: "enabled" | "profile_disabled" | "unsupported_host"
+}
+
+export type AttentionItem = {
+  id: string
+  revision: string
+  kind: "activity_failed" | "execution_recovery" | "no_progress" | "task" | "goal"
+  state:
+    | "failed"
+    | "recovery_required"
+    | "authority_conflict"
+    | "owned_elsewhere"
+    | "execution_claim_pending"
+    | "needs_human"
+    | "completed"
+    | "closed"
+    | "interrupted"
+    | "cancelled"
+    | "paused"
+    | "stopped"
+    | "rolled_back"
+    | "close_requested"
+  reasonCode:
+    | "activity_failed"
+    | "claim_only"
+    | "safe_before_dispatch"
+    | "terminal_consistent"
+    | "recovery_required"
+    | "authority_conflict"
+    | "owned_elsewhere"
+    | "no_progress"
+    | "task_result"
+    | "task_recovery"
+    | "task_close_requested"
+    | "goal_result"
+    | "goal_recovery"
+    | "goal_paused"
+    | "goal_stopped"
+  occurredAt: number | null
+  observedAt: number
+  session: {
+    id: string
+    title: string
+    projectID: string
+    directory: string
+    workspaceID: null
+    parentID?: string
+  }
+  source: {
+    activityID?: string
+    permissionRequestID?: string
+    expiresAt?: number
+    task?: {
+      runID: string
+      parentSessionID: string
+      childSessionID: string | null
+      recordedChildSessionID: string
+      generation: number
+      version: number
+      state: string
+      controlState: "open" | "close_requested" | "closed"
+      terminalReceiptID: string | null
+      pendingProviders: number
+      pendingProviderAttempts: number
+      pendingToolEffects: number
+      hasExecutionClaim: boolean
+    }
+    goal?: {
+      goalID: string
+      controlRevision: number
+      planRevision: number
+      nextSeq: number
+      planDocID: string
+      phase: string
+      preparation: string
+      pendingRebase: boolean
+      pendingPermits: number
+      unknownPermits: number
+      checkpointState: string | null
+      checkpointHash: string | null
+    }
+  }
+  allowedActions?: Array<
+    | "continue_once"
+    | "terminate"
+    | "task_request_close"
+    | "task_resolve_failed"
+    | "task_resolve_closed"
+    | "goal_pause"
+    | "goal_resume"
+    | "goal_stop"
+    | "goal_edit"
+  >
+  seen: boolean
+  seenAt: number | null
+}
+
+export type AttentionList = {
+  data: Array<AttentionItem>
+  nextCursor?: string
+  asOf: number
+  scope: "implicit-local"
+  unseenCount: number
+}
+
+export type AttentionNotFoundError = {
+  _tag: "AttentionNotFoundError"
   message: string
 }
 
@@ -5755,11 +6835,20 @@ export type AuthInfo = {
   credential: AuthCredential
 }
 
-export type PermissionV2Source = {
-  type: "tool"
-  messageID: string
-  callID: string
-}
+export type PermissionV2Source =
+  | {
+      type: "tool"
+      messageID: string
+      callID: string
+    }
+  | {
+      type: "mcp_app"
+      invocationID: string
+      viewID: string
+      server: string
+      tool: string
+      generation: string
+    }
 
 export type PermissionV2Reply = "once" | "always" | "reject"
 
@@ -5821,125 +6910,37 @@ export type EventServerInstanceDisposed = {
   }
 }
 
-export type SyncEventSessionCreated1 = {
+export type SyncEventSessionMcpAppAdmitted1 = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.created.1"
+    type: "session.mcp-app.admitted.1"
     id: string
     seq: number
     aggregateID: string
     data: {
       sessionID: string
-      info: Session
+      invocationID: string
+      sourceHash: string
+      inputHash: string
+      timestamp: number
     }
   }
 }
 
-export type SyncEventSessionUpdated1 = {
+export type SyncEventSessionMcpAppChanged1 = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.updated.1"
+    type: "session.mcp-app.changed.1"
     id: string
     seq: number
     aggregateID: string
     data: {
       sessionID: string
-      info: Session
-    }
-  }
-}
-
-export type SyncEventSessionDeleted1 = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.deleted.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      info: Session
-    }
-  }
-}
-
-export type SyncEventSessionDiff1 = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.diff.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      diff: Array<SnapshotFileDiff>
-      manifest?: SnapshotDiffManifestDescriptor
-    }
-  }
-}
-
-export type SyncEventMessageUpdated1 = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.updated.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      info: Message
-    }
-  }
-}
-
-export type SyncEventMessageRemoved1 = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.removed.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      messageID: string
-    }
-  }
-}
-
-export type SyncEventMessagePartUpdated1 = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.part.updated.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      part: Part
-      time: number
-    }
-  }
-}
-
-export type SyncEventMessagePartRemoved1 = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.part.removed.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      messageID: string
-      partID: string
+      invocationID: string
+      status: McpAppInvocationStatus
+      timestamp: number
     }
   }
 }
@@ -6848,6 +7849,129 @@ export type SyncEventSessionNextCompactionEnded2 = {
   }
 }
 
+export type SyncEventSessionCreated1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.created.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      info: Session
+    }
+  }
+}
+
+export type SyncEventSessionUpdated1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.updated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      info: Session
+    }
+  }
+}
+
+export type SyncEventSessionDeleted1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.deleted.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      info: Session
+    }
+  }
+}
+
+export type SyncEventSessionDiff1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.diff.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      diff: Array<SnapshotFileDiff>
+      manifest?: SnapshotDiffManifestDescriptor
+    }
+  }
+}
+
+export type SyncEventMessageUpdated1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "message.updated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      info: Message
+    }
+  }
+}
+
+export type SyncEventMessageRemoved1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "message.removed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      messageID: string
+    }
+  }
+}
+
+export type SyncEventMessagePartUpdated1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "message.part.updated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      part: Part
+      time: number
+    }
+  }
+}
+
+export type SyncEventMessagePartRemoved1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "message.part.removed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      messageID: string
+      partID: string
+    }
+  }
+}
+
 export type SyncEventProxyRequestAdmitted1 = {
   type: "sync"
   id: string
@@ -6934,6 +8058,40 @@ export type SyncEventProxyMechanismTraced1 = {
   }
 }
 
+export type SyncEventSessionDomainPackLoaded1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.domain_pack.loaded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      assistantMessageID: string
+      toolCallID: string
+      ref: string
+    }
+  }
+}
+
+export type SyncEventSessionKnowledgeProposeReserved1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.knowledge_propose.reserved.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      assistantMessageID: string
+      toolCallID: string
+      inputHash: string
+    }
+  }
+}
+
 export type SyncEventSessionCompacted1 = {
   type: "sync"
   id: string
@@ -6946,6 +8104,10 @@ export type SyncEventSessionCompacted1 = {
       sessionID: string
     }
   }
+}
+
+export type ConfigIm = {
+  model?: string
 }
 
 export type PolicyEffect = "allow" | "deny"
@@ -7661,18 +8823,6 @@ export type ProviderV2Info = {
   }
 }
 
-export type PermissionV2Request = {
-  id: string
-  sessionID: string
-  action: string
-  resources: Array<string>
-  save?: Array<string>
-  metadata?: {
-    [key: string]: unknown
-  }
-  source?: PermissionV2Source
-}
-
 export type PermissionSavedInfo = {
   id: string
   projectID: string
@@ -7738,6 +8888,29 @@ export type QuestionV2Reply = {
   answers: Array<QuestionV2Answer>
 }
 
+export type EventSessionMcpAppAdmitted = {
+  id: string
+  type: "session.mcp-app.admitted"
+  properties: {
+    sessionID: string
+    invocationID: string
+    sourceHash: string
+    inputHash: string
+    timestamp: number
+  }
+}
+
+export type EventSessionMcpAppChanged = {
+  id: string
+  type: "session.mcp-app.changed"
+  properties: {
+    sessionID: string
+    invocationID: string
+    status: McpAppInvocationStatus
+    timestamp: number
+  }
+}
+
 export type EventSessionCreated = {
   id: string
   type: "session.created"
@@ -7756,15 +8929,6 @@ export type EventSessionUpdated = {
   }
 }
 
-export type EventSessionDeleted = {
-  id: string
-  type: "session.deleted"
-  properties: {
-    sessionID: string
-    info: Session
-  }
-}
-
 export type EventSessionDiff = {
   id: string
   type: "session.diff"
@@ -7775,41 +8939,12 @@ export type EventSessionDiff = {
   }
 }
 
-export type EventMessageUpdated = {
+export type EventSessionDeleted = {
   id: string
-  type: "message.updated"
+  type: "session.deleted"
   properties: {
     sessionID: string
-    info: Message
-  }
-}
-
-export type EventMessageRemoved = {
-  id: string
-  type: "message.removed"
-  properties: {
-    sessionID: string
-    messageID: string
-  }
-}
-
-export type EventMessagePartUpdated = {
-  id: string
-  type: "message.part.updated"
-  properties: {
-    sessionID: string
-    part: Part
-    time: number
-  }
-}
-
-export type EventMessagePartRemoved = {
-  id: string
-  type: "message.part.removed"
-  properties: {
-    sessionID: string
-    messageID: string
-    partID: string
+    info: Session
   }
 }
 
@@ -8355,6 +9490,56 @@ export type EventSessionNextCompactionEnded = {
   }
 }
 
+export type EventMessageUpdated = {
+  id: string
+  type: "message.updated"
+  properties: {
+    sessionID: string
+    info: Message
+  }
+}
+
+export type EventMessageRemoved = {
+  id: string
+  type: "message.removed"
+  properties: {
+    sessionID: string
+    messageID: string
+  }
+}
+
+export type EventMessagePartUpdated = {
+  id: string
+  type: "message.part.updated"
+  properties: {
+    sessionID: string
+    part: Part
+    time: number
+  }
+}
+
+export type EventMessagePartDelta = {
+  id: string
+  type: "message.part.delta"
+  properties: {
+    sessionID: string
+    messageID: string
+    partID: string
+    field: string
+    delta: string
+  }
+}
+
+export type EventMessagePartRemoved = {
+  id: string
+  type: "message.part.removed"
+  properties: {
+    sessionID: string
+    messageID: string
+    partID: string
+  }
+}
+
 export type EventProxyRequestAdmitted = {
   id: string
   type: "proxy.request.admitted"
@@ -8420,6 +9605,28 @@ export type EventProxyMechanismTraced = {
       selectedRefs: string
       truncated: boolean
     }>
+  }
+}
+
+export type EventSessionDomainPackLoaded = {
+  id: string
+  type: "session.domain_pack.loaded"
+  properties: {
+    sessionID: string
+    assistantMessageID: string
+    toolCallID: string
+    ref: string
+  }
+}
+
+export type EventSessionKnowledgeProposeReserved = {
+  id: string
+  type: "session.knowledge_propose.reserved"
+  properties: {
+    sessionID: string
+    assistantMessageID: string
+    toolCallID: string
+    inputHash: string
   }
 }
 
@@ -8712,18 +9919,6 @@ export type EventTodoUpdated = {
   properties: {
     sessionID: string
     todos: Array<SessionTodoInfo>
-  }
-}
-
-export type EventMessagePartDelta = {
-  id: string
-  type: "message.part.delta"
-  properties: {
-    sessionID: string
-    messageID: string
-    partID: string
-    field: string
-    delta: string
   }
 }
 
@@ -9227,6 +10422,201 @@ export type ExperimentalControlPlaneMoveSessionResponses = {
 export type ExperimentalControlPlaneMoveSessionResponse =
   ExperimentalControlPlaneMoveSessionResponses[keyof ExperimentalControlPlaneMoveSessionResponses]
 
+export type WorkRecoveryRecoverKnownData = {
+  body: {
+    sessionID: string
+    requestID: string
+    expectedClaimToken: number
+    expectedControlRevision: number
+    action?: "recover_only" | "recover_and_resume"
+  }
+  path: {
+    workID: string
+  }
+  query?: never
+  url: "/api/v1/im/work/{workID}/recover-known"
+}
+
+export type WorkRecoveryRecoverKnownErrors = {
+  /**
+   * WorkRecoveryInvalid | InvalidRequestError
+   */
+  400: WorkRecoveryInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * WorkRecoveryForbidden
+   */
+  403: WorkRecoveryForbidden
+  /**
+   * WorkRecoveryNotFound
+   */
+  404: WorkRecoveryNotFound
+  /**
+   * WorkRecoveryConflict
+   */
+  409: WorkRecoveryConflict
+  /**
+   * WorkRecoveryUnavailable
+   */
+  503: WorkRecoveryUnavailable
+}
+
+export type WorkRecoveryRecoverKnownError = WorkRecoveryRecoverKnownErrors[keyof WorkRecoveryRecoverKnownErrors]
+
+export type WorkRecoveryRecoverKnownResponses = {
+  /**
+   * Success
+   */
+  200: {
+    receipt: {
+      recoveryID: string
+      workID: string
+      sessionID: string
+      requestID: string
+      action: "recover_only" | "recover_and_resume"
+      oldClaimToken: number
+      controlRevision: number
+      createdAt: number
+      replayed: boolean
+      continuation: "not_started"
+    }
+    execution: "not_started" | "drained" | "attention_required"
+  }
+}
+
+export type WorkRecoveryRecoverKnownResponse =
+  WorkRecoveryRecoverKnownResponses[keyof WorkRecoveryRecoverKnownResponses]
+
+export type WorkRecoveryResumeRecoveredData = {
+  body: {
+    recoveryID: string
+    requestID: string
+    expectedControlRevision: number
+  }
+  path: {
+    workID: string
+  }
+  query?: never
+  url: "/api/v1/im/work/{workID}/resume-recovered"
+}
+
+export type WorkRecoveryResumeRecoveredErrors = {
+  /**
+   * WorkRecoveryInvalid | InvalidRequestError
+   */
+  400: WorkRecoveryInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * WorkRecoveryForbidden
+   */
+  403: WorkRecoveryForbidden
+  /**
+   * WorkRecoveryNotFound
+   */
+  404: WorkRecoveryNotFound
+  /**
+   * WorkRecoveryConflict
+   */
+  409: WorkRecoveryConflict
+  /**
+   * WorkRecoveryUnavailable
+   */
+  503: WorkRecoveryUnavailable
+}
+
+export type WorkRecoveryResumeRecoveredError =
+  WorkRecoveryResumeRecoveredErrors[keyof WorkRecoveryResumeRecoveredErrors]
+
+export type WorkRecoveryResumeRecoveredResponses = {
+  /**
+   * Success
+   */
+  200: {
+    receipt: {
+      recoveryID: string
+      workID: string
+      sessionID: string
+      requestID: string
+      controlRevision: number
+      createdAt: number
+      replayed: boolean
+      continuation: "recorded"
+    }
+    execution: "not_started" | "drained" | "attention_required"
+  }
+}
+
+export type WorkRecoveryResumeRecoveredResponse =
+  WorkRecoveryResumeRecoveredResponses[keyof WorkRecoveryResumeRecoveredResponses]
+
+export type WorkRecoveryCleanupKnownData = {
+  body: {
+    recoveryID: string
+    admissionID: string
+    requestID: string
+    expectedCustodyRevision: number
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/im/work/cleanup-known"
+}
+
+export type WorkRecoveryCleanupKnownErrors = {
+  /**
+   * WorkRecoveryInvalid | InvalidRequestError
+   */
+  400: WorkRecoveryInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * WorkRecoveryForbidden
+   */
+  403: WorkRecoveryForbidden
+  /**
+   * WorkRecoveryNotFound
+   */
+  404: WorkRecoveryNotFound
+  /**
+   * WorkRecoveryConflict
+   */
+  409: WorkRecoveryConflict
+  /**
+   * WorkRecoveryUnavailable
+   */
+  503: WorkRecoveryUnavailable
+}
+
+export type WorkRecoveryCleanupKnownError = WorkRecoveryCleanupKnownErrors[keyof WorkRecoveryCleanupKnownErrors]
+
+export type WorkRecoveryCleanupKnownResponses = {
+  /**
+   * Success
+   */
+  200: {
+    contract: "work-storage-cleanup.v1"
+    cleanupID: string
+    admissionID: string
+    workID: string
+    requestHash: string
+    phase: "retained" | "cleanup_pending" | "cleanup_recovery" | "cleanup_verified" | "released"
+    revision: number
+    releasedBytes: number
+    recordedAt: number
+    replayed: boolean
+  }
+}
+
+export type WorkRecoveryCleanupKnownResponse =
+  WorkRecoveryCleanupKnownResponses[keyof WorkRecoveryCleanupKnownResponses]
+
 export type GlobalHealthData = {
   body?: never
   path?: never
@@ -9284,6 +10674,9 @@ export type GlobalCapabilitiesResponses = {
       im: boolean
       sessions: boolean
       pty: boolean
+      importModes?: boolean
+      importJobs?: boolean
+      importFileJobs?: boolean
       workspaces: boolean
       expertPanel: boolean
       goalLoop: boolean
@@ -9434,7 +10827,7 @@ export type GlobalUpgradeResponses = {
 export type GlobalUpgradeResponse = GlobalUpgradeResponses[keyof GlobalUpgradeResponses]
 
 export type GlobalImportData = {
-  body?: never
+  body?: ImportRequest
   path?: never
   query?: never
   url: "/global/import"
@@ -9442,9 +10835,13 @@ export type GlobalImportData = {
 
 export type GlobalImportErrors = {
   /**
-   * BadRequest | InvalidRequestError
+   * ImportRequestError | InvalidRequestError
    */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  400: ImportRequestError | InvalidRequestError
+  /**
+   * ImportBusyError
+   */
+  409: ImportBusyError
 }
 
 export type GlobalImportError = GlobalImportErrors[keyof GlobalImportErrors]
@@ -9457,6 +10854,128 @@ export type GlobalImportResponses = {
 }
 
 export type GlobalImportResponse = GlobalImportResponses[keyof GlobalImportResponses]
+
+export type GlobalImportListData = {
+  body?: never
+  path?: never
+  query?: {
+    cursor?: string
+    limit?: string
+  }
+  url: "/global/import/jobs"
+}
+
+export type GlobalImportListErrors = {
+  /**
+   * ImportRequestError | InvalidRequestError
+   */
+  400: ImportRequestError | InvalidRequestError
+}
+
+export type GlobalImportListError = GlobalImportListErrors[keyof GlobalImportListErrors]
+
+export type GlobalImportListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    items: Array<ImportJobInfo>
+    cursor?: string
+  }
+}
+
+export type GlobalImportListResponse = GlobalImportListResponses[keyof GlobalImportListResponses]
+
+export type GlobalImportCreateData = {
+  body?: ImportJobRequest
+  path?: never
+  query?: never
+  url: "/global/import/jobs"
+}
+
+export type GlobalImportCreateErrors = {
+  /**
+   * ImportRequestError | InvalidRequestError
+   */
+  400: ImportRequestError | InvalidRequestError
+  /**
+   * ImportBusyError
+   */
+  409: ImportBusyError
+}
+
+export type GlobalImportCreateError = GlobalImportCreateErrors[keyof GlobalImportCreateErrors]
+
+export type GlobalImportCreateResponses = {
+  /**
+   * ImportJobInfo
+   */
+  200: ImportJobInfo
+}
+
+export type GlobalImportCreateResponse = GlobalImportCreateResponses[keyof GlobalImportCreateResponses]
+
+export type GlobalImportGetData = {
+  body?: never
+  path: {
+    jobID: string
+  }
+  query?: never
+  url: "/global/import/jobs/{jobID}"
+}
+
+export type GlobalImportGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ImportNotFoundError
+   */
+  404: ImportNotFoundError
+}
+
+export type GlobalImportGetError = GlobalImportGetErrors[keyof GlobalImportGetErrors]
+
+export type GlobalImportGetResponses = {
+  /**
+   * ImportJobInfo
+   */
+  200: ImportJobInfo
+}
+
+export type GlobalImportGetResponse = GlobalImportGetResponses[keyof GlobalImportGetResponses]
+
+export type GlobalImportCancelData = {
+  body?: never
+  path: {
+    jobID: string
+  }
+  query?: never
+  url: "/global/import/jobs/{jobID}/cancel"
+}
+
+export type GlobalImportCancelErrors = {
+  /**
+   * ImportRequestError | InvalidRequestError
+   */
+  400: ImportRequestError | InvalidRequestError
+  /**
+   * ImportNotFoundError
+   */
+  404: ImportNotFoundError
+}
+
+export type GlobalImportCancelError = GlobalImportCancelErrors[keyof GlobalImportCancelErrors]
+
+export type GlobalImportCancelResponses = {
+  /**
+   * ImportJobInfo
+   */
+  200: ImportJobInfo
+}
+
+export type GlobalImportCancelResponse = GlobalImportCancelResponses[keyof GlobalImportCancelResponses]
 
 export type GlobalProjectsData = {
   body?: never
@@ -9509,6 +11028,3651 @@ export type GlobalProjectDeleteResponses = {
 }
 
 export type GlobalProjectDeleteResponse = GlobalProjectDeleteResponses[keyof GlobalProjectDeleteResponses]
+
+export type BrowserCreateData = {
+  body:
+    | {
+        requestID: string
+        sessionID: string
+        origin: string
+        expiresAt: number
+        profile: "managed-loopback-preview-v1"
+      }
+    | {
+        requestID: string
+        sessionID: string
+        origin: string
+        expiresAt: number
+        profile: "managed-loopback-interaction-v1"
+        postPaths: Array<string>
+        scriptGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          readOnly: true
+        }>
+        programGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+          maxSteps: number
+        }>
+        clipboardPolicy?: {
+          read: boolean
+          write: boolean
+        }
+      }
+    | {
+        requestID: string
+        sessionID: string
+        origin: string
+        expiresAt: number
+        profile: "managed-loopback-exchange-v1"
+        postPaths: Array<string>
+        filePolicy: {
+          upload: boolean
+          download: boolean
+        }
+      }
+    | {
+        requestID: string
+        sessionID: string
+        origin: string
+        expiresAt: number
+        profile: "managed-public-readonly-v1"
+        approvedOrigins: Array<string>
+        resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+      }
+    | {
+        requestID: string
+        sessionID: string
+        origin: string
+        expiresAt: number
+        profile: "managed-public-interaction-v1"
+        approvedOrigins: Array<string>
+        resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        pageMode: "static" | "dynamic"
+        postTargets: Array<{
+          origin: string
+          path: string
+        }>
+      }
+    | {
+        requestID: string
+        sessionID: string
+        origin: string
+        expiresAt: number
+        profile: "managed-public-api-v1"
+        approvedOrigins: Array<string>
+        resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        pageMode: "static" | "dynamic"
+        apiPostTargets: Array<{
+          url: string
+          contentTypes: Array<"application/json" | "application/x-www-form-urlencoded" | "text/plain">
+          maxBodyBytes: number
+        }>
+      }
+  path?: never
+  query?: never
+  url: "/api/v1/browser/controls"
+}
+
+export type BrowserCreateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserCreateError = BrowserCreateErrors[keyof BrowserCreateErrors]
+
+export type BrowserCreateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    control:
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-loopback-preview-v1"
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-loopback-interaction-v1"
+          postPaths: Array<string>
+          scriptGrants?: Array<{
+            scriptHash: string
+            argsHash: string
+            readOnly: true
+          }>
+          programGrants?: Array<{
+            scriptHash: string
+            argsHash: string
+            operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+            maxSteps: number
+          }>
+          clipboardPolicy?: {
+            read: boolean
+            write: boolean
+          }
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-loopback-exchange-v1"
+          postPaths: Array<string>
+          filePolicy: {
+            upload: boolean
+            download: boolean
+          }
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-public-readonly-v1"
+          approvedOrigins: Array<string>
+          resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-public-interaction-v1"
+          approvedOrigins: Array<string>
+          resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+          pageMode: "static" | "dynamic"
+          postTargets: Array<{
+            origin: string
+            path: string
+          }>
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-public-api-v1"
+          approvedOrigins: Array<string>
+          resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+          pageMode: "static" | "dynamic"
+          apiPostTargets: Array<{
+            url: string
+            contentTypes: Array<"application/json" | "application/x-www-form-urlencoded" | "text/plain">
+            maxBodyBytes: number
+          }>
+        }
+    availability: "available" | "host_unavailable" | "expired" | "stopped"
+    nativeVerification: "verified" | "unavailable"
+    stopConfirmed: boolean
+  }
+}
+
+export type BrowserCreateResponse = BrowserCreateResponses[keyof BrowserCreateResponses]
+
+export type BrowserGetData = {
+  body?: never
+  path: {
+    controlID: string
+  }
+  query?: never
+  url: "/api/v1/browser/controls/{controlID}"
+}
+
+export type BrowserGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserGetError = BrowserGetErrors[keyof BrowserGetErrors]
+
+export type BrowserGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    control:
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-loopback-preview-v1"
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-loopback-interaction-v1"
+          postPaths: Array<string>
+          scriptGrants?: Array<{
+            scriptHash: string
+            argsHash: string
+            readOnly: true
+          }>
+          programGrants?: Array<{
+            scriptHash: string
+            argsHash: string
+            operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+            maxSteps: number
+          }>
+          clipboardPolicy?: {
+            read: boolean
+            write: boolean
+          }
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-loopback-exchange-v1"
+          postPaths: Array<string>
+          filePolicy: {
+            upload: boolean
+            download: boolean
+          }
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-public-readonly-v1"
+          approvedOrigins: Array<string>
+          resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-public-interaction-v1"
+          approvedOrigins: Array<string>
+          resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+          pageMode: "static" | "dynamic"
+          postTargets: Array<{
+            origin: string
+            path: string
+          }>
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-public-api-v1"
+          approvedOrigins: Array<string>
+          resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+          pageMode: "static" | "dynamic"
+          apiPostTargets: Array<{
+            url: string
+            contentTypes: Array<"application/json" | "application/x-www-form-urlencoded" | "text/plain">
+            maxBodyBytes: number
+          }>
+        }
+    availability: "available" | "host_unavailable" | "expired" | "stopped"
+    nativeVerification: "verified" | "unavailable"
+    stopConfirmed: boolean
+  }
+}
+
+export type BrowserGetResponse = BrowserGetResponses[keyof BrowserGetResponses]
+
+export type BrowserCancelData = {
+  body: {
+    requestID: string
+    expectedRevision: number
+  }
+  path: {
+    controlID: string
+  }
+  query?: never
+  url: "/api/v1/browser/controls/{controlID}/cancel"
+}
+
+export type BrowserCancelErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserCancelError = BrowserCancelErrors[keyof BrowserCancelErrors]
+
+export type BrowserCancelResponses = {
+  /**
+   * Success
+   */
+  200: {
+    control:
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-loopback-preview-v1"
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-loopback-interaction-v1"
+          postPaths: Array<string>
+          scriptGrants?: Array<{
+            scriptHash: string
+            argsHash: string
+            readOnly: true
+          }>
+          programGrants?: Array<{
+            scriptHash: string
+            argsHash: string
+            operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+            maxSteps: number
+          }>
+          clipboardPolicy?: {
+            read: boolean
+            write: boolean
+          }
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-loopback-exchange-v1"
+          postPaths: Array<string>
+          filePolicy: {
+            upload: boolean
+            download: boolean
+          }
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-public-readonly-v1"
+          approvedOrigins: Array<string>
+          resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-public-interaction-v1"
+          approvedOrigins: Array<string>
+          resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+          pageMode: "static" | "dynamic"
+          postTargets: Array<{
+            origin: string
+            path: string
+          }>
+        }
+      | {
+          version: 1
+          controlID: string
+          requestID: string
+          requestDigest: string
+          scope: {
+            principal: string
+            securityNamespaceID: string
+            locationKey: string
+            projectScopeKey: string
+            namespaceBindingHash: string
+            sessionID: string
+            projectID: string
+            directory: string
+            workspaceID: null
+          }
+          hostID: string
+          hostIncarnation: string
+          resourceID: string
+          credentialBinding: string
+          origin: string
+          revision: number
+          epoch: number
+          policyRevision: number
+          state: "creating" | "active" | "cancel_requested" | "stopped" | "unknown"
+          expiresAt: number
+          createdAt: number
+          updatedAt: number
+          cancel: {
+            requestID: string
+            expectedRevision: number
+            requestedAt: number
+          } | null
+          stopConfirmedAt: number | null
+          profile: "managed-public-api-v1"
+          approvedOrigins: Array<string>
+          resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+          pageMode: "static" | "dynamic"
+          apiPostTargets: Array<{
+            url: string
+            contentTypes: Array<"application/json" | "application/x-www-form-urlencoded" | "text/plain">
+            maxBodyBytes: number
+          }>
+        }
+    availability: "available" | "host_unavailable" | "expired" | "stopped"
+    nativeVerification: "verified" | "unavailable"
+    stopConfirmed: boolean
+  }
+}
+
+export type BrowserCancelResponse = BrowserCancelResponses[keyof BrowserCancelResponses]
+
+export type BrowserActionData = {
+  body?: never
+  path: {
+    actionID: string
+  }
+  query?: never
+  url: "/api/v1/browser/actions/{actionID}"
+}
+
+export type BrowserActionErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserActionError = BrowserActionErrors[keyof BrowserActionErrors]
+
+export type BrowserActionResponses = {
+  /**
+   * Success
+   */
+  200: {
+    action: {
+      version: 1
+      actionID: string
+      controlID: string
+      requestID: string
+      commandDigest: string
+      command:
+        | {
+            type: "api.post"
+            actionTag: "browser-api-post.v1"
+            profileVersion: 1
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+            url: string
+            contentType: "application/json" | "application/x-www-form-urlencoded" | "text/plain"
+            body: string
+          }
+        | {
+            type: "program"
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+            scriptHash: string
+            source: string
+            argsJSON: string
+            targets: Array<{
+              name: string
+              ref: string
+            }>
+          }
+        | {
+            type: "clipboard.read"
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+          }
+        | {
+            type: "clipboard.write"
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+            text: string
+          }
+        | {
+            type: "files.list"
+            cursor?: string
+            limit?: number
+          }
+        | {
+            type: "file.upload"
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+            ref: string
+            grantIDs: Array<string>
+          }
+        | {
+            type: "file.download"
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+            ref: string
+            grantID: string
+          }
+        | {
+            type: "tabs.list"
+          }
+        | {
+            type: "tabs.create"
+            url?: string
+          }
+        | {
+            type: "tabs.select"
+            tabID: string
+            generation: number
+          }
+        | {
+            type: "tabs.close"
+            tabID: string
+            generation: number
+          }
+        | {
+            type: "back"
+            tabID: string
+            generation: number
+          }
+        | {
+            type: "forward"
+            tabID: string
+            generation: number
+          }
+        | {
+            type: "reload"
+            tabID: string
+            generation: number
+          }
+        | {
+            type: "stop"
+            tabID: string
+            generation: number
+          }
+        | {
+            type: "frames.list"
+            tabID: string
+            generation: number
+          }
+        | {
+            type: "navigate"
+            tabID: string
+            generation: number
+            url: string
+          }
+        | {
+            type: "snapshot"
+            tabID: string
+            generation: number
+            frameID?: string
+            depth?: number
+            limit?: number
+          }
+        | {
+            type: "screenshot"
+            tabID: string
+            generation: number
+          }
+        | {
+            type: "evaluate"
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+            scriptHash: string
+            source: string
+            argsJSON: string
+          }
+        | {
+            type: "fill"
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+            ref: string
+            text: string
+          }
+        | {
+            type: "select"
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+            ref: string
+            values: Array<string>
+          }
+        | {
+            type: "click"
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+            ref: string
+            count?: 1 | 2
+            waitForNavigation?: boolean
+          }
+        | {
+            type: "scroll"
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+            ref: string
+            deltaX: number
+            deltaY: number
+          }
+        | {
+            type: "drag"
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+            ref: string
+            targetRef: string
+            steps?: number
+          }
+        | {
+            type: "press"
+            tabID: string
+            generation: number
+            frameID: string
+            observationRevision: number
+            ref: string
+            key:
+              | "Tab"
+              | "Shift+Tab"
+              | "Enter"
+              | "Space"
+              | "Escape"
+              | "ArrowUp"
+              | "ArrowDown"
+              | "ArrowLeft"
+              | "ArrowRight"
+              | "Home"
+              | "End"
+              | "PageUp"
+              | "PageDown"
+              | "Backspace"
+              | "Delete"
+              | "SelectAll"
+            waitForNavigation?: boolean
+          }
+      admissionID: string
+      providerReceiptID: string
+      providerAttemptID: string
+      toolCallID: string
+      sessionID: string
+      hostIncarnation: string
+      resourceID: string
+      controlEpoch: number
+      policyRevision: number
+      revision: number
+      deadline: number
+      outcome: "pending" | "completed" | "failed" | "cancelled" | "unknown"
+      result: {
+        tabs: Array<{
+          tabID: string
+          generation: number
+          url: string
+          title: string
+          selected?: boolean
+          canGoBack?: boolean
+          canGoForward?: boolean
+        }>
+        apiPost?: {
+          version: 1
+          status: number
+          contentType: string
+          bytes: number
+          sha256: string
+          text?: string
+        }
+        program?: {
+          version: 1
+          planHash: string
+          totalSteps: number
+          completedSteps: number
+          steps: Array<{
+            ordinal: number
+            operation: "fill" | "select" | "click" | "press" | "scroll" | "drag"
+          }>
+        }
+        clipboard?:
+          | {
+              direction: "read"
+              bytes: number
+              sha256: string
+              text: string
+            }
+          | {
+              direction: "write"
+              bytes: number
+              sha256: string
+            }
+        files?: Array<{
+          artifactID: string
+          grantID: string
+          direction: "upload" | "download"
+          name: string
+          bytes: number
+          sha256: string
+          state: "selected" | "published"
+          nativeVerified: true
+        }>
+        fileGrants?: Array<{
+          grantID: string
+          direction: "upload" | "download"
+          name: string
+          bytes?: number
+          maxBytes?: number
+          expiresAt: number
+          state: "approved" | "used" | "expired" | "unavailable"
+        }>
+        nextFileCursor?: string
+        frames?: Array<{
+          frameID: string
+          parentFrameID: string | null
+          url: string
+        }>
+        text?: string
+        truncated?: boolean
+        scriptResultJSON?: string
+        frameID?: string
+        observationRevision?: number
+        refs?: Array<{
+          ref: string
+          frameID: string
+          role: string
+          name: string
+        }>
+        image?: {
+          mime: "image/png"
+          hash: string
+          bytes: number
+          width: number
+          height: number
+        }
+      } | null
+      errorCode:
+        | "BROWSER_UNAVAILABLE"
+        | "BROWSER_HOST_UNAVAILABLE"
+        | "BROWSER_NOT_FOUND"
+        | "BROWSER_CONFLICT"
+        | "BROWSER_INVALID_RECORD"
+        | "BROWSER_CAPACITY"
+        | "BROWSER_SCOPE_DENIED"
+        | "BROWSER_AUTHORITY_REQUIRED"
+        | "BROWSER_OWNER_LOST"
+        | "BROWSER_STALE_TARGET"
+        | "BROWSER_EXPIRED"
+        | "BROWSER_CANCELLED"
+        | "BROWSER_UNKNOWN"
+        | "BROWSER_NETWORK_DENIED"
+        | "BROWSER_OUTPUT_LIMIT"
+        | "BROWSER_DRIVER_UNAVAILABLE"
+        | null
+      createdAt: number
+      updatedAt: number
+      terminalAt: number | null
+      stopConfirmedAt: number | null
+    }
+    effectID: string | null
+    effectState: "settled" | "failed" | null
+    cancelRequested: boolean
+    nativeVerification: "verified" | "unavailable"
+    observedOutcome: "pending" | "completed" | "failed" | "cancelled" | "unknown"
+    stopConfirmed: boolean
+  }
+}
+
+export type BrowserActionResponse = BrowserActionResponses[keyof BrowserActionResponses]
+
+export type BrowserFilesPreviewData = {
+  body:
+    | {
+        direction: "upload"
+        relative: string
+        targetPath: string
+      }
+    | {
+        direction: "download"
+        relative: string
+        targetURL: string
+        maxBytes: number
+      }
+  path: {
+    controlID: string
+  }
+  query?: never
+  url: "/api/v1/browser/controls/{controlID}/files/preview"
+}
+
+export type BrowserFilesPreviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserFilesPreviewError = BrowserFilesPreviewErrors[keyof BrowserFilesPreviewErrors]
+
+export type BrowserFilesPreviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    controlID: string
+    previewID: string
+    controlRevision: number
+    preview:
+      | {
+          direction: "upload"
+          name: string
+          relative: string
+          bytes: number
+          sha256: string
+          targetPath: string
+          observedAt: number
+        }
+      | {
+          direction: "download"
+          name: string
+          relative: string
+          maxBytes: number
+          targetURL: string
+          observedAt: number
+        }
+  }
+}
+
+export type BrowserFilesPreviewResponse = BrowserFilesPreviewResponses[keyof BrowserFilesPreviewResponses]
+
+export type BrowserFilesApproveData = {
+  body: {
+    requestID: string
+    previewID: string
+    expectedControlRevision: number
+    expiresAt: number
+  }
+  path: {
+    controlID: string
+  }
+  query?: never
+  url: "/api/v1/browser/controls/{controlID}/files/approve"
+}
+
+export type BrowserFilesApproveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserFilesApproveError = BrowserFilesApproveErrors[keyof BrowserFilesApproveErrors]
+
+export type BrowserFilesApproveResponses = {
+  /**
+   * Success
+   */
+  200: {
+    controlID: string
+    grant: {
+      grantID: string
+      direction: "upload" | "download"
+      name: string
+      bytes?: number
+      maxBytes?: number
+      expiresAt: number
+      state: "approved" | "used" | "expired" | "unavailable"
+    }
+    replayed: boolean
+  }
+}
+
+export type BrowserFilesApproveResponse = BrowserFilesApproveResponses[keyof BrowserFilesApproveResponses]
+
+export type BrowserFilesStatusData = {
+  body?: never
+  path: {
+    controlID: string
+    requestID: string
+  }
+  query?: never
+  url: "/api/v1/browser/controls/{controlID}/files/requests/{requestID}"
+}
+
+export type BrowserFilesStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserFilesStatusError = BrowserFilesStatusErrors[keyof BrowserFilesStatusErrors]
+
+export type BrowserFilesStatusResponses = {
+  /**
+   * Success
+   */
+  200: {
+    requestID: string
+    state: "approved" | "used" | "expired" | "unavailable" | "missing"
+    grant: {
+      grantID: string
+      direction: "upload" | "download"
+      name: string
+      bytes?: number
+      maxBytes?: number
+      expiresAt: number
+      state: "approved" | "used" | "expired" | "unavailable"
+    } | null
+  }
+}
+
+export type BrowserFilesStatusResponse = BrowserFilesStatusResponses[keyof BrowserFilesStatusResponses]
+
+export type BrowserFilesListData = {
+  body?: never
+  path: {
+    controlID: string
+  }
+  query?: {
+    cursor?: string
+    limit?: string
+  }
+  url: "/api/v1/browser/controls/{controlID}/files"
+}
+
+export type BrowserFilesListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserFilesListError = BrowserFilesListErrors[keyof BrowserFilesListErrors]
+
+export type BrowserFilesListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    files: Array<{
+      artifactID: string
+      grantID: string
+      direction: "upload" | "download"
+      name: string
+      bytes: number
+      sha256: string
+      state: "selected" | "published"
+      nativeVerified: true
+    }>
+    grants: Array<{
+      grantID: string
+      direction: "upload" | "download"
+      name: string
+      bytes?: number
+      maxBytes?: number
+      expiresAt: number
+      state: "approved" | "used" | "expired" | "unavailable"
+    }>
+    nextCursor: string | null
+  }
+}
+
+export type BrowserFilesListResponse = BrowserFilesListResponses[keyof BrowserFilesListResponses]
+
+export type EventValidationCandidatesData = {
+  body: {
+    sessionID: string
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/event-validation/candidates"
+}
+
+export type EventValidationCandidatesErrors = {
+  /**
+   * ValidationInvalid | InvalidRequestError
+   */
+  400: ValidationInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * ValidationForbidden
+   */
+  403: ValidationForbidden
+  /**
+   * ValidationNotFound
+   */
+  404: ValidationNotFound
+  /**
+   * ValidationConflict
+   */
+  409: ValidationConflict
+  /**
+   * ValidationCapacity
+   */
+  429: ValidationCapacity
+  /**
+   * ValidationUnavailable
+   */
+  503: ValidationUnavailable
+}
+
+export type EventValidationCandidatesError = EventValidationCandidatesErrors[keyof EventValidationCandidatesErrors]
+
+export type EventValidationCandidatesResponses = {
+  /**
+   * Success
+   */
+  200: {
+    targets: Array<{
+      targetID: string
+      recipes: Array<
+        | {
+            schemaVersion: "work-command-recipe.v1"
+            logicalID: string
+            revision: number
+            executable: "installed-bun-v1"
+            argv: Array<
+              | {
+                  kind: "literal"
+                  value: string
+                }
+              | {
+                  kind: "parameter"
+                  parameter: string
+                }
+            >
+            parameters: Array<{
+              key: string
+              choices: Array<string>
+            }>
+            cwd: string | null
+            inputs: Array<string>
+            outputs: Array<string>
+            environment: Array<{
+              name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+              value: string
+            }>
+            workspace: "private_explicit_files.v1"
+            sandbox: {
+              id: "darwin-single-process-workspace-v1"
+              revision: 1
+              network: "deny"
+              processes: 1
+              openFiles: 64
+              maxInputFiles: 256
+              maxInputFileBytes: 16777216
+              maxInputBytes: 67108864
+              maxDepth: 16
+              maxOutputFiles: 32
+              maxOutputFileBytes: 1048576
+              maxOutputBytes: 33554432
+            }
+            timeoutMs: number
+            stdoutBytes: number
+            stderrBytes: number
+          }
+        | {
+            schemaVersion: "work-command-recipe.mac-x64.v1"
+            logicalID: string
+            revision: number
+            executable: "installed-bun-mac-x64-v1"
+            argv: Array<
+              | {
+                  kind: "literal"
+                  value: string
+                }
+              | {
+                  kind: "parameter"
+                  parameter: string
+                }
+            >
+            parameters: Array<{
+              key: string
+              choices: Array<string>
+            }>
+            cwd: string | null
+            inputs: Array<string>
+            outputs: Array<string>
+            environment: Array<{
+              name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+              value: string
+            }>
+            workspace: "private_explicit_files.v1"
+            sandbox: {
+              id: "darwin-single-process-workspace-v1"
+              revision: 1
+              network: "deny"
+              processes: 1
+              openFiles: 64
+              maxInputFiles: 256
+              maxInputFileBytes: 16777216
+              maxInputBytes: 67108864
+              maxDepth: 16
+              maxOutputFiles: 32
+              maxOutputFileBytes: 1048576
+              maxOutputBytes: 33554432
+            }
+            timeoutMs: number
+            stdoutBytes: number
+            stderrBytes: number
+          }
+        | {
+            schemaVersion: "work-command-recipe.v2"
+            logicalID: string
+            revision: number
+            executable: "installed-bun-v2"
+            argv: Array<
+              | {
+                  kind: "literal"
+                  value: string
+                }
+              | {
+                  kind: "parameter"
+                  parameter: string
+                }
+            >
+            parameters: Array<{
+              key: string
+              choices: Array<string>
+            }>
+            cwd: string | null
+            inputs: Array<string>
+            outputs: Array<string>
+            environment: Array<{
+              name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+              value: string
+            }>
+            workspace: "private_explicit_files.v1"
+            sandbox: {
+              revision: 1
+              network: "deny"
+              filesystem: "explicit_snapshot_closure"
+              payloadProcesses: 1
+              payloadThreadsMax: 64
+              supervisorProcessesMax: 2
+              openFiles: 64
+              stopProof: "root_exit_stream_eof_tree_empty"
+              id: "linux-cgroup2-single-payload-v1"
+              threadsEnforcement: "cgroup_pids"
+              cpu: {
+                quotaMicros: number
+                periodMicros: number
+                totalWatchdogMicros: number
+                pollMs: number
+              }
+              memory: {
+                maxBytes: number
+                swapMaxBytes: 0
+              }
+              tasksMax: 66
+            }
+            timeoutMs: number
+            stdoutBytes: number
+            stderrBytes: number
+            target: "linux-x64" | "linux-arm64"
+          }
+      >
+    }>
+  }
+}
+
+export type EventValidationCandidatesResponse =
+  EventValidationCandidatesResponses[keyof EventValidationCandidatesResponses]
+
+export type EventValidationCaptureData = {
+  body: {
+    sessionID: string
+    targetID: string
+    recipeID: string
+    parameters: Array<{
+      key: string
+      value: string
+    }>
+    watch: Array<string>
+    maxRuns: number
+    expiresAt: number
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/event-validation/capture"
+}
+
+export type EventValidationCaptureErrors = {
+  /**
+   * ValidationInvalid | InvalidRequestError
+   */
+  400: ValidationInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * ValidationForbidden
+   */
+  403: ValidationForbidden
+  /**
+   * ValidationNotFound
+   */
+  404: ValidationNotFound
+  /**
+   * ValidationConflict
+   */
+  409: ValidationConflict
+  /**
+   * ValidationCapacity
+   */
+  429: ValidationCapacity
+  /**
+   * ValidationUnavailable
+   */
+  503: ValidationUnavailable
+}
+
+export type EventValidationCaptureError = EventValidationCaptureErrors[keyof EventValidationCaptureErrors]
+
+export type EventValidationCaptureResponses = {
+  /**
+   * Success
+   */
+  200: {
+    captureID: string
+    expiresAt: number
+    preview: {
+      kind: "test" | "build"
+      recipe:
+        | {
+            schemaVersion: "work-command-recipe.v1"
+            logicalID: string
+            revision: number
+            executable: "installed-bun-v1"
+            argv: Array<
+              | {
+                  kind: "literal"
+                  value: string
+                }
+              | {
+                  kind: "parameter"
+                  parameter: string
+                }
+            >
+            parameters: Array<{
+              key: string
+              choices: Array<string>
+            }>
+            cwd: string | null
+            inputs: Array<string>
+            outputs: Array<string>
+            environment: Array<{
+              name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+              value: string
+            }>
+            workspace: "private_explicit_files.v1"
+            sandbox: {
+              id: "darwin-single-process-workspace-v1"
+              revision: 1
+              network: "deny"
+              processes: 1
+              openFiles: 64
+              maxInputFiles: 256
+              maxInputFileBytes: 16777216
+              maxInputBytes: 67108864
+              maxDepth: 16
+              maxOutputFiles: 32
+              maxOutputFileBytes: 1048576
+              maxOutputBytes: 33554432
+            }
+            timeoutMs: number
+            stdoutBytes: number
+            stderrBytes: number
+          }
+        | {
+            schemaVersion: "work-command-recipe.mac-x64.v1"
+            logicalID: string
+            revision: number
+            executable: "installed-bun-mac-x64-v1"
+            argv: Array<
+              | {
+                  kind: "literal"
+                  value: string
+                }
+              | {
+                  kind: "parameter"
+                  parameter: string
+                }
+            >
+            parameters: Array<{
+              key: string
+              choices: Array<string>
+            }>
+            cwd: string | null
+            inputs: Array<string>
+            outputs: Array<string>
+            environment: Array<{
+              name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+              value: string
+            }>
+            workspace: "private_explicit_files.v1"
+            sandbox: {
+              id: "darwin-single-process-workspace-v1"
+              revision: 1
+              network: "deny"
+              processes: 1
+              openFiles: 64
+              maxInputFiles: 256
+              maxInputFileBytes: 16777216
+              maxInputBytes: 67108864
+              maxDepth: 16
+              maxOutputFiles: 32
+              maxOutputFileBytes: 1048576
+              maxOutputBytes: 33554432
+            }
+            timeoutMs: number
+            stdoutBytes: number
+            stderrBytes: number
+          }
+        | {
+            schemaVersion: "work-command-recipe.v2"
+            logicalID: string
+            revision: number
+            executable: "installed-bun-v2"
+            argv: Array<
+              | {
+                  kind: "literal"
+                  value: string
+                }
+              | {
+                  kind: "parameter"
+                  parameter: string
+                }
+            >
+            parameters: Array<{
+              key: string
+              choices: Array<string>
+            }>
+            cwd: string | null
+            inputs: Array<string>
+            outputs: Array<string>
+            environment: Array<{
+              name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+              value: string
+            }>
+            workspace: "private_explicit_files.v1"
+            sandbox: {
+              revision: 1
+              network: "deny"
+              filesystem: "explicit_snapshot_closure"
+              payloadProcesses: 1
+              payloadThreadsMax: 64
+              supervisorProcessesMax: 2
+              openFiles: 64
+              stopProof: "root_exit_stream_eof_tree_empty"
+              id: "linux-cgroup2-single-payload-v1"
+              threadsEnforcement: "cgroup_pids"
+              cpu: {
+                quotaMicros: number
+                periodMicros: number
+                totalWatchdogMicros: number
+                pollMs: number
+              }
+              memory: {
+                maxBytes: number
+                swapMaxBytes: 0
+              }
+              tasksMax: 66
+            }
+            timeoutMs: number
+            stdoutBytes: number
+            stderrBytes: number
+            target: "linux-x64" | "linux-arm64"
+          }
+      parameters: Array<{
+        key: string
+        value: string
+      }>
+      watch: Array<string>
+      maxRuns: number
+      ruleExpiresAt: number
+    }
+  }
+}
+
+export type EventValidationCaptureResponse = EventValidationCaptureResponses[keyof EventValidationCaptureResponses]
+
+export type EventValidationConfigureCapturedData = {
+  body: {
+    captureID: string
+    ruleID: string
+    requestID: string
+    expectedRevision: number
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/event-validation/rules/configure-captured"
+}
+
+export type EventValidationConfigureCapturedErrors = {
+  /**
+   * ValidationInvalid | InvalidRequestError
+   */
+  400: ValidationInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * ValidationForbidden
+   */
+  403: ValidationForbidden
+  /**
+   * ValidationNotFound
+   */
+  404: ValidationNotFound
+  /**
+   * ValidationConflict
+   */
+  409: ValidationConflict
+  /**
+   * ValidationCapacity
+   */
+  429: ValidationCapacity
+  /**
+   * ValidationUnavailable
+   */
+  503: ValidationUnavailable
+}
+
+export type EventValidationConfigureCapturedError =
+  EventValidationConfigureCapturedErrors[keyof EventValidationConfigureCapturedErrors]
+
+export type EventValidationConfigureCapturedResponses = {
+  /**
+   * Success
+   */
+  200: {
+    receipt: {
+      version: 1
+      instanceID: string
+      requestID: string
+      ruleID: string
+      action: "create" | "update" | "enable" | "pause" | "revoke" | "verify" | "cancel"
+      ruleRevision: number
+      runID: string | null
+      createdAt: number
+      investigation?: {
+        version: 1
+        operation: "enable" | "disable"
+        epoch: number
+      }
+    }
+    replayed: boolean
+  }
+}
+
+export type EventValidationConfigureCapturedResponse =
+  EventValidationConfigureCapturedResponses[keyof EventValidationConfigureCapturedResponses]
+
+export type EventValidationRulesData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/v1/event-validation/rules"
+}
+
+export type EventValidationRulesErrors = {
+  /**
+   * ValidationInvalid | InvalidRequestError
+   */
+  400: ValidationInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * ValidationForbidden
+   */
+  403: ValidationForbidden
+  /**
+   * ValidationNotFound
+   */
+  404: ValidationNotFound
+  /**
+   * ValidationConflict
+   */
+  409: ValidationConflict
+  /**
+   * ValidationCapacity
+   */
+  429: ValidationCapacity
+  /**
+   * ValidationUnavailable
+   */
+  503: ValidationUnavailable
+}
+
+export type EventValidationRulesError = EventValidationRulesErrors[keyof EventValidationRulesErrors]
+
+export type EventValidationRulesResponses = {
+  /**
+   * Success
+   */
+  200: Array<{
+    version: 1
+    ruleID: string
+    instanceID: string
+    projectKey: string
+    revision: number
+    state: "disabled" | "enabled" | "paused" | "revoked"
+    operatorID: string
+    operatorRevision: number
+    configuration: {
+      profile: "project_validation_v1"
+      scope: {
+        instanceID: string
+        workspaceID: string | null
+        securityNamespaceID: string
+        namespaceBindingHash: string
+        locationKey: string
+        projectScopeKey: string
+        projectID: string
+        canonicalRoot: string
+        rootIdentity: {
+          kind: "posix"
+          device: string
+          inode: string
+        }
+      }
+      kind: "test" | "build"
+      recipe:
+        | {
+            schemaVersion: "work-command-recipe.v1"
+            logicalID: string
+            revision: number
+            executable: {
+              assetPath: string
+              sha256: string
+              bytes: number
+              platform: "darwin-arm64"
+              identity: {
+                kind: "posix"
+                device: string
+                inode: string
+              }
+            }
+            argv: Array<
+              | {
+                  kind: "literal"
+                  value: string
+                }
+              | {
+                  kind: "parameter"
+                  parameter: string
+                }
+            >
+            parameters: Array<{
+              key: string
+              choices: Array<string>
+            }>
+            cwd: string | null
+            inputs: Array<string>
+            outputs: Array<string>
+            environment: Array<{
+              name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+              value: string
+            }>
+            workspace: "private_explicit_files.v1"
+            sandbox: {
+              id: "darwin-single-process-workspace-v1"
+              revision: 1
+              network: "deny"
+              processes: 1
+              openFiles: 64
+              maxInputFiles: 256
+              maxInputFileBytes: 16777216
+              maxInputBytes: 67108864
+              maxDepth: 16
+              maxOutputFiles: 32
+              maxOutputFileBytes: 1048576
+              maxOutputBytes: 33554432
+            }
+            timeoutMs: number
+            stdoutBytes: number
+            stderrBytes: number
+          }
+        | {
+            schemaVersion: "work-command-recipe.mac-x64.v1"
+            logicalID: string
+            revision: number
+            executable: {
+              assetPath: "packages/work-file-helper/bin/darwin-x64/bun-command-runtime"
+              sha256: string
+              bytes: number
+              platform: "darwin-x64"
+              identity: {
+                kind: "posix"
+                device: string
+                inode: string
+              }
+            }
+            argv: Array<
+              | {
+                  kind: "literal"
+                  value: string
+                }
+              | {
+                  kind: "parameter"
+                  parameter: string
+                }
+            >
+            parameters: Array<{
+              key: string
+              choices: Array<string>
+            }>
+            cwd: string | null
+            inputs: Array<string>
+            outputs: Array<string>
+            environment: Array<{
+              name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+              value: string
+            }>
+            workspace: "private_explicit_files.v1"
+            sandbox: {
+              id: "darwin-single-process-workspace-v1"
+              revision: 1
+              network: "deny"
+              processes: 1
+              openFiles: 64
+              maxInputFiles: 256
+              maxInputFileBytes: 16777216
+              maxInputBytes: 67108864
+              maxDepth: 16
+              maxOutputFiles: 32
+              maxOutputFileBytes: 1048576
+              maxOutputBytes: 33554432
+            }
+            timeoutMs: number
+            stdoutBytes: number
+            stderrBytes: number
+          }
+        | {
+            schemaVersion: "work-command-recipe.v2"
+            logicalID: string
+            revision: number
+            executable: {
+              assetPath: string
+              sha256: string
+              bytes: number
+              platform: "linux-x64" | "linux-arm64"
+              identity: {
+                kind: "posix"
+                device: string
+                inode: string
+              }
+            }
+            argv: Array<
+              | {
+                  kind: "literal"
+                  value: string
+                }
+              | {
+                  kind: "parameter"
+                  parameter: string
+                }
+            >
+            parameters: Array<{
+              key: string
+              choices: Array<string>
+            }>
+            cwd: string | null
+            inputs: Array<string>
+            outputs: Array<string>
+            environment: Array<{
+              name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+              value: string
+            }>
+            workspace: "private_explicit_files.v1"
+            sandbox: {
+              revision: 1
+              network: "deny"
+              filesystem: "explicit_snapshot_closure"
+              payloadProcesses: 1
+              payloadThreadsMax: 64
+              supervisorProcessesMax: 2
+              openFiles: 64
+              stopProof: "root_exit_stream_eof_tree_empty"
+              id: "linux-cgroup2-single-payload-v1"
+              threadsEnforcement: "cgroup_pids"
+              cpu: {
+                quotaMicros: number
+                periodMicros: number
+                totalWatchdogMicros: number
+                pollMs: number
+              }
+              memory: {
+                maxBytes: number
+                swapMaxBytes: 0
+              }
+              tasksMax: 66
+            }
+            timeoutMs: number
+            stdoutBytes: number
+            stderrBytes: number
+          }
+      parameters: Array<{
+        key: string
+        value: string
+      }>
+      helperHash: string
+      watch: Array<string>
+      recipient: "local_status"
+      maxRuns: number
+      expiresAt: number
+      investigation: "disabled"
+      autoFix: false
+    }
+    configHash: string
+    approval: {
+      ruleRevision: number
+      operatorRevision: number
+      configHash: string
+    } | null
+    contentRevision: number
+    contentHash: string | null
+    runCount: number
+    pendingFirstAt: number | null
+    pendingLastAt: number | null
+    dueAt: number | null
+    currentRunID: string | null
+    lastReason:
+      | "disabled"
+      | "paused"
+      | "revoked"
+      | "debouncing"
+      | "unchanged"
+      | "ready"
+      | "running"
+      | "superseded"
+      | "cancelled"
+      | "expired"
+      | "budget_exhausted"
+      | "authority_changed"
+      | "native_unavailable"
+      | "unknown"
+      | "completed"
+    createdAt: number
+    updatedAt: number
+    investigationAuthority?:
+      | {
+          version: 1
+          epoch: number
+          updatedAt: number
+          state: "disabled"
+          grant: null
+        }
+      | {
+          version: 1
+          epoch: number
+          updatedAt: number
+          state: "enabled"
+          grant: {
+            version: 1
+            grantID: string
+            epoch: number
+            ruleID: string
+            principal: {
+              instanceID: string
+              actorID: string
+              revision: number
+              identityHash: string
+            }
+            credentialGeneration: number
+            policyRevision: number
+            policyHash: string
+            targetID: string
+            target: {
+              scope: {
+                actorID: string
+                workspaceID: string
+                securityNamespaceID: string
+                projectScopeKey: string
+              }
+              location: {
+                directory: string
+                workspaceID?: string
+              }
+              agentID: string
+              profile: {
+                id:
+                  | "project_work_v1"
+                  | "event_investigate_v1"
+                  | "project_shared_root_v1"
+                  | "project_deepseek_context_bound_v1"
+                  | "event_deepseek_dag_v1"
+                version: 1
+                hash: string
+              }
+              provider: {
+                providerID: string
+                modelID: string
+                protocol: string
+                routeID: string
+                configurationHash: string
+                endpoint: string
+                evidenceID: string
+                evidenceHash: string
+                endpointPinned: boolean
+                redirectsDenied: boolean
+                transportRetriesDenied: boolean
+                completion: {
+                  parameter: string
+                  hardLimit: boolean
+                  includesReasoning: boolean
+                  maxTokens: number
+                }
+              }
+              budget: {
+                maxTotalTokens: number
+                maxInputTokens: number
+                maxCompletionTokens: number
+                maxProviderDispatches: number
+                maxToolCalls: number
+                maxChildren: number
+                maxDurationMs: number
+                hourTokensMax: number
+                hourWindowMinutes: number
+              }
+              durationMs: number
+              version: 2
+              projectScope: {
+                projectID: string
+                locationKey: string
+                namespaceBindingHash: string
+                canonicalRoot: string
+                helperHash: string
+                rootIdentity:
+                  | {
+                      kind: "posix"
+                      device: string
+                      inode: string
+                    }
+                  | {
+                      kind: "windows"
+                      volumeSerial: string
+                      fileID: string
+                    }
+              }
+              contextPolicy: {
+                kind: "scoped_project_history_v1"
+                instructionsRevision: number
+                history: "same_work_activity"
+                graphs: Array<unknown>
+                references: Array<unknown>
+                files: "approved_tool_results_only"
+              }
+              toolPolicy: {
+                kind: "scoped_project_tools_v1"
+                capabilities: Array<{
+                  toolID: string
+                  definitionHash: string
+                  operations: Array<
+                    "read" | "list" | "search" | "write" | "edit" | "run" | "delegate" | "mcp" | "browser" | "network"
+                  >
+                }>
+                fileScope: {
+                  read: Array<{
+                    kind: "file" | "tree"
+                    path: string
+                  }>
+                  write: Array<{
+                    kind: "file" | "tree"
+                    path: string
+                  }>
+                  deny: Array<{
+                    kind: "file" | "tree"
+                    path: string
+                  }>
+                  maxReadBytes: number
+                  maxPageBytes: number
+                  maxHashBytes: number
+                  maxWriteBytes: number
+                  symlinks: "deny"
+                }
+                commandScope: Array<{
+                  command: {
+                    id: string
+                    revision: number
+                    hash: string
+                  }
+                  sandbox: {
+                    id: string
+                    revision: number
+                    hash: string
+                  }
+                  environmentHash: string
+                  networkHash: string
+                  filesystemHash: string
+                }>
+                commandRecipes?: Array<
+                  | {
+                      schemaVersion: "work-command-recipe.v1"
+                      logicalID: string
+                      revision: number
+                      executable: {
+                        assetPath: string
+                        sha256: string
+                        bytes: number
+                        platform: "darwin-arm64"
+                        identity: {
+                          kind: "posix"
+                          device: string
+                          inode: string
+                        }
+                      }
+                      argv: Array<
+                        | {
+                            kind: "literal"
+                            value: string
+                          }
+                        | {
+                            kind: "parameter"
+                            parameter: string
+                          }
+                      >
+                      parameters: Array<{
+                        key: string
+                        choices: Array<string>
+                      }>
+                      cwd: string | null
+                      inputs: Array<string>
+                      outputs: Array<string>
+                      environment: Array<{
+                        name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+                        value: string
+                      }>
+                      workspace: "private_explicit_files.v1"
+                      sandbox: {
+                        id: "darwin-single-process-workspace-v1"
+                        revision: 1
+                        network: "deny"
+                        processes: 1
+                        openFiles: 64
+                        maxInputFiles: 256
+                        maxInputFileBytes: 16777216
+                        maxInputBytes: 67108864
+                        maxDepth: 16
+                        maxOutputFiles: 32
+                        maxOutputFileBytes: 1048576
+                        maxOutputBytes: 33554432
+                      }
+                      timeoutMs: number
+                      stdoutBytes: number
+                      stderrBytes: number
+                    }
+                  | {
+                      schemaVersion: "work-command-recipe.mac-x64.v1"
+                      logicalID: string
+                      revision: number
+                      executable: {
+                        assetPath: "packages/work-file-helper/bin/darwin-x64/bun-command-runtime"
+                        sha256: string
+                        bytes: number
+                        platform: "darwin-x64"
+                        identity: {
+                          kind: "posix"
+                          device: string
+                          inode: string
+                        }
+                      }
+                      argv: Array<
+                        | {
+                            kind: "literal"
+                            value: string
+                          }
+                        | {
+                            kind: "parameter"
+                            parameter: string
+                          }
+                      >
+                      parameters: Array<{
+                        key: string
+                        choices: Array<string>
+                      }>
+                      cwd: string | null
+                      inputs: Array<string>
+                      outputs: Array<string>
+                      environment: Array<{
+                        name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+                        value: string
+                      }>
+                      workspace: "private_explicit_files.v1"
+                      sandbox: {
+                        id: "darwin-single-process-workspace-v1"
+                        revision: 1
+                        network: "deny"
+                        processes: 1
+                        openFiles: 64
+                        maxInputFiles: 256
+                        maxInputFileBytes: 16777216
+                        maxInputBytes: 67108864
+                        maxDepth: 16
+                        maxOutputFiles: 32
+                        maxOutputFileBytes: 1048576
+                        maxOutputBytes: 33554432
+                      }
+                      timeoutMs: number
+                      stdoutBytes: number
+                      stderrBytes: number
+                    }
+                  | {
+                      schemaVersion: "work-command-recipe.v2"
+                      logicalID: string
+                      revision: number
+                      executable: {
+                        assetPath: string
+                        sha256: string
+                        bytes: number
+                        platform: "linux-x64" | "linux-arm64" | "win32-x64" | "win32-arm64"
+                        identity:
+                          | {
+                              kind: "posix"
+                              device: string
+                              inode: string
+                            }
+                          | {
+                              kind: "windows"
+                              volumeSerial: string
+                              fileID: string
+                            }
+                      }
+                      argv: Array<
+                        | {
+                            kind: "literal"
+                            value: string
+                          }
+                        | {
+                            kind: "parameter"
+                            parameter: string
+                          }
+                      >
+                      parameters: Array<{
+                        key: string
+                        choices: Array<string>
+                      }>
+                      cwd: string | null
+                      inputs: Array<string>
+                      outputs: Array<string>
+                      environment: Array<{
+                        name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+                        value: string
+                      }>
+                      workspace: "private_explicit_files.v1"
+                      sandbox:
+                        | {
+                            revision: 1
+                            network: "deny"
+                            filesystem: "explicit_snapshot_closure"
+                            payloadProcesses: 1
+                            payloadThreadsMax: 64
+                            supervisorProcessesMax: 2
+                            openFiles: 64
+                            stopProof: "root_exit_stream_eof_tree_empty"
+                            id: "linux-cgroup2-single-payload-v1"
+                            threadsEnforcement: "cgroup_pids"
+                            cpu: {
+                              quotaMicros: number
+                              periodMicros: number
+                              totalWatchdogMicros: number
+                              pollMs: number
+                            }
+                            memory: {
+                              maxBytes: number
+                              swapMaxBytes: 0
+                            }
+                            tasksMax: 66
+                          }
+                        | {
+                            revision: 1
+                            network: "deny"
+                            filesystem: "explicit_snapshot_closure"
+                            payloadProcesses: 1
+                            payloadThreadsMax: 64
+                            supervisorProcessesMax: 2
+                            openFiles: 64
+                            stopProof: "root_exit_stream_eof_tree_empty"
+                            id: "win32-job-appcontainer-single-payload-v1"
+                            threadsEnforcement: "supervisor_watchdog"
+                            cpu: {
+                              hardCapPercent: number
+                              jobUserTimeLimit100ns: number
+                              totalWatchdogMicros: number
+                              pollMs: number
+                            }
+                            memory: {
+                              jobCommitMaxBytes: number
+                            }
+                            jobProcessesMax: 1
+                            noBreakaway: true
+                          }
+                      timeoutMs: number
+                      stdoutBytes: number
+                      stderrBytes: number
+                    }
+                >
+                integrations: Array<{
+                  kind: "mcp" | "browser" | "network"
+                  capability: {
+                    id: string
+                    revision: number
+                    hash: string
+                  }
+                  resources: Array<string>
+                }>
+              }
+              childPolicy:
+                | "deny_all"
+                | {
+                    kind: "root_budget_inheritance_v1"
+                    maxConcurrent: number
+                    profiles: Array<{
+                      id: string
+                      version: number
+                      hash: string
+                    }>
+                  }
+                | {
+                    kind: "shared_root_v1"
+                    maxConcurrent: number
+                    agents: Array<string>
+                    toolIDs: Array<string>
+                    budget: {
+                      maxTotalTokens: number
+                      maxInputTokens: number
+                      maxCompletionTokens: number
+                      maxProviderDispatches: number
+                      maxToolCalls: number
+                      maxChildren: number
+                      maxDurationMs: number
+                      hourTokensMax: number
+                      hourWindowMinutes: number
+                    }
+                  }
+                | {
+                    kind: "event_dag_v1"
+                    maxConcurrent: number
+                    agents: Array<string>
+                    toolIDs: Array<string>
+                    budget: {
+                      maxTotalTokens: number
+                      maxInputTokens: number
+                      maxCompletionTokens: number
+                      maxProviderDispatches: number
+                      maxToolCalls: number
+                      maxChildren: number
+                      maxDurationMs: number
+                      hourTokensMax: number
+                      hourWindowMinutes: number
+                    }
+                  }
+            }
+            scopeHash: string
+            createdAt: number
+            expiresAt: number
+          }
+        }
+  }>
+}
+
+export type EventValidationRulesResponse = EventValidationRulesResponses[keyof EventValidationRulesResponses]
+
+export type EventValidationRunsData = {
+  body?: never
+  path: {
+    ruleID: string
+  }
+  query?: never
+  url: "/api/v1/event-validation/rules/{ruleID}/runs"
+}
+
+export type EventValidationRunsErrors = {
+  /**
+   * ValidationInvalid | InvalidRequestError
+   */
+  400: ValidationInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * ValidationForbidden
+   */
+  403: ValidationForbidden
+  /**
+   * ValidationNotFound
+   */
+  404: ValidationNotFound
+  /**
+   * ValidationConflict
+   */
+  409: ValidationConflict
+  /**
+   * ValidationCapacity
+   */
+  429: ValidationCapacity
+  /**
+   * ValidationUnavailable
+   */
+  503: ValidationUnavailable
+}
+
+export type EventValidationRunsError = EventValidationRunsErrors[keyof EventValidationRunsErrors]
+
+export type EventValidationRunsResponses = {
+  /**
+   * Success
+   */
+  200: Array<{
+    record: {
+      version: 1
+      runID: string
+      ruleID: string
+      instanceID: string
+      projectKey: string
+      ruleRevision: number
+      contentRevision: number
+      contentHash: string
+      recipeHash: string
+      configHash: string
+      state: "queued" | "preparing" | "dispatching" | "settled" | "cancelled" | "superseded" | "unknown"
+      outcome: "passed" | "failed" | "cancelled" | "refused" | null
+      ownerToken: string
+      revision: number
+      cancelRequested: boolean
+      content: {
+        files: Array<{
+          relative: string
+          identity: {
+            kind: "posix"
+            device: string
+            inode: string
+          } | null
+          sha256: string | null
+          bytes: number
+          missing: boolean
+        }>
+        contentHash: string
+        observedAt: number
+      }
+      testRunID: string | null
+      previewBuildID: string | null
+      snapshotHash: string | null
+      processIncarnation: string | null
+      processID: number | null
+      workspaceBasename: string
+      workspaceIdentity: {
+        kind: "posix"
+        device: string
+        inode: string
+      } | null
+      retainedBytes: number
+      releasedAt: number | null
+      result: {
+        outcome: "passed" | "failed" | "cancelled" | "refused"
+        exitCode: number | null
+        signal: string | null
+        stdout: {
+          sha256: string
+          bytes: number
+          capturedBytes: number
+          truncated: boolean
+          complete: boolean
+          excerptTruncated: boolean
+          excerpt: string
+        }
+        stderr: {
+          sha256: string
+          bytes: number
+          capturedBytes: number
+          truncated: boolean
+          complete: boolean
+          excerptTruncated: boolean
+          excerpt: string
+        }
+        stopConfirmed: boolean
+        endedAt: number
+      } | null
+      resultCurrent: boolean
+      createdAt: number
+      startedAt: number | null
+      terminalAt: number | null
+      deadline: number
+      preparationRelease?: {
+        version: 1
+        preparationID: string
+        kind: "no_workspace_created" | "partial_workspace_cleaned"
+        workspaceIdentity: {
+          kind: "posix"
+          device: string
+          inode: string
+        } | null
+        observedAt: number
+      }
+    }
+    current: boolean
+    observation: "owned" | "known_terminal" | "recovery_required"
+  }>
+}
+
+export type EventValidationRunsResponse = EventValidationRunsResponses[keyof EventValidationRunsResponses]
+
+export type EventValidationConfigureData = {
+  body: {
+    ruleID: string
+    requestID: string
+    expectedRevision: number
+    configuration: {
+      profile: "project_validation_v1"
+      scope: {
+        instanceID: string
+        workspaceID: string | null
+        securityNamespaceID: string
+        namespaceBindingHash: string
+        locationKey: string
+        projectScopeKey: string
+        projectID: string
+        canonicalRoot: string
+        rootIdentity: {
+          kind: "posix"
+          device: string
+          inode: string
+        }
+      }
+      kind: "test" | "build"
+      recipe:
+        | {
+            schemaVersion: "work-command-recipe.v1"
+            logicalID: string
+            revision: number
+            executable: {
+              assetPath: string
+              sha256: string
+              bytes: number
+              platform: "darwin-arm64"
+              identity: {
+                kind: "posix"
+                device: string
+                inode: string
+              }
+            }
+            argv: Array<
+              | {
+                  kind: "literal"
+                  value: string
+                }
+              | {
+                  kind: "parameter"
+                  parameter: string
+                }
+            >
+            parameters: Array<{
+              key: string
+              choices: Array<string>
+            }>
+            cwd: string | null
+            inputs: Array<string>
+            outputs: Array<string>
+            environment: Array<{
+              name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+              value: string
+            }>
+            workspace: "private_explicit_files.v1"
+            sandbox: {
+              id: "darwin-single-process-workspace-v1"
+              revision: 1
+              network: "deny"
+              processes: 1
+              openFiles: 64
+              maxInputFiles: 256
+              maxInputFileBytes: 16777216
+              maxInputBytes: 67108864
+              maxDepth: 16
+              maxOutputFiles: 32
+              maxOutputFileBytes: 1048576
+              maxOutputBytes: 33554432
+            }
+            timeoutMs: number
+            stdoutBytes: number
+            stderrBytes: number
+          }
+        | {
+            schemaVersion: "work-command-recipe.mac-x64.v1"
+            logicalID: string
+            revision: number
+            executable: {
+              assetPath: "packages/work-file-helper/bin/darwin-x64/bun-command-runtime"
+              sha256: string
+              bytes: number
+              platform: "darwin-x64"
+              identity: {
+                kind: "posix"
+                device: string
+                inode: string
+              }
+            }
+            argv: Array<
+              | {
+                  kind: "literal"
+                  value: string
+                }
+              | {
+                  kind: "parameter"
+                  parameter: string
+                }
+            >
+            parameters: Array<{
+              key: string
+              choices: Array<string>
+            }>
+            cwd: string | null
+            inputs: Array<string>
+            outputs: Array<string>
+            environment: Array<{
+              name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+              value: string
+            }>
+            workspace: "private_explicit_files.v1"
+            sandbox: {
+              id: "darwin-single-process-workspace-v1"
+              revision: 1
+              network: "deny"
+              processes: 1
+              openFiles: 64
+              maxInputFiles: 256
+              maxInputFileBytes: 16777216
+              maxInputBytes: 67108864
+              maxDepth: 16
+              maxOutputFiles: 32
+              maxOutputFileBytes: 1048576
+              maxOutputBytes: 33554432
+            }
+            timeoutMs: number
+            stdoutBytes: number
+            stderrBytes: number
+          }
+        | {
+            schemaVersion: "work-command-recipe.v2"
+            logicalID: string
+            revision: number
+            executable: {
+              assetPath: string
+              sha256: string
+              bytes: number
+              platform: "linux-x64" | "linux-arm64"
+              identity: {
+                kind: "posix"
+                device: string
+                inode: string
+              }
+            }
+            argv: Array<
+              | {
+                  kind: "literal"
+                  value: string
+                }
+              | {
+                  kind: "parameter"
+                  parameter: string
+                }
+            >
+            parameters: Array<{
+              key: string
+              choices: Array<string>
+            }>
+            cwd: string | null
+            inputs: Array<string>
+            outputs: Array<string>
+            environment: Array<{
+              name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+              value: string
+            }>
+            workspace: "private_explicit_files.v1"
+            sandbox: {
+              revision: 1
+              network: "deny"
+              filesystem: "explicit_snapshot_closure"
+              payloadProcesses: 1
+              payloadThreadsMax: 64
+              supervisorProcessesMax: 2
+              openFiles: 64
+              stopProof: "root_exit_stream_eof_tree_empty"
+              id: "linux-cgroup2-single-payload-v1"
+              threadsEnforcement: "cgroup_pids"
+              cpu: {
+                quotaMicros: number
+                periodMicros: number
+                totalWatchdogMicros: number
+                pollMs: number
+              }
+              memory: {
+                maxBytes: number
+                swapMaxBytes: 0
+              }
+              tasksMax: 66
+            }
+            timeoutMs: number
+            stdoutBytes: number
+            stderrBytes: number
+          }
+      parameters: Array<{
+        key: string
+        value: string
+      }>
+      helperHash: string
+      watch: Array<string>
+      recipient: "local_status"
+      maxRuns: number
+      expiresAt: number
+      investigation: "disabled"
+      autoFix: false
+    }
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/event-validation/rules/configure"
+}
+
+export type EventValidationConfigureErrors = {
+  /**
+   * ValidationInvalid | InvalidRequestError
+   */
+  400: ValidationInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * ValidationForbidden
+   */
+  403: ValidationForbidden
+  /**
+   * ValidationNotFound
+   */
+  404: ValidationNotFound
+  /**
+   * ValidationConflict
+   */
+  409: ValidationConflict
+  /**
+   * ValidationCapacity
+   */
+  429: ValidationCapacity
+  /**
+   * ValidationUnavailable
+   */
+  503: ValidationUnavailable
+}
+
+export type EventValidationConfigureError = EventValidationConfigureErrors[keyof EventValidationConfigureErrors]
+
+export type EventValidationConfigureResponses = {
+  /**
+   * Success
+   */
+  200: {
+    receipt: {
+      version: 1
+      instanceID: string
+      requestID: string
+      ruleID: string
+      action: "create" | "update" | "enable" | "pause" | "revoke" | "verify" | "cancel"
+      ruleRevision: number
+      runID: string | null
+      createdAt: number
+      investigation?: {
+        version: 1
+        operation: "enable" | "disable"
+        epoch: number
+      }
+    }
+    replayed: boolean
+  }
+}
+
+export type EventValidationConfigureResponse =
+  EventValidationConfigureResponses[keyof EventValidationConfigureResponses]
+
+export type EventValidationControlData = {
+  body: {
+    requestID: string
+    expectedRevision: number
+    action: "enable" | "pause" | "revoke" | "verify" | "cancel"
+  }
+  path: {
+    ruleID: string
+  }
+  query?: never
+  url: "/api/v1/event-validation/rules/{ruleID}/control"
+}
+
+export type EventValidationControlErrors = {
+  /**
+   * ValidationInvalid | InvalidRequestError
+   */
+  400: ValidationInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * ValidationForbidden
+   */
+  403: ValidationForbidden
+  /**
+   * ValidationNotFound
+   */
+  404: ValidationNotFound
+  /**
+   * ValidationConflict
+   */
+  409: ValidationConflict
+  /**
+   * ValidationCapacity
+   */
+  429: ValidationCapacity
+  /**
+   * ValidationUnavailable
+   */
+  503: ValidationUnavailable
+}
+
+export type EventValidationControlError = EventValidationControlErrors[keyof EventValidationControlErrors]
+
+export type EventValidationControlResponses = {
+  /**
+   * Success
+   */
+  200: {
+    receipt: {
+      version: 1
+      instanceID: string
+      requestID: string
+      ruleID: string
+      action: "create" | "update" | "enable" | "pause" | "revoke" | "verify" | "cancel"
+      ruleRevision: number
+      runID: string | null
+      createdAt: number
+      investigation?: {
+        version: 1
+        operation: "enable" | "disable"
+        epoch: number
+      }
+    }
+    replayed: boolean
+  }
+}
+
+export type EventValidationControlResponse = EventValidationControlResponses[keyof EventValidationControlResponses]
+
+export type EventInvestigationCandidatesData = {
+  body?: never
+  path: {
+    ruleID: string
+  }
+  query?: never
+  url: "/api/v1/event-investigation/rules/{ruleID}/candidates"
+}
+
+export type EventInvestigationCandidatesErrors = {
+  /**
+   * ValidationInvalid | InvalidRequestError
+   */
+  400: ValidationInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * ValidationForbidden
+   */
+  403: ValidationForbidden
+  /**
+   * ValidationConflict
+   */
+  409: ValidationConflict
+  /**
+   * ValidationUnavailable
+   */
+  503: ValidationUnavailable
+}
+
+export type EventInvestigationCandidatesError =
+  EventInvestigationCandidatesErrors[keyof EventInvestigationCandidatesErrors]
+
+export type EventInvestigationCandidatesResponses = {
+  /**
+   * Success
+   */
+  200: {
+    ruleID: string
+    ruleRevision: number
+    operatorRevision: number
+    epoch: number
+    maxExpiresAt: number
+    targets: Array<{
+      targetID: string
+      profile: {
+        id: "event_investigate_v1"
+        version: 1
+        hash: string
+      }
+      provider: {
+        providerID: string
+        modelID: string
+        routeID: string
+      }
+      read: Array<string>
+      budget: {
+        maxTotalTokens: number
+        maxInputTokens: number
+        maxCompletionTokens: number
+        maxProviderDispatches: number
+        maxToolCalls: number
+        maxChildren: number
+        maxDurationMs: number
+        hourTokensMax: number
+        hourWindowMinutes: number
+      }
+      durationMs: number
+    }>
+  }
+}
+
+export type EventInvestigationCandidatesResponse =
+  EventInvestigationCandidatesResponses[keyof EventInvestigationCandidatesResponses]
+
+export type EventInvestigationReportsData = {
+  body?: never
+  path: {
+    ruleID: string
+  }
+  query?: never
+  url: "/api/v1/event-investigation/rules/{ruleID}/reports"
+}
+
+export type EventInvestigationReportsErrors = {
+  /**
+   * ValidationInvalid | InvalidRequestError
+   */
+  400: ValidationInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * ValidationForbidden
+   */
+  403: ValidationForbidden
+  /**
+   * ValidationConflict
+   */
+  409: ValidationConflict
+  /**
+   * ValidationUnavailable
+   */
+  503: ValidationUnavailable
+}
+
+export type EventInvestigationReportsError = EventInvestigationReportsErrors[keyof EventInvestigationReportsErrors]
+
+export type EventInvestigationReportsResponses = {
+  /**
+   * Success
+   */
+  200: Array<{
+    receiptID: string
+    failureKey: string
+    runID: string
+    contentRevision: number
+    contentHash: string
+    sessionID: string
+    grantEpoch: number
+    createdAt: number
+    deadline: number
+    work: {
+      admissionState: "reserved" | "ready" | "rejected"
+      controlState: "active" | "paused" | "revoked" | "cancelled" | "expired"
+      controlRevision: number
+      outcome: "pending" | "succeeded" | "failed" | "unknown"
+    }
+  }>
+}
+
+export type EventInvestigationReportsResponse =
+  EventInvestigationReportsResponses[keyof EventInvestigationReportsResponses]
+
+export type EventInvestigationCaptureData = {
+  body: {
+    ruleID: string
+    targetID: string
+    expiresAt: number
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/event-investigation/capture"
+}
+
+export type EventInvestigationCaptureErrors = {
+  /**
+   * ValidationInvalid | InvalidRequestError
+   */
+  400: ValidationInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * ValidationForbidden
+   */
+  403: ValidationForbidden
+  /**
+   * ValidationConflict
+   */
+  409: ValidationConflict
+  /**
+   * ValidationUnavailable
+   */
+  503: ValidationUnavailable
+}
+
+export type EventInvestigationCaptureError = EventInvestigationCaptureErrors[keyof EventInvestigationCaptureErrors]
+
+export type EventInvestigationCaptureResponses = {
+  /**
+   * Success
+   */
+  200: {
+    captureID: string
+    expiresAt: number
+    preview: {
+      ruleID: string
+      ruleRevision: number
+      operatorRevision: number
+      epoch: number
+      grantExpiresAt: number
+      target: {
+        targetID: string
+        profile: {
+          id: "event_investigate_v1"
+          version: 1
+          hash: string
+        }
+        provider: {
+          providerID: string
+          modelID: string
+          routeID: string
+        }
+        read: Array<string>
+        budget: {
+          maxTotalTokens: number
+          maxInputTokens: number
+          maxCompletionTokens: number
+          maxProviderDispatches: number
+          maxToolCalls: number
+          maxChildren: number
+          maxDurationMs: number
+          hourTokensMax: number
+          hourWindowMinutes: number
+        }
+        durationMs: number
+      }
+    }
+  }
+}
+
+export type EventInvestigationCaptureResponse =
+  EventInvestigationCaptureResponses[keyof EventInvestigationCaptureResponses]
+
+export type EventInvestigationControlData = {
+  body: {
+    ruleID: string
+    requestID: string
+    operation: "enable" | "disable"
+    expectedEpoch: number
+    expectedOperatorRevision: number
+    targetID: string | null
+    expiresAt: number | null
+    captureID: string | null
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/event-investigation/control"
+}
+
+export type EventInvestigationControlErrors = {
+  /**
+   * ValidationInvalid | InvalidRequestError
+   */
+  400: ValidationInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * ValidationForbidden
+   */
+  403: ValidationForbidden
+  /**
+   * ValidationConflict
+   */
+  409: ValidationConflict
+  /**
+   * ValidationUnavailable
+   */
+  503: ValidationUnavailable
+}
+
+export type EventInvestigationControlError = EventInvestigationControlErrors[keyof EventInvestigationControlErrors]
+
+export type EventInvestigationControlResponses = {
+  /**
+   * Success
+   */
+  200: {
+    receipt: {
+      version: 1
+      instanceID: string
+      requestID: string
+      ruleID: string
+      action: "create" | "update" | "enable" | "pause" | "revoke" | "verify" | "cancel"
+      ruleRevision: number
+      runID: string | null
+      createdAt: number
+      investigation?: {
+        version: 1
+        operation: "enable" | "disable"
+        epoch: number
+      }
+    }
+    replayed: boolean
+  }
+}
+
+export type EventInvestigationControlResponse =
+  EventInvestigationControlResponses[keyof EventInvestigationControlResponses]
 
 export type GatewayModelsData = {
   body?: never
@@ -12187,6 +17351,7 @@ export type DeepagentPanelStatusResponse = DeepagentPanelStatusResponses[keyof D
 export type DeepagentGoalStartData = {
   body?: {
     sessionID: string
+    requestID: string
     objective?: string
     criteria?: Array<{
       kind: "tests_pass" | "no_diagnostics" | "reviewer_clean" | "panel_approves" | "plan_complete"
@@ -12215,19 +17380,39 @@ export type DeepagentGoalStartErrors = {
    * DeepAgentPromotionError | InvalidRequestError
    */
   400: DeepAgentPromotionError | InvalidRequestError
+  /**
+   * DeepAgentGoalControlMissing
+   */
+  404: DeepAgentGoalControlMissing
+  /**
+   * DeepAgentGoalControlConflict
+   */
+  409: DeepAgentGoalControlConflict
+  /**
+   * DeepAgentGoalControlUnavailable
+   */
+  503: DeepAgentGoalControlUnavailable
 }
 
 export type DeepagentGoalStartError = DeepagentGoalStartErrors[keyof DeepagentGoalStartErrors]
 
 export type DeepagentGoalStartResponses = {
   /**
-   * The started goal (goalId + initial phase)
+   * Durable Goal acceptance receipt; wake publication is independently recoverable
    */
   200: {
     goalId: string
     planDocId: string
     phase: string
     running: boolean
+    revision: number
+    requestedPhase: "running" | "paused" | "stopped" | "done" | "needs_human" | "rolled_back"
+    preparation: "preparing" | "ready" | "recovery_required"
+    inFlight: boolean
+    recoveryRequired: boolean
+    wakeState: "none" | "pending" | "published" | "superseded"
+    receiptID?: string
+    replayed: boolean
   }
 }
 
@@ -12236,6 +17421,9 @@ export type DeepagentGoalStartResponse = DeepagentGoalStartResponses[keyof Deepa
 export type DeepagentGoalPauseData = {
   body?: {
     sessionID: string
+    goalId: string
+    expectedRevision: number
+    requestID: string
   }
   path?: never
   query?: {
@@ -12250,16 +17438,39 @@ export type DeepagentGoalPauseErrors = {
    * DeepAgentPromotionError | InvalidRequestError
    */
   400: DeepAgentPromotionError | InvalidRequestError
+  /**
+   * DeepAgentGoalControlMissing
+   */
+  404: DeepAgentGoalControlMissing
+  /**
+   * DeepAgentGoalControlConflict
+   */
+  409: DeepAgentGoalControlConflict
+  /**
+   * DeepAgentGoalControlUnavailable
+   */
+  503: DeepAgentGoalControlUnavailable
 }
 
 export type DeepagentGoalPauseError = DeepagentGoalPauseErrors[keyof DeepagentGoalPauseErrors]
 
 export type DeepagentGoalPauseResponses = {
   /**
-   * Whether the goal was paused
+   * Pause control receipt; inFlight remains explicit
    */
   200: {
-    ok: boolean
+    goalId: string
+    planDocId: string
+    phase: string
+    running: boolean
+    revision: number
+    requestedPhase: "running" | "paused" | "stopped" | "done" | "needs_human" | "rolled_back"
+    preparation: "preparing" | "ready" | "recovery_required"
+    inFlight: boolean
+    recoveryRequired: boolean
+    wakeState: "none" | "pending" | "published" | "superseded"
+    receiptID?: string
+    replayed: boolean
   }
 }
 
@@ -12268,6 +17479,9 @@ export type DeepagentGoalPauseResponse = DeepagentGoalPauseResponses[keyof Deepa
 export type DeepagentGoalResumeData = {
   body?: {
     sessionID: string
+    goalId: string
+    expectedRevision: number
+    requestID: string
   }
   path?: never
   query?: {
@@ -12282,16 +17496,39 @@ export type DeepagentGoalResumeErrors = {
    * DeepAgentPromotionError | InvalidRequestError
    */
   400: DeepAgentPromotionError | InvalidRequestError
+  /**
+   * DeepAgentGoalControlMissing
+   */
+  404: DeepAgentGoalControlMissing
+  /**
+   * DeepAgentGoalControlConflict
+   */
+  409: DeepAgentGoalControlConflict
+  /**
+   * DeepAgentGoalControlUnavailable
+   */
+  503: DeepAgentGoalControlUnavailable
 }
 
 export type DeepagentGoalResumeError = DeepagentGoalResumeErrors[keyof DeepagentGoalResumeErrors]
 
 export type DeepagentGoalResumeResponses = {
   /**
-   * Whether the goal was resumed
+   * Resume control receipt and durable wake obligation
    */
   200: {
-    ok: boolean
+    goalId: string
+    planDocId: string
+    phase: string
+    running: boolean
+    revision: number
+    requestedPhase: "running" | "paused" | "stopped" | "done" | "needs_human" | "rolled_back"
+    preparation: "preparing" | "ready" | "recovery_required"
+    inFlight: boolean
+    recoveryRequired: boolean
+    wakeState: "none" | "pending" | "published" | "superseded"
+    receiptID?: string
+    replayed: boolean
   }
 }
 
@@ -12300,6 +17537,9 @@ export type DeepagentGoalResumeResponse = DeepagentGoalResumeResponses[keyof Dee
 export type DeepagentGoalStopData = {
   body?: {
     sessionID: string
+    goalId: string
+    expectedRevision: number
+    requestID: string
   }
   path?: never
   query?: {
@@ -12314,20 +17554,760 @@ export type DeepagentGoalStopErrors = {
    * DeepAgentPromotionError | InvalidRequestError
    */
   400: DeepAgentPromotionError | InvalidRequestError
+  /**
+   * DeepAgentGoalControlMissing
+   */
+  404: DeepAgentGoalControlMissing
+  /**
+   * DeepAgentGoalControlConflict
+   */
+  409: DeepAgentGoalControlConflict
+  /**
+   * DeepAgentGoalControlUnavailable
+   */
+  503: DeepAgentGoalControlUnavailable
 }
 
 export type DeepagentGoalStopError = DeepagentGoalStopErrors[keyof DeepagentGoalStopErrors]
 
 export type DeepagentGoalStopResponses = {
   /**
-   * Whether the goal was stopped
+   * Stop request receipt; inFlight does not imply confirmed interruption
    */
   200: {
-    ok: boolean
+    goalId: string
+    planDocId: string
+    phase: string
+    running: boolean
+    revision: number
+    requestedPhase: "running" | "paused" | "stopped" | "done" | "needs_human" | "rolled_back"
+    preparation: "preparing" | "ready" | "recovery_required"
+    inFlight: boolean
+    recoveryRequired: boolean
+    wakeState: "none" | "pending" | "published" | "superseded"
+    receiptID?: string
+    replayed: boolean
   }
 }
 
 export type DeepagentGoalStopResponse = DeepagentGoalStopResponses[keyof DeepagentGoalStopResponses]
+
+export type DeepagentGoalPlanRebaseBeginData = {
+  body: {
+    sessionID: string
+    goalID: string
+    expectedControlRevision: number
+    requestID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/goal/plan-rebase/begin"
+}
+
+export type DeepagentGoalPlanRebaseBeginErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * DeepAgentGoalRebaseUnauthorized | Unauthorized
+   */
+  401: DeepAgentGoalRebaseUnauthorized
+  /**
+   * DeepAgentGoalRebaseError
+   */
+  409: DeepAgentGoalRebaseError
+}
+
+export type DeepagentGoalPlanRebaseBeginError =
+  DeepagentGoalPlanRebaseBeginErrors[keyof DeepagentGoalPlanRebaseBeginErrors]
+
+export type DeepagentGoalPlanRebaseBeginResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: 1
+    originalReceipt: {
+      version: 1
+      requestID: string
+      requestHash: string
+      action: "begin" | "apply" | "cancel" | "reconcile"
+      editID: string
+      goalID: string
+      sessionID: string
+      revision: number
+      state:
+        | "waiting_boundary"
+        | "ready"
+        | "prepared"
+        | "mirror_pending"
+        | "committed"
+        | "cancelled"
+        | "superseded"
+        | "recovery_required"
+      sourcePlanRevision: number
+      sourceControlRevision: number
+      targetPlanRevision: number
+      controlRevision: number
+      sourceReceiptHash: string | null
+      candidateHash: string | null
+      committedReceiptHash: string | null
+      planDocID: string
+      planDocVersion: number
+      planDocHash: string | null
+      nextSeq: number
+      confirmedDocuments: number
+      totalDocuments: number
+      projections: Array<{
+        documentID: string
+        state: "pending" | "confirmed"
+        version: number | null
+        hash: string | null
+      }>
+      partial: boolean
+      execution: "waiting_boundary" | "paused" | "blocked" | "terminal"
+      recordedAt: number
+    } | null
+    current: {
+      editID: string
+      revision: number
+      state:
+        | "waiting_boundary"
+        | "ready"
+        | "prepared"
+        | "mirror_pending"
+        | "committed"
+        | "cancelled"
+        | "superseded"
+        | "recovery_required"
+      controlRevision: number
+      planRevision: number
+      confirmedDocuments: number
+      totalDocuments: number
+      partial: boolean
+      safeToResume: boolean
+      execution: "waiting_boundary" | "blocked" | "terminal" | "paused" | "running"
+      retry: "same_request" | "refresh" | "reconcile" | "none"
+      editSource: {
+        planDocument: {
+          id: string
+          type: "plan" | "run_context" | "worklog" | "diagnosis" | "decision"
+          scope: string
+          status: "draft" | "candidate" | "active" | "superseded" | "rejected" | "quarantined" | "provisional"
+          version: number
+          superseded_by: string | null
+          created_round: number | null
+          domain: string | null
+          tags: Array<string>
+          description: string
+          provenance: {
+            [key: string]: unknown
+          }
+          links: Array<{
+            rel: string
+            to: string
+            note?: string
+          }>
+          extensions?: {
+            [key: string]: unknown
+          }
+          body: string
+        }
+        planDocHash: string
+        sourceReceiptHash: string
+        baselineDocsHash: string
+        attemptedStepIDs: Array<string>
+      } | null
+    }
+    replayed: boolean
+  }
+}
+
+export type DeepagentGoalPlanRebaseBeginResponse =
+  DeepagentGoalPlanRebaseBeginResponses[keyof DeepagentGoalPlanRebaseBeginResponses]
+
+export type DeepagentGoalPlanRebaseApplyData = {
+  body: {
+    sessionID: string
+    goalID: string
+    editID: string
+    requestID: string
+    expectedEditRevision: number
+    expectedControlRevision: number
+    expectedPlanRevision: number
+    expectedDocVersion: number
+    expectedDocHash: string
+    candidate: {
+      steps: Array<{
+        step_id: string
+        title: string
+        status: "pending" | "active" | "done" | "cancelled" | "blocked"
+        acceptance?: string | null
+        assigned_agent?: string | null
+        evidence?: Array<string>
+        note?: string | null
+      }>
+      activeStepID: string | null
+      dispositions: Array<{
+        stepID: string
+        reason: string
+      }>
+    }
+    reason: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/goal/plan-rebase/apply"
+}
+
+export type DeepagentGoalPlanRebaseApplyErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * DeepAgentGoalRebaseUnauthorized | Unauthorized
+   */
+  401: DeepAgentGoalRebaseUnauthorized
+  /**
+   * DeepAgentGoalRebaseError
+   */
+  409: DeepAgentGoalRebaseError
+}
+
+export type DeepagentGoalPlanRebaseApplyError =
+  DeepagentGoalPlanRebaseApplyErrors[keyof DeepagentGoalPlanRebaseApplyErrors]
+
+export type DeepagentGoalPlanRebaseApplyResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: 1
+    originalReceipt: {
+      version: 1
+      requestID: string
+      requestHash: string
+      action: "begin" | "apply" | "cancel" | "reconcile"
+      editID: string
+      goalID: string
+      sessionID: string
+      revision: number
+      state:
+        | "waiting_boundary"
+        | "ready"
+        | "prepared"
+        | "mirror_pending"
+        | "committed"
+        | "cancelled"
+        | "superseded"
+        | "recovery_required"
+      sourcePlanRevision: number
+      sourceControlRevision: number
+      targetPlanRevision: number
+      controlRevision: number
+      sourceReceiptHash: string | null
+      candidateHash: string | null
+      committedReceiptHash: string | null
+      planDocID: string
+      planDocVersion: number
+      planDocHash: string | null
+      nextSeq: number
+      confirmedDocuments: number
+      totalDocuments: number
+      projections: Array<{
+        documentID: string
+        state: "pending" | "confirmed"
+        version: number | null
+        hash: string | null
+      }>
+      partial: boolean
+      execution: "waiting_boundary" | "paused" | "blocked" | "terminal"
+      recordedAt: number
+    } | null
+    current: {
+      editID: string
+      revision: number
+      state:
+        | "waiting_boundary"
+        | "ready"
+        | "prepared"
+        | "mirror_pending"
+        | "committed"
+        | "cancelled"
+        | "superseded"
+        | "recovery_required"
+      controlRevision: number
+      planRevision: number
+      confirmedDocuments: number
+      totalDocuments: number
+      partial: boolean
+      safeToResume: boolean
+      execution: "waiting_boundary" | "blocked" | "terminal" | "paused" | "running"
+      retry: "same_request" | "refresh" | "reconcile" | "none"
+      editSource: {
+        planDocument: {
+          id: string
+          type: "plan" | "run_context" | "worklog" | "diagnosis" | "decision"
+          scope: string
+          status: "draft" | "candidate" | "active" | "superseded" | "rejected" | "quarantined" | "provisional"
+          version: number
+          superseded_by: string | null
+          created_round: number | null
+          domain: string | null
+          tags: Array<string>
+          description: string
+          provenance: {
+            [key: string]: unknown
+          }
+          links: Array<{
+            rel: string
+            to: string
+            note?: string
+          }>
+          extensions?: {
+            [key: string]: unknown
+          }
+          body: string
+        }
+        planDocHash: string
+        sourceReceiptHash: string
+        baselineDocsHash: string
+        attemptedStepIDs: Array<string>
+      } | null
+    }
+    replayed: boolean
+  }
+}
+
+export type DeepagentGoalPlanRebaseApplyResponse =
+  DeepagentGoalPlanRebaseApplyResponses[keyof DeepagentGoalPlanRebaseApplyResponses]
+
+export type DeepagentGoalPlanRebaseCancelData = {
+  body: {
+    sessionID: string
+    goalID: string
+    editID: string
+    requestID: string
+    expectedEditRevision: number
+    expectedControlRevision: number
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/goal/plan-rebase/cancel"
+}
+
+export type DeepagentGoalPlanRebaseCancelErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * DeepAgentGoalRebaseUnauthorized | Unauthorized
+   */
+  401: DeepAgentGoalRebaseUnauthorized
+  /**
+   * DeepAgentGoalRebaseError
+   */
+  409: DeepAgentGoalRebaseError
+}
+
+export type DeepagentGoalPlanRebaseCancelError =
+  DeepagentGoalPlanRebaseCancelErrors[keyof DeepagentGoalPlanRebaseCancelErrors]
+
+export type DeepagentGoalPlanRebaseCancelResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: 1
+    originalReceipt: {
+      version: 1
+      requestID: string
+      requestHash: string
+      action: "begin" | "apply" | "cancel" | "reconcile"
+      editID: string
+      goalID: string
+      sessionID: string
+      revision: number
+      state:
+        | "waiting_boundary"
+        | "ready"
+        | "prepared"
+        | "mirror_pending"
+        | "committed"
+        | "cancelled"
+        | "superseded"
+        | "recovery_required"
+      sourcePlanRevision: number
+      sourceControlRevision: number
+      targetPlanRevision: number
+      controlRevision: number
+      sourceReceiptHash: string | null
+      candidateHash: string | null
+      committedReceiptHash: string | null
+      planDocID: string
+      planDocVersion: number
+      planDocHash: string | null
+      nextSeq: number
+      confirmedDocuments: number
+      totalDocuments: number
+      projections: Array<{
+        documentID: string
+        state: "pending" | "confirmed"
+        version: number | null
+        hash: string | null
+      }>
+      partial: boolean
+      execution: "waiting_boundary" | "paused" | "blocked" | "terminal"
+      recordedAt: number
+    } | null
+    current: {
+      editID: string
+      revision: number
+      state:
+        | "waiting_boundary"
+        | "ready"
+        | "prepared"
+        | "mirror_pending"
+        | "committed"
+        | "cancelled"
+        | "superseded"
+        | "recovery_required"
+      controlRevision: number
+      planRevision: number
+      confirmedDocuments: number
+      totalDocuments: number
+      partial: boolean
+      safeToResume: boolean
+      execution: "waiting_boundary" | "blocked" | "terminal" | "paused" | "running"
+      retry: "same_request" | "refresh" | "reconcile" | "none"
+      editSource: {
+        planDocument: {
+          id: string
+          type: "plan" | "run_context" | "worklog" | "diagnosis" | "decision"
+          scope: string
+          status: "draft" | "candidate" | "active" | "superseded" | "rejected" | "quarantined" | "provisional"
+          version: number
+          superseded_by: string | null
+          created_round: number | null
+          domain: string | null
+          tags: Array<string>
+          description: string
+          provenance: {
+            [key: string]: unknown
+          }
+          links: Array<{
+            rel: string
+            to: string
+            note?: string
+          }>
+          extensions?: {
+            [key: string]: unknown
+          }
+          body: string
+        }
+        planDocHash: string
+        sourceReceiptHash: string
+        baselineDocsHash: string
+        attemptedStepIDs: Array<string>
+      } | null
+    }
+    replayed: boolean
+  }
+}
+
+export type DeepagentGoalPlanRebaseCancelResponse =
+  DeepagentGoalPlanRebaseCancelResponses[keyof DeepagentGoalPlanRebaseCancelResponses]
+
+export type DeepagentGoalPlanRebaseGetData = {
+  body?: never
+  path: {
+    editID: string
+  }
+  query: {
+    directory?: string
+    workspace?: string
+    sessionID: string
+    goalID: string
+    requestID: string
+  }
+  url: "/deepagent/goal/plan-rebase/{editID}"
+}
+
+export type DeepagentGoalPlanRebaseGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * DeepAgentGoalRebaseUnauthorized | Unauthorized
+   */
+  401: DeepAgentGoalRebaseUnauthorized
+  /**
+   * DeepAgentGoalRebaseError
+   */
+  409: DeepAgentGoalRebaseError
+}
+
+export type DeepagentGoalPlanRebaseGetError = DeepagentGoalPlanRebaseGetErrors[keyof DeepagentGoalPlanRebaseGetErrors]
+
+export type DeepagentGoalPlanRebaseGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: 1
+    originalReceipt: {
+      version: 1
+      requestID: string
+      requestHash: string
+      action: "begin" | "apply" | "cancel" | "reconcile"
+      editID: string
+      goalID: string
+      sessionID: string
+      revision: number
+      state:
+        | "waiting_boundary"
+        | "ready"
+        | "prepared"
+        | "mirror_pending"
+        | "committed"
+        | "cancelled"
+        | "superseded"
+        | "recovery_required"
+      sourcePlanRevision: number
+      sourceControlRevision: number
+      targetPlanRevision: number
+      controlRevision: number
+      sourceReceiptHash: string | null
+      candidateHash: string | null
+      committedReceiptHash: string | null
+      planDocID: string
+      planDocVersion: number
+      planDocHash: string | null
+      nextSeq: number
+      confirmedDocuments: number
+      totalDocuments: number
+      projections: Array<{
+        documentID: string
+        state: "pending" | "confirmed"
+        version: number | null
+        hash: string | null
+      }>
+      partial: boolean
+      execution: "waiting_boundary" | "paused" | "blocked" | "terminal"
+      recordedAt: number
+    } | null
+    current: {
+      editID: string
+      revision: number
+      state:
+        | "waiting_boundary"
+        | "ready"
+        | "prepared"
+        | "mirror_pending"
+        | "committed"
+        | "cancelled"
+        | "superseded"
+        | "recovery_required"
+      controlRevision: number
+      planRevision: number
+      confirmedDocuments: number
+      totalDocuments: number
+      partial: boolean
+      safeToResume: boolean
+      execution: "waiting_boundary" | "blocked" | "terminal" | "paused" | "running"
+      retry: "same_request" | "refresh" | "reconcile" | "none"
+      editSource: {
+        planDocument: {
+          id: string
+          type: "plan" | "run_context" | "worklog" | "diagnosis" | "decision"
+          scope: string
+          status: "draft" | "candidate" | "active" | "superseded" | "rejected" | "quarantined" | "provisional"
+          version: number
+          superseded_by: string | null
+          created_round: number | null
+          domain: string | null
+          tags: Array<string>
+          description: string
+          provenance: {
+            [key: string]: unknown
+          }
+          links: Array<{
+            rel: string
+            to: string
+            note?: string
+          }>
+          extensions?: {
+            [key: string]: unknown
+          }
+          body: string
+        }
+        planDocHash: string
+        sourceReceiptHash: string
+        baselineDocsHash: string
+        attemptedStepIDs: Array<string>
+      } | null
+    }
+    replayed: boolean
+  }
+}
+
+export type DeepagentGoalPlanRebaseGetResponse =
+  DeepagentGoalPlanRebaseGetResponses[keyof DeepagentGoalPlanRebaseGetResponses]
+
+export type DeepagentGoalPlanRebaseReconcileData = {
+  body: {
+    sessionID: string
+    goalID: string
+    editID: string
+    requestID: string
+    expectedEditRevision: number
+    expectedControlRevision: number
+  }
+  path: {
+    editID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/goal/plan-rebase/{editID}/reconcile"
+}
+
+export type DeepagentGoalPlanRebaseReconcileErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * DeepAgentGoalRebaseUnauthorized | Unauthorized
+   */
+  401: DeepAgentGoalRebaseUnauthorized
+  /**
+   * DeepAgentGoalRebaseError
+   */
+  409: DeepAgentGoalRebaseError
+}
+
+export type DeepagentGoalPlanRebaseReconcileError =
+  DeepagentGoalPlanRebaseReconcileErrors[keyof DeepagentGoalPlanRebaseReconcileErrors]
+
+export type DeepagentGoalPlanRebaseReconcileResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: 1
+    originalReceipt: {
+      version: 1
+      requestID: string
+      requestHash: string
+      action: "begin" | "apply" | "cancel" | "reconcile"
+      editID: string
+      goalID: string
+      sessionID: string
+      revision: number
+      state:
+        | "waiting_boundary"
+        | "ready"
+        | "prepared"
+        | "mirror_pending"
+        | "committed"
+        | "cancelled"
+        | "superseded"
+        | "recovery_required"
+      sourcePlanRevision: number
+      sourceControlRevision: number
+      targetPlanRevision: number
+      controlRevision: number
+      sourceReceiptHash: string | null
+      candidateHash: string | null
+      committedReceiptHash: string | null
+      planDocID: string
+      planDocVersion: number
+      planDocHash: string | null
+      nextSeq: number
+      confirmedDocuments: number
+      totalDocuments: number
+      projections: Array<{
+        documentID: string
+        state: "pending" | "confirmed"
+        version: number | null
+        hash: string | null
+      }>
+      partial: boolean
+      execution: "waiting_boundary" | "paused" | "blocked" | "terminal"
+      recordedAt: number
+    } | null
+    current: {
+      editID: string
+      revision: number
+      state:
+        | "waiting_boundary"
+        | "ready"
+        | "prepared"
+        | "mirror_pending"
+        | "committed"
+        | "cancelled"
+        | "superseded"
+        | "recovery_required"
+      controlRevision: number
+      planRevision: number
+      confirmedDocuments: number
+      totalDocuments: number
+      partial: boolean
+      safeToResume: boolean
+      execution: "waiting_boundary" | "blocked" | "terminal" | "paused" | "running"
+      retry: "same_request" | "refresh" | "reconcile" | "none"
+      editSource: {
+        planDocument: {
+          id: string
+          type: "plan" | "run_context" | "worklog" | "diagnosis" | "decision"
+          scope: string
+          status: "draft" | "candidate" | "active" | "superseded" | "rejected" | "quarantined" | "provisional"
+          version: number
+          superseded_by: string | null
+          created_round: number | null
+          domain: string | null
+          tags: Array<string>
+          description: string
+          provenance: {
+            [key: string]: unknown
+          }
+          links: Array<{
+            rel: string
+            to: string
+            note?: string
+          }>
+          extensions?: {
+            [key: string]: unknown
+          }
+          body: string
+        }
+        planDocHash: string
+        sourceReceiptHash: string
+        baselineDocsHash: string
+        attemptedStepIDs: Array<string>
+      } | null
+    }
+    replayed: boolean
+  }
+}
+
+export type DeepagentGoalPlanRebaseReconcileResponse =
+  DeepagentGoalPlanRebaseReconcileResponses[keyof DeepagentGoalPlanRebaseReconcileResponses]
 
 export type DeepagentGoalEditPlanData = {
   body?: {
@@ -12458,6 +18438,18 @@ export type DeepagentGoalStatusErrors = {
    * DeepAgentPromotionError | InvalidRequestError
    */
   400: DeepAgentPromotionError | InvalidRequestError
+  /**
+   * DeepAgentGoalControlMissing
+   */
+  404: DeepAgentGoalControlMissing
+  /**
+   * DeepAgentGoalControlConflict
+   */
+  409: DeepAgentGoalControlConflict
+  /**
+   * DeepAgentGoalControlUnavailable
+   */
+  503: DeepAgentGoalControlUnavailable
 }
 
 export type DeepagentGoalStatusError = DeepagentGoalStatusErrors[keyof DeepagentGoalStatusErrors]
@@ -12472,6 +18464,14 @@ export type DeepagentGoalStatusResponses = {
       planDocId: string
       phase: string
       running: boolean
+      revision: number
+      requestedPhase: "running" | "paused" | "stopped" | "done" | "needs_human" | "rolled_back"
+      preparation: "preparing" | "ready" | "recovery_required"
+      inFlight: boolean
+      recoveryRequired: boolean
+      wakeState: "none" | "pending" | "published" | "superseded"
+      receiptID?: string
+      replayed: boolean
     }
   }
 }
@@ -13723,6 +19723,10 @@ export type ExperimentalResourceListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type ExperimentalResourceListError = ExperimentalResourceListErrors[keyof ExperimentalResourceListErrors]
@@ -14306,6 +20310,756 @@ export type FileLockStatusResponses = {
 
 export type FileLockStatusResponse = FileLockStatusResponses[keyof FileLockStatusResponses]
 
+export type ImActivationQuoteData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/activation/quote"
+}
+
+export type ImActivationQuoteErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImActivationQuoteError = ImActivationQuoteErrors[keyof ImActivationQuoteErrors]
+
+export type ImActivationQuoteResponses = {
+  /**
+   * Success
+   */
+  200: {
+    quoteID: string
+    priceCredits: 1
+    quotaCost: number
+    expiresAt: number
+    entitlementExpiresAt: number
+  }
+}
+
+export type ImActivationQuoteResponse = ImActivationQuoteResponses[keyof ImActivationQuoteResponses]
+
+export type ImActivationPendingData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/activation"
+}
+
+export type ImActivationPendingErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImActivationPendingError = ImActivationPendingErrors[keyof ImActivationPendingErrors]
+
+export type ImActivationPendingResponses = {
+  /**
+   * Success
+   */
+  200: {
+    transaction: {
+      transactionID: string
+      name: string
+      method: "api_key" | "activation_code"
+      quoteID: string
+      state: "pending" | "unknown" | "succeeded" | "rejected"
+      chargedCredits: 0 | 1
+      credentialStored: boolean
+      code?: string
+    }
+  }
+}
+
+export type ImActivationPendingResponse = ImActivationPendingResponses[keyof ImActivationPendingResponses]
+
+export type ImActivateData = {
+  body: {
+    transactionID: string
+    name: string
+    method: "api_key" | "activation_code"
+    credential: string
+    quoteID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/activation"
+}
+
+export type ImActivateErrors = {
+  /**
+   * IMFacadeBadRequestError | BadRequest | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImActivateError = ImActivateErrors[keyof ImActivateErrors]
+
+export type ImActivateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    transactionID: string
+    name: string
+    method: "api_key" | "activation_code"
+    quoteID: string
+    state: "pending" | "unknown" | "succeeded" | "rejected"
+    chargedCredits: 0 | 1
+    credentialStored: boolean
+    code?: string
+  }
+}
+
+export type ImActivateResponse = ImActivateResponses[keyof ImActivateResponses]
+
+export type ImActivationStatusData = {
+  body?: never
+  path: {
+    transactionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/activation/{transactionID}"
+}
+
+export type ImActivationStatusErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImActivationStatusError = ImActivationStatusErrors[keyof ImActivationStatusErrors]
+
+export type ImActivationStatusResponses = {
+  /**
+   * Success
+   */
+  200: {
+    transactionID: string
+    name: string
+    method: "api_key" | "activation_code"
+    quoteID: string
+    state: "pending" | "unknown" | "succeeded" | "rejected"
+    chargedCredits: 0 | 1
+    credentialStored: boolean
+    code?: string
+  }
+}
+
+export type ImActivationStatusResponse = ImActivationStatusResponses[keyof ImActivationStatusResponses]
+
+export type ImDacBindingData = {
+  body?: never
+  path: {
+    groupId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups/{groupId}/dac"
+}
+
+export type ImDacBindingErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMGroupNotFoundError
+   */
+  404: ImGroupNotFoundError
+  /**
+   * IMDacCommandError
+   */
+  409: ImDacCommandError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImDacBindingError = ImDacBindingErrors[keyof ImDacBindingErrors]
+
+export type ImDacBindingResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: 1
+    groupID: string
+    projectID: string
+    directory: string
+    workspaceID: string
+    bindingID: string
+    sessionID: string
+    recentCommands?: Array<{
+      version: 1
+      groupID: string
+      projectID: string
+      directory: string
+      workspaceID: string
+      commandID: string
+      bindingID: string
+      sessionID: string
+      inputID: string
+      delivery: "queue" | "steer"
+      state: "pending" | "admitted" | "rejected"
+      activityID: string
+      finalMessageID: string
+      replyStatus: "pending" | "delivering" | "delivered" | "dead" | "unknown"
+    }>
+  }
+}
+
+export type ImDacBindingResponse = ImDacBindingResponses[keyof ImDacBindingResponses]
+
+export type ImDacSubmitData = {
+  body: {
+    commandID: string
+    text: string
+    delivery: "queue" | "steer"
+    referenceMessageIDs?: Array<string>
+    newSession?: boolean
+  }
+  path: {
+    groupId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups/{groupId}/dac/commands"
+}
+
+export type ImDacSubmitErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMGroupNotFoundError
+   */
+  404: ImGroupNotFoundError
+  /**
+   * IMDacCommandError
+   */
+  409: ImDacCommandError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImDacSubmitError = ImDacSubmitErrors[keyof ImDacSubmitErrors]
+
+export type ImDacSubmitResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: 1
+    groupID: string
+    projectID: string
+    directory: string
+    workspaceID: string
+    commandID: string
+    bindingID: string
+    sessionID: string
+    inputID: string
+    delivery: "queue" | "steer"
+    state: "pending" | "admitted" | "rejected"
+    activityID: string
+    finalMessageID: string
+    replyStatus: "pending" | "delivering" | "delivered" | "dead" | "unknown"
+  }
+}
+
+export type ImDacSubmitResponse = ImDacSubmitResponses[keyof ImDacSubmitResponses]
+
+export type ImDacCommandData = {
+  body?: never
+  path: {
+    groupId: string
+    commandID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups/{groupId}/dac/commands/{commandID}"
+}
+
+export type ImDacCommandErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMGroupNotFoundError
+   */
+  404: ImGroupNotFoundError
+  /**
+   * IMDacCommandError
+   */
+  409: ImDacCommandError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImDacCommandError2 = ImDacCommandErrors[keyof ImDacCommandErrors]
+
+export type ImDacCommandResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: 1
+    groupID: string
+    projectID: string
+    directory: string
+    workspaceID: string
+    commandID: string
+    bindingID: string
+    sessionID: string
+    inputID: string
+    delivery: "queue" | "steer"
+    state: "pending" | "admitted" | "rejected"
+    activityID: string
+    finalMessageID: string
+    replyStatus: "pending" | "delivering" | "delivered" | "dead" | "unknown"
+  }
+}
+
+export type ImDacCommandResponse = ImDacCommandResponses[keyof ImDacCommandResponses]
+
+export type ImDacReplyRetryData = {
+  body?: never
+  path: {
+    groupId: string
+    commandID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups/{groupId}/dac/commands/{commandID}/reply/retry"
+}
+
+export type ImDacReplyRetryErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMGroupNotFoundError
+   */
+  404: ImGroupNotFoundError
+  /**
+   * IMDacCommandError
+   */
+  409: ImDacCommandError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImDacReplyRetryError = ImDacReplyRetryErrors[keyof ImDacReplyRetryErrors]
+
+export type ImDacReplyRetryResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: 1
+    groupID: string
+    projectID: string
+    directory: string
+    workspaceID: string
+    commandID: string
+    bindingID: string
+    sessionID: string
+    inputID: string
+    delivery: "queue" | "steer"
+    state: "pending" | "admitted" | "rejected"
+    activityID: string
+    finalMessageID: string
+    replyStatus: "pending" | "delivering" | "delivered" | "dead" | "unknown"
+  }
+}
+
+export type ImDacReplyRetryResponse = ImDacReplyRetryResponses[keyof ImDacReplyRetryResponses]
+
+export type ImGroupsListPageData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    lane: "ordinary" | "protected"
+    limit?: string
+    cursor?: string
+  }
+  url: "/api/v1/im/groups/page"
+}
+
+export type ImGroupsListPageErrors = {
+  /**
+   * IMValidationFailedError | BadRequest | InvalidRequestError
+   */
+  400: ImValidationFailedError | EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImGroupsListPageError = ImGroupsListPageErrors[keyof ImGroupsListPageErrors]
+
+export type ImGroupsListPageResponses = {
+  /**
+   * Bounded IM group page
+   */
+  200: {
+    version: 1
+    lane: "ordinary" | "protected"
+    groups: Array<{
+      reader?: {
+        mode: "protected"
+        state: "pending" | "ready"
+        liveUnread: string | null
+        peerID?: string
+        admittedOrdinal?: string
+        readAction?: {
+          actionID: string
+          cutID: string
+          phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+          cutIndex: number
+          targetAdmitted: string
+          throughOrdinal: string
+          targetReached: boolean
+        }
+        unresolvedReadActions?: Array<{
+          actionID: string
+          cutID: string
+          phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+          cutIndex: number
+          targetAdmitted: string
+          throughOrdinal: string
+          targetReached: boolean
+        }>
+      }
+      id: string
+      workspaceID: string
+      projectID: string | null
+      type: string
+      name: string
+      createdBy: string
+      kernelConvID: string | null
+      createdAt: number
+      updatedAt: number
+    }>
+    hasMore: boolean
+    nextCursor: string | null
+    reader?: {
+      displayEpoch: string
+      proofWindowMs: number
+      validatedServerNow?: number
+      nextExpiryAt: number | null
+    }
+  }
+}
+
+export type ImGroupsListPageResponse = ImGroupsListPageResponses[keyof ImGroupsListPageResponses]
+
+export type ImGroupsGetData = {
+  body?: never
+  path: {
+    groupId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups/{groupId}"
+}
+
+export type ImGroupsGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMGroupNotFoundError
+   */
+  404: ImGroupNotFoundError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImGroupsGetError = ImGroupsGetErrors[keyof ImGroupsGetErrors]
+
+export type ImGroupsGetResponses = {
+  /**
+   * Current IM group
+   */
+  200: {
+    version: 1
+    group: {
+      reader?: {
+        mode: "protected"
+        state: "pending" | "ready"
+        liveUnread: string | null
+        peerID?: string
+        admittedOrdinal?: string
+        readAction?: {
+          actionID: string
+          cutID: string
+          phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+          cutIndex: number
+          targetAdmitted: string
+          throughOrdinal: string
+          targetReached: boolean
+        }
+        unresolvedReadActions?: Array<{
+          actionID: string
+          cutID: string
+          phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+          cutIndex: number
+          targetAdmitted: string
+          throughOrdinal: string
+          targetReached: boolean
+        }>
+      }
+      id: string
+      workspaceID: string
+      projectID: string | null
+      type: string
+      name: string
+      createdBy: string
+      kernelConvID: string | null
+      createdAt: number
+      updatedAt: number
+    }
+    reader?: {
+      displayEpoch: string
+      proofWindowMs: number
+      validatedServerNow?: number
+      nextExpiryAt: number | null
+    }
+  }
+}
+
+export type ImGroupsGetResponse = ImGroupsGetResponses[keyof ImGroupsGetResponses]
+
+export type ImGroupsRefreshData = {
+  body?: never
+  path: {
+    groupId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups/{groupId}/refresh"
+}
+
+export type ImGroupsRefreshErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMGroupNotFoundError
+   */
+  404: ImGroupNotFoundError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImGroupsRefreshError = ImGroupsRefreshErrors[keyof ImGroupsRefreshErrors]
+
+export type ImGroupsRefreshResponses = {
+  /**
+   * Current IM group after authenticated metadata refresh
+   */
+  200: {
+    version: 1
+    group: {
+      reader?: {
+        mode: "protected"
+        state: "pending" | "ready"
+        liveUnread: string | null
+        peerID?: string
+        admittedOrdinal?: string
+        readAction?: {
+          actionID: string
+          cutID: string
+          phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+          cutIndex: number
+          targetAdmitted: string
+          throughOrdinal: string
+          targetReached: boolean
+        }
+        unresolvedReadActions?: Array<{
+          actionID: string
+          cutID: string
+          phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+          cutIndex: number
+          targetAdmitted: string
+          throughOrdinal: string
+          targetReached: boolean
+        }>
+      }
+      id: string
+      workspaceID: string
+      projectID: string | null
+      type: string
+      name: string
+      createdBy: string
+      kernelConvID: string | null
+      createdAt: number
+      updatedAt: number
+    }
+    reader?: {
+      displayEpoch: string
+      proofWindowMs: number
+      validatedServerNow?: number
+      nextExpiryAt: number | null
+    }
+  }
+}
+
+export type ImGroupsRefreshResponse = ImGroupsRefreshResponses[keyof ImGroupsRefreshResponses]
+
 export type ImGroupsListData = {
   body?: never
   path?: never
@@ -14329,6 +21083,10 @@ export type ImGroupsListErrors = {
    * IMInternalServerError
    */
   500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
 }
 
 export type ImGroupsListError = ImGroupsListErrors[keyof ImGroupsListErrors]
@@ -14338,14 +21096,40 @@ export type ImGroupsListResponses = {
    * IM groups
    */
   200: Array<{
+    reader?: {
+      mode: "protected"
+      state: "pending" | "ready"
+      liveUnread: string | null
+      peerID?: string
+      admittedOrdinal?: string
+      readAction?: {
+        actionID: string
+        cutID: string
+        phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+        cutIndex: number
+        targetAdmitted: string
+        throughOrdinal: string
+        targetReached: boolean
+      }
+      unresolvedReadActions?: Array<{
+        actionID: string
+        cutID: string
+        phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+        cutIndex: number
+        targetAdmitted: string
+        throughOrdinal: string
+        targetReached: boolean
+      }>
+    }
     id: string
     workspaceID: string
-    projectID: string
+    projectID: string | null
     type: string
     name: string
     createdBy: string
-    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    kernelConvID: string | null
+    createdAt: number
+    updatedAt: number
   }>
 }
 
@@ -14382,6 +21166,10 @@ export type ImGroupsCreateErrors = {
    * IMInternalServerError
    */
   500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
 }
 
 export type ImGroupsCreateError = ImGroupsCreateErrors[keyof ImGroupsCreateErrors]
@@ -14391,14 +21179,40 @@ export type ImGroupsCreateResponses = {
    * Created IM group
    */
   200: {
+    reader?: {
+      mode: "protected"
+      state: "pending" | "ready"
+      liveUnread: string | null
+      peerID?: string
+      admittedOrdinal?: string
+      readAction?: {
+        actionID: string
+        cutID: string
+        phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+        cutIndex: number
+        targetAdmitted: string
+        throughOrdinal: string
+        targetReached: boolean
+      }
+      unresolvedReadActions?: Array<{
+        actionID: string
+        cutID: string
+        phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+        cutIndex: number
+        targetAdmitted: string
+        throughOrdinal: string
+        targetReached: boolean
+      }>
+    }
     id: string
     workspaceID: string
-    projectID: string
+    projectID: string | null
     type: string
     name: string
     createdBy: string
-    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    kernelConvID: string | null
+    createdAt: number
+    updatedAt: number
   }
 }
 
@@ -14439,6 +21253,10 @@ export type ImMessagesListErrors = {
    * IMInternalServerError
    */
   500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
 }
 
 export type ImMessagesListError = ImMessagesListErrors[keyof ImMessagesListErrors]
@@ -14448,7 +21266,30 @@ export type ImMessagesListResponses = {
    * IM messages
    */
   200: {
+    reader?: {
+      state: "ready" | "partial"
+      displayEpoch: string
+      projectionRevision: string
+      validatedServerNow: number
+      nextExpiryAt: number | null
+    }
+    protectedUnavailable?: boolean
     messages: Array<{
+      remoteAttachments?: Array<{
+        profile: "kernel_media"
+        attachmentID: string
+        contentRef: string
+        filename: string
+        mime: string
+        sizeBytes: number
+        sha256: string
+        createdAt: number
+        expiresAt: number
+      }>
+      transport?: {
+        state: "prepared" | "acknowledged" | "unknown"
+        reason?: string
+      }
       id: string
       groupID: string
       senderID: string
@@ -14470,11 +21311,29 @@ export type ImMessagesListResponse = ImMessagesListResponses[keyof ImMessagesLis
 
 export type ImMessagesCreateData = {
   body: {
+    attachmentID?: string
+    attachmentIDs?: Array<string>
+    clientRequestID?: string
     senderType: "user" | "agent" | "system"
     type: "text" | "code" | "file" | "agent_status" | "system"
     content: string
     mentions?: Array<string>
     metadata?:
+      | {
+          type: "attachment_ref"
+          attachmentID: string
+          batch?: true
+        }
+      | {
+          type: "kernel_sync"
+          liveEligible: boolean
+        }
+      | {
+          type: "task_status_notice"
+          noticeID: string
+          requestID: string
+          kind: "cancel_requested" | "recovery_required" | "refused"
+        }
       | {
           type: "file_ref"
           path: string
@@ -14531,9 +21390,9 @@ export type ImMessagesCreateData = {
 
 export type ImMessagesCreateErrors = {
   /**
-   * BadRequest | InvalidRequestError
+   * IMValidationFailedError | BadRequest | InvalidRequestError
    */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  400: ImValidationFailedError | EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
    * Unauthorized
    */
@@ -14543,9 +21402,13 @@ export type ImMessagesCreateErrors = {
    */
   403: ImPermissionDeniedError
   /**
-   * IMGroupNotFoundError
+   * IMGroupNotFoundError | IMFileUploadDisabledError | IMAttachmentNotFoundError
    */
-  404: ImGroupNotFoundError
+  404: ImGroupNotFoundError | ImFileUploadDisabledError | ImAttachmentNotFoundError
+  /**
+   * IMMessageIdentityConflictError
+   */
+  409: ImMessageIdentityConflictError
   /**
    * IMMessageTooLargeError
    */
@@ -14558,6 +21421,10 @@ export type ImMessagesCreateErrors = {
    * IMInternalServerError
    */
   500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
 }
 
 export type ImMessagesCreateError = ImMessagesCreateErrors[keyof ImMessagesCreateErrors]
@@ -14567,6 +21434,21 @@ export type ImMessagesCreateResponses = {
    * Created message
    */
   200: {
+    remoteAttachments?: Array<{
+      profile: "kernel_media"
+      attachmentID: string
+      contentRef: string
+      filename: string
+      mime: string
+      sizeBytes: number
+      sha256: string
+      createdAt: number
+      expiresAt: number
+    }>
+    transport?: {
+      state: "prepared" | "acknowledged" | "unknown"
+      reason?: string
+    }
     id: string
     groupID: string
     senderID: string
@@ -14586,6 +21468,11 @@ export type ImMessagesCreateResponse = ImMessagesCreateResponses[keyof ImMessage
 export type ImMessagesMarkReadData = {
   body: {
     readAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    actionID?: string
+    reconcile?: boolean
+    continue?: boolean
+    cancel?: boolean
+    newAction?: boolean
   }
   path: {
     groupId: string
@@ -14618,6 +21505,10 @@ export type ImMessagesMarkReadErrors = {
    * IMInternalServerError
    */
   500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
 }
 
 export type ImMessagesMarkReadError = ImMessagesMarkReadErrors[keyof ImMessagesMarkReadErrors]
@@ -14628,6 +21519,13 @@ export type ImMessagesMarkReadResponses = {
    */
   200: {
     ok: boolean
+    reader?: {
+      actionID: string
+      state: "confirmed" | "partial" | "unknown" | "cancelled"
+      targetAdmitted: string
+      readOrdinal: string
+      liveUnread: string
+    }
   }
 }
 
@@ -14656,6 +21554,10 @@ export type ImAgentsListErrors = {
    * IMInternalServerError
    */
   500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
 }
 
 export type ImAgentsListError = ImAgentsListErrors[keyof ImAgentsListErrors]
@@ -14727,6 +21629,10 @@ export type ImMessagesGetErrors = {
    * IMInternalServerError
    */
   500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
 }
 
 export type ImMessagesGetError = ImMessagesGetErrors[keyof ImMessagesGetErrors]
@@ -14736,6 +21642,21 @@ export type ImMessagesGetResponses = {
    * IM message
    */
   200: {
+    remoteAttachments?: Array<{
+      profile: "kernel_media"
+      attachmentID: string
+      contentRef: string
+      filename: string
+      mime: string
+      sizeBytes: number
+      sha256: string
+      createdAt: number
+      expiresAt: number
+    }>
+    transport?: {
+      state: "prepared" | "acknowledged" | "unknown"
+      reason?: string
+    }
     id: string
     groupID: string
     senderID: string
@@ -14751,6 +21672,388 @@ export type ImMessagesGetResponses = {
 }
 
 export type ImMessagesGetResponse = ImMessagesGetResponses[keyof ImMessagesGetResponses]
+
+export type ImMessagesTaskResultData = {
+  body?: never
+  path: {
+    messageId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/messages/{messageId}/task-result"
+}
+
+export type ImMessagesTaskResultErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMMessageNotFoundError
+   */
+  404: ImMessageNotFoundError
+  /**
+   * IMReaderUnavailableError | IMTaskResultUnavailableError
+   */
+  503: ImReaderUnavailableError | ImTaskResultUnavailableError
+}
+
+export type ImMessagesTaskResultError = ImMessagesTaskResultErrors[keyof ImMessagesTaskResultErrors]
+
+export type ImMessagesTaskResultResponses = {
+  /**
+   * Verified task result location
+   */
+  200:
+    | {
+        version: 1
+        messageID: string
+        groupID: string
+        state: "available"
+        placement: {
+          instanceID: string
+          securityNamespaceID: string
+          projectID: string
+          directory: string
+          workspaceID: string | null
+          sessionID: string
+        }
+        attempt: {
+          requestID: string
+          workID: string
+          inputID: string
+          ordinal: 1
+          outcome: "succeeded" | "failed"
+        }
+      }
+    | {
+        version: 1
+        messageID: string
+        groupID: string
+        state: "unavailable"
+        code: "not_task_result" | "remote_result_unlinked" | "result_changed" | "placement_unavailable"
+      }
+}
+
+export type ImMessagesTaskResultResponse = ImMessagesTaskResultResponses[keyof ImMessagesTaskResultResponses]
+
+export type ImMessagesTaskStatusData = {
+  body?: never
+  path: {
+    messageId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/messages/{messageId}/task-status"
+}
+
+export type ImMessagesTaskStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMMessageNotFoundError
+   */
+  404: ImMessageNotFoundError
+  /**
+   * IMReaderUnavailableError | IMTaskResultUnavailableError
+   */
+  503: ImReaderUnavailableError | ImTaskResultUnavailableError
+}
+
+export type ImMessagesTaskStatusError = ImMessagesTaskStatusErrors[keyof ImMessagesTaskStatusErrors]
+
+export type ImMessagesTaskStatusResponses = {
+  /**
+   * Success
+   */
+  200:
+    | {
+        version: 1
+        messageID: string
+        groupID: string
+        state: "available"
+        notice: {
+          noticeID: string
+          kind: "cancel_requested" | "recovery_required" | "refused"
+          createdAt: number
+        }
+        task: {
+          requestID: string
+          instanceID: string
+          directory: string
+          disposition: "open" | "refused"
+          grant: {
+            state: "active" | "revoked"
+            revision: number
+          } | null
+          work: {
+            workID: string
+            sessionID: string
+            outcome: "pending" | "succeeded" | "failed" | "unknown"
+            controlState: "active" | "paused" | "revoked" | "cancelled" | "expired"
+            recoveryRequired: boolean
+            hasExecutionClaim: boolean
+            processActive: boolean
+          } | null
+        }
+      }
+    | {
+        version: 1
+        messageID: string
+        groupID: string
+        state: "unavailable"
+        code: "not_task_status" | "status_changed" | "delivery_unknown" | "placement_unavailable"
+      }
+}
+
+export type ImMessagesTaskStatusResponse = ImMessagesTaskStatusResponses[keyof ImMessagesTaskStatusResponses]
+
+export type ImMessagesRemoteTaskLocatorData = {
+  body?: never
+  path: {
+    messageId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/messages/{messageId}/remote-task-locator"
+}
+
+export type ImMessagesRemoteTaskLocatorErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMMessageNotFoundError
+   */
+  404: ImMessageNotFoundError
+  /**
+   * IMReaderUnavailableError | IMTaskResultUnavailableError
+   */
+  503: ImReaderUnavailableError | ImTaskResultUnavailableError
+}
+
+export type ImMessagesRemoteTaskLocatorError =
+  ImMessagesRemoteTaskLocatorErrors[keyof ImMessagesRemoteTaskLocatorErrors]
+
+export type ImMessagesRemoteTaskLocatorResponses = {
+  /**
+   * Success
+   */
+  200:
+    | {
+        version: 1
+        messageID: string
+        groupID: string
+        state: "available"
+        tuple: {
+          version: 1
+          realm: string
+          appkey: string
+          orgID: string
+          kernelMessageID: string
+          senderID: string
+          receiverID: string
+          conversationType: 1 | 2
+          conversationID: string
+        }
+      }
+    | {
+        version: 1
+        messageID: string
+        groupID: string
+        state: "unavailable"
+        code: "remote_result_unlinked"
+      }
+}
+
+export type ImMessagesRemoteTaskLocatorResponse =
+  ImMessagesRemoteTaskLocatorResponses[keyof ImMessagesRemoteTaskLocatorResponses]
+
+export type ImTasksRemoteResultData = {
+  body: {
+    tuple: {
+      version: 1
+      realm: string
+      appkey: string
+      orgID: string
+      kernelMessageID: string
+      senderID: string
+      receiverID: string
+      conversationType: 1 | 2
+      conversationID: string
+    }
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/tasks/remote-result"
+}
+
+export type ImTasksRemoteResultErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMMessageNotFoundError
+   */
+  404: ImMessageNotFoundError
+  /**
+   * IMReaderUnavailableError | IMTaskResultUnavailableError
+   */
+  503: ImReaderUnavailableError | ImTaskResultUnavailableError
+}
+
+export type ImTasksRemoteResultError = ImTasksRemoteResultErrors[keyof ImTasksRemoteResultErrors]
+
+export type ImTasksRemoteResultResponses = {
+  /**
+   * Success
+   */
+  200:
+    | {
+        version: 1
+        messageID: string
+        groupID: string
+        state: "available"
+        placement: {
+          instanceID: string
+          securityNamespaceID: string
+          projectID: string
+          directory: string
+          workspaceID: string | null
+          sessionID: string
+        }
+        attempt: {
+          requestID: string
+          workID: string
+          inputID: string
+          ordinal: 1
+          outcome: "succeeded" | "failed"
+        }
+      }
+    | {
+        version: 1
+        state: "unavailable"
+        code: "remote_result_unlinked" | "result_changed" | "placement_unavailable"
+      }
+}
+
+export type ImTasksRemoteResultResponse = ImTasksRemoteResultResponses[keyof ImTasksRemoteResultResponses]
+
+export type ImTasksRemoteStatusData = {
+  body: {
+    tuple: {
+      version: 1
+      realm: string
+      appkey: string
+      orgID: string
+      kernelMessageID: string
+      senderID: string
+      receiverID: string
+      conversationType: 1 | 2
+      conversationID: string
+    }
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/tasks/remote-status"
+}
+
+export type ImTasksRemoteStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMMessageNotFoundError
+   */
+  404: ImMessageNotFoundError
+  /**
+   * IMReaderUnavailableError | IMTaskResultUnavailableError
+   */
+  503: ImReaderUnavailableError | ImTaskResultUnavailableError
+}
+
+export type ImTasksRemoteStatusError = ImTasksRemoteStatusErrors[keyof ImTasksRemoteStatusErrors]
+
+export type ImTasksRemoteStatusResponses = {
+  /**
+   * Success
+   */
+  200:
+    | {
+        version: 1
+        messageID: string
+        groupID: string
+        state: "available"
+        notice: {
+          noticeID: string
+          kind: "cancel_requested" | "recovery_required" | "refused"
+          createdAt: number
+        }
+        task: {
+          requestID: string
+          instanceID: string
+          directory: string
+          disposition: "open" | "refused"
+          grant: {
+            state: "active" | "revoked"
+            revision: number
+          } | null
+          work: {
+            workID: string
+            sessionID: string
+            outcome: "pending" | "succeeded" | "failed" | "unknown"
+            controlState: "active" | "paused" | "revoked" | "cancelled" | "expired"
+            recoveryRequired: boolean
+            hasExecutionClaim: boolean
+            processActive: boolean
+          } | null
+        }
+      }
+    | {
+        version: 1
+        state: "unavailable"
+        code: "remote_status_unlinked" | "status_changed" | "delivery_unknown" | "placement_unavailable"
+      }
+}
+
+export type ImTasksRemoteStatusResponse = ImTasksRemoteStatusResponses[keyof ImTasksRemoteStatusResponses]
 
 export type ImMessagesThreadData = {
   body?: never
@@ -14788,6 +22091,10 @@ export type ImMessagesThreadErrors = {
    * IMInternalServerError
    */
   500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
 }
 
 export type ImMessagesThreadError = ImMessagesThreadErrors[keyof ImMessagesThreadErrors]
@@ -14797,7 +22104,30 @@ export type ImMessagesThreadResponses = {
    * Thread messages
    */
   200: {
+    reader?: {
+      state: "ready" | "partial"
+      displayEpoch: string
+      projectionRevision: string
+      validatedServerNow: number
+      nextExpiryAt: number | null
+    }
+    protectedUnavailable?: boolean
     messages: Array<{
+      remoteAttachments?: Array<{
+        profile: "kernel_media"
+        attachmentID: string
+        contentRef: string
+        filename: string
+        mime: string
+        sizeBytes: number
+        sha256: string
+        createdAt: number
+        expiresAt: number
+      }>
+      transport?: {
+        state: "prepared" | "acknowledged" | "unknown"
+        reason?: string
+      }
       id: string
       groupID: string
       senderID: string
@@ -14847,6 +22177,10 @@ export type ImMessagesSearchErrors = {
    * IMInternalServerError
    */
   500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
 }
 
 export type ImMessagesSearchError = ImMessagesSearchErrors[keyof ImMessagesSearchErrors]
@@ -14856,7 +22190,30 @@ export type ImMessagesSearchResponses = {
    * Search results
    */
   200: {
+    reader?: {
+      state: "ready" | "partial"
+      displayEpoch: string
+      projectionRevision: string
+      validatedServerNow: number
+      nextExpiryAt: number | null
+    }
+    protectedUnavailable?: boolean
     messages: Array<{
+      remoteAttachments?: Array<{
+        profile: "kernel_media"
+        attachmentID: string
+        contentRef: string
+        filename: string
+        mime: string
+        sizeBytes: number
+        sha256: string
+        createdAt: number
+        expiresAt: number
+      }>
+      transport?: {
+        state: "prepared" | "acknowledged" | "unknown"
+        reason?: string
+      }
       id: string
       groupID: string
       senderID: string
@@ -14891,21 +22248,25 @@ export type ImAttachmentsListData = {
 
 export type ImAttachmentsListErrors = {
   /**
-   * InvalidRequestError
+   * IMValidationFailedError | InvalidRequestError
    */
-  400: InvalidRequestError
+  400: ImValidationFailedError | InvalidRequestError
   /**
    * Unauthorized
    */
   401: unknown
   /**
-   * IMFileUploadDisabledError | IMGroupNotFoundError
+   * IMFileUploadDisabledError | IMGroupNotFoundError | IMAttachmentNotFoundError
    */
-  404: ImFileUploadDisabledError | ImGroupNotFoundError
+  404: ImFileUploadDisabledError | ImGroupNotFoundError | ImAttachmentNotFoundError
   /**
    * IMInternalServerError
    */
   500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
 }
 
 export type ImAttachmentsListError = ImAttachmentsListErrors[keyof ImAttachmentsListErrors]
@@ -14923,9 +22284,11 @@ export type ImAttachmentsListResponses = {
     uploadedBy: string
     filename: string
     mime: string
-    sizeBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    sizeBytes: number
     checksum: string
-    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    createdAt: number
+    expiresAt: number
+    preview: boolean
   }>
 }
 
@@ -14934,7 +22297,7 @@ export type ImAttachmentsListResponse = ImAttachmentsListResponses[keyof ImAttac
 export type ImAttachmentsUploadData = {
   body: {
     file: Blob | File
-    groupId?: string | null
+    groupId: string
     messageId?: string | null
   }
   path?: never
@@ -14955,9 +22318,9 @@ export type ImAttachmentsUploadErrors = {
    */
   401: unknown
   /**
-   * IMFileUploadDisabledError | IMGroupNotFoundError
+   * IMFileUploadDisabledError | IMAttachmentNotFoundError | IMGroupNotFoundError
    */
-  404: ImFileUploadDisabledError | ImGroupNotFoundError
+  404: ImFileUploadDisabledError | ImAttachmentNotFoundError | ImGroupNotFoundError
   /**
    * IMFileTooLargeError
    */
@@ -14970,6 +22333,10 @@ export type ImAttachmentsUploadErrors = {
    * IMInternalServerError
    */
   500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
 }
 
 export type ImAttachmentsUploadError = ImAttachmentsUploadErrors[keyof ImAttachmentsUploadErrors]
@@ -14987,13 +22354,1139 @@ export type ImAttachmentsUploadResponses = {
     uploadedBy: string
     filename: string
     mime: string
-    sizeBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    sizeBytes: number
     checksum: string
-    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    createdAt: number
+    expiresAt: number
+    preview: boolean
   }
 }
 
 export type ImAttachmentsUploadResponse = ImAttachmentsUploadResponses[keyof ImAttachmentsUploadResponses]
+
+export type ImAttachmentsGetData = {
+  body?: never
+  path: {
+    attachmentId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/attachments/{attachmentId}"
+}
+
+export type ImAttachmentsGetErrors = {
+  /**
+   * IMValidationFailedError | InvalidRequestError
+   */
+  400: ImValidationFailedError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFileUploadDisabledError | IMGroupNotFoundError | IMAttachmentNotFoundError
+   */
+  404: ImFileUploadDisabledError | ImGroupNotFoundError | ImAttachmentNotFoundError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImAttachmentsGetError = ImAttachmentsGetErrors[keyof ImAttachmentsGetErrors]
+
+export type ImAttachmentsGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    workspaceID: string
+    projectID: string
+    groupID: string
+    messageID: string
+    uploadedBy: string
+    filename: string
+    mime: string
+    sizeBytes: number
+    checksum: string
+    createdAt: number
+    expiresAt: number
+    preview: boolean
+  }
+}
+
+export type ImAttachmentsGetResponse = ImAttachmentsGetResponses[keyof ImAttachmentsGetResponses]
+
+export type ImAttachmentsDownloadData = {
+  body?: never
+  path: {
+    attachmentId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/attachments/{attachmentId}/content"
+}
+
+export type ImAttachmentsDownloadErrors = {
+  /**
+   * IMValidationFailedError | InvalidRequestError
+   */
+  400: ImValidationFailedError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFileUploadDisabledError | IMGroupNotFoundError | IMAttachmentNotFoundError
+   */
+  404: ImFileUploadDisabledError | ImGroupNotFoundError | ImAttachmentNotFoundError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImAttachmentsDownloadError = ImAttachmentsDownloadErrors[keyof ImAttachmentsDownloadErrors]
+
+export type ImAttachmentsDownloadResponses = {
+  /**
+   * Success
+   */
+  200: Blob | File
+}
+
+export type ImAttachmentsDownloadResponse = ImAttachmentsDownloadResponses[keyof ImAttachmentsDownloadResponses]
+
+export type ImAttachmentsRemoteGetData = {
+  body?: never
+  path: {
+    groupId: string
+    messageId: string
+    attachmentId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups/{groupId}/messages/{messageId}/attachments/{attachmentId}"
+}
+
+export type ImAttachmentsRemoteGetErrors = {
+  /**
+   * IMValidationFailedError | InvalidRequestError
+   */
+  400: ImValidationFailedError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFileUploadDisabledError | IMAttachmentNotFoundError
+   */
+  404: ImFileUploadDisabledError | ImAttachmentNotFoundError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImAttachmentsRemoteGetError = ImAttachmentsRemoteGetErrors[keyof ImAttachmentsRemoteGetErrors]
+
+export type ImAttachmentsRemoteGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    profile: "kernel_media"
+    attachmentID: string
+    contentRef: string
+    filename: string
+    mime: string
+    sizeBytes: number
+    sha256: string
+    createdAt: number
+    expiresAt: number
+  }
+}
+
+export type ImAttachmentsRemoteGetResponse = ImAttachmentsRemoteGetResponses[keyof ImAttachmentsRemoteGetResponses]
+
+export type ImAttachmentsRemoteDownloadData = {
+  body?: never
+  path: {
+    groupId: string
+    messageId: string
+    attachmentId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups/{groupId}/messages/{messageId}/attachments/{attachmentId}/content"
+}
+
+export type ImAttachmentsRemoteDownloadErrors = {
+  /**
+   * IMValidationFailedError | InvalidRequestError
+   */
+  400: ImValidationFailedError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFileUploadDisabledError | IMAttachmentNotFoundError
+   */
+  404: ImFileUploadDisabledError | ImAttachmentNotFoundError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImAttachmentsRemoteDownloadError =
+  ImAttachmentsRemoteDownloadErrors[keyof ImAttachmentsRemoteDownloadErrors]
+
+export type ImAttachmentsRemoteDownloadResponses = {
+  /**
+   * Success
+   */
+  200: Blob | File
+}
+
+export type ImAttachmentsRemoteDownloadResponse =
+  ImAttachmentsRemoteDownloadResponses[keyof ImAttachmentsRemoteDownloadResponses]
+
+export type ImFacadeStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/status"
+}
+
+export type ImFacadeStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImFacadeStatusError = ImFacadeStatusErrors[keyof ImFacadeStatusErrors]
+
+export type ImFacadeStatusResponses = {
+  /**
+   * IM facade status
+   */
+  200: {
+    media?: {
+      version: 2
+      enabled: boolean
+      multipleAttachments: true
+      maxAttachments: 4
+      maxAttachmentBytes: number
+      ttlMs: 86400000
+    }
+    reader?: {
+      state: "idle" | "syncing" | "ready" | "partial" | "unavailable"
+      code?:
+        | "reader_required"
+        | "reader_upgrade_required"
+        | "reader_unavailable"
+        | "reader_stale"
+        | "reader_unknown"
+        | "reader_capacity"
+        | "reader_scope_mismatch"
+        | "reader_legacy_unverified"
+        | "reader_cleanup_required"
+        | "reader_mapping_conflict"
+      displayEpoch: string
+      legacyMirrorUnavailable: boolean
+    }
+    facade: "disabled" | "claim_required" | "blocked" | "active"
+    identity: {
+      uuid: string
+      name: string
+      orgID: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      orgAllGroupID: string
+    }
+    blocked: {
+      code: string
+      message: string
+    }
+    kernel: "connecting" | "connected" | "disconnected" | "failed"
+    keyOrigin: "stored" | "env" | "none"
+    viewer?: {
+      memberID: string
+    }
+    recovery?: {
+      status: "pending" | "ready" | "failed"
+      message?: string
+    }
+  }
+}
+
+export type ImFacadeStatusResponse = ImFacadeStatusResponses[keyof ImFacadeStatusResponses]
+
+export type ImFacadeClaimData = {
+  body: {
+    name: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/claim"
+}
+
+export type ImFacadeClaimErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeClaimError = ImFacadeClaimErrors[keyof ImFacadeClaimErrors]
+
+export type ImFacadeClaimResponses = {
+  /**
+   * Claimed IM identity
+   */
+  200: {
+    uuid: string
+    name: string
+    orgID: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    orgAllGroupID: string
+  }
+}
+
+export type ImFacadeClaimResponse = ImFacadeClaimResponses[keyof ImFacadeClaimResponses]
+
+export type ImFacadeRenameData = {
+  body: {
+    name: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/rename"
+}
+
+export type ImFacadeRenameErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeRenameError = ImFacadeRenameErrors[keyof ImFacadeRenameErrors]
+
+export type ImFacadeRenameResponses = {
+  /**
+   * Renamed IM identity
+   */
+  200: {
+    uuid: string
+    name: string
+    orgID: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    orgAllGroupID: string
+  }
+}
+
+export type ImFacadeRenameResponse = ImFacadeRenameResponses[keyof ImFacadeRenameResponses]
+
+export type ImFacadeRebindData = {
+  body: {
+    newKey: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/rebind"
+}
+
+export type ImFacadeRebindErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeRebindError = ImFacadeRebindErrors[keyof ImFacadeRebindErrors]
+
+export type ImFacadeRebindResponses = {
+  /**
+   * Rebound IM identity
+   */
+  200: {
+    uuid: string
+    name: string
+    orgID: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    orgAllGroupID: string
+  }
+}
+
+export type ImFacadeRebindResponse = ImFacadeRebindResponses[keyof ImFacadeRebindResponses]
+
+export type ImFacadeRetryData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/retry"
+}
+
+export type ImFacadeRetryErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeRetryError = ImFacadeRetryErrors[keyof ImFacadeRetryErrors]
+
+export type ImFacadeRetryResponses = {
+  /**
+   * Exchanged IM identity
+   */
+  200: {
+    uuid: string
+    name: string
+    orgID: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    orgAllGroupID: string
+  }
+}
+
+export type ImFacadeRetryResponse = ImFacadeRetryResponses[keyof ImFacadeRetryResponses]
+
+export type ImFacadeResolveData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    name: string
+  }
+  url: "/api/v1/im/facade/resolve"
+}
+
+export type ImFacadeResolveErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeResolveError = ImFacadeResolveErrors[keyof ImFacadeResolveErrors]
+
+export type ImFacadeResolveResponses = {
+  /**
+   * Resolved IM user
+   */
+  200: {
+    uuid: string
+    name: string
+  }
+}
+
+export type ImFacadeResolveResponse = ImFacadeResolveResponses[keyof ImFacadeResolveResponses]
+
+export type ImFacadeDirectData = {
+  body: {
+    name: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/direct"
+}
+
+export type ImFacadeDirectErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeDirectError = ImFacadeDirectErrors[keyof ImFacadeDirectErrors]
+
+export type ImFacadeDirectResponses = {
+  /**
+   * Direct chat group
+   */
+  200: {
+    reader?: {
+      mode: "protected"
+      state: "pending" | "ready"
+      liveUnread: string | null
+      peerID?: string
+      admittedOrdinal?: string
+      readAction?: {
+        actionID: string
+        cutID: string
+        phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+        cutIndex: number
+        targetAdmitted: string
+        throughOrdinal: string
+        targetReached: boolean
+      }
+      unresolvedReadActions?: Array<{
+        actionID: string
+        cutID: string
+        phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+        cutIndex: number
+        targetAdmitted: string
+        throughOrdinal: string
+        targetReached: boolean
+      }>
+    }
+    id: string
+    workspaceID: string
+    projectID: string | null
+    type: string
+    name: string
+    createdBy: string
+    kernelConvID: string | null
+    createdAt: number
+    updatedAt: number
+  }
+}
+
+export type ImFacadeDirectResponse = ImFacadeDirectResponses[keyof ImFacadeDirectResponses]
+
+export type ImFacadeGroupsCreateData = {
+  body: {
+    name: string
+    memberNames: Array<string>
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/groups"
+}
+
+export type ImFacadeGroupsCreateErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError
+   */
+  404: ImFacadeNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImFacadeGroupsCreateError = ImFacadeGroupsCreateErrors[keyof ImFacadeGroupsCreateErrors]
+
+export type ImFacadeGroupsCreateResponses = {
+  /**
+   * Kernel group
+   */
+  200: {
+    reader?: {
+      mode: "protected"
+      state: "pending" | "ready"
+      liveUnread: string | null
+      peerID?: string
+      admittedOrdinal?: string
+      readAction?: {
+        actionID: string
+        cutID: string
+        phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+        cutIndex: number
+        targetAdmitted: string
+        throughOrdinal: string
+        targetReached: boolean
+      }
+      unresolvedReadActions?: Array<{
+        actionID: string
+        cutID: string
+        phase: "prepared" | "dispatched" | "unknown" | "confirmed" | "cancelled"
+        cutIndex: number
+        targetAdmitted: string
+        throughOrdinal: string
+        targetReached: boolean
+      }>
+    }
+    id: string
+    workspaceID: string
+    projectID: string | null
+    type: string
+    name: string
+    createdBy: string
+    kernelConvID: string | null
+    createdAt: number
+    updatedAt: number
+  }
+}
+
+export type ImFacadeGroupsCreateResponse = ImFacadeGroupsCreateResponses[keyof ImFacadeGroupsCreateResponses]
+
+export type ImFacadeGroupsInviteData = {
+  body: {
+    name: string
+  }
+  path: {
+    groupId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/facade/groups/{groupId}/invite"
+}
+
+export type ImFacadeGroupsInviteErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeForbiddenError
+   */
+  403: ImFacadeForbiddenError
+  /**
+   * IMFacadeNotFoundError | IMGroupNotFoundError
+   */
+  404: ImFacadeNotFoundError | ImGroupNotFoundError
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImFacadeGroupsInviteError = ImFacadeGroupsInviteErrors[keyof ImFacadeGroupsInviteErrors]
+
+export type ImFacadeGroupsInviteResponses = {
+  /**
+   * Invite result
+   */
+  200: {
+    ok: boolean
+  }
+}
+
+export type ImFacadeGroupsInviteResponse = ImFacadeGroupsInviteResponses[keyof ImFacadeGroupsInviteResponses]
+
+export type EventWorkCandidatesData = {
+  body: {
+    sourceSessionID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/event-work/candidates"
+}
+
+export type EventWorkCandidatesErrors = {
+  /**
+   * EventWorkInvalid | InvalidRequestError
+   */
+  400: EventWorkInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * EventWorkForbidden
+   */
+  403: EventWorkForbidden
+  /**
+   * EventWorkConflict
+   */
+  409: EventWorkConflict
+  /**
+   * EventWorkUnavailable
+   */
+  503: EventWorkUnavailable
+}
+
+export type EventWorkCandidatesError = EventWorkCandidatesErrors[keyof EventWorkCandidatesErrors]
+
+export type EventWorkCandidatesResponses = {
+  /**
+   * Success
+   */
+  200: Array<EventWorkCandidate>
+}
+
+export type EventWorkCandidatesResponse = EventWorkCandidatesResponses[keyof EventWorkCandidatesResponses]
+
+export type EventWorkRulesData = {
+  body: {
+    sourceSessionID: string
+    limit?: number
+    after?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/event-work/rules"
+}
+
+export type EventWorkRulesErrors = {
+  /**
+   * EventWorkInvalid | InvalidRequestError
+   */
+  400: EventWorkInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * EventWorkForbidden
+   */
+  403: EventWorkForbidden
+  /**
+   * EventWorkConflict
+   */
+  409: EventWorkConflict
+  /**
+   * EventWorkUnavailable
+   */
+  503: EventWorkUnavailable
+}
+
+export type EventWorkRulesError = EventWorkRulesErrors[keyof EventWorkRulesErrors]
+
+export type EventWorkRulesResponses = {
+  /**
+   * EventWorkRulesPage
+   */
+  200: EventWorkRulesPage
+}
+
+export type EventWorkRulesResponse = EventWorkRulesResponses[keyof EventWorkRulesResponses]
+
+export type EventWorkRootsData = {
+  body: {
+    sourceSessionID: string
+    limit?: number
+    after?: string
+    ruleID?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/event-work/roots"
+}
+
+export type EventWorkRootsErrors = {
+  /**
+   * EventWorkInvalid | InvalidRequestError
+   */
+  400: EventWorkInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * EventWorkForbidden
+   */
+  403: EventWorkForbidden
+  /**
+   * EventWorkConflict
+   */
+  409: EventWorkConflict
+  /**
+   * EventWorkUnavailable
+   */
+  503: EventWorkUnavailable
+}
+
+export type EventWorkRootsError = EventWorkRootsErrors[keyof EventWorkRootsErrors]
+
+export type EventWorkRootsResponses = {
+  /**
+   * EventWorkRootsPage
+   */
+  200: EventWorkRootsPage
+}
+
+export type EventWorkRootsResponse = EventWorkRootsResponses[keyof EventWorkRootsResponses]
+
+export type EventWorkRuleControlData = {
+  body: {
+    sourceSessionID: string
+    ruleID: string
+    requestID: string
+    expectedRevision: number
+    action: "create" | "enable" | "pause" | "revoke"
+    originID?: string
+    instruction?: string
+    expiresAt?: number
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/event-work/rules/control"
+}
+
+export type EventWorkRuleControlErrors = {
+  /**
+   * EventWorkInvalid | InvalidRequestError
+   */
+  400: EventWorkInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * EventWorkForbidden
+   */
+  403: EventWorkForbidden
+  /**
+   * EventWorkConflict
+   */
+  409: EventWorkConflict
+  /**
+   * EventWorkUnavailable
+   */
+  503: EventWorkUnavailable
+}
+
+export type EventWorkRuleControlError = EventWorkRuleControlErrors[keyof EventWorkRuleControlErrors]
+
+export type EventWorkRuleControlResponses = {
+  /**
+   * EventWorkRuleCommandResult
+   */
+  200: EventWorkRuleCommandResult
+}
+
+export type EventWorkRuleControlResponse = EventWorkRuleControlResponses[keyof EventWorkRuleControlResponses]
+
+export type EventWorkRootControlData = {
+  body: {
+    sourceSessionID: string
+    rootID: string
+    requestID: string
+    expectedRevision: number
+    action: "cancel"
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/event-work/roots/control"
+}
+
+export type EventWorkRootControlErrors = {
+  /**
+   * EventWorkInvalid | InvalidRequestError
+   */
+  400: EventWorkInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * EventWorkForbidden
+   */
+  403: EventWorkForbidden
+  /**
+   * EventWorkConflict
+   */
+  409: EventWorkConflict
+  /**
+   * EventWorkUnavailable
+   */
+  503: EventWorkUnavailable
+}
+
+export type EventWorkRootControlError = EventWorkRootControlErrors[keyof EventWorkRootControlErrors]
+
+export type EventWorkRootControlResponses = {
+  /**
+   * EventWorkRootCommandResult
+   */
+  200: EventWorkRootCommandResult
+}
+
+export type EventWorkRootControlResponse = EventWorkRootControlResponses[keyof EventWorkRootControlResponses]
+
+export type EventWorkSessionData = {
+  body: {
+    sourceSessionID: string
+    rootID: string
+    nodeID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/event-work/session"
+}
+
+export type EventWorkSessionErrors = {
+  /**
+   * EventWorkInvalid | InvalidRequestError
+   */
+  400: EventWorkInvalid | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * EventWorkForbidden
+   */
+  403: EventWorkForbidden
+  /**
+   * EventWorkConflict
+   */
+  409: EventWorkConflict
+  /**
+   * EventWorkUnavailable
+   */
+  503: EventWorkUnavailable
+}
+
+export type EventWorkSessionError = EventWorkSessionErrors[keyof EventWorkSessionErrors]
+
+export type EventWorkSessionResponses = {
+  /**
+   * EventWorkSessionPointer
+   */
+  200: EventWorkSessionPointer
+}
+
+export type EventWorkSessionResponse = EventWorkSessionResponses[keyof EventWorkSessionResponses]
 
 export type InstanceDisposeData = {
   body?: never
@@ -15213,18 +23706,26 @@ export type CommandListData = {
 
 export type CommandListErrors = {
   /**
-   * Bad request
+   * InvalidRequestError
    */
-  400: BadRequestError
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type CommandListError = CommandListErrors[keyof CommandListErrors]
 
 export type CommandListResponses = {
   /**
-   * List of commands
+   * Read-only command metadata
    */
-  200: Array<Command>
+  200: Array<CommandRead>
 }
 
 export type CommandListResponse = CommandListResponses[keyof CommandListResponses]
@@ -15731,6 +24232,379 @@ export type SystemContextSnapshotResponses = {
 
 export type SystemContextSnapshotResponse = SystemContextSnapshotResponses[keyof SystemContextSnapshotResponses]
 
+export type McpAppsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/apps"
+}
+
+export type McpAppsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * McpAppOperationError
+   */
+  409: McpAppOperationError
+}
+
+export type McpAppsError = McpAppsErrors[keyof McpAppsErrors]
+
+export type McpAppsResponses = {
+  /**
+   * Success
+   */
+  200: Array<{
+    server: string
+    tool: string
+    toolName: string
+    generation: string
+    resourceUri: string
+    mimeType: "text/html;profile=mcp-app"
+  }>
+}
+
+export type McpAppsResponse = McpAppsResponses[keyof McpAppsResponses]
+
+export type McpAppOpenData = {
+  body?: {
+    server: string
+    tool: string
+    generation: string
+    resourceUri: string
+    consent: true
+    sessionID?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/apps/open"
+}
+
+export type McpAppOpenErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * McpAppOperationError
+   */
+  409: McpAppOperationError
+}
+
+export type McpAppOpenError = McpAppOpenErrors[keyof McpAppOpenErrors]
+
+export type McpAppOpenResponses = {
+  /**
+   * Success
+   */
+  200: {
+    viewID: string
+    descriptor: {
+      server: string
+      tool: string
+      toolName: string
+      generation: string
+      resourceUri: string
+      mimeType: "text/html;profile=mcp-app"
+    }
+    html: string
+    csp: "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; media-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'"
+    prefersBorder: boolean
+    expiresAt: number
+    sessionID?: string
+  }
+}
+
+export type McpAppOpenResponse = McpAppOpenResponses[keyof McpAppOpenResponses]
+
+export type McpAppCheckData = {
+  body?: {
+    viewID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/apps/check"
+}
+
+export type McpAppCheckErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * McpAppOperationError
+   */
+  409: McpAppOperationError
+}
+
+export type McpAppCheckError = McpAppCheckErrors[keyof McpAppCheckErrors]
+
+export type McpAppCheckResponses = {
+  /**
+   * Success
+   */
+  200: {
+    server: string
+    tool: string
+    toolName: string
+    generation: string
+    resourceUri: string
+    mimeType: "text/html;profile=mcp-app"
+  }
+}
+
+export type McpAppCheckResponse = McpAppCheckResponses[keyof McpAppCheckResponses]
+
+export type McpAppCloseData = {
+  body?: {
+    viewID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/apps/close"
+}
+
+export type McpAppCloseErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * McpAppOperationError
+   */
+  409: McpAppOperationError
+}
+
+export type McpAppCloseError = McpAppCloseErrors[keyof McpAppCloseErrors]
+
+export type McpAppCloseResponses = {
+  /**
+   * Success
+   */
+  200: boolean
+}
+
+export type McpAppCloseResponse = McpAppCloseResponses[keyof McpAppCloseResponses]
+
+export type McpAppInvokeData = {
+  body?: {
+    sessionID: string
+    viewID: string
+    rpcID: string | number
+    name: string
+    arguments: {
+      [key: string]: unknown
+    }
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/apps/invoke"
+}
+
+export type McpAppInvokeErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * McpAppInvocationOperationError
+   */
+  409: McpAppInvocationOperationError
+}
+
+export type McpAppInvokeError = McpAppInvokeErrors[keyof McpAppInvokeErrors]
+
+export type McpAppInvokeResponses = {
+  /**
+   * McpAppInvocationStatus
+   */
+  200: McpAppInvocationStatus
+}
+
+export type McpAppInvokeResponse = McpAppInvokeResponses[keyof McpAppInvokeResponses]
+
+export type McpAppViewToolsData = {
+  body?: {
+    viewID: string
+    sessionID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/apps/tools"
+}
+
+export type McpAppViewToolsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * McpAppInvocationOperationError
+   */
+  409: McpAppInvocationOperationError
+}
+
+export type McpAppViewToolsError = McpAppViewToolsErrors[keyof McpAppViewToolsErrors]
+
+export type McpAppViewToolsResponses = {
+  /**
+   * Success
+   */
+  200: {
+    viewID: string
+    sessionID: string
+    generation: string
+    tools: Array<{
+      name: string
+      description?: string
+      inputSchema: {
+        [key: string]: unknown
+      }
+      outputSchema?: {
+        [key: string]: unknown
+      }
+      annotations?: {
+        [key: string]: unknown
+      }
+      _meta?: {
+        [key: string]: unknown
+      }
+      execution?: {
+        [key: string]: unknown
+      }
+    }>
+  }
+}
+
+export type McpAppViewToolsResponse = McpAppViewToolsResponses[keyof McpAppViewToolsResponses]
+
+export type McpAppInvocationStatusData = {
+  body?: {
+    sessionID: string
+    invocationID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/apps/invocations/status"
+}
+
+export type McpAppInvocationStatusErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * McpAppInvocationOperationError
+   */
+  409: McpAppInvocationOperationError
+}
+
+export type McpAppInvocationStatusError = McpAppInvocationStatusErrors[keyof McpAppInvocationStatusErrors]
+
+export type McpAppInvocationStatusResponses = {
+  /**
+   * McpAppInvocationStatus
+   */
+  200: McpAppInvocationStatus
+}
+
+export type McpAppInvocationStatusResponse = McpAppInvocationStatusResponses[keyof McpAppInvocationStatusResponses]
+
+export type McpAppInvocationResultData = {
+  body?: {
+    sessionID: string
+    invocationID: string
+    viewID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/apps/invocations/result"
+}
+
+export type McpAppInvocationResultErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * McpAppInvocationOperationError
+   */
+  409: McpAppInvocationOperationError
+}
+
+export type McpAppInvocationResultError = McpAppInvocationResultErrors[keyof McpAppInvocationResultErrors]
+
+export type McpAppInvocationResultResponses = {
+  /**
+   * McpAppInvocationResult
+   */
+  200: McpAppInvocationResult
+}
+
+export type McpAppInvocationResultResponse = McpAppInvocationResultResponses[keyof McpAppInvocationResultResponses]
+
+export type McpAppInvocationListData = {
+  body?: {
+    sessionID: string
+    after?: number
+    limit?: number
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/apps/invocations/list"
+}
+
+export type McpAppInvocationListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * McpAppInvocationOperationError
+   */
+  409: McpAppInvocationOperationError
+}
+
+export type McpAppInvocationListError = McpAppInvocationListErrors[keyof McpAppInvocationListErrors]
+
+export type McpAppInvocationListResponses = {
+  /**
+   * Success
+   */
+  200: Array<McpAppInvocationStatus>
+}
+
+export type McpAppInvocationListResponse = McpAppInvocationListResponses[keyof McpAppInvocationListResponses]
+
 export type McpStatusData = {
   body?: never
   path?: never
@@ -15746,6 +24620,10 @@ export type McpStatusErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type McpStatusError = McpStatusErrors[keyof McpStatusErrors]
@@ -15762,7 +24640,7 @@ export type McpStatusResponses = {
 export type McpStatusResponse = McpStatusResponses[keyof McpStatusResponses]
 
 export type McpAddData = {
-  body?: {
+  body: {
     name: string
     config: McpLocalConfig | McpRemoteConfig
   }
@@ -15779,6 +24657,10 @@ export type McpAddErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
 }
 
 export type McpAddError = McpAddErrors[keyof McpAddErrors]
@@ -15793,6 +24675,50 @@ export type McpAddResponses = {
 }
 
 export type McpAddResponse = McpAddResponses[keyof McpAddResponses]
+
+export type McpRemoveConfigData = {
+  body?: never
+  path: {
+    name: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/{name}/config"
+}
+
+export type McpRemoveConfigErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * McpServerNotFoundError
+   */
+  404: McpServerNotFoundError
+  /**
+   * McpConfigRemovalError
+   */
+  409: McpConfigRemovalError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type McpRemoveConfigError = McpRemoveConfigErrors[keyof McpRemoveConfigErrors]
+
+export type McpRemoveConfigResponses = {
+  /**
+   * Success
+   */
+  200: {
+    removed: true
+  }
+}
+
+export type McpRemoveConfigResponse = McpRemoveConfigResponses[keyof McpRemoveConfigResponses]
 
 export type McpCatalogData = {
   body?: never
@@ -15809,6 +24735,10 @@ export type McpCatalogErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type McpCatalogError = McpCatalogErrors[keyof McpCatalogErrors]
@@ -15847,7 +24777,7 @@ export type McpCatalogResponses = {
 export type McpCatalogResponse = McpCatalogResponses[keyof McpCatalogResponses]
 
 export type McpCatalogEnableData = {
-  body?: {
+  body: {
     id: string
     params: {
       [key: string]: string | Array<string>
@@ -15869,6 +24799,10 @@ export type McpCatalogEnableErrors = {
    * McpCatalogInstantiateError | InvalidRequestError
    */
   400: McpCatalogInstantiateError | InvalidRequestError
+  /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
   /**
    * McpServerNotFoundError
    */
@@ -15892,6 +24826,342 @@ export type McpCatalogEnableResponses = {
 
 export type McpCatalogEnableResponse = McpCatalogEnableResponses[keyof McpCatalogEnableResponses]
 
+export type McpCredentialsInitializeData = {
+  body?: never
+  path: {
+    name: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/{name}/credentials/initialize"
+}
+
+export type McpCredentialsInitializeErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
+  /**
+   * McpSecretOperationError
+   */
+  409: McpSecretOperationError
+  /**
+   * McpSecretUnavailableError
+   */
+  503: McpSecretUnavailableError
+}
+
+export type McpCredentialsInitializeError = McpCredentialsInitializeErrors[keyof McpCredentialsInitializeErrors]
+
+export type McpCredentialsInitializeResponses = {
+  /**
+   * Success
+   */
+  200: {
+    name: string
+    source: string
+  }
+}
+
+export type McpCredentialsInitializeResponse =
+  McpCredentialsInitializeResponses[keyof McpCredentialsInitializeResponses]
+
+export type McpCredentialsPreviewData = {
+  body?: never
+  path: {
+    name: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/{name}/credentials/preview"
+}
+
+export type McpCredentialsPreviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
+  /**
+   * McpSecretOperationError
+   */
+  409: McpSecretOperationError
+  /**
+   * McpSecretUnavailableError
+   */
+  503: McpSecretUnavailableError
+}
+
+export type McpCredentialsPreviewError = McpCredentialsPreviewErrors[keyof McpCredentialsPreviewErrors]
+
+export type McpCredentialsPreviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    name: string
+    source: string
+    previewID: string
+    fields: Array<{
+      field: "environment" | "headers" | "oauth"
+      key: string
+    }>
+  }
+}
+
+export type McpCredentialsPreviewResponse = McpCredentialsPreviewResponses[keyof McpCredentialsPreviewResponses]
+
+export type McpCredentialsCommitData = {
+  body: {
+    previewID: string
+    requestID: string
+  }
+  path: {
+    name: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/{name}/credentials/commit"
+}
+
+export type McpCredentialsCommitErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
+  /**
+   * McpSecretOperationError
+   */
+  409: McpSecretOperationError
+  /**
+   * McpSecretUnavailableError
+   */
+  503: McpSecretUnavailableError
+}
+
+export type McpCredentialsCommitError = McpCredentialsCommitErrors[keyof McpCredentialsCommitErrors]
+
+export type McpCredentialsCommitResponses = {
+  /**
+   * Success
+   */
+  200: {
+    requestID: string
+    name: string
+    state: "prepared" | "stored" | "committed" | "changed"
+    moved: number
+  }
+}
+
+export type McpCredentialsCommitResponse = McpCredentialsCommitResponses[keyof McpCredentialsCommitResponses]
+
+export type McpCredentialsStatusData = {
+  body?: never
+  path: {
+    name: string
+    requestID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/{name}/credentials/{requestID}"
+}
+
+export type McpCredentialsStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
+  /**
+   * NotFound
+   */
+  404: EffectHttpApiErrorNotFound
+  /**
+   * McpSecretOperationError
+   */
+  409: McpSecretOperationError
+  /**
+   * McpSecretUnavailableError
+   */
+  503: McpSecretUnavailableError
+}
+
+export type McpCredentialsStatusError = McpCredentialsStatusErrors[keyof McpCredentialsStatusErrors]
+
+export type McpCredentialsStatusResponses = {
+  /**
+   * Success
+   */
+  200: {
+    requestID: string
+    name: string
+    state: "prepared" | "stored" | "committed" | "changed"
+    moved: number
+  }
+}
+
+export type McpCredentialsStatusResponse = McpCredentialsStatusResponses[keyof McpCredentialsStatusResponses]
+
+export type McpCredentialsReconcileData = {
+  body?: never
+  path: {
+    name: string
+    requestID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/{name}/credentials/{requestID}/reconcile"
+}
+
+export type McpCredentialsReconcileErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
+  /**
+   * McpSecretOperationError
+   */
+  409: McpSecretOperationError
+  /**
+   * McpSecretUnavailableError
+   */
+  503: McpSecretUnavailableError
+}
+
+export type McpCredentialsReconcileError = McpCredentialsReconcileErrors[keyof McpCredentialsReconcileErrors]
+
+export type McpCredentialsReconcileResponses = {
+  /**
+   * Success
+   */
+  200: {
+    requestID: string
+    name: string
+    state: "prepared" | "stored" | "committed" | "changed"
+    moved: number
+  }
+}
+
+export type McpCredentialsReconcileResponse = McpCredentialsReconcileResponses[keyof McpCredentialsReconcileResponses]
+
+export type McpBindingPreviewData = {
+  body?: never
+  path: {
+    name: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/{name}/binding/preview"
+}
+
+export type McpBindingPreviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
+  /**
+   * McpSecretOperationError
+   */
+  409: McpSecretOperationError
+  /**
+   * McpSecretUnavailableError
+   */
+  503: McpSecretUnavailableError
+}
+
+export type McpBindingPreviewError = McpBindingPreviewErrors[keyof McpBindingPreviewErrors]
+
+export type McpBindingPreviewResponses = {
+  /**
+   * McpBindingRepairPreview
+   */
+  200: McpBindingRepairPreview
+}
+
+export type McpBindingPreviewResponse = McpBindingPreviewResponses[keyof McpBindingPreviewResponses]
+
+export type McpBindingRepairData = {
+  body: {
+    previewID: string
+  }
+  path: {
+    name: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/{name}/binding/repair"
+}
+
+export type McpBindingRepairErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
+  /**
+   * McpSecretOperationError
+   */
+  409: McpSecretOperationError
+  /**
+   * McpSecretUnavailableError
+   */
+  503: McpSecretUnavailableError
+}
+
+export type McpBindingRepairError = McpBindingRepairErrors[keyof McpBindingRepairErrors]
+
+export type McpBindingRepairResponses = {
+  /**
+   * Success
+   */
+  200: {
+    name: string
+    source: string
+    state: "repaired"
+  }
+}
+
+export type McpBindingRepairResponse = McpBindingRepairResponses[keyof McpBindingRepairResponses]
+
 export type McpAuthRemoveData = {
   body?: never
   path: {
@@ -15906,13 +25176,21 @@ export type McpAuthRemoveData = {
 
 export type McpAuthRemoveErrors = {
   /**
-   * Bad request
+   * InvalidRequestError
    */
-  400: BadRequestError
+  400: InvalidRequestError
+  /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
   /**
    * McpServerNotFoundError
    */
   404: McpServerNotFoundError
+  /**
+   * McpOAuthFlowError
+   */
+  409: McpOAuthFlowError
 }
 
 export type McpAuthRemoveError = McpAuthRemoveErrors[keyof McpAuthRemoveErrors]
@@ -15946,9 +25224,17 @@ export type McpAuthStartErrors = {
    */
   400: McpUnsupportedOAuthError | InvalidRequestError
   /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
+  /**
    * McpServerNotFoundError
    */
   404: McpServerNotFoundError
+  /**
+   * McpOAuthFlowError
+   */
+  409: McpOAuthFlowError
 }
 
 export type McpAuthStartError = McpAuthStartErrors[keyof McpAuthStartErrors]
@@ -15966,8 +25252,10 @@ export type McpAuthStartResponses = {
 export type McpAuthStartResponse = McpAuthStartResponses[keyof McpAuthStartResponses]
 
 export type McpAuthCallbackData = {
-  body?: {
+  body: {
     code: string
+    oauthState: string
+    iss?: string
   }
   path: {
     name: string
@@ -15985,9 +25273,17 @@ export type McpAuthCallbackErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
+  /**
    * McpServerNotFoundError
    */
   404: McpServerNotFoundError
+  /**
+   * McpOAuthFlowError
+   */
+  409: McpOAuthFlowError
 }
 
 export type McpAuthCallbackError = McpAuthCallbackErrors[keyof McpAuthCallbackErrors]
@@ -16019,9 +25315,17 @@ export type McpAuthAuthenticateErrors = {
    */
   400: McpUnsupportedOAuthError | InvalidRequestError
   /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
+  /**
    * McpServerNotFoundError
    */
   404: McpServerNotFoundError
+  /**
+   * McpOAuthFlowError
+   */
+  409: McpOAuthFlowError
 }
 
 export type McpAuthAuthenticateError = McpAuthAuthenticateErrors[keyof McpAuthAuthenticateErrors]
@@ -16049,13 +25353,21 @@ export type McpConnectData = {
 
 export type McpConnectErrors = {
   /**
-   * Bad request
+   * InvalidRequestError
    */
-  400: BadRequestError
+  400: InvalidRequestError
+  /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
   /**
    * McpServerNotFoundError
    */
   404: McpServerNotFoundError
+  /**
+   * McpOAuthFlowError
+   */
+  409: McpOAuthFlowError
 }
 
 export type McpConnectError = McpConnectErrors[keyof McpConnectErrors]
@@ -16083,9 +25395,13 @@ export type McpDisconnectData = {
 
 export type McpDisconnectErrors = {
   /**
-   * Bad request
+   * InvalidRequestError
    */
-  400: BadRequestError
+  400: InvalidRequestError
+  /**
+   * McpAuthenticationRequired | Unauthorized
+   */
+  401: McpAuthenticationRequired
   /**
    * McpServerNotFoundError
    */
@@ -17103,6 +26419,10 @@ export type SessionCreateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SessionCreateError = SessionCreateErrors[keyof SessionCreateErrors]
@@ -17111,7 +26431,7 @@ export type SessionCreateResponses = {
   /**
    * Successfully created session
    */
-  200: Session3
+  200: Session2
 }
 
 export type SessionCreateResponse = SessionCreateResponses[keyof SessionCreateResponses]
@@ -17217,7 +26537,7 @@ export type SessionGetResponses = {
   /**
    * Get session
    */
-  200: Session2
+  200: SessionReadInfo
 }
 
 export type SessionGetResponse = SessionGetResponses[keyof SessionGetResponses]
@@ -17264,7 +26584,7 @@ export type SessionUpdateResponses = {
   /**
    * Successfully updated session
    */
-  200: Session4
+  200: Session3
 }
 
 export type SessionUpdateResponse = SessionUpdateResponses[keyof SessionUpdateResponses]
@@ -17757,7 +27077,7 @@ export type SessionForkResponses = {
   /**
    * 200
    */
-  200: Session5
+  200: Session4
 }
 
 export type SessionForkResponse = SessionForkResponses[keyof SessionForkResponses]
@@ -17883,7 +27203,7 @@ export type SessionUnshareResponses = {
   /**
    * Successfully unshared session
    */
-  200: Session7
+  200: Session6
 }
 
 export type SessionUnshareResponse = SessionUnshareResponses[keyof SessionUnshareResponses]
@@ -17929,7 +27249,7 @@ export type SessionShareResponses = {
   /**
    * Successfully shared session
    */
-  200: Session6
+  200: Session5
 }
 
 export type SessionShareResponse = SessionShareResponses[keyof SessionShareResponses]
@@ -18032,6 +27352,7 @@ export type SessionPromptPrepareResponses = {
     goal: string
     preview: string
     intent_id?: string
+    degraded?: boolean
   }
 }
 
@@ -18339,7 +27660,7 @@ export type SessionRevertResponses = {
   /**
    * Updated session
    */
-  200: Session8
+  200: Session7
 }
 
 export type SessionRevertResponse = SessionRevertResponses[keyof SessionRevertResponses]
@@ -18377,7 +27698,7 @@ export type SessionUnrevertResponses = {
   /**
    * Updated session
    */
-  200: Session9
+  200: Session8
 }
 
 export type SessionUnrevertResponse = SessionUnrevertResponses[keyof SessionUnrevertResponses]
@@ -21574,7 +30895,7 @@ export type V2PermissionRequestListResponses = {
    */
   200: {
     location: LocationInfo
-    data: Array<PermissionV2Request>
+    data: Array<PermissionRequestView>
   }
 }
 
@@ -21675,7 +30996,7 @@ export type V2SessionPermissionListResponses = {
    * Success
    */
   200: {
-    data: Array<PermissionV2Request>
+    data: Array<PermissionRequestView>
   }
 }
 
@@ -22015,6 +31336,224 @@ export type V2SessionQuestionRejectResponses = {
 }
 
 export type V2SessionQuestionRejectResponse = V2SessionQuestionRejectResponses[keyof V2SessionQuestionRejectResponses]
+
+export type V2AttentionTaskControlData = {
+  body: TaskHumanControlInput
+  path?: never
+  query?: {
+    workspace?: string
+    directory?: string
+  }
+  url: "/api/attention/task/control"
+}
+
+export type V2AttentionTaskControlErrors = {
+  /**
+   * InvalidRequestError | TaskControlInvalidError
+   */
+  400: InvalidRequestError | TaskControlInvalidError
+  /**
+   * TaskControlAuthenticationError | UnauthorizedError
+   */
+  401: TaskControlAuthenticationError | UnauthorizedError
+  /**
+   * TaskControlForbiddenError
+   */
+  403: TaskControlForbiddenError
+  /**
+   * TaskControlConflictError
+   */
+  409: TaskControlConflictError
+  /**
+   * TaskControlLimitError
+   */
+  429: TaskControlLimitError
+  /**
+   * TaskControlUnavailableError
+   */
+  503: TaskControlUnavailableError
+}
+
+export type V2AttentionTaskControlError = V2AttentionTaskControlErrors[keyof V2AttentionTaskControlErrors]
+
+export type V2AttentionTaskControlResponses = {
+  /**
+   * Success
+   */
+  200: {
+    receipt: TaskHumanControlReceipt
+    replayed: boolean
+  }
+}
+
+export type V2AttentionTaskControlResponse = V2AttentionTaskControlResponses[keyof V2AttentionTaskControlResponses]
+
+export type V2AttentionCapabilityData = {
+  body?: never
+  path?: never
+  query?: {
+    workspace?: string
+    directory?: string
+  }
+  url: "/api/attention/capability"
+}
+
+export type V2AttentionCapabilityErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2AttentionCapabilityError = V2AttentionCapabilityErrors[keyof V2AttentionCapabilityErrors]
+
+export type V2AttentionCapabilityResponses = {
+  /**
+   * AttentionCapability
+   */
+  200: AttentionCapability
+}
+
+export type V2AttentionCapabilityResponse = V2AttentionCapabilityResponses[keyof V2AttentionCapabilityResponses]
+
+export type V2AttentionListData = {
+  body?: never
+  path?: never
+  query?: {
+    workspace?: string
+    directory?: string
+    project?: string
+    kind?: "activity_failed" | "execution_recovery" | "no_progress" | "task" | "goal"
+    view?: "all" | "unseen"
+    cursor?: string
+    limit?: string
+  }
+  url: "/api/attention"
+}
+
+export type V2AttentionListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2AttentionListError = V2AttentionListErrors[keyof V2AttentionListErrors]
+
+export type V2AttentionListResponses = {
+  /**
+   * AttentionList
+   */
+  200: AttentionList
+}
+
+export type V2AttentionListResponse = V2AttentionListResponses[keyof V2AttentionListResponses]
+
+export type V2AttentionGetData = {
+  body?: never
+  path: {
+    itemID: string
+  }
+  query?: {
+    workspace?: string
+    directory?: string
+  }
+  url: "/api/attention/{itemID}"
+}
+
+export type V2AttentionGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * AttentionNotFoundError
+   */
+  404: AttentionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2AttentionGetError = V2AttentionGetErrors[keyof V2AttentionGetErrors]
+
+export type V2AttentionGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: AttentionItem
+  }
+}
+
+export type V2AttentionGetResponse = V2AttentionGetResponses[keyof V2AttentionGetResponses]
+
+export type V2AttentionSeenData = {
+  body: {
+    revision: string
+  }
+  path: {
+    itemID: string
+  }
+  query?: {
+    workspace?: string
+    directory?: string
+  }
+  url: "/api/attention/{itemID}/seen"
+}
+
+export type V2AttentionSeenErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * AttentionNotFoundError
+   */
+  404: AttentionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2AttentionSeenError = V2AttentionSeenErrors[keyof V2AttentionSeenErrors]
+
+export type V2AttentionSeenResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: AttentionItem
+  }
+}
+
+export type V2AttentionSeenResponse = V2AttentionSeenResponses[keyof V2AttentionSeenResponses]
 
 export type PtyConnectData = {
   body?: never

@@ -5,7 +5,7 @@ import { and, asc, desc, eq, inArray, max, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { Hash } from "../util/hash"
-import { SessionInputTable } from "../session/sql"
+import { SessionInputTable, SessionMessageTable } from "../session/sql"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
 import { DeepAgentReleasedSnapshot, type Binding } from "../deepagent/released-snapshot"
@@ -33,6 +33,7 @@ export type Activity = {
   readonly state: "active" | "settled" | "failed" | "interrupted"
   readonly createdAt: number
   readonly settledAt?: number
+  readonly finalMessageId?: string
 }
 
 export type SelectedRef = {
@@ -194,6 +195,7 @@ export interface Interface {
   readonly settleActivity: (input: {
     readonly activityId: string
     readonly state: "settled" | "failed" | "interrupted"
+    readonly finalMessageId?: string
     readonly now?: number
   }) => Effect.Effect<Activity | undefined, Error>
   readonly commitSelection: (input: CommitSelectionInput) => Effect.Effect<Selection, Error>
@@ -337,6 +339,7 @@ export const layer = Layer.effect(
               state: "active" as const,
               created_at: now,
               settled_at: null,
+              final_message_id: null,
             }
             yield* tx.insert(SessionActivityTable).values(created).run()
             yield* tx
@@ -429,6 +432,7 @@ export const layer = Layer.effect(
     const settleActivity = Effect.fn("SessionContext.settleActivity")(function* (input: {
       readonly activityId: string
       readonly state: "settled" | "failed" | "interrupted"
+      readonly finalMessageId?: string
       readonly now?: number
     }) {
       return yield* db
@@ -444,15 +448,31 @@ export const layer = Layer.effect(
               .where(eq(SessionActivityTable.activity_id, input.activityId))
               .get()
             if (!current || current.state !== "active") return undefined
+            if (input.state === "settled" && input.finalMessageId) {
+              const final = yield* tx.select().from(SessionMessageTable)
+                .where(and(eq(SessionMessageTable.id, SessionMessage.ID.make(input.finalMessageId)), eq(SessionMessageTable.session_id, SessionSchema.ID.make(current.session_id)))).get()
+              const membership = yield* tx.select({ promoted: max(SessionInputTable.promoted_seq) })
+                .from(SessionActivityInputTable).innerJoin(SessionInputTable, eq(SessionInputTable.id, SessionActivityInputTable.input_id))
+                .where(eq(SessionActivityInputTable.activity_id, current.activity_id)).get()
+              if (!final || final.type !== "assistant" || !("finish" in final.data) || final.data.finish !== "stop" ||
+                ("error" in final.data && final.data.error) || membership?.promoted == null || final.seq <= membership.promoted)
+                return yield* new ActivityStateError()
+            }
             const settled = yield* tx
               .update(SessionActivityTable)
-              .set({ state: input.state, settled_at: input.now ?? Date.now() })
+              .set({ state: input.state, settled_at: input.now ?? Date.now(), final_message_id: input.state === "settled" ? input.finalMessageId ?? null : null })
               .where(
                 and(eq(SessionActivityTable.activity_id, input.activityId), eq(SessionActivityTable.state, "active")),
               )
               .returning()
               .get()
             if (!settled) return undefined
+            if (settled.state === "settled" && settled.final_message_id) {
+              const { EventWorkRule } = yield* Effect.promise(() => import("../deepagent/event-work-rule"))
+              // This is data-only capture in the original terminal commit. Provider/source/rule
+              // authority is independently revalidated before any later Work reservation.
+              yield* EventWorkRule.observeInTransaction(tx, { sessionID: settled.session_id, activityID: settled.activity_id })
+            }
             return activity(settled)
           }),
         )
@@ -637,44 +657,74 @@ export const layer = Layer.effect(
     })
 
     const appendValidation = Effect.fn("SessionContext.appendValidation")(function* (input: ValidationInput) {
-      const selection = yield* db
-        .select()
-        .from(SessionContextSelectionTable)
-        .where(eq(SessionContextSelectionTable.selection_id, input.selectionId))
-        .get()
-        .pipe(Effect.orDie)
-      if (!selection) return yield* new ValidationError()
-      if (
-        input.outcome === "valid" &&
-        (input.validUntil <= input.validatedAt ||
-          input.selectedSourceFingerprint !== selection.selected_source_fingerprint ||
-          input.observedLocationMutationEpoch < selection.observed_location_mutation_epoch)
-      ) {
-        return yield* new ValidationError()
+      const values = {
+        selection_id: input.selectionId,
+        provider_turn_seq: input.providerTurnSeq,
+        authorization_epoch: input.authorizationEpoch,
+        egress_epoch: input.egressEpoch,
+        observed_location_mutation_epoch: input.observedLocationMutationEpoch,
+        selected_source_fingerprint: input.selectedSourceFingerprint,
+        validated_at: input.validatedAt,
+        valid_until: input.validUntil,
+        outcome: input.outcome,
+        reason_code: input.reasonCode,
       }
-      // §4.1 step 7 revalidation refresh: a validation may extend the freshness window past the
-      // selection row's original next_revalidation_at when the identity still matches — long
-      // provider turns routinely outlive the 60s TTL. The immutable selection row keeps its
-      // original window; the validation row carries the extended one.
-      const id = opaque("validation")
-      yield* db
-        .insert(SessionContextValidationTable)
-        .values({
-          validation_id: id,
-          selection_id: input.selectionId,
-          provider_turn_seq: input.providerTurnSeq,
-          authorization_epoch: input.authorizationEpoch,
-          egress_epoch: input.egressEpoch,
-          observed_location_mutation_epoch: input.observedLocationMutationEpoch,
-          selected_source_fingerprint: input.selectedSourceFingerprint,
-          validated_at: input.validatedAt,
-          valid_until: input.validUntil,
-          outcome: input.outcome,
-          reason_code: input.reasonCode,
-        })
-        .run()
-        .pipe(Effect.orDie)
-      return id
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const selection = yield* tx
+                .select()
+                .from(SessionContextSelectionTable)
+                .where(eq(SessionContextSelectionTable.selection_id, values.selection_id))
+                .get()
+                .pipe(Effect.orDie)
+              if (!selection) return yield* new ValidationError()
+              if (
+                values.outcome === "valid" &&
+                (values.valid_until <= values.validated_at ||
+                  values.selected_source_fingerprint !== selection.selected_source_fingerprint ||
+                  values.observed_location_mutation_epoch < selection.observed_location_mutation_epoch)
+              )
+                return yield* new ValidationError()
+              // Refresh can extend the selection's original window. Exact retries within one
+              // millisecond share the observation; they cannot alter its authority or freshness.
+              const created = yield* tx
+                .insert(SessionContextValidationTable)
+                .values({ validation_id: opaque("validation"), ...values })
+                .onConflictDoNothing({
+                  target: [
+                    SessionContextValidationTable.selection_id,
+                    SessionContextValidationTable.provider_turn_seq,
+                    SessionContextValidationTable.validated_at,
+                  ],
+                })
+                .returning()
+                .get()
+                .pipe(Effect.orDie)
+              if (created) return created.validation_id
+              const previous = yield* tx
+                .select()
+                .from(SessionContextValidationTable)
+                .where(
+                  and(
+                    eq(SessionContextValidationTable.selection_id, values.selection_id),
+                    eq(SessionContextValidationTable.provider_turn_seq, values.provider_turn_seq),
+                    eq(SessionContextValidationTable.validated_at, values.validated_at),
+                  ),
+                )
+                .get()
+                .pipe(Effect.orDie)
+              if (
+                !previous ||
+                !Object.entries(values).every(([key, value]) => previous[key as keyof typeof values] === value)
+              )
+                return yield* new ValidationError()
+              return previous.validation_id
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(preserveErrors)
     })
 
     const hasValidValidation = Effect.fn("SessionContext.hasValidValidation")(function* (input: {
@@ -735,6 +785,7 @@ function activity(row: typeof SessionActivityTable.$inferSelect): Activity {
     state: row.state,
     createdAt: row.created_at,
     ...(row.settled_at !== null ? { settledAt: row.settled_at } : {}),
+    ...(row.final_message_id !== null ? { finalMessageId: row.final_message_id } : {}),
   }
 }
 

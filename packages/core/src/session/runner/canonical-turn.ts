@@ -1,7 +1,7 @@
 export * as SessionRunnerCanonical from "./canonical-turn"
 
 import { and, asc, desc, eq, gt, inArray, isNull, lte, sql } from "drizzle-orm"
-import { Effect, Layer, Option, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import { Database } from "../../database/database"
 import { ContextArtifactStore } from "../../context-federation/artifact-store"
 import { SessionProviderAttempt } from "../../context-federation/provider-attempt"
@@ -9,7 +9,7 @@ import { SessionProviderOwner } from "../../context-federation/provider-owner"
 import { ContextReference, LocationKey, ProjectScopeKey, SecurityNamespaceID } from "../../context-federation/reference"
 import { SessionContext } from "../../context-federation/session-context"
 import { ContextQueryAuthorization } from "../../context-federation/query-authorization"
-import { resolveGraphs, GraphOrder, type QueryEnvelope } from "../../context-federation/resolver-v2"
+import { resolveGraphs, GraphOrder, type QueryEnvelope, type QueryResultV2 } from "../../context-federation/resolver-v2"
 import { budgetSelection } from "../../context-federation/selection-budget"
 import {
   buildSelectionEnvelope,
@@ -44,6 +44,13 @@ import {
 import { SessionSchema } from "../schema"
 import { LongContext } from "../long-context"
 import { Hash } from "../../util/hash"
+import { CanonicalJson } from "../../util/canonical-json"
+import { SessionMessage } from "../message"
+import { SessionInputTable, SessionMessageTable, SessionTable } from "../sql"
+import { WorkAuthority } from "../work-authority"
+import { WorkAuthorityPolicy } from "../work-authority-policy"
+import { WorkAuthoritySchema } from "../work-authority.schema"
+import { WorkToolPolicy } from "../work-tool-policy"
 import { V2ProviderTurn } from "./v2-provider-turn"
 import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 
@@ -56,6 +63,11 @@ import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 // adapter set (`source_disabled`) only under an explicit `=false`.
 export const SelectionLifetimeMs = 14 * 60_000
 export const ValidationMs = 60_000
+
+/** Internal continuation scope supplied by the serialized runner, never a persisted grant. */
+export const CurrentContinuationActivity = Context.Reference<string | undefined>(
+  "SessionRunnerCanonical.CurrentContinuationActivity", { defaultValue: () => undefined },
+)
 
 /**
  * opencode upstream port #1 — the durable resume budget (upstream default 10). Counted from the
@@ -224,7 +236,383 @@ export const admitSelection = Effect.fn("SessionRunnerCanonical.admitSelection")
   )
 })
 
+/** Restricted admission shares the canonical activity and selection writers. It never registers
+ * a missing identity or loads the ordinary system/history/production graph sources. Promotion is
+ * owned by the existing runner: this entry requires the one audited input already be promoted.
+ * Retrieval remains unavailable by policy; that does NOT mean the fixed instructions/text are
+ * missing. The caller must not append graph evidence to those fixed instructions. */
+export const admitRestrictedSelection = Effect.fn("SessionRunnerCanonical.admitRestrictedSelection")(function* (input: {
+  readonly db: Database.Interface["db"]
+  readonly contexts: SessionContext.Interface
+  readonly sessionID: SessionSchema.ID
+  readonly workID: string
+  readonly expectedRevision: number
+}) {
+  const bound = yield* WorkAuthority.lookupSession(input.db, input.sessionID)
+  if (bound.kind === "bound" && bound.work.binding.schemaVersion === "work-execution.v2") {
+    yield* WorkToolPolicy.preparePrevious(input.db, input.sessionID)
+    // Authenticating cold native outcomes may outlive the short source observation. Reobserve
+    // only after all external preparation; the immediate SQL fence consumes that same witness.
+    const { WorkExecutionProfile } = yield* Effect.promise(() => import("../work-execution-profile"))
+    yield* WorkExecutionProfile.prepareSource(bound.work, { fresh: true })
+  }
+  return yield* input.db.transaction(
+    (tx) =>
+      Effect.gen(function* () {
+        // Effect SQLite uses a fiber-local transaction connection, so requireContext's nested
+        // transaction, captured contexts.openActivity and writeSelectionRow share this outer fence.
+        const work = yield* WorkAuthority.requireContext(input.db, { sessionID: input.sessionID })
+        if (!work)
+          return yield* new WorkAuthoritySchema.Error({
+            code: "WORK_AUTHORITY_MISSING",
+            message: "Restricted selection requires durable Work authority",
+          })
+        if (work.work_id !== input.workID || work.control_revision !== input.expectedRevision)
+          return yield* new WorkAuthoritySchema.Error({
+            code: "WORK_CONTROL_CONFLICT",
+            message: "Restricted selection Work identity or revision changed",
+          })
+        if (work.binding.location.workspaceID !== undefined)
+          return yield* new WorkAuthoritySchema.Error({
+            code: "PROFILE_UNAVAILABLE",
+            message: "Restricted selection currently requires registered implicit-local placement",
+          })
+        const session = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, input.sessionID)).get()
+        const admitted = yield* tx
+          .select()
+          .from(SessionInputTable)
+          .where(eq(SessionInputTable.id, SessionMessage.ID.make(work.input_id)))
+          .get()
+        const parent = work.parent_work_id ? yield* Effect.gen(function* () {
+          const { WorkDerivedAuthority } = yield* Effect.promise(() => import("../work-derived-authority"))
+          yield* WorkDerivedAuthority.requireCurrent(tx, work)
+          return yield* WorkDerivedAuthority.get(tx, work.work_id)
+        }) : undefined
+        if (
+          !session ||
+          session.parent_id !== (parent?.parentSessionID ?? null) ||
+          session.metadata !== null ||
+          (session.permission?.length ?? 0) !== 0 ||
+          !admitted ||
+          admitted.promoted_seq === null
+        )
+          return yield* new WorkAuthoritySchema.Error({
+            code: "WORK_BINDING_CONFLICT",
+            message: "Restricted Session or promoted input is unavailable",
+          })
+        yield* WorkAuthority.bindInputInTransaction(tx, {
+          workID: work.work_id,
+          sessionID: input.sessionID,
+          inputID: work.input_id,
+          promptHash: work.binding.auditedText.hash,
+          admittedSeq: admitted.admitted_seq,
+          expectedRevision: input.expectedRevision,
+        })
+        const message = yield* tx
+          .select()
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.id, admitted.id))
+          .get()
+        const projected = message
+          ? Schema.decodeUnknownOption(SessionMessage.User, { onExcessProperty: "error" })({
+              ...message.data,
+              id: message.id,
+              type: message.type,
+            })
+          : Option.none()
+        const inputs = yield* tx
+          .select({ id: SessionInputTable.id })
+          .from(SessionInputTable)
+          .where(eq(SessionInputTable.session_id, input.sessionID))
+          .limit(2)
+          .all()
+        const messages = yield* tx
+          .select()
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.session_id, input.sessionID))
+          .orderBy(asc(SessionMessageTable.seq))
+          .limit(work.binding.schemaVersion === "work-execution.v2" ? 34 : 2)
+          .all()
+        if (
+          !message ||
+          message.session_id !== input.sessionID ||
+          message.seq !== admitted.promoted_seq ||
+          Option.isNone(projected) ||
+          projected.value.text !== admitted.prompt.text ||
+          !Object.keys(message.data).every((key) => ["text", "time", "agent", "model"].includes(key)) ||
+          projected.value.agent !== admitted.prompt.agent ||
+          CanonicalJson.stringify(projected.value.model ?? null) !==
+            CanonicalJson.stringify(admitted.prompt.model ?? null) ||
+          inputs.length !== 1 ||
+          (work.binding.schemaVersion === "work-execution.v1" ? messages.length !== 1
+            : messages.length > 33 || messages[0]?.id !== admitted.id ||
+              messages.slice(1).some((row) => row.type !== "assistant"))
+        )
+          return yield* new WorkAuthoritySchema.Error({
+            code: "WORK_BINDING_CONFLICT",
+            message: "Restricted selection requires exactly the audited promoted user text",
+          })
+        const previous = yield* WorkToolPolicy.previous(tx, work)
+        if (work.binding.schemaVersion === "work-execution.v2" &&
+          messages.length !== (previous?.receipt.provider_turn_seq ?? 0) + 1)
+          return yield* new WorkAuthoritySchema.Error({ code: "WORK_BINDING_CONFLICT",
+            message: "Project history has no complete authenticated predecessor chain" })
+        const identity = yield* tx
+          .select({
+            namespace: SecurityNamespaceTable,
+            project: ProjectScopeIdentityTable,
+            location: LocationIdentityTable,
+          })
+          .from(LocationIdentityTable)
+          .innerJoin(SecurityNamespaceTable, eq(SecurityNamespaceTable.id, LocationIdentityTable.security_namespace_id))
+          .innerJoin(
+            ProjectScopeIdentityTable,
+            and(
+              eq(ProjectScopeIdentityTable.security_namespace_id, LocationIdentityTable.security_namespace_id),
+              eq(ProjectScopeIdentityTable.project_scope_key, LocationIdentityTable.project_scope_key),
+            ),
+          )
+          .where(
+            and(
+              eq(
+                LocationIdentityTable.security_namespace_id,
+                SecurityNamespaceID.make(work.binding.scope.securityNamespaceID),
+              ),
+              eq(LocationIdentityTable.project_scope_key, ProjectScopeKey.make(work.binding.scope.projectScopeKey)),
+              eq(LocationIdentityTable.canonical_root, work.binding.location.directory),
+            ),
+          )
+          .get()
+        if (
+          !identity ||
+          identity.namespace.kind !== "implicit_local" ||
+          identity.namespace.retired_at !== null ||
+          identity.project.retired_at !== null ||
+          identity.location.retired_at !== null ||
+          identity.location.workspace_binding !== null ||
+          (identity.project.observed_project_id !== null &&
+            identity.project.observed_project_id !== session.project_id) ||
+          (identity.location.observed_project_id !== null &&
+            identity.location.observed_project_id !== session.project_id) ||
+          (work.binding.schemaVersion === "work-execution.v2" &&
+            (work.binding.projectScope.projectID !== session.project_id ||
+              work.binding.projectScope.locationKey !== identity.location.location_key ||
+              work.binding.projectScope.namespaceBindingHash !== identity.namespace.binding_hash))
+        )
+          return yield* new WorkAuthoritySchema.Error({
+            code: "WORK_BINDING_CONFLICT",
+            message: "Restricted selection scope has no current registered Location identity",
+          })
+        const protocol = restrictedProtocol(work.binding.provider.protocol)
+        if (protocol === undefined)
+          return yield* new WorkAuthoritySchema.Error({
+            code: "PROFILE_UNAVAILABLE",
+            message: "Restricted selection protocol is unavailable",
+          })
+        const now = Date.now()
+        const activity = yield* input.contexts.openActivity({
+          sessionId: input.sessionID,
+          triggerInputId: admitted.id,
+          now,
+        })
+        const members = yield* tx
+          .select()
+          .from(SessionActivityInputTable)
+          .where(eq(SessionActivityInputTable.activity_id, activity.activityId))
+          .all()
+        if (
+          activity.triggerInputId !== admitted.id ||
+          activity.state !== "active" ||
+          members.length !== 1 ||
+          members[0]?.input_id !== admitted.id
+        )
+          return yield* new WorkAuthoritySchema.Error({
+            code: "WORK_BINDING_CONFLICT",
+            message: "Restricted activity membership differs from its single audited input",
+          })
+        const profile = WorkAuthorityPolicy.profileFor(work.binding.profile)
+        if (!profile)
+          return yield* new WorkAuthoritySchema.Error({
+            code: "WORK_BINDING_CONFLICT",
+            message: "Restricted instructions require the verified execution profile",
+          })
+        const instructions = profile.instructions
+        const historyHash = Hash.sha256(CanonicalJson.stringify(messages))
+        const queryFingerprint = Hash.sha256(
+          CanonicalJson.stringify({
+            profileHash: work.binding.profile.hash,
+            instructions,
+            inputID: admitted.id,
+            text: admitted.prompt.text,
+            ...(work.binding.schemaVersion === "work-execution.v2" ? { historyHash } : {}),
+          }),
+        )
+        const authorizationFingerprint = Hash.sha256(
+          CanonicalJson.stringify({
+            workID: work.work_id,
+            bindingHash: work.binding_hash,
+            controlRevision: work.control_revision,
+            sourceRecordHash: work.source_record_hash,
+            scope: work.binding.scope,
+          }),
+        )
+        const executionFingerprint = Hash.sha256(
+          CanonicalJson.stringify({
+            queryFingerprint,
+            authorizationFingerprint,
+            locationKey: identity.location.location_key,
+            provider: work.binding.provider,
+          }),
+        )
+        const envelope: QueryEnvelope = {
+          membership: { sessionId: input.sessionID, activityId: activity.activityId, inputIds: [admitted.id] },
+          location: { locationKey: identity.location.location_key },
+          principal: {
+            principalId: work.binding.scope.actorID,
+            securityNamespaceId: SecurityNamespaceID.make(identity.namespace.id),
+            authorizationEpoch: work.control_revision,
+            locationKeys: [LocationKey.make(identity.location.location_key)],
+            projectScopeKeys: [ProjectScopeKey.make(identity.project.project_scope_key)],
+            sessionIds: [input.sessionID],
+            subjectIds: [],
+            allowBuiltin: false,
+          },
+          workspace: { workspaceId: work.binding.scope.workspaceID },
+          securityNamespace: { securityNamespaceId: identity.namespace.id },
+          projectScope: { projectScopeKey: identity.project.project_scope_key, projectId: session.project_id },
+          egress: {
+            policyId: `work:${work.binding.profile.hash}`,
+            epoch: work.control_revision,
+            graphs: [],
+            sensitivities: [],
+          },
+          agentPolicy: { agentId: work.binding.agentID, autonomyCeiling: "low", permitDegraded: false },
+          modelCapability: {
+            modelId: work.binding.provider.modelID,
+            providerId: work.binding.provider.providerID,
+            protocol,
+            structuredOutput: false,
+          },
+          releasedKnowledge: { snapshotId: "", binding: "unavailable" },
+          queryIntent: "explain_decision",
+          query: queryFingerprint,
+          observedLocationMutationEpoch: 0,
+        }
+        const graphStatuses = Object.fromEntries(
+          GraphOrder.map((graph) => [
+            graph,
+            {
+              graph,
+              status: "denied" as const,
+              revision: work.binding.profile.hash,
+              adapterVersion: work.binding.schemaVersion === "work-execution.v2" ? "work-project-selection.v1" : "work-text-only-selection.v1",
+              observedMutationEpoch: 0,
+              latencyMs: 0,
+              candidateCount: 0,
+              rejectedCount: 0,
+              reasonCode: "agent_policy_denied" as const,
+            },
+          ]),
+        ) as QueryResultV2["graphStatuses"]
+        const resolved: QueryResultV2 = {
+          queryFingerprint,
+          authorizationFingerprint,
+          executionFingerprint,
+          membership: envelope.membership,
+          location: envelope.location,
+          graphStatuses,
+          results: [],
+          candidates: [],
+          successorRebuild: undefined,
+          truncated: false,
+          truncatedCount: 0,
+        }
+        const selection = buildSelectionEnvelope(budgetSelection(resolved, envelope), resolved, envelope, {
+          revision: previous?.receipt.provider_turn_seq ?? 0,
+          triggerInputId: admitted.id,
+          providerTurnSeq: previous?.receipt.provider_turn_seq ?? 0,
+          now,
+          validUntil: Math.min(
+            now + ValidationMs,
+            work.binding.deadline,
+            work.created_at + work.binding.budget.maxDurationMs,
+          ),
+        })
+        // Recheck deadline and trusted authority immediately before writing; a failed check
+        // rolls back the activity too. No production source callback runs in this transaction.
+        yield* WorkAuthority.requireContext(input.db, { sessionID: input.sessionID })
+        const written = yield* writeSelectionRow(input.db, selection, now)
+        if (written.conflict || written.selectionId !== selection.selectionId)
+          return yield* new WorkAuthoritySchema.Error({
+            code: "WORK_BINDING_CONFLICT",
+            message: "Restricted selection slot already contains different evidence",
+          })
+        const stored = yield* tx
+          .select({ nextRevalidationAt: SessionContextSelectionTable.next_revalidation_at })
+          .from(SessionContextSelectionTable)
+          .where(eq(SessionContextSelectionTable.selection_id, written.selectionId))
+          .get()
+        if (!stored)
+          return yield* new WorkAuthoritySchema.Error({
+            code: "WORK_BINDING_CONFLICT",
+            message: "Restricted selection was not persisted",
+          })
+        // tokenCount=0 describes selected graph refs only. It is NEVER an input-token bound.
+        return {
+          admission: {
+            activityId: activity.activityId,
+            selectionId: written.selectionId,
+            projectionHash: selection.projectionHash,
+            authorizationEpoch: work.control_revision,
+            egressEpoch: work.control_revision,
+            observedLocationMutationEpoch: 0,
+            selectedSourceFingerprint: selection.identity.selectedSourceFingerprint,
+            nextRevalidationAt: stored.nextRevalidationAt,
+            readiness: "unavailable" as const,
+            selectedRefs: [] as readonly string[],
+          },
+          workID: work.work_id,
+          controlRevision: work.control_revision,
+          bindingHash: work.binding_hash,
+          inputID: admitted.id,
+          auditedText: admitted.prompt.text,
+          instructions,
+          profileHash: work.binding.profile.hash,
+          historyHash,
+          history: messages,
+          predecessor: previous,
+        }
+      }),
+    { behavior: "immediate" },
+  )
+})
+
+function restrictedProtocol(protocol: string): SelectionEnvelope["modelCapability"]["protocol"] | undefined {
+  if (protocol === "openai-responses") return "openai.responses"
+  if (protocol === "openai-chat") return "openai-compatible.chat"
+  if (protocol === "anthropic-messages") return "anthropic.messages"
+  return undefined
+}
+
 function admitActivity(input: AdmitSelectionInput, now: number) {
+  return Effect.gen(function* () {
+    const expected = yield* CurrentContinuationActivity
+    if (expected !== undefined) {
+      const original = yield* input.db.select().from(SessionActivityTable).where(and(
+        eq(SessionActivityTable.activity_id, expected),
+        eq(SessionActivityTable.session_id, input.sessionID),
+        eq(SessionActivityTable.state, "active"),
+      )).get().pipe(Effect.orDie)
+      if (!original) return yield* new AdmissionError({ reason: "continuation_activity_obsolete" })
+      yield* input.contexts.attachInputs({ activityId: expected, inputIds: input.promotedInputIds, now })
+        .pipe(Effect.mapError(() => new AdmissionError({ reason: "continuation_activity_obsolete" })))
+      return { activityId: expected, triggerInputId: original.trigger_input_id }
+    }
+    return yield* admitOrdinaryActivity(input, now)
+  })
+}
+
+function admitOrdinaryActivity(input: AdmitSelectionInput, now: number) {
   const triggerInputId = input.promotedInputIds[0]
   if (triggerInputId !== undefined) {
     return input.contexts
@@ -793,6 +1181,14 @@ export type CommitTurnInput = {
 // request inside a single transaction. Exact retries converge on the same prepared attempt.
 export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(function* (input: CommitTurnInput) {
   const now = input.now ?? Date.now()
+  const authority = yield* WorkAuthority.lookupSession(input.db, input.sessionID)
+  if (authority.kind === "bound" && authority.work.binding.schemaVersion === "work-execution.v2") {
+    yield* WorkToolPolicy.preparePrevious(input.db, input.sessionID)
+    // Materialization and authenticating prior outcomes are external preparation. Their
+    // observation cannot carry an earlier source witness into this new attempt's SQL fence.
+    const { WorkExecutionProfile } = yield* Effect.promise(() => import("../work-execution-profile"))
+    yield* WorkExecutionProfile.prepareSource(authority.work, { fresh: true })
+  }
   const result = yield* input.db
     .transaction(
       (tx) =>
@@ -804,6 +1200,17 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
             .orderBy(desc(SessionProviderAttemptTable.provider_turn_seq))
             .limit(1)
             .get()
+          if (authority.kind === "bound" && authority.work.binding.schemaVersion === "work-execution.v2") {
+            const work = yield* WorkAuthority.requireCurrentControlInTransaction(tx, {
+              workID: authority.work.work_id, expectedRevision: authority.work.control_revision,
+            })
+            const existing = latest?.state === "prepared" && latest.owner_token === input.ownerToken &&
+              latest.request_hash === input.receipt.requestInputHash
+              ? yield* tx.select({ id: V2ProviderTurnReceiptTable.receipt_id }).from(V2ProviderTurnReceiptTable)
+                .where(eq(V2ProviderTurnReceiptTable.provider_attempt_id, latest.attempt_id)).get()
+              : undefined
+            yield* WorkToolPolicy.previous(tx, work, existing?.id)
+          }
           // Only attempts that may still be physically streaming block new work. An
           // `indeterminate_after_crash` attempt is known-dead with an unknown outcome: explicit
           // forced continuation may open a fresh attempt (new seq, no replay of the quarantined
@@ -994,6 +1401,7 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
     )
     .pipe(
       Effect.catch((error) =>
+        error instanceof WorkAuthoritySchema.Error ||
         error instanceof AdmissionError ||
         error instanceof V2ProviderTurn.ConflictError ||
         error instanceof V2ProviderTurn.UnsafeRetryError ||

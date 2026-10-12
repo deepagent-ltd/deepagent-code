@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { McpAppSandbox } from "@deepagent-code/core/mcp/app-sandbox"
 import { describe, expect } from "bun:test"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import * as Log from "@deepagent-code/core/util/log"
@@ -184,6 +185,15 @@ function responseText(response: Response) {
 }
 
 describe("HttpApi UI fallback", () => {
+  it.live("never proxies unknown API paths or mutation bodies to the public UI upstream", () => Effect.gen(function* () {
+    const requests: string[] = []
+    const ui = uiApp({ disableEmbeddedWebUi: true, client: httpClient(new Response("ui"), (request) => requests.push(request.url)) })
+    for (const [path, method] of [["/api/v1/im/tasks/removed", "GET"], ["/api/v1/im/activation/removed", "POST"], ["/missing-ui", "POST"]]) {
+      const response = yield* ui.request(path, { method, ...(method === "POST" ? { body: "private-test-material" } : {}) })
+      expect(response.status).toBe(404)
+    }
+    expect(requests).toEqual([])
+  }))
   it.live("serves the web UI through the HTTP API app", () =>
     Effect.gen(function* () {
       let proxiedUrl: string | undefined
@@ -379,6 +389,27 @@ describe("HttpApi UI fallback", () => {
 
       expect(response.status).toBe(401)
       expect(response.headers.get("www-authenticate")).toBe('Basic realm="Secure Area"')
+    }),
+  )
+
+  it.live("serves only fixed public MCP sandbox markup without credentials or upstream IO", () =>
+    Effect.gen(function* () {
+      const server = uiApp({ password: "sandbox-private-password", disableEmbeddedWebUi: true })
+      const response = yield* server.request(`${McpAppSandbox.path}?resource=must-not-appear&auth_token=must-not-appear`)
+      expect(response.status).toBe(200)
+      expect(response.headers.get("content-security-policy")).toBe(McpAppSandbox.csp)
+      expect(response.headers.get("cache-control")).toBe("no-store")
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer")
+      expect(response.headers.get("permissions-policy")).toContain("clipboard-write=()")
+      const body = yield* responseText(response)
+      expect(body).toBe(McpAppSandbox.html())
+      expect(body).not.toContain("must-not-appear")
+      expect(body).not.toContain("sandbox-private-password")
+      expect((yield* server.request(McpAppSandbox.path, { method: "POST" })).status).toBe(401)
+      expect((yield* server.request(McpAppSandbox.path, {
+        method: "POST", headers: { authorization: `Basic ${btoa("deepagent-code:sandbox-private-password")}` },
+      })).status).toBe(404)
+      expect((yield* server.request(`${McpAppSandbox.path}/other`)).status).toBe(401)
     }),
   )
 

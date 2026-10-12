@@ -26,6 +26,11 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Option } from "effect"
 import type { EventDispatcher } from "./event-dispatcher"
 import type { MultiAgentRuntime } from "./multi-agent-runtime"
+import { EventWorkRuntime } from "./event-work-admission"
+import { EventWorkRule } from "@deepagent-code/core/deepagent/event-work-rule"
+import { EventWorkDagPolicy } from "@deepagent-code/core/deepagent/event-work-dag.policy"
+import type { EventWorkDagRuntime } from "./event-work-dag-runtime"
+import { EventWorkSource } from "@deepagent-code/core/deepagent/event-work-source"
 
 // C5-12 — the PRODUCTION V2 admission bridge provider for the `eventV2Admission` seam TECH1
 // (C5-04) defined in MultiAgentRuntime. Design authority: docs/core-v2.0-beta/design.md §8.4 (routing →
@@ -62,6 +67,13 @@ import type { MultiAgentRuntime } from "./multi-agent-runtime"
 
 /** The C5 registry seed for the V4 event types the runtime dispatches (documented seed map, §(a)). */
 export const V4_EVENT_REGISTRY: EventRegistryIface = EventRegistry.createEventRegistry([
+  {
+    eventType: EventWorkRule.EVENT_TYPE, execution: "single", kind: "observation",
+    schemaId: "ordinary_session_activity_terminal_v1", schemaVersion: "1", payloadContentType: "application/json",
+    payloadVersion: "v1", allowedProducerKinds: ["system"], allowedSourceKinds: ["system"],
+    causation: { allowed: ["causedByEventId"], requiresCause: false }, risk: "low",
+    objective: "execute the explicitly reviewed terminal-activity rule", requestedCapability: "deepagent.project.read", autonomyCeiling: "low",
+  },
   {
     eventType: "ci.failure",
     execution: "dag",
@@ -343,6 +355,9 @@ export interface V2AdmissionBridgeDeps {
   readonly db: Database.Interface["db"]
   /** The SessionV2 stack (optional: an absent stack makes admission fail closed at dispatch time). */
   readonly v2Session?: SessionV2.Interface
+  /** Formal source/Work port; routing trust never substitutes for it. */
+  readonly eventWork?: EventWorkRuntime.Port
+  readonly eventWorkDag?: EventWorkDagRuntime.Port
   /** The C5 event registry. Defaults to the documented `V4_EVENT_REGISTRY` seed map. */
   readonly registry?: EventRegistryIface
   /** Optional security-namespace resolver (production: ContextLocationIdentity workspace boundary).
@@ -384,6 +399,26 @@ export const makeV2AdmissionBridge = (deps: V2AdmissionBridgeDeps): MultiAgentRu
     receiptOnly: boolean,
   ) =>
     Effect.gen(function* () {
+      if (request.event.type === EventWorkRule.EVENT_TYPE) {
+        if (!deps.eventWork) return yield* EventWorkSource.failure("EVENT_WORK_AUTH_REQUIRED")
+        const current = yield* deps.eventWork.lookup(request.event.id)
+        if (request.event.source !== "system" || request.event.workspaceID !== current.rule.target.scope.workspaceID ||
+          request.event.projectID !== current.receipt.source.projectID || request.event.actorID !== current.rule.operatorID ||
+          request.event.idempotencyKey !== current.receipt.occurrenceKey ||
+          EventWorkSource.hash(request.event.payload) !== current.receipt.sourceHash)
+          return yield* EventWorkSource.failure("EVENT_WORK_CONFLICT")
+        if (EventWorkDagPolicy.profileMatches(current.binding.profile)) {
+          if (!receiptOnly || !deps.eventWorkDag) return yield* EventWorkSource.failure("EVENT_WORK_AUTH_REQUIRED")
+          yield* deps.eventWorkDag.prepare(request.event)
+          return
+        }
+        if (receiptOnly) return yield* EventWorkSource.failure("EVENT_WORK_AUTH_REQUIRED")
+        yield* deps.eventWork.admit(request.event.id)
+        return
+      }
+      // Existing event/DAG records remain observable. Until their distinct trusted source and
+      // controller contracts are installed they cannot create ordinary model work from routing.
+      if (!receiptOnly) return yield* EventWorkSource.failure("EVENT_WORK_AUTH_REQUIRED")
       if (!receiptOnly && !deps.v2Session) {
         return yield* Effect.fail(
           new Error(`C5-12 V2 admission bridge requires the SessionV2 stack to admit event "${request.event.id}"`),
@@ -414,6 +449,12 @@ export const makeV2AdmissionBridge = (deps: V2AdmissionBridgeDeps): MultiAgentRu
   return {
     securityNamespaceFor,
     executionFor: (eventType) => registry.lookup(eventType)?.execution ?? "single",
+    executionForRequest: (request) => Effect.gen(function* () {
+      if (request.event.type !== EventWorkRule.EVENT_TYPE) return registry.lookup(request.event.type)?.execution ?? "single"
+      if (!deps.eventWork) return yield* EventWorkSource.failure("EVENT_WORK_AUTH_REQUIRED")
+      const current = yield* deps.eventWork.lookup(request.event.id)
+      return EventWorkDagPolicy.profileMatches(current.binding.profile) ? "dag" : "single"
+    }),
     admit: ({ request, scope }) => admit(request, scope, false),
     admitReceiptOnly: ({ request, scope }) => admit(request, scope, true),
   }

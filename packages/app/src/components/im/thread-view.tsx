@@ -1,102 +1,192 @@
-import { createSignal, createEffect, For, Show, type Component } from "solid-js"
+import { createEffect, For, Show, onCleanup } from "solid-js"
+import { createStore } from "solid-js/store"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Button } from "@deepagent-code/ui/button"
+import { useLanguage } from "@/context/language"
 import { MessageItem } from "./message-item"
 import { MessageComposer } from "./message-composer"
+import { createComposerDrafts } from "./composer-draft"
 import { useIMClient } from "@/utils/im-client"
 import type { LocalMessage } from "@/hooks/use-im-websocket"
 import type { AgentDescriptor } from "./types"
 
-// V4.0 §B3 — a message's reply thread. Overlays the group chat: shows the root message + its replies
-// (listThread, keyset paginated via nextCursor), and posts new replies with `replyToID = root.id`.
-// The thread endpoint is `GET /groups/:groupId/messages/:messageId/thread`.
-export const ThreadView: Component<{
+type ThreadViewProps = {
   groupID: string
   root: LocalMessage
   agents: AgentDescriptor[]
+  mediaEnabled?: boolean
+  protected?: boolean
+  displayEpoch?: string
+  onReaderInvalidated?: () => void
+  selfMemberIDs?: readonly string[]
+  senderNames?: ReadonlyMap<string, string>
+  drafts?: ReturnType<typeof createComposerDrafts>
   onClose: () => void
-}> = (props) => {
+}
+
+export function ThreadView(props: ThreadViewProps) {
+  const drafts = props.drafts ?? createComposerDrafts()
+  return (
+    <Show when={props.root} keyed>
+      {(root) => <ThreadConversation {...props} root={root} drafts={drafts} />}
+    </Show>
+  )
+}
+
+function ThreadConversation(props: ThreadViewProps & { drafts: ReturnType<typeof createComposerDrafts> }) {
+  const language = useLanguage()
   const client = useIMClient()
-  const [replies, setReplies] = createSignal<LocalMessage[]>([])
-  const [cursor, setCursor] = createSignal<string | null>(null)
-  const [hasMore, setHasMore] = createSignal(false)
-  const [loading, setLoading] = createSignal(true)
-
-  const load = (append: boolean) => {
-    setLoading(true)
-    client
-      .listThread(props.groupID, props.root.id, 50, append ? cursor() ?? undefined : undefined)
-      .then((page) => {
-        const incoming = page.messages ?? []
-        setReplies((prev) => (append ? [...prev, ...incoming] : incoming))
-        setCursor(page.nextCursor)
-        setHasMore(page.hasMore)
-        setLoading(false)
-      })
-      .catch((error) => {
-        console.error("Failed to load thread:", error)
-        setLoading(false)
-      })
+  const groupID = props.groupID
+  const rootID = props.root.id
+  const [state, setState] = createStore({
+    replies: [] as LocalMessage[],
+    cursor: null as string | null,
+    hasMore: false,
+    loading: false,
+    failedLoad: null as "initial" | "more" | null,
+  })
+  const lifecycle = {
+    disposed: false,
+    active: false,
+    generation: 0,
+    deadline: Infinity,
+    timer: undefined as ReturnType<typeof setTimeout> | undefined,
   }
-
-  // Reload whenever the root message changes.
-  createEffect(() => {
-    props.root.id
-    setReplies([])
-    setCursor(null)
-    load(false)
+  const invalidate = () => {
+    if (lifecycle.disposed || !props.protected) return
+    lifecycle.generation++
+    setState({ replies: [], cursor: null, hasMore: false, failedLoad: "initial" })
+    props.onReaderInvalidated?.()
+    props.onClose()
+  }
+  onCleanup(() => {
+    lifecycle.disposed = true
+    if (lifecycle.timer) clearTimeout(lifecycle.timer)
   })
 
-  const sendReply = async (content: string) => {
+  const load = async (append: boolean) => {
+    if (lifecycle.active || lifecycle.disposed) return
+    lifecycle.active = true
+    const generation = lifecycle.generation
+    const scope = client.scope()
+    const started = performance.now()
+    setState({ loading: true, failedLoad: null })
     try {
-      const created = await client.createMessage(props.groupID, {
-        content,
-        type: "text",
-        replyToID: props.root.id,
-      })
-      setReplies((prev) => [...prev, created as LocalMessage])
-    } catch (error) {
-      console.error("Failed to send reply:", error)
-      const { showToast } = await import("@/utils/toast")
-      showToast({
-        variant: "error",
-        title: "Failed to send reply",
-        description: error instanceof Error ? error.message : String(error),
-      })
+      const page = await client.listThread(groupID, rootID, 50, append ? (state.cursor ?? undefined) : undefined)
+      if (lifecycle.disposed || generation !== lifecycle.generation || scope !== client.scope()) return
+      if (props.protected) {
+        const reader = page.reader
+        const remaining =
+          reader?.nextExpiryAt === null ? Infinity : (reader?.nextExpiryAt ?? 0) - (reader?.validatedServerNow ?? 0)
+        if (
+          !reader ||
+          (props.displayEpoch && reader.displayEpoch !== props.displayEpoch) ||
+          !Number.isSafeInteger(reader.validatedServerNow) ||
+          (reader.nextExpiryAt !== null && !Number.isSafeInteger(reader.nextExpiryAt)) ||
+          started + remaining <= performance.now()
+        ) {
+          invalidate()
+          return
+        }
+        lifecycle.deadline = Math.min(lifecycle.deadline, started + remaining)
+        if (lifecycle.timer) clearTimeout(lifecycle.timer)
+        if (Number.isFinite(lifecycle.deadline))
+          lifecycle.timer = setTimeout(invalidate, Math.max(0, lifecycle.deadline - performance.now()))
+      }
+      // Keep HTTP send receipts received while this snapshot was in flight.
+      setState("replies", (previous) =>
+        Array.from(new Map([...page.messages, ...previous].map((reply) => [reply.id, reply])).values()).sort(
+          (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),
+        ),
+      )
+      setState({ cursor: page.nextCursor, hasMore: page.hasMore })
+    } catch {
+      if (props.protected) invalidate()
+      if (!lifecycle.disposed) setState("failedLoad", append ? "more" : "initial")
+    } finally {
+      lifecycle.active = false
+      if (!lifecycle.disposed) setState("loading", false)
     }
+  }
+  createEffect(() => {
+    client.scope()
+    props.displayEpoch
+    lifecycle.generation++
+    void load(false)
+  })
+  const timer = setInterval(() => {
+    if (props.protected) void load(false)
+  }, 5000)
+  onCleanup(() => clearInterval(timer))
+
+  const sendReply = async (content: string, clientRequestID: string) => {
+    const created = await client.createMessage(groupID, { content, type: "text", replyToID: rootID, clientRequestID })
+    if (lifecycle.disposed) return
+    if (props.protected) {
+      void load(false)
+      return
+    }
+    setState("replies", (previous) =>
+      [...previous.filter((reply) => reply.id !== created.id), created].sort(
+        (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),
+      ),
+    )
   }
 
   return (
-    <div class="absolute inset-0 z-20 flex flex-col bg-background-base">
+    <section
+      class="absolute inset-0 z-20 min-w-0 flex flex-col bg-background-base"
+      aria-label={language.t("im.thread.title")}
+    >
       <div class="sticky top-0 z-10 h-10 shrink-0 flex items-center justify-between px-2 bg-background-base border-b border-border-weaker-base">
-        <span class="text-13-medium text-text-strong pl-1">Thread</span>
+        <span class="text-13-medium text-text-strong pl-1">{language.t("im.thread.title")}</span>
         <IconButton
           icon="close-small"
           variant="ghost"
           class="h-7 w-7 rounded-md"
           onClick={props.onClose}
-          aria-label="Close thread"
+          aria-label={language.t("im.thread.close")}
         />
       </div>
 
-      <div class="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
-        {/* root message */}
+      <div class="flex-1 min-h-0 overflow-y-auto p-3 space-y-4">
         <div class="rounded-lg border border-border-weak-base bg-surface-base p-2">
-          <MessageItem message={props.root} />
+          <MessageItem
+            mediaEnabled={props.mediaEnabled}
+            message={props.root}
+            selfMemberIDs={props.selfMemberIDs}
+            senderNames={props.senderNames}
+          />
         </div>
         <div class="text-11-regular text-text-weak">
-          {replies().length} {replies().length === 1 ? "reply" : "replies"}
+          {language.t("im.thread.count", { count: state.replies.length })}
         </div>
-
+        <Show when={state.failedLoad}>
+          <div role="alert" class="flex flex-wrap items-center gap-2 text-12-regular text-text-critical">
+            <span>{language.t("im.thread.load.failed")}</span>
+            <Button variant="secondary" size="small" onClick={() => void load(state.failedLoad === "more")}>
+              {language.t("im.facade.retry")}
+            </Button>
+          </div>
+        </Show>
         <Show
-          when={!loading() || replies().length > 0}
-          fallback={<div class="text-12-regular text-text-weak">Loading thread…</div>}
+          when={!state.loading || state.replies.length > 0}
+          fallback={<div class="text-12-regular text-text-weak">{language.t("im.loading")}</div>}
         >
-          <For each={replies()}>{(reply) => <MessageItem message={reply} />}</For>
-          <Show when={hasMore()}>
+          <For each={state.replies}>
+            {(reply) => (
+              <MessageItem
+                mediaEnabled={props.mediaEnabled}
+                message={reply}
+                selfMemberIDs={props.selfMemberIDs}
+                senderNames={props.senderNames}
+              />
+            )}
+          </For>
+          <Show when={state.hasMore && !state.failedLoad}>
             <div class="flex justify-center">
-              <Button variant="ghost" size="small" onClick={() => load(true)} disabled={loading()}>
-                {loading() ? "Loading…" : "Load more"}
+              <Button variant="ghost" size="small" onClick={() => void load(true)} disabled={state.loading}>
+                {state.loading ? language.t("im.loading") : language.t("im.thread.more")}
               </Button>
             </div>
           </Show>
@@ -104,10 +194,11 @@ export const ThreadView: Component<{
       </div>
 
       <MessageComposer
+        draft={props.drafts(groupID, rootID)}
         onSend={sendReply}
         agents={props.agents}
-        placeholder="Reply in thread…"
+        placeholder={language.t("im.thread.placeholder")}
       />
-    </div>
+    </section>
   )
 }

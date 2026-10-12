@@ -5,6 +5,7 @@ import { ConfigErrorV1 } from "@deepagent-code/core/v1/config/error"
 import { Effect, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { errorLayer } from "../../src/server/routes/instance/httpapi/middleware/error"
+import { SettingsTransaction } from "../../src/settings/transaction"
 import { NotFoundError } from "../../src/storage/storage"
 import { testEffect } from "../lib/effect"
 
@@ -19,6 +20,20 @@ function expectUnknownErrorBody(body: unknown) {
 }
 
 describe("HttpApi error middleware", () => {
+  it.live("explains an actual partial Settings commit without trusting arbitrary defect messages", () =>
+    Effect.gen(function* () {
+      yield* Layer.mergeAll(
+        HttpRouter.add("GET", "/settings-partial", Effect.die(new SettingsTransaction.Error("unknown"))),
+        HttpRouter.add("GET", "/settings-forged", Effect.die({ _tag: "SettingsTransactionError", reason: "unknown", message: "secret path /private/key" })),
+      ).pipe(Layer.provide(errorLayer), HttpRouter.serve, Layer.build)
+      const response = yield* HttpClientRequest.get("/settings-partial").pipe(HttpClient.execute)
+      expect(response.status).toBe(500)
+      expect(yield* response.json).toMatchObject({ name: "UnknownError", data: { message: "Settings change is partially committed. Retry the same change to reconcile the original files." } })
+      const forged = yield* HttpClientRequest.get("/settings-forged").pipe(HttpClient.execute)
+      expect(forged.status).toBe(500)
+      expectUnknownErrorBody(yield* forged.json)
+    }),
+  )
   it.live("returns a safe body for unknown 500 defects", () =>
     Effect.gen(function* () {
       yield* HttpRouter.add("GET", "/boom", Effect.die(new Error("secret stack marker"))).pipe(

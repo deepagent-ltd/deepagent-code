@@ -1,3 +1,4 @@
+import { GlobalRuntimeFixture } from "./fixture/global-runtime"
 import { NodeHttpServer } from "@effect/platform-node"
 import { describe, expect } from "bun:test"
 import { Context, Effect, Layer, Option } from "effect"
@@ -15,13 +16,14 @@ import { GlobalPaths } from "../../src/server/routes/instance/httpapi/groups/glo
 import { controlHandlers } from "../../src/server/routes/instance/httpapi/handlers/control"
 import { controlPlaneHandlers } from "../../src/server/routes/instance/httpapi/handlers/control-plane"
 import { globalHandlers } from "../../src/server/routes/instance/httpapi/handlers/global"
+import { workRecoveryHandlers } from "../../src/server/routes/instance/httpapi/handlers/work-recovery"
 import { authorizationLayer } from "../../src/server/routes/instance/httpapi/middleware/authorization"
 import { schemaErrorLayer } from "../../src/server/routes/instance/httpapi/middleware/schema-error"
 import { testEffect } from "../lib/effect"
 
 const apiLayer = HttpRouter.serve(
   HttpApiBuilder.layer(RootHttpApi).pipe(
-    Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
+    Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers, workRecoveryHandlers()]),
     Layer.provide([authorizationLayer, schemaErrorLayer]),
     // Raw HttpApi routes expose an opaque handler context at the request boundary.
     // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
@@ -31,6 +33,7 @@ const apiLayer = HttpRouter.serve(
 ).pipe(
   Layer.provideMerge(NodeHttpServer.layerTest),
   Layer.provide(Layer.mock(Auth.Service)({})),
+    Layer.provide(GlobalRuntimeFixture.layer),
   Layer.provide(Layer.mock(Config.Service)({})),
   Layer.provide(Layer.mock(MoveSession.Service)({})),
   Layer.provide(

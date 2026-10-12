@@ -37,6 +37,32 @@ export interface Auth {
   readonly pipe: <A>(f: (self: Auth) => A) => A
 }
 
+type CredentialConstruction = Readonly<{ kind: "value" | "config"; name?: string }>
+const credentialConstructions = new WeakMap<
+  Credential,
+  { load: Credential["load"]; description: CredentialConstruction }
+>()
+const authConstructions = new WeakMap<
+  Auth,
+  {
+    apply: Auth["apply"]
+    description: Readonly<{
+      kind: "none" | "credential"
+      header?: string
+      scheme?: "bearer" | "plain"
+      source?: CredentialConstruction
+    }>
+    current?: () => boolean
+  }
+>()
+
+/** Builtin construction facts, without credential bytes. Injected functions and copied objects
+ * deliberately have no provenance, even when they return identical headers. */
+export const construction = (input: Auth) => {
+  const entry = authConstructions.get(input)
+  return entry?.apply === input.apply && (!entry.current || entry.current()) ? entry.description : undefined
+}
+
 export const isAuth = (input: unknown): input is Auth =>
   typeof input === "object" && input !== null && "apply" in input && typeof input.apply === "function"
 
@@ -44,8 +70,8 @@ const credential = (load: Effect.Effect<Redacted.Redacted, CredentialError>): Cr
   const self: Credential = {
     load,
     orElse: (that) => credential(load.pipe(Effect.catch(() => that.load))),
-    bearer: () => fromCredential(self, (secret) => ({ authorization: `Bearer ${secret}` })),
-    header: (name) => fromCredential(self, (secret) => ({ [name]: secret })),
+    bearer: () => fromCredential(self, (secret) => ({ authorization: `Bearer ${secret}` }), "authorization", "bearer"),
+    header: (name) => fromCredential(self, (secret) => ({ [name]: secret }), name, "plain"),
     pipe: (f) => f(self),
   }
   return self
@@ -62,10 +88,29 @@ const auth = (apply: Auth["apply"]): Auth => {
   return self
 }
 
-const fromCredential = (source: Credential, render: (secret: string) => Headers.Input) =>
-  auth((input) =>
+const fromCredential = (
+  source: Credential,
+  render: (secret: string) => Headers.Input,
+  header?: string,
+  scheme?: "bearer" | "plain",
+) => {
+  const result = auth((input) =>
     source.load.pipe(Effect.map((secret) => Headers.setAll(input.headers, render(Redacted.value(secret))))),
   )
+  const description = credentialConstructions.get(source)
+  if (description && description.load === source.load && header && scheme)
+    authConstructions.set(result, {
+      apply: result.apply,
+      description: Object.freeze({
+        kind: "credential",
+        header: header.toLowerCase(),
+        scheme,
+        source: description.description,
+      }),
+      current: () => source.load === description.load,
+    })
+  return result
+}
 
 const secretEffect = (secret: string | Redacted.Redacted, source: string) => {
   const redacted = typeof secret === "string" ? Redacted.make(secret) : secret
@@ -82,18 +127,27 @@ const credentialFromSecret = (secret: Secret, source: string) => {
   )
 }
 
-export const value = (secret: string, source = "value") => credentialFromSecret(secret, source)
+export const value = (secret: string, source = "value") => {
+  const result = credentialFromSecret(secret, source)
+  credentialConstructions.set(result, { load: result.load, description: Object.freeze({ kind: "value" }) })
+  return result
+}
 
 export const optional = (secret: Secret | undefined, source = "optional value") =>
   secret === undefined
     ? credential(Effect.fail(new MissingCredentialError(source)))
     : credentialFromSecret(secret, source)
 
-export const config = (name: string) => credentialFromSecret(Config.redacted(name), name)
+export const config = (name: string) => {
+  const result = credentialFromSecret(Config.redacted(name), name)
+  credentialConstructions.set(result, { load: result.load, description: Object.freeze({ kind: "config", name }) })
+  return result
+}
 
 export const effect = (load: Effect.Effect<Redacted.Redacted, CredentialError>) => credential(load)
 
 export const none = auth((input) => Effect.succeed(input.headers))
+authConstructions.set(none, { apply: none.apply, description: Object.freeze({ kind: "none" }) })
 
 export const headers = (input: Headers.Input) =>
   auth((inputAuth) => Effect.succeed(Headers.setAll(inputAuth.headers, input)))

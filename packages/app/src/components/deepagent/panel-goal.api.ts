@@ -1,3 +1,6 @@
+import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
+export { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
+
 // Pure HTTP client functions + types for the V3.9 Expert Panel (§C) + Goal Loop (§D) UI. Split from
 // any .tsx so it carries NO UI imports (the route-contract test imports THIS module). Mirrors the
 // review dialog's raw-request pattern (client.client.request by path; POST bodies via `body`).
@@ -27,23 +30,9 @@ export type PanelVerdict = {
   dissent: PanelDissent[]
 }
 
-export type GoalSnapshot = {
-  goalId: string
-  planDocId: string
-  phase: string
-  running: boolean
-}
+export type GoalSnapshot = GoalClient.Snapshot
 
-type RawSdkClient = {
-  client: {
-    request<TData>(options: {
-      method: string
-      url: string
-      body?: unknown
-      headers?: Record<string, string>
-    }): Promise<{ data?: TData }>
-  }
-}
+type RawSdkClient = GoalClient.Client
 
 export type PanelGoalClient = RawSdkClient
 
@@ -145,41 +134,13 @@ export const fetchPanelStatus = async (
 
 // ── Goal Loop (§D) ───────────────────────────────────────────────────────────
 
-export const startGoal = async (
-  client: PanelGoalClient,
-  input: {
-    sessionID: string
-    criteria?: { kind: string; commands?: string[]; maxSeverity?: string; severityAtMost?: string }[]
-    limits?: { maxTicks?: number; maxTokens?: number; maxWallclockMs?: number; maxCost?: number }
-    stallThreshold?: number
-  },
-): Promise<GoalSnapshot | undefined> => {
-  const response = await client.client.request<GoalSnapshot>({
-    method: "POST",
-    url: "/deepagent/goal/start",
-    body: input,
-    headers: JSON_HEADERS,
-  })
-  return response.data
-}
-
-const goalMutate = async (
-  client: PanelGoalClient,
-  action: "pause" | "resume" | "stop",
-  sessionID: string,
-): Promise<boolean> => {
-  const response = await client.client.request<{ ok: boolean }>({
-    method: "POST",
-    url: `/deepagent/goal/${action}`,
-    body: { sessionID },
-    headers: JSON_HEADERS,
-  })
-  return response.data?.ok ?? false
-}
-
-export const pauseGoal = (client: PanelGoalClient, sessionID: string) => goalMutate(client, "pause", sessionID)
-export const resumeGoal = (client: PanelGoalClient, sessionID: string) => goalMutate(client, "resume", sessionID)
-export const stopGoal = (client: PanelGoalClient, sessionID: string) => goalMutate(client, "stop", sessionID)
+export const startGoal = GoalClient.start
+export const pauseGoal = (client: PanelGoalClient, input: GoalClient.ControlInput) =>
+  GoalClient.control(client, "pause", input)
+export const resumeGoal = (client: PanelGoalClient, input: GoalClient.ControlInput) =>
+  GoalClient.control(client, "resume", input)
+export const stopGoal = (client: PanelGoalClient, input: GoalClient.ControlInput) =>
+  GoalClient.control(client, "stop", input)
 
 /** A plan step as the edit-plan payload carries it (loose input: step_id/status optional, mirroring the
  * backend PlanInput — evidence is runtime-owned and never sent from the client). */
@@ -283,7 +244,9 @@ export const buildGoalPlanWrite = (
     goal !== current.goal.trim() ||
     JSON.stringify(assumptions) !== JSON.stringify(current.assumptions.map((value) => value.trim())) ||
     draft.steps.length !== current.steps.length ||
-    draft.steps.some((step, index) => step.step_id !== current.steps[index]?.step_id || !sameIdentity(step, current.steps[index]))
+    draft.steps.some(
+      (step, index) => step.step_id !== current.steps[index]?.step_id || !sameIdentity(step, current.steps[index]),
+    )
 
   const used = new Set<string>()
   const freshStepID = () => {
@@ -348,16 +311,7 @@ export const editPlanGoal = async (
   return response.data
 }
 
-export const goalStatus = async (
-  client: PanelGoalClient,
-  sessionID: string,
-): Promise<GoalSnapshot | null> => {
-  const response = await client.client.request<{ goal: GoalSnapshot | null }>({
-    method: "GET",
-    url: `/deepagent/goal/status?sessionID=${encodeURIComponent(sessionID)}`,
-  })
-  return response.data?.goal ?? null
-}
+export const goalStatus = GoalClient.status
 
 export type GoalStartable = { startable: boolean; source: "plan" | "file" | "none" }
 
@@ -368,10 +322,7 @@ export type GoalStartable = { startable: boolean; source: "plan" | "file" | "non
  * touching session_plan), so a client-only hasPlan() check would hide the button in exactly the modes
  * where it belongs. Tolerant of an older server that lacks the route (treated as not-startable).
  */
-export const fetchGoalStartable = async (
-  client: PanelGoalClient,
-  sessionID: string,
-): Promise<GoalStartable> => {
+export const fetchGoalStartable = async (client: PanelGoalClient, sessionID: string): Promise<GoalStartable> => {
   const response = await client.client.request<GoalStartable>({
     method: "GET",
     url: `/deepagent/goal/startable?sessionID=${encodeURIComponent(sessionID)}`,

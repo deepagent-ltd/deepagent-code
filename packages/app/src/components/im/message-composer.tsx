@@ -1,39 +1,63 @@
-import { createSignal, createMemo, createEffect, onCleanup, Show, For } from "solid-js"
+import { createMemo, createEffect, onCleanup, Show, For } from "solid-js"
+import { createStore } from "solid-js/store"
+import { Button } from "@deepagent-code/ui/button"
+import { useLanguage } from "@/context/language"
 import type { AgentDescriptor } from "./types"
+import { createComposerDraft, type ComposerDraft } from "./composer-draft"
+import { parseDacCommand } from "./personal-command"
 
 interface MessageComposerProps {
-  onSend: (content: string) => void
+  onSend: (content: string, clientRequestID: string) => void | Promise<void>
+  onDac?: (text: string, delivery: "queue" | "steer") => boolean | void | Promise<boolean | void>
   onTyping?: (typing: boolean) => void
   agents: AgentDescriptor[]
   disabled?: boolean
-  // §B3 file attachments — when provided, a paperclip button lets the user upload a file. The panel
-  // owns the upload (uploadAttachment → file message) so the composer stays presentation-only.
-  onAttach?: (file: File) => Promise<void>
+  draft?: ComposerDraft
+  // The panel persists uploads in its attachment draft; selecting files never sends a message.
+  onAttach?: (files: readonly File[]) => Promise<void>
+  hasAttachments?: boolean
+  attachmentLimit?: number
+  attachmentBusy?: boolean
+  sendDisabled?: boolean
   // Placeholder override (e.g. thread replies read "Reply in thread…").
   placeholder?: string
 }
 
 export function MessageComposer(props: MessageComposerProps) {
-  const [content, setContent] = createSignal("")
-  const [showMentionMenu, setShowMentionMenu] = createSignal(false)
-  const [mentionQuery, setMentionQuery] = createSignal("")
-  const [mentionPosition, setMentionPosition] = createSignal({ top: 0, left: 0 })
-  const [selectedIndex, setSelectedIndex] = createSignal(0)
-  const [uploading, setUploading] = createSignal(false)
+  const language = useLanguage()
+  const draft = props.draft ?? createComposerDraft()
+  const delivery = draft.state
+  const setDelivery = draft.setState
+  const content = () => draft.state.content
+  const privateCommand = () => parseDacCommand(content()) !== undefined
+  const setContent = (value: string) =>
+    draft.setState({
+      content: value,
+      ...(value !== delivery.requestContent ? { failed: false, requestID: "", requestContent: "" } : {}),
+    })
+  const [editor, setEditor] = createStore({
+    showMentionMenu: false,
+    mentionQuery: "",
+    mentionPosition: { top: 0, left: 0 },
+    selectedIndex: 0,
+    uploading: false,
+    dacDelivery: "queue" as "queue" | "steer",
+  })
   let textareaRef: HTMLTextAreaElement | undefined
   let fileInputRef: HTMLInputElement | undefined
   let typingActive = false
   let typingStopTimer: ReturnType<typeof setTimeout> | undefined
+  let disposed = false
 
   const handleFileSelected = async (e: Event & { currentTarget: HTMLInputElement }) => {
-    const file = e.currentTarget.files?.[0]
+    const files = Array.from(e.currentTarget.files ?? [])
     e.currentTarget.value = ""
-    if (!file || !props.onAttach) return
-    setUploading(true)
+    if (!files.length || !props.onAttach || editor.uploading || delivery.sending) return
+    setEditor("uploading", true)
     try {
-      await props.onAttach(file)
+      await props.onAttach(files)
     } finally {
-      setUploading(false)
+      if (!disposed) setEditor("uploading", false)
     }
   }
 
@@ -60,17 +84,22 @@ export function MessageComposer(props: MessageComposerProps) {
     }
   }
 
-  onCleanup(stopTyping)
+  onCleanup(() => {
+    if (delivery.sending) setDelivery({ sending: false, failed: true })
+    disposed = true
+    stopTyping()
+  })
 
   // Filter agents based on mention query
   const filteredAgents = createMemo(() => {
-    const query = mentionQuery()
+    const query = editor.mentionQuery
     if (!query) return props.agents
     const lowerQuery = query.toLowerCase()
-    return props.agents.filter((agent) =>
-      agent.id.toLowerCase().includes(lowerQuery) ||
-      agent.displayName?.toLowerCase().includes(lowerQuery) ||
-      agent.description?.toLowerCase().includes(lowerQuery)
+    return props.agents.filter(
+      (agent) =>
+        agent.id.toLowerCase().includes(lowerQuery) ||
+        agent.displayName?.toLowerCase().includes(lowerQuery) ||
+        agent.description?.toLowerCase().includes(lowerQuery),
     )
   })
 
@@ -86,67 +115,100 @@ export function MessageComposer(props: MessageComposerProps) {
     const mentionMatch = textBeforeCursor.match(/@(\w*)$/)
 
     if (mentionMatch) {
-      setMentionQuery(mentionMatch[1])
-      setShowMentionMenu(true)
-      setSelectedIndex(0)
+      setEditor("mentionQuery", mentionMatch[1])
+      setEditor("showMentionMenu", true)
+      setEditor("selectedIndex", 0)
 
       // Calculate position for the dropdown
       const coords = getCaretCoordinates(textareaRef, cursorPos)
-      setMentionPosition({
+      setEditor("mentionPosition", {
         top: coords.top - textareaRef.scrollTop,
         left: coords.left,
       })
     } else {
-      setShowMentionMenu(false)
-      setMentionQuery("")
+      setEditor("showMentionMenu", false)
+      setEditor("mentionQuery", "")
     }
   })
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (showMentionMenu() && filteredAgents().length > 0) {
+    if (e.isComposing || e.keyCode === 229) return
+    if (editor.showMentionMenu && filteredAgents().length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault()
-        setSelectedIndex((prev) => (prev + 1) % filteredAgents().length)
+        setEditor("selectedIndex", (prev) => (prev + 1) % filteredAgents().length)
         return
       }
       if (e.key === "ArrowUp") {
         e.preventDefault()
-        setSelectedIndex((prev) => (prev - 1 + filteredAgents().length) % filteredAgents().length)
+        setEditor("selectedIndex", (prev) => (prev - 1 + filteredAgents().length) % filteredAgents().length)
         return
       }
       if (e.key === "Tab" || e.key === "Enter") {
         if (e.key === "Enter" && !e.shiftKey) {
-          // Only handle Tab and Shift+Enter for mention completion
+          // Enter completes the selected mention; Shift+Enter keeps its newline behavior.
           e.preventDefault()
-          insertMention(filteredAgents()[selectedIndex()])
+          insertMention(filteredAgents()[editor.selectedIndex])
           return
         }
         if (e.key === "Tab") {
           e.preventDefault()
-          insertMention(filteredAgents()[selectedIndex()])
+          insertMention(filteredAgents()[editor.selectedIndex])
           return
         }
       }
       if (e.key === "Escape") {
         e.preventDefault()
-        setShowMentionMenu(false)
+        setEditor("showMentionMenu", false)
         return
       }
     }
 
     // Normal message sending (Enter without Shift)
-    if (e.key === "Enter" && !e.shiftKey && !showMentionMenu()) {
+    if (e.key === "Enter" && !e.shiftKey && (!editor.showMentionMenu || filteredAgents().length === 0)) {
       e.preventDefault()
-      if (content().trim() && !props.disabled) {
-        props.onSend(content())
-        setContent("")
-        stopTyping()
+      void submit()
+    }
+  }
+
+  const submit = async () => {
+    if (
+      (!content().trim() && !props.hasAttachments) ||
+      props.disabled ||
+      props.sendDisabled ||
+      delivery.sending ||
+      props.attachmentBusy
+    )
+      return
+    const sent = content()
+    const command = parseDacCommand(sent)
+    if (command !== undefined) {
+      if (!props.onDac || props.hasAttachments) return
+      const accepted = await props.onDac(command, editor.dacDelivery)
+      if (accepted === false) return
+      if (!disposed && content() === sent) setContent("")
+      return
+    }
+    const requestID = delivery.requestID || crypto.randomUUID()
+    setDelivery({ sending: true, failed: false, requestID, requestContent: sent })
+    try {
+      await props.onSend(sent, requestID)
+      if (disposed) return
+      if (content() === sent) setContent("")
+      setDelivery({ requestID: "", requestContent: "" })
+      stopTyping()
+    } catch {
+      if (!disposed) setDelivery("failed", true)
+    } finally {
+      if (!disposed) {
+        setDelivery("sending", false)
+        textareaRef?.focus()
       }
     }
   }
 
   const insertMention = (agent: AgentDescriptor) => {
-    if (!textareaRef) return
+    if (delivery.sending || !textareaRef) return
 
     const cursorPos = textareaRef.selectionStart
     const textBeforeCursor = content().slice(0, cursorPos)
@@ -161,18 +223,42 @@ export function MessageComposer(props: MessageComposerProps) {
 
       // Set cursor position after the mention
       setTimeout(() => {
-        if (!textareaRef) return
+        if (disposed || !textareaRef) return
         const newCursorPos = beforeMention.length + agent.id.length + 2
         textareaRef.setSelectionRange(newCursorPos, newCursorPos)
         textareaRef.focus()
       }, 0)
     }
 
-    setShowMentionMenu(false)
+    setEditor("showMentionMenu", false)
   }
 
   return (
-    <div class="relative border-t border-border-base p-4">
+    <div class="relative shrink-0 border-t border-border-weaker-base p-3">
+      <Show when={props.onDac && /^\/(?:d(?:a(?:c)?)?)?$/.test(content())}>
+        <Button
+          size="small"
+          variant="ghost"
+          onClick={() => {
+            void props.onDac?.("", "queue")
+          }}
+        >
+          {language.t("im.dac.activate")}
+        </Button>
+      </Show>
+      <Show when={props.onDac && parseDacCommand(content()) !== undefined}>
+        <div class="flex items-center gap-2 text-11-regular text-text-weak">
+          <span>{language.t("im.dac.private")}</span>
+          <select
+            aria-label={language.t("im.dac.delivery")}
+            value={editor.dacDelivery}
+            onChange={(event) => setEditor("dacDelivery", event.currentTarget.value === "steer" ? "steer" : "queue")}
+          >
+            <option value="queue">{language.t("im.dac.queue")}</option>
+            <option value="steer">{language.t("im.dac.steer")}</option>
+          </select>
+        </div>
+      </Show>
       <textarea
         ref={textareaRef}
         value={content()}
@@ -182,19 +268,30 @@ export function MessageComposer(props: MessageComposerProps) {
           else stopTyping()
         }}
         onKeyDown={handleKeyDown}
-        placeholder={props.placeholder ?? "Type a message... Use @ to mention agents"}
+        placeholder={props.placeholder ?? language.t("im.composer.placeholder")}
+        aria-label={props.placeholder ?? language.t("im.composer.placeholder")}
         disabled={props.disabled}
-        class="w-full p-3 bg-surface-base border border-border-base rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-accent-base text-text-base placeholder:text-text-weak"
+        readOnly={delivery.sending}
+        aria-busy={delivery.sending}
+        class="w-full p-2.5 bg-surface-panel border border-border-weak-base rounded-md resize-none focus:outline-none focus:border-border-active text-13-regular text-text-base placeholder:text-text-weak"
         rows={3}
       />
+      <Show when={delivery.failed}>
+        <p role="alert" class="mt-1 text-12-regular text-text-critical">
+          {language.t("im.composer.failed")}
+        </p>
+      </Show>
+      <Show when={privateCommand() && props.hasAttachments}>
+        <p role="alert" class="mt-1 text-12-regular text-text-weak">
+          {language.t("im.dac.attachments")}
+        </p>
+      </Show>
 
-      <Show when={showMentionMenu() && filteredAgents().length > 0}>
+      <Show when={editor.showMentionMenu && filteredAgents().length > 0}>
         <div
-          class="absolute bg-surface-raised-base border border-border-base rounded-lg shadow-lg max-h-60 overflow-y-auto z-50"
+          class="absolute left-3 right-3 min-w-0 bg-surface-raised-base border border-border-base rounded-lg shadow-lg max-h-60 overflow-y-auto z-50"
           style={{
-            bottom: `calc(100% - ${mentionPosition().top}px + 8px)`,
-            left: `${mentionPosition().left}px`,
-            "min-width": "250px",
+            bottom: `calc(100% - ${editor.mentionPosition.top}px + 8px)`,
           }}
         >
           <For each={filteredAgents()}>
@@ -202,10 +299,10 @@ export function MessageComposer(props: MessageComposerProps) {
               <button
                 type="button"
                 class={`w-full px-4 py-2 text-left hover:bg-surface-raised-base-hover ${
-                  index() === selectedIndex() ? "bg-surface-raised-base-hover" : ""
+                  index() === editor.selectedIndex ? "bg-surface-raised-base-hover" : ""
                 }`}
                 onClick={() => insertMention(agent)}
-                onMouseEnter={() => setSelectedIndex(index())}
+                onMouseEnter={() => setEditor("selectedIndex", index())}
               >
                 <div class="font-medium text-text-strong">@{agent.id}</div>
                 <Show when={agent.description}>
@@ -218,23 +315,42 @@ export function MessageComposer(props: MessageComposerProps) {
       </Show>
 
       <div class="mt-2 flex items-center justify-between gap-2">
-        <div class="text-xs text-text-weak">
-          Press <kbd class="px-1 py-0.5 bg-surface-raised-base border border-border-base rounded">Enter</kbd> to
-          send, <kbd class="px-1 py-0.5 bg-surface-raised-base border border-border-base rounded">Shift+Enter</kbd>{" "}
-          for new line
-        </div>
+        <div class="min-w-0 text-11-regular text-text-weak">{language.t("im.composer.hint")}</div>
         <Show when={props.onAttach}>
-          <input ref={fileInputRef} type="file" class="hidden" onChange={handleFileSelected} />
+          <input ref={fileInputRef} type="file" multiple class="hidden" onChange={handleFileSelected} />
           <button
             type="button"
             class="shrink-0 flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-base hover:bg-surface-raised-base-hover disabled:opacity-50"
-            disabled={props.disabled || uploading()}
+            disabled={
+              props.disabled ||
+              editor.uploading ||
+              delivery.sending ||
+              props.attachmentBusy ||
+              privateCommand() ||
+              props.attachmentLimit === 0
+            }
             onClick={() => fileInputRef?.click()}
-            aria-label="Attach file"
+            aria-label={language.t("im.composer.attach")}
           >
-            {uploading() ? "Uploading…" : "Attach"}
+            {editor.uploading ? language.t("im.composer.uploading") : language.t("im.composer.attach")}
           </button>
         </Show>
+        <Button
+          class="shrink-0"
+          variant="primary"
+          size="small"
+          disabled={
+            props.disabled ||
+            props.sendDisabled ||
+            delivery.sending ||
+            props.attachmentBusy ||
+            (privateCommand() && (!!props.hasAttachments || !props.onDac)) ||
+            (!content().trim() && !props.hasAttachments)
+          }
+          onClick={() => void submit()}
+        >
+          {delivery.sending ? language.t("im.composer.sending") : language.t("im.composer.send")}
+        </Button>
       </div>
     </div>
   )
@@ -246,10 +362,9 @@ function getCaretCoordinates(element: HTMLTextAreaElement, position: number) {
   const style = getComputedStyle(element)
 
   // Copy styles
-  for (const prop of style) {
-    // @ts-ignore
-    div.style[prop] = style[prop]
-  }
+  Array.from({ length: style.length }, (_, index) => style.item(index)).forEach((property) =>
+    div.style.setProperty(property, style.getPropertyValue(property)),
+  )
 
   div.style.position = "absolute"
   div.style.visibility = "hidden"

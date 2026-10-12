@@ -1,7 +1,7 @@
 import { projectLayer } from "./fixture/project-layer"
-import { afterAll, describe, expect } from "bun:test"
+import { afterAll, afterEach, describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import fs from "fs/promises"
 import path from "path"
 import { Database } from "@deepagent-code/core/database/database"
@@ -12,7 +12,7 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
-import { TaskRunEventTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { SessionMessageTable, TaskRunEventTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { TaskRunAuthority } from "@deepagent-code/core/session/task-run"
 import { TaskWorkspace } from "@deepagent-code/core/session/task-workspace"
@@ -39,6 +39,21 @@ afterAll(() => {
   else process.env.DEEPAGENT_CODE_HOME = priorDataHome
 })
 
+let resumeHook: ((sessionID: SessionSchema.ID) => Effect.Effect<void>) | undefined
+afterEach(() => {
+  resumeHook = undefined
+})
+const execution = Layer.succeed(
+  SessionExecution.Service,
+  SessionExecution.Service.of({
+    active: Effect.succeed(new Set()),
+    resume: (sessionID) => resumeHook?.(sessionID) ?? Effect.void,
+    wake: () => Effect.void,
+    interrupt: () => Effect.void,
+    awaitIdle: () => Effect.void,
+  }),
+)
+
 const stackOver = (database: Layer.Layer<Database.Service, unknown>) => {
   const events = EventV2.layer.pipe(Layer.provide(database))
   const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
@@ -47,7 +62,7 @@ const stackOver = (database: Layer.Layer<Database.Service, unknown>) => {
     Layer.provide(database),
     Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
     Layer.provide(projectLayer(database)),
-    Layer.provide(SessionExecution.noopLayer),
+    Layer.provide(execution),
   )
   return Layer.mergeAll(database, events, projector, sessions)
 }
@@ -164,6 +179,76 @@ const settledRunWithCommit = (toolCallID: string, file: string, content: string)
 // ── Tests ─────────────────────────────────────────────────────────────────────────────────────
 
 describe("Core V2 TaskPRReview", () => {
+  it.effect("UP-03 validates a review JSON value split across final assistant text blocks", () =>
+    Effect.gen(function* () {
+      const settled = yield* settledRunWithCommit("call-pr-blocks", "blocks.txt", "reviewed change\n")
+      const verdict = {
+        implementationCommitSha: settled.tip,
+        verdict: "request_changes",
+        rationale: "keep both result blocks",
+      }
+      let sequence = 0
+      resumeHook = (sessionID) =>
+        Effect.gen(function* () {
+          sequence++
+          const message = Schema.decodeUnknownSync(SessionMessage.Message)({
+            id: `msg_up03_review_${sequence}`,
+            type: "assistant",
+            agent: "reviewer",
+            model: { id: "m", providerID: "p" },
+            content:
+              sequence === 1
+                ? [{ type: "text", id: "part_review_research", text: "persisted review findings" }]
+                : [
+                    { type: "text", id: `part_review_body_${sequence}`, text: JSON.stringify(verdict).slice(0, -1) },
+                    { type: "reasoning", id: `part_review_reasoning_${sequence}`, text: "must not enter JSON" },
+                    { type: "text", id: `part_review_end_${sequence}`, text: "}" },
+                  ],
+            time: { created: sequence },
+          })
+          yield* settled.db
+            .insert(SessionMessageTable)
+            .values({
+              id: message.id,
+              session_id: sessionID,
+              seq: sequence,
+              type: message.type,
+              data: Schema.encodeSync(SessionMessage.Message)(message),
+            })
+            .run()
+            .pipe(Effect.orDie)
+        })
+      const outcome = yield* TaskPRReview.review(settled.db, settled.events, settled.sessions, {
+        runID: settled.run.run_id,
+        parentMessageID: "msg_up03_pr_finalize",
+        parentDirectory: settled.repo,
+        timeoutMs: 5_000,
+      })
+      expect(outcome).toMatchObject({ status: "changes_requested", rationale: verdict.rationale })
+      expect(sequence).toBe(2)
+      const reviewer = yield* settled.db
+        .select()
+        .from(TaskRunTable)
+        .where(
+          eq(
+            TaskRunTable.tool_call_id,
+            `pr_review:${TaskPRReview.operationKey({ runID: settled.run.run_id, tip: settled.tip })}`,
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      expect(reviewer).toBeDefined()
+      const evidence = yield* TaskRunAuthority.structuredEvidence(settled.db, reviewer!.run_id)
+      expect(evidence).toMatchObject({
+        validationOutcome: "validated",
+        rawOutput: JSON.stringify(verdict),
+        outputMessageId: "msg_up03_review_2",
+      })
+      expect((yield* runRow(settled.db, settled.run.run_id)).worktree_state).toBe("retained")
+      expect(rev(settled.repo, "main")).toBe(settled.base)
+    }),
+  )
+
   it.effect("eligible lists this parent's never-reviewed released isolated runs only", () =>
     Effect.gen(function* () {
       const settled = yield* settledRunWithCommit("call-pr-elig-2", "elig.txt", "eligible\n")

@@ -163,7 +163,17 @@ const accountErrorFromCause = (cause: unknown, message: string): AccountError =>
   return new AccountServiceError({ message, cause })
 }
 
+export type Source = Readonly<{
+  id: string
+  url: string
+  orgID: string | null
+  generation: string | null
+  selectionRevision: number
+}>
+
 export interface Interface {
+  readonly source: () => Effect.Effect<Source | undefined, AccountError>
+  readonly verifyAuthority: () => Effect.Effect<AccountRepo.Authority, AccountError>
   readonly active: () => Effect.Effect<Option.Option<Info>, AccountError>
   readonly activeOrg: () => Effect.Effect<Option.Option<ActiveOrg>, AccountError>
   readonly list: () => Effect.Effect<Info[], AccountError>
@@ -235,6 +245,7 @@ export const layer: Layer.Layer<Service, never, AccountRepo.Service | HttpClient
 
       yield* repo.persistToken({
         accountID: row.id,
+        expected: row,
         accessToken: parsed.access_token,
         refreshToken: parsed.refresh_token,
         expiry,
@@ -304,6 +315,75 @@ export const layer: Layer.Layer<Service, never, AccountRepo.Service | HttpClient
       return yield* HttpClientResponse.schemaBodyJson(User)(response).pipe(
         mapAccountServiceError("Failed to decode response"),
       )
+    })
+
+    const selectAccount = Effect.fn("Account.use")(function* (accountID: AccountID, orgID: Option.Option<OrgID>) {
+      const resolved = yield* resolveAccess(accountID)
+      if (Option.isNone(resolved)) return yield* new AccountServiceError({ message: "Account not found" })
+      // A fresh token may have replaced the captured row. Freeze the exact row used
+      // for these remote identity checks, then CAS it inside the selection transaction.
+      const current = yield* repo.getRow(accountID)
+      if (
+        Option.isNone(current) ||
+        current.value.url !== resolved.value.account.url ||
+        current.value.identity_generation !== resolved.value.account.identity_generation ||
+        current.value.access_token !== resolved.value.accessToken
+      )
+        return yield* new AccountServiceError({ message: "Account changed during verification" })
+      const verified = yield* Effect.all(
+        [
+          fetchUser(current.value.url, current.value.access_token),
+          fetchOrgs(current.value.url, current.value.access_token),
+        ],
+        { concurrency: 2 },
+      )
+      if (verified[0].id !== accountID || (Option.isSome(orgID) && !verified[1].some((org) => org.id === orgID.value)))
+        return yield* new AccountServiceError({ message: "Account or organization is no longer authorized" })
+      yield* repo.use(accountID, orgID, current.value)
+    })
+
+    const verifyAuthority = Effect.fn("Account.verifyAuthority")(function* () {
+      const before = yield* repo.authority()
+      if (!before.account) return before
+      const resolved = yield* resolveAccess(before.account.id)
+      if (Option.isNone(resolved)) return yield* new AccountServiceError({ message: "Account is unavailable" })
+      const current = yield* repo.authority()
+      if (
+        !current.account ||
+        current.account.id !== before.account.id ||
+        current.account.url !== before.account.url ||
+        current.account.identity_generation !== before.account.identity_generation ||
+        current.selectionRevision !== before.selectionRevision
+      )
+        return yield* new AccountServiceError({ message: "Account changed during verification" })
+      const verified = yield* Effect.all(
+        [
+          fetchUser(current.account.url, resolved.value.accessToken),
+          fetchOrgs(current.account.url, resolved.value.accessToken),
+        ],
+        { concurrency: 2 },
+      )
+      if (
+        verified[0].id !== current.account.id ||
+        (current.orgID !== null && !verified[1].some((org) => org.id === current.orgID))
+      )
+        return yield* new AccountServiceError({ message: "Account or organization is no longer authorized" })
+      const after = yield* repo.authority()
+      if (
+        !after.account ||
+        after.account.id !== current.account.id ||
+        after.account.url !== current.account.url ||
+        after.account.identity_generation !== current.account.identity_generation ||
+        after.selectionRevision !== current.selectionRevision ||
+        after.account.access_token !== resolved.value.accessToken
+      )
+        return yield* new AccountServiceError({ message: "Account changed during verification" })
+      // A legacy null generation needs a deliberate verified account selection or login.
+      if (after.account.identity_generation === null)
+        return yield* new AccountServiceError({
+          message: "Select this account again to verify its identity before MCP authentication",
+        })
+      return after
     })
 
     const token = Effect.fn("Account.token")((accountID: AccountID) =>
@@ -439,12 +519,34 @@ export const layer: Layer.Layer<Service, never, AccountRepo.Service | HttpClient
     })
 
     return Service.of({
+      source: () =>
+        Effect.gen(function* () {
+          const value = yield* repo.authority()
+          const now = yield* Clock.currentTimeMillis
+          // Display provenance expires at the actual credential deadline. The
+          // principal remains in AccountRepo; this read never refreshes tokens.
+          if (
+            !value.account ||
+            typeof value.account.token_expiry !== "number" ||
+            !Number.isSafeInteger(value.account.token_expiry) ||
+            value.account.token_expiry <= now
+          )
+            return undefined
+          return {
+            id: value.account.id,
+            url: value.account.url,
+            orgID: value.orgID,
+            generation: value.account.identity_generation,
+            selectionRevision: value.selectionRevision,
+          }
+        }),
+      verifyAuthority,
       active: repo.active,
       activeOrg,
       list: repo.list,
       orgsByAccount,
       remove: repo.remove,
-      use: repo.use,
+      use: selectAccount,
       orgs,
       config,
       token,

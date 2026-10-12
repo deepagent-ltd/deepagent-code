@@ -13,6 +13,7 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Database } from "@deepagent-code/core/database/database"
 import { Auth } from "@/auth"
 import { Account } from "@/account/account"
+import { AccountRepo } from "@/account/repo"
 import { Config } from "@/config/config"
 import { Git } from "@/git"
 import { Ripgrep } from "@deepagent-code/core/filesystem/ripgrep"
@@ -32,6 +33,7 @@ import { Todo } from "@/session/todo"
 import { Session } from "@/session/session"
 import { SessionProjection } from "@/session/session-projector"
 import { GoalManager } from "@/session/goal-manager"
+import { GoalTickExecution } from "@/session/goal-tick-execution"
 import { Instruction } from "@/session/instruction"
 import { LLM } from "@/session/llm"
 import { LSP } from "@/lsp/lsp"
@@ -43,6 +45,7 @@ import { ToolRegistry } from "@/tool/registry"
 import { Format } from "@/format"
 import { InstanceLayer } from "@/project/instance-layer"
 import { Root } from "./root"
+import { RuntimeIntegrityIdentity } from "./runtime-integrity-identity"
 import { Project } from "@/project/project"
 import { Vcs } from "@/project/vcs"
 import { Reference } from "@/reference/reference"
@@ -86,6 +89,7 @@ const baseAppLayer = Layer.mergeAll(
   FSUtil.defaultLayer,
   Auth.defaultLayer,
   Account.defaultLayer,
+  AccountRepo.defaultLayer,
   Config.defaultLayer,
   Git.defaultLayer,
   Ripgrep.defaultLayer,
@@ -163,6 +167,7 @@ const baseAppLayer = Layer.mergeAll(
   // outputs cannot satisfy V2 outbox/session inputs.
   Layer.provideMerge(Database.defaultLayer),
   Layer.provideMerge(EventV2Bridge.defaultLayer),
+  Layer.provideMerge(GoalTickExecution.runtimeLayer),
   Layer.provideMerge(Root.layer),
   // RI-123: same owner-qualification references the HTTP graph root provides — prompt paths
   // running on this root resolve them from the calling fiber's context.
@@ -171,6 +176,7 @@ const baseAppLayer = Layer.mergeAll(
   Layer.provideMerge(Observability.layer),
   Layer.provide(DurableLearningRuntime.reviewerRegistryLayer),
   Layer.provide(DurableLearningRuntime.lifecycleObserverLayer.pipe(Layer.provide(Database.defaultLayer))),
+  Layer.provideMerge(Root.windowsStorageLayer),
 )
 
 // §16.3 order 4: V2 turn receipts record the durable history-window boundary (PromptEpoch active
@@ -187,7 +193,7 @@ const baseAppLayer = Layer.mergeAll(
 // authorization row (ephemeral issuance pair, onConflictDoNothing semantics). Production r0 mints
 // campaigns through the operator flow instead — this seam exists so the packaged live test can boot
 // the V2-only profile with a verifiable campaign against a real provider.
-export const AppLayer = baseAppLayer.pipe(
+const appServicesLayer = baseAppLayer.pipe(
   // W3.7 — the ProductionV2Sources VALUE seam: provided INTO the base graph (same context-flow
   // mechanism as the PromptEpoch seam below) so the location-layer runner subtree — whose
   // `productionV2SourcesLayer` forwards an outer-scope value from its build context — resolves the
@@ -215,6 +221,10 @@ export const AppLayer = baseAppLayer.pipe(
   Layer.provideMerge(Root.ownerSeedLayer),
   Layer.provideMerge(captureRootDatabasePath),
 )
+
+// CLI drains use the same slot as the shared Session runtime without opening a listener.
+// Capture after the whole graph builds so the snapshot contains its actual owner and DB services.
+export const AppLayer = RuntimeIntegrityIdentity.captureRootContextLayer.pipe(Layer.provideMerge(appServicesLayer))
 
 // The embedded in-process HTTP server (`Server.Default`) builds its route graph with
 // this same memo map, so InstanceStore / PTY / LocationServiceMap / Database identity —

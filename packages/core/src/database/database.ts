@@ -326,7 +326,9 @@ export function layerFromPath(filename: string) {
         layer.pipe(
           Layer.provide(Layer.succeed(CurrentPreflightState, { state })),
           Layer.provide(Layer.succeed(CurrentDatabaseFile, { filename })),
-          Layer.provide(sqliteLayer({ filename })),
+          // Keep the existing journal readable by the consistency backup. The business
+          // layer selects WAL only after backup verification and acquiring its runtime lock.
+          Layer.provide(sqliteLayer({ filename, disableWAL: true })),
         ),
       ),
     ),

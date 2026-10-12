@@ -147,7 +147,29 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
   // but the legacy SDK expected plain `T` for optional fields. Strip null
   // from all component schemas so both request and response types match.
   for (const [name, schema] of Object.entries(spec.components?.schemas ?? {})) {
-    spec.components!.schemas![name] = stripOptionalNull(structuredClone(schema))
+    spec.components!.schemas![name] = [
+      "IMTaskTargetReview",
+      "IMTaskState",
+      "IMTaskSession",
+      "IMTaskCancelReceipt",
+      "McpBindingRepairPreview",
+      "EventWorkCandidate",
+      "EventWorkRule",
+      "EventWorkNode",
+      "EventWorkRoot",
+      "EventWorkRuleCommand",
+      "EventWorkRootCommand",
+      "EventWorkRuleCommandResult",
+      "EventWorkRootCommandResult",
+      "EventWorkRulesPage",
+      "EventWorkRootsPage",
+      "EventWorkSessionPointer",
+      "AttentionItem",
+      "TaskHumanControlInput",
+      "TaskHumanControlReceipt",
+    ].includes(name)
+      ? stripNativeOptionalNull(structuredClone(schema))
+      : stripOptionalNull(structuredClone(schema))
   }
   normalizeComponentNames(spec)
   collapseDuplicateComponents(spec)
@@ -160,7 +182,65 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
     for (const method of ["get", "post", "put", "delete", "patch"] as const) {
       const operation = item[method]
       if (!operation) continue
-      const isV2Api = isV2ApiPath(path)
+      const scopedMcp =
+        (method === "post" &&
+          [
+            "/mcp",
+            "/mcp/catalog/enable",
+            "/mcp/{name}/auth",
+            "/mcp/{name}/auth/callback",
+            "/mcp/{name}/auth/authenticate",
+            "/mcp/{name}/connect",
+            "/mcp/{name}/disconnect",
+          ].includes(path)) ||
+        (method === "delete" && path === "/mcp/{name}/auth")
+      const nativeContract =
+        (method === "post" && path === "/api/attention/task/control") ||
+        path.startsWith("/api/v1/event-investigation/") ||
+        path.startsWith("/api/v1/event-work/") ||
+        scopedMcp ||
+        [
+          "/mcp/{name}/credentials/initialize",
+          "/mcp/{name}/credentials/preview",
+          "/mcp/{name}/credentials/commit",
+          "/mcp/{name}/credentials/{requestID}",
+          "/mcp/{name}/credentials/{requestID}/reconcile",
+          "/mcp/{name}/binding/preview",
+          "/mcp/{name}/binding/repair",
+        ].includes(path) ||
+        (method === "get" && path === "/command") ||
+        (method === "get" && ["/api/v1/im/groups/page", "/api/v1/im/groups/{groupId}"].includes(path)) ||
+        (method === "get" && path === "/api/v1/im/messages/{messageId}/task-result") ||
+        (method === "get" && path === "/api/v1/im/messages/{messageId}/task-status") ||
+        (method === "get" && path === "/api/v1/im/messages/{messageId}/remote-task-locator") ||
+        (method === "post" && path === "/api/v1/im/tasks/remote-result") ||
+        (method === "post" && path === "/api/v1/im/tasks/remote-status") ||
+        (method === "get" &&
+          [
+            "/api/v1/im/tasks/targets",
+            "/api/v1/im/tasks/conversations/{groupID}",
+            "/api/v1/im/tasks/requests/{requestID}",
+            "/api/v1/im/tasks/requests/{requestID}/state",
+          ].includes(path)) ||
+        (method === "post" &&
+          [
+            "/api/v1/im/tasks/requests",
+            "/api/v1/im/tasks/requests/{requestID}/accept",
+            "/api/v1/im/tasks/requests/{requestID}/cancel",
+            "/api/v1/im/tasks/requests/{requestID}/refuse",
+          ].includes(path)) ||
+        (method === "get" &&
+          [
+            "/api/v1/im/groups/{groupId}/messages/{messageId}/attachments/{attachmentId}",
+            "/api/v1/im/groups/{groupId}/messages/{messageId}/attachments/{attachmentId}/content",
+          ].includes(path)) ||
+        (method === "post" &&
+          ["/api/v1/im/work/{workID}/recover-known", "/api/v1/im/work/{workID}/resume-recovered", "/api/v1/im/work/cleanup-known"].includes(path)) ||
+        path.startsWith("/deepagent/goal/plan-rebase/") ||
+        path.startsWith("/api/v1/browser/") ||
+        path.startsWith("/api/v1/event-validation/")
+      const isV2Api = isV2ApiPath(path) || nativeContract
+      const normalizeSchema = nativeContract ? stripNativeOptionalNull : stripOptionalNull
       // C6-04: expand the C0-03 typed-error union into per-status responses
       // (400/403/404/409/410/423/503) before any legacy-error normalization.
       splitTypedErrorUnionResponses(operation)
@@ -169,7 +249,7 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
         // Keep that SDK surface stable while the HttpApi spec is tightened.
         if (!isV2Api && path !== "/session/{sessionID}/continuation-resolution") delete operation.requestBody.required
         const body = operation.requestBody.content?.["application/json"]
-        if (body?.schema) body.schema = stripOptionalNull(structuredClone(body.schema))
+        if (body?.schema) body.schema = normalizeSchema(structuredClone(body.schema))
         if (path === "/experimental/workspace" && method === "post") {
           // Workspace creation fields `branch` and `extra` are Schema.NullOr —
           // genuinely nullable, not just optional. Re-add the null that the
@@ -211,7 +291,7 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
       }
       for (const response of Object.values(operation.responses ?? {})) {
         for (const content of Object.values(response.content ?? {})) {
-          if (content.schema) content.schema = stripOptionalNull(structuredClone(content.schema))
+          if (content.schema) content.schema = normalizeSchema(structuredClone(content.schema))
         }
       }
       if (!isV2Api) {
@@ -340,6 +420,11 @@ function applyLegacySchemaOverrides(spec: OpenApiSpec) {
   }
   if (schemas.GlobalSession?.properties?.project)
     schemas.GlobalSession.properties.project = nullable(schemas.GlobalSession.properties.project)
+  // These required native fields use null as durable absence (unknown recovery
+  // occurrence and no seen receipt), not as optional legacy properties.
+  const attention = schemas.AttentionItem?.properties
+  if (attention?.occurredAt) attention.occurredAt = nullable(attention.occurredAt)
+  if (attention?.seenAt) attention.seenAt = nullable(attention.seenAt)
   const providerOptions = schemas.ProviderConfig?.properties?.options
   if (providerOptions) providerOptions.additionalProperties = {}
   const model = schemas.ProviderConfig?.properties?.models?.additionalProperties
@@ -536,8 +621,51 @@ function fixSelfReferencingComponents(spec: OpenApiSpec) {
   }
 }
 
+// Native required NullOr fields represent durable absence. Effect wraps optional
+// properties in one extra null union; remove only that outer wrapper, preserving
+// an explicit inner NullOr and the original required-property list.
+function stripNativeOptionalNull(schema: OpenApiSchema, optional = false): OpenApiSchema {
+  const options = schema.anyOf ?? schema.oneOf
+  const value =
+    optional && options?.length === 2 && options.some((item) => item.type === "null")
+      ? options.find((item) => item.type !== "null")!
+      : schema
+  if (value.anyOf) value.anyOf = value.anyOf.map((item) => stripNativeOptionalNull(item))
+  if (value.oneOf) value.oneOf = value.oneOf.map((item) => stripNativeOptionalNull(item))
+  if (value.allOf) {
+    const constraints = value.allOf.map((item) => stripNativeOptionalNull(item))
+    if (value.type) {
+      delete value.allOf
+      constraints.forEach((item) => Object.assign(value, item))
+    } else {
+      value.allOf = constraints
+    }
+  }
+  if (value.items) value.items = stripNativeOptionalNull(value.items)
+  if (value.prefixItems) value.prefixItems = value.prefixItems.map((item) => stripNativeOptionalNull(item))
+  if (value.properties) {
+    for (const [key, item] of Object.entries(value.properties)) {
+      value.properties[key] = stripNativeOptionalNull(item, !value.required?.includes(key))
+    }
+  }
+  if (value.additionalProperties && typeof value.additionalProperties === "object") {
+    value.additionalProperties = stripNativeOptionalNull(value.additionalProperties)
+  }
+  return value
+}
+
 /** Strip `{type:"null"}` arms that Effect's `Schema.optional` adds to OpenAPI unions. */
 function stripOptionalNull(schema: OpenApiSchema): OpenApiSchema {
+  const reader = schema.properties?.reader
+  const readerOptions = reader?.anyOf ?? reader?.oneOf ?? (reader ? [reader] : [])
+  if (
+    schema.properties?.projectID &&
+    readerOptions.some((item) => item.properties?.mode?.enum?.includes("protected"))
+  ) {
+    // Protected IM groups are workspace-bound and have a real null projectID.
+    // Their required nullable fields must match the actual native DTO contract.
+    return stripNativeOptionalNull(schema)
+  }
   if (schema.allOf?.length === 1) {
     const [constraint] = schema.allOf
     delete schema.allOf
@@ -564,7 +692,17 @@ function stripOptionalNull(schema: OpenApiSchema): OpenApiSchema {
   if (schema.items) schema.items = stripOptionalNull(schema.items)
   if (schema.properties) {
     for (const [key, value] of Object.entries(schema.properties)) {
-      schema.properties[key] = stripOptionalNull(value)
+      // IM's new reader view carries required durable absence (pending unread
+      // and no next expiry). Keep its native subtree while preserving the
+      // established legacy shape of the surrounding IM response.
+      const options = value.anyOf ?? value.oneOf ?? [value]
+      const reader =
+        key === "reader" &&
+        options.some((item) => item.properties?.displayEpoch || item.properties?.mode?.enum?.includes("protected"))
+      schema.properties[key] =
+        reader || key === "remoteAttachments"
+          ? stripNativeOptionalNull(value, !schema.required?.includes(key))
+          : stripOptionalNull(value)
     }
   }
   if (schema.additionalProperties && typeof schema.additionalProperties === "object") {

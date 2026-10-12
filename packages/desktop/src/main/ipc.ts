@@ -14,7 +14,7 @@ import { getStore } from "./store"
 import { getPinchZoomEnabled, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
 import { getPreventSleepEnabled, setPreventSleepEnabled, syncPowerSaveBlocker } from "./power"
 import { PREVENT_SLEEP_KEY, SETTINGS_STORE } from "./store-keys"
-import { browserView } from "./browser-view"
+import { registerBrowserViewIpc } from "./browser-view"
 import type { UpdaterController } from "./updater-controller"
 import { createUpdaterSubscriptions } from "./updater-subscriptions"
 
@@ -233,26 +233,7 @@ export function registerIpcHandlers(deps: Deps) {
     win?.focus()
   })
 
-  // U7 isolated browser — NAVIGATION-ONLY IPC. Deliberately no handler reads page content; the only
-  // main->renderer channel is "browser-state" (url/title/canGoBack) for the address bar chrome.
-  ipcMain.handle(
-    "browser-show",
-    (event: IpcMainInvokeEvent, rect: { x: number; y: number; width: number; height: number }) => {
-      const win = BrowserWindow.fromWebContents(event.sender)
-      if (win) browserView.show(win, rect)
-    },
-  )
-  ipcMain.handle("browser-hide", () => browserView.hide())
-  ipcMain.handle(
-    "browser-set-bounds",
-    (_event: IpcMainInvokeEvent, rect: { x: number; y: number; width: number; height: number }) =>
-      browserView.setBounds(rect),
-  )
-  ipcMain.handle("browser-navigate", (_event: IpcMainInvokeEvent, url: string) => browserView.navigate(url))
-  ipcMain.handle("browser-back", () => browserView.back())
-  ipcMain.handle("browser-forward", () => browserView.forward())
-  ipcMain.handle("browser-reload", () => browserView.reload())
-  ipcMain.handle("browser-open-external", () => browserView.openExternal())
+  registerBrowserViewIpc()
 
   ipcMain.handle("show-window", (event: IpcMainInvokeEvent) => {
     const win = BrowserWindow.fromWebContents(event.sender)

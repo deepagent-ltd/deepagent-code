@@ -23,7 +23,7 @@ export function PanelVerdictDialog(props: { verdict: PanelVerdict }) {
       <div class="flex flex-col gap-4 p-1" data-component="panel-verdict">
         <div class="flex items-center gap-2">
           <span class="text-15-medium text-text-base">{language.t(DECISION_LABEL_KEY[v().decision] as never)}</span>
-          <span class="text-13-regular text-text-muted">
+          <span class="text-13-regular text-text-weak">
             {language.t(v().rounds === 1 ? "composer.panel.verdict.meta.one" : "composer.panel.verdict.meta.other", {
               confidence: (v().confidence * 100).toFixed(0),
               rounds: v().rounds,
@@ -36,7 +36,7 @@ export function PanelVerdictDialog(props: { verdict: PanelVerdict }) {
             <span class="text-13-medium text-text-base">{language.t("composer.panel.verdict.evidence")}</span>
             <ul class="flex flex-col gap-1">
               <For each={v().evidence}>
-                {(e) => <li class="text-13-regular text-text-muted">{e}</li>}
+                {(e) => <li class="text-13-regular text-text-weak">{e}</li>}
               </For>
             </ul>
           </div>
@@ -47,13 +47,13 @@ export function PanelVerdictDialog(props: { verdict: PanelVerdict }) {
             <span class="text-13-medium text-text-base">{language.t("composer.panel.verdict.dissent")}</span>
             <For each={v().dissent}>
               {(d) => (
-                <div class="flex flex-col gap-1 rounded-md border border-border-subtle p-2">
+                <div class="flex flex-col gap-1 rounded-md border border-border-weak-base p-2">
                   <span class="text-13-medium text-text-base capitalize">
                     {d.lens} — {d.verdict} ({(d.confidence * 100).toFixed(0)}%)
                   </span>
                   <For each={d.findings}>
                     {(f) => (
-                      <div class="text-12-regular text-text-muted">
+                      <div class="text-12-regular text-text-weak">
                         <span class="text-text-base">{f.summary}</span>
                         <Show when={f.file}> — {f.file}{f.line != null ? `:${f.line}` : ""}</Show>
                         <div class="italic">{f.failureScenario}</div>

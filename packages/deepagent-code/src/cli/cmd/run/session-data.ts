@@ -323,10 +323,12 @@ export function permissionRequestFromV2(
     sessionID: properties.sessionID,
     permission: properties.action,
     patterns: properties.resources,
-    metadata: properties.metadata ?? {},
+    metadata: properties.source?.type === "mcp_app"
+      ? { ...(properties.metadata ?? {}), mcpApp: properties.source }
+      : properties.metadata ?? {},
     always: properties.save ?? [],
     v2: true,
-    ...(properties.source
+    ...(properties.source?.type === "tool"
       ? { tool: { messageID: properties.source.messageID, callID: properties.source.callID } }
       : {}),
   }

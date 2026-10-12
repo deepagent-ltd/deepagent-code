@@ -1,0 +1,971 @@
+syntax = "proto3";
+
+package codec;
+
+message ConnectMsgBody{
+    string protoId = 1;
+    string sdkVersion = 2; //sdk 版本
+    string appkey = 3;
+    string token = 4;
+
+    //设备信息
+    string deviceId = 5;
+    string platform = 6;//iOS/Android/iPad
+    string deviceCompany = 7;//设备厂商, huawei/apple
+    string deviceModel = 8;//设备型号  例如: iPhone8
+    string deviceOsVersion = 9;//手机操作系统版本
+    string pushToken = 10;//厂商推送Token
+    //网络
+    string networkId = 11;//网络类型；4G/wifi
+    string isp_num = 12;//网络运营商编号
+    string clientIp = 13;
+
+    string packageName =14;
+    string pushChannel =15;
+    string ext = 16;
+    string clientSession = 17;
+}
+
+message ConnectAckMsgBody{
+    int32 code = 1;
+    string userId = 2;
+    string session = 3;
+    int64 timestamp = 4;
+    string ext = 5;
+    int32 mentionClearType = 8;
+}
+
+message DisconnectMsgBody{
+    int32 code = 1;
+    int64 timestamp = 2;
+    string ext = 3;
+}
+
+message PublishMsgBody{
+    int32 index = 1;
+    string topic = 2;
+    string targetId = 3;
+    int64 timestamp = 4;
+    bytes data = 5;
+}
+
+message PublishAckMsgBody{
+    int32 index = 1;
+    int32 code = 2;
+    string msgId = 3;
+    int64 timestamp = 4;
+    int64 msgIndex = 5;
+    int32 memberCount = 6;
+    string clientMsgId = 7;
+    DownMsg modifiedMsg = 8;
+    int32 deliveryVersion = 9;
+    int64 deliveryExpiresAt = 10;
+    string deliveryRequestHash = 11;
+}
+
+message QueryMsgBody{
+    int32 index = 1;
+    string topic = 2;
+    string targetId = 3;
+    int64 timestamp = 4;
+    bytes data = 5;
+}
+
+message QueryAckMsgBody{
+    int32 index = 1;
+    int32 code = 2;
+    int64 timestamp = 3;
+    bytes data = 4;
+}
+
+message QueryConfirmMsgBody{
+    int32 index = 1;
+}
+
+message ImWebsocketMsg {
+    int32 version = 1;
+    int32 cmd = 2;
+    int32 qos  = 3;
+    bytes payload = 4;
+    oneof testof{
+        ConnectMsgBody connectMsgBody = 11;
+        ConnectAckMsgBody ConnectAckMsgBody = 12;
+        DisconnectMsgBody disconnectMsgBody = 13;
+        PublishMsgBody publishMsgBody = 14;
+        PublishAckMsgBody pubAckMsgBody = 15;
+        QueryMsgBody qryMsgBody = 16;
+        QueryAckMsgBody qryAckMsgBody = 17;
+        QueryConfirmMsgBody qryConfirmMsgBody = 18;
+    }
+}
+
+enum ChannelType {
+    Private = 1;  //单聊
+    Group = 2;    //群聊
+    Chatroom = 3; // 聊天室
+    System = 4;   // 系统消息
+}
+
+enum PushLevel{
+  DefaultPuhsLevel = 0;
+  IgnoreSpeedControl = 1;
+  IgnoreUndisturb = 2;
+}
+
+message PushData{
+    string title = 1;
+    string pushId = 2;
+    string pushText = 3;
+    string pushExtraData = 4;
+    PushLevel pushLevel = 5;
+    bool isVoip = 6;
+    string jPushOptions = 7;
+}
+
+message QryHisMsgsReq{
+    string converId = 1;
+    ChannelType type = 2;
+    int64 startTime = 3;
+    int32 count = 4;
+    int32 order = 5;
+    repeated string msgTypes = 6;
+}
+
+message DownMsgSet{
+    repeated DownMsg msgs = 1;
+    int64 syncTime = 2;
+    bool isFinished = 3;
+    UserInfo targetUserInfo = 4;
+    GroupInfo groupInfo = 5;
+}
+
+message UpMsg {
+    string msgType = 1;   //消息类型定义
+    bytes msgContent= 2;  // 消息实体数据
+    int32 flags = 3;      // 标识 
+    string clientUid=4;   //客户端指定的消息唯一ID
+    PushData pushData = 5; // 推送设置
+    MentionInfo mentionInfo = 6; //@ 消息
+    DownMsg referMsg = 7;
+    repeated string toUserIds = 8;
+    MergedMsgs mergedMsgs = 9;
+    string SearchText = 10;
+    int64 lifeTime = 11;   // 消息默认生存周期，单位毫秒，例如：86400000，即该消息1天后会被自动删除
+    int64 lifeTimeAfterRead = 12; // 消息已读后的生存周期，通常小于lifeTime，例如60000，即消息已读1分钟后会被自动删除
+    string subChannel = 13;
+    int64 msgTime = 51;
+    int64 deliveryExpiresAt = 52;
+    int32 deliveryVersion = 53;
+}
+message MentionInfo {
+    MentionType mentionType = 1;
+    repeated UserInfo targetUsers = 2;  //被@ 人列表
+}
+enum MentionType{
+    MentionDefault = 0;
+    MentionAll = 1;    //@ 所有人
+    MentionSomeone = 2; //@ 指定人
+}
+message DownMsg{
+    string targetId = 1;
+    ChannelType type = 2;
+    string msgType = 3;
+    string senderId = 4;
+    string msgId = 5;
+    // msgIndex 是双方混排的序号！序号！序号！
+    int64 msgIndex = 6;
+    bytes msgContent = 7;
+    int64 msgTime = 8;
+    int32 flags = 9;
+    bool isSend = 10;
+    string platform = 11;
+    string clientUid = 12;
+    PushData pushData = 13;
+    MentionInfo mentionInfo = 14;
+    bool isRead = 15;
+    DownMsg referMsg = 16;
+    UserInfo targetUserInfo = 17;
+    GroupInfo groupInfo = 18;
+    MergedMsgs mergedMsgs = 19;
+    int32 undisturbType = 20;
+    int32 memberCount = 21;
+    int32 readCount = 22;
+    int64 unreadIndex = 23;
+    repeated StreamMsgItem msgItems = 24;
+    repeated MsgExtItem msgExtSet = 25;
+    repeated MsgExtItem msgExts = 26;
+    repeated ConverTag converTags = 27;
+    string searchText = 29;
+    GrpMemberInfo grpMemberInfo = 30;
+    int64 destroyTime = 31;  // 消息默认的销毁时间点，单位毫秒，如 1752551449037，为0时，表示消息不自动销毁
+    int64 lifeTimeAfterRead = 32; // 消息已读后生存周期，例如60000，即消息已读1分钟后会被自动删除
+    bool isDelete = 33;
+    string subChannel = 34;
+    repeated string toUserIds = 35;
+    int64 readTime = 36;
+    FriendInfo friendInfo = 37;
+    UserInfo senderInfo = 38;
+}
+message FriendInfo{
+    string friendId = 1;
+    bool isFriend = 2;
+    string friendDisplayName = 3;
+    int64 updatedTime = 4;
+}
+message GrpMemberInfo{
+    string grpDisplayName = 1;
+    repeated KvItem extFields = 2;
+    int64 updatedTime = 3; 
+}
+message StreamMsgItem{
+  StreamEvent event = 1;
+  int64 subSeq = 2;
+  bytes partialContent= 3;
+}
+
+message StreamDownMsg{
+  string targetId = 1;
+  ChannelType channelType = 2;
+  string msgId = 3;
+  repeated StreamMsgItem msgItems = 4;
+}
+
+enum StreamEvent{
+  DefaultStreamEvent = 0;
+  StreamMessage = 1;
+  StreamComplete = 2;
+}
+
+message MergedMsgs{
+    ChannelType channelType = 1;
+    string userId = 2;
+    string targetId = 3;
+    repeated SimpleMsg msgs = 4;
+}
+
+message GroupInfo{
+    string groupId = 1;
+    string groupName = 2;
+    string groupPortrait = 3;
+    int32 isMute = 4;
+    repeated KvItem extFields = 5;
+    int64 updatedTime = 6;
+}
+
+message KvItem{
+    string key = 1;
+    string value = 2;
+}
+
+message UserIdReq{
+    string userId = 1;
+}
+
+message UserInfo{
+    string userId = 1;
+    string nickname = 2;
+    string userPortrait = 3;
+    repeated KvItem extFields = 4;
+    int64 updatedTime = 5;
+    repeated KvItem settings = 6;
+    repeated KvItem statuses = 7;
+    UserType userType = 8;
+}
+enum UserType{
+    User = 0;
+    Bot = 1;
+}
+message SyncConversationsReq{
+    int64 startTime = 1;
+    int32 count = 2;
+}
+
+message QryConversationsReq{
+    int64 startTime = 1;
+    int32 count = 2;
+    int32 order = 3;
+
+    string targetId = 5;
+    ChannelType channelType = 6;
+    string tag = 7;
+    string exceptTag = 8;
+}
+
+message QryConversationsResp{
+    repeated Conversation conversations = 1;
+    bool isFinished = 2;
+}
+message ClearUnreadReq{
+    repeated Conversation conversations = 1;
+}
+message DelConversationReq{
+    repeated Conversation conversations = 1;
+}
+message ConversationsReq{
+    repeated Conversation conversations = 1;
+}
+message Conversation{
+    string userId = 1;
+    string targetId = 2;
+    ChannelType channelType = 3;
+    int64 sortTime = 4;
+    int64 unreadCount = 5;
+    DownMsg msg = 6;
+    int64 latestReadIndex = 7;
+    Mentions mentions = 8;
+    int32 isTop = 9;
+    int64 topUpdatedTime = 10;
+    int32 undisturbType = 11;
+    UserInfo targetUserInfo = 12;
+    GroupInfo groupInfo = 13;
+    int64 syncTime = 14;
+    int32 isDelete = 15;
+    int64 latestUnreadIndex = 16;
+    int32 unreadTag = 17;
+    string latestReadMsgId = 18;
+    int64 latestReadMsgTime = 19;
+    repeated ConverTag converTags = 20;
+    GrpMemberInfo grpInfo = 21;
+    FriendInfo friendInfo = 22;
+}
+
+message Mentions{
+    bool isMentioned = 1;
+    int32 mentionMsgCount = 2;
+    repeated UserInfo senders = 3;
+    repeated MentionMsg mentionMsgs = 4;
+}
+message MentionMsg{
+    string senderId = 1;
+    string msgId = 2;
+    int64 msgTime = 3;
+    MentionType mentionType = 4;
+}
+
+message SyncMsgReq{
+    int64 syncTime = 1;//收件箱同步时间
+    bool containsSendBox = 2;//是否包含发件箱消息
+    int64 sendBoxSyncTime = 3;//发件箱同步时间,
+    string chatroomId = 4;
+}
+
+
+message SyncChatroomReq{
+  string chatroomId = 1;//聊天室id
+  int64 syncTime = 2; // 聊天室消息同步时间戳
+  int32 count = 3;
+}
+
+message SyncChatroomMsgResp{
+  repeated DownMsg msgs = 1;
+}
+message Notify{
+    NotifyType type = 1;
+    int64 syncTime = 2;
+    string chatroomId = 3;
+}
+enum NotifyType {
+    Default = 0;
+    Msg = 1;
+    ChatroomMsg = 2;  // 聊天室消息通知
+    ChatroomAtt = 3;  // 聊天室属性变更通知
+    ChatroomEvent = 4;  // 聊天室事件通知，如有人加入/退出
+    ChatroomDestroy = 5; // 聊天室销毁
+}
+message RecallMsgReq{
+    string targetId = 1;   //单聊是为对方userid，群聊时为groupid
+    ChannelType channelType = 2;
+    string msgId = 3;  //待撤回消息的msg_id
+    int64 msgTime = 4; //待撤回消息的发送时间
+    repeated KvItem exts = 5; // 携带扩展数据，用于控制撤回消息的展示逻辑
+}
+message MarkReadReq{
+    string targetId = 1;
+    ChannelType channelType = 2;
+    repeated SimpleMsg msgs = 3;  //批量标记消息的已读状态
+    repeated IndexScope indexScopes = 4;
+}
+
+message SimpleMsg{
+    string msgId = 1;
+    int64 msgTime = 2;
+    int64 msgIndex = 3;
+}
+
+message IndexScope{
+    int64 startIndex = 1;
+    int64 endIndex = 2;
+}
+message ModifyMsgReq{
+    string targetId = 1;
+    ChannelType channelType = 2;
+    string msgId = 3;  //必填
+    int64 msgTime = 4; //可选
+    int64 msgSeqNo = 5; //可选
+    bytes msgContent = 6; //修改后的消息内容
+    string msgType = 7;
+}
+message CleanHisMsgReq{
+    string targetId = 1;
+    ChannelType channelType = 2;
+    int64 cleanMsgTime = 3;
+    int32 cleanScope = 4;
+}
+message QryHisMsgByIdsReq{
+    string targetId = 1;
+    ChannelType channelType = 2;
+    repeated string msgIds = 3;
+}
+message ChatRoomReq{
+    string chatId = 1;
+    string chatName = 2;
+    bool isAutoCreate = 3;
+}
+message QryTotalUnreadCountReq{
+    int64 time = 1;
+    ConverFilter filter = 2;
+}
+message ConverFilter{
+  repeated ChannelType channelTypes = 1;
+  repeated SimpleConversation ignoreConvers = 2;
+  string tag = 4;
+}
+message SimpleConversation {
+  string targetId = 1;
+  ChannelType channelType = 2;
+}
+message QryTotalUnreadCountResp{
+    int64 totalCount = 1;
+}
+message QryMentionMsgsReq{
+    string targetId = 1;
+    ChannelType channelType = 2;
+    int64 startIndex = 3;
+    int32 count = 4;
+    int32 order = 5;  //0：倒序；1：正序
+    int64 latestReadIndex = 6;
+    bool onlyUnread = 8;
+}
+message QryMentionMsgsResp{
+    repeated DownMsg mentionMsgs = 1;
+    bool isFinished = 2;
+}
+message QMentionMsg{
+    MentionType mentionType = 1;
+    UserInfo senderInfo = 2;
+    DownMsg msg = 3;
+}
+message QryUploadTokenResp{
+    OssType ossType = 1;
+    oneof ossOf{
+        QiniuCredResp qiniuCred = 11;
+        PreSignResp preSignResp = 12;
+    }
+}
+message PreSignResp {
+  string url = 1;
+  string objKey = 2;
+  string policy = 3;
+  string signVersion  = 4;
+  string credential = 5;
+  string date = 6;
+  string signature = 7;
+  string downloadUrl = 8;
+}
+enum OssType{
+    DefaultOss = 0;
+    QiNiu = 1;
+    S3 = 2;
+    Minio = 3;
+    Oss = 4;
+}
+message QiniuCredResp{
+    string domain = 1;
+    string token = 2;
+}
+
+message QryUploadTokenReq{
+    FileType fileType = 1;
+    string ext = 2;
+}
+enum FileType {
+    DefaultFileType = 0;
+    Image = 1;
+    Audio = 2;
+    Video = 3;
+    File = 4;
+}
+message QryReadDetailReq{
+    string targetId = 1;
+    ChannelType channelType = 2;
+    string msgId = 3;
+}
+message QryReadDetailResp{
+    int32 readCount = 1;
+    int32 memberCount = 2;
+    repeated MemberReadDetailItem readMembers = 3;
+    repeated MemberReadDetailItem unreadMembers = 4;
+}
+message MemberReadDetailItem{
+    UserInfo member = 1;
+    int64 time = 2;
+}
+message QryMergedMsgsReq{
+    int64 startTime = 1;
+    int32 count = 2;
+    int32 order = 3;
+}
+message UndisturbConversReq {
+    string userId = 1;
+    repeated UndisturbConverItem items = 2;
+}
+message UndisturbConverItem {
+    string targetId = 1;
+    ChannelType channelType = 2;
+    int32 undisturbType = 3;  // 0：非免打扰；1：普通免打扰
+}
+message QryTopConversReq{
+    int64 startTime = 1;
+    TopConverSortType sortType = 2;
+    int32 order = 3;
+}
+enum TopConverSortType{
+    ByTopTime = 0;
+    BySortTime = 1;
+}
+message DelHisMsgsReq{
+    string senderId = 1;
+    string targetId = 2;
+    ChannelType channelType = 3;
+    repeated SimpleMsg msgs = 4; 
+    int32 delScope = 5;
+}
+message QryConverReq{
+  string targetId = 1;
+  ChannelType channelType = 2;
+}
+
+message SyncChatroomAttResp{
+  repeated ChatAttItem atts = 1;
+}
+
+message ChatAtts{
+    string chatId = 1;
+    repeated ChatAttItem atts = 2;
+    bool isComplete = 3;   // 是否同步的全量聊天室属性，如果是全量，需要以此列表替换本地该聊天室所有属性
+    bool isFinished = 4;
+}
+message ChatAttItem{
+  string key = 1;
+  string value = 2;
+  int64 attTime = 3;
+  string userId = 4;
+  ChatAttOptType optType = 5;
+}
+enum ChatAttOptType{
+    ChatAttOpt_Default = 0;
+    ChatAttOpt_Add = 1;
+    ChatAttOpt_Del = 2;
+}
+message UserUndisturb{
+  bool switch = 1;
+  string timezone = 2;
+  repeated UserUndisturbItem rules = 3;
+}
+
+message UserUndisturbItem {
+  string start = 1;
+  string end = 2;
+}
+message Nil{
+}
+message ChatAttBatchReq{
+  repeated ChatAttReq atts = 1;
+}
+message ChatAttBatchResp{
+  repeated ChatAttResp attResps = 1;
+}
+
+message ChatAttReq{
+  string key = 1;
+  string value = 2;
+  bool isForce = 3;  //是否强制覆盖，否：则该key已有值时，不覆盖
+  bool isAutoDel = 4; //是否在该属性所有者离开房间时自动删除；否：则不自动删除；
+  UpMsg msg = 5; //设置属性时，同时发送一条聊天室消息；
+}
+message ChatAttResp{
+  string key = 1;  
+  int32 code = 2; // 设置属性时的返回码
+  int64 attTime = 3;  //属性的设置时间
+
+  //当设置属性时，附带发送消息时，下列属性有效
+  int32 msgCode = 11; // 消息发送的响应码
+  string msgId = 12;  //消息的id
+  int64 msgTime = 13; //消息的时间戳
+  int64 msgSeq = 14; //消息的序号
+}
+message QryFirstUnreadMsgReq{
+  string targetId = 1;
+  ChannelType channelType = 2;
+}
+message ChrmEvent{
+    ChrmEventType eventType = 1;
+    string chatId = 2;
+    string userId = 3;
+    int64 eventTime = 4;
+}
+enum ChrmEventType{
+    Join = 0;  //加入聊天室通知
+    Quit = 1;  // 主动退出聊天室通知
+    Kick = 2;   // 踢出聊天室通知
+    Fallout = 3;  // 自动掉出聊天室通知
+}
+message MsgExt {
+  string targetId = 1;
+  ChannelType channelType = 2;
+  string msgId = 3;
+  MsgExtItem ext = 4;
+}
+message MsgExtItem {
+  string key = 1;
+  string value = 2;
+  int64 timestamp = 3;
+  UserInfo userInfo = 4;
+}
+
+message TagConvers{
+  string tag = 1;
+  string tagName = 2;
+  repeated SimpleConversation convers = 11;
+}
+message UserConverTags{
+  repeated ConverTag tags = 1;
+}
+message ConverTag{
+  string tag = 1;
+  string tagName = 2;
+  ConverTagType tagType = 3;
+  int32 tagOrder = 4;
+  bool isAdd = 5;
+}
+enum ConverTagType{
+  UserTag = 0;
+  SystemTag = 1;
+  GlobalTag = 2;
+}
+
+message RtcRoomReq{
+    RtcRoomType roomType = 1;
+    string roomId = 2;
+    RtcMember joinMember = 3;
+}
+
+enum RtcRoomType{
+    OneOne = 0;
+    OneMore = 1;
+}
+
+message RtcMember{
+    UserInfo member = 1;
+    RtcState rtcState = 2;
+    int64 callTime = 3;
+    int64 connectTime = 4;
+    int64 hangupTime = 5;
+    UserInfo inviter = 6;
+}
+enum RtcState{
+    RtcStateDefault = 0;
+    RtcIncoming = 1;
+    RtcOutgoing = 2;
+    RtcConnecting = 3;
+    RtcConnected = 4;
+}
+message RtcRoom{
+    RtcRoomType roomType = 1;
+    string roomId = 2;
+    UserInfo owner = 3;
+    RtcChannel rtcChannel = 4;
+    RtcMediaType rtcMediaType = 5;
+    string ext = 6;
+    RtcAuth auth= 7;
+    ConverIndex attachedConver = 8;
+    repeated RtcMember members = 51;
+}
+message RtcInviteReq{
+    repeated string targetIds = 1;
+    RtcRoomType roomType = 2;
+    string roomId = 3;
+    RtcChannel rtcChannel = 4;
+    RtcMediaType rtcMediaType = 5;
+    string ext = 6;
+    ConverIndex attachedConver = 7;
+}
+message ConverIndex {
+    string targetId = 1;
+    ChannelType channelType = 2;
+    string subChannel = 3;
+}
+
+enum RtcMediaType{
+    RtcAudio = 0;
+    RtcVideo = 1;
+}
+
+enum InviteType{
+    RtcInvite = 0;
+    RtcAccept = 1;
+    RtcHangup = 2;
+}
+message RtcInviteEvent{
+    InviteType inviteType = 1;
+    UserInfo user = 2; //事件发起人的用户信息
+    RtcRoom room = 3;
+    repeated UserInfo targetUsers = 4; 
+}
+message RtcAnswerReq{
+    string targetId = 1;
+    string roomId = 2;
+}
+enum RtcChannel {
+    Zego = 0;
+}
+message RtcAuth{
+    ZegoAuth zegoAuth = 1;
+}
+message ZegoAuth{
+    string token = 1;
+}
+message RtcRoomEvent{
+    RtcRoomEventType roomEventType = 1;
+    repeated RtcMember members = 2;
+    RtcRoom room = 3;
+    RtcRoomQuitReason reason = 4;
+    int64 eventTime = 5;
+}
+enum RtcRoomEventType{
+    DefaultRtcRoomEvent = 0;
+    RtcJoin = 1;
+    RtcQuit = 2;
+    RtcDestroy = 3;
+    RtcStateChg = 4;
+}
+
+enum RtcRoomQuitReason{
+    Active = 0; //主动退出
+    CallTimeout = 1;//暂时废弃
+    PingTimeout = 2; //ping超时，自动被提出
+}
+message TransReq{
+    repeated TransItem items = 1;
+    string targetLang = 2;
+    string sourceLang = 3;
+}
+message TransItem{
+    string key = 1;  
+    string content = 2;
+}
+message SetTopMsgReq{
+  string targetId = 1;
+  ChannelType channelType = 2;
+  string msgId = 3;
+}
+message GetTopMsgReq{
+  string targetId = 1;
+  ChannelType channelType = 2;
+}
+message TopMsg{
+  DownMsg msg = 1;
+  UserInfo operator = 2;
+  int64 createdTime = 3;
+}
+message FavoriteMsgIds{
+  repeated FavoriteMsgIdItem items = 1;
+}
+message FavoriteMsgIdItem{
+  string senderId = 1;
+  string receiverId = 2;
+  ChannelType channelType = 3;
+  string msgId = 4;
+}
+message QryFavoriteMsgsReq{
+  int64 limit = 1;
+  string offset = 2;
+}
+message FavoriteMsgs{
+  repeated FavoriteMsg items = 1;
+  string offset = 2;
+}
+message FavoriteMsg{
+  DownMsg msg = 1;
+  int64 createdTime = 2;
+}
+message RegPushTokenReq{
+    string deviceId = 1;
+    Platform platform = 2;
+    PushChannel pushChannel = 3;
+    string pushToken = 4;
+    string packageName = 5;
+}
+enum Platform{
+    DefaultPlatform = 0;
+    Android = 1;
+    iOS = 2;
+    Web = 3;
+    PC = 4;
+}
+enum PushChannel{
+    DefaultChannel = 0;
+    Apple = 1;
+    Huawei = 2;
+    Xiaomi = 3;
+}
+message PushSwitch{
+  int32 switch = 1;  //0：关闭；1：开启；
+}
+message SearchMsgsReq{
+  string targetId = 1;
+  ChannelType channelType = 2;
+  string keyword = 3;
+  int32 count = 4;
+}
+message BatchSearchMsgsResp{
+  repeated SearchMsgsResp items = 1;
+  double maxScore = 2;
+}
+message SearchMsgsResp{
+  string targetId = 1;
+  ChannelType channelType = 2;
+  repeated SearchMsgItem items = 3;
+  double maxScore = 4;
+}
+message SearchMsgItem{
+  string highlightText = 1;
+  DownMsg msg = 2;
+  double score = 3;
+}
+message SubStreamMsgsReq{
+    repeated SubStream subStreamMsgs = 1;
+}
+message SubStream{
+    string streamMsgId = 1;
+    int64 startSeq = 2;
+}
+message UserIdsReq{
+  repeated string userIds = 1;
+}
+message UserStatusList{
+  repeated UserStatus items = 1;
+}
+
+message UserStatus{
+  string userId = 1;
+  UserOnlineItem onlineStatus = 2;
+}
+
+message UserOnlineItem {
+  string userId = 1;
+  bool isOnline = 2;
+}
+// DAC receipt-v1, preserving the frozen 9493 wire contract.
+message DeliveryReceiptQuery {
+ int32 version=1; int32 channelType=2; string targetId=3; string clientUid=4; string requestHash=5; int64 expiresAt=6;
+}
+message DeliveryReceiptResult {
+ string state=1; int32 version=2; string clientUid=3; string requestHash=4; int64 expiresAt=5; string msgId=6; int64 msgTime=7; int64 msgSeqNo=8;
+}
+message DeliveryCapabilities {
+ int32 version=1; string profile=2; int64 maxLifetimeMs=3; int32 maxContentBytes=4; bool eventualDelivery=5;
+}
+// Protected reader-v1 is independent of receipt-v1. Decimal cursors, revisions,
+// IDs and sequences stay strings across JavaScript transports.
+message DeliveryReadQuery {
+  int32 version = 1;
+  string scopeKey = 2;
+  string after = 3;
+  string pageToken = 4;
+  string projectionKey = 5;
+  string projectionRevision = 6;
+  string direction = 7;
+  string anchorDeliveryCursor = 8;
+  int32 limit = 9;
+  string throughOrdinal = 10;
+}
+message DeliveryReaderInfo {
+  int32 version = 1;
+  string scopeKey = 2;
+  string currentCursor = 3;
+  int64 serverNow = 4;
+  int32 maxPageItems = 5;
+  int32 maxChangeBytes = 6;
+  int32 maxMessageBytes = 7;
+  int32 maxWindowPages = 8;
+}
+message DeliveryConversationChange {
+  string projectionKey = 1;
+  string revision = 2;
+  string cursor = 3;
+  string visibility = 4;
+  string liveUnread = 5;
+  string storedUnread = 6;
+  string admittedOrdinal = 7;
+  string readOrdinal = 8;
+  int64 nextExpiryAt = 9;
+  string latestMessageId = 10;
+  string latestSequence = 11;
+  int64 latestMessageTime = 12;
+  int32 conversationType = 13;
+  string targetId = 14;
+}
+message DeliveryChangesResult {
+  int32 version = 1;
+  string scopeKey = 2;
+  string after = 3;
+  string upper = 4;
+  string scanCursor = 5;
+  string scanProjectionKey = 6;
+  string pageToken = 7;
+  bool windowComplete = 8;
+  bool caughtUp = 9;
+  int64 serverNow = 10;
+  repeated DeliveryConversationChange items = 11;
+}
+message DeliveryReadMessage {
+  string effectKey = 1;
+  string messageId = 2;
+  string sequence = 3;
+  string deliveryCursor = 4;
+  int64 messageTime = 5;
+  int64 expiresAt = 6;
+  string senderId = 7;
+  string targetId = 8;
+  int32 conversationType = 9;
+  string content = 10;
+  bool isSend = 11;
+  bool isRead = 12;
+  // Present only in explicitly negotiated reader-v2 responses.
+  string messageType = 13;
+}
+message DeliveryMessagesResult {
+  int32 version = 1;
+  string scopeKey = 2;
+  string projectionKey = 3;
+  string projectionRevision = 4;
+  string direction = 5;
+  string nextDeliveryCursor = 6;
+  bool finished = 7;
+  int64 serverNow = 8;
+  repeated DeliveryReadMessage items = 9;
+}
+message DeliveryReadCutResult {
+  int32 version = 1;
+  string scopeKey = 2;
+  string projectionKey = 3;
+  string projectionRevision = 4;
+  string throughOrdinal = 5;
+  string targetAdmittedOrdinal = 6;
+  string readOrdinal = 7;
+  string liveUnread = 8;
+  string storedUnread = 9;
+  int64 serverNow = 10;
+  bool complete = 11;
+}

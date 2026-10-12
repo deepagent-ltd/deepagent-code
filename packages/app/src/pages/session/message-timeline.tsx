@@ -78,6 +78,7 @@ import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { notifySessionTabsRemoved } from "@/components/titlebar-session-events"
 import { messageAgentColor } from "@/utils/agent"
+import { displayMessages } from "@/utils/message-display"
 import { sessionTitle } from "@/utils/session-title"
 import { formatDuration } from "@/utils/format-duration"
 import { makeTimer } from "@solid-primitives/timer"
@@ -539,7 +540,7 @@ export function MessageTimeline(props: {
   const sessionMessages = createMemo(() => {
     const id = sessionID()
     if (!id) return emptyMessages
-    return sync.data.message[id] ?? emptyMessages
+    return displayMessages(sync.data.message[id] ?? emptyMessages)
   })
   const messageByID = createMemo(() => new Map(sessionMessages().map((message) => [message.id, message] as const)))
   const sessionByID = createMemo(

@@ -2,7 +2,7 @@ export * as EventTurnRunner from "./event-turn-runner"
 
 import path from "node:path"
 import { and, eq, lt, sql } from "drizzle-orm"
-import { Duration, Effect, Exit, Option } from "effect"
+import { Cause, Duration, Effect, Exit, Option } from "effect"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { contentDigest } from "@deepagent-code/core/contract/digest"
 import type { Database } from "@deepagent-code/core/database/database"
@@ -18,10 +18,14 @@ import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
 import { cleanupAgentWorktree, createAgentWorktree } from "./agent-worktree"
+import { EventWorkDagSchema } from "@deepagent-code/core/deepagent/event-work-dag.schema"
+import type { EventWorkDagRuntime } from "./event-work-dag-runtime"
 import type { SubagentTurnInput, SubagentTurnResult, SubagentTurnRunner } from "./goal-loop-wiring"
 
 export interface Dependencies {
   readonly sessions: SessionV2.Interface
+  /** Original controller/node authority port. Production never enters ordinary child admission. */
+  readonly eventWorkDag?: EventWorkDagRuntime.Port
   readonly instanceStore: InstanceStore.Interface
   /** Production event DAGs require this durable receipt store; absent only in injected runner unit tests. */
   readonly db?: Database.Interface["db"]
@@ -90,6 +94,12 @@ export const makeEventTurnRunnerV2 =
   (deps: Dependencies): SubagentTurnRunner =>
   (input) =>
     Effect.gen(function* () {
+      if (deps.eventWorkDag) return yield* deps.eventWorkDag.run(input).pipe(Effect.catchCause((cause) => {
+        const error = Option.getOrUndefined(Cause.findErrorOption(cause))
+        if (error instanceof EventWorkDagSchema.Error) return Effect.succeed(failed(error.code === "EVENT_DAG_UNKNOWN"
+          ? "admission_recovery_required" : error.code === "EVENT_DAG_NOT_READY" ? "event_node_busy" : "event_node_authority_changed"))
+        return Effect.succeed(failed("admission_recovery_required"))
+      }))
       const ids = idsFor(input)
       if (!ids || !input.parentSessionID) return failed("runner_failed")
       // AgentExecution increments generation after an expired/released claim. Its new child ID

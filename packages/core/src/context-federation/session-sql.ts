@@ -20,9 +20,13 @@ export const SessionActivityTable = sqliteTable(
     state: text().$type<"active" | "settled" | "failed" | "interrupted">().notNull(),
     created_at: integer().notNull(),
     settled_at: integer(),
+    final_message_id: text(),
   },
   (table) => [
     uniqueIndex("session_activity_ordinal_idx").on(table.session_id, table.ordinal),
+    index("session_activity_attention_failed_idx")
+      .on(sql`coalesce(${table.settled_at}, ${table.created_at}) DESC`, table.activity_id)
+      .where(sql`${table.state} = 'failed'`),
     uniqueIndex("session_activity_active_idx")
       .on(table.session_id)
       .where(sql`${table.state} = 'active'`),

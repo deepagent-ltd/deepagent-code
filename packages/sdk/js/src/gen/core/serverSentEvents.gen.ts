@@ -138,7 +138,7 @@ export function createSseClient<TData = unknown>({
 
         const abortHandler = () => {
           try {
-            reader.cancel()
+            void reader.cancel().catch(() => undefined)
           } catch {
             // noop
           }

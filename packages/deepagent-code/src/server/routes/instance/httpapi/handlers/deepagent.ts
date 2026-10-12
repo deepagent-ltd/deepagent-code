@@ -6,12 +6,23 @@ import { readPinnedPacks, writePinnedPacks } from "@deepagent-code/core/deepagen
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { buildProfile } from "@/deepagent/profile-detector"
+import { HttpServerRequest } from "effect/unstable/http"
+import { ServerAuth } from "@/server/auth"
+import { LocationServiceMap } from "@deepagent-code/core/location-layer"
+import { GoalPlanRebaseHost } from "@/session/goal-plan-rebase"
+import { GoalPlanRebaseAccess } from "@/session/goal-plan-rebase-access"
+import { GoalPlanRebaseSchema } from "@deepagent-code/core/deepagent/goal-plan-rebase.schema"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Effect, Option, DateTime } from "effect"
 import { buildRunReview, listRunIds } from "@/deepagent/run-review"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { InstanceHttpApi } from "../api"
 import {
+  DeepAgentGoalControlConflict,
+  DeepAgentGoalRebaseUnauthorized,
+  DeepAgentGoalRebaseError,
+  DeepAgentGoalControlMissing,
+  DeepAgentGoalControlUnavailable,
   DeepAgentGoalPlanBusyError,
   DeepAgentGoalPlanChallengeError,
   DeepAgentGoalPlanConflictError,
@@ -32,6 +43,7 @@ import { Session } from "@/session/session"
 import { Agent } from "@/agent/agent"
 import { Provider } from "@/provider/provider"
 import { GoalManager } from "@/session/goal-manager"
+import { GoalControlSchema } from "@deepagent-code/core/deepagent/goal-control.schema"
 import { SessionID } from "@/session/schema"
 import { consultPanel } from "@/panel/consult"
 import { makeTaskSubagentRunner } from "@/session/goal-loop-wiring"
@@ -56,6 +68,18 @@ import {
   type PlanEditReceipt,
 } from "@deepagent-code/core/deepagent/plan-edit-protocol"
 import { SERVER_USER_ID } from "../utils/workspace-context"
+
+const mapGoalRebaseError = (error: GoalPlanRebaseSchema.Error) =>
+  ["AUTH_REQUIRED", "AUTH_CHANGED"].includes(error.code)
+    ? new DeepAgentGoalRebaseUnauthorized({ code: error.code, message: error.message })
+    : new DeepAgentGoalRebaseError({ code: error.code, message: error.message })
+
+const mapGoalControlError = (error: GoalControlSchema.Error) =>
+  error.code === "not_found"
+    ? new DeepAgentGoalControlMissing({ code: error.code, message: error.message })
+    : error.code === "unavailable"
+      ? new DeepAgentGoalControlUnavailable({ code: error.code, message: error.message })
+      : new DeepAgentGoalControlConflict({ code: error.code, message: error.message })
 
 export const mapGoalPlanError = (error: GoalManager.GoalPlanEditAdmissionError) => {
   if (error instanceof PlanValidationError) {
@@ -224,6 +248,8 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const v2Snapshot = yield* Snapshot.Service
     const goals = yield* GoalManager.Service
     const database = yield* Database.Service
+    const rebaseAuthConfig = yield* Effect.serviceOption(ServerAuth.Config)
+    const rebaseLocations = yield* Effect.serviceOption(LocationServiceMap)
     const locationIdentity = yield* LocationIdentity.Service
     // FEAT-003 — the §A2 bus packsPin/packsUnpin publish pack.changed onto. Available at this layer
     // (the route runtime provides DeepAgentEventBus.defaultLayer — same seam the IM handlers use).
@@ -961,10 +987,12 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     // The global Expert Panel default (§C): the effective armed state falls back to this when a session
     // has never explicitly toggled. Read from the first-party SettingsStore (expertPanelDefault).
     const expertPanelDefault = () =>
-      Effect.promise(() => SettingsStore.read()).pipe(Effect.map((s) => s.deepagent?.expertPanelDefault ?? false))
+      SettingsStore.readEffect.pipe(Effect.orDie).pipe(Effect.map((s) => s.deepagent?.expertPanelDefault ?? false))
 
     const panelArm = Effect.fn("DeepAgentHttpApi.panelArm")(function* (ctx) {
       const { sessionID, armed, rounds } = ctx.payload
+      if (armed && !flags.experimentalExpertPanel)
+        return yield* Effect.fail(new DeepAgentPromotionError({ message: "expert panel is disabled" }))
       AgentGateway.DeepAgentSessionState.setPanelArmed(sessionID, armed)
       // Persist the debate depth when arming (the three-state control's Single/Multi choice). On disarm
       // we leave the stored depth untouched so re-arming restores the user's last choice.
@@ -1011,29 +1039,82 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       const snapshot = yield* goals
         .start({
           sessionID: ctx.payload.sessionID,
+          requestID: ctx.payload.requestID,
           ...(ctx.payload.objective != null ? { objective: ctx.payload.objective } : {}),
           ...(criteria ? { criteria } : {}),
           ...(ctx.payload.limits ? { limits: ctx.payload.limits } : {}),
           ...(ctx.payload.stallThreshold != null ? { stallThreshold: ctx.payload.stallThreshold } : {}),
         })
-        .pipe(Effect.mapError((e) => new DeepAgentPromotionError({ message: e.reason })))
+        .pipe(
+          Effect.mapError((e) =>
+            e instanceof GoalControlSchema.Error
+              ? mapGoalControlError(e)
+              : new DeepAgentPromotionError({ message: e.reason }),
+          ),
+        )
       return snapshot
     })
 
     // The goal MUTATION handlers gate on experimentalGoalLoop too (defense-in-depth, matching goalStart):
-    // with the flag off no goal can be started, so these are already no-ops (getControl → null ⇒ ok:false),
-    // but gating here makes the posture explicit and uniform across the whole goal-lifecycle surface.
+    // Disabled mutation support is an explicit error; read-only status remains available for recovery.
     const goalPause = Effect.fn("DeepAgentHttpApi.goalPause")(function* (ctx) {
-      if (!flags.experimentalGoalLoop) return { ok: false }
-      return { ok: yield* goals.pause(ctx.payload.sessionID) }
+      if (!flags.experimentalGoalLoop)
+        return yield* new DeepAgentGoalControlConflict({ code: "unsupported", message: "Goal loop is disabled" })
+      return yield* goals.pause(ctx.payload).pipe(Effect.mapError(mapGoalControlError))
     })
     const goalResume = Effect.fn("DeepAgentHttpApi.goalResume")(function* (ctx) {
-      if (!flags.experimentalGoalLoop) return { ok: false }
-      return { ok: yield* goals.resume(ctx.payload.sessionID) }
+      if (!flags.experimentalGoalLoop)
+        return yield* new DeepAgentGoalControlConflict({ code: "unsupported", message: "Goal loop is disabled" })
+      return yield* goals.resume(ctx.payload).pipe(Effect.mapError(mapGoalControlError))
     })
     const goalStop = Effect.fn("DeepAgentHttpApi.goalStop")(function* (ctx) {
-      if (!flags.experimentalGoalLoop) return { ok: false }
-      return { ok: yield* goals.stop(ctx.payload.sessionID) }
+      if (!flags.experimentalGoalLoop)
+        return yield* new DeepAgentGoalControlConflict({ code: "unsupported", message: "Goal loop is disabled" })
+      return yield* goals.stop(ctx.payload).pipe(Effect.mapError(mapGoalControlError))
+    })
+    const rebaseAccess = Effect.gen(function* () {
+      if (!flags.experimentalGoalLoop)
+        return yield* new GoalPlanRebaseSchema.Error({ code: "UNAVAILABLE", message: "Goal loop is disabled" })
+      const config = rebaseAuthConfig
+      if (Option.isNone(config)) return yield* new GoalPlanRebaseSchema.Error({ code: "AUTH_REQUIRED", message: "Current server operator authentication is unavailable" })
+      return yield* GoalPlanRebaseAccess.authenticateOperator(config.value, yield* HttpServerRequest.HttpServerRequest)
+    })
+    const goalPlanRebaseBegin = Effect.fn("DeepAgentHttpApi.goalPlanRebaseBegin")(function* (ctx) {
+      const access = yield* rebaseAccess.pipe(Effect.mapError(mapGoalRebaseError))
+      return yield* GoalPlanRebaseHost.begin(ctx.payload, access).pipe(
+        (effect) => Option.isSome(rebaseLocations) ? Effect.provideService(effect, LocationServiceMap, rebaseLocations.value) : effect,
+        Effect.mapError(mapGoalRebaseError),
+      )
+    })
+    const goalPlanRebaseApply = Effect.fn("DeepAgentHttpApi.goalPlanRebaseApply")(function* (ctx) {
+      const access = yield* rebaseAccess.pipe(Effect.mapError(mapGoalRebaseError))
+      return yield* GoalPlanRebaseHost.apply(ctx.payload, access).pipe(
+        (effect) => Option.isSome(rebaseLocations) ? Effect.provideService(effect, LocationServiceMap, rebaseLocations.value) : effect,
+        Effect.mapError(mapGoalRebaseError),
+      )
+    })
+    const goalPlanRebaseCancel = Effect.fn("DeepAgentHttpApi.goalPlanRebaseCancel")(function* (ctx) {
+      const access = yield* rebaseAccess.pipe(Effect.mapError(mapGoalRebaseError))
+      return yield* GoalPlanRebaseHost.cancel(ctx.payload, access).pipe(
+        (effect) => Option.isSome(rebaseLocations) ? Effect.provideService(effect, LocationServiceMap, rebaseLocations.value) : effect,
+        Effect.mapError(mapGoalRebaseError),
+      )
+    })
+    const goalPlanRebaseGet = Effect.fn("DeepAgentHttpApi.goalPlanRebaseGet")(function* (ctx) {
+      const access = yield* rebaseAccess.pipe(Effect.mapError(mapGoalRebaseError))
+      return yield* GoalPlanRebaseHost.get({ ...ctx.query, editID: ctx.params.editID }, access).pipe(
+        (effect) => Option.isSome(rebaseLocations) ? Effect.provideService(effect, LocationServiceMap, rebaseLocations.value) : effect,
+        Effect.mapError(mapGoalRebaseError),
+      )
+    })
+    const goalPlanRebaseReconcile = Effect.fn("DeepAgentHttpApi.goalPlanRebaseReconcile")(function* (ctx) {
+      const access = yield* rebaseAccess.pipe(Effect.mapError(mapGoalRebaseError))
+      if (ctx.params.editID !== ctx.payload.editID)
+        return yield* new DeepAgentGoalRebaseError({ code: "TARGET_CONFLICT", message: "Path and payload edit IDs differ" })
+      return yield* GoalPlanRebaseHost.reconcile(ctx.payload, access).pipe(
+        (effect) => Option.isSome(rebaseLocations) ? Effect.provideService(effect, LocationServiceMap, rebaseLocations.value) : effect,
+        Effect.mapError(mapGoalRebaseError),
+      )
     })
     const goalEditPlan = Effect.fn("DeepAgentHttpApi.goalEditPlan")(function* (ctx) {
       if (!flags.experimentalGoalLoop) {
@@ -1063,7 +1144,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       return projectPlanReceipt(receipt)
     })
     const goalStatus = Effect.fn("DeepAgentHttpApi.goalStatus")(function* (ctx) {
-      return { goal: yield* goals.status(ctx.query.sessionID) }
+      return { goal: yield* goals.status(ctx.query.sessionID).pipe(Effect.mapError(mapGoalControlError)) }
     })
     const goalStartable = Effect.fn("DeepAgentHttpApi.goalStartable")(function* (ctx) {
       return yield* goals.startable(ctx.query.sessionID)
@@ -1229,6 +1310,11 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("goalPause", goalPause)
       .handle("goalResume", goalResume)
       .handle("goalStop", goalStop)
+      .handle("goalPlanRebaseBegin", goalPlanRebaseBegin)
+      .handle("goalPlanRebaseApply", goalPlanRebaseApply)
+      .handle("goalPlanRebaseCancel", goalPlanRebaseCancel)
+      .handle("goalPlanRebaseGet", goalPlanRebaseGet)
+      .handle("goalPlanRebaseReconcile", goalPlanRebaseReconcile)
       .handle("goalEditPlan", goalEditPlan)
       .handle("goalStatus", goalStatus)
       .handle("goalStartable", goalStartable)

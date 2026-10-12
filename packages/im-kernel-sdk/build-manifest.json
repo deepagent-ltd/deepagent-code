@@ -1,0 +1,141 @@
+{
+  "sourceCommit": "f69cbe450fc79fceac7ae24a54baee57f9b1a5c3",
+  "buildYear": 2026,
+  "files": [
+    {
+      "path": "lib/index.js",
+      "sha256": "de5c1b957905acce256ec353789ea28797b6cb1ef394d2a4fc06795d6a0ff178"
+    },
+    {
+      "path": "lib/index.d.ts",
+      "sha256": "0b4f2e5bc0459e75cb600e254bb2f2599c043732d4b54f9f767abc7f3a5bb477"
+    }
+  ],
+  "previousReviewedFiles": [
+    {
+      "path": "lib/index.js",
+      "sha256": "ae751d2c45aaa292f960786e0687a6f0c7807eaef3c3dc108931cb2a2c06c387"
+    },
+    {
+      "path": "lib/index.d.ts",
+      "sha256": "0b4f2e5bc0459e75cb600e254bb2f2599c043732d4b54f9f767abc7f3a5bb477"
+    }
+  ],
+  "protocols": [
+    "receipt-v1",
+    "reader-v1",
+    "reader-v2",
+    "mysql-protected-media-v1",
+    "protected-live-origin-v1",
+    "protected-current-link-v1",
+    "dac-media-resumable-v1",
+    "protected-live-read-v1",
+    "protected-live-receiver-baseline-v1"
+  ],
+  "defaultProtectedMedia": false,
+  "reviewedFileHistory": [
+    {
+      "files": [
+        {
+          "path": "lib/index.js",
+          "sha256": "a2b90064b57e8e27269cd4ae3da121b549d2e81db4b1cccb7d3f0c6e924215ef"
+        },
+        {
+          "path": "lib/index.d.ts",
+          "sha256": "e4a11aefc8761508f77567a2693c30a13c8cfaa57246c13bc2268b9a56884769"
+        }
+      ],
+      "protocols": [
+        "receipt-v1",
+        "reader-v1",
+        "reader-v2",
+        "mysql-protected-media-v1",
+        "protected-live-origin-v1"
+      ]
+    },
+    {
+      "files": [
+        {
+          "path": "lib/index.js",
+          "sha256": "545d31a9b48084328329c85f2652be72701ac3c8e4f1daa067ed70dd3107f40a"
+        },
+        {
+          "path": "lib/index.d.ts",
+          "sha256": "79c5424beb715ba6d0d55bd92cb29b62322d971e2840976b1752d06f100b85b2"
+        }
+      ],
+      "protocols": [
+        "receipt-v1",
+        "reader-v1",
+        "reader-v2",
+        "mysql-protected-media-v1",
+        "protected-live-origin-v1"
+      ]
+    },
+    {
+      "files": [
+        {
+          "path": "lib/index.js",
+          "sha256": "1c78f33afca112366affd3888f6de0ce055b0bc005959501414245e35757e1e0"
+        },
+        {
+          "path": "lib/index.d.ts",
+          "sha256": "60a08b2dee254b9d3460e804143314a43854a9dac721c758dbf55c114d662708"
+        }
+      ],
+      "note": "Prior reviewed bytes retained when enabling independent resumable transfer capability"
+    },
+    {
+      "files": [
+        {
+          "path": "lib/index.js",
+          "sha256": "fd1606e1840f252fe425025494ea88cf681a610155d9456ec04e34e164cfb952"
+        },
+        {
+          "path": "lib/index.d.ts",
+          "sha256": "e8f72bb6796c6858be974cca95a6de67067692df73d86ad79bfb7d0b58edb815"
+        }
+      ],
+      "note": "Prior reviewed bytes retained before protected current-connection live-read v1"
+    },
+    {
+      "files": [
+        {
+          "path": "lib/index.js",
+          "sha256": "7960fc5fabcc9c160a67d921efbffb62ef31e2a629aa689a0875b5e1115246ce"
+        },
+        {
+          "path": "lib/index.d.ts",
+          "sha256": "09cf023f32963df83770174bd236dc0a01d34729f4187d6b814c4c8edae98026"
+        }
+      ],
+      "note": "Prior reviewed bytes retained before original receiver-connection acceptance baseline and first-projection proof"
+    },
+    {
+      "files": [
+        {
+          "path": "lib/index.js",
+          "sha256": "063fe04c4e88a3e29e5969cd6e07e740772a7354a4a5aed97021c146d17710ef"
+        },
+        {
+          "path": "lib/index.d.ts",
+          "sha256": "0b4f2e5bc0459e75cb600e254bb2f2599c043732d4b54f9f767abc7f3a5bb477"
+        }
+      ],
+      "note": "Prior reviewed receiver baseline bytes retained before cap2 text reader selection independent of media rollout"
+    },
+    {
+      "files": [
+        {
+          "path": "lib/index.js",
+          "sha256": "ae751d2c45aaa292f960786e0687a6f0c7807eaef3c3dc108931cb2a2c06c387"
+        },
+        {
+          "path": "lib/index.d.ts",
+          "sha256": "0b4f2e5bc0459e75cb600e254bb2f2599c043732d4b54f9f767abc7f3a5bb477"
+        }
+      ],
+      "note": "Intermediate cap2 text-reader request bytes retained before matching the shared reader admission guard; not a functional qualification"
+    }
+  ]
+}

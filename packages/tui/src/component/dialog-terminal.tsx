@@ -63,7 +63,7 @@ export function DialogTerminal() {
       value: item.id,
       category: "PTY",
       footer: item.createdAt ? Locale.time(new Date(item.createdAt).getTime()) : "",
-    }))
+    })).concat(items.loading || items.latest?.length ? [] : [{ title: i18n.t("tui.terminal.new"), value: "", category: "PTY", footer: "" }])
 
   onMount(() => {
     dialog.setSize("large")
@@ -74,7 +74,8 @@ export function DialogTerminal() {
       title={i18n.t("tui.terminal.title")}
       options={options()}
       current={undefined}
-      onSelect={() => {}}
+      locked={busy()}
+      onSelect={(option) => { if (!option.value) void create() }}
       actions={[
         {
           command: "terminal.create",
@@ -86,6 +87,7 @@ export function DialogTerminal() {
         {
           command: "terminal.attach",
           title: i18n.t("tui.terminal.attach"),
+          disabled: (option) => !option?.value,
           onTrigger: () => {
             dialog.replace(() => (
               <DialogAlert title={i18n.t("tui.terminal.attach")} message={i18n.t("tui.terminal.attachHint")} />
@@ -95,6 +97,7 @@ export function DialogTerminal() {
         {
           command: "terminal.remove",
           title: i18n.t("tui.terminal.remove"),
+          disabled: (option) => !option?.value,
           onTrigger: (option: { value: string }) => {
             void remove(String(option.value))
           },

@@ -1,11 +1,11 @@
-// §16.5 API-APP-PACKAGE P3 — V2 durable event → app notification mapping. The notification
-// feed currently listens to the volatile GlobalBus (serverSDK.event.listen, session.idle /
-// session.error). The durable replacement replays a session's V2 event journal via the P2
-// cursor primitive; this module is the single mapping source from V2 journal events to the app
-// notification semantics so the wiring layer never re-derives the vocabulary.
+// V2 durable event → app notification mapping. The notification feed drains each
+// session's journal through the cursor subscription; this is the single mapping
+// source so the wiring layer does not re-derive terminal notification semantics.
 //
-// V2 has no session.idle: a settled execution (succeeded / interrupted) is the durable idle
-// signal; session.execution.failed carries the structured error payload.
+// Only a succeeded execution may enter the completion-notification path. Interrupted
+// executions (user stop, shutdown, superseded) still advance the journal cursor, but do
+// not announce a ready response or fabricate an error for a deliberate cancellation.
+// session.execution.failed carries the structured error payload.
 //
 // Journal row types are VERSIONED (`EventTable.type` = `session.execution.succeeded.1`): the
 // suffix is stripped here (`eventBaseType`) so the same vocabulary matches both the SSE mirror
@@ -22,8 +22,7 @@ export type NotificationEvent = {
 export const toNotificationEvent = (type: string, data: Record<string, unknown>): NotificationEvent | undefined => {
   const sessionID = typeof data.sessionID === "string" ? data.sessionID : undefined
   const baseType = eventBaseType(type)
-  if (baseType === "session.execution.succeeded" || baseType === "session.execution.interrupted")
-    return { type: "session.idle", sessionID }
+  if (baseType === "session.execution.succeeded") return { type: "session.idle", sessionID }
   if (baseType === "session.execution.failed") {
     const error = data.error as { readonly message?: unknown } | undefined
     const message =

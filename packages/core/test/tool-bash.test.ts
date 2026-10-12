@@ -2,7 +2,7 @@ import fs from "fs/promises"
 import { realpathSync } from "node:fs"
 import path from "path"
 import { describe, expect, test } from "bun:test"
-import { Duration, Effect, Layer } from "effect"
+import { Deferred, Duration, Effect, Fiber, Layer } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Config } from "@deepagent-code/core/config"
@@ -14,6 +14,7 @@ import { Wildcard } from "@deepagent-code/core/util/wildcard"
 import { AppProcess } from "@deepagent-code/core/process"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { CurrentToolExecution } from "@deepagent-code/core/session/runner/current-tool-execution"
 import { BashTool } from "@deepagent-code/core/tool/bash"
 import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { location } from "./fixture/location"
@@ -162,6 +163,87 @@ const call = (input: typeof BashTool.Input.Type, id = "call-bash") => ({
 const it = testEffect(Layer.empty)
 
 describe("BashTool", () => {
+  it.live("records only the original builtin pre-effect permission cancellation within its live scope", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const input = call({ command: "printf never-dispatched", description: "Await approval" })
+        const context = { sessionID, ...toolIdentity, toolCallID: input.call.id }
+        const admission = { admissionId: "admission-original", sessionId: sessionID, providerAttemptId: "attempt-original",
+          receiptId: "receipt-original", toolCallId: input.call.id, toolName: "bash", effectKind: "mutating" as const,
+          ownerToken: "owner-original", timeCreated: Date.now() }
+        return withTool(tmp.path, (registry) => Effect.gen(function* () {
+          const materialization = yield* registry.materialize()
+          const builtin = ToolRegistry.inspect(materialization, "bash")?.tool
+          expect(BashTool.isBuiltin(builtin)).toBe(true)
+          expect(BashTool.isBuiltin(builtin && Object.freeze({ ...builtin }))).toBe(false)
+          const waiting = yield* Deferred.make<void>()
+          afterPermission = () => Deferred.succeed(waiting, undefined).pipe(Effect.andThen(Effect.never))
+          const result = { cancelled: false, witness: undefined as CurrentToolExecution.PermissionCancellation | undefined }
+          const fiber = yield* CurrentToolExecution.withPermissionCancellation(admission, context, (witness) => {
+            result.witness = witness
+            return settleTool(registry, input).pipe(Effect.onInterrupt(() => Effect.sync(() => {
+              result.cancelled = CurrentToolExecution.cancelledBeforeEffect(witness)
+            })))
+          }).pipe(Effect.forkChild)
+          yield* Deferred.await(waiting)
+          yield* Fiber.interrupt(fiber)
+          expect(result.cancelled).toBe(true)
+          expect(runs).toEqual([])
+          expect(CurrentToolExecution.cancelledBeforeEffect(result.witness!)).toBe(false)
+          expect(CurrentToolExecution.cancelledBeforeEffect(Object.freeze({}) as CurrentToolExecution.PermissionCancellation)).toBe(false)
+          expect((yield* CurrentToolExecution.withPermissionCancellation({ ...admission, toolName: "read" }, context,
+            () => Effect.void).pipe(Effect.exit))._tag).toBe("Failure")
+        }))
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("does not certify a foreign wait or interruption after the actual shell has started", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const input = call({ command: "printf started > marker.txt; sleep 30", description: "Known process start" })
+        const context = { sessionID, ...toolIdentity, toolCallID: input.call.id }
+        const admission = { admissionId: "admission-process", sessionId: sessionID, providerAttemptId: "attempt-process",
+          receiptId: "receipt-process", toolCallId: input.call.id, toolName: "bash", effectKind: "mutating" as const,
+          ownerToken: "owner-process", timeCreated: Date.now() }
+        return withTool(tmp.path, (registry) => Effect.gen(function* () {
+          const result = { cancelled: true }
+          const fiber = yield* CurrentToolExecution.withPermissionCancellation(admission, context, (witness) =>
+            settleTool(registry, input).pipe(Effect.onInterrupt(() => Effect.sync(() => {
+              result.cancelled = CurrentToolExecution.cancelledBeforeEffect(witness)
+            }))),
+          ).pipe(Effect.forkChild)
+          yield* Effect.promise(async () => {
+            const deadline = Date.now() + 5000
+            while (!await Bun.file(path.join(tmp.path, "marker.txt")).exists()) {
+              if (Date.now() >= deadline) throw new Error("Original shell did not start")
+              await Bun.sleep(10)
+            }
+          })
+          yield* Fiber.interrupt(fiber)
+          expect(result.cancelled).toBe(false)
+          expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "marker.txt"), "utf8")))
+            .toBe("started")
+          const waiting = yield* Deferred.make<void>()
+          const foreign = yield* CurrentToolExecution.withPermissionCancellation(admission, context, (witness) => Effect.gen(function* () {
+            const child = yield* CurrentToolExecution.beforeEffectPermission({ ...context, toolCallID: "foreign-call" },
+              Deferred.succeed(waiting, undefined).pipe(Effect.andThen(Effect.never))).pipe(Effect.forkChild)
+            yield* Deferred.await(waiting)
+            yield* Fiber.interrupt(child)
+            return CurrentToolExecution.cancelledBeforeEffect(witness)
+          }))
+          expect(foreign).toBe(false)
+        }), AppProcess.defaultLayer)
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
   it.live("registers and returns structured successful output from the active Location", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

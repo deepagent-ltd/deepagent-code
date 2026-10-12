@@ -10,17 +10,7 @@
  *   - GET /profile/hotspots  — 热点函数列表
  *   - GET /profile/result    — 完整 PROFILE_RESULT.json
  */
-import {
-  For,
-  Match,
-  Show,
-  Switch,
-  batch,
-  createSignal,
-  onCleanup,
-  onMount,
-  type Component,
-} from "solid-js"
+import { For, Match, Show, Switch, batch, createSignal, onCleanup, onMount, type Component } from "solid-js"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Icon } from "@deepagent-code/ui/icon"
 import { useServerSDK } from "@/context/server-sdk"
@@ -121,9 +111,7 @@ const MetricCards: Component<{
         {(key) => (
           <div class="flex flex-col gap-0.5 min-w-[7rem] rounded-md bg-surface-base px-3 py-2">
             <span class="text-10-regular text-text-weaker truncate">{labelForKey(key)}</span>
-            <span class="text-14-medium text-text-strong font-mono">
-              {formatMetricValue(props.summary[key])}
-            </span>
+            <span class="text-14-medium text-text-strong font-mono">{formatMetricValue(props.summary[key])}</span>
           </div>
         )}
       </For>
@@ -164,7 +152,7 @@ const HotspotTable: Component<{
 }> = (props) => {
   const diffMap = () => {
     const m = new Map<string, HotspotDiff>()
-    for (const d of (props.diff ?? [])) m.set(d.name, d)
+    for (const d of props.diff ?? []) m.set(d.name, d)
     return m
   }
 
@@ -196,9 +184,7 @@ const HotspotTable: Component<{
                   classList={{ "bg-surface-base-active": idx() === 0 }}
                 >
                   <td class="px-3 py-1 max-w-[10rem]">
-                    <span class={`text-12-regular text-text-strong truncate block ${diffClass()}`}>
-                      {row.name}
-                    </span>
+                    <span class={`text-12-regular text-text-strong truncate block ${diffClass()}`}>{row.name}</span>
                     <span class="text-10-regular text-text-weaker font-mono">{pctBar(row.selfPct)}</span>
                   </td>
                   <td class="px-2 py-1 max-w-[8rem]">
@@ -216,9 +202,7 @@ const HotspotTable: Component<{
                   <td class="px-2 py-1 text-right text-12-medium text-text-strong font-mono">
                     {row.selfPct.toFixed(1)}%
                   </td>
-                  <td class="px-2 py-1 text-right text-12-regular text-text font-mono">
-                    {row.cumulPct.toFixed(1)}%
-                  </td>
+                  <td class="px-2 py-1 text-right text-12-regular text-text font-mono">{row.cumulPct.toFixed(1)}%</td>
                   <td class="px-2 py-1 text-right text-12-regular text-text font-mono">
                     {row.calls >= 0 ? row.calls.toLocaleString() : "—"}
                   </td>
@@ -290,7 +274,7 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
         await loadArtifact(runId)
       } else if (data?.status === "error") {
         setError(data.error ?? "run failed")
-        setRuns((prev) => prev.map((r) => r.runId === runId ? { ...r, status: "error", error: data.error } : r))
+        setRuns((prev) => prev.map((r) => (r.runId === runId ? { ...r, status: "error", error: data.error } : r)))
       }
     } catch {
       // tolerate
@@ -357,9 +341,7 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
       const data = (res as any)?.data as RunEntry | undefined
       if (data?.runId) {
         await loadRuns()
-        setSelectedRunId(data.runId)
-        setHotspots([])
-        setArtifact(undefined)
+        await selectRun(data.runId)
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "launch failed")
@@ -379,7 +361,9 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
   // ── lifecycle ─────────────────────────────────────────────────────────────
   onMount(() => {
     void loadRuns()
-    pollTimer = setInterval(() => { void pollSelectedRun() }, POLL_INTERVAL_MS)
+    pollTimer = setInterval(() => {
+      void pollSelectedRun()
+    }, POLL_INTERVAL_MS)
   })
 
   onCleanup(() => {
@@ -422,7 +406,9 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
               placeholder="命令（如 python train.py）"
               value={program()}
               onInput={(e) => setProgram(e.currentTarget.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") void launchRun() }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void launchRun()
+              }}
               aria-label="剖析命令"
             />
             <button
@@ -448,10 +434,14 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
               <select
                 class="flex-1 min-w-0 bg-surface-base rounded px-2 py-1 text-12-regular text-text outline-none border border-border-weaker-base"
                 value={selectedRunId() ?? ""}
-                onChange={(e) => { if (e.currentTarget.value) void selectRun(e.currentTarget.value) }}
+                onChange={(e) => {
+                  if (e.currentTarget.value) void selectRun(e.currentTarget.value)
+                }}
                 aria-label="历史运行"
               >
-                <option value="" disabled>选择历史运行</option>
+                <option value="" disabled>
+                  选择历史运行
+                </option>
                 <For each={runs()}>
                   {(r) => (
                     <option value={r.runId}>
@@ -471,9 +461,7 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
           </div>
         </Show>
         <Show when={error()}>
-          <div class="px-3 py-2 text-12-regular text-red-400 bg-red-950/20 mx-3 my-1 rounded">
-            {error()}
-          </div>
+          <div class="px-3 py-2 text-12-regular text-red-400 bg-red-950/20 mx-3 my-1 rounded">{error()}</div>
         </Show>
 
         {/* ── Roofline badge ── */}
@@ -481,7 +469,10 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
           {(rf) => (
             <div class="mx-3 mt-2 px-2 py-1 rounded bg-surface-base text-11-regular text-text-weak" title={rf().detail}>
               <span class="font-medium text-text">{rf().bound}</span>
-              <span class="ml-1 text-text-weaker">— {rf().detail.slice(0, 80)}{rf().detail.length > 80 ? "…" : ""}</span>
+              <span class="ml-1 text-text-weaker">
+                — {rf().detail.slice(0, 80)}
+                {rf().detail.length > 80 ? "…" : ""}
+              </span>
             </div>
           )}
         </Show>
@@ -495,9 +486,7 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
         </Show>
 
         {/* ── DiffBadge ── */}
-        <Show when={diff()}>
-          {(d) => <DiffBadge diff={d()} />}
-        </Show>
+        <Show when={diff()}>{(d) => <DiffBadge diff={d()} />}</Show>
 
         {/* ── HotspotTable ── */}
         <Show when={hotspots().length > 0 || loadingHotspots()}>
@@ -508,11 +497,7 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
                 <div class="px-3 py-2 text-12-regular text-text-weak">加载中…</div>
               </Match>
               <Match when={true}>
-                <HotspotTable
-                  hotspots={hotspots()}
-                  diff={diff()?.hotspots}
-                  onNavigate={handleNavigate}
-                />
+                <HotspotTable hotspots={hotspots()} diff={diff()?.hotspots} onNavigate={handleNavigate} />
               </Match>
             </Switch>
           </div>

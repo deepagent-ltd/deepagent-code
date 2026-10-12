@@ -1,5 +1,7 @@
 import { Effect } from "effect"
 import { InstanceState } from "@/effect/instance-state"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 
 /**
  * The identity of the acting principal for IM operations.
@@ -43,3 +45,23 @@ export function getWorkspaceContext(_query?: unknown) {
     return { workspaceID, directory, userID: SERVER_USER_ID }
   })
 }
+
+/** Preserve the instance loader's decode-then-resolve rule for routed directories. */
+export function resolveRoutedDirectory(input: string) {
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(input)
+    } catch {
+      return input
+    }
+  })()
+  return FSUtil.resolve(decoded)
+}
+
+/** Historical task management uses the authenticated router placement, without
+ * booting plugins or an execution-capable instance to read or reduce authority. */
+export const getTaskManagementContext = Effect.gen(function* () {
+  const route = yield* WorkspaceRouteContext
+  const directory = resolveRoutedDirectory(route.directory)
+  return { directory, workspaceID: route.workspaceID ?? directory, userID: SERVER_USER_ID }
+})

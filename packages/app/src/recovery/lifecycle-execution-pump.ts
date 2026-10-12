@@ -57,12 +57,18 @@ export type ExecutionJournalRow = {
 /** Structural view of the generated client.context drain surface (supertype-compatible). */
 export type ExecutionJournalClient = {
   readonly context: {
-    eventsCursor(parameters: { session_id: string }): Promise<{
+    eventsCursor(
+      parameters: { session_id: string },
+      options?: { signal?: AbortSignal },
+    ): Promise<{
       data?: { watermark?: number; cursor?: number; floor?: number }
       error?: unknown
       response?: Response
     }>
-    events(parameters: { session_id: string; after: string; limit?: string }): Promise<{
+    events(
+      parameters: { session_id: string; after: string; limit?: string },
+      options?: { signal?: AbortSignal },
+    ): Promise<{
       data?: { events?: ExecutionJournalRow[]; nextCursor?: number; floor?: number }
       error?: unknown
       response?: Response
@@ -88,7 +94,11 @@ export type ExecutionJournalHandlers = {
    * execution summary for this session resumes from `floor`. This is the authoritative compact
    * contract (never a re-read storm); the notice exists so UI/log consumers can surface it
    * ("session history compressed, execution summary resumes from X"). */
-  readonly onResync?: (info: { readonly sessionID: string; readonly fromSeq: number | undefined; readonly floor: number }) => void
+  readonly onResync?: (info: {
+    readonly sessionID: string
+    readonly fromSeq: number | undefined
+    readonly floor: number
+  }) => void
 }
 
 const payloadOf = (event: ExecutionEventInput): Record<string, unknown> | undefined => {
@@ -170,11 +180,17 @@ export const createExecutionJournalSubscription = (
     readonly sessionIDs: () => readonly string[]
     readonly lifecycle: RecoveryLifecycle
     readonly handlers?: ExecutionJournalHandlers
+    readonly active?: (sessionID: string) => boolean
+    readonly subscribeHint?: (hint: (sessionID?: string) => void) => () => void
   },
   pollMs = POLL_MS,
 ): { readonly refresh: (force?: boolean) => void; readonly dispose: () => void } => {
   const cancelled = new Set<string>()
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
+  const requests = new Map<string, AbortController>()
+  const kicks = new Map<string, () => void>()
+  const visible = () => typeof document === "undefined" || document.visibilityState !== "hidden"
+  let disposed = false
   // W9.6 — WRITE-THROUGH anchor map: every consumed seq (initial watermark anchor, 410 floor
   // re-anchor, and each drained row) is stored here. `rebuild()` seeds a surviving session's loop
   // FROM this map, so a session-set change or session switch resumes from the last seen seq
@@ -203,8 +219,8 @@ export const createExecutionJournalSubscription = (
     }
   }
 
-  const readAnchor = async (sessionID: string, kind: "watermark" | "floor"): Promise<number> => {
-    const cursor = await input.client.context.eventsCursor({ session_id: sessionID })
+  const readAnchor = async (sessionID: string, kind: "watermark" | "floor", signal: AbortSignal): Promise<number> => {
+    const cursor = await input.client.context.eventsCursor({ session_id: sessionID }, { signal })
     if (cursor.error) throw cursor.error
     const anchor = kind === "floor" ? cursor.data?.floor : cursor.data?.watermark
     return typeof anchor === "number" ? anchor : 0
@@ -214,6 +230,24 @@ export const createExecutionJournalSubscription = (
     const myGeneration = generation
     let lastSeq = seedSeq
     let gapResync = false
+    const owner = { active: false, pending: false, delay: pollMs, nextAt: 0 }
+    const current = () => !disposed && !cancelled.has(sessionID) && myGeneration === generation
+    const schedule = (delay: number) => {
+      clearTimeout(timers.get(sessionID))
+      timers.delete(sessionID)
+      if (!current() || !visible()) return
+      timers.set(
+        sessionID,
+        setTimeout(() => void tick(), delay),
+      )
+    }
+    const kick = () => {
+      if (!current()) return
+      owner.pending = true
+      owner.delay = pollMs
+      if (!owner.active) schedule(Math.max(0, owner.nextAt - performance.now()))
+    }
+    kicks.set(sessionID, kick)
 
     // Write through to the shared anchor map: every consumed position (initial watermark, 410
     // floor re-anchor, each drained row) becomes the rebuild seed for this session.
@@ -252,12 +286,22 @@ export const createExecutionJournalSubscription = (
     }
 
     const tick = async () => {
-      if (cancelled.has(sessionID) || myGeneration !== generation) return
+      if (!current()) return
+      if (!visible() || owner.active) {
+        owner.pending = true
+        return
+      }
+      owner.active = true
+      owner.pending = false
+      owner.nextAt = performance.now() + pollMs
+      const abort = new AbortController()
+      requests.set(sessionID, abort)
+      const result = { fresh: false, successful: false }
       try {
         let anchor: number
         if (gapResync) {
           const fromSeq = lastSeqs.get(sessionID)
-          anchor = await readAnchor(sessionID, "floor")
+          anchor = await readAnchor(sessionID, "floor", abort.signal)
           // W15 (P1): a rebuild may land while this floor read was in flight. An old-generation
           // tick must never `advance` into the SHARED anchor map — that would overwrite the new
           // loop's seeded position (e.g. 50) with the stale floor (45) and replay the already
@@ -271,7 +315,7 @@ export const createExecutionJournalSubscription = (
           // the JOURNAL's own compaction and the summary continues from the retained floor.
           input.handlers?.onResync?.({ sessionID, fromSeq, floor: anchor })
         } else if (lastSeq === undefined) {
-          anchor = await readAnchor(sessionID, "watermark")
+          anchor = await readAnchor(sessionID, "watermark", abort.signal)
           if (cancelled.has(sessionID) || myGeneration !== generation) return
           advance(anchor)
           input.handlers?.onAnchor?.(sessionID)
@@ -279,7 +323,14 @@ export const createExecutionJournalSubscription = (
           anchor = lastSeq
           advance(anchor)
         }
-        const drain = await input.client.context.events({ session_id: sessionID, after: String(anchor) })
+        if (!visible()) {
+          owner.pending = true
+          return
+        }
+        const drain = await input.client.context.events(
+          { session_id: sessionID, after: String(anchor) },
+          { signal: abort.signal },
+        )
         // A rebuild may have replaced this loop while the poll was in flight: an old-generation
         // tick must never deliver (double delivery = phantom turn), never clear the new loop's
         // anchor, and never flip connectivity it no longer owns. The new loop was seeded from
@@ -292,6 +343,7 @@ export const createExecutionJournalSubscription = (
           for (const row of drain.data?.events ?? []) {
             if (row.seq <= seen) continue // duplicate absorption (seq-dedupe)
             seen = row.seq
+            result.fresh = true
             advance(row.seq)
             input.handlers?.onJournalEvent?.(sessionID, row)
             const mapped = toLifecycleEvent({ type: row.type, data: row.data })
@@ -299,33 +351,40 @@ export const createExecutionJournalSubscription = (
             input.lifecycle.onEvent(mapped)
             input.handlers?.onEvent?.()
           }
+          result.successful = true
           markRecovered(sessionID)
         }
       } catch (error) {
         // W15 (P1): a stale tick's failed read must not flip connectivity the new loop owns
         // (same post-await guard as the advance/onResync path above).
-        if (cancelled.has(sessionID) || myGeneration !== generation) return
+        if (!current() || !visible()) return
         handleError(error)
       } finally {
-        if (!cancelled.has(sessionID) && myGeneration === generation) {
-          timers.set(
-            sessionID,
-            setTimeout(() => void tick(), pollMs),
-          )
+        owner.active = false
+        if (requests.get(sessionID) === abort) requests.delete(sessionID)
+        if (current()) {
+          const running = input.active?.(sessionID) || !!input.lifecycle.snapshot().sessions.get(sessionID)?.execution
+          owner.delay = result.fresh || running ? pollMs : Math.min(30_000, owner.delay * 2)
+          if (!result.successful && visible() && !abort.signal.aborted) owner.pending = false
+          schedule(owner.pending ? Math.max(0, owner.nextAt - performance.now()) : owner.delay)
         }
       }
     }
-    timers.set(sessionID, setTimeout(() => void tick(), 0))
+    schedule(0)
   }
 
   const rebuild = () => {
     generation += 1
+    for (const abort of requests.values()) abort.abort()
+    requests.clear()
+    kicks.clear()
     for (const timer of timers.values()) clearTimeout(timer)
     timers.clear()
     for (const sessionID of sessionIDs) startLoop(sessionID, lastSeqs.get(sessionID))
   }
 
   const refresh = (force = false) => {
+    if (disposed) return
     const next = input.sessionIDs()
     const changed = force || next.length !== sessionIDs.length || !next.every((id) => sessionIDs.includes(id))
     if (!changed) return
@@ -333,7 +392,32 @@ export const createExecutionJournalSubscription = (
     rebuild()
   }
 
+  const visibility = () => {
+    if (visible()) {
+      for (const kick of kicks.values()) kick()
+      return
+    }
+    for (const timer of timers.values()) clearTimeout(timer)
+    timers.clear()
+    for (const abort of requests.values()) abort.abort()
+  }
+  const unsubscribe = input.subscribeHint?.((sessionID) => {
+    if (sessionID !== undefined) {
+      kicks.get(sessionID)?.()
+      return
+    }
+    for (const kick of kicks.values()) kick()
+  })
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", visibility)
   const dispose = () => {
+    if (disposed) return
+    disposed = true
+    generation++
+    unsubscribe?.()
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", visibility)
+    for (const abort of requests.values()) abort.abort()
+    requests.clear()
+    kicks.clear()
     for (const sessionID of sessionIDs) cancelled.add(sessionID)
     for (const timer of timers.values()) clearTimeout(timer)
     timers.clear()

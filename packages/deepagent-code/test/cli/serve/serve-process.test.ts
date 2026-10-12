@@ -120,7 +120,7 @@ describe("deepagentCode serve (subprocess)", () => {
           }
           throw new Error("server.json was not written within 5s of listening")
         })
-        expect(registration.url).toBe(server.url)
+        expect(new URL(registration.url).href).toBe(new URL(server.url).href)
         expect(registration.pid).toBeGreaterThan(0)
         expect(registration.id).toBeTruthy()
         expect(registration.version).toBeTruthy()

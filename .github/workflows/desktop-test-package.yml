@@ -1,0 +1,275 @@
+name: desktop-test-package
+
+# Test artifacts only. This workflow never publishes a Release, imports certificates,
+# requests signing secrets, or deletes another run's artifacts.
+on:
+  workflow_call:
+    inputs:
+      platforms:
+        description: Native platforms to build
+        type: string
+        default: all
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: Native platforms to build
+        type: choice
+        default: all
+        options: [all, mac, linux, windows]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-test-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: macos-15
+            target: darwin-arm64
+            group: mac
+            flags: --mac dmg zip --arm64
+          - host: macos-15-intel
+            target: darwin-x64
+            group: mac
+            flags: --mac dmg zip --x64
+          - host: ubuntu-24.04
+            target: linux-x64
+            group: linux
+            flags: --linux deb --x64
+          - host: windows-2025
+            target: win32-x64
+            group: windows
+            flags: --win nsis --x64
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 60
+    env:
+      DEEPAGENT_CODE_ALLOW_UNSIGNED: "1"
+      DEEPAGENT_CODE_CHANNEL: dev
+      DEEPAGENT_CODE_VERSION: "0.0.0-dev-203.${{ github.run_id }}.${{ github.run_attempt }}"
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      DEEPAGENT_CODE_BUILD_LINUX_NATIVE_ASSETS: ${{ matrix.group == 'linux' && '1' || '' }}
+    steps:
+      - name: Preserve frozen source bytes on checkout
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        shell: bash
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+      - uses: ./.github/actions/setup-bun
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: ${{ matrix.target == 'darwin-arm64' && '1' || '' }}
+      - uses: actions/setup-node@v4
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        with:
+          node-version: "24"
+      - name: Rebuild the locked IM transport SDK and verify reviewed bytes
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        shell: bash
+        run: |
+          npm ci --ignore-scripts --prefix packages/im-kernel-sdk/upstream
+          bun run --cwd packages/im-kernel-sdk build
+      - name: Verify this runner uses the frozen complete source candidate
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        shell: bash
+        run: |
+          bun -e 'await Bun.write(process.env.RUNNER_TEMP + "/dac-source-roots.json", JSON.stringify({ dac: process.cwd() }))'
+          bun ./scripts/materialize-source-closure.ts --manifest release/source-closure/2.0.3-acceptance-20261012/manifest.json --out "$RUNNER_TEMP/dac-source-check-only" --roots "$RUNNER_TEMP/dac-source-roots.json" --check --require dac,kernel,platform
+      - name: Verify the internal QA publisher and fixed artifact guard module
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        working-directory: packages/desktop
+        run: bun test ./scripts/test-native-publisher.test.ts
+      - name: Prepare this job's private internal Native QA publisher
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        env:
+          DAC_TEST_PACKAGE_TARGET: ${{ matrix.target }}
+        run: bun ./packages/desktop/scripts/test-native-publisher.ts prepare
+      - name: Complete macOS ARM Electron download
+        if: (inputs.platforms == 'all' || inputs.platforms == matrix.group) && matrix.target == 'darwin-arm64'
+        working-directory: packages/desktop
+        run: node node_modules/electron/install.js
+      - name: Verify native Linux build tools
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        shell: bash
+        run: |
+          bun --version
+          node --version
+          # Template substitutions belong to JavaScript, not the shell.
+          # shellcheck disable=SC2016
+          bun -e 'if (`${process.platform}-${process.arch}` !== process.env.DAC_BUILD_TARGET) throw new Error("Test package runner is not the requested native target")'
+          if [ "$DAC_BUILD_GROUP" = "linux" ]; then
+            cargo --version
+            /usr/bin/readelf --version
+          fi
+        env:
+          DAC_BUILD_GROUP: ${{ matrix.group }}
+          DAC_BUILD_TARGET: ${{ matrix.target }}
+      - name: Build current Desktop
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        working-directory: packages/desktop
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: bun run build
+      - name: Build unsigned native test installer
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        working-directory: packages/desktop
+        shell: bash
+        env:
+          DAC_PACKAGE_FLAGS: ${{ matrix.flags }}
+        run: |
+          read -r -a dac_package_args <<< "$DAC_PACKAGE_FLAGS"
+          bun ./scripts/package.ts "${dac_package_args[@]}" --publish never
+      - name: Verify exact native installer targets and record checksums
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        working-directory: packages/desktop
+        env:
+          DAC_TEST_PACKAGE_TARGET: ${{ matrix.target }}
+        run: bun ./scripts/assert-test-package.ts
+      - name: Build native CLI and TUI test distribution
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        working-directory: packages/deepagent-code
+        timeout-minutes: 20
+        run: bun ./script/build.ts --single --skip-install --outdir dist-test-cli
+      - name: Seal the exact compiled CLI with the job's internal publisher
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        env:
+          DAC_TEST_PACKAGE_TARGET: ${{ matrix.target }}
+        run: bun ./packages/desktop/scripts/test-native-publisher.ts seal-cli
+      - name: Require complete packaged Desktop and CLI Native build proofs
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        env:
+          DAC_TEST_PACKAGE_TARGET: ${{ matrix.target }}
+        run: bun ./packages/desktop/scripts/test-native-publisher.ts guard
+      - name: Verify packaged Main, preload and original sidecar health
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        working-directory: packages/desktop
+        shell: bash
+        timeout-minutes: 3
+        env:
+          DAC_TEST_PACKAGE_TARGET: ${{ matrix.target }}
+          DAC_PACKAGE_GROUP: ${{ matrix.group }}
+        run: |
+          if [ "$DAC_PACKAGE_GROUP" = "linux" ]; then
+            xvfb-run -a bun ./scripts/run-test-package-smoke.ts
+          else
+            bun ./scripts/run-test-package-smoke.ts
+          fi
+      - name: Verify native CLI starts with the candidate version
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        working-directory: packages/deepagent-code
+        shell: bash
+        env:
+          DAC_CLI_TARGET: ${{ matrix.target }}
+        run: |
+          # Template substitutions belong to JavaScript, not the shell.
+          # shellcheck disable=SC2016
+          bun -e '
+            const target = process.env.DAC_CLI_TARGET;
+            const name = target.replace("win32", "windows");
+            const file = `dist-test-cli/deepagent-code-${name}/bin/deepagent-code${target.startsWith("win32") ? ".exe" : ""}`;
+            const child = Bun.spawn([file, "--version"], { stdout: "pipe", stderr: "pipe", timeout: 30000 });
+            const [code, output] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+            if (code !== 0 || output.trim() !== process.env.DEEPAGENT_CODE_VERSION) throw new Error("Native CLI version smoke failed");
+            await Bun.write("dist-test-cli/test-cli-checksums.json", JSON.stringify({ target, version: output.trim(), filename: file, bytes: Bun.file(file).size, sha256: new Bun.CryptoHasher("sha256").update(await Bun.file(file).arrayBuffer()).digest("hex") }, null, 2));
+          '
+      - name: Upload this run's test installer and required asset manifests
+        if: (inputs.platforms == 'all' || inputs.platforms == matrix.group) && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dac-2.0.3-test-${{ matrix.target }}-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            packages/desktop/dist/*.dmg
+            packages/desktop/dist/*.zip
+            packages/desktop/dist/*.deb
+            packages/desktop/dist/*.exe
+            packages/desktop/dist/test-package-checksums.json
+            packages/desktop/dist/test-native-qualification.json
+            packages/desktop/out/main/chunks/linux-native-dev-assets.json
+            packages/desktop/out/main/managed-browser-input/*.asset.json
+            packages/deepagent-code/dist-test-cli/**
+      - name: Upload a separate Native qualification diagnostic report
+        if: (inputs.platforms == 'all' || inputs.platforms == matrix.group) && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dac-2.0.3-diagnostic-report-${{ matrix.target }}-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: packages/desktop/dist/test-native-qualification.json
+      - name: Remove this job's private internal publisher
+        if: (inputs.platforms == 'all' || inputs.platforms == matrix.group) && always()
+        env:
+          DAC_TEST_PACKAGE_TARGET: ${{ matrix.target }}
+        run: bun ./packages/desktop/scripts/test-native-publisher.ts cleanup
+
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GOTOOLCHAIN: local
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+    steps:
+      - name: Preserve frozen source bytes on checkout
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-bun
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: false
+      - name: Reconstruct all reviewed production and formal test sources
+        shell: bash
+        run: |
+          mkdir -p artifacts/source artifacts/services
+          bun -e 'await Bun.write(process.env.RUNNER_TEMP + "/dac-source-roots.json", JSON.stringify({ dac: process.cwd() }))'
+          bun ./scripts/materialize-source-closure.ts --manifest release/source-closure/2.0.3-acceptance-20261012/manifest.json --out "$GITHUB_WORKSPACE/artifacts/source-tree" --roots "$RUNNER_TEMP/dac-source-roots.json" --require dac,kernel,platform
+          cp artifacts/source-tree/source-closure-manifest.json artifacts/source/source-closure-manifest.json
+          cp artifacts/source-tree/source-materialization.json artifacts/source/source-materialization.json
+          git rev-parse HEAD > artifacts/source/actions-source-commit.txt
+      - name: Build the real Platform frontend with its frozen lock
+        working-directory: artifacts/source-tree/platform/web
+        shell: bash
+        run: |
+          bun install --frozen-lockfile --ignore-scripts --registry https://registry.npmjs.org
+          bun run build
+      - name: Build formal IM kernel and Platform production entrypoints
+        shell: bash
+        timeout-minutes: 20
+        run: |
+          DAC_SERVICE_OUT="$GITHUB_WORKSPACE/artifacts/services"
+          (cd artifacts/source-tree/kernel && go build -mod=readonly -buildvcs=false -p=2 -o "$DAC_SERVICE_OUT/im-kernel-linux-x64" ./launcher)
+          (cd artifacts/source-tree/platform && go build -mod=readonly -buildvcs=false -p=2 -o "$DAC_SERVICE_OUT/im-platform-linux-x64" .)
+          go version -m "$DAC_SERVICE_OUT/im-kernel-linux-x64" > "$DAC_SERVICE_OUT/im-kernel-buildinfo.txt"
+          go version -m "$DAC_SERVICE_OUT/im-platform-linux-x64" > "$DAC_SERVICE_OUT/im-platform-buildinfo.txt"
+          sha256sum "$DAC_SERVICE_OUT/im-kernel-linux-x64" "$DAC_SERVICE_OUT/im-platform-linux-x64" > "$DAC_SERVICE_OUT/SHA256SUMS"
+      - name: Archive the exact reconstructed full source
+        shell: bash
+        run: |
+          # Dependencies and generated frontend assets are reproducible build products.
+          # Archive the reviewed source tree before including any tool cache or binary.
+          rm -rf artifacts/source-tree/platform/web/node_modules artifacts/source-tree/platform/web/dist
+          tar -czf artifacts/source/deepagent-code-2.0.3-full-source.tar.gz -C artifacts/source-tree .
+          sha256sum artifacts/source/deepagent-code-2.0.3-full-source.tar.gz artifacts/source/source-closure-manifest.json > artifacts/source/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dac-2.0.3-test-source-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: error
+          path: artifacts/source/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dac-2.0.3-test-im-services-linux-x64-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: error
+          path: artifacts/services/*

@@ -1,6 +1,6 @@
 export * as TaskTool from "./task"
 
-import { ToolFailure, toolText } from "@deepagent-code/llm"
+import { ToolFailure, ToolOutput, toolText } from "@deepagent-code/llm"
 import Ajv from "ajv"
 import { and, desc, eq, inArray } from "drizzle-orm"
 import { Cause, Effect, Exit, Option } from "effect"
@@ -8,14 +8,19 @@ import { Context, Layer, Schema } from "effect"
 import { AgentV2 } from "../agent"
 import { AgentGateway } from "../agent-gateway"
 import { Database } from "../database/database"
+import { CanonicalJson } from "../util/canonical-json"
+import { Hash } from "../util/hash"
 import { ConflictArbiter } from "../deepagent/conflict-arbiter"
 import { EventV2 } from "../event"
 import { PermissionV2 } from "../permission"
-import { SessionSchema, SessionV2 } from "../session"
+import type { SessionV2 } from "../session"
+import { SessionSchema } from "../session/schema"
 import { SessionMessage } from "../session/message"
 import { Prompt } from "../session/prompt"
 import { TaskRunTable, type TaskStructuredOutputReceipt } from "../session/sql"
 import { TaskRunAuthority } from "../session/task-run"
+import { TaskContinuation } from "../session/task-continuation"
+import { WorkChildAuthority } from "../session/work-child-authority"
 import { Delegation } from "./delegation"
 import {
   MAX_SUBAGENT_FANOUT,
@@ -32,6 +37,8 @@ import { Tools } from "./tools"
 import DESCRIPTION from "./task.txt"
 
 export const name = "task"
+const nativeTasks = new WeakSet<object>()
+export function isNativeTask(tool: object) { return nativeTasks.has(tool) }
 
 /**
  * Delegation slot (see tool/delegation.ts for the pattern rationale): the V2 session service
@@ -45,6 +52,7 @@ export const { DelegationSlot, delegationSlotLayer } = Delegation
 export const captureDelegationServiceLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const slot = yield* DelegationSlot
+    const { SessionV2 } = yield* Effect.promise(() => import("../session"))
     slot.service = yield* SessionV2.Service
   }),
 )
@@ -97,6 +105,24 @@ const Output = Schema.Struct({
   warnings: Schema.optional(Schema.Array(Schema.String)),
 })
 export type Output = typeof Output.Type
+
+// Only the original native Task executor creates these values; cloned/serialized output
+// is never an authenticated child result. The receiving frame consumes the witness once.
+const completedOutputs = new WeakMap<object, { tool: object; context: Tool.Context; runID: string; inputHash: string; outcomeHash: string }>()
+export function takeCompletedOutput(witness: object) {
+  const value = completedOutputs.get(witness)
+  completedOutputs.delete(witness)
+  return value
+}
+
+function taskModelOutput(output: Output) {
+  const lines = [output.text]
+  if (output.warnings !== undefined) lines.push(...output.warnings)
+  if (output.run?.branch !== undefined)
+    lines.push(`Write-type subagent output is on branch \`${output.run.branch}\`; finalize with pr_finalize, inspect with task_read.`)
+  lines.push(`task_id: "${output.task_id}"`)
+  return [toolText({ type: "text", text: lines.join("\n") })]
+}
 
 const toolFailure = (message: string) => new ToolFailure({ message })
 
@@ -175,10 +201,11 @@ const sessionDepth = (sessions: SessionV2.Interface, sessionID: SessionSchema.ID
 
 const lastAssistantText = (messages: readonly SessionMessage.Message[]) =>
   messages
-    .filter((message): message is SessionMessage.Assistant => message.type === "assistant")
-    .flatMap((message) => message.content)
-    .filter((part): part is SessionMessage.AssistantText => part.type === "text")
-    .at(-1)?.text ?? ""
+    .findLast((message): message is SessionMessage.Assistant => message.type === "assistant")
+    ?.content.filter((part): part is SessionMessage.AssistantText => part.type === "text")
+    .map((part) => part.text)
+    .filter((text) => text.trim().length > 0)
+    .join("\n\n") ?? ""
 
 const lastAssistantMessageID = (messages: readonly SessionMessage.Message[]) =>
   messages
@@ -308,24 +335,15 @@ export const layer = Layer.effectDiscard(
     const permission = yield* PermissionV2.Service
     // Tool settlement runs in a narrowed context; capture Location policy while registering.
     const gateway = Option.getOrUndefined(yield* Effect.serviceOption(AgentGateway.Runtime))
+    const registeredDatabase = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
+    const registeredEvents = Option.getOrUndefined(yield* Effect.serviceOption(EventV2.Service))
 
-    yield* tools
-      .register({
-        [name]: Tool.withPermission(
+    const tool = Tool.withPermission(
           Tool.make({
             description: DESCRIPTION,
             input: Input,
             output: Output,
-            toModelOutput: ({ output }) => {
-              const lines = [output.text]
-              if (output.warnings !== undefined) lines.push(...output.warnings)
-              if (output.run?.branch !== undefined)
-                lines.push(
-                  `Write-type subagent output is on branch \`${output.run.branch}\`; finalize with pr_finalize, inspect with task_read.`,
-                )
-              lines.push(`task_id: "${output.task_id}"`)
-              return [toolText({ type: "text", text: lines.join("\n") })]
-            },
+            toModelOutput: ({ output }) => taskModelOutput(output),
             execute: (params, context) =>
               withTaskConcurrency(
                 String(context.sessionID),
@@ -351,7 +369,7 @@ export const layer = Layer.effectDiscard(
                   // Durable fan-out admission (C-P2-08): the ledger lives in the database, so the
                   // service is required BEFORE the cap decision — missing authority is an honest
                   // refusal, never a silent bypass of the cap.
-                  const database = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
+                  const database = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service)) ?? registeredDatabase
                   if (!database)
                     return yield* toolFailure(
                       "task is unavailable: the database service is missing from the runner context (durable fan-out admission)",
@@ -388,6 +406,9 @@ export const layer = Layer.effectDiscard(
                   const outputSchema = resolveOutputSchema(params.output_schema, params.subagent_type)
                   if (typeof params.output_schema === "string" && outputSchema === undefined)
                     return yield* toolFailure(`Unknown output schema: ${params.output_schema}.`)
+                  const restrictedChild = yield* WorkChildAuthority.requireTaskMode(database.db, context.sessionID, {
+                    task_id: params.task_id, background: params.background, workspace: workspaceMode, outputSchema,
+                  }).pipe(Effect.mapError(() => toolFailure("This approved profile supports only a fresh foreground shared child, without task_id or structured finalization.")))
                   const parent = yield* sessions.get(context.sessionID).pipe(Effect.orDie)
                   const parentAgent = yield* agents.resolve(parent.agent ?? context.agent)
                   const callerDepth = yield* sessionDepth(sessions, context.sessionID)
@@ -487,6 +508,8 @@ export const layer = Layer.effectDiscard(
                       ? Effect.succeed(undefined)
                       : database.db
                           .select({
+                            state: TaskRunTable.state,
+                            error: TaskRunTable.error,
                             workspace_mode: TaskRunTable.workspace_mode,
                             worktree_branch: TaskRunTable.worktree_branch,
                             worktree_state: TaskRunTable.worktree_state,
@@ -502,7 +525,7 @@ export const layer = Layer.effectDiscard(
                           .get()
                           .pipe(Effect.orDie)
                   const durableLaunch = Effect.gen(function* () {
-                    const events = Option.getOrUndefined(yield* Effect.serviceOption(EventV2.Service))
+                    const events = Option.getOrUndefined(yield* Effect.serviceOption(EventV2.Service)) ?? registeredEvents
                     if (!database || !events)
                       return yield* toolFailure(
                         `task is unavailable: durable authority services missing from the runner context (database: ${database ? "ok" : "missing"}, events: ${events ? "ok" : "missing"})`,
@@ -535,7 +558,7 @@ export const layer = Layer.effectDiscard(
                       deliveryMode: background ? "background" : "foreground",
                       prompt: new Prompt({
                         text: params.prompt,
-                        ...(childMode === undefined
+                        ...(childMode === undefined || restrictedChild
                           ? {}
                           : { metadata: { deepagent: { agent_mode_override: childMode } } }),
                       }),
@@ -545,7 +568,7 @@ export const layer = Layer.effectDiscard(
                       child: {
                         title: `task: ${params.description}`,
                         location: parent.location,
-                        permissions: inheritedTaskPermissions(
+                        permissions: restrictedChild ? [] : inheritedTaskPermissions(
                           resolved.permissions,
                           parentAgent?.permissions ?? [],
                           parent.permissions,
@@ -553,6 +576,7 @@ export const layer = Layer.effectDiscard(
                         ...(workspaceMode === "worktree" ? { workspace: { mode: "worktree" as const } } : {}),
                       },
                     }).pipe(
+                      Effect.provideService(TaskContinuation.CurrentDeadline, deadline),
                       Effect.mapError((error) =>
                         toolFailure(
                           error._tag === "TaskRunAuthority.AdmissionConflict"
@@ -580,7 +604,9 @@ export const layer = Layer.effectDiscard(
                         text: `<task id="${admitted.run.childSessionID}" state="${state}">\n${
                           state === "running"
                             ? `Background task enqueued: ${params.description}`
-                            : `Background task settled as ${state}; use task_read for its transcript.`
+                            : state === "recovery_required"
+                              ? "Background task requires explicit recovery; inspect task_status or task_read. Ordinary resume is unavailable."
+                              : `Background task settled as ${state}; use task_read for its transcript.`
                         }\n</task>`,
                       }
                     }
@@ -597,6 +623,11 @@ export const layer = Layer.effectDiscard(
                     if (result.outcome === "interrupted")
                       return yield* toolFailure(
                         `Task ${admitted.run.childSessionID} was interrupted. Partial work is preserved; inspect it with task_read.`,
+                      )
+                    if (result.outcome === "recovery_required")
+                      return yield* toolFailure(
+                        `Task ${admitted.run.childSessionID} requires explicit recovery. Inspect task_status or task_read; ` +
+                          "task_recovery may resolve the old run as failed or closed after approval. Ordinary resume is unavailable; the original workspace and execution evidence are preserved.",
                       )
                     if (result.outcome === "timeout") timedOut = true
                     const run = runInfoOf(yield* runRowByID(admitted.run.runID), params.subagent_type)
@@ -624,6 +655,16 @@ export const layer = Layer.effectDiscard(
                     // reclaimed (retention grace expired) would run the child against a dead root.
                     // Refuse with the real reason instead of surfacing fs-level tool breakage.
                     const latest = yield* latestRunRow(childID)
+                    if (latest?.state === "recovery_required")
+                      return yield* toolFailure(
+                        `Cannot resume task "${params.task_id}": the old run requires explicit recovery. Inspect task_status or task_read; ` +
+                          "task_recovery may resolve it as failed or closed after approval. The original workspace and execution evidence are preserved.",
+                      )
+                    if (latest?.error?.code === "execution_recovery_required")
+                      return yield* toolFailure(
+                        `Cannot resume task "${params.task_id}": the old unresolved execution was explicitly disposed as ${latest.state}. ` +
+                          "Inspect task_status or task_read; start a fresh task for new work.",
+                      )
                     if (latest?.workspace_mode === "worktree" && (latest.worktree_state === "removed" || latest.worktree_state === "reclaimed"))
                       return yield* toolFailure(
                         latest.worktree_state === "reclaimed"
@@ -651,8 +692,8 @@ export const layer = Layer.effectDiscard(
                       ...(runInfo === undefined ? {} : { run: runInfo }),
                       ...(warnings.length === 0 ? {} : { warnings }),
                     }
-                  if (!outputSchema)
-                    return {
+                  if (!outputSchema) {
+                    const output = {
                       task_id: childID,
                       text: boundResultText(research, {
                         maxChars: subagentOutputMaxChars(),
@@ -662,6 +703,19 @@ export const layer = Layer.effectDiscard(
                       ...(runInfo === undefined ? {} : { run: runInfo }),
                       ...(warnings.length === 0 ? {} : { warnings }),
                     }
+                    if (restrictedChild) {
+                      if (!launch.runID) return yield* toolFailure("The approved child has no original TaskRun result.")
+                      const witness = Object.freeze({})
+                      completedOutputs.set(witness, { tool, context, runID: launch.runID,
+                        inputHash: Hash.sha256(CanonicalJson.stringify(params)),
+                        outcomeHash: Hash.sha256(CanonicalJson.stringify(ToolOutput.toResultValue(ToolOutput.make(output, taskModelOutput(output))))) })
+                      yield* WorkChildAuthority.captureTaskOutput(database.db, witness).pipe(
+                        Effect.ensuring(Effect.sync(() => completedOutputs.delete(witness))),
+                        Effect.mapError(() => toolFailure("The original completed child result could not be authenticated.")),
+                      )
+                    }
+                    return output
+                  }
                   // `prompt` is a durable admission. Once the shared deadline wins, never enqueue
                   // one or two doomed 1ms finalizer prompts into the child inbox.
                   if (timedOut)
@@ -788,8 +842,8 @@ export const layer = Layer.effectDiscard(
               ),
           }),
           name,
-        ),
-      })
-      .pipe(Effect.orDie)
+        )
+    nativeTasks.add(tool)
+    yield* tools.register({ [name]: tool }).pipe(Effect.orDie)
   }),
 )

@@ -12,6 +12,10 @@ import { ProviderV2 } from "../provider"
 // Extracted from session.ts so the projector can import it without a module cycle
 // (session.ts imports the projector).
 
+export function legacyAssistantPartID(messageID: SessionMessage.ID, index: number) {
+  return SessionV1.PartID.ascending(`prt_${messageID.slice("msg_".length)}_${index}`)
+}
+
 export function legacyAssistant(input: {
   readonly sessionID: SessionSchema.ID
   readonly parentMessageID: SessionV1.MessageID
@@ -23,7 +27,7 @@ export function legacyAssistant(input: {
   const completed = input.message.time.completed ? DateTime.toEpochMillis(input.message.time.completed) : undefined
   const messageID = SessionV1.MessageID.ascending(input.message.id)
   const parts = input.message.content.map((part, index): SessionV1.Part => {
-    const id = SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_${index}`)
+    const id = legacyAssistantPartID(input.message.id, index)
     if (part.type === "text") {
       return {
         id,

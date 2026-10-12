@@ -11,15 +11,13 @@ import { QuietHours } from "@deepagent-code/core/deepagent/quiet-hours"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
-import { IMRepository } from "@deepagent-code/core/im/repository"
-import type { IMRepositoryInterface } from "@deepagent-code/core/im/repository"
-import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
 import { isEventV2AdmissionEnabled } from "@deepagent-code/core/deepagent/event-admission"
 import type { RuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
-import { declaresMentionTrigger, MENTION_TRIGGER } from "@/agent/agent"
+export { resolveMentioned } from "@deepagent-code/core/im/mention-parser"
+export type { MentionedAgent } from "@deepagent-code/core/im/mention-parser"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventNotRegisteredError } from "./v2-admission-bridge"
-import * as Log from "@deepagent-code/core/util/log"
+import { Log } from "@deepagent-code/core/util/log"
 
 // V4.0 §A4 — the Event Router + Scheduler RUNTIME WIRING (Wave 2b). This is the deepagent-code half
 // that core (event-router.ts / scheduler.ts) deliberately cannot be: it reads feature flags, resolves
@@ -68,9 +66,7 @@ export interface DispatchPort {
   readonly dispatch: (request: DispatchRequest) => Effect.Effect<void, unknown>
 }
 
-/** The decision `handle` returns: the pure router's decision for event-triggered routing, or `receipted`
- * for a W0.4 mention that produced a `agent_no_trigger_mention` receipt instead of a silent `no_match`
- * drop. `receipted` is terminal and acked like `dispatch`. */
+/** Historical receipts remain decodable; new IM events are terminally dropped. */
 export type HandleDecision =
   | EventRouter.RouteDecision
   | { readonly type: "receipted"; readonly reason: MentionReceiptReason }
@@ -89,25 +85,8 @@ export const observeOnlyDispatchPort: DispatchPort = {
     ),
 }
 
-// ---------------------------------------------------------------------------
-// W0.4 — @mention 路由修复与默认统一 (design v2.0-design.md W0.4).
-//
-// The IM @mention flow (CLI event-V2 admission ON) used to publish `im.message.created` onto the bus;
-// the router previously matched agents by their `triggers[].event` against that type and — since no
-// agent declares an IM trigger by default — terminal-dropped the mention with `no_match`: no execution,
-// no receipt, a silent loss for the user. The fix routes mentions by NAME (the @mentioned agent is the
-// authorization target, mirroring the legacy agent-orchestrator resolution) and only dispatches when
-// the mentioned agent declares the mention trigger (default `["mention"]` — see
-// `Agent.declaresMentionTrigger`). Anything else writes a durable `agent_no_trigger_mention` receipt
-// into the initiating conversation and logs `mention_no_trigger_receipt` — the `no_match` silent-drop
-// path is never taken for a mention event.
-//
-// V2 IM durable-only migration: NO production component publishes `im.message.created` anymore —
-// mention admission is synchronous durable SessionV2 work in the IM handler
-// (src/im/im-agent-execution.ts). The dispatcher-side mention branch below is dormant bus-side
-// machinery (kept for the registry-declared type); `resolveMentioned` and `defaultMentionReceiptPort`
-// are LIVE — the IM handler uses them for its synchronous admission + receipt path.
-// ---------------------------------------------------------------------------
+// Historical mention metadata and pure parsing remain compatible. Neither a
+// mention nor a generic Event trigger may invoke the owner's personal DAC.
 
 /** W0.4 — the durable mention-routing receipt message type (IM message `metadata.type` discriminant). */
 export const AGENT_NO_TRIGGER_MENTION = "agent_no_trigger_mention"
@@ -131,101 +110,14 @@ export interface MentionReceiptInput {
   readonly reason: MentionReceiptReason
 }
 
-/** W0.4 — the receipt seam (mirrors `DispatchPort`): implementations write the user-visible durable
- * receipt. `handle` tolerates a failing port (logged; receipts are best-effort, the ack still runs). */
+/** Historical receipt shape; the dispatcher never calls this port. */
 export interface MentionReceiptPort {
   readonly receipt: (input: MentionReceiptInput) => Effect.Effect<void, unknown>
 }
 
-/**
- * P7 — how many of the group's most recent messages the receipt dedup pre-check scans. Receipt writes
- * happen immediately after the initiating mention and a retry re-drive of the same event follows promptly
- * (the retry pump), so a bounded newest-first window catches the duplicate while keeping the guard cheap;
- * an old duplicate landing outside the window is harmless (the receipt is still truthful).
- */
-export const MENTION_RECEIPT_DEDUP_WINDOW = 100
+/** Historical interface only. No mention receipt or execution is produced. */
+export const defaultMentionReceiptPort: MentionReceiptPort = { receipt: () => Effect.void }
 
-/**
- * P7 — was this receipt already written? The idempotency key is groupID + messageID + agentID (a generic
- * no-declarer receipt keys on groupID + messageID with agentID undefined). Compared against the metadata
- * JSON this port itself writes, so a retry re-drive of the SAME mention event never double-writes; a
- * DIFFERENT mention (different messageID/agentID) never collides. No key material (no groupID or
- * messageID) ⇒ no dedup (the log-only fallback has no durable write to guard).
- */
-const receiptAlreadyWritten = (repo: IMRepositoryInterface, input: MentionReceiptInput) =>
-  Effect.gen(function* () {
-    if (!input.groupID || !input.messageID) return false
-    const page = yield* repo.listMessages({ groupID: input.groupID, limit: MENTION_RECEIPT_DEDUP_WINDOW })
-    // IMMessage.metadata is `unknown | null` (free-form JSON column) — narrow to the receipt shape.
-    return page.messages.some((m) => {
-      const meta = m.metadata as { type?: unknown; messageID?: unknown; agentID?: unknown } | null
-      return (
-        meta !== null &&
-        meta.type === AGENT_NO_TRIGGER_MENTION &&
-        meta.messageID === input.messageID &&
-        meta.agentID === input.agentID
-      )
-    })
-  })
-
-/** W0.4 — the default receipt port: writes the receipt as a durable IM message into the initiating group
- * via IMRepository (metadata.type = `agent_no_trigger_mention`), shaped like an ordinary agent reply
- * message. In isolated contexts (no IM repository / no group on the event) it falls
- * back to the `mention_no_trigger_receipt` log line — never a silent no-op. */
-export const defaultMentionReceiptPort: MentionReceiptPort = {
-  receipt: (input) =>
-    Effect.gen(function* () {
-      const repo = Option.getOrUndefined(yield* Effect.serviceOption(IMRepository))
-      if (!repo || !input.groupID) {
-        log.info("mention_no_trigger_receipt", { ...input, surface: "log-only" })
-        return
-      }
-      // P7 — retry idempotency: a bus retry re-drive of the same mention must not double-write the receipt.
-      if (yield* receiptAlreadyWritten(repo, input)) return
-      const text =
-        input.reason === "no_declared_trigger"
-          ? `没有 agent 声明支持该触发器（${MENTION_TRIGGER}）——本次 @mention 未执行。`
-          : `@${input.agentNames[0] ?? ""} (${input.agentID ?? "unknown"}) 未声明 ${MENTION_TRIGGER} 触发器——没有 agent 声明支持该触发器，本次 @mention 未执行。`
-      const message = yield* repo.createMessage({
-        groupID: input.groupID,
-        senderID: input.agentID ?? "system",
-        senderType: input.agentID ? "agent" : "system",
-        type: "text",
-        content: text,
-        mentions: [],
-        metadata: {
-          type: AGENT_NO_TRIGGER_MENTION,
-          ...(input.agentID != null ? { agentID: input.agentID } : {}),
-          ...(input.agentNames.length > 0 ? { agentNames: [...input.agentNames] } : {}),
-          ...(input.eventID ? { eventID: input.eventID } : {}),
-          ...(input.messageID != null ? { messageID: input.messageID } : {}),
-        },
-      })
-      // P3 — the receipt is a real IM message, so broadcast it like any agent reply — the body text
-      // reaches live clients, not just the DB. Best-effort: the broadcast call is synchronous and never
-      // fails; a missing broadcaster service (isolated contexts) keeps the durable write.
-      const broadcaster = Option.getOrUndefined(yield* Effect.serviceOption(IMBroadcasterService))
-      broadcaster?.broadcast(input.groupID, {
-        type: "message_created",
-        data: {
-          id: message.id,
-          groupID: message.groupID,
-          senderID: message.senderID,
-          senderType: message.senderType,
-          messageType: message.type,
-          content: message.content,
-          mentions: message.mentions,
-          metadata: message.metadata,
-          replyToID: message.replyToID,
-          createdAt: message.createdAt,
-          updatedAt: message.updatedAt,
-        },
-      })
-    }),
-}
-
-/** W0.4 — the mention names carried by an `im.message.created` event (already parsed by the IM handler
- * via MentionParser when the message was created). Any other event type has no mention semantics. */
 export const mentionNamesFor = (event: DeepAgentEvent.Event): string[] => {
   if (event.type !== LMNEvents.IM_MESSAGE_CREATED) return []
   const payload = event.payload as { mentions?: unknown } | null
@@ -233,44 +125,9 @@ export const mentionNamesFor = (event: DeepAgentEvent.Event): string[] => {
   return Array.isArray(mentions) ? mentions.filter((m): m is string => typeof m === "string") : []
 }
 
-/** W0.4 — one mentioned entry: the name, the registered agent it resolved to (undefined = unknown
- * mention), and whether it is dispatchable (visible agent + declares the mention trigger). Visible
- * agents always win over same-name hidden builtins (the built-ins reuse "auto"/"general" names for
- * matchable-but-hidden trigger routers). */
-export interface MentionedAgent {
-  readonly name: string
-  readonly agent: AgentDescriptor | undefined
-  readonly dispatchable: boolean
-}
-
-export const resolveMentioned = (
-  agents: ReadonlyArray<AgentDescriptor>,
-  mentions: ReadonlyArray<string>,
-): ReadonlyArray<MentionedAgent> => {
-  const byName = new Map<string, AgentDescriptor>()
-  for (const agent of agents) {
-    const existing = byName.get(agent.name)
-    if (existing && existing.visible && !agent.visible) continue
-    byName.set(agent.name, agent)
-  }
-  return mentions.map((name) => {
-    const agent = byName.get(name)
-    return {
-      name,
-      agent,
-      dispatchable: agent !== undefined && agent.visible && declaresMentionTrigger(agent.triggers),
-    }
-  })
-}
-
 // Map an event type to the feature flag that gates its dispatch path (fail-closed: flag OFF ⇒ dropped).
 //   agent.push.*    → v4AgentPushEnabled  (proactive agent-initiated push)
-//   everything else → v4MultiAgentRuntime (git/ci/pr/monitor/schedule — and im.*: the dedicated
-//                     v4EventDrivenIm flag was removed with the V2 IM durable-only migration. No
-//                     production component publishes im.* anymore (mention admission is synchronous
-//                     durable SessionV2 work in the IM handler), but the registry still declares
-//                     im.message.created and this dispatcher's mention branch remains as the bus-side
-//                     machinery — so im.* rides the SAME master switch as every other routed type.)
+//   other events   → v4MultiAgentRuntime. IM_MESSAGE_CREATED is rejected before flag resolution.
 export const flagForEventType = (flags: RuntimeFlags.Info, eventType: string): boolean => {
   if (eventType.startsWith("agent.push")) return flags.v4AgentPushEnabled
   return flags.v4MultiAgentRuntime
@@ -313,8 +170,7 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 export interface LayerOptions {
   readonly runtimeFeatures?: RuntimeFeatureRegistry
   readonly dispatchPort?: DispatchPort
-  // W0.4 — the mention-routing receipt port. Defaults to the IM-backed writer (IMRepository message with
-  // metadata.type = agent_no_trigger_mention; log-only fallback), injectable for deterministic tests.
+  // Historical layer option only; it never authorizes an IM dispatch or writes a receipt.
   readonly mentionReceiptPort?: MentionReceiptPort
   readonly maxQueueDepth?: number
   readonly dedupeWindowMs?: number
@@ -345,7 +201,6 @@ export const layerWith = (options?: LayerOptions) =>
       // scheduled fire past the window; high/critical always fire (§E4 允许即时送达).
       const workspaceConfig = yield* Effect.serviceOption(WorkspaceConfig.Service)
       const port = options?.dispatchPort ?? observeOnlyDispatchPort
-      const mentionReceipt = options?.mentionReceiptPort ?? defaultMentionReceiptPort
       const maxQueueDepth = options?.maxQueueDepth ?? DEFAULT_MAX_QUEUE_DEPTH
       const dedupeWindowMs = options?.dedupeWindowMs ?? DEFAULT_DEDUPE_WINDOW_MS
       const tickIntervalMs = options?.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS
@@ -447,130 +302,16 @@ export const layerWith = (options?: LayerOptions) =>
               Effect.orElseSucceed(() => ({ quiet: false as const })),
             )
 
-      // W0.4 — write one mention receipt. Best-effort by design: a receipt-write failure is logged and
-      // swallowed (the ack still settles the delivery); the receipt surface never blocks dispatch.
-      const writeMentionReceipt = (input: MentionReceiptInput) =>
-        mentionReceipt.receipt(input).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() =>
-              log.error("mention receipt write failed", { eventID: input.eventID, cause: Cause.pretty(cause) }),
-            ),
-          ),
-          Effect.asVoid,
-        )
-
-      // W0.4 — route one mention event (see the branch in `handle`). Returns a `dispatch` decision with
-      // the mentioned targets, or `receipted` when nothing was dispatchable — the `no_match` silent drop
-      // is never used for a mention. Also writes per-agent receipts for mentioned agents that resolved
-      // but did NOT declare the mention trigger, and one generic receipt when nobody declared at all.
-      const handleMention = (
-        event: DeepAgentEvent.Event,
-        agentRegistry: ReadonlyArray<AgentDescriptor>,
-        mentionNames: ReadonlyArray<string>,
-        claimToken?: string,
-      ): Effect.Effect<HandleDecision> =>
-        Effect.gen(function* () {
-          const payload = event.payload as { groupID?: unknown; messageID?: unknown } | null
-          const groupID = typeof payload?.groupID === "string" ? payload.groupID : undefined
-          const messageID = typeof payload?.messageID === "string" ? payload.messageID : undefined
-          const resolved = resolveMentioned(agentRegistry, mentionNames)
-          const targets = resolved.flatMap((r) => (r.dispatchable && r.agent ? [r.agent] : []))
-          // Visible mentioned agents that resolved but did not declare the trigger. Hidden actors (the
-          // built-in trigger routers back the visible config agents of the same name) and unknown names
-          // fall through to the generic no-declarer receipt instead of a per-agent claim.
-          const notDeclaring = resolved.filter((r) => r.agent !== undefined && r.agent.visible && !r.dispatchable)
-
-          // per-mentioned-agent receipts: the name resolved but the agent did not declare the trigger.
-          yield* Effect.forEach(
-            notDeclaring,
-            (r) =>
-              writeMentionReceipt({
-                eventID: event.id,
-                groupID,
-                messageID,
-                agentID: r.agent?.id,
-                agentNames: [r.name],
-                reason: "agent_no_trigger_mention",
-              }).pipe(
-                Effect.tap(() =>
-                  Effect.sync(() =>
-                    log.info("mention_no_trigger_receipt", {
-                      eventID: event.id,
-                      agentID: r.agent?.id,
-                      agentName: r.name,
-                      reason: "agent_no_trigger_mention",
-                    }),
-                  ),
-                ),
-              ),
-            { discard: true },
-          )
-
-          if (targets.length === 0) {
-            // Nothing dispatchable: a receipt instead of the silent `no_match` terminal drop. When every
-            // mention resolved to a non-declaring agent, the per-agent receipts above already give the
-            // user feedback; a generic no-declarer receipt covers unknown names / an empty registry.
-            if (notDeclaring.length === 0) {
-              yield* writeMentionReceipt({
-                eventID: event.id,
-                groupID,
-                messageID,
-                agentID: undefined,
-                agentNames: mentionNames,
-                reason: "no_declared_trigger",
-              }).pipe(
-                Effect.tap(() =>
-                  Effect.sync(() =>
-                    log.info("mention_no_trigger_receipt", {
-                      eventID: event.id,
-                      agentNames: mentionNames,
-                      reason: "no_declared_trigger",
-                    }),
-                  ),
-                ),
-              )
-            }
-            yield* ack(event, claimToken)
-            return {
-              type: "receipted",
-              reason: notDeclaring.length > 0 ? "agent_no_trigger_mention" : "no_declared_trigger",
-            } as const
-          }
-
-          // P8 — mixed mentions: some names dispatch while others resolved to NOTHING (unknown names).
-          // The dispatch target does its work; the unknown names must not pass silently — write the
-          // generic no-declarer receipt for exactly those names (resolved-but-not-declaring agents are
-          // already receipted per-agent above, and hidden actors are the built-in trigger routers that
-          // back a visible agent of the same name).
-          const unresolved = resolved.filter((r) => r.agent === undefined)
-          if (unresolved.length > 0) {
-            yield* writeMentionReceipt({
-              eventID: event.id,
-              groupID,
-              messageID,
-              agentID: undefined,
-              agentNames: unresolved.map((r) => r.name),
-              reason: "no_declared_trigger",
-            }).pipe(
-              Effect.tap(() =>
-                Effect.sync(() =>
-                  log.info("mention_no_trigger_receipt", {
-                    eventID: event.id,
-                    agentNames: unresolved.map((r) => r.name),
-                    reason: "no_declared_trigger",
-                  }),
-                ),
-              ),
-            )
-          }
-
-          const priority = event.priority
-          yield* settleDispatch({ event, priority, targets }, claimToken)
-          return { type: "dispatch", priority, targets } as const
-        })
-
       const handle: Interface["handle"] = (event, claimToken) =>
         Effect.gen(function* () {
+          // IM messages are communication facts. Only the owner's private /dac
+          // admission may invoke a personal Session, including when a broad
+          // Event trigger would otherwise match this historical event type.
+          if (event.type === LMNEvents.IM_MESSAGE_CREATED) {
+            yield* bus.recordDrop({ event, reason: "im_personal_command_only" })
+            yield* ack(event, claimToken)
+            return { type: "dropped", reason: "operational" } as const
+          }
           const flagEnabled = flagForEventType(flags, event.type)
 
           // resolve candidate agents (permission scoping is the provider's job — the router matches
@@ -601,26 +342,7 @@ export const layerWith = (options?: LayerOptions) =>
               now: event.createdAt,
             })
 
-            // W0.4 — @mention 路由 (see the module doc above). A mention event routes by the mentioned
-            // agent's NAME; the pure router's event-type trigger match is bypassed (the @mention itself is
-            // the authorization). Runs BEFORE `EventRouter.route` so a mention never lands in the
-            // `no_match` terminal drop path (route.dropped log + silent ack): it dispatches to mentioned
-            // agents that declare the mention trigger and receipts everyone else (agent_no_trigger_mention
-            // / the "没有 agent 声明支持该触发器" no-declarer receipt).
-            //
-            // P1/P2 (design W0.4 note 4) — the mention branch is gated on `isEventV2AdmissionEnabled()`,
-            // the SAME predicate the dispatch port uses (multi-agent-runtime.ts dispatch —
-            // dispatchV2 vs coordinate). v4 ON ∧ admission ON ⇒ this dispatcher owns the mention (dispatch
-            // or receipt). v4 ON ∧ admission OFF ⇒ the explicit fall-back matrix: this mention branch is
-            // skipped, the event keeps the pre-W0.4 pure-router path (no receipt is written, which is the
-            // documented explicit-disabled semantic). With the event path off the flag_disabled
-            // fail-closed drop stays authoritative. (V2 IM durable-only migration: no producer publishes
-            // im.* anymore — the IM handler admits mentions synchronously as durable SessionV2 work, so
-            // this branch is the dormant bus-side half and cannot double-execute with it.)
-            const mentions = mentionNamesFor(event)
-            if (mentions.length > 0 && isEventV2AdmissionEnabled(options?.runtimeFeatures)) {
-              return yield* handleMention(event, agents, mentions, claimToken)
-            }
+
           }
 
           // K40-4: use the durable pending-delivery count as the authoritative backpressure depth when
@@ -670,7 +392,7 @@ export const layerWith = (options?: LayerOptions) =>
       // discriminator into the payload + scope the workspaceID to the failing repo's workspace, and
       // `keySuffix` lets it distinguish each repo's fire in the idempotency key. Does NOT markFired — the
       // caller does that ONCE per schedule (a per-repo tick publishes N events but marks the schedule
-      // fired once). No-op-safe: a publish failure is logged + swallowed so one bad fire can't kill the tick.
+      // fired once). Failures propagate to the per-schedule boundary: they must never advance its fire.
       const publishScheduleEvent = (
         schedule: Scheduler.Schedule,
         at: number,
@@ -694,20 +416,12 @@ export const layerWith = (options?: LayerOptions) =>
             typeof template.payload === "object" && template.payload != null
               ? (template.payload as Record<string, unknown>)
               : {}
-          yield* bus
-            .publish({
-              ...template,
-              ...(overrides?.workspaceID ? { workspaceID: overrides.workspaceID } : {}),
-              ...(overrides?.payload ? { payload: { ...basePayload, ...overrides.payload } } : {}),
-              idempotencyKey,
-            })
-            .pipe(
-              Effect.catchCause((cause) =>
-                Effect.sync(() =>
-                  log.error("schedule publish failed", { scheduleID: schedule.id, cause: Cause.pretty(cause) }),
-                ),
-              ),
-            )
+          yield* bus.publish({
+            ...template,
+            ...(overrides?.workspaceID ? { workspaceID: overrides.workspaceID } : {}),
+            ...(overrides?.payload ? { payload: { ...basePayload, ...overrides.payload } } : {}),
+            idempotencyKey,
+          })
         })
 
       const fireSchedule = (schedule: Scheduler.Schedule, at: number) =>
@@ -719,8 +433,9 @@ export const layerWith = (options?: LayerOptions) =>
       // §E4/§N — fire a due schedule UNLESS it is a side-effecting low/normal fire during the workspace's
       // quiet hours, in which case DEFER it past the window (reschedule fire_at = the window end via
       // recheckCondition — works for every kind: it pushes the next eligibility without marking fired).
-      // high/critical schedules ALWAYS fire (§E4 允许即时送达). Returns whether it actually fired.
-      const fireOrDefer = (schedule: Scheduler.Schedule, at: number): Effect.Effect<boolean> =>
+      // high/critical schedules ALWAYS fire (§E4 允许即时送达). Preserve the deferral outcome so the
+      // condition recheck path cannot overwrite the already-persisted quiet-hours boundary.
+      const fireOrDefer = (schedule: Scheduler.Schedule, at: number): Effect.Effect<"fired" | "deferred"> =>
         Effect.gen(function* () {
           const priority = schedule.eventTemplate.priority ?? "normal"
           if (priority !== "high" && priority !== "critical") {
@@ -734,11 +449,11 @@ export const layerWith = (options?: LayerOptions) =>
                 deferUntil: nextAt,
               })
               yield* scheduler.recheckCondition(schedule.id, nextAt)
-              return false
+              return "deferred" as const
             }
           }
           yield* fireSchedule(schedule, at)
-          return true
+          return "fired" as const
         })
 
       // §C3.2 / P4.5b — the PER-REPO condition fire. Partition `recent` trigger events by their
@@ -747,7 +462,8 @@ export const layerWith = (options?: LayerOptions) =>
       // workspace. Marks the schedule fired ONCE (a per-repo tick emits N events for one schedule). Honors
       // quiet hours on the schedule's workspace for low/normal fires exactly like fireOrDefer (defers the
       // whole evaluation past the window); the CI-repair template is high priority so it always fires.
-      // Returns whether the schedule fired (≥1 repo repair emitted) so the tick advances its recheck.
+      // A partially published batch never marks the schedule fired. Retry keeps the logical fire key
+      // for every repo, so the bus unique idempotency key preserves already-published events.
       const readRepo = (event: DeepAgentEvent.Event): string | undefined => {
         const repo = (event.payload as { repo?: unknown } | null)?.repo
         return typeof repo === "string" && repo.length > 0 ? repo : undefined
@@ -757,7 +473,7 @@ export const layerWith = (options?: LayerOptions) =>
         spec: Scheduler.ConditionSpec,
         recent: ReadonlyArray<DeepAgentEvent.Event>,
         at: number,
-      ): Effect.Effect<boolean> =>
+      ): Effect.Effect<"fired" | "deferred" | "not_met"> =>
         Effect.gen(function* () {
           const priority = schedule.eventTemplate.priority ?? "normal"
           if (priority !== "high" && priority !== "critical") {
@@ -770,7 +486,7 @@ export const layerWith = (options?: LayerOptions) =>
                 deferUntil: nextAt,
               })
               yield* scheduler.recheckCondition(schedule.id, nextAt)
-              return false
+              return "deferred" as const
             }
           }
           // Group the window's trigger events by repo; keep each repo's count + the workspace its latest
@@ -801,7 +517,7 @@ export const layerWith = (options?: LayerOptions) =>
             firedAny = true
           }
           if (firedAny) yield* scheduler.markFired(schedule.id, at)
-          return firedAny
+          return firedAny ? ("fired" as const) : ("not_met" as const)
         })
 
       const tick: Interface["tick"] = (nowArg) =>
@@ -810,52 +526,42 @@ export const layerWith = (options?: LayerOptions) =>
           const due = yield* scheduler.due(at)
           let fired = 0
           for (const schedule of due) {
-            if (schedule.kind === "condition" && schedule.condition) {
-              // §A4 条件触发: fire ONLY when the threshold of trigger events is met in the window; else
-              // reschedule the next re-check WITHOUT publishing (and without leaving it hot-looping).
+            const didFire = yield* Effect.gen(function* () {
+              if (schedule.kind !== "condition" || !schedule.condition)
+                return (yield* fireOrDefer(schedule, at)) === "fired"
               const spec = schedule.condition
-              // §A4 跨 workspace 计数: a crossWorkspace condition (e.g. the SYSTEM-level "3× CI failure →
-              // repair" trigger) counts trigger events across ALL workspaces — so it observes CI failures
-              // that land in per-project workspaces, not just its own. recentByType omits the workspaceID
-              // filter when it's undefined (bus counts cross-tenant). Non-crossWorkspace conditions keep
-              // the historical per-workspace scoping (pass the schedule's own workspaceID).
               const recent = yield* bus.recentByType({
                 type: spec.eventType,
                 ...(spec.crossWorkspace ? {} : { workspaceID: schedule.workspaceID }),
                 windowMs: spec.windowMs,
                 now: at,
               })
-              // §C3.2 / P4.5b — a groupByRepo condition evaluates the threshold PER REPO (partitioning the
-              // window by payload.repo) and fires ONE repair per repo that hits it, carrying repo=<repo>.
-              // A plain condition keeps the single-counter behavior (fire once when the total meets it).
-              const didFire = spec.groupByRepo
+              const outcome = spec.groupByRepo
                 ? yield* firePerRepoOrDefer(schedule, spec, recent, at)
                 : Scheduler.conditionMet(spec, recent.length)
-                  ? // §E4 — fireOrDefer holds the fire for quiet hours (low/normal) and reschedules it past
-                    // the window; a deferred fire already advanced fire_at, so skip the recheck below.
-                    yield* fireOrDefer(schedule, at)
-                  : false
-              if (didFire) {
-                // A fired condition must not re-fire while the SAME trigger events are still inside the
-                // window. markFired (called inside fireOrDefer / firePerRepoOrDefer) advances fire_at by
-                // only the recheck CADENCE (e.g. 60s), so a cadenced condition (the production 3×-CI
-                // trigger: recheck 60s, window 30min) would otherwise become due again 60s later with the
-                // same ≥3 failures still in-window and re-fire ~once per recheck for the whole window
-                // (~30 duplicate high-priority repair goals — the bus idempotency key is per-fireAt, and
-                // the router only dedups LOW priority, so nothing collapses them). Push the next recheck
-                // PAST the window so those events have aged out before the condition is eligible again.
-                // This applies to EVERY fired condition, cadenced or not (the old `intervalMs == null`
-                // guard left the cadenced production trigger unprotected). New events landing after this
-                // still start a fresh window and legitimately re-trigger.
-                yield* scheduler.recheckCondition(schedule.id, at + (spec.windowMs || 1))
-                fired++
-              } else {
-                const nextCheck = at + (schedule.intervalMs ?? (spec.windowMs || 1))
-                yield* scheduler.recheckCondition(schedule.id, nextCheck)
+                  ? yield* fireOrDefer(schedule, at)
+                  : "not_met"
+              if (outcome === "deferred") return false
+              if (outcome === "not_met") {
+                yield* scheduler.recheckCondition(schedule.id, at + (schedule.intervalMs ?? (spec.windowMs || 1)))
+                return false
               }
-              continue
-            }
-            if (yield* fireOrDefer(schedule, at)) fired++
+              // A completed condition waits out the triggering window, so the same source events
+              // cannot produce a new logical fire on every shorter recheck cadence.
+              yield* scheduler.recheckCondition(schedule.id, at + (spec.windowMs || 1))
+              return true
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.sync(() => {
+                  log.error("schedule processing failed", {
+                    scheduleID: schedule.id,
+                    cause: Cause.pretty(cause),
+                  })
+                  return false
+                }),
+              ),
+            )
+            if (didFire) fired++
           }
           return fired
         })

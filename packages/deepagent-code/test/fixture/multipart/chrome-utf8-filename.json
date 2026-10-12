@@ -1,0 +1,6 @@
+{
+  "bodyBase64": "LS0tLS0tV2ViS2l0Rm9ybUJvdW5kYXJ5QkdFeTB2ejRwVDFWS1dTTA0KQ29udGVudC1EaXNwb3NpdGlvbjogZm9ybS1kYXRhOyBuYW1lPSJmaWxlIjsgZmlsZW5hbWU9IuS4reaWhy5iaW4iDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL29jdGV0LXN0cmVhbQ0KDQoBAgMNCi0tLS0tLVdlYktpdEZvcm1Cb3VuZGFyeUJHRXkwdno0cFQxVktXU0wNCkNvbnRlbnQtRGlzcG9zaXRpb246IGZvcm0tZGF0YTsgbmFtZT0iZ3JvdXBJZCINCg0KaW1nX3NhZmVfZml4dHVyZQ0KLS0tLS0tV2ViS2l0Rm9ybUJvdW5kYXJ5QkdFeTB2ejRwVDFWS1dTTC0tDQo=",
+  "bodyUtf8": "------WebKitFormBoundaryBGEy0vz4pT1VKWSL\r\nContent-Disposition: form-data; name=\"file\"; filename=\"中文.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n\u0001\u0002\u0003\r\n------WebKitFormBoundaryBGEy0vz4pT1VKWSL\r\nContent-Disposition: form-data; name=\"groupId\"\r\n\r\nimg_safe_fixture\r\n------WebKitFormBoundaryBGEy0vz4pT1VKWSL--\r\n",
+  "contentType": "multipart/form-data; boundary=----WebKitFormBoundaryBGEy0vz4pT1VKWSL",
+  "source": "Chrome FormData; synthetic bytes 01 02 03; no credentials"
+}

@@ -6,6 +6,7 @@ import { Effect, Layer } from "effect"
 import * as SessionState from "../src/deepagent/session-state"
 import * as PlanStore from "../src/deepagent/plan-store"
 import { DocumentStore } from "../src/deepagent/document-store"
+import { Database } from "../src/database/database"
 import { PlanWriteTool } from "../src/tool/plan"
 import { PermissionV2 } from "../src/permission"
 import { ToolOutputStore } from "../src/tool-output-store"
@@ -50,7 +51,7 @@ const registry = ToolRegistry.layer.pipe(
   Layer.provide(outputStore),
   Layer.provide(permission),
 )
-const it = testEffect(Layer.provideMerge(PlanWriteTool.layer.pipe(Layer.provide(permission)), registry))
+const it = testEffect(Layer.provideMerge(PlanWriteTool.layer.pipe(Layer.provide(permission), Layer.provide(Database.layerFromPath(":memory:"))), registry))
 const identity = {
   agent: "build" as never,
   assistantMessageID: "msg_plan_tool" as never,

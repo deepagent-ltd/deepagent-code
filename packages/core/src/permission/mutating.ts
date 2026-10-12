@@ -11,7 +11,9 @@
 import { readonlySet } from "../util/readonly-collections"
 
 export const MUTATING_PERMISSIONS = readonlySet(
-  new Set(["edit", "write", "patch", "bash", "task", "external_directory"]),
+  // Generic remote and computer tools can perform arbitrary actions. Provider hints
+  // such as MCP readOnlyHint cannot establish a trusted read-only permission.
+  new Set(["edit", "write", "patch", "bash", "task", "external_directory", "mcp", "browser", "computer_use"]),
 )
 
 export function isMutatingPermission(permission: string) {

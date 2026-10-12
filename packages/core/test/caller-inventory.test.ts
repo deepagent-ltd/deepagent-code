@@ -26,7 +26,6 @@ const PROBE_DIR = join(ROOT, "script/caller-inventory/__probe__")
 const inventory = await buildInventory()
 
 describe("C0-01 caller inventory gate", () => {
-
   test("production universe is non-empty and covers all declared surfaces", () => {
     expect(inventory.entries.length).toBeGreaterThan(0)
     const covered = new Set(inventory.entries.map((entry) => entry.entry.surface))
@@ -59,7 +58,14 @@ describe("C0-01 caller inventory gate", () => {
     // V2.0.2 adds 20 production entries, including project-switch learning, proxy routes,
     // and X-07 bundle/share handlers. Every newly extracted route is classified below.
     // X-10c proxy audit adds one EventV2 ledger reader to the production route surface.
-    expect(inventory.entries.length).toBe(434)
+    // B2 facade portal re-pin (fb93a563, 2026-10-05, +9): the IM facade claim/rename/
+    // rebind/retry/resolve/direct/createGroup/invite/status endpoints joined the
+    // instance httpapi surface (434→443); the pin was left stale at that merge.
+    // The explicit personal /dac candidate extracts 524 existing entries after
+    // endpoint retirement, plus its separately audited ordinary Session bridge.
+    // Every new endpoint retains exact owner/body proofs; no unclassified waiver.
+    // Explicit final-delivery retry adds one reviewed adapter; it never admits Session work.
+    expect(inventory.entries.length).toBe(526)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)
@@ -69,20 +75,22 @@ describe("C0-01 caller inventory gate", () => {
     // produced from a nested Spec.make (e.g. cli.lildax.agents instead of cli.lildax.debug.agents,
     // cli.lildax.list instead of cli.lildax.workspace.list) would break that this exact set, and any
     // standalone <cliName> root would break the surface count.
-    expect(lildax).toEqual([
-      "cli.lildax.debug.agents",
-      "cli.lildax.login",
-      "cli.lildax.logout",
-      "cli.lildax.migrate",
-      "cli.lildax.service.password",
-      "cli.lildax.service.restart",
-      "cli.lildax.service.start",
-      "cli.lildax.service.status",
-      "cli.lildax.service.stop",
-      "cli.lildax.workspace.list",
-      "cli.lildax.workspace.use",
-      "cli.lildax.serve",
-    ].sort())
+    expect(lildax).toEqual(
+      [
+        "cli.lildax.debug.agents",
+        "cli.lildax.login",
+        "cli.lildax.logout",
+        "cli.lildax.migrate",
+        "cli.lildax.service.password",
+        "cli.lildax.service.restart",
+        "cli.lildax.service.start",
+        "cli.lildax.service.status",
+        "cli.lildax.service.stop",
+        "cli.lildax.workspace.list",
+        "cli.lildax.workspace.use",
+        "cli.lildax.serve",
+      ].sort(),
+    )
   })
 
   test("every entry is fully classified along the seven authority dimensions with legal verdicts and evidence", () => {
@@ -130,7 +138,7 @@ describe("C0-01 caller inventory gate", () => {
           'import ts from "typescript"',
           "// SessionV2.prompt probe in a comment",
           'const template = "EventV2.publish SessionPrompt.promptOrSteer admissible string"',
-          "/* HttpApiEndpoint.get(\"probe.op\", \"/probe\") inside block comment */",
+          '/* HttpApiEndpoint.get("probe.op", "/probe") inside block comment */',
           "export const ProbeFake = 1",
         ].join("\n"),
       )
@@ -162,6 +170,20 @@ describe("C0-01 caller inventory gate", () => {
     // every dimension is read_only — decisively non-v2, by verified reader facts.
     expect(execution?.verdict).toBe("read_only")
     expect(executor!.roles.every((role) => role.verdict === "read_only")).toBe(true)
+  })
+
+  test("personal /dac adapts ordinary Session admission while messages and retired mentions have no execution authority", () => {
+    const bridge = inventory.entries.find((entry) => entry.entry.id === "im.dac-session")
+    expect(bridge?.roles.find((role) => role.dimension === "admission_owner")?.verdict).toBe("adapter")
+    expect(bridge?.roles.find((role) => role.dimension === "execution_owner")?.verdict).toBe("adapter")
+    const submit = inventory.entries.find((entry) => entry.entry.id === "http.instance.im.dacSubmit")
+    expect(submit?.roles.every((role) => role.verdict === "adapter")).toBe(true)
+    const retry = inventory.entries.find((entry) => entry.entry.id === "http.instance.im.dacReplyRetry")
+    expect(retry?.roles.every((role) => role.verdict === "adapter")).toBe(true)
+    for (const id of ["http.instance.im.createMessage", "im.agent-execution"]) {
+      const entry = inventory.entries.find((entry) => entry.entry.id === id)
+      expect(entry?.roles.every((role) => role.verdict === "read_only")).toBe(true)
+    }
   })
 
   test("event.v2-bridge is the V2 authority (C7-05 flip: no double-write)", () => {
@@ -225,7 +247,6 @@ describe("C0-01 caller inventory gate", () => {
     }
   })
 
-
   test("open owners are reported honestly with reasons", async () => {
     const open = inventory.entries.filter((entry) => entry.unclassifiedCount > 0)
     // Honest freeze: the report surfaces whatever could not be proven; either everything
@@ -233,9 +254,7 @@ describe("C0-01 caller inventory gate", () => {
     for (const entry of open) {
       expect(Object.keys(entry.openOwners ?? {}).length).toBe(entry.unclassifiedCount)
     }
-    expect(inventory.totals.byVerdict.unclassified).toBe(
-      open.reduce((sum, entry) => sum + entry.unclassifiedCount, 0),
-    )
+    expect(inventory.totals.byVerdict.unclassified).toBe(open.reduce((sum, entry) => sum + entry.unclassifiedCount, 0))
   })
 
   test("inventory JSON report is byte-stable across rebuilds", async () => {
@@ -264,12 +283,8 @@ describe("C0-01 caller inventory gate", () => {
       }
     }
     // Inventory totals are internally consistent.
-    expect(inventory.totals.unclassifiedRoles).toBe(
-      inventory.entries.reduce((s, e) => s + e.unclassifiedCount, 0),
-    )
-    expect(inventory.totals.unclassifiedEntries).toBe(
-      inventory.entries.filter((e) => e.unclassifiedCount > 0).length,
-    )
+    expect(inventory.totals.unclassifiedRoles).toBe(inventory.entries.reduce((s, e) => s + e.unclassifiedCount, 0))
+    expect(inventory.totals.unclassifiedEntries).toBe(inventory.entries.filter((e) => e.unclassifiedCount > 0).length)
   })
 
   test("delegation model gate: edges real, acyclic, no self-delegation, no delegation to an unclassified target", () => {
@@ -372,12 +387,18 @@ describe("C0-01 caller inventory gate", () => {
           // call-site test but must still be anchored at a real line.
           if (proof.marker.startsWith("delegates:")) {
             expect(
-              moduleText.includes(".start(") || moduleText.includes(".stop(") ||
-              moduleText.includes(".status(") || moduleText.includes(".password(") ||
-              moduleText.includes(".restart(") || moduleText.includes(".client(") ||
-              moduleText.includes(".list(") || moduleText.includes(".fork(") ||
-              moduleText.includes(".spawn(") || moduleText.includes("spawn(") ||
-              moduleText.includes("fork(") || /\S+\(/.test(lineText),
+              moduleText.includes(".start(") ||
+                moduleText.includes(".stop(") ||
+                moduleText.includes(".status(") ||
+                moduleText.includes(".password(") ||
+                moduleText.includes(".restart(") ||
+                moduleText.includes(".client(") ||
+                moduleText.includes(".list(") ||
+                moduleText.includes(".fork(") ||
+                moduleText.includes(".spawn(") ||
+                moduleText.includes("spawn(") ||
+                moduleText.includes("fork(") ||
+                /\S+\(/.test(lineText),
             ).toBe(true)
           }
           if (proof.marker.startsWith("delegates:")) expect(lineText.trim().startsWith("import")).toBe(false)

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { Context, Schema } from "effect"
+import { realpath, symlink } from "node:fs/promises"
+import path from "node:path"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import * as Log from "@deepagent-code/core/util/log"
@@ -73,6 +75,25 @@ afterEach(async () => {
 })
 
 describe("v2 location HttpApi", () => {
+  test("creates a Session through a directory alias using the canonical host Location", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await using aliases = await tmpdir()
+    const directory = await realpath(tmp.path)
+    const alias = path.join(aliases.path, "project-alias")
+    await symlink(directory, alias, process.platform === "win32" ? "junction" : "dir")
+    const response = await request("/api/session", alias, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    })
+    expect(response.status).toBe(200)
+    const body = await response.json() as { data: { id: string; location: { directory: string } } }
+    expect(body.data.location.directory).toBe(directory)
+    const commands = await request("/api/command", alias)
+    expect(commands.status).toBe(200)
+    expect((await commands.json() as { location: { directory: string } }).location.directory).toBe(directory)
+  })
+
   test("returns command and skill snapshots with resolved locations", async () => {
     await using tmp = await tmpdir({ git: true })
 

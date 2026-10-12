@@ -1,15 +1,18 @@
 import { expect, test } from "bun:test"
-import { Cause, ConfigProvider, Context, Effect, Exit, Layer, Schema } from "effect"
+import { Cause, ConfigProvider, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import path from "node:path"
 import { createHash } from "node:crypto"
 import { HttpRouter } from "effect/unstable/http"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { Database } from "@deepagent-code/core/database/database"
+import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { migrations } from "@deepagent-code/core/database/migration.gen"
 import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
 import { ProxyTenantTable } from "@deepagent-code/core/proxy/sql"
 import { ContractDigest } from "@deepagent-code/core/contract/digest"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Server } from "../../src/server/server"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { gatewayServiceTags } from "../../src/effect/gateway-service-tags"
@@ -18,6 +21,8 @@ import { Root } from "../../src/effect/root"
 import { CompositionDigest } from "../../src/effect/composition-digest"
 import { RuntimeIntegrityIdentity } from "../../src/effect/runtime-integrity-identity"
 import { V2RunnerFrame } from "../../src/session/v2-runner-frame"
+import { EventInvestigationHost } from "../../src/deepagent/event-investigation"
+import { Service } from "../../src/installation/work-execution-profile"
 import { adaptCustomTool } from "../../src/tool/custom-tool-adapter"
 import { MaintenancePaths } from "../../src/server/routes/instance/httpapi/groups/maintenance"
 import { tmpdir } from "../fixture/fixture"
@@ -81,6 +86,23 @@ function expectWireInvariants(record: CompositionDigest.Record) {
     ].toSorted(),
   )
 }
+
+test("AppRuntime captures its actual execution and database services before opening a listener", async () => {
+  await AppRuntime.runPromise(Effect.gen(function* () {
+    const slot = yield* RuntimeIntegrityIdentity.RootIdentitySlot
+    expect(slot.context).toBeDefined()
+    const database = yield* Database.Service
+    const execution = yield* SessionExecution.Service
+    const locations = yield* LocationServiceMap
+    const investigation = yield* EventInvestigationHost.Service
+    const installed = yield* Service
+    expect(Option.getOrUndefined(Context.getOption(slot.context!, Database.Service))).toBe(database)
+    expect(Option.getOrUndefined(Context.getOption(slot.context!, SessionExecution.Service))).toBe(execution)
+    expect(Option.getOrUndefined(Context.getOption(slot.context!, LocationServiceMap))).toBe(locations)
+    expect(Option.getOrUndefined(Context.getOption(slot.context!, EventInvestigationHost.Service))).toBe(investigation)
+    expect(Option.getOrUndefined(Context.getOption(slot.context!, Service))).toBe(installed)
+  }))
+})
 
 test("HTTP server root and AppRuntime root expose the identical composition digest", async () => {
   const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
@@ -266,6 +288,37 @@ test("a scoped plugin fixture changes the live application-tool facet until it u
   expect(loaded.v2Registry.applicationTools.ids).toContain("fixture_plugin_tool")
   expect(loaded.v2Registry.applicationTools.count).toBe(baseline.v2Registry.applicationTools.count + 1)
   expect(loaded.v2Registry.applicationTools.digest).not.toBe(baseline.v2Registry.applicationTools.digest)
+  expect((await compositionDigest()).v2Registry.applicationTools).toEqual(baseline.v2Registry.applicationTools)
+}, 180_000)
+
+test("composition reports scoped tools only for its canonical Location", async () => {
+  const baseline = await compositionDigest()
+  const fixture = adaptCustomTool({
+    id: "fixture_scoped_tool",
+    description: "fixture Location tool",
+    parameters: Schema.Unknown,
+    execute: () => Effect.succeed({ title: "", metadata: {}, output: "fixture" }),
+  })
+  expect(fixture).toBeDefined()
+  if (!fixture) return
+  const loaded = await AppRuntime.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const applications = yield* ApplicationTools.Service
+        yield* applications.register({ fixture_scoped_tool: fixture }, { directory: AbsolutePath.make(process.cwd()) })
+        yield* applications.register(
+          { fixture_other_location: fixture },
+          { directory: AbsolutePath.make("/other-location") },
+        )
+        return yield* CompositionDigest.current
+      }),
+    ),
+  )
+  expect(loaded.v2Registry.applicationTools.ids).toContain("fixture_scoped_tool")
+  expect(loaded.v2Registry.materialized.ids).toContain("fixture_scoped_tool")
+  expect(loaded.v2Registry.applicationTools.ids).not.toContain("fixture_other_location")
+  expect(loaded.v2Registry.materialized.ids).not.toContain("fixture_other_location")
+  expect(loaded.v2Registry.applicationTools.count).toBe(baseline.v2Registry.applicationTools.count + 1)
   expect((await compositionDigest()).v2Registry.applicationTools).toEqual(baseline.v2Registry.applicationTools)
 }, 180_000)
 

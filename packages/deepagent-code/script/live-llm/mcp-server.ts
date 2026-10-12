@@ -1,6 +1,6 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js"
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
+import { Server } from "@modelcontextprotocol/server"
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio"
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/core"
 
 const marker = Bun.argv[2]
 if (!marker) throw new Error("Usage: mcp-server.ts <marker>")
@@ -14,7 +14,7 @@ if (
 
 const server = new Server({ name: "deepagent-code-live-llm", version: "1.0.0" }, { capabilities: { tools: {} } })
 
-server.setRequestHandler(ListToolsRequestSchema, () => ({
+server.setRequestHandler("tools/list", () => ({
   tools: [
     {
       name: "evidence",
@@ -52,7 +52,7 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
   ],
 }))
 
-server.setRequestHandler(CallToolRequestSchema, (request) => {
+server.setRequestHandler("tools/call", (request) => {
   if (request.params.name === "failure") {
     return { isError: true, content: [{ type: "text", text: "MCP_FIXTURE_FAILURE" }] }
   }

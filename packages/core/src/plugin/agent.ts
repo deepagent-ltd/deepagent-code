@@ -217,11 +217,7 @@ export const Plugin = PluginV2.define({
         item.description = "The default agent. Executes tools based on configured permissions."
         item.system ??= BUILD_SYSTEM
         item.mode = "primary"
-        item.permissions.push(
-          ...PermissionV2.merge(defaults, [
-            { action: "question", resource: "*", effect: "allow" },
-          ]),
-        )
+        item.permissions.push(...PermissionV2.merge(defaults, [{ action: "question", resource: "*", effect: "allow" }]))
       })
 
       editor.update(AgentV2.ID.make("plan"), (item) => {
@@ -253,9 +249,7 @@ export const Plugin = PluginV2.define({
           "Goal loop. Describe what you want; the agent writes goal+plan.md, then a supervised loop drives it to completion (plan→execute→verify per tick). You can edit the plan before it runs."
         item.system = PROMPT_LOOP_MODE
         item.mode = "primary"
-        item.permissions.push(
-          ...PermissionV2.merge(defaults, [{ action: "question", resource: "*", effect: "allow" }]),
-        )
+        item.permissions.push(...PermissionV2.merge(defaults, [{ action: "question", resource: "*", effect: "allow" }]))
       })
 
       editor.update(AgentV2.ID.make("design"), (item) => {
@@ -263,9 +257,7 @@ export const Plugin = PluginV2.define({
           "Design-driven. You author goal+plan.md yourself; the agent reads it and executes your plan faithfully under the supervised loop, without redefining the goal."
         item.system = PROMPT_DESIGN_MODE
         item.mode = "primary"
-        item.permissions.push(
-          ...PermissionV2.merge(defaults, [{ action: "question", resource: "*", effect: "allow" }]),
-        )
+        item.permissions.push(...PermissionV2.merge(defaults, [{ action: "question", resource: "*", effect: "allow" }]))
       })
 
       editor.update(AgentV2.ID.make("general"), (item) => {
@@ -402,6 +394,21 @@ export const Plugin = PluginV2.define({
             readonlyExternalDirectory,
           ),
         )
+      })
+      editor.goalRole(AgentV2.ID.make("goal-worker"), {
+        version: "owned-goal-v2",
+        kind: "worker",
+        planWriteOwnGoal: true,
+      })
+      editor.goalRole(AgentV2.ID.make("reviewer"), {
+        version: "owned-goal-v2",
+        kind: "reviewer",
+        planWriteOwnGoal: false,
+      })
+      editor.goalRole(AgentV2.ID.make("researcher"), {
+        version: "owned-goal-v2",
+        kind: "panel",
+        planWriteOwnGoal: false,
       })
 
       editor.update(AgentV2.ID.make("compaction"), (item) => {

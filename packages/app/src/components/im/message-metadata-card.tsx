@@ -1,11 +1,17 @@
 import { Show } from "solid-js"
 import type { MessageMetadata } from "./types"
+import { useLanguage } from "@/context/language"
+import { Button } from "@deepagent-code/ui/button"
+import { Icon } from "@deepagent-code/ui/icon"
 
 interface MessageMetadataCardProps {
   metadata: MessageMetadata
+  onOpenTaskResult?: () => void
+  onOpenConversationSession?: () => void
 }
 
 export function MessageMetadataCard(props: MessageMetadataCardProps) {
+  const language = useLanguage()
   const handleFileClick = (path: string, line?: number) => {
     // In a real VSCode extension environment, use the VSCode API
     if (typeof window !== "undefined" && (window as any).vscode) {
@@ -69,12 +75,47 @@ export function MessageMetadataCard(props: MessageMetadataCardProps) {
 
     case "agent_run":
       return (
-        <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-surface-raised-base border border-border-base rounded-lg">
-          <span class="text-accent-base">🤖</span>
-          <div class="text-left">
-            <div class="text-sm font-medium text-text-strong">Agent Run</div>
-            <div class="text-xs text-text-weak">Status: {metadata.status}</div>
+        <div
+          data-im-task-result-card
+          class="min-w-0 max-w-full grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 bg-surface-raised-base border border-border-base rounded-lg"
+        >
+          <div class="min-w-0 flex items-start gap-2 text-left">
+            <Icon name="agent-tree" size="small" class="shrink-0 text-icon-weak mt-0.5" />
+            <div class="min-w-0">
+              <div class="whitespace-nowrap text-12-medium text-text-strong">
+                {language.t("im.taskResult.cardTitle")}
+              </div>
+              <div class="text-12-regular text-text-weak [overflow-wrap:anywhere]">
+                {language.t("im.taskResult.status")}: {metadata.status}
+              </div>
+            </div>
           </div>
+          <Show when={props.onOpenConversationSession || props.onOpenTaskResult}>
+            <Button
+              size="small"
+              variant="secondary"
+              class="im-task-result-open shrink-0 whitespace-nowrap"
+              onClick={() =>
+                props.onOpenConversationSession ? props.onOpenConversationSession() : props.onOpenTaskResult?.()
+              }
+            >
+              {language.t(props.onOpenConversationSession ? "im.dac.conversationSession" : "im.taskResult.view")}
+            </Button>
+          </Show>
+        </div>
+      )
+
+    case "task_status_notice":
+      return (
+        <div class="flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-lg border border-border-base bg-surface-raised-base px-2 py-2">
+          <span class="min-w-0 flex-1 text-12-medium text-text-base">
+            {language.t(`im.taskStatus.${metadata.kind}`)}
+          </span>
+          <Show when={props.onOpenTaskResult}>
+            <Button size="small" variant="secondary" onClick={() => props.onOpenTaskResult?.()}>
+              {language.t("im.taskStatus.view")}
+            </Button>
+          </Show>
         </div>
       )
 

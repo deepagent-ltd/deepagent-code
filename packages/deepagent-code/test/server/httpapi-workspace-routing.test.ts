@@ -34,7 +34,7 @@ import { HEADER as FenceHeader } from "../../src/server/shared/fence"
 import { resetDatabase } from "../fixture/db"
 import { workspaceLayerWithRuntimeFlags } from "../fixture/workspace"
 import { tmpdirScoped } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { testEffect, pollWithTimeout } from "../lib/effect"
 
 const testStateLayer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -234,6 +234,13 @@ const ProbeApi = HttpApi.make("workspace-routing-probe").add(
         query: WorkspaceRoutingQuery,
         success: ProbeResult,
       }),
+      HttpApiEndpoint.post("secretInit", "/mcp/fixture/credentials/initialize", { query: WorkspaceRoutingQuery, success: ProbeResult }),
+      HttpApiEndpoint.get("secretPreview", "/mcp/fixture/credentials/preview", { query: WorkspaceRoutingQuery, success: ProbeResult }),
+      HttpApiEndpoint.post("secretCommit", "/mcp/fixture/credentials/commit", { query: WorkspaceRoutingQuery, success: ProbeResult }),
+      HttpApiEndpoint.get("secretStatus", "/mcp/fixture/credentials/request", { query: WorkspaceRoutingQuery, success: ProbeResult }),
+      HttpApiEndpoint.post("secretReconcile", "/mcp/fixture/credentials/request/reconcile", { query: WorkspaceRoutingQuery, success: ProbeResult }),
+      HttpApiEndpoint.get("bindingPreview", "/mcp/fixture/binding/preview", { query: WorkspaceRoutingQuery, success: ProbeResult }),
+      HttpApiEndpoint.post("bindingRepair", "/mcp/fixture/binding/repair", { query: WorkspaceRoutingQuery, success: ProbeResult }),
     )
     .middleware(WorkspaceRoutingMiddleware),
 )
@@ -248,7 +255,14 @@ const probeHandlers = HttpApiBuilder.group(ProbeApi, "probe", (handlers) =>
     .handle("get", () => routeContextResponse)
     .handle("patch", () => Effect.succeed(false))
     .handle("session", () => routeContextResponse)
-    .handle("workspace", () => routeContextResponse),
+    .handle("workspace", () => routeContextResponse)
+    .handle("secretInit", () => routeContextResponse)
+    .handle("secretPreview", () => routeContextResponse)
+    .handle("secretCommit", () => routeContextResponse)
+    .handle("secretStatus", () => routeContextResponse)
+    .handle("secretReconcile", () => routeContextResponse)
+    .handle("bindingPreview", () => routeContextResponse)
+    .handle("bindingRepair", () => routeContextResponse),
 )
 
 const serveProbe = HttpApiBuilder.layer(ProbeApi).pipe(
@@ -260,6 +274,41 @@ const serveProbe = HttpApiBuilder.layer(ProbeApi).pipe(
 )
 
 describe("HttpApi workspace routing middleware", () => {
+  it.live("rejects scoped MCP credentials before a healthy remote workspace can receive them", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const project = yield* Project.use.fromDirectory(dir)
+      const forwarded = yield* Ref.make(0)
+      const url = yield* startRemoteWorkspaceHttpServer(() => Ref.update(forwarded, (count) => count + 1).pipe(
+        Effect.as(HttpServerResponse.jsonUnsafe({ leaked: true })),
+      ))
+      const workspace = yield* createRemoteWorkspace({ dir, projectID: project.project.id,
+        type: "secret-routing-denied", url: `${url}/base` })
+      yield* pollWithTimeout(Workspace.Service.use((service) => service.isSyncing(workspace.id)).pipe(
+        Effect.map((ready) => ready ? true : undefined)), "remote workspace did not become healthy")
+      yield* serveProbe
+      const routes = [
+        { method: "POST" as const, path: "/mcp/fixture/credentials/initialize" },
+        { method: "GET" as const, path: "/mcp/fixture/credentials/preview" },
+        { method: "POST" as const, path: "/mcp/fixture/credentials/commit" },
+        { method: "GET" as const, path: "/mcp/fixture/credentials/request" },
+        { method: "POST" as const, path: "/mcp/fixture/credentials/request/reconcile" },
+        { method: "GET" as const, path: "/mcp/fixture/binding/preview" },
+        { method: "POST" as const, path: "/mcp/fixture/binding/repair" },
+      ]
+      yield* Effect.forEach(routes, (route) => Effect.gen(function* () {
+        const response = yield* HttpClientRequest.make(route.method)(`${route.path}?workspace=${workspace.id}`).pipe(HttpClient.execute)
+        expect(response.status).toBe(503)
+        expect(yield* response.json).toMatchObject({ service: "mcp" })
+      }))
+      const empty = yield* HttpClient.get("/mcp/fixture/credentials/preview?workspace=")
+      expect(empty.status).toBe(503)
+      expect(yield* Ref.get(forwarded)).toBe(0)
+      const local = yield* HttpClient.get("/mcp/fixture/credentials/preview")
+      expect(local.status).toBe(200)
+    }), 10_000,
+  )
+
   it.live("proxies remote workspace HTTP requests through the selected workspace target", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })

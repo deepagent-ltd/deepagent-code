@@ -3,6 +3,9 @@ import { EventV2 } from "@deepagent-code/core/event"
 import * as Log from "@deepagent-code/core/util/log"
 import * as LSPClient from "./client"
 import path from "path"
+import fs from "node:fs/promises"
+import { constants } from "node:fs"
+import { createHash } from "node:crypto"
 import { pathToFileURL, fileURLToPath } from "url"
 import * as LSPServer from "./server"
 import { Config } from "@/config/config"
@@ -121,7 +124,44 @@ interface State {
   spawning: Map<string, Promise<LSPClient.Info | undefined>>
 }
 
+export type CheckedInput = {
+  readonly files: readonly string[]
+  readonly authorize: (action: "read" | "lsp", file: string) => Effect.Effect<void>
+}
+export type CheckedResult = {
+  readonly state: "checked" | "not_applicable" | "unavailable"
+  readonly receipts: readonly LSPClient.CheckedObservation[]
+}
+
+// Only the explicit bounded code set is opened. Symlinks, changing bytes and undecodable input
+// fail this observation; ordinary LSP file handling deliberately retains its existing semantics.
+async function readCheckedFile(file: string) {
+  const fd = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const before = await fd.stat()
+    if (!before.isFile() || before.size > 1048576) throw new Error("Diagnostic source unavailable")
+    const buffer = Buffer.alloc(before.size + 1)
+    let offset = 0
+    while (offset < buffer.length) {
+      const count = (await fd.read(buffer, offset, Math.min(65536, buffer.length - offset), offset)).bytesRead
+      if (!count) break
+      offset += count
+    }
+    const after = await fd.stat()
+    const current = await fs.lstat(file)
+    if (offset !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs ||
+      current.isSymbolicLink() || current.dev !== before.dev || current.ino !== before.ino ||
+      current.size !== before.size || current.mtimeMs !== before.mtimeMs) throw new Error("Diagnostic source changed")
+    const bytes = buffer.subarray(0, offset)
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    if (!Buffer.from(text).equals(bytes)) throw new Error("Diagnostic source encoding unavailable")
+    return { text, hash: createHash("sha256").update(bytes).digest("hex") }
+  } finally { await fd.close() }
+}
+
 export interface Interface {
+  readonly observeChecked?: (input: CheckedInput) => Effect.Effect<CheckedResult>
+  readonly recheck?: (input: CheckedInput & { receipts: readonly LSPClient.CheckedObservation[] }) => Effect.Effect<readonly LSPClient.CheckedView[] | undefined>
   readonly init: () => Effect.Effect<void>
   readonly status: () => Effect.Effect<Status[]>
   readonly hasClients: (file: string) => Effect.Effect<boolean>
@@ -234,7 +274,7 @@ export const layer = Layer.effect(
       }),
     )
 
-    const getClients = Effect.fnUntraced(function* (file: string) {
+    const getClients = Effect.fnUntraced(function* (file: string, allowedSpawn?: ReadonlySet<string>) {
       const ctx = yield* InstanceState.context
       if (!containsPath(file, ctx)) return [] as LSPClient.Info[]
       const s = yield* InstanceState.get(state)
@@ -297,6 +337,7 @@ export const layer = Layer.effect(
             continue
           }
 
+          if (allowedSpawn && !allowedSpawn.has(server.id)) continue
           const inflight = s.spawning.get(root + server.id)
           if (inflight) {
             const client = await inflight
@@ -372,6 +413,61 @@ export const layer = Layer.effect(
         }
         return false
       })
+    })
+
+    const exactFiles = (files: readonly string[], directory: string) => {
+      if (!files.length || files.length > 8) return
+      const exact = files.map((file) => path.resolve(directory, file))
+      if (new Set(exact).size !== exact.length || exact.some((file) => {
+        const relative = path.relative(directory, file)
+        return !relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) ||
+          file.length > 512 || file.includes("\0") || /[*?]/.test(file)
+      })) return
+      return exact
+    }
+    const recheck: NonNullable<Interface["recheck"]> = (input) => Effect.gen(function* () {
+      const ctx = yield* InstanceState.context
+      const files = exactFiles(input.files, ctx.directory)
+      if (!files || input.receipts.length < files.length || input.receipts.length > 16) return
+      const views: LSPClient.CheckedView[] = []
+      for (const file of files) {
+        yield* input.authorize("read", file)
+        const source = yield* Effect.promise(() => readCheckedFile(file).catch(() => undefined))
+        if (!source) return
+        const matches = input.receipts.map(LSPClient.inspectChecked).filter((item) => item?.uri === pathToFileURL(file).href)
+        if (!matches.length || matches.some((item) => !item || item.directory !== ctx.directory || item.contentHash !== source.hash)) return
+        views.push(...matches.filter((item): item is LSPClient.CheckedView => item !== undefined))
+      }
+      if (views.length !== input.receipts.length || input.receipts.some((receipt) => !LSPClient.inspectChecked(receipt))) return
+      return views
+    })
+    const observeChecked: NonNullable<Interface["observeChecked"]> = (input) => Effect.gen(function* () {
+      const ctx = yield* InstanceState.context
+      const files = exactFiles(input.files, ctx.directory)
+      if (!files) return { state: input.files.length ? "unavailable" as const : "not_applicable" as const, receipts: [] }
+      const cfg = yield* config.get()
+      // Owned checks may reuse running clients or launch an explicitly configured local
+      // command. They never trigger a built-in server's download/install fallback.
+      const allowedSpawn = new Set(cfg.lsp && cfg.lsp !== true ? Object.entries(cfg.lsp).flatMap(([id, item]) =>
+        !item.disabled && item.command?.[0] && path.isAbsolute(item.command[0]) ? [id] : []) : [])
+      const receipts: LSPClient.CheckedObservation[] = []
+      for (const file of files) {
+        yield* input.authorize("read", file)
+        const source = yield* Effect.promise(() => readCheckedFile(file).catch(() => undefined))
+        if (!source) return { state: "unavailable" as const, receipts: [] }
+        yield* input.authorize("lsp", file)
+        const clients = yield* getClients(file, allowedSpawn)
+        if (!clients.length || clients.length > 2) return { state: "unavailable" as const, receipts: [] }
+        for (const client of clients) {
+          yield* input.authorize("lsp", file)
+          const receipt = yield* Effect.promise((signal) => client.observeChecked({ path: file, text: source.text, signal }).catch(() => undefined))
+          if (!receipt) return { state: "unavailable" as const, receipts: [] }
+          receipts.push(receipt)
+        }
+      }
+      return (yield* recheck({ ...input, receipts }))
+        ? { state: "checked" as const, receipts }
+        : { state: "unavailable" as const, receipts: [] }
     })
 
     const touchFile = Effect.fn("LSP.touchFile")(function* (input: string, diagnostics?: "document" | "full") {
@@ -728,6 +824,8 @@ export const layer = Layer.effect(
       init,
       status,
       hasClients,
+      observeChecked,
+      recheck,
       touchFile,
       diagnostics,
       hover,

@@ -1,4 +1,5 @@
 import { NamedError } from "@deepagent-code/core/util/error"
+import { SettingsTransaction } from "../../../../../settings/transaction"
 import * as Log from "@deepagent-code/core/util/log"
 import { Cause, Effect } from "effect"
 import { HttpRouter, HttpServerError, HttpServerRespondable, HttpServerResponse } from "effect/unstable/http"
@@ -25,7 +26,10 @@ export const errorLayer = HttpRouter.middleware<{ handles: unknown }>()((effect)
       return Effect.succeed(
         HttpServerResponse.jsonUnsafe(
           new NamedError.Unknown({
-            message: "Unexpected server error. Check server logs for details.",
+            message:
+              error instanceof SettingsTransaction.Error && error.reason === "unknown"
+                ? "Settings change is partially committed. Retry the same change to reconcile the original files."
+                : "Unexpected server error. Check server logs for details.",
             ref,
           }).toObject(),
           { status: 500 },

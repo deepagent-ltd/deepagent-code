@@ -1,14 +1,17 @@
 import { describe, expect } from "bun:test"
+import { createHash } from "node:crypto"
 import { DateTime, Effect } from "effect"
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { Model } from "@deepagent-code/llm"
+import { LLM, LLMClient, Model, ToolOutput } from "@deepagent-code/llm"
+import { OpenAICompatibleResponses, OpenAIResponses } from "@deepagent-code/llm/protocols"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { FileAttachment } from "@deepagent-code/core/session/prompt"
+import { ModelRef } from "@deepagent-code/core/model/ref"
 import { normalizeAttachments } from "@deepagent-code/core/session/runner/attachments"
 import { toLLMMessages } from "@deepagent-code/core/session/runner/to-llm-message"
 import { testEffect } from "./lib/effect"
@@ -40,6 +43,116 @@ const asUser = (message: SessionMessage.Message | undefined) => {
 }
 
 describe("normalizeAttachments", () => {
+  for (const vision of [false, true])
+    it.effect(
+      `keeps screenshot custody and ${vision ? "preserves vision media" : "degrades text-only media"} on Responses wire`,
+      () =>
+        Effect.forEach([false, true], (executed) =>
+          Effect.gen(function* () {
+            const png = Buffer.from(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==",
+              "base64",
+            )
+            const metadata = {
+              actionID: "browser_action_original",
+              type: "screenshot",
+              image: {
+                mime: "image/png",
+                hash: createHash("sha256").update(png).digest("hex"),
+                bytes: png.length,
+                width: 1,
+                height: 1,
+              },
+            }
+            const output = ToolOutput.make(metadata, [
+              { type: "text", text: JSON.stringify(metadata) },
+              {
+                type: "file",
+                mime: "image/png",
+                name: "browser.png",
+                source: { type: "data", data: png.toString("base64") },
+              },
+            ])
+            const original = SessionMessage.Assistant.make({
+              id: SessionMessage.ID.make("msg_browser_screenshot"),
+              type: "assistant",
+              agent: "build",
+              model: {
+                providerID: ModelRef.Ref.fields.providerID.make("deepseek"),
+                id: ModelRef.ID.make("deepseek-flash"),
+              },
+              time: { created },
+              content: [
+                SessionMessage.AssistantTool.make({
+                  type: "tool",
+                  id: "call_browser_screenshot",
+                  name: "browser",
+                  provider: { executed },
+                  time: { created, ran: created, completed: created },
+                  state: SessionMessage.ToolStateCompleted.make({
+                    status: "completed",
+                    input: { type: "screenshot", controlID: "browser_original" },
+                    structured: metadata,
+                    content: output.content,
+                    result: { ...ToolOutput.toResultValue(output), artifactWitness: "original_extra_field" },
+                  }),
+                }),
+              ],
+            })
+            const before = JSON.stringify(original)
+            const selected = OpenAICompatibleResponses.route
+              .with({ endpoint: { baseURL: "https://api.deepseek.test" } })
+              .model({ provider: "deepseek", id: "deepseek-flash" })
+            const normalized = yield* normalizeAttachments([original], vision ? ["text", "image"] : ["text"])
+            const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+              LLM.request({
+                model: selected,
+                messages: toLLMMessages(normalized, selected),
+              }),
+            )
+            const result = prepared.body.input.find((item) => "type" in item && item.type === "function_call_output")
+            const expected = [
+              { type: "input_text" as const, text: JSON.stringify(metadata) },
+              vision
+                ? { type: "input_image" as const, image_url: `data:image/png;base64,${png.toString("base64")}` }
+                : {
+                    type: "input_text" as const,
+                    text: 'ERROR: Cannot read "browser.png" (this model does not support image input). Inform the user. The tool attachment remains available to the user; rely on the tool\'s text and metadata instead.',
+                  },
+            ]
+            if (!executed) {
+              expect(result).toBeDefined()
+              if (result === undefined || !("output" in result)) throw new Error("missing screenshot wire output")
+              expect(result.output).toEqual(expected)
+            }
+            // Responses hosted-tool results use original provider references, not local tool output.
+            if (executed) expect(prepared.body.input).toEqual([])
+            const message = normalized[0]
+            if (message?.type !== "assistant") throw new Error("missing screenshot message")
+            const part = message.content[0]
+            if (part?.type !== "tool" || part.state.status !== "completed") throw new Error("missing screenshot tool")
+            if (!vision)
+              expect(part.state.result).toEqual(
+                ToolOutput.toResultValue({ structured: part.state.structured, content: part.state.content }),
+              )
+            expect(JSON.stringify(original)).toBe(before)
+            expect(original.content[0]?.type).toBe("tool")
+            expect(output.content[1]).toEqual({
+              type: "file",
+              mime: "image/png",
+              name: "browser.png",
+              source: { type: "data", data: png.toString("base64") },
+            })
+            expect(JSON.stringify(prepared.body).includes(png.toString("base64"))).toBe(vision && !executed)
+            expect(JSON.stringify(prepared.body).includes(metadata.image.hash)).toBe(!executed)
+            if (vision) {
+              expect(normalized).toEqual([original])
+              expect(original.content[0]).toBe(part)
+            }
+          }),
+        ).pipe(Effect.asVoid),
+    )
+
   it.effect("inlines a directory attachment as a listing block and drops the file part", () =>
     withTmpdir((directory) =>
       Effect.gen(function* () {

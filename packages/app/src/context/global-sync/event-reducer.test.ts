@@ -1185,7 +1185,7 @@ describe("goal.updated reducer (session_goal)", () => {
     })
   }
 
-  test("routes goal.updated to setSessionGoal and advances phase + ledger", () => {
+  test("routes goal.updated as a ledger hint without declaring a control phase", () => {
     createRoot((dispose) => {
       const [goalStore, setGoalStore] = createStore<{ g: Record<string, SessionGoal> }>({ g: {} })
       const setSessionGoal = (sid: string, goal: SessionGoal | undefined) => {
@@ -1194,14 +1194,14 @@ describe("goal.updated reducer (session_goal)", () => {
       }
 
       dispatch(setSessionGoal, goalEvent("ses_1", "running", 10))
-      expect(goalStore.g.ses_1.phase).toBe("running")
+      expect(goalStore.g.ses_1.phase).toBe("unknown")
       expect(goalStore.g.ses_1.ledger.tokens).toBe(10)
 
       dispatch(setSessionGoal, goalEvent("ses_1", "running", 120))
       expect(goalStore.g.ses_1.ledger.tokens).toBe(120)
 
       dispatch(setSessionGoal, goalEvent("ses_1", "needs_human", 200))
-      expect(goalStore.g.ses_1.phase).toBe("needs_human")
+      expect(goalStore.g.ses_1.phase).toBe("unknown")
       expect(goalStore.g.ses_1.gaps).toEqual(["reviewer_clean unmet"])
 
       dispose()

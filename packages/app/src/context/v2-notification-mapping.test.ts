@@ -5,20 +5,26 @@ import { toNotificationEvent } from "./v2-notification-mapping"
 // notification semantics.
 
 describe("v2 notification mapping", () => {
-  test("maps settled executions to session.idle", () => {
+  test("maps successful executions to the completion path", () => {
     expect(toNotificationEvent("session.execution.succeeded", { sessionID: "ses-1" })).toEqual({
-      type: "session.idle",
-      sessionID: "ses-1",
-    })
-    expect(toNotificationEvent("session.execution.interrupted", { sessionID: "ses-1", reason: "user" })).toEqual({
       type: "session.idle",
       sessionID: "ses-1",
     })
   })
 
+  test("never turns a user stop, shutdown or superseded execution into a ready-response notification", () => {
+    for (const reason of ["user", "shutdown", "superseded"]) {
+      expect(toNotificationEvent("session.execution.interrupted", { sessionID: "ses-1", reason })).toBeUndefined()
+      expect(toNotificationEvent("session.execution.interrupted.1", { sessionID: "ses-1", reason })).toBeUndefined()
+    }
+  })
+
   test("maps failed executions to session.error with a fallback message", () => {
     expect(
-      toNotificationEvent("session.execution.failed", { sessionID: "ses-1", error: { type: "unknown", message: "boom" } }),
+      toNotificationEvent("session.execution.failed", {
+        sessionID: "ses-1",
+        error: { type: "unknown", message: "boom" },
+      }),
     ).toEqual({ type: "session.error", sessionID: "ses-1", error: { type: "unknown", message: "boom" } })
     expect(toNotificationEvent("session.execution.failed", { sessionID: "ses-1" })).toEqual({
       type: "session.error",
@@ -39,7 +45,9 @@ describe("v2 notification mapping", () => {
       type: "session.idle",
       sessionID: "ses-1",
     })
-    expect(toNotificationEvent("session.execution.failed.1", { sessionID: "ses-1", error: { message: "boom" } })).toEqual({
+    expect(
+      toNotificationEvent("session.execution.failed.1", { sessionID: "ses-1", error: { message: "boom" } }),
+    ).toEqual({
       type: "session.error",
       sessionID: "ses-1",
       error: { type: "unknown", message: "boom" },

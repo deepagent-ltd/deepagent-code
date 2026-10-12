@@ -5,6 +5,7 @@ import { Effect, JsonSchema, Schema } from "effect"
 import type { AgentV2 } from "../agent"
 import type { SessionMessage } from "../session/message"
 import type { SessionSchema } from "../session/schema"
+import type { McpAppInvocationSchema } from "../session/mcp-app-invocation.schema"
 
 export interface Context {
   readonly sessionID: SessionSchema.ID
@@ -12,6 +13,27 @@ export interface Context {
   readonly assistantMessageID: SessionMessage.ID
   readonly toolCallID: string
 }
+
+/** External App calls have no assistant/provider identity. Copies carry no execution witness. */
+export interface AppContext {
+  readonly sessionID: SessionSchema.ID
+  readonly agent: AgentV2.ID
+  readonly invocationID: string
+  readonly source: McpAppInvocationSchema.Source
+}
+const appContexts = new WeakMap<AppContext, { readonly check: Effect.Effect<void, ToolFailure>; readonly current: () => boolean }>()
+export const appContext = (input: AppContext, check: Effect.Effect<void, ToolFailure>, current: () => boolean) =>
+  Effect.acquireRelease(Effect.sync(() => {
+    const value = Object.freeze({ ...input, source: Object.freeze(structuredClone(input.source)) })
+    appContexts.set(value, { check, current })
+    return value
+  }), (value) => Effect.sync(() => { appContexts.delete(value) }))
+export const appContextCurrent = (value: AppContext) => appContexts.get(value)?.current() === true
+export const checkAppContext = (value: AppContext) => Effect.suspend(() => {
+  const saved = appContexts.get(value)
+  return saved?.current() ? saved.check.pipe(Effect.andThen(() => saved.current() ? Effect.void : Effect.fail(new ToolFailure({ message: "App invocation source changed" }))))
+    : Effect.fail(new ToolFailure({ message: "App invocation execution witness is unavailable" }))
+})
 
 export type SchemaType<A> = Schema.Codec<A, any, never, never>
 
@@ -46,6 +68,11 @@ type Config<Input extends SchemaType<any>, Output extends SchemaType<any>> = {
     input: Schema.Schema.Type<Input>,
     context: Context,
   ) => Effect.Effect<Schema.Schema.Type<Output>, ToolFailure>
+  /** Retained metadata can omit bytes emitted separately as native model content. */
+  readonly toStructuredOutput?: (input: {
+    readonly input: Schema.Schema.Type<Input>
+    readonly output: Output["Encoded"]
+  }) => unknown
   readonly toModelOutput?: (input: {
     readonly input: Schema.Schema.Type<Input>
     readonly output: Output["Encoded"]
@@ -95,7 +122,7 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
             ),
             Effect.map((output) =>
               ToolOutput.make(
-                output,
+                config.toStructuredOutput ? config.toStructuredOutput({ input, output }) : output,
                 config.toModelOutput?.({ input, output }).map((part) =>
                   part.type === "text"
                     ? { type: "text" as const, text: part.text }
@@ -129,6 +156,8 @@ export interface DynamicConfig {
    */
   readonly inputJsonSchema: JsonSchema.JsonSchema | Record<string, unknown>
   readonly execute: (input: unknown, context: Context) => Effect.Effect<unknown, ToolFailure>
+  /** Retained domain data, separate from media carried in model content. */
+  readonly toStructuredOutput?: (input: { readonly input: unknown; readonly output: unknown }) => unknown
   readonly toModelOutput?: (input: { readonly input: unknown; readonly output: unknown }) => ReadonlyArray<Content>
 }
 
@@ -153,7 +182,7 @@ export function makeDynamic(config: DynamicConfig): Definition<any, any> {
       config.execute(call.input, context).pipe(
         Effect.map((output) =>
           ToolOutput.make(
-            output,
+            config.toStructuredOutput ? config.toStructuredOutput({ input: call.input, output }) : output,
             config.toModelOutput?.({ input: call.input, output }).map((part) =>
               part.type === "text"
                 ? { type: "text" as const, text: part.text }

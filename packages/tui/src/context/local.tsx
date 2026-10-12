@@ -13,6 +13,8 @@ import { useTheme } from "./theme"
 import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
 import { useTuiI18n } from "./i18n"
+import { mcpConnectionBlocked } from "../util/mcp-status"
+import type { Agent } from "@deepagent-code/sdk"
 
 export type LocalTheme = {
   secondary: RGBA
@@ -48,6 +50,63 @@ export function recentModels(
     .map((item) => ({ providerID: item.providerID, modelID: item.modelID }))
 }
 
+/** A pending or unavailable list cannot select an Agent or authorize composer actions. */
+export function createAgentSelection(input: {
+  agents: () => Agent[] | undefined
+  loading: () => boolean
+  preferred?: () => string | undefined
+  warn: (message: string) => void
+}) {
+  const agents = createMemo(
+    () => input.agents()?.filter((agent) => agent.mode !== "subagent" && !agent.hidden) ?? [],
+    [],
+  )
+  const [store, setStore] = createStore({ current: undefined as string | undefined })
+  const status = () =>
+    input.loading()
+      ? ("loading" as const)
+      : !Array.isArray(input.agents())
+        ? ("unavailable" as const)
+        : (agents() ?? []).length
+          ? ("ready" as const)
+          : ("empty" as const)
+  const list = () => (status() === "ready" ? (agents() ?? []) : [])
+  const current = () => {
+    const preferred = input.preferred?.()
+    const name = preferred === "build" && !list().some((agent) => agent.name === "build") ? "auto" : preferred
+    return list().find((agent) => agent.name === store.current) ?? list().find((agent) => agent.name === name) ?? list().at(0)
+  }
+  return {
+    status,
+    list,
+    current,
+    set(name: string) {
+      if (status() !== "ready") {
+        input.warn(
+          status() === "loading" ? "Agents are still loading" : "Agent list is unavailable. Reconnect to retry.",
+        )
+        return false
+      }
+      if (!list().some((agent) => agent.name === name)) {
+        input.warn(`Agent not found: ${name}`)
+        return false
+      }
+      setStore("current", name)
+      return true
+    },
+    move(direction: 1 | -1) {
+      const selected = current()
+      if (!selected) return false
+      const values = list()
+      const index = values.findIndex((agent) => agent.name === selected.name)
+      const next = values[(index + direction + values.length) % values.length]
+      if (!next) return false
+      setStore("current", next.name)
+      return true
+    },
+  }
+}
+
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
   init: () => {
@@ -73,11 +132,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     }
 
     function createAgent() {
-      const agents = createMemo(() => sync.data.agent.filter((x) => x.mode !== "subagent" && !x.hidden))
-      const visibleAgents = createMemo(() => sync.data.agent.filter((x) => !x.hidden))
-      const [agentStore, setAgentStore] = createStore({
-        current: undefined as string | undefined,
+      const selection = createAgentSelection({
+        agents: () => sync.data.agent,
+        loading: () => sync.status === "loading",
+        preferred: () => sync.data.config.default_agent,
+        warn: (message) => toast.show({ variant: "warning", message, duration: 3000 }),
       })
+      const visibleAgents = createMemo(() => sync.data.agent?.filter((x) => !x.hidden) ?? [], [])
       const colors = createMemo(() => [
         theme.secondary,
         theme.accent,
@@ -88,36 +149,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         theme.info,
       ])
       return {
-        list() {
-          return agents()
-        },
-        current() {
-          return agents().find((x) => x.name === agentStore.current) ?? agents().at(0)
-        },
-        set(name: string) {
-          if (!agents().some((x) => x.name === name))
-            return toast.show({
-              variant: "warning",
-              message: `Agent not found: ${name}`,
-              duration: 3000,
-            })
-          setAgentStore("current", name)
-        },
-        move(direction: 1 | -1) {
-          batch(() => {
-            const current = this.current()
-            if (!current) return
-            let next = agents().findIndex((x) => x.name === current.name) + direction
-            if (next < 0) next = agents().length - 1
-            if (next >= agents().length) next = 0
-            const value = agents()[next]
-            setAgentStore("current", value.name)
-          })
-        },
+        ...selection,
         color(name: string) {
-          const index = visibleAgents().findIndex((x) => x.name === name)
+          const visible = visibleAgents() ?? []
+          const index = visible.findIndex((x) => x.name === name)
           if (index === -1) return colors()[0]
-          const agent = visibleAgents()[index]
+          const agent = visible[index]
 
           if (agent?.color) {
             const color = agent.color
@@ -234,6 +271,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
       const currentModel = createMemo(() => {
         const a = agent.current()
+        if (!a) return undefined
         return (
           getFirstValidModel(
             () => a && modelStore.model[a.name],
@@ -257,6 +295,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         parsed: createMemo(() => {
           const value = currentModel()
           if (!value) {
+            if (agent.status() !== "ready")
+              return {
+                provider: agent.status() === "loading" ? "Loading agents" : "Agent data unavailable",
+                model: agent.status() === "loading" ? "Waiting for current Agent list" : "Reconnect to retry",
+                reasoning: false,
+              }
             return {
               provider: "Connect a provider",
               model: "No provider selected",
@@ -510,9 +554,21 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       },
       async toggle(name: string) {
         const status = sync.data.mcp[name]
-        if (status?.status === "connected") {
+        if (!status || mcpConnectionBlocked(status)) throw new Error(i18n.t("tui.mcp.connection.recoveryRequired"))
+        if (sdk.mcpOperator) {
+          const prepared = await sdk.mcpOperator.prepare(name)
+          try {
+            await sdk.mcpOperator.send({ ticket: prepared.ticket, action: status.status === "connected" ? "disconnect" : status.status === "needs_auth" ? "authenticate" : "connect" })
+          } finally {
+            await sdk.mcpOperator.release(prepared.ticket)
+          }
+          return
+        }
+        if (status.status === "connected") {
           // Disable: disconnect the MCP
           await sdk.client.mcp.disconnect({ name })
+        } else if (status.status === "needs_auth") {
+          await sdk.client.mcp.auth.authenticate({ name })
         } else {
           // Enable/Retry: connect the MCP (handles disabled, failed, and other states)
           await sdk.client.mcp.connect({ name })

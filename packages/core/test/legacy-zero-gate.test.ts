@@ -206,8 +206,11 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     // 15 learning/catalog/admin-query/bundle and other routes are read-only (+105 dims).
     // X-10c proxy audit adds one EventV2 ledger query (+7 read-only); the checked V2 bridge
     // publisher retains its existing V2 event dimension after its evidence anchor is updated.
-    expect(counters.adapterDims).toBe(474)
-    expect(counters.readOnlyDims).toBe(2351)
+    // v2.0.3 original-owner HTTP adapters and injected Panel ports are individually reviewed.
+    expect(counters.adapterDims).toBe(642)
+    // B2 facade portal re-pin (fb93a563, 2026-10-05): the 9 IM facade endpoints are thin
+    // HTTP adapters classified read_only on all seven dimensions — read-only 2351→2414.
+    expect(counters.readOnlyDims).toBe(2827)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -251,7 +254,7 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     const counters = await currentTreeCounts(inventory)
     expect(counters.legacyDims).toBe(0)
     expect(counters.doubleWrite).toBe(0)
-    expect(counters.adapterDims).toBe(474)
+    expect(counters.adapterDims).toBe(642)
   })
 })
 
@@ -315,7 +318,7 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     const snapshot = buildSnapshot(inventory, bridgeSites)
     expect(snapshot.counters.legacyDims).toBe(0)
     expect(snapshot.counters.doubleWrite).toBe(0)
-    expect(snapshot.counters.adapterDims).toBe(474)
+    expect(snapshot.counters.adapterDims).toBe(642)
     // v2w-j4 (2026-09-19): +2 v2 dims (github.agent-execution admission/execution).
     // V2.0.1 merge-wave re-pin (2026-09-23): w-c removed desktop.wsl-sidecar (-7 v2 dims);
     // merged W-b/K-04/M-b/C-P2-08 waves added read-only surfaces — v2 220->213, read-only ->2204.
@@ -326,9 +329,12 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     // v2w-j4 (2026-09-19): github.agent-execution is declared (+1 entry, +7 roles — v2 on
     // admission/execution, read_only on the rest).
     // X-10c proxy audit contributes one read-only entry and seven classified roles.
-    expect(snapshot.entries).toBe(434)
+    // B2 facade portal re-pin (fb93a563, 2026-10-05): +9 IM facade entries (434→443),
+    // +63 roles (3038→3101), all read_only.
+    // v2.0.3 reviewed current tree: exact original owners, runtime-only graph and physical Node root.
+    expect(snapshot.entries).toBe(526)
     // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
-    expect(snapshot.roles).toBe(3038)
+    expect(snapshot.roles).toBe(3682)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 

@@ -18,12 +18,13 @@ import type { ConsoleState } from "@deepagent-code/core/v1/config/console-state"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { InstanceRef } from "@/effect/instance-ref"
-import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Semaphore } from "effect"
+import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema, ScopedCache, Semaphore } from "effect"
 import { JsonError, InvalidError } from "@deepagent-code/core/v1/config/error"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { containsPath, type InstanceContext } from "../project/instance-context"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
+import { MixedNativeFields } from "@deepagent-code/core/config"
 import { ConfigPermissionV1 } from "@deepagent-code/core/v1/config/permission"
 import { ConfigPluginV1 } from "@deepagent-code/core/v1/config/plugin"
 import { ConfigAgent } from "./agent"
@@ -33,8 +34,10 @@ import { ConfigParse } from "./parse"
 import { ConfigPaths } from "./paths"
 import { ConfigPlugin } from "./plugin"
 import { ConfigVariable } from "./variable"
+import { ConfigFileWrite } from "./file-write"
 import { Npm } from "@deepagent-code/core/npm"
 import { SettingsStore } from "@/settings/store"
+import { SettingsTransaction } from "@/settings/transaction"
 import { OFFICIAL_PROVIDER_ID_SET } from "@deepagent-code/core/provider-official"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 
@@ -64,11 +67,15 @@ export function normalizeLoadedConfig(data: unknown, source: string) {
     delete copy.tui
     log.warn("tui keys in deepagent-code config are deprecated; move them to tui.json", { path: source })
   }
-  // D3 — `providers` is the Core V2 catalog schema (ConfigProviderPlugin; see core's Config.Info).
-  // Both loaders read the same files, and this V1 schema rejects it as an unknown key, which
-  // used to 500 the whole instance config load. It has no V1 consumer, so strip it here and let
-  // the core V2 loader keep consuming it from the same file.
-  if ("providers" in copy) delete copy.providers
+  // Validate native fields before excluding them from this legacy-only projection.
+  // The source bytes (including global consolidation) retain both generations.
+  ConfigParse.schema(
+    MixedNativeFields,
+    Object.fromEntries(Object.entries(copy).filter(([key]) => Object.hasOwn(MixedNativeFields.fields, key))),
+    source,
+  )
+  delete copy.providers
+  delete copy.permissions
   return copy
 }
 
@@ -167,23 +174,47 @@ export type ConfigError = {
 
 type State = {
   config: Info
+  mcpAccountSource?: Account.Source
+  readonlyRemote?: { sources: { source: string; config: Pick<Info, "command" | "skills"> }[]; unavailable: boolean }
   directories: string[]
   deps: Fiber.Fiber<void>[]
   consoleState: ConsoleState
   errors: ConfigError[]
 }
 
+export type McpSnapshot = Readonly<{ config: Info; source: string; accountSource?: Account.Source }>
+
+export type ReadSnapshot = McpSnapshot &
+  Readonly<{ directories: string[]; directory: string; worktree: string; remoteCurrent: boolean }>
+
+export class McpRemovalError extends Schema.TaggedErrorClass<McpRemovalError>()("ConfigMcpRemovalError", {
+  reason: Schema.Literals(["readonly", "changed"]),
+}) {}
+
 export interface Interface {
+  readonly readonlySnapshot?: (input: {
+    directory: string
+    worktree: string
+    observed?: InstanceContext
+  }) => Effect.Effect<ReadSnapshot>
+  readonly mcpSnapshot?: () => Effect.Effect<McpSnapshot>
   readonly get: () => Effect.Effect<Info>
   readonly getGlobal: () => Effect.Effect<Info>
   readonly getConsoleState: () => Effect.Effect<ConsoleState>
   readonly getErrors: () => Effect.Effect<ConfigError[]>
-  readonly update: (config: Info) => Effect.Effect<void>
-  readonly updateGlobal: (config: Info) => Effect.Effect<{ info: Info; changed: boolean }>
+  readonly update: (config: Info, expected?: ConfigFileWrite.Observation) => Effect.Effect<void>
+  readonly updateGlobal: (
+    config: Info,
+    expected?: ConfigFileWrite.Observation,
+  ) => Effect.Effect<{ info: Info; changed: boolean }>
+  readonly removeGlobalMcp?: (name: string, original: McpSnapshot) => Effect.Effect<void, McpRemovalError>
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
   readonly waitForDependencies: () => Effect.Effect<void>
-  readonly watch?: (changed: () => Effect.Effect<void>) => Effect.Effect<() => void>
+  readonly watch?: (
+    changed: () => Effect.Effect<void>,
+    options?: { readonly mcpOnly?: boolean },
+  ) => Effect.Effect<() => void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/Config") {}
@@ -209,76 +240,56 @@ function globalConfigFile() {
 const CANONICAL_GLOBAL_CONFIG = "config.jsonc"
 const LEGACY_GLOBAL_CONFIGS = ["config.json", "deepagent-code.json", "deepagent-code.jsonc"]
 
-async function migrateGlobalConfigFiles() {
-  const dir = Global.Path.config
-  const canonicalPath = path.join(dir, CANONICAL_GLOBAL_CONFIG)
-  const legacyPaths = LEGACY_GLOBAL_CONFIGS.map((name) => path.join(dir, name)).filter((file) => existsSync(file))
-  if (legacyPaths.length === 0) return
-
-  // Parse strictly: if ANY legacy or canonical file is broken (bad JSON OR invalid schema), skip
-  // migration entirely so the normal load path still surfaces the error via getErrors() against the
-  // original file. We must not silently move/drop content from a file the user needs to be told is
-  // broken — moving it would also relabel the error against the wrong (canonical) filename.
-  const parseStrict = (raw: string): Record<string, unknown> | undefined => {
-    try {
-      const value = ConfigParse.jsonc(raw, "migrate")
-      if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
-      // Schema-validate too: an invalid-field file must keep surfacing its schema error in place.
-      // `providers` (Core V2 catalog key) is stripped by normalizeLoadedConfig before validation —
-      // a valid V2-only file must not count as "broken" and block legacy consolidation (D3).
-      ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(value, "migrate"), "migrate")
-      return value as Record<string, unknown>
-    } catch {
-      return undefined
-    }
-  }
-
-  // Load order = config.json -> deepagent-code.json -> deepagent-code.jsonc, so the newest legacy
-  // (.jsonc) wins over older ones. Build the merged object in that precedence; the canonical
-  // config.jsonc (patched below) then wins over all of them.
-  let merged: Record<string, unknown> = {}
-  for (const file of legacyPaths) {
-    const parsed = parseStrict(await fsNode.readFile(file, "utf8").catch(() => ""))
-    if (!parsed) return // broken legacy file — leave everything in place for error reporting
-    merged = { ...merged, ...parsed }
-  }
-
-  let canonicalExisting: Record<string, unknown> | undefined
-  if (existsSync(canonicalPath)) {
-    canonicalExisting = parseStrict(await fsNode.readFile(canonicalPath, "utf8").catch(() => ""))
-    if (!canonicalExisting) return // broken canonical file — don't touch anything
-  }
-
-  if (canonicalExisting) {
-    // Preserve the user's existing .jsonc (and its comments): patch in only the legacy keys that
-    // aren't already set in the canonical file.
-    let text = await fsNode.readFile(canonicalPath, "utf8").catch(() => "{}")
-    for (const [key, value] of Object.entries(merged)) {
-      if (key in canonicalExisting) continue
-      text = patchJsonc(text, { [key]: value })
-    }
-    await fsNode.writeFile(canonicalPath, text)
-  } else {
-    // No canonical file yet. Prefer renaming from a legacy .jsonc so we carry the user's comments
-    // over (the common upgrade path: deepagent-code.jsonc -> config.jsonc). Fold in keys from any
-    // .json-only legacy files on top. Fall back to a plain serialize when no .jsonc legacy exists.
-    const jsoncBase = [...legacyPaths].reverse().find((file) => file.endsWith(".jsonc"))
-    await fsNode.mkdir(dir, { recursive: true }).catch(() => {})
-    if (jsoncBase) {
-      let text = await fsNode.readFile(jsoncBase, "utf8").catch(() => "{}")
-      const baseParsed = parseStrict(text) ?? {}
-      for (const [key, value] of Object.entries(merged)) {
-        if (key in baseParsed) continue
-        text = patchJsonc(text, { [key]: value })
+function migrateGlobalConfigFiles() {
+  const canonicalPath = path.join(Global.Path.config, CANONICAL_GLOBAL_CONFIG)
+  const candidates = LEGACY_GLOBAL_CONFIGS.map((name) => path.join(Global.Path.config, name))
+  return ConfigFileWrite.transaction([canonicalPath, ...candidates], (tx) =>
+    Effect.gen(function* () {
+      const legacy = candidates.map(tx.file).filter((file) => file.text !== undefined)
+      if (!legacy.length) return
+      const parseStrict = (file: ConfigFileWrite.File) => {
+        if (file.text === undefined) return undefined
+        try {
+          const value = ConfigParse.jsonc(file.text, file.path)
+          if (!isRecord(value)) return undefined
+          ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(value, file.path), file.path)
+          return value
+        } catch (error) {
+          if (toConfigError(error, file.path)) return undefined
+          throw error
+        }
       }
-      await fsNode.writeFile(canonicalPath, text)
-    } else {
-      merged.$schema ??= "https://ai.deepagent.ltd/config.schema.json"
-      await fsNode.writeFile(canonicalPath, JSON.stringify(merged, null, 2))
-    }
-  }
-
-  for (const file of legacyPaths) await fsNode.unlink(file).catch(() => {})
+      // Every participating source remains locked until the canonical publication and removals.
+      // This is cooperative maintenance, not a recoverable multi-file migration transaction.
+      const parsed = legacy.map(parseStrict)
+      if (parsed.some((value) => value === undefined)) return
+      const merged = parsed.reduce<Record<string, unknown>>((value, next) => mergeDeep(value, next ?? {}), {})
+      const canonical = tx.file(canonicalPath)
+      const existing = parseStrict(canonical)
+      if (canonical.text !== undefined && !existing) return
+      const base = canonical.text ?? [...legacy].reverse().find((file) => file.path.endsWith(".jsonc"))?.text
+      const baseParsed = base === undefined ? undefined : ConfigParse.jsonc(base, canonicalPath)
+      const fill = (
+        text: string,
+        values: Record<string, unknown>,
+        present: Record<string, unknown>,
+        keys: string[] = [],
+      ): string =>
+        Object.entries(values).reduce((text, [key, value]) => {
+          if (!Object.hasOwn(present, key)) return patchJsonc(text, { [key]: value }, keys)
+          return isRecord(value) && isRecord(present[key]) ? fill(text, value, present[key], [...keys, key]) : text
+        }, text)
+      const text =
+        base === undefined
+          ? JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json", ...merged }, null, 2)
+          : fill(base, merged, existing ?? (isRecord(baseParsed) ? baseParsed : {}))
+      if (text !== canonical.text) yield* tx.write(canonical, text)
+      for (const file of legacy) {
+        if (file.path === canonical.path) continue
+        yield* tx.remove(file)
+      }
+    }),
+  )
 }
 
 function patchJsonc(input: string, patch: unknown, path: string[] = []): string {
@@ -380,7 +391,7 @@ function extractSettingsPatch(config: Info): {
   const deepagent = provider[DEEPAGENT_PSEUDO_PROVIDER_ID]
   if (deepagent) {
     const opts = (deepagent.options ?? {}) as Record<string, unknown>
-    patch.deepagent = {
+    const values = {
       promptMode: opts.promptMode as SettingsStore.PromptMode | undefined,
       // Legacy-compat: prefer the new `intelligenceModel` option key, fall back to the pre-rename
       // `wishModel` so a config written before the rename still carries the user's model over.
@@ -394,12 +405,18 @@ function extractSettingsPatch(config: Info): {
       subagentIntensity: opts.subagentIntensity as SettingsStore.SubagentIntensity | undefined,
       selfLearning: opts.selfLearning as SettingsStore.SelfLearning | undefined,
       runsDir: typeof opts.runsDir === "string" ? opts.runsDir : undefined,
+      expertPanelDefault: typeof opts.expertPanelDefault === "boolean" ? opts.expertPanelDefault : undefined,
       allowProviderExecutedTools:
         typeof opts.allowProviderExecutedTools === "boolean" ? opts.allowProviderExecutedTools : undefined,
       allowProviderExecutedToolNames: Array.isArray(opts.allowProviderExecutedToolNames)
         ? (opts.allowProviderExecutedToolNames.filter((i) => typeof i === "string") as string[])
         : undefined,
     }
+    // Omitted fields are not removals. Preserve independently stored settings;
+    // an explicitly supplied undefined still clears its original field.
+    patch.deepagent = Object.fromEntries(Object.entries(values).filter(([key]) =>
+      Object.hasOwn(opts, key) || key === "intelligenceModel" && Object.hasOwn(opts, "wishModel"))) as SettingsStore.DeepAgentSettings
+
     delete provider[DEEPAGENT_PSEUDO_PROVIDER_ID]
     changed = true
   }
@@ -429,61 +446,51 @@ function extractSettingsPatch(config: Info): {
  * then strip the `provider.deepagent` entry from the file so the config file is third-party-only.
  * Idempotent: if SettingsStore already has deepagent settings we still strip the stale file entry.
  */
-async function migrateFirstPartySettings() {
-  const file = globalConfigFile()
-  let text: string
-  try {
-    text = await fsNode.readFile(file, "utf8")
-  } catch {
-    return // no config file yet — nothing to migrate
-  }
-  let parsed: Record<string, unknown>
-  try {
-    const value = ConfigParse.jsonc(text, "settings-migrate")
-    if (!isRecord(value)) return
-    ConfigParse.schema(ConfigV1.Info, value, "settings-migrate") // skip migration if the file is broken
-    parsed = value as Record<string, unknown>
-  } catch {
-    return
-  }
-  const provider = isRecord(parsed.provider) ? parsed.provider : undefined
-  const deepagent = provider && isRecord(provider.deepagent) ? provider.deepagent : undefined
-  if (!deepagent) return
-
-  const opts = isRecord(deepagent.options) ? deepagent.options : {}
-  const existing = await SettingsStore.read()
-  if (!existing.deepagent) {
-    await SettingsStore.update({
-      deepagent: {
-        promptMode: opts.promptMode as SettingsStore.PromptMode | undefined,
-        // Legacy-compat: prefer the new `intelligenceModel` key, fall back to legacy `wishModel`.
-        intelligenceModel:
-          typeof opts.intelligenceModel === "string"
-            ? opts.intelligenceModel
-            : typeof opts.wishModel === "string"
-              ? opts.wishModel
-              : undefined,
-        agentMode: opts.agentMode as SettingsStore.AgentMode | undefined,
-        subagentIntensity: opts.subagentIntensity as SettingsStore.SubagentIntensity | undefined,
-        selfLearning: opts.selfLearning as SettingsStore.SelfLearning | undefined,
-        runsDir: typeof opts.runsDir === "string" ? opts.runsDir : undefined,
-        allowProviderExecutedTools:
-          typeof opts.allowProviderExecutedTools === "boolean" ? opts.allowProviderExecutedTools : undefined,
-        allowProviderExecutedToolNames: Array.isArray(opts.allowProviderExecutedToolNames)
-          ? (opts.allowProviderExecutedToolNames.filter((i) => typeof i === "string") as string[])
-          : undefined,
-      },
-    })
-  }
-  // Strip provider.deepagent from the file (preserving comments/formatting for the rest).
-  const stripped = patchJsonc(text, { deepagent: undefined }, ["provider"])
-  if (stripped !== text) await fsNode.writeFile(file, stripped).catch(() => {})
+function migrateFirstPartySettings() {
+  const candidates = ["config.jsonc", ...LEGACY_GLOBAL_CONFIGS].map((name) => path.join(Global.Path.config, name))
+  return SettingsTransaction.apply({
+    files: candidates, request: { kind: "legacy_first_party_settings" },
+    prepare: (tx, existing) => {
+      const current = tx.file(globalConfigFile())
+      if (current.text === undefined) return { settings: existing, value: undefined }
+      const parsed = (() => {
+        try {
+          const value = ConfigParse.jsonc(current.text, "settings-migrate")
+          if (!isRecord(value)) return undefined
+          ConfigParse.schema(ConfigV1.Info, value, "settings-migrate")
+          return value
+        } catch { return undefined }
+      })()
+      const provider = parsed && isRecord(parsed.provider) ? parsed.provider : undefined
+      const deepagent = provider && isRecord(provider.deepagent) ? provider.deepagent : undefined
+      if (!deepagent) return { settings: existing, value: undefined }
+      const opts = isRecord(deepagent.options) ? deepagent.options : {}
+      const settings = existing.deepagent ? existing : SettingsStore.merge(existing, {
+        deepagent: {
+          promptMode: opts.promptMode as SettingsStore.PromptMode | undefined,
+          intelligenceModel: typeof opts.intelligenceModel === "string" ? opts.intelligenceModel :
+            typeof opts.wishModel === "string" ? opts.wishModel : undefined,
+          agentMode: opts.agentMode as SettingsStore.AgentMode | undefined,
+          subagentIntensity: opts.subagentIntensity as SettingsStore.SubagentIntensity | undefined,
+          selfLearning: opts.selfLearning as SettingsStore.SelfLearning | undefined,
+          runsDir: typeof opts.runsDir === "string" ? opts.runsDir : undefined,
+          allowProviderExecutedTools: typeof opts.allowProviderExecutedTools === "boolean" ? opts.allowProviderExecutedTools : undefined,
+          allowProviderExecutedToolNames: Array.isArray(opts.allowProviderExecutedToolNames) ?
+            opts.allowProviderExecutedToolNames.filter((value): value is string => typeof value === "string") : undefined,
+        },
+      })
+      return { config: { file: current, text: patchJsonc(current.text, { deepagent: undefined }, ["provider"]) }, settings, value: undefined }
+    },
+  })
 }
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
+    const flock = yield* EffectFlock.Service
+    const fileWrite = <A, E>(effect: Effect.Effect<A, E, FSUtil.Service | EffectFlock.Service>) =>
+      effect.pipe(Effect.provideService(FSUtil.Service, fs), Effect.provideService(EffectFlock.Service, flock))
     const authSvc = yield* Auth.Service
     const accountSvc = yield* Account.Service
     const env = yield* Env.Service
@@ -511,7 +518,7 @@ export const layer = Layer.effect(
 
     const loadConfig = Effect.fnUntraced(function* (
       text: string,
-      options: { path: string } | { dir: string; source: string },
+      options: { path: string; observed?: ConfigFileWrite.Observation } | { dir: string; source: string },
       env?: Record<string, string>,
     ) {
       const source = "path" in options ? options.path : options.source
@@ -529,17 +536,42 @@ export const layer = Layer.effect(
       yield* Effect.promise(() => resolveLoadedPlugins(data, options.path))
       if (!data.$schema) {
         data.$schema = "https://ai.deepagent.ltd/config.schema.json"
-        const updated = text.replace(/^\s*\{/, '{\n  "$schema": "https://ai.deepagent.ltd/config.schema.json",')
-        yield* fs.writeFileString(options.path, updated).pipe(Effect.catch(() => Effect.void))
+        const updated = patchJsonc(text, { $schema: "https://ai.deepagent.ltd/config.schema.json" })
+        // Global metadata participates in the same journal and locks as settings;
+        // a standalone edit would invalidate a just-completed settings receipt.
+        const global = [CANONICAL_GLOBAL_CONFIG, ...LEGACY_GLOBAL_CONFIGS].some((name) =>
+          path.resolve(options.path) === path.resolve(Global.Path.config, name),
+        )
+        yield* (global
+          ? SettingsTransaction.apply({
+            files: [options.path], request: { kind: "global_config_schema", path: options.path },
+            prepare: (tx, settings) => {
+              const current = tx.file(options.path)
+              if (current.text !== text || (options.observed && !ConfigFileWrite.sameObservation(current, options.observed)))
+                throw new ConfigFileWrite.Error({ reason: "changed" })
+              return { config: { file: current, text: updated }, settings, value: undefined }
+            },
+          })
+          : ConfigFileWrite.edit(
+            options.path,
+            (current) => {
+              if (current.text !== text) throw new ConfigFileWrite.Error({ reason: "changed" })
+              return { text: updated, value: undefined }
+            },
+            options.observed,
+          )).pipe(
+          fileWrite,
+          Effect.catch(() => Effect.void),
+        )
       }
       return data
     })
 
     const loadFile = Effect.fnUntraced(function* (filepath: string, env?: Record<string, string>) {
       log.info("loading", { path: filepath })
-      const text = yield* readConfigFile(filepath)
-      if (!text) return {} as Info
-      return yield* loadConfig(text, { path: filepath }, env)
+      const observed = yield* ConfigFileWrite.read(filepath).pipe(Effect.orDie)
+      if (!observed.text) return {} as Info
+      return yield* loadConfig(observed.text, { path: filepath, observed }, env)
     })
 
     const loadGlobal = Effect.fnUntraced(function* (env?: Record<string, string>) {
@@ -561,18 +593,32 @@ export const layer = Layer.effect(
       // Seed the default global config with the schema for editor completion, but avoid writing when config
       // is supplied directly through an explicit file or inline content.
       if (!Flag.DEEPAGENT_CODE_CONFIG && !Flag.DEEPAGENT_CODE_CONFIG_CONTENT) {
+        yield* SettingsTransaction.requireSettledEffect.pipe(Effect.orDie)
         // Consolidate any legacy config.json / deepagent-code.json into the single canonical
         // deepagent-code.jsonc and remove the old files, so there is one config file to edit.
         // Best-effort: a failure here must not block config loading (we still merge all names below).
-        yield* Effect.promise(() => migrateGlobalConfigFiles()).pipe(Effect.catch(() => Effect.void))
+        yield* migrateGlobalConfigFiles().pipe(
+          fileWrite,
+          Effect.catch(() => Effect.void),
+        )
         // Move any first-party runtime settings (provider.deepagent.options) out of the config file
         // into SettingsStore, so the config file stays third-party-only. Best-effort.
-        yield* Effect.promise(() => migrateFirstPartySettings()).pipe(Effect.catch(() => Effect.void))
+        yield* migrateFirstPartySettings().pipe(
+          fileWrite,
+          Effect.catch(() => Effect.void),
+        )
         const file = globalConfigFile()
         if (!existsSync(file)) {
-          yield* fs
-            .writeWithDirs(file, JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json" }, null, 2))
-            .pipe(Effect.catch(() => Effect.void))
+          yield* ConfigFileWrite.edit(file, (current) => ({
+            text:
+              current.text === undefined
+                ? JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json" }, null, 2)
+                : undefined,
+            value: undefined,
+          })).pipe(
+            fileWrite,
+            Effect.catch(() => Effect.void),
+          )
         }
       }
       // Merge in precedence order: legacy names first, then the canonical config.jsonc last so it
@@ -585,17 +631,26 @@ export const layer = Layer.effect(
 
       const legacy = path.join(Global.Path.config, "config")
       if (existsSync(legacy)) {
-        yield* Effect.promise(() =>
-          import(pathToFileURL(legacy).href, { with: { type: "toml" } })
-            .then(async (mod) => {
-              const { provider, model, ...rest } = mod.default
-              if (provider && model) result.model = `${provider}/${model}`
-              result["$schema"] = "https://ai.deepagent.ltd/config.schema.json"
-              result = mergeConfig(result, rest)
-              await fsNode.writeFile(path.join(Global.Path.config, "config.json"), JSON.stringify(result, null, 2))
-              await fsNode.unlink(legacy)
-            })
-            .catch(() => {}),
+        const destination = path.join(Global.Path.config, "config.json")
+        yield* ConfigFileWrite.transaction([legacy, destination], (tx) =>
+          Effect.gen(function* () {
+            const original = tx.file(legacy)
+            if (original.text === undefined) return
+            const mod = yield* Effect.promise(() => import(pathToFileURL(legacy).href, { with: { type: "toml" } }))
+            const { provider, model, ...rest } = mod.default
+            const next = mergeConfig(result, rest)
+            if (provider && model) next.model = `${provider}/${model}`
+            next.$schema = "https://ai.deepagent.ltd/config.schema.json"
+            const current = yield* ConfigFileWrite.read(legacy)
+            if (!ConfigFileWrite.sameObservation(original, current))
+              return yield* new ConfigFileWrite.Error({ reason: "changed" })
+            yield* tx.write(tx.file(destination), JSON.stringify(next, null, 2))
+            yield* tx.remove(original)
+            result = next
+          }),
+        ).pipe(
+          fileWrite,
+          Effect.catch(() => Effect.void),
         )
       }
 
@@ -617,7 +672,7 @@ export const layer = Layer.effect(
       // Frontend view: overlay first-party settings so the app renders current values. Official
       // transport is included here (getGlobal is only read by the app / global routes, never by the
       // provider loader), so the connect dialog can show/edit timeouts.
-      const settings = yield* Effect.promise(() => SettingsStore.read())
+      const settings = yield* SettingsStore.readEffect.pipe(Effect.orDie)
       return overlaySettings(base, settings, true)
     })
 
@@ -648,6 +703,7 @@ export const layer = Layer.effect(
         const consoleManagedProviders = new Set<string>()
         const configErrors: ConfigError[] = []
         let activeOrgName: string | undefined
+        const readonlyRemote: NonNullable<State["readonlyRemote"]> = { sources: [], unavailable: false }
 
         const pluginScopeForSource = Effect.fnUntraced(function* (source: string) {
           if (source.startsWith("http://") || source.startsWith("https://")) return "global"
@@ -678,6 +734,26 @@ export const layer = Layer.effect(
         })
 
         const merge = (source: string, next: Info, kind?: ConfigPlugin.Scope) => {
+          // Retain only already-loaded display data. This is a bounded projection,
+          // not permission to refresh an account or discover remote skills on GET.
+          if (/^https?:/.test(source) && (next.command || next.skills) && !readonlyRemote.unavailable) {
+            const entry = { source, config: { command: next.command, skills: next.skills } }
+            const candidates = [...readonlyRemote.sources, entry]
+            const count = candidates.reduce(
+              (total, item) =>
+                total +
+                1 +
+                Object.keys(item.config.command ?? {}).length +
+                (item.config.skills?.paths?.length ?? 0) +
+                (item.config.skills?.urls?.length ?? 0),
+              0,
+            )
+            if (count > 1000 || Buffer.byteLength(JSON.stringify(candidates)) > 262144) {
+              readonlyRemote.sources.length = 0
+              readonlyRemote.unavailable = true
+            }
+            if (!readonlyRemote.unavailable) readonlyRemote.sources.push(structuredClone(entry))
+          }
           result = mergeConfigConcatArrays(result, next)
           if (next.mcp) {
             result.mcp_origins = {
@@ -831,15 +907,22 @@ export const layer = Layer.effect(
         const activeAccount = Option.getOrUndefined(
           yield* accountSvc.active().pipe(Effect.catch(() => Effect.succeed(Option.none()))),
         )
+        const observed: { account?: Account.Source } = {}
         if (activeAccount?.active_org_id) {
           const accountID = activeAccount.id
           const orgID = activeAccount.active_org_id
           const url = activeAccount.url
           yield* Effect.gen(function* () {
+            const before = yield* accountSvc.source()
+            if (!before || before.id !== accountID || before.url !== url || before.orgID !== orgID)
+              return yield* new Account.AccountServiceError({ message: "Account changed before configuration read" })
             const [configOpt, tokenOpt] = yield* Effect.all(
               [accountSvc.config(accountID, orgID), accountSvc.token(accountID)],
               { concurrency: 2 },
             )
+            const after = yield* accountSvc.source()
+            if (JSON.stringify(before) !== JSON.stringify(after))
+              return yield* new Account.AccountServiceError({ message: "Account changed during configuration read" })
             if (Option.isSome(tokenOpt)) {
               process.env["DEEPAGENT_CODE_CONSOLE_TOKEN"] = tokenOpt.value
               yield* env.set("DEEPAGENT_CODE_CONSOLE_TOKEN", tokenOpt.value)
@@ -855,6 +938,7 @@ export const layer = Layer.effect(
                 consoleManagedProviders.add(providerID)
               }
               yield* merge(source, next, "global")
+              observed.account = after
             }
           }).pipe(
             Effect.withSpan("Config.loadActiveOrgConfig"),
@@ -936,6 +1020,8 @@ export const layer = Layer.effect(
 
         return {
           config: result,
+          mcpAccountSource: observed.account,
+          readonlyRemote,
           directories,
           deps,
           consoleState: {
@@ -955,13 +1041,119 @@ export const layer = Layer.effect(
       }),
     )
 
+    const observeConfig = Effect.fn("Config.observeConfig")(
+      function* (ctx: { directory: string; worktree: string }, cachedState?: State, full = false) {
+        const result: Info = {}
+        const sources: [string, string][] = []
+        const merge = (source: string, next: Info) => {
+          const previous = result.mcp
+          if (full) Object.assign(result, mergeConfigConcatArrays(result, next))
+          if (!next.mcp) return
+          result.mcp = mergeConfigConcatArrays({ mcp: previous }, { mcp: next.mcp }).mcp
+          result.mcp_origins = {
+            ...result.mcp_origins,
+            ...Object.fromEntries(Object.keys(next.mcp).map((key) => [key, source])),
+          }
+        }
+        const read = Effect.fnUntraced(function* (file: string, source = file) {
+          const text = yield* readConfigFile(file)
+          sources.push([file, text ?? ""])
+          if (text) merge(source, yield* loadConfig(text, { dir: path.dirname(file), source: file }))
+        })
+        // Only an already observed remote configuration can appear here. This path
+        // never fetches it, installs plugins, rewrites config or opens an MCP client.
+        const currentAccount = yield* accountSvc.source()
+        const accountCurrent = JSON.stringify(currentAccount) === JSON.stringify(cachedState?.mcpAccountSource)
+        const cached = cachedState?.config
+        const sourceCurrent = (source: string) => !source.endsWith("/api/config") || accountCurrent
+        if (full && accountCurrent && cachedState?.readonlyRemote?.unavailable)
+          return yield* Effect.die(new Error("Observed remote command metadata exceeds the readonly budget"))
+        const readSources = (cachedState?.readonlyRemote?.sources ?? []).filter((entry) => sourceCurrent(entry.source))
+        for (const entry of readSources)
+          if (full && !entry.source.endsWith("/api/config")) merge(entry.source, entry.config)
+        const remote = Object.entries(cached?.mcp ?? {}).filter(
+          ([key]) => /^https?:/.test(cached?.mcp_origins?.[key] ?? "") && sourceCurrent(cached!.mcp_origins![key]),
+        )
+        for (const [key, value] of remote) merge(cached!.mcp_origins![key], { mcp: { [key]: value } })
+        for (const file of ["config.json", "deepagent-code.json", "deepagent-code.jsonc", "config.jsonc"])
+          yield* read(path.join(Global.Path.config, file), Global.Path.config)
+        if (Flag.DEEPAGENT_CODE_CONFIG) yield* read(Flag.DEEPAGENT_CODE_CONFIG)
+        if (!Flag.DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG)
+          for (const file of yield* ConfigPaths.files("deepagent-code", ctx.directory, ctx.worktree).pipe(Effect.orDie))
+            yield* read(file)
+        const directories = yield* ConfigPaths.directories(ctx.directory, ctx.worktree)
+        for (const dir of directories) {
+          if (dir.endsWith(".deepagent-code"))
+            for (const name of ["deepagent-code.json", "deepagent-code.jsonc"]) yield* read(path.join(dir, name))
+          if (full)
+            result.command = mergeDeep(result.command ?? {}, yield* Effect.promise(() => ConfigCommand.load(dir)))
+        }
+        if (process.env.DEEPAGENT_CODE_CONFIG_CONTENT) {
+          sources.push(["DEEPAGENT_CODE_CONFIG_CONTENT", process.env.DEEPAGENT_CODE_CONFIG_CONTENT])
+          merge(
+            "DEEPAGENT_CODE_CONFIG_CONTENT",
+            yield* loadConfig(process.env.DEEPAGENT_CODE_CONFIG_CONTENT, {
+              dir: ctx.directory,
+              source: "DEEPAGENT_CODE_CONFIG_CONTENT",
+            }),
+          )
+        }
+        // Account config is later than local layers in the production loader.
+        for (const entry of readSources)
+          if (full && entry.source.endsWith("/api/config")) merge(entry.source, entry.config)
+        for (const [key, value] of remote)
+          if (cached!.mcp_origins![key].endsWith("/api/config"))
+            merge(cached!.mcp_origins![key], { mcp: { [key]: value } })
+        const managedDir = ConfigManaged.managedConfigDir()
+        if (existsSync(managedDir))
+          for (const name of ["deepagent-code.json", "deepagent-code.jsonc"]) yield* read(path.join(managedDir, name))
+        const managed = yield* Effect.promise(() => ConfigManaged.readManagedPreferences())
+        if (managed) {
+          sources.push([managed.source, managed.text])
+          merge(
+            managed.source,
+            yield* loadConfig(managed.text, { dir: path.dirname(managed.source), source: managed.source }),
+          )
+        }
+        if (JSON.stringify(yield* accountSvc.source()) !== JSON.stringify(currentAccount))
+          return yield* Effect.die(new Error("Account changed during readonly configuration observation"))
+        return {
+          config: result,
+          remoteCurrent: accountCurrent,
+          source: JSON.stringify({ sources, account: currentAccount, remote: readSources }),
+          accountSource: accountCurrent ? cachedState?.mcpAccountSource : undefined,
+          directories,
+          directory: ctx.directory,
+          worktree: ctx.worktree,
+        }
+      },
+      Effect.provideService(FSUtil.Service, fs),
+      Effect.orDie,
+    )
+
+    const mcpSnapshot = Effect.fn("Config.mcpSnapshot")(function* () {
+      const context = yield* InstanceState.context
+      return yield* observeConfig(context, Option.getOrUndefined(yield* ScopedCache.getSuccess(state.cache, context)))
+    })
+
+    const readonlySnapshot = Effect.fn("Config.readonlySnapshot")(function* (input: {
+      directory: string
+      worktree: string
+      observed?: InstanceContext
+    }) {
+      const cached = input.observed
+        ? Option.getOrUndefined(yield* ScopedCache.getSuccess(state.cache, input.observed))
+        : undefined
+      return yield* observeConfig(input, cached, true)
+    })
+
     const get = Effect.fn("Config.get")(function* () {
       const base = yield* InstanceState.use(state, (s) => s.config)
       // Backend view: overlay ONLY the deepagent runtime settings (gatewayConfig/intelligenceModel read them
       // from provider.deepagent.options). Official-provider transport is deliberately NOT overlaid
       // here — the provider loader reads transport straight from SettingsStore, and injecting an
       // official id into the config it sees would trip the official-conflict rejection.
-      const settings = yield* Effect.promise(() => SettingsStore.read())
+      const settings = yield* SettingsStore.readEffect.pipe(Effect.orDie)
       return overlaySettings(base, settings, false)
     })
 
@@ -986,12 +1178,19 @@ export const layer = Layer.effect(
     // Project-scoped writes must land in a file the loader actually merges: ConfigPaths.files
     // targets deepagent-code.json(c) at or above ctx.directory. A plain config.json next to the
     // working directory is never read back, so writes there silently vanish on the next load.
-    const update = Effect.fn("Config.update")(function* (config: Info) {
+    const update = Effect.fn("Config.update")(function* (config: Info, expected?: ConfigFileWrite.Observation) {
       const file = path.join(yield* InstanceState.directory, "deepagent-code.json")
-      const existing = yield* loadFile(file)
-      yield* fs
-        .writeFileString(file, JSON.stringify(mergeDeep(writable(existing), writable(config)), null, 2))
-        .pipe(Effect.orDie)
+      yield* ConfigFileWrite.edit(
+        file,
+        (current) => {
+          const text = current.text ?? "{}"
+          ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(ConfigParse.jsonc(text, file), file), file)
+          const updated = patchJsonc(text, writable(config))
+          ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(ConfigParse.jsonc(updated, file), file), file)
+          return { text: updated, value: undefined }
+        },
+        expected,
+      ).pipe(fileWrite, Effect.orDie)
     })
 
     const invalidate = Effect.fn("Config.invalidate")(function* () {
@@ -1000,24 +1199,36 @@ export const layer = Layer.effect(
       if (instance) yield* InstanceState.invalidate(state)
     })
 
-    const watchChanges = Effect.fn("Config.watch")(function* (changed: () => Effect.Effect<void>) {
+    const watchChanges = Effect.fn("Config.watch")(function* (
+      changed: () => Effect.Effect<void>,
+      options?: { readonly mcpOnly?: boolean },
+    ) {
       const ctx = yield* InstanceState.context
-      const dirs = yield* directories()
-      const pluginFiles =
-        (yield* get()).plugin_origins?.flatMap((origin) => {
-          const spec = ConfigPlugin.pluginSpecifier(origin.spec)
-          return spec.startsWith("file://") ? [fileURLToPath(spec)] : []
-        }) ?? []
+      const dirs = options?.mcpOnly
+        ? yield* ConfigPaths.directories(ctx.directory, ctx.worktree).pipe(
+            Effect.provideService(FSUtil.Service, fs),
+            Effect.orDie,
+          )
+        : yield* directories()
+      const pluginFiles = options?.mcpOnly
+        ? []
+        : ((yield* get()).plugin_origins?.flatMap((origin) => {
+            const spec = ConfigPlugin.pluginSpecifier(origin.spec)
+            return spec.startsWith("file://") ? [fileURLToPath(spec)] : []
+          }) ?? [])
       const files = yield* ConfigPaths.files("deepagent-code", ctx.directory, ctx.worktree).pipe(
         Effect.provideService(FSUtil.Service, fs),
         Effect.orDie,
       )
-      const pluginDirectories = new Set(dirs.flatMap((dir) => [path.join(dir, "plugin"), path.join(dir, "plugins")]))
+      const pluginDirectories = new Set(
+        options?.mcpOnly ? [] : dirs.flatMap((dir) => [path.join(dir, "plugin"), path.join(dir, "plugins")]),
+      )
       const targets = new Set([
         Global.Path.config,
         ctx.directory,
         ...dirs,
         ...files.map(path.dirname),
+        ...(Flag.DEEPAGENT_CODE_CONFIG ? [path.dirname(Flag.DEEPAGENT_CODE_CONFIG)] : []),
         ...pluginFiles.map(path.dirname),
         ...pluginDirectories,
       ])
@@ -1030,7 +1241,7 @@ export const layer = Layer.effect(
             .withPermit(
               Effect.gen(function* () {
                 if (closed) return
-                yield* invalidate()
+                if (!options?.mcpOnly) yield* invalidate()
                 yield* changed()
               }),
             )
@@ -1126,57 +1337,87 @@ export const layer = Layer.effect(
       }
     })
 
-    const updateGlobal = Effect.fn("Config.updateGlobal")(function* (config: Info) {
-      // Route first-party settings (deepagent runtime + official transport) to SettingsStore and strip
-      // them from the config payload so they never land in the third-party-only config file.
-      const { cleaned, patch, hasPatch } = extractSettingsPatch(config)
-      let settingsChanged = false
-      if (hasPatch) {
-        const result = yield* Effect.promise(() => SettingsStore.update(patch))
-        settingsChanged = result.changed
-      }
-
-      const file = globalConfigFile()
-      const before = (yield* readConfigFile(file)) ?? "{}"
+    const updateGlobal = Effect.fn("Config.updateGlobal")(function* (
+      config: Info,
+      expected?: ConfigFileWrite.Observation,
+    ) {
+      const { cleaned, patch } = extractSettingsPatch(config)
+      const candidates = ["config.jsonc", ...LEGACY_GLOBAL_CONFIGS].map((name) => path.join(Global.Path.config, name))
       const patchGlobal = writableGlobal(cleaned)
+      const written = yield* SettingsTransaction.apply({
+        files: candidates, request: { kind: "global_settings", config },
+        prepare: (tx, settings) => {
+          const current = tx.file(globalConfigFile())
+          if (expected && !ConfigFileWrite.sameObservation(current, expected))
+            throw new ConfigFileWrite.Error({ reason: "changed" })
+          const before = current.text ?? "{}"
+          ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(ConfigParse.jsonc(before, current.path), current.path), current.path)
+          const updated = patchJsonc(before, patchGlobal)
+          const next = ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(ConfigParse.jsonc(updated, current.path), current.path), current.path)
+          return { config: { file: current, text: updated }, settings: SettingsStore.merge(settings, patch), value: next }
+        },
+      }).pipe(fileWrite, Effect.orDie)
+      if (written.changed) yield* invalidate()
+      return { info: overlaySettings(written.value, written.settings, true), changed: written.changed }
+    })
 
-      let next: Info
-      let changed: boolean
-      if (!file.endsWith(".jsonc")) {
-        const existing = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(before, file), file)
-        const merged = mergeDeep(writable(existing), patchGlobal)
-        const serialized = JSON.stringify(merged, null, 2)
-        changed = serialized !== before
-        if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
-        next = merged
-      } else {
-        const updated = patchJsonc(before, patchGlobal)
-        next = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(updated, file), file)
-        changed = updated !== before
-        if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
-      }
-
-      if (changed) yield* invalidate()
-      // Re-overlay the persisted settings onto the returned info so the caller (app) immediately sees
-      // the values it just set, including official transport (this is the getGlobal-equivalent view).
-      const settings = yield* Effect.promise(() => SettingsStore.read())
-      return { info: overlaySettings(next, settings, true), changed: changed || settingsChanged }
+    const removeGlobalMcp = Effect.fn("Config.removeGlobalMcp")(function* (name: string, original: McpSnapshot) {
+      const observed = yield* mcpSnapshot()
+      if (observed.source !== original.source) return yield* new McpRemovalError({ reason: "changed" })
+      if (Object.hasOwn(observed.config.mcp ?? {}, name) && observed.config.mcp_origins?.[name] !== Global.Path.config)
+        return yield* new McpRemovalError({ reason: "readonly" })
+      const file = globalConfigFile()
+      const expected = yield* ConfigFileWrite.read(file).pipe(fileWrite, Effect.orDie)
+      yield* SettingsTransaction.apply({
+        files: ["config.jsonc", ...LEGACY_GLOBAL_CONFIGS].map((name) => path.join(Global.Path.config, name)),
+        request: { kind: "global_mcp_remove", name },
+        prepare: (tx, settings) => {
+          const current = tx.file(file)
+          if (!ConfigFileWrite.sameObservation(current, expected)) throw new McpRemovalError({ reason: "changed" })
+          const text = current.text ?? "{}"
+          const parsed = ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(ConfigParse.jsonc(text, file), file), file)
+          if (Object.hasOwn(observed.config.mcp ?? {}, name) && !Object.hasOwn(parsed.mcp ?? {}, name))
+            throw new McpRemovalError({ reason: "changed" })
+          // A surviving legacy definition would reappear after removing the winning key.
+          for (const nameOfFile of ["config.jsonc", ...LEGACY_GLOBAL_CONFIGS]) {
+            const other = tx.file(path.join(Global.Path.config, nameOfFile))
+            if (other.path === current.path || other.text === undefined) continue
+            const value = ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(ConfigParse.jsonc(other.text, other.path), other.path), other.path)
+            if (Object.hasOwn(value.mcp ?? {}, name)) throw new McpRemovalError({ reason: "changed" })
+          }
+          const updated = applyEdits(text, modify(text, ["mcp", name], undefined, {
+            formattingOptions: { insertSpaces: true, tabSize: 2 },
+          }))
+          ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(ConfigParse.jsonc(updated, file), file), file)
+          return { config: current.text === undefined ? undefined : { file: current, text: updated }, settings, value: undefined }
+        },
+      }).pipe(fileWrite, Effect.catchCause((cause) => {
+        const error = Cause.squash(cause)
+        return error instanceof McpRemovalError ? Effect.fail(error) : Effect.die(error)
+      }))
+      yield* invalidate()
+      // A lower remote/project layer may become visible after the local key is gone.
+      // Report that current source rather than claiming the effective server was removed.
+      if (Object.hasOwn((yield* get()).mcp ?? {}, name)) return yield* new McpRemovalError({ reason: "changed" })
     })
 
     return Service.of({
+      mcpSnapshot,
+      readonlySnapshot,
       get,
       getGlobal,
       getConsoleState,
       getErrors,
       update,
       updateGlobal,
+      removeGlobalMcp,
       invalidate,
       directories,
       waitForDependencies,
       watch: watchChanges,
     })
   }),
-)
+).pipe(Layer.provide(EffectFlock.defaultLayer))
 
 const withAuthorities = (account: Layer.Layer<Account.Service, unknown>) =>
   layer.pipe(

@@ -114,6 +114,23 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   const project = useProject()
   const sync = useSync()
   const i18n = useTuiI18n()
+  const app = () => {
+    const source = props.request.metadata?.mcpApp
+    if (
+      !source ||
+      typeof source !== "object" ||
+      !("type" in source) ||
+      source.type !== "mcp_app" ||
+      !("server" in source) ||
+      typeof source.server !== "string" ||
+      !("tool" in source) ||
+      typeof source.tool !== "string" ||
+      !("invocationID" in source) ||
+      typeof source.invocationID !== "string"
+    )
+      return
+    return { server: source.server, tool: source.tool, invocationID: source.invocationID }
+  }
   const [store, setStore] = createStore({
     stage: "permission" as PermissionStage,
   })
@@ -418,7 +435,21 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
             <Prompt
               title="Permission required"
               header={header()}
-              body={current.body}
+              body={
+                <box flexDirection="column">
+                  <Show when={app()}>
+                    {(source) => (
+                      <box paddingLeft={1} flexDirection="column">
+                        <text fg={theme.warning}>
+                          {i18n.t("tui.mcp.apps.source", { server: source().server, tool: source().tool })}
+                        </text>
+                        <text fg={theme.textMuted}>{source().invocationID}</text>
+                      </box>
+                    )}
+                  </Show>
+                  {current.body}
+                </box>
+              }
               options={{
                 once: i18n.t("tui.permission.allowOnce"),
                 always: i18n.t("tui.permission.allowAlways"),

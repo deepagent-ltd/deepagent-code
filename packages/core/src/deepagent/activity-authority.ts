@@ -10,6 +10,7 @@ import { SessionTable } from "../session/sql"
 import { CanonicalJson } from "../util/canonical-json"
 import { Hash } from "../util/hash"
 import { Wildcard } from "../util/wildcard"
+import { WorkspaceV2 } from "../workspace"
 import type { CompletionCriterion } from "./goal-loop"
 import {
   type ActivityKind,
@@ -903,6 +904,8 @@ const decidePermissionInternal = Effect.fn("DeepAgentActivityAuthority.decidePer
             return yield* new ConflictError({ entity: input.requestID, expected: "pending", actual: "missing" })
           if (request.state !== "pending")
             return yield* new ConflictError({ entity: input.requestID, expected: "pending", actual: request.state })
+          if (input.actorType !== "system")
+            yield* requireCurrentNoProgressAuthority(tx, request, now, input.decision === "interrupted")
           if (request.request_kind === "tool") {
             const objective = yield* tx
               .select({ state: SessionActivityObjectiveTable.state })
@@ -1437,6 +1440,7 @@ export const consumeOnce = Effect.fn("DeepAgentActivityAuthority.consumeOnce")(f
               expected: "approved_once",
               actual: request?.state ?? "missing",
             })
+          yield* requireCurrentNoProgressAuthority(tx, request, now)
           const objective = yield* tx
             .select({ state: SessionActivityObjectiveTable.state })
             .from(SessionActivityObjectiveTable)
@@ -2256,6 +2260,74 @@ function observation(row: typeof SessionActivityProgressObservationTable.$inferS
     noProgressCount: row.no_progress_count,
     observedAt: row.observed_at,
   }
+}
+
+/** Fresh interactive V2 continuation cannot use a dead owner's or superseded policy's challenge.
+ * A live owner may still terminate its original blocked activity after policy changes: stopping
+ * grants no new execution authority. Exact retries and system recovery bypass this fresh fence. */
+function requireCurrentNoProgressAuthority(
+  tx: Transaction,
+  request: typeof SessionActivityPermissionRequestTable.$inferSelect,
+  now: number,
+  terminate = false,
+) {
+  return Effect.gen(function* () {
+    if (request.activity_kind !== "v2" || request.request_kind !== "no_progress") return
+    const owner = yield* tx
+      .select({ expiresAt: SessionActivityPermissionOwnerLeaseTable.lease_expires_at })
+      .from(SessionActivityPermissionOwnerLeaseTable)
+      .where(eq(SessionActivityPermissionOwnerLeaseTable.owner_id, request.owner_id))
+      .get()
+    if (!owner || owner.expiresAt <= now)
+      return yield* new ConflictError({
+        entity: request.request_id,
+        expected: "live original no-progress owner",
+        actual: owner ? "expired" : "missing",
+      })
+    if (terminate) {
+      const activity = yield* tx
+        .select({ state: SessionActivityObjectiveTable.state, baseState: SessionActivityTable.state })
+        .from(SessionActivityTable)
+        .innerJoin(SessionTable, eq(SessionTable.id, SessionActivityTable.session_id))
+        .innerJoin(
+          SessionActivityObjectiveTable,
+          and(
+            eq(SessionActivityObjectiveTable.activity_kind, "v2"),
+            eq(SessionActivityObjectiveTable.activity_id, SessionActivityTable.activity_id),
+            eq(SessionActivityObjectiveTable.session_id, request.session_id),
+          ),
+        )
+        .where(
+          and(
+            eq(SessionActivityTable.activity_id, request.activity_id),
+            eq(SessionActivityTable.session_id, request.session_id),
+            eq(SessionTable.project_id, request.project_id),
+            request.workspace_id === null
+              ? isNull(SessionTable.workspace_id)
+              : eq(SessionTable.workspace_id, WorkspaceV2.ID.make(request.workspace_id)),
+          ),
+        )
+        .get()
+      if (activity?.state !== "needs_human" || activity.baseState !== "active")
+        return yield* new ConflictError({
+          entity: request.activity_id,
+          expected: "original active no-progress activity awaiting human decision",
+          actual: activity ? `${activity.baseState}/${activity.state}` : "missing original activity",
+        })
+      return
+    }
+    const epoch = yield* tx
+      .select({ epoch: PermissionSavedEpochTable.epoch })
+      .from(PermissionSavedEpochTable)
+      .where(eq(PermissionSavedEpochTable.project_id, request.project_id))
+      .get()
+    if (!epoch || epoch.epoch !== request.authority_epoch)
+      return yield* new ConflictError({
+        entity: request.request_id,
+        expected: `current no-progress authority epoch ${request.authority_epoch}`,
+        actual: epoch ? String(epoch.epoch) : "missing",
+      })
+  })
 }
 
 function permissionRequest(row: typeof SessionActivityPermissionRequestTable.$inferSelect) {

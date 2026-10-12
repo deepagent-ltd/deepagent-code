@@ -1,3 +1,4 @@
+import { GoalChildSchema } from "../../deepagent/goal-child.schema"
 export * as SessionExecutionLocal from "./local"
 
 import { Cause, DateTime, Effect, Layer } from "effect"
@@ -11,12 +12,18 @@ import { SessionStore } from "../store"
 import { SessionExecution } from "../execution"
 import { logFailure } from "../logging"
 import { Delegation } from "../../tool/delegation"
+import { WorkAuthoritySchema } from "../work-authority.schema"
 
 /** Current-process routing for implicit-local Locations. Future remote placement belongs here. */
 export const layer = Layer.effect(
   SessionExecution.Service,
   Effect.gen(function* () {
     const store = yield* SessionStore.Service
+    const owned = store.goalOwned?.()
+    const withReceipt = <A, E, R>(
+      receipt: SessionRunCoordinator.OwnedReceipt<SessionSchema.ID> | undefined,
+      effect: Effect.Effect<A, E, R>,
+    ) => (owned ? owned.withReceipt(receipt, effect) : effect)
     const locations = yield* LocationServiceMap
     const events = yield* EventV2.Service
     // Drain fibers are forked from this layer's captured context and structurally cannot see the
@@ -40,64 +47,98 @@ export const layer = Layer.effect(
         ),
         Effect.ignore,
       )
-    const releaseOnCommit = (sessionID: SessionSchema.ID) => ({
+    const releaseOnCommit = (
+      sessionID: SessionSchema.ID,
+      receipt?: SessionRunCoordinator.OwnedReceipt<SessionSchema.ID>,
+      state: GoalChildSchema.Execution["state"] = "recovery_required",
+    ) => ({
       commit: () => {
         const token = ownedClaims.get(sessionID)
         if (token === undefined) return Effect.die(`Session execution claim token missing: ${sessionID}`)
-        return store.release(sessionID, token).pipe(
+        return (owned?.finish(receipt, state) ?? Effect.void).pipe(
+          Effect.orDie,
+          Effect.andThen(store.release(sessionID, token)),
           Effect.flatMap((released) =>
-            released
-              ? Effect.void
-              : Effect.die(`Session execution claim token changed: ${sessionID}`),
+            released ? Effect.void : Effect.die(`Session execution claim token changed: ${sessionID}`),
           ),
         )
       },
     })
-    const coordinator = yield* SessionRunCoordinator.make<
+    const coordinator: SessionRunCoordinator.Coordinator<SessionSchema.ID, void, SessionRunner.RunError, SessionExecution.InterruptReason> = yield* SessionRunCoordinator.make<
       SessionSchema.ID,
       void,
       SessionRunner.RunError,
       SessionExecution.InterruptReason
     >({
-      started: (sessionID) =>
-        Effect.gen(function* () {
-          const session = yield* store.get(sessionID)
-          if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
-          let claimedToken: number | undefined
-          yield* events.publishChecked(
-            SessionEvent.Execution.Started,
-            { sessionID, timestamp: yield* DateTime.now },
-            {
-              commit: () => store.claim(sessionID).pipe(Effect.flatMap((token) =>
-                token === undefined
-                  ? Effect.fail(new SessionRunner.ExecutionRecoveryRequiredError({ sessionID }))
-                  : Effect.sync(() => { claimedToken = token }),
-              )),
-              location: session.location,
-            },
-          )
-          if (claimedToken === undefined) return yield* Effect.die(`Session execution claim token missing after Started: ${sessionID}`)
-          ownedClaims.set(sessionID, claimedToken)
-        }).pipe(
-          // A refused claim aborts the event transaction. Recover only this expected CAS result
-          // from the checked hook channel; all other hook failures remain defects.
-          Effect.catch((error) =>
-            error.cause instanceof SessionRunner.ExecutionRecoveryRequiredError
-              ? Effect.fail(error.cause)
-              : Effect.die(error),
-          ),
-          Effect.asVoid,
-        ),
-      drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, mode) {
-        const session = yield* store.get(sessionID)
-        if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
-        return yield* SessionRunner.Service.use((runner) => runner.run({ sessionID, force: mode === "run" })).pipe(
-          Effect.provide(locations.get(session.location)),
-          Effect.provideService(Delegation.DelegationSlot, delegation),
-        )
+      captureRunScope: (sessionID) => Effect.gen(function* () {
+        const { WorkKnownRecovery } = yield* Effect.promise(() => import("../work-known-recovery"))
+        return yield* WorkKnownRecovery.captureContinuation(sessionID)
       }),
+      started: (sessionID, receipt) =>
+        withReceipt(
+          receipt,
+          Effect.gen(function* () {
+            yield* store.requireExecution(sessionID)
+            const session = yield* store.get(sessionID)
+            if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
+            let claimedToken: number | undefined
+            let link: GoalChildSchema.Execution | undefined
+            yield* events.publishChecked(
+              SessionEvent.Execution.Started,
+              { sessionID, timestamp: yield* DateTime.now },
+              {
+                commit: (seq) =>
+                  store.requireExecution(sessionID, { prepareSource: false }).pipe(
+                    Effect.andThen(store.claim(sessionID)),
+                    Effect.flatMap((token) =>
+                      Effect.gen(function* () {
+                        if (token === undefined)
+                          return yield* new SessionRunner.ExecutionRecoveryRequiredError({ sessionID })
+                        if (receipt) link = yield* owned!.bind(receipt, token, seq)
+                        claimedToken = token
+                      }),
+                    ),
+                  ),
+                location: session.location,
+              },
+            )
+            if (claimedToken === undefined)
+              return yield* Effect.die(`Session execution claim token missing after Started: ${sessionID}`)
+            if (receipt && link) owned!.committed(receipt, link)
+            ownedClaims.set(sessionID, claimedToken)
+          }).pipe(
+            // Control can refuse before publishChecked or inside its transactional hook. Preserve
+            // either typed refusal; unexpected hook failures remain defects and keep claims fenced.
+            Effect.catch((error) =>
+              error instanceof WorkAuthoritySchema.Error || error instanceof GoalChildSchema.Error
+                ? Effect.fail(error)
+                : error.cause instanceof SessionRunner.ExecutionRecoveryRequiredError ||
+                    error.cause instanceof WorkAuthoritySchema.Error ||
+                    error.cause instanceof GoalChildSchema.Error
+                  ? Effect.fail(error.cause)
+                  : Effect.die(error),
+            ),
+            Effect.asVoid,
+          ),
+        ),
+      drain: (sessionID, mode, receipt, activityID) =>
+        withReceipt(
+          receipt,
+          Effect.gen(function* () {
+            yield* store.requireExecution(sessionID)
+            const session = yield* store.get(sessionID)
+            if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
+            return yield* SessionRunner.Service.use((runner) => runner.run({ sessionID, force: mode === "run", activityID })).pipe(
+              Effect.provide(locations.get(session.location)),
+              Effect.provideService(Delegation.DelegationSlot, delegation),
+              // A bounded continuation owns only its activity. Independently admitted future
+              // inputs retain their normal wake path after that activity settles or pauses.
+              Effect.tap(() => activityID === undefined ? Effect.void : coordinator.wake(sessionID)),
+            )
+          }),
+        ),
       onFailure: (sessionID, cause) => logFailure("Failed to drain Session", sessionID, cause),
-      settled: (sessionID, exit, reason) =>
+      settled: (sessionID, exit, reason, receipt) =>
         reportLifecycle(
           sessionID,
           Effect.gen(function* () {
@@ -114,14 +155,20 @@ export const layer = Layer.effect(
               // evidence lives in the receipt state machine, not in this execution claim.
               const token = ownedClaims.get(sessionID)
               if (token !== undefined)
-                yield* store
-                  .release(sessionID, token)
-                  .pipe(
-                    Effect.flatMap((released) =>
-                      released ? Effect.sync(() => ownedClaims.delete(sessionID)) : Effect.void,
-                    ),
-                    Effect.ignore,
-                  )
+                yield* (
+                  owned
+                    ? owned.transaction(
+                        owned
+                          .finish(receipt, "recovery_required")
+                          .pipe(Effect.andThen(store.release(sessionID, token))),
+                      )
+                    : store.release(sessionID, token)
+                ).pipe(
+                  Effect.flatMap((released) =>
+                    released ? Effect.sync(() => ownedClaims.delete(sessionID)) : Effect.void,
+                  ),
+                  Effect.ignore,
+                )
               return
             }
             // The Started event may have failed after its in-transaction claim hook; neither
@@ -135,7 +182,7 @@ export const layer = Layer.effect(
               yield* events.publish(
                 SessionEvent.Execution.Succeeded,
                 { sessionID, timestamp },
-                { ...releaseOnCommit(sessionID), location: session.location },
+                { ...releaseOnCommit(sessionID, receipt, "settled"), location: session.location },
               )
               ownedClaims.delete(sessionID)
               return
@@ -145,7 +192,9 @@ export const layer = Layer.effect(
                 SessionEvent.Execution.Interrupted,
                 { sessionID, timestamp, reason: outcome.reason },
                 {
-                  ...(outcome.reason === "shutdown" ? {} : releaseOnCommit(sessionID)),
+                  ...(outcome.reason === "shutdown"
+                    ? { commit: () => (owned?.finish(receipt, "recovery_required") ?? Effect.void).pipe(Effect.orDie) }
+                    : releaseOnCommit(sessionID, receipt, "interrupted")),
                   location: session.location,
                 },
               )
@@ -155,24 +204,59 @@ export const layer = Layer.effect(
             yield* events.publish(
               SessionEvent.Execution.Failed,
               { sessionID, timestamp, error: outcome.error },
-              { ...releaseOnCommit(sessionID), location: session.location },
+              { ...releaseOnCommit(sessionID, receipt), location: session.location },
             )
             ownedClaims.delete(sessionID)
           }),
-        ),
+        ).pipe(Effect.ensuring(Effect.sync(() => owned?.revoke(receipt)))),
     })
 
     return SessionExecution.Service.of({
       active: coordinator.active,
+      owned: owned
+        ? {
+            run: (target, options) =>
+              Effect.gen(function* () {
+                if (options?.receipt) {
+                  if (!owned.matches(options.receipt, target)) return { status: "not-local" } as const
+                  return yield* coordinator.runOwned(
+                    SessionSchema.ID.make((yield* owned.prepareForJoin(target)).sessionID),
+                    options.receipt,
+                  )
+                }
+                const prepared = yield* owned.prepare(target)
+                return yield* coordinator.runOwned(prepared.sessionID, undefined, (receipt) => {
+                  owned.register(receipt, prepared)
+                  options?.registered?.(receipt)
+                })
+              }),
+            interrupt: (receipt, predicate, seq, reason) =>
+              coordinator.interruptIf(receipt, predicate, seq, reason ?? "user"),
+            await: coordinator.awaitOwned,
+          }
+        : undefined,
       interrupt: (sessionID, seq) => coordinator.interrupt(sessionID, seq, "user"),
-      resume: coordinator.run,
+      resume: (sessionID, options) =>
+        (owned?.ordinary(sessionID) ?? Effect.void).pipe(
+          Effect.andThen(store.requireExecution(sessionID)),
+          Effect.andThen(coordinator.run(sessionID, options)),
+        ),
       wake: (sessionID, seq) =>
-        store.interruptSeq(sessionID).pipe(
-          Effect.flatMap((interruptSeq) =>
-            interruptSeq !== undefined && (seq === undefined || seq <= interruptSeq)
-              ? Effect.void
-              : coordinator.wake(sessionID, seq),
+        (owned?.ordinary(sessionID) ?? Effect.void).pipe(
+          Effect.andThen(
+            store
+              .interruptSeq(sessionID)
+              .pipe(
+                Effect.flatMap((interruptSeq) =>
+                  interruptSeq !== undefined && (seq === undefined || seq <= interruptSeq)
+                    ? Effect.void
+                    : coordinator.wake(sessionID, seq),
+                ),
+              ),
           ),
+          // Advisory delivery is not execution acceptance. A managed wake must never join an
+          // owned Entry, while its historical fire-and-forget return remains compatible.
+          Effect.catchTag("GoalChild.Error", () => Effect.void),
         ),
       awaitIdle: coordinator.awaitIdle,
     })

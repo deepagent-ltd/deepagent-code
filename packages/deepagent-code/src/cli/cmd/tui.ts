@@ -20,6 +20,10 @@ import {
 } from "@deepagent-code/core/util/deepagent-code-process"
 import { validateSession } from "../tui/validate-session"
 import { win32InstallCtrlCGuard } from "@deepagent-code/tui/terminal-win32"
+import { createGoalPlanBridge } from "../tui/goal-plan-bridge"
+import { createMcpOperatorBridge } from "../tui/mcp-operator-bridge"
+import { createTaskControlBridge } from "../tui/task-control-bridge"
+import { ServerAuth } from "@/server/auth"
 
 declare global {
   const DEEPAGENT_CODE_WORKER_PATH: string
@@ -141,7 +145,11 @@ export const TuiThreadCommand = cmd({
       const worker = new Worker(file, {
         env,
       })
-      const client = Rpc.client<typeof rpc>(worker)
+      const goalPlan = createGoalPlanBridge(worker, cwd)
+      const mcpOperator = createMcpOperatorBridge(worker, cwd)
+      const taskControl = createTaskControlBridge(worker, cwd)
+      const client = Rpc.client<typeof rpc>(worker, { requireReady: true })
+      worker.addEventListener("close", () => client.close(new Error("TUI worker exited")), { once: true })
       worker.onerror = (e) => {
         Log.Default.error("thread error", {
           message: e.message,
@@ -157,7 +165,11 @@ export const TuiThreadCommand = cmd({
         Log.Default.error("process error", { error: errorMessage(e) })
       }
       const reload = () => {
-        client.call("reload", undefined).catch((err) => {
+        client.call("reload", undefined).then(async () => {
+          await (await goalPlan).reconnect()
+          await (await mcpOperator).reconnect()
+          await (await taskControl).reconnect()
+        }).catch((err) => {
           Log.Default.warn("worker reload failed", {
             error: errorMessage(err),
           })
@@ -171,6 +183,9 @@ export const TuiThreadCommand = cmd({
       const stop = async () => {
         if (stopped) return
         stopped = true
+        await goalPlan.then((bridge) => bridge.close()).catch(() => undefined)
+        await mcpOperator.then((bridge) => bridge.close()).catch(() => undefined)
+        await taskControl.then((bridge) => bridge.close()).catch(() => undefined)
         process.off("uncaughtException", error)
         process.off("unhandledRejection", error)
         process.off("SIGUSR2", reload)
@@ -183,48 +198,51 @@ export const TuiThreadCommand = cmd({
         worker.terminate()
       }
 
-      const prompt = await input(args.prompt)
-      const config = await TuiConfig.get()
-
-      const network = resolveNetworkOptionsNoConfig(args)
-      const external =
-        process.argv.includes("--port") ||
-        process.argv.includes("--hostname") ||
-        process.argv.includes("--mdns") ||
-        network.mdns ||
-        network.port !== 0 ||
-        network.hostname !== "127.0.0.1"
-
-      const transport = external
-        ? {
-            url: (await client.call("server", network)).url,
-            fetch: undefined,
-            events: undefined,
-          }
-        : {
-            url: "http://deepagent-code.internal",
-            fetch: createWorkerFetch(client),
-            events: createEventSource(client),
-          }
-
       try {
-        await validateSession({
-          url: transport.url,
-          sessionID: args.session,
-          directory: cwd,
-          fetch: transport.fetch,
-        })
-      } catch (error) {
-        UI.error(errorMessage(error))
-        process.exitCode = 1
-        return
-      }
+        // The worker installs its private bridges before its RPC listener.
+        await client.ready
+        const prompt = await input(args.prompt)
+        const config = await TuiConfig.get()
 
-      setTimeout(() => {
-        client.call("checkUpgrade", { directory: cwd }).catch(() => {})
-      }, 1000).unref?.()
+        const network = resolveNetworkOptionsNoConfig(args)
+        const external =
+          process.argv.includes("--port") ||
+          process.argv.includes("--hostname") ||
+          process.argv.includes("--mdns") ||
+          network.mdns ||
+          network.port !== 0 ||
+          network.hostname !== "127.0.0.1"
+        const headers = external ? ServerAuth.headers() : undefined
 
-      try {
+        const transport = external
+          ? {
+              url: (await client.call("server", network)).url,
+              fetch: undefined,
+              events: undefined,
+            }
+          : {
+              url: "http://deepagent-code.internal",
+              fetch: createWorkerFetch(client),
+              events: createEventSource(client),
+            }
+
+        try {
+          await validateSession({
+            url: transport.url,
+            sessionID: args.session,
+            directory: cwd,
+            fetch: transport.fetch,
+            headers,
+          })
+        } catch (error) {
+          UI.error(errorMessage(error))
+          process.exitCode = 1
+          return
+        }
+
+        setTimeout(() => {
+          client.call("checkUpgrade", { directory: cwd }).catch(() => {})
+        }, 1000).unref?.()
         const { Effect } = await import("effect")
         const { run } = await import("../tui/layer")
         const { createLegacyTuiPluginHost } = await import("@/plugin/tui/runtime")
@@ -240,7 +258,11 @@ export const TuiThreadCommand = cmd({
             pluginHost: createLegacyTuiPluginHost(),
             directory: cwd,
             fetch: transport.fetch,
+            headers,
             events: transport.events,
+            goalPlan: (await goalPlan).transport,
+            mcpOperator: (await mcpOperator).transport,
+            taskControl: (await taskControl).transport,
             args: {
               continue: args.continue,
               sessionID: args.session,

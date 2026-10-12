@@ -49,12 +49,45 @@ export const DialogConfigureMcp: Component<{ name: string }> = (props) => {
   const [headers, setHeaders] = createSignal(initial?.type === "remote" ? formatMap(initial.headers) : "{}")
   const [timeout, setTimeoutValue] = createSignal(initial?.timeout?.toString() ?? "")
   const [oauthDisabled, setOauthDisabled] = createSignal(initial?.type === "remote" && initial.oauth === false)
+  const [clientId, setClientId] = createSignal(
+    initial?.type === "remote" && typeof initial.oauth === "object" ? (initial.oauth.clientId ?? "") : "",
+  )
+  const [issuer, setIssuer] = createSignal(
+    initial?.type === "remote" && typeof initial.oauth === "object" ? (initial.oauth.expectedIssuer ?? "") : "",
+  )
+
+  const clientIdRequired = createMemo(() => {
+    const current = config()
+    return current?.type === "remote" && typeof current.oauth === "object" && current.oauth.clientSecret !== undefined
+  })
+  const secretEmpty = createMemo(() => {
+    const current = config()
+    return current?.type === "remote" && typeof current.oauth === "object" && current.oauth.clientSecret === ""
+  })
+  const issuerError = createMemo(() => {
+    if (oauthDisabled()) return
+    if (!issuer().trim()) return clientIdRequired() ? language.t("dialog.mcp.configure.issuerRequired") : undefined
+    if (
+      new TextEncoder().encode(issuer().trim()).byteLength > 8192 ||
+      /[\u0000-\u0020\u007f?#]/.test(issuer().trim()) ||
+      !URL.canParse(issuer().trim())
+    )
+      return language.t("dialog.mcp.configure.issuerInvalid")
+    const parsed = new URL(issuer().trim())
+    if (!["https:", "http:"].includes(parsed.protocol) || parsed.username || parsed.password)
+      return language.t("dialog.mcp.configure.issuerInvalid")
+  })
 
   const valid = createMemo(() => {
     const current = config()
     if (!current) return false
     if (current.type === "local" && command().trim().length === 0) return false
     if (current.type === "remote" && url().trim().length === 0) return false
+    if (current.type === "remote" && !oauthDisabled()) {
+      if (clientIdRequired() && !clientId().trim()) return false
+      if (secretEmpty()) return false
+      if (issuerError()) return false
+    }
     if (timeout().trim().length === 0) return true
     return Number.isFinite(Number(timeout())) && Number(timeout()) > 0
   })
@@ -79,7 +112,13 @@ export const DialogConfigureMcp: Component<{ name: string }> = (props) => {
               enabled: enabled(),
               url: url().trim(),
               headers: parseMap(headers(), language.t("dialog.mcp.configure.invalidJson")),
-              oauth: oauthDisabled() ? false : current.oauth === false ? undefined : current.oauth,
+              oauth: oauthDisabled()
+                ? false
+                : {
+                    ...(typeof current.oauth === "object" ? current.oauth : {}),
+                    clientId: clientId().trim() || undefined,
+                    expectedIssuer: issuer().trim() || undefined,
+                  },
               timeout: parsedTimeout,
             }
 
@@ -152,6 +191,39 @@ export const DialogConfigureMcp: Component<{ name: string }> = (props) => {
                   </div>
                   <Switch checked={!oauthDisabled()} onChange={(value) => setOauthDisabled(!value)} />
                 </div>
+                <Show when={!oauthDisabled()}>
+                  <TextField
+                    type="text"
+                    label={language.t("dialog.mcp.configure.clientId")}
+                    value={clientId()}
+                    onChange={setClientId}
+                    required={clientIdRequired()}
+                    validationState={clientIdRequired() && !clientId().trim() ? "invalid" : "valid"}
+                    error={
+                      clientIdRequired() && !clientId().trim()
+                        ? language.t("dialog.mcp.configure.clientIdRequired")
+                        : undefined
+                    }
+                    spellcheck={false}
+                  />
+                  <TextField
+                    type="text"
+                    label={language.t("dialog.mcp.configure.issuer")}
+                    placeholder="https://auth.example.com"
+                    value={issuer()}
+                    onChange={setIssuer}
+                    required={clientIdRequired()}
+                    validationState={issuerError() ? "invalid" : "valid"}
+                    error={issuerError()}
+                    description={language.t("dialog.mcp.configure.issuerHelp")}
+                    spellcheck={false}
+                  />
+                  <Show when={secretEmpty()}>
+                    <p role="alert" class="text-11-regular text-text-critical-base">
+                      {language.t("dialog.mcp.configure.secretEmpty")}
+                    </p>
+                  </Show>
+                </Show>
               </Match>
             </SolidSwitch>
 

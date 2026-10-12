@@ -1,16 +1,21 @@
 export * as KnowledgeProposeTool from "./knowledge-propose"
 
 import { ToolFailure, toolText } from "@deepagent-code/llm"
-import { eq } from "drizzle-orm"
+import { and, count, eq } from "drizzle-orm"
 import { Effect, Layer, Option, Schema } from "effect"
+import { createHash } from "node:crypto"
 import { Database } from "../database/database"
+import { EventV2 } from "../event"
+import { EventTable } from "../event/sql"
 import { projectIdForWorkspace, type DurableKnowledgeStore } from "../deepagent/durable-knowledge-store"
 import { isConfigured, projectStoreFor, userGlobalStoreFor } from "../deepagent/knowledge-source"
 import { looksSensitive } from "../deepagent/memory-governance"
-import type { SessionSchema } from "../session/schema"
+import { SessionSchema } from "../session/schema"
+import { SessionToolQuota } from "../session/tool-quota.schema"
 import { SessionTable } from "../session/sql"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { CanonicalJson } from "../util/canonical-json"
 
 // P3-b (WS7/B6, docs/V2.0.1-001-llm-agent-system-manual.md §8.1): the model's "remember this" write
 // path. A proposal is staged through `DurableKnowledgeStore.stageCandidate` — status is ALWAYS
@@ -23,8 +28,8 @@ import { Tools } from "./tools"
 // Anti-pollution (design §8.1 三道):
 //   1. sensitivity scrub — the memory-governance credential patterns; a hit REJECTS the proposal
 //      (the tool path has no auto-review routing, so fail-closed is the honest action).
-//   2. a per-session cap of 10 staged proposals, counted in module state keyed by sessionID (the
-//      domain_pack_load budget pattern: process-local, keyed by globally unique session ids).
+//   2. ten durable reservations per Session. Once staging begins, an unknown result retains its
+//      reservation; process restart or metadata edits cannot reset the original budget.
 //   3. the store's dedup-merge (above); a human-rejected fingerprint stays `rejected` and is never
 //      resurrected (findSimilarKnowledge skips rejected docs).
 //
@@ -43,7 +48,7 @@ export const name = "knowledge_propose"
 
 /** Anti-pollution budget: at most this many proposals stage per session (design §8.1). */
 export const KnowledgeProposeBudget = {
-  perSessionMax: 10,
+  perSessionMax: SessionToolQuota.LIMITS.proposals,
 } as const
 
 const DESCRIPTION = [
@@ -93,14 +98,8 @@ export interface KnowledgeProposeToolOptions {
 const productionGlobalStore = () => (isConfigured() ? userGlobalStoreFor() : null)
 const productionProjectStore = (workspacePath: string) => (isConfigured() ? projectStoreFor(workspacePath) : null)
 
-// Per-session staged-proposal counts (see the module header). Process-local like the
-// domain_pack_load budget maps; a reset hook keeps tests isolated.
-const sessionProposals = new Map<string, number>()
-
-/** Test hook: clear all per-session proposal counts (mirrors resetDomainPackLoadState). */
-export function resetKnowledgeProposeState(): void {
-  sessionProposals.clear()
-}
+/** Compatibility test hook. Only deleting the actual Session aggregate retires its quota facts. */
+export function resetKnowledgeProposeState(): void {}
 
 type ResolvedStore = {
   readonly store: DurableKnowledgeStore
@@ -129,15 +128,95 @@ export function makeKnowledgeProposeTool(options: KnowledgeProposeToolOptions = 
               "carry secrets — restate the fact without the sensitive value, or do not propose it.",
           })
 
-        const staged = sessionProposals.get(context.sessionID) ?? 0
-        if (staged >= KnowledgeProposeBudget.perSessionMax)
-          return yield* new ToolFailure({
-            message:
-              `knowledge_propose budget exhausted: at most ${KnowledgeProposeBudget.perSessionMax} proposals ` +
-              "stage per session. Propose only the few facts that genuinely outlive this session.",
-          })
-
         const resolved = yield* resolveStore(scope, context.sessionID, resolveGlobal, resolveProject)
+        const database = yield* Effect.serviceOption(Database.Service)
+        const events = yield* Effect.serviceOption(EventV2.Service)
+        if (Option.isNone(database) || Option.isNone(events))
+          return yield* new ToolFailure({
+            message: "knowledge_propose quota requires the original Session database and event service",
+          })
+        const db = database.value.db
+        if (
+          !(yield* db
+            .select({ id: SessionTable.id })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, context.sessionID))
+            .get()
+            .pipe(Effect.orDie))
+        )
+          return yield* new ToolFailure({ message: "knowledge_propose requires a durable Session" })
+        const id = SessionToolQuota.reservationID(context)
+        // A reservation is evidence that staging may have happened, never a fabricated successful
+        // result. The original tool-result path owns completed exact retries; otherwise refuse.
+        yield* events.value
+          .publishChecked(
+            SessionToolQuota.Reserved,
+            {
+              sessionID: context.sessionID,
+              assistantMessageID: context.assistantMessageID,
+              toolCallID: context.toolCallID,
+              inputHash: createHash("sha256").update(CanonicalJson.stringify(input)).digest("hex"),
+            },
+            {
+              id,
+              idempotent: true,
+              commit: () =>
+                Effect.gen(function* () {
+                  if (
+                    !(yield* db
+                      .select({ id: SessionTable.id })
+                      .from(SessionTable)
+                      .where(eq(SessionTable.id, context.sessionID))
+                      .get()
+                      .pipe(Effect.orDie))
+                  )
+                    return yield* new ToolFailure({ message: "knowledge_propose requires a durable Session" })
+                  if (
+                    yield* db
+                      .select({ id: EventTable.id })
+                      .from(EventTable)
+                      .where(eq(EventTable.id, id))
+                      .get()
+                      .pipe(Effect.orDie)
+                  )
+                    return yield* new ToolFailure({
+                      message:
+                        "knowledge_propose exact retry requires its original tool result; the reservation may have an unknown effect",
+                    })
+                  const staged = yield* db
+                    .select({ value: count() })
+                    .from(EventTable)
+                    .where(
+                      and(
+                        eq(EventTable.aggregate_id, context.sessionID),
+                        eq(EventTable.type, EventV2.durableType(SessionToolQuota.Reserved)),
+                      ),
+                    )
+                    .get()
+                    .pipe(Effect.orDie)
+                  if ((staged?.value ?? 0) >= KnowledgeProposeBudget.perSessionMax)
+                    return yield* new ToolFailure({
+                      message: `knowledge_propose budget exhausted: at most ${KnowledgeProposeBudget.perSessionMax} proposals stage per session`,
+                    })
+                }),
+            },
+          )
+          .pipe(
+            Effect.mapError((error) =>
+              error.cause instanceof ToolFailure
+                ? error.cause
+                : new ToolFailure({ message: "knowledge_propose quota is unavailable" }),
+            ),
+            Effect.catchDefect((error) =>
+              error instanceof EventV2.InvalidSyncEventError
+                ? Effect.fail(
+                    new ToolFailure({
+                      message: "knowledge_propose conflicting exact retry cannot reuse the original reservation",
+                    }),
+                  )
+                : Effect.die(error),
+            ),
+          )
         const doc = yield* Effect.try({
           try: () =>
             resolved.store.stageCandidate({
@@ -160,8 +239,6 @@ export function makeKnowledgeProposeTool(options: KnowledgeProposeToolOptions = 
               message: `knowledge_propose failed to stage the candidate: ${error instanceof Error ? error.message : String(error)}`,
             }),
         })
-
-        sessionProposals.set(context.sessionID, staged + 1)
 
         const status = doc.status === "candidate" ? ("pending_review" as const) : ("already_active" as const)
         return {

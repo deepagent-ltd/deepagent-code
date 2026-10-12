@@ -71,6 +71,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
     const applied = new Set<string>()
     const buffering = new Map<string, Event[]>()
     const syncing = new Map<string, Promise<void>>()
+    let disposed = false
 
     function duplicate(id: string) {
       if (applied.has(id)) return true
@@ -96,6 +97,9 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
       buffering.set(sessionID, pending)
       try {
         const response = await sdk.client.v2.session.messages({ sessionID })
+        if (response.error) throw response.error
+        if (!Array.isArray(response.data?.data)) throw new Error("Session journal returned no snapshot")
+        if (disposed) return
         const messages = response.data?.data ?? []
         const snapshotIDs = new Set(messages.map((message) => message.id))
         setStore(
@@ -112,7 +116,8 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
     }
 
     const journals = new Map<string, { close: () => void }>()
-    const resyncCounts = new Map<string, number>()
+    const recoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+    const recoveryAttempts = new Map<string, number>()
 
     // 16.5 API-APP-PACKAGE P4 - snapshot-at-watermark. The durable journal is the authority;
     // the volatile global stream stays as the delta notification surface. Read the high-water
@@ -120,62 +125,74 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
     // journaled event at or below the cursor is reflected in the snapshot (projection commits
     // with the journal), so the drained tail is exact and replayed boundary events converge.
     async function cycle(sessionID: string) {
-      const cursor = await sdk.client.context.eventsCursor({ session_id: sessionID }).catch(() => undefined)
-      const watermark = cursor?.data?.watermark
+      const cursor = await sdk.client.context.eventsCursor({ session_id: sessionID })
+      if (cursor.error) throw cursor.error
+      const watermark = cursor.data?.watermark
+      if (watermark === undefined) throw new Error("Session journal returned no cursor")
       await hydrate(sessionID)
-      if (watermark === undefined) return
+      if (disposed) return
       if (journals.has(sessionID)) return
+      // Install ownership before the async drive can report a cursor gap. Otherwise an
+      // immediately failed drive can be inserted into the map after its resync removed it.
+      let opened: { close: () => void } | undefined
+      const owner = { close: () => opened?.close() }
+      journals.set(sessionID, owner)
       const journal = await openSessionJournal(sdk.client, sessionID, {
         after: String(watermark),
         onEvent: (payload) => {
+          if (disposed || journals.get(sessionID) !== owner) return
+          recoveryAttempts.delete(sessionID)
           if (!payload.id || duplicate(payload.id)) return
-          apply({ id: payload.id, type: payload.type, properties: payload.data ?? {} } as Event)
+          apply({ id: payload.id, type: payload.type.replace(/\.\d+$/, ""), properties: payload.data ?? {} } as Event)
         },
         onResync: () => {
-          void resync(sessionID)
+          void (syncing.get(sessionID) ?? Promise.resolve()).then(() => {
+            if (!disposed && journals.get(sessionID) === owner) scheduleResync(sessionID)
+          })
         },
         onStreamEnd: () => {
           // C6-07: the durable drain never "ends"; a caught-up page is the steady state and
           // the volatile global stream stays the delta surface (never the authority).
+          recoveryAttempts.delete(sessionID)
         },
         onError: (error) => {
           console.error("session journal error", { sessionID, error })
         },
       })
-      journals.set(sessionID, journal)
+      opened = journal
+      if (disposed || journals.get(sessionID) !== owner) journal.close()
     }
 
-    async function resync(sessionID: string) {
-      const counts = resyncCounts.get(sessionID) ?? 0
-      if (counts >= 5) {
-        // 1.4.8.rN deep fix: on resync-budget exhaustion, do ONE final snapshot re-hydration before
-        // giving up — the volatile delta surface keeps applying and the timeline rebuilds from the
-        // durable snapshot, so boundary windows cannot be lost silently; the next explicit sync
-        // restarts the cycle. Best-effort: a failed hydrate is logged, volatile still applies.
-        journals.delete(sessionID)
-        try {
-          await hydrate(sessionID)
-        } catch (error) {
-          console.error("session journal hydrate-on-resync-exhaustion failed", { sessionID, error })
-        }
-        return
-      }
-      resyncCounts.set(sessionID, counts + 1)
+    function scheduleResync(sessionID: string) {
+      if (disposed) return
       journals.get(sessionID)?.close()
       journals.delete(sessionID)
-      try {
-        await sync(sessionID)
-        resyncCounts.delete(sessionID)
-      } catch (error) {
-        console.error("session journal resync failed", { sessionID, error })
-        resyncCounts.delete(sessionID)
-      }
+      if (recoveryTimers.has(sessionID)) return
+      const attempts = (recoveryAttempts.get(sessionID) ?? 0) + 1
+      recoveryAttempts.set(sessionID, attempts)
+      recoveryTimers.set(
+        sessionID,
+        setTimeout(() => {
+          recoveryTimers.delete(sessionID)
+          void sync(sessionID)
+        }, Math.min(30_000, 1000 * 2 ** Math.min(attempts - 1, 5))),
+      )
     }
 
     function sync(sessionID: string) {
+      if (disposed) return Promise.resolve()
+      const retry = recoveryTimers.get(sessionID)
+      if (retry) clearTimeout(retry)
+      recoveryTimers.delete(sessionID)
       const existing = syncing.get(sessionID)
       if (existing) return existing
-      const result = cycle(sessionID).finally(() => syncing.delete(sessionID))
+      const result = cycle(sessionID)
+        .catch((error) => {
+          if (disposed) return
+          console.error("session journal snapshot recovery failed", { sessionID, error })
+          scheduleResync(sessionID)
+        })
+        .finally(() => syncing.delete(sessionID))
       syncing.set(sessionID, result)
       return result
     }
@@ -508,8 +525,11 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
     })
 
     onCleanup(() => {
+      disposed = true
       for (const journal of journals.values()) journal.close()
       journals.clear()
+      for (const timer of recoveryTimers.values()) clearTimeout(timer)
+      recoveryTimers.clear()
     })
 
     const result = {

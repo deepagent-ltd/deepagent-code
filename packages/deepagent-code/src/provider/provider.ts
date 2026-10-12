@@ -77,7 +77,9 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
         const id = setTimeout(() => {
           const err = new ProviderError.ResponseStreamError("SSE read timed out")
           ctl.abort(err)
-          void reader.cancel(err)
+          // Aborting fetch can already error its body. Preserve the timeout as
+          // the stream failure without leaving cancellation's rejection unhandled.
+          void reader.cancel(err).catch(() => {})
           reject(err)
         }, ms)
 
@@ -1307,7 +1309,7 @@ export const layer = Layer.effect(
         // Official providers ignore config.provider.<id> entirely; their transport tuning
         // (header/chunk/request timeouts, retries) is read straight from SettingsStore — the only
         // place the connect dialog's advanced section persists it (never the config file).
-        const officialTransport = (yield* Effect.promise(() => SettingsStore.read())).providers ?? {}
+        const officialTransport = (yield* SettingsStore.readEffect.pipe(Effect.orDie)).providers ?? {}
         const modelsDev = yield* modelsDevSvc.get()
         // Cross-provider spec index: lets a discovered/custom model whose id is NOT under its own
         // provider (e.g. a gateway forwarding "deepseek-chat") inherit context/reasoning/cost/modality

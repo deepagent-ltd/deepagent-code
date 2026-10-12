@@ -7,6 +7,18 @@ script/build-*.ts
 # build-node.ts is a committed source entrypoint for the desktop sidecar build, not a
 # generated artifact — keep it tracked despite the build-*.ts rule above.
 !script/build-node.ts
+!script/build-native-node.ts
+!script/build-work-file-helper.ts
+!script/build-work-storage-cleanup.ts
+!script/build-work-process-supervisor.ts
+!script/build-windows-native-bootstrap.ts
+!script/build-linux-native-assets.ts
+!script/build-linux-native-assets.d.ts
+!script/build-windows-native-bootstrap.d.ts
+!script/build-work-file-helper.d.ts
+!script/build-work-storage-cleanup.d.ts
+!script/build-linux-native-assets.test.ts
+!script/build-output.ts
 temporary-*.md
 .artifacts
 

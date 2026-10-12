@@ -33,17 +33,34 @@ on:
           - mac
           - linux
           - windows
+      artifact_mode:
+        description: "Release packaging or isolated unsigned candidate artifacts"
+        required: false
+        default: "release"
+        type: choice
+        options:
+          - release
+          - test
 
 permissions:
   contents: write
   actions: write
 
 concurrency:
-  group: desktop-build-${{ github.ref }}
-  cancel-in-progress: true
+  group: desktop-build-${{ github.ref }}-${{ inputs.artifact_mode || 'release' }}
+  cancel-in-progress: ${{ inputs.artifact_mode != 'test' }}
 
 jobs:
+  test-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.artifact_mode == 'test'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/desktop-test-package.yml
+    with:
+      platforms: ${{ inputs.platforms || 'all' }}
+
   cleanup:
+    if: github.event_name != 'workflow_dispatch' || inputs.artifact_mode != 'test'
     runs-on: ubuntu-24.04
     steps:
       - name: Delete previous desktop artifacts
@@ -60,6 +77,7 @@ jobs:
   # Build the matrix from the `platforms` input. Job-level `if` cannot read the matrix
   # context, so the selection happens here and the build job consumes the JSON.
   setup:
+    if: github.event_name != 'workflow_dispatch' || inputs.artifact_mode != 'test'
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.gen.outputs.matrix }}

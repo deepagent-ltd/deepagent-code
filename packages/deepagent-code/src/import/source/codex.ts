@@ -47,6 +47,33 @@ export function parseCodex(root: string, opts?: { cwdFilter?: string }): ParsedS
   return { sessions, memories, skills: [], skipped }
 }
 
+/** Job preflight yields between bounded files, so cancel/status requests remain serviceable. */
+export async function parseCodexCooperative(
+  root: string,
+  opts: { cwdFilter?: string; checkpoint: () => Promise<void>; onSession?: (session: SourceSession) => void },
+): Promise<ParsedSource> {
+  const titles = readTitleIndex(join(root, "session_index.jsonl"))
+  const sessions: SourceSession[] = []
+  const skipped: string[] = []
+  for (const file of discoverRollouts(join(root, "sessions"))) {
+    await opts.checkpoint()
+    if (isExcludedFile(file)) {
+      skipped.push(file)
+      continue
+    }
+    const parsed = parseRollout(file, titles)
+    if (!parsed) {
+      skipped.push(file)
+      continue
+    }
+    if (opts.cwdFilter && !parsed.cwd.startsWith(opts.cwdFilter)) continue
+    opts.onSession?.(parsed)
+    sessions.push(parsed)
+  }
+  await opts.checkpoint()
+  return { sessions, memories: fromMarkdownTree("codex", join(root, "memories")), skills: [], skipped }
+}
+
 function readTitleIndex(path: string): Map<string, string> {
   const map = new Map<string, string>()
   let text: string
@@ -157,7 +184,10 @@ function parseRollout(file: string, titles: Map<string, string>): SourceSession 
     } else if (kind === "reasoning") {
       if (!currentAssistant) currentAssistant = { turn: new AssistantTurnBlocks(ts) }
       const summary = p.summary as Array<{ text?: string }> | undefined
-      const reasoningText = (summary ?? []).map((s) => s.text ?? "").join("\n").trim()
+      const reasoningText = (summary ?? [])
+        .map((s) => s.text ?? "")
+        .join("\n")
+        .trim()
       if (reasoningText) currentAssistant.turn.reasoning(reasoningText)
     } else if (kind === "function_call") {
       if (!currentAssistant) currentAssistant = { turn: new AssistantTurnBlocks(ts) }
@@ -234,7 +264,9 @@ class AssistantTurnBlocks {
   private model: IRModel | undefined
   private finish: string | undefined
   private cost: number | undefined
-  private tokens: { input?: number; output?: number; reasoning?: number; cacheRead?: number; cacheWrite?: number } | undefined
+  private tokens:
+    | { input?: number; output?: number; reasoning?: number; cacheRead?: number; cacheWrite?: number }
+    | undefined
   constructor(private readonly timestampMs: number) {}
 
   text(t: string) {

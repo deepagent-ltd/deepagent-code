@@ -263,13 +263,12 @@ describe("facade-activity.goal delegation", () => {
       expect(pending.terminal).toBe(false)
       expect(pending.state).toBe("active")
 
-      // control delegates pause/resume/stop to GoalManager.
-      expect((yield* facade.control({ sessionID: parentSessionID, subkind: "goal", action: "pause" })).applied).toBe(
-        true,
-      )
-      expect((yield* facade.control({ sessionID: parentSessionID, subkind: "goal", action: "resume" })).applied).toBe(
-        true,
-      )
+      // Session-only controls must not silently select a newer durable Goal.
+      for (const action of ["pause", "resume"] as const) {
+        const refusal = yield* facade.control({ sessionID: parentSessionID, subkind: "goal", action }).pipe(Effect.flip)
+        expect(refusal).toBeInstanceOf(FacadeActivityUnsupportedControl)
+      }
+      expect(active[0]!.ref.control).toBe("unavailable_via_facade_use_goal_panel")
 
       // steer without a message fails closed (and no steer buffer exists in this graph).
       const noMessage = yield* facade
@@ -283,9 +282,7 @@ describe("facade-activity.goal delegation", () => {
 
       // The domain reaches a terminal phase → the next touch settles the facade row (authority).
       goalFakeState.phase = "done"
-      expect((yield* facade.control({ sessionID: parentSessionID, subkind: "goal", action: "stop" })).applied).toBe(
-        true,
-      )
+      expect(yield* facade.control({ sessionID: parentSessionID, subkind: "goal", action: "stop" }).pipe(Effect.flip)).toBeInstanceOf(FacadeActivityUnsupportedControl)
       const settled = yield* facade.status({ sessionID: parentSessionID })
       expect(settled[0]!.state).toBe("settled")
       expect(settled[0]!.reason).toBe("goal_done")
@@ -367,7 +364,7 @@ describe("facade-activity.runner honesty (no fabricated runners)", () => {
     }),
   )
 
-  it.instance("panel start refuses without its runner dependencies", () =>
+  it.instance("disabled panel refuses before durable admission", () =>
     Effect.gen(function* () {
       yield* setup
       const facade = yield* FacadeActivity.Service
@@ -375,6 +372,8 @@ describe("facade-activity.runner honesty (no fabricated runners)", () => {
         .start({ sessionID: parentSessionID, subkind: "panel", objective: "x" })
         .pipe(Effect.flip)
       expect(error).toBeInstanceOf(FacadeActivityRunnerUnavailable)
+      expect(error._tag === "FacadeActivity.RunnerUnavailable" && error.reason).toBe("expert panel is disabled")
+      expect(yield* latestRow(parentSessionID, "panel")).toBeUndefined()
     }),
   )
 

@@ -209,7 +209,7 @@ describe("RuntimeFlags", () => {
       expect(flags.v4FileUploadEnabled).toBe(false)
       // Promoted ON (stableOn): daemon audit GO, broadly deployed.
       expect(flags.v4AgentPushEnabled).toBe(true)
-      expect(flags.v4PanelAutoConvene).toBe(true)
+      expect(flags.v4PanelAutoConvene).toBe(false)
       // V4.1: the Multi-Agent Runtime master switch is PROMOTED ON — the daemon audit is GO and the §N
       // event-driven goal-tick chain (with cross-process cold recovery) is now the live driver.
       expect(flags.v4MultiAgentRuntime).toBe(true)
@@ -234,11 +234,11 @@ describe("RuntimeFlags", () => {
       expect(flags.v4FileUploadEnabled).toBe(false)
       // stableOn flags are unaffected by the override — they remain ON
       expect(flags.v4AgentPushEnabled).toBe(true)
-      expect(flags.v4PanelAutoConvene).toBe(true)
+      expect(flags.v4PanelAutoConvene).toBe(false)
     }),
   )
 
-  it.effect("§H1: all five V4.0 flags can be turned ON together via env (full-stack opt-in)", () =>
+  it.effect("2.0.3: legacy panel opt-in cannot re-enable the unavailable capability", () =>
     Effect.gen(function* () {
       // v4EventDrivenIm was removed with the V2 IM durable-only migration (no bus-mediated IM path
       // remains to gate); the surviving V4.0 flags remain independent full-stack opt-ins.
@@ -250,6 +250,7 @@ describe("RuntimeFlags", () => {
             DEEPAGENT_CODE_V4_THREAD_ENABLED: "true",
             DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED: "true",
             DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE: "true",
+            DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL: "true",
           }),
         ),
       )
@@ -257,7 +258,8 @@ describe("RuntimeFlags", () => {
       expect(flags.v4MultiAgentRuntime).toBe(true)
       expect(flags.v4ThreadEnabled).toBe(true)
       expect(flags.v4FileUploadEnabled).toBe(true)
-      expect(flags.v4PanelAutoConvene).toBe(true)
+      expect(flags.v4PanelAutoConvene).toBe(false)
+      expect(flags.experimentalExpertPanel).toBe(false)
     }),
   )
 

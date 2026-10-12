@@ -12,7 +12,7 @@ import type { PermissionV1 } from "@deepagent-code/core/v1/permission"
 // Also supports `--command` for slash-command execution, `--format json` for
 // raw event streaming, `--continue` / `--session` for session resumption,
 // `--fork` for forking before continuing, and `--goal --agent loop` for a
-// scriptable Goal Loop lifecycle that exits only after a terminal goal event.
+// scriptable Goal lifecycle whose terminal state is confirmed through the status API.
 import type { Argv } from "yargs"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -29,6 +29,7 @@ import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.
 import { backgroundTask, createBackgroundSessions, createSessionTree, questionAnswers } from "./run/noninteractive"
 import { PERMISSION_MODES, permissionReplyFor, resolvePermissionMode, type PermissionMode } from "./run/permission-mode"
 import { Identifier } from "@deepagent-code/core/util/identifier"
+import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
 
 type ModelInput = Parameters<OpencodeClient["session"]["prompt"]>[0]["model"]
 
@@ -154,6 +155,10 @@ export const RunCommand = effectCmd({
         describe: "start the message or existing goal+plan.md as a Goal Loop (requires --agent loop)",
         type: "boolean",
         default: false,
+      })
+      .option("request-id", {
+        describe: "retry the same Goal start with --goal --session and the original message",
+        type: "string",
       })
       .option("continue", {
         alias: ["c"],
@@ -314,8 +319,13 @@ export const RunCommand = effectCmd({
         die("--goal requires --agent loop")
       }
 
-      if (args.goal && (args.continue || args.session || args.fork)) {
-        die("--goal starts a fresh loop session and cannot be used with --continue, --session, or --fork")
+      if (args.goal && (args.continue || args.fork || (args.session && !args["request-id"]))) {
+        die(
+          "--goal starts a fresh loop session; only exact start retry permits --session with --request-id (no --continue or --fork)",
+        )
+      }
+      if (args["request-id"] !== undefined && (!args.goal || !args.session || !args["request-id"].trim())) {
+        die("--request-id requires --goal --session and the original start message; it never creates a replacement Session")
       }
 
       if (args.demo && !args.interactive) {
@@ -704,6 +714,7 @@ export const RunCommand = effectCmd({
         const sessionID = sess.id
         const background = createBackgroundSessions()
         let releaseGoalStart = () => {}
+        let wakeGoalRead = () => {}
         const goalStartReady = args.goal
           ? new Promise<void>((resolve) => {
               releaseGoalStart = resolve
@@ -942,17 +953,11 @@ export const RunCommand = effectCmd({
               UI.error(err)
             }
 
-            if (event.type === "goal.updated" && event.properties.sessionID === sessionID) {
+            if (goalMode && event.type === "goal.updated" && event.properties.sessionID === sessionID) {
               await goalStartReady
-              const phase = event.properties.phase
-              if (!emit("goal", { goal: event.properties })) {
-                UI.println(`goal ${event.properties.goalId}: ${phase}`)
-              }
-              if (["done", "needs_human", "rolled_back", "stopped"].includes(phase)) {
-                emit("session_terminal", { reason: "goal", phase, goalId: event.properties.goalId })
-                if (phase !== "done") process.exitCode = 1
-                break
-              }
+              // Events are hints, including old requested-phase projections. Only a complete GET
+              // of the captured Goal can confirm that execution reached a terminal state.
+              wakeGoalRead()
             }
 
             if (
@@ -1050,7 +1055,8 @@ export const RunCommand = effectCmd({
         await share(client, sessionID)
 
         if (!args.interactive) {
-          const events = await client.event.subscribe()
+          const goalEvents = args.goal ? new AbortController() : undefined
+          const events = await client.event.subscribe(undefined, goalEvents ? { signal: goalEvents.signal } : undefined)
           const loopTask = loop(client, events).catch((e) => {
             console.error(e)
             process.exitCode = 1
@@ -1101,30 +1107,120 @@ export const RunCommand = effectCmd({
             }
 
             if (args.goal) {
-              const objective = initialInput?.trim()
-              const result = await runDeadline
-                .race(
-                  client.deepagent.goal.start({
-                    sessionID,
-                    ...(objective ? { objective } : {}),
-                  }),
+              const request = GoalClient.capture(
+                client as unknown as GoalClient.Client,
+                {
+                  server: args.attach ?? "http://deepagent-code.internal",
+                  directory: cwd,
+                  sessionID,
+                },
+                "start",
+                {
+                  sessionID,
+                  requestID: args["request-id"] ?? crypto.randomUUID(),
+                  ...(initialInput?.trim() ? { objective: initialInput.trim() } : {}),
+                },
+              )
+              if (!emit("goal_request", { action: "start", request: request.body }))
+                UI.println(
+                  `Goal start request: ${JSON.stringify(request.body)}. Exact retry requires --goal --session ${sessionID} --request-id ${request.body.requestID} and the same message.`,
                 )
-                .catch((error) => ({ data: undefined, error }))
-              if (result.error || !result.data) {
-                const error = result.error ?? "Goal start returned no data"
-                if (!emit("error", { error })) UI.error(formatRunError(error))
-                process.exitCode = 1
+              try {
+                const result = await runDeadline.race(GoalClient.send(request)).then(
+                  (goal) => ({ goal }),
+                  (error: unknown) => ({ error }),
+                )
+                if ("error" in result) {
+                  const unknownOutcome = !(result.error instanceof GoalClient.RequestError) || result.error.unknownOutcome
+                  const latest =
+                    result.error instanceof GoalClient.RequestError && result.error.status === 409
+                      ? await runDeadline.race(GoalClient.status(request.client, sessionID)).then(
+                          (goal) => ({ goal }),
+                          (error: unknown) => ({ error: formatRunError(error) }),
+                        )
+                      : undefined
+                  const message = `${formatRunError(result.error)}. ${unknownOutcome ? "Start outcome is unknown; do not create a replacement Session. Retry the same emitted sessionID/requestID and original message." : "Start rejected; no automatic retry was sent."}`
+                  if (
+                    !emit("error", {
+                      error: message,
+                      request: request.body,
+                      outcome: unknownOutcome ? "unknown" : "rejected",
+                      latest,
+                    })
+                  )
+                    UI.error(message)
+                  process.exitCode = 1
+                  return
+                }
+                emit("goal_start", { goal: result.goal, request: request.body })
                 releaseGoalStart()
-                await events.stream.return?.(undefined).catch(() => undefined)
+                const observed = { previous: "", revision: result.goal.revision }
+                while (!goalEvents?.signal.aborted) {
+                  const status = await runDeadline.race(GoalClient.status(request.client, sessionID)).then(
+                    (goal) => ({ goal }),
+                    (error: unknown) => ({ error }),
+                  )
+                  if ("error" in status) {
+                    if (status.error instanceof RunTimedOut) throw status.error
+                    const message = `${formatRunError(status.error)}; Goal observation is unavailable, and execution is not confirmed stopped`
+                    if (
+                      !emit("error", {
+                        error: message,
+                        goalId: result.goal.goalId,
+                        stopped: false,
+                      })
+                    )
+                      UI.error(message)
+                    process.exitCode = 1
+                    return
+                  }
+                  const goal = status.goal
+                  if (!goal || goal.goalId !== result.goal.goalId || goal.revision < observed.revision)
+                    return die(
+                      "Goal observation lost its captured target or revision; no replacement Goal was selected and no stop was confirmed",
+                    )
+                  observed.revision = goal.revision
+                  const serialized = JSON.stringify(goal)
+                  if (serialized !== observed.previous) {
+                    if (!emit("goal", { goal }))
+                      UI.println(
+                        `goal ${goal.goalId}: ${goal.phase}; requested ${goal.requestedPhase}; in-flight ${goal.inFlight ? "yes" : "no"}; recovery ${goal.recoveryRequired ? "required" : "no"}`,
+                      )
+                    observed.previous = serialized
+                  }
+                  if (GoalClient.confirmedTerminal(goal)) {
+                    emit("session_terminal", {
+                      reason: "goal",
+                      phase: goal.phase,
+                      goalId: goal.goalId,
+                      revision: goal.revision,
+                    })
+                    if (goal.phase !== "done") process.exitCode = 1
+                    return
+                  }
+                  if (goal.recoveryRequired || goal.preparation === "recovery_required") {
+                    if (!emit("goal_recovery", { goal, stopped: false }))
+                      UI.error("Goal requires recovery; execution is not confirmed stopped")
+                    process.exitCode = 1
+                    return
+                  }
+                  await runDeadline.race(
+                    Promise.race([
+                      Bun.sleep(1_000),
+                      new Promise<void>((resolve) => {
+                        wakeGoalRead = resolve
+                      }),
+                    ]),
+                  )
+                }
+              } finally {
+                releaseGoalStart()
+                goalEvents?.abort()
+                await runDeadline.race(events.stream.return?.(undefined) ?? Promise.resolve()).catch(() => undefined)
                 await runDeadline.race(loopTask).catch((error: unknown) => {
                   if (!(error instanceof RunTimedOut)) throw error
-                  return String(error)
                 })
-                return
               }
-              emit("goal_start", { goal: result.data })
-              releaseGoalStart()
-              if (await runDeadline.race(loopTask)) process.exitCode = 1
               return
             }
 
@@ -1167,7 +1263,10 @@ export const RunCommand = effectCmd({
             return
           } catch (error) {
             if (!(error instanceof RunTimedOut)) throw error
-            if (!emit("error", { error: error.message })) UI.error(error.message)
+            const message = args.goal
+              ? `${error.message}; observation ended without cancelling or confirming that the Goal stopped`
+              : error.message
+            if (!emit("error", { error: message })) UI.error(message)
             process.exitCode = 1
             return
           }

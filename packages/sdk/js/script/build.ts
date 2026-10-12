@@ -60,6 +60,21 @@ if (sseTypesPatched === sseTypesSource && !sseTypesSource.includes("=> Promise<S
 }
 if (sseTypesPatched !== sseTypesSource) await Bun.write(sseTypesPath, sseTypesPatched)
 
+// Cancellation is asynchronous. A pending native fetch read can make cancel()
+// reject after the synchronous try/catch, crashing a TUI that correctly aborted.
+const ssePath = "./src/gen/core/serverSentEvents.gen.ts"
+const sseSource = await Bun.file(ssePath).text()
+const ssePatched = sseSource.replace("reader.cancel()", "void reader.cancel().catch(() => undefined)")
+if (ssePatched === sseSource) throw new Error("SSE cancel patch did not apply; generator output changed")
+await Bun.write(ssePath, ssePatched)
+
+// The flat-parameter generator removes an empty body even when the API requires
+// an object whose fields are all optional. Session creation with defaults is a
+// valid request; retain {} without changing GETs or optional request bodies.
+const { patchRequiredObjectBodies } = await import("./patch-required-object-bodies")
+const sdkPath = "./src/gen/sdk.gen.ts"
+await Bun.write(sdkPath, patchRequiredObjectBodies(await Bun.file(sdkPath).text(), await Bun.file("./openapi.json").json()))
+
 // Error interceptors receive the original per-call options from hey-api, so a
 // client-level `throwOnError: true` is otherwise invisible to them. Pass the
 // resolved value to keep decoded server errors as real Error instances.
@@ -80,5 +95,6 @@ for (const clientPath of ["./src/gen/client/client.gen.ts"]) {
 
 await $`bun prettier --write src/gen`
 await $`rm -rf dist`
-await $`bun tsc`
+await $`bun typecheck`
+await $`bun tsgo`
 await $`rm openapi.json`

@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import { mkdtempSync } from "node:fs"
 import os from "node:os"
 import * as DateTime from "effect/DateTime"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, SubscriptionRef } from "effect"
 import { eq } from "drizzle-orm"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -23,6 +23,8 @@ import { IMRepository, IMRepositoryError, IMMessage } from "@deepagent-code/core
 import type { IMRepositoryInterface } from "@deepagent-code/core/im/repository"
 import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
 import { IMReplyOutbox } from "@/im/im-reply-outbox"
+import { IMKernelSync } from "@/im/kernel/sync"
+import { KernelClient } from "@/im/kernel/client"
 import { testEffect } from "../lib/effect"
 
 // V2 IM durable-only — the reply half (src/im/im-reply-outbox.ts). The terminal assistant reply of
@@ -56,7 +58,17 @@ const v2Session = SessionV2.layer.pipe(
 const createdMessages: Array<{ groupID: string; senderID: string; content: string; metadata: unknown }> = []
 let deliveriesFail = false
 const repo: IMRepositoryInterface = {
+  claimKernelDelivery: () => Effect.die("unused transport admission"),
+  acknowledgeKernelDelivery: () => Effect.die("unused transport acknowledgement"),
+  uncertainKernelDelivery: () => Effect.die("unused transport unknown"),
+  kernelDeliveryStatuses: () => Effect.die("unused transport statuses"),
+  kernelDeliveryStatus: () => Effect.die("unused transport status"),
+  requireLegacyMention: () => Effect.die("unused"),
+  listPendingMentions: () => Effect.succeed([]),
+  bindMention: () => Effect.die("unused"),
+  settleMention: () => Effect.void,
   listGroups: () => Effect.die("unused"),
+  ensureKernelGroup: () => Effect.die("unused"),
   createGroup: () => Effect.die("unused"),
   createDirectGroup: () => Effect.die("unused"),
   getGroup: () => Effect.die("unused"),
@@ -84,6 +96,7 @@ const repo: IMRepositoryInterface = {
             mentions: input.mentions ?? [],
             metadata: input.metadata ?? null,
             replyToID: null,
+            kernelMsgID: null,
             createdAt: Date.now(),
             updatedAt: Date.now(),
             deletedAt: null,
@@ -94,6 +107,19 @@ const repo: IMRepositoryInterface = {
   createAttachment: () => Effect.die("unused"),
   getAttachment: () => Effect.die("unused"),
   listAttachments: () => Effect.die("unused"),
+  listExpiredAttachments: () => Effect.die("unused"),
+  attachmentCleanupCursor: () => Effect.die("unused attachment cleanup cursor"),
+  advanceAttachmentCleanupCursor: () => Effect.die("unused attachment cleanup cursor update"),
+  expireAttachment: () => Effect.die("unused"),
+  getGroupByKernelConvID: () => Effect.die("unused"),
+  getGroupByID: () => Effect.die("unused"),
+  bindKernelConversation: () => Effect.die("unused"),
+  getMessageByKernelMsgID: () => Effect.die("unused"),
+  setMessageKernelMsgID: () => Effect.die("unused"),
+  listPendingKernelMessages: () => Effect.die("unused"),
+  listKernelBoundGroups: Effect.die("unused"),
+  getSyncCursor: () => Effect.die("unused"),
+  upsertSyncCursor: () => Effect.die("unused"),
 }
 const broadcasts: Array<{ groupID: string; type: string }> = []
 const broadcaster = {
@@ -138,6 +164,19 @@ const baseAppend = {
 }
 
 describe("IMReplyOutbox append/claim/settle", () => {
+  it.effect("an ordinary-looking outbox ID cannot bypass a managed task's actual terminal authority", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const before = { messages: createdMessages.length, broadcasts: broadcasts.length }
+      const result = yield* IMReplyOutbox.deliverReply({ db, repo, broadcaster }, {
+        id: "imo_forged", sessionID: "ses_imtask_no_grant", groupID: "other-group", agentID: "auto",
+        replyText: "must not disclose", attempts: 1, triggerMessageID: "other-source", replyMessageID: "other-final",
+      }).pipe(Effect.exit)
+      expect(result._tag).toBe("Failure")
+      expect({ messages: createdMessages.length, broadcasts: broadcasts.length }).toEqual(before)
+    }),
+  )
+
   it.effect("append is idempotent per (session, reply) — re-collection never double-writes", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -200,6 +239,48 @@ describe("IMReplyOutbox append/claim/settle", () => {
     }),
   )
 
+  it.effect("a delivered reply forwards to the kernel with the [Agent·] marker; the local row stays bare", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const input = { ...baseAppend, sessionID: "ses_im_outbox_kernel", replyMessageID: "msg_reply_kernel" }
+      yield* IMReplyOutbox.appendReply(db, { ...input, now: 0 })
+      const kernelSends: Array<{ groupID: string; messageID: string; content: string }> = []
+      const kernelSync: IMKernelSync.Interface = {
+        createMessage: repo.createMessage,
+        deliveryStatuses: () => Effect.die("unused transport statuses"),
+        deliveryStatus: () => Effect.die("unused transport status"),
+        state: yield* SubscriptionRef.make<KernelClient.ConnectionState>("connected"),
+        send: (send) => Effect.sync(() => void kernelSends.push(send)),
+        drainPending: Effect.void,
+        recovery: yield* SubscriptionRef.make<IMKernelSync.RecoveryState>({ status: "ready" }),
+        catchUp: Effect.void,
+      }
+
+      yield* IMReplyOutbox.drainPass({ db, repo, broadcaster, kernelSync }, { now: 0 })
+
+      // design §6：跨内核回发带 [Agent·<执行者>] 标记（内核只路由文本，senderType/metadata 到不了
+      // 对端）；本地行保持裸文（本地渲染已有 senderType="agent" + metadata）。createdMessages 跨
+      // 测试累积——只断言本次 drain 追加的末尾行。
+      const created = createdMessages.at(-1)
+      expect(created).toEqual({
+        groupID: input.groupID,
+        senderID: input.agentID,
+        content: input.replyText,
+        metadata: { type: "agent_run", sessionID: input.sessionID, status: "success" },
+      })
+      expect(kernelSends).toEqual([
+        {
+          groupID: input.groupID,
+          messageID: `im_created_${createdMessages.length}`,
+          content: `[Agent·${input.agentID}] ${input.replyText}`,
+        },
+      ])
+      expect((yield* outboxRow(IMReplyOutbox.replyOutboxID(input.sessionID, input.replyMessageID)))?.status).toBe(
+        "delivered",
+      )
+    }),
+  )
+
   it.effect("past the attempt cap the row settles dead — visible in the table, never vanished", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -256,7 +337,7 @@ const zero = DateTime.makeUnsafe(0)
 const model = { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") }
 
 describe("IMReplyOutbox.collectSessionReply", () => {
-  it.effect("appends the terminal assistant reply of a projected IM session; re-collection is a no-op", () =>
+  it.effect("does not infer a terminal Activity from an assistant text projection", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
       const { db } = yield* Database.Service
@@ -300,11 +381,9 @@ describe("IMReplyOutbox.collectSessionReply", () => {
         text: "the projected terminal reply",
       })
 
-      expect(yield* IMReplyOutbox.collectSessionReply({ db, v2Session: session }, sessionID, 10_000)).toBe(true)
+      expect(yield* IMReplyOutbox.collectSessionReply({ db, v2Session: session }, sessionID, 10_000)).toBe(false)
       const row = yield* outboxRow(IMReplyOutbox.replyOutboxID(sessionID, assistantID))
-      expect(row?.reply_text).toBe("the projected terminal reply")
-      expect(row?.group_id).toBe("grp_collect")
-      expect(row?.trigger_message_id).toBe("msg_collect_trigger")
+      expect(row).toBeUndefined()
 
       // Re-collection (the periodic reconcile) is a no-op.
       expect(yield* IMReplyOutbox.collectSessionReply({ db, v2Session: session }, sessionID, 11_000)).toBe(false)

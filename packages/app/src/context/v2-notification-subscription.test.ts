@@ -50,7 +50,12 @@ describe("v2 notification subscription (durable drain)", () => {
     const fake = fakeDrain({
       "ses-1": [{ id: "e1", seq: 8, type: "session.execution.succeeded", data: { sessionID: "ses-1" } }],
       "ses-2": [
-        { id: "e2", seq: 10, type: "session.execution.failed", data: { sessionID: "ses-2", error: { type: "unknown", message: "boom" } } },
+        {
+          id: "e2",
+          seq: 10,
+          type: "session.execution.failed",
+          data: { sessionID: "ses-2", error: { type: "unknown", message: "boom" } },
+        },
       ],
     })
     fake.watermarks.set("ses-1", 7)
@@ -76,7 +81,9 @@ describe("v2 notification subscription (durable drain)", () => {
   })
 
   test("a typed 410 (cursor_gap_exceeded) surfaces a bounded resync without fabricating a notification", async () => {
-    const fake = fakeDrain({ "ses-1": [{ id: "e1", seq: 2, type: "session.execution.started", data: { sessionID: "ses-1" } }] })
+    const fake = fakeDrain({
+      "ses-1": [{ id: "e1", seq: 2, type: "session.execution.started", data: { sessionID: "ses-1" } }],
+    })
     const originalEvents = fake.client.context.events
     let first = true
     fake.client.context.events = async (parameters: { session_id: string; after: string }) => {
@@ -139,4 +146,93 @@ describe("v2 notification subscription (durable drain)", () => {
     }
     await Bun.sleep(20) // no unhandled rejection — the loop is stopped
   })
+})
+
+test("real REST interruption rows advance the cursor across duplicate drains and resumed subscriptions", async () => {
+  const { createOpencodeClient } = await import("@deepagent-code/sdk")
+  const { createServer } = await import("node:http")
+  const rows: EventRow[] = [
+    ...["user", "shutdown", "superseded"].map((reason, index) => ({
+      id: `interrupt-${reason}`,
+      seq: index + 1,
+      type: "session.execution.interrupted.1",
+      data: { sessionID: "ses-1", reason },
+    })),
+    { id: "success", seq: 4, type: "session.execution.succeeded.1", data: { sessionID: "ses-1" } },
+    {
+      id: "failure",
+      seq: 5,
+      type: "session.execution.failed.1",
+      data: { sessionID: "ses-1", error: { type: "unknown", message: "provider failure" } },
+    },
+    {
+      id: "duplicate-failure",
+      seq: 5,
+      type: "session.execution.failed.1",
+      data: { sessionID: "ses-1", error: { type: "unknown", message: "duplicate" } },
+    },
+    { id: "next-start", seq: 6, type: "session.execution.started.1", data: { sessionID: "ses-1" } },
+  ]
+  const requests: string[] = []
+  const consumed: number[] = []
+  const idle: string[] = []
+  const failures: string[] = []
+  const duplicateDrain = Promise.withResolvers<void>()
+  const resumedDrain = Promise.withResolvers<void>()
+  const server = createServer((request, response) => {
+    const url = new URL(request.url!, "http://127.0.0.1")
+    response.setHeader("Content-Type", "application/json")
+    response.setHeader("Access-Control-Allow-Origin", request.headers.origin ?? "*")
+    if (request.method === "OPTIONS") {
+      response.setHeader("Access-Control-Allow-Methods", "GET")
+      response.setHeader(
+        "Access-Control-Allow-Headers",
+        request.headers["access-control-request-headers"] ?? "content-type",
+      )
+      response.writeHead(204).end()
+      return
+    }
+    if (url.pathname === "/context/eventsCursor") {
+      response.end(JSON.stringify({ watermark: 0, cursor: 0, floor: 0 }))
+      return
+    }
+    if (url.pathname !== "/context/events") {
+      response.writeHead(404).end()
+      return
+    }
+    requests.push(url.searchParams.get("after") ?? "")
+    const afterTerminal = requests.filter((after) => after === "6").length
+    if (afterTerminal === 2) duplicateDrain.resolve()
+    if (afterTerminal === 4) resumedDrain.resolve()
+    // Repeated pages deliberately include earlier terminal rows; only seq authority
+    // decides whether they can notify again, including after rebuilding a subscriber.
+    response.end(JSON.stringify({ events: rows, nextCursor: 6, floor: 0 }))
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (!address || typeof address === "string") throw new Error("Missing fixture listener address")
+  const client = createOpencodeClient({ baseUrl: `http://127.0.0.1:${address.port}` })
+  const handlers = {
+    onIdle: (sessionID: string) => idle.push(sessionID),
+    onError: (_sessionID: string, error: { message: string }) => failures.push(error.message),
+    onJournalEvent: (_sessionID: string, event: { seq: number }) => consumed.push(event.seq),
+  }
+  let close = subscribeSessionNotifications(client, ["ses-1"], handlers, { after: () => "0" }, 1)
+  try {
+    await duplicateDrain.promise
+    expect(consumed).toEqual([1, 2, 3, 4, 5, 6])
+    expect(idle).toEqual(["ses-1"])
+    expect(failures).toEqual(["provider failure"])
+    expect(requests.slice(0, 3)).toEqual(["0", "6", "6"])
+    close()
+    close = subscribeSessionNotifications(client, ["ses-1"], handlers, { after: () => String(consumed.at(-1)) }, 1)
+    await resumedDrain.promise
+    expect(consumed).toEqual([1, 2, 3, 4, 5, 6])
+    expect(idle).toEqual(["ses-1"])
+    expect(failures).toEqual(["provider failure"])
+  } finally {
+    close()
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
 })

@@ -58,7 +58,11 @@ import { tmpdir } from "./fixture/tmpdir"
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
   Effect.runPromise(
-    effect.pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Effect.scoped),
+    Effect.gen(function* () {
+      // Migrations run on the same FK-on client contract as production bootstrap.
+      yield* (yield* SqliteClient.SqliteClient).unsafe("PRAGMA foreign_keys = ON")
+      return yield* effect
+    }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Effect.scoped),
   )
 
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
@@ -710,7 +714,7 @@ describe("DatabaseMigration", () => {
       Effect.gen(function* () {
         const db = yield* makeDb
         yield* DatabaseMigration.apply(db)
-        yield* seedReceiptScope(db)
+        yield* seedReceiptScope(db, "session-constraint-test")
 
         expect(yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session'`)).toEqual({
           name: "session",
@@ -1201,7 +1205,7 @@ describe("DatabaseMigration", () => {
       Effect.gen(function* () {
         const db = yield* makeDb
         yield* DatabaseMigration.apply(db)
-        yield* seedReceiptScope(db)
+        yield* seedReceiptScope(db, "session-provider-lifecycle")
         yield* db.run(sql`
           INSERT INTO session_provider_owner_lease (
             owner_token, registered_at, heartbeat_at, lease_expires_at
@@ -1828,7 +1832,7 @@ describe("DatabaseMigration", () => {
         )
         expect(preparedTurnMigrationIndex).toBeGreaterThan(0)
         yield* DatabaseMigration.applyOnly(db, migrations.slice(0, preparedTurnMigrationIndex))
-        yield* seedReceiptScope(db)
+        yield* seedReceiptScope(db, "session-pre-w3")
 
         for (const [index, state] of ["prepared", "dispatching", "streaming"].entries()) {
           const receiptID = `receipt-pre-w3-${state}`
@@ -5111,7 +5115,7 @@ describe("DatabaseMigration", () => {
   })
 })
 
-function seedReceiptScope(db: Database.Interface["db"]) {
+function seedReceiptScope(db: Database.Interface["db"], sessionID?: string) {
   return Effect.gen(function* () {
     yield* db.run(sql`
       INSERT INTO context_security_namespace (id, kind, binding_hash, created_at)
@@ -5124,6 +5128,12 @@ function seedReceiptScope(db: Database.Interface["db"]) {
         ${receiptNamespace}, ${receiptProjectScope}, 'registered_root', 'receipt-project-identity', 1
       )
     `)
+    if (!sessionID) return
+    // Receipt rows retain their real Session/Project parents under FK-on migration.
+    yield* db.run(sql`INSERT INTO project (id,worktree,sandboxes,time_created,time_updated)
+      VALUES (${`project-${sessionID}`}, "/receipt-fixture", '[]', 1, 1)`)
+    yield* db.run(sql`INSERT INTO session (id,project_id,slug,directory,title,version,time_created,time_updated)
+      VALUES (${sessionID}, ${`project-${sessionID}`}, ${sessionID}, "/receipt-fixture", 'Receipt fixture', '1', 1, 1)`)
   })
 }
 

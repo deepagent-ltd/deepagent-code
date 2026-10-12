@@ -3,12 +3,43 @@ export * as SessionExecution from "./execution"
 import { Cause, Context, Effect, Exit, Layer } from "effect"
 import { SessionRunner } from "./runner/index"
 import { SessionSchema } from "./schema"
+import { SessionRunCoordinator } from "./run-coordinator"
+import { GoalChildExecution } from "../deepagent/goal-child-execution"
+import { GoalChildSchema } from "../deepagent/goal-child.schema"
+
+export interface Owned {
+  readonly run: (
+    target: GoalChildExecution.Target,
+    options?: {
+      readonly receipt?: SessionRunCoordinator.OwnedReceipt<SessionSchema.ID>
+      readonly registered?: (receipt: SessionRunCoordinator.OwnedReceipt<SessionSchema.ID>) => void
+    },
+  ) => Effect.Effect<SessionRunCoordinator.OwnedStart<SessionSchema.ID>, GoalChildSchema.Error>
+  readonly interrupt: (
+    receipt: SessionRunCoordinator.OwnedReceipt<SessionSchema.ID>,
+    predicate: () => boolean,
+    seq?: number,
+    reason?: InterruptReason,
+  ) => Effect.Effect<SessionRunCoordinator.OwnedInterruption>
+  readonly await: (
+    receipt: SessionRunCoordinator.OwnedReceipt<SessionSchema.ID>,
+  ) => Effect.Effect<SessionRunCoordinator.OwnedSettlement<void, SessionRunner.RunError>>
+}
+export const requireOwned = (execution: Interface) =>
+  execution.owned
+    ? Effect.succeed(execution.owned)
+    : Effect.fail(
+        new GoalChildSchema.Error({ code: "GOAL_CHILD_UNAVAILABLE", message: "Owned Goal execution is not installed" }),
+      )
 
 export interface Interface {
+  /** Internal capability only. Noop and ordinary test services may omit it. */
+  readonly owned?: Owned
+
   /** Snapshots active execution owned by this process. */
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
-  /** Explicitly drain one Session, making at least one provider attempt. */
-  readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRunner.RunError>
+  /** Explicitly drain a Session; an activity-bound continuation cannot reopen an ended activity. */
+  readonly resume: (sessionID: SessionSchema.ID, options?: { readonly activityID?: string }) => Effect.Effect<void, SessionRunner.RunError>
   /** Schedule a drain after durable work is recorded. Repeated wakeups may coalesce. */
   readonly wake: (sessionID: SessionSchema.ID, seq?: number) => Effect.Effect<void, SessionRunner.RunError>
   /** Interrupt active work owned by this process. Idle interruption is a no-op. */

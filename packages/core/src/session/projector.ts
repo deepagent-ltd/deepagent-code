@@ -1,13 +1,13 @@
 export * as SessionProjector from "./projector"
 
-import { and, asc, desc, eq, gt, gte, lt, ne, sql } from "drizzle-orm"
+import { and, asc, count, desc, eq, gt, gte, inArray, lt, ne, sql } from "drizzle-orm"
 import { isDeepStrictEqual } from "node:util"
 import path from "node:path"
-import { DateTime, Effect, Layer, Schema } from "effect"
+import { DateTime, Effect, Layer, Option, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventV2 } from "../event"
-import { EventArtifactTable } from "../event/sql"
+import { EventArtifactTable, EventSequenceTable, EventSyncSequenceTable, EventTable } from "../event/sql"
 import { FilePartArtifact } from "../file-part-artifact"
 import { FilePartArtifactBindingTable } from "../file-part-artifact.sql"
 import { SessionEvent } from "./event"
@@ -29,9 +29,11 @@ import {
   SessionWireProjectionTable,
 } from "./sql"
 import { V2ProviderTurnReceiptTable } from "./runner/v2-provider-turn.sql"
-import { legacyAssistant as legacyAssistantExport, legacyUser } from "./legacy-wire"
+import { SessionProviderOwnerLeaseTable } from "../context-federation/session-sql"
+import { legacyAssistant, legacyAssistantPartID, legacyUser } from "./legacy-wire"
 import type { DeepMutable } from "../schema"
 import { SessionSchema } from "./schema"
+import { SessionToolQuota } from "./tool-quota.schema"
 import { Hash } from "../util/hash"
 
 type DatabaseService = Database.Interface["db"]
@@ -48,7 +50,9 @@ const discardRevertedV2Tail = Effect.fnUntraced(function* (
   const target = yield* db
     .select()
     .from(SessionMessageTable)
-    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, SessionMessage.ID.make(messageID))))
+    .where(
+      and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, SessionMessage.ID.make(messageID))),
+    )
     .get()
     .pipe(Effect.orDie)
   if (!target) return
@@ -66,11 +70,13 @@ const discardRevertedV2Tail = Effect.fnUntraced(function* (
   )
   yield* db
     .delete(SessionMessageTable)
-    .where(and(
-      eq(SessionMessageTable.session_id, sessionID),
-      includeTarget ? gte(SessionMessageTable.seq, target.seq) : gt(SessionMessageTable.seq, target.seq),
-      ne(SessionMessageTable.id, noticeID),
-    ))
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        includeTarget ? gte(SessionMessageTable.seq, target.seq) : gt(SessionMessageTable.seq, target.seq),
+        ne(SessionMessageTable.id, noticeID),
+      ),
+    )
     .run()
     .pipe(Effect.orDie)
   return target
@@ -197,6 +203,7 @@ const snapshotTableNames = [
   "session_message",
   "session_input",
   "session_context_epoch",
+  "quota_event",
 ] as const
 
 function stripDiffPatches(value: unknown): unknown {
@@ -393,6 +400,31 @@ const loadMessageRow = (db: DatabaseService, sessionID: SessionSchema.ID, messag
 const decodeRow = (row: typeof SessionMessageTable.$inferSelect) =>
   decodeMessage({ ...row.data, id: row.id, type: row.type })
 
+const liveWireOwner = (db: DatabaseService, sessionID: SessionSchema.ID) =>
+  db
+    .select({
+      receiptID: V2ProviderTurnReceiptTable.receipt_id,
+      ownerToken: V2ProviderTurnReceiptTable.owner_token,
+      mode: V2ProviderTurnReceiptTable.owner_mode,
+      state: V2ProviderTurnReceiptTable.state,
+      directory: SessionTable.directory,
+      workspaceID: SessionTable.workspace_id,
+      expiresAt: SessionProviderOwnerLeaseTable.lease_expires_at,
+      releasedAt: SessionProviderOwnerLeaseTable.released_at,
+      now: sql<number>`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`,
+    })
+    .from(V2ProviderTurnReceiptTable)
+    .innerJoin(
+      SessionProviderOwnerLeaseTable,
+      eq(SessionProviderOwnerLeaseTable.owner_token, V2ProviderTurnReceiptTable.owner_token),
+    )
+    .innerJoin(SessionTable, eq(SessionTable.id, V2ProviderTurnReceiptTable.session_id))
+    .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+    .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+
 function wireFingerprintCursor(
   db: DatabaseService,
   sessionID: SessionSchema.ID,
@@ -480,7 +512,13 @@ const wireParent = (db: DatabaseService, sessionID: SessionSchema.ID, assistantI
   return db
     .select({ id: SessionMessageTable.id })
     .from(SessionMessageTable)
-    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "user"), lt(SessionMessageTable.seq, seq)))
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        eq(SessionMessageTable.type, "user"),
+        lt(SessionMessageTable.seq, seq),
+      ),
+    )
     .orderBy(desc(SessionMessageTable.seq))
     .get()
     .pipe(
@@ -498,9 +536,7 @@ function wireRoot(directory: string, subpath: string | null) {
   if (path.isAbsolute(subpath)) {
     // Legacy rows may already store an absolute root; accept it only when it contains cwd.
     const relative = path.relative(subpath, directory)
-    return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
-      ? directory
-      : subpath
+    return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) ? directory : subpath
   }
   const segments = subpath.split(/[\\/]/).filter((segment) => segment && segment !== ".")
   // A traversal or malformed relative path cannot establish a wider workspace boundary.
@@ -536,7 +572,7 @@ function publishWireForMessage(
               .where(eq(SessionTable.id, sessionID))
               .get()
               .pipe(Effect.orDie)
-            return legacyAssistantExport({
+            return legacyAssistant({
               sessionID,
               parentMessageID: SessionV1.MessageID.ascending(parent ? parent.id : message.id),
               directory: directory?.directory ?? "",
@@ -564,10 +600,11 @@ function publishWireForMessage(
             })
           : undefined
     if (!projected) return
+    const projectedInfo = { ...projected.info, canonicalSeq: row.seq }
     const existing = yield* db
       .select({ data: MessageTable.data })
       .from(MessageTable)
-      .where(eq(MessageTable.id, projected.info.id))
+      .where(eq(MessageTable.id, projectedInfo.id))
       .get()
       .pipe(Effect.orDie)
     // Ownership scoping (staged 6b-1): the host authors wire rows for legacy-loop sessions with
@@ -576,13 +613,13 @@ function publishWireForMessage(
     // recovery: the row was never written) plus assistant rows for V2-owned sessions (the
     // mirror's exact audience); existing host-authored rows stay untouched until 6b-2 retires
     // the mirror and the egress becomes the single writer.
-    if (projected.info.role === "user") {
+    if (projectedInfo.role === "user") {
       if (existing) return
-      const messageFingerprint = JSON.stringify(projected.info)
-      yield* publishWireOnce(db, events, sessionID, "message", projected.info.id, messageFingerprint, () =>
+      const messageFingerprint = JSON.stringify(projectedInfo)
+      yield* publishWireOnce(db, events, sessionID, "message", projectedInfo.id, messageFingerprint, () =>
         events.publish(SessionV1.Event.MessageUpdated, {
           sessionID,
-          info: structuredClone(projected.info),
+          info: structuredClone(projectedInfo),
         }),
       )
       for (const part of projected.parts) {
@@ -604,12 +641,18 @@ function publishWireForMessage(
       .get()
       .pipe(Effect.orDie)
     if (v2Owned) {
-      // Merge-preserve: keep wire-row fields the V2 projection does not model (assistant
-      // `structured`, providerAttemptID...) on top of the derived row.
+      // Preserve Host-only extras, but canonical settlement owns time, usage and
+      // identity. A pending wire row must not overwrite the completed projection.
       const mergedInfo =
         existing?.data && typeof existing.data === "object"
-          ? ({ ...structuredClone(projected.info), ...structuredClone(existing.data) } as typeof projected.info)
-          : projected.info
+          ? ({
+              ...structuredClone(existing.data),
+              ...structuredClone(projectedInfo),
+              finish: projectedInfo.finish,
+              error: projectedInfo.error,
+              variant: projectedInfo.variant,
+            } as typeof projectedInfo)
+          : projectedInfo
       const messageFingerprint = JSON.stringify(mergedInfo)
       yield* publishWireOnce(db, events, sessionID, "message", mergedInfo.id, messageFingerprint, () =>
         events.publish(SessionV1.Event.MessageUpdated, {
@@ -635,6 +678,31 @@ export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const events = yield* EventV2.Service
     const { db } = yield* Database.Service
+    // Live fragments have no replay authority. Keep only identities captured after
+    // this process commits Started for a current V2 owner; never retain their text.
+    const liveWireParts = new Map<
+      string,
+      {
+        sessionID: SessionSchema.ID
+        messageID: SessionMessage.ID
+        partID: SessionV1.PartID
+        receiptID: string
+        ownerToken: string
+        location: NonNullable<EventV2.Payload["location"]>
+      }
+    >()
+    const liveWireKey = (sessionID: string, messageID: string, kind: "text" | "reasoning", fragmentID: string) =>
+      JSON.stringify([sessionID, messageID, kind, fragmentID])
+    const forgetLiveWireParts = (sessionID: string, messageID?: string, partID?: string) => {
+      for (const [key, part] of liveWireParts) {
+        if (
+          part.sessionID === sessionID &&
+          (messageID === undefined || part.messageID === messageID) &&
+          (partID === undefined || part.partID === partID)
+        )
+          liveWireParts.delete(key)
+      }
+    }
     if (events.registerSnapshotCodec)
       yield* events.registerSnapshotCodec({
         codec: "session-projection",
@@ -917,6 +985,56 @@ export const layer = Layer.effectDiscard(
                 if (!row) continue
                 return { cursor: snapshotCursor(index, row.id), tableName, rowKey: row.id, value: row }
               }
+              if (tableName === "quota_event") {
+                const row = yield* db
+                  .select({
+                    id: EventTable.id,
+                    aggregate_id: EventTable.aggregate_id,
+                    seq: EventTable.seq,
+                    type: EventTable.type,
+                    data: EventTable.data,
+                  })
+                  .from(EventTable)
+                  .where(
+                    and(
+                      eq(EventTable.aggregate_id, aggregateID),
+                      inArray(EventTable.type, SessionToolQuota.types),
+                      gt(EventTable.id, EventV2.ID.make(after || "evt_")),
+                    ),
+                  )
+                  .orderBy(asc(EventTable.id))
+                  .limit(1)
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!row) continue
+                const value = Schema.decodeUnknownOption(SessionToolQuota.SnapshotFact, { onExcessProperty: "error" })({
+                  ...row,
+                  hash: SessionToolQuota.digest(row),
+                })
+                if (Option.isNone(value) || !SessionToolQuota.valid(value.value))
+                  return yield* Effect.die(
+                    new EventV2.InvalidSyncEventError({
+                      type: "snapshot",
+                      message: "Invalid original Session quota fact",
+                    }),
+                  )
+                const capacity = yield* db
+                  .select({ value: count() })
+                  .from(EventTable)
+                  .where(
+                    and(eq(EventTable.aggregate_id, aggregateID), inArray(EventTable.type, SessionToolQuota.types)),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
+                if ((capacity?.value ?? 0) > SessionToolQuota.LIMITS.loaded + SessionToolQuota.LIMITS.proposals)
+                  return yield* Effect.die(
+                    new EventV2.InvalidSyncEventError({
+                      type: "snapshot",
+                      message: "Session quota fact capacity exceeded",
+                    }),
+                  )
+                return { cursor: snapshotCursor(index, row.id), tableName, rowKey: row.id, value: value.value }
+              }
               if (after) continue
               const row = yield* db
                 .select()
@@ -971,6 +1089,143 @@ export const layer = Layer.effectDiscard(
               .pipe(Effect.orDie)
           }),
         import: (aggregateID, row, ownerID) => {
+          if (row.tableName === "quota_event")
+            return Effect.gen(function* () {
+              const value = Schema.decodeUnknownOption(SessionToolQuota.SnapshotFact, { onExcessProperty: "error" })(
+                row.value,
+              )
+              if (
+                Option.isNone(value) ||
+                !SessionToolQuota.valid(value.value) ||
+                value.value.id !== row.rowKey ||
+                value.value.aggregate_id !== aggregateID
+              )
+                return yield* Effect.die(
+                  new EventV2.InvalidSyncEventError({
+                    type: "snapshot",
+                    message: "Session quota snapshot identity or schema changed",
+                  }),
+                )
+              const fact = value.value
+              const sequence = yield* db
+                .select()
+                .from(EventSequenceTable)
+                .where(eq(EventSequenceTable.aggregate_id, aggregateID))
+                .get()
+                .pipe(Effect.orDie)
+              if (!sequence || fact.seq > sequence.seq)
+                return yield* Effect.die(
+                  new EventV2.InvalidSyncEventError({
+                    type: "snapshot",
+                    message: "Session quota fact exceeds original aggregate sequence",
+                  }),
+                )
+              const existing = yield* db
+                .select()
+                .from(EventTable)
+                .where(eq(EventTable.id, fact.id))
+                .get()
+                .pipe(Effect.orDie)
+              if (existing) {
+                if (
+                  !isDeepStrictEqual(
+                    {
+                      id: existing.id,
+                      aggregate_id: existing.aggregate_id,
+                      seq: existing.seq,
+                      type: existing.type,
+                      data: existing.data,
+                    },
+                    { id: fact.id, aggregate_id: fact.aggregate_id, seq: fact.seq, type: fact.type, data: fact.data },
+                  )
+                )
+                  return yield* Effect.die(
+                    new EventV2.InvalidSyncEventError({
+                      type: "snapshot",
+                      message: "Session quota fact conflicts with original local charge",
+                    }),
+                  )
+                return
+              }
+              const used = yield* db
+                .select({ value: count() })
+                .from(EventTable)
+                .where(and(eq(EventTable.aggregate_id, aggregateID), eq(EventTable.type, fact.type)))
+                .get()
+                .pipe(Effect.orDie)
+              const limit =
+                fact.type === SessionToolQuota.types[0]
+                  ? SessionToolQuota.LIMITS.loaded
+                  : SessionToolQuota.LIMITS.proposals
+              if ((used?.value ?? 0) >= limit)
+                return yield* Effect.die(
+                  new EventV2.InvalidSyncEventError({
+                    type: "snapshot",
+                    message: "Session quota snapshot capacity exceeded",
+                  }),
+                )
+              if (fact.type === SessionToolQuota.types[0]) {
+                const duplicate = yield* db
+                  .select({ id: EventTable.id })
+                  .from(EventTable)
+                  .where(
+                    and(
+                      eq(EventTable.aggregate_id, aggregateID),
+                      eq(EventTable.type, fact.type),
+                      sql`json_extract(${EventTable.data}, '$.ref') = ${fact.data.ref}`,
+                    ),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
+                const turn = yield* db
+                  .select({ value: count() })
+                  .from(EventTable)
+                  .where(
+                    and(
+                      eq(EventTable.aggregate_id, aggregateID),
+                      eq(EventTable.type, fact.type),
+                      sql`json_extract(${EventTable.data}, '$.assistantMessageID') = ${fact.data.assistantMessageID}`,
+                    ),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
+                if (duplicate || (turn?.value ?? 0) >= SessionToolQuota.LIMITS.newPerTurn)
+                  return yield* Effect.die(
+                    new EventV2.InvalidSyncEventError({
+                      type: "snapshot",
+                      message: "Session quota snapshot duplicates or exceeds original turn charge",
+                    }),
+                  )
+              }
+              // Restore only ledger facts under the already-validated snapshot transaction. Allocate
+              // this database's sequence; a peer's sync cursor never becomes local authority.
+              const sync = yield* db
+                .update(EventSyncSequenceTable)
+                .set({ seq: sql`${EventSyncSequenceTable.seq} + 1` })
+                .where(eq(EventSyncSequenceTable.id, 1))
+                .returning({ seq: EventSyncSequenceTable.seq })
+                .get()
+                .pipe(Effect.orDie)
+              if (!sync)
+                return yield* Effect.die(
+                  new EventV2.InvalidSyncEventError({
+                    type: "snapshot",
+                    message: "Session quota sync sequence is unavailable",
+                  }),
+                )
+              yield* db
+                .insert(EventTable)
+                .values({
+                  id: fact.id,
+                  aggregate_id: fact.aggregate_id,
+                  seq: fact.seq,
+                  type: fact.type,
+                  data: fact.data,
+                  sync_seq: sync.seq,
+                })
+                .run()
+                .pipe(Effect.orDie)
+            })
           if (row.tableName === "session") {
             const value = row.value as typeof SessionTable.$inferInsert
             if (value.id !== aggregateID || (ownerID !== undefined && value.workspace_id !== ownerID))
@@ -1442,7 +1697,9 @@ export const layer = Layer.effectDiscard(
         if (!Number.isInteger(index) || index < 0) return
         const message = decodeMessage({ ...target.data, id: target.id, type: target.type })
         if (message.type !== "assistant" || index >= message.content.length) return
-        const encoded = encodeMessage(new SessionMessage.Assistant({ ...message, content: message.content.slice(0, index) }))
+        const encoded = encodeMessage(
+          new SessionMessage.Assistant({ ...message, content: message.content.slice(0, index) }),
+        )
         const { id, type, ...data } = encoded
         yield* db
           .update(SessionMessageTable)
@@ -1650,7 +1907,12 @@ export const layer = Layer.effectDiscard(
         if (event.data.reason === "hard_gate") {
           if (!event.data.checkpointID || !event.data.checkpointHash)
             return yield* Effect.die("Hard-gate compaction has no checkpoint binding")
-          yield* LongContext.assertCheckpoint(db, event.data.sessionID, event.data.checkpointID, event.data.checkpointHash).pipe(Effect.orDie)
+          yield* LongContext.assertCheckpoint(
+            db,
+            event.data.sessionID,
+            event.data.checkpointID,
+            event.data.checkpointHash,
+          ).pipe(Effect.orDie)
         }
         yield* run(db, event)
         yield* SessionContextEpoch.requestReplacement(db, event.data.sessionID, seq)
@@ -1664,16 +1926,85 @@ export const layer = Layer.effectDiscard(
     // rows, and the durable fingerprint cursor keeps it exactly-once across replays. This
     // replaces the F-17 in-process mirror with the same listen structure but journal-derived,
     // crash-safe state.
-    yield* events.listen((event) =>
-      Effect.suspend(() => {
-        if (!event.type.startsWith("session.next.")) return Effect.void
+    const unsubscribe = yield* events.listen((event) =>
+      Effect.gen(function* () {
+        if (Schema.is(SessionEvent.Text.Delta)(event) || Schema.is(SessionEvent.Reasoning.Delta)(event)) {
+          if (event.replay || event.seq !== undefined || event.version !== undefined || !event.location) return
+          const kind = Schema.is(SessionEvent.Text.Delta)(event) ? "text" : "reasoning"
+          const fragmentID = Schema.is(SessionEvent.Text.Delta)(event) ? event.data.textID : event.data.reasoningID
+          const part = liveWireParts.get(
+            liveWireKey(event.data.sessionID, event.data.assistantMessageID, kind, fragmentID),
+          )
+          if (
+            !part ||
+            event.location.directory !== part.location.directory ||
+            event.location.workspaceID !== part.location.workspaceID
+          )
+            return
+          // This indexed owner/receipt fence only controls live display, never
+          // provider admission. Cancellation or lost ownership cannot reuse it.
+          const owner = yield* liveWireOwner(db, part.sessionID)
+          if (
+            !owner ||
+            owner.receiptID !== part.receiptID ||
+            owner.ownerToken !== part.ownerToken ||
+            owner.mode !== "v2" ||
+            owner.releasedAt !== null ||
+            owner.expiresAt <= owner.now ||
+            owner.directory !== part.location.directory ||
+            (owner.workspaceID ?? undefined) !== part.location.workspaceID ||
+            !["preparing", "dispatching", "streaming"].includes(owner.state)
+          ) {
+            liveWireParts.delete(liveWireKey(part.sessionID, part.messageID, kind, fragmentID))
+            return
+          }
+          if (liveWireParts.get(liveWireKey(part.sessionID, part.messageID, kind, fragmentID)) !== part) return
+          yield* events.publish(
+            SessionV1.Event.PartDelta,
+            {
+              sessionID: part.sessionID,
+              messageID: SessionV1.MessageID.make(part.messageID),
+              partID: part.partID,
+              field: "text",
+              delta: event.data.delta,
+            },
+            { location: part.location },
+          )
+          return
+        }
+        if (
+          Schema.is(SessionEvent.Step.Started)(event) ||
+          Schema.is(SessionEvent.InterruptRequested)(event) ||
+          Schema.is(SessionEvent.Execution.Succeeded)(event) ||
+          Schema.is(SessionEvent.Execution.Failed)(event) ||
+          Schema.is(SessionEvent.Execution.Interrupted)(event) ||
+          Schema.is(SessionEvent.Deleted)(event) ||
+          Schema.is(SessionEvent.Moved)(event) ||
+          Schema.is(SessionEvent.RevertChanged)(event)
+        )
+          forgetLiveWireParts(event.data.sessionID)
+        if (Schema.is(SessionEvent.Step.Ended)(event) || Schema.is(SessionEvent.Step.Failed)(event))
+          forgetLiveWireParts(event.data.sessionID, event.data.assistantMessageID)
+        if (Schema.is(SessionV1.Event.MessageRemoved)(event))
+          forgetLiveWireParts(event.data.sessionID, event.data.messageID)
+        if (Schema.is(SessionV1.Event.PartRemoved)(event))
+          forgetLiveWireParts(event.data.sessionID, event.data.messageID, event.data.partID)
+        if (Schema.is(SessionEvent.Text.Ended)(event))
+          liveWireParts.delete(
+            liveWireKey(event.data.sessionID, event.data.assistantMessageID, "text", event.data.textID),
+          )
+        if (Schema.is(SessionEvent.Reasoning.Ended)(event))
+          liveWireParts.delete(
+            liveWireKey(event.data.sessionID, event.data.assistantMessageID, "reasoning", event.data.reasoningID),
+          )
+        if (!event.type.startsWith("session.next.")) return
         const data = event.data as { sessionID?: string; assistantMessageID?: string; messageID?: string }
-        if (typeof data.sessionID !== "string") return Effect.void
+        if (typeof data.sessionID !== "string") return
         const messageIDs = [data.assistantMessageID, data.messageID].filter(
           (id): id is string => typeof id === "string",
         )
-        if (messageIDs.length === 0) return Effect.void
-        return Effect.forEach(
+        if (messageIDs.length === 0) return
+        yield* Effect.forEach(
           messageIDs,
           (messageID) =>
             publishWireForMessage(
@@ -1684,8 +2015,63 @@ export const layer = Layer.effectDiscard(
             ),
           { concurrency: 2 },
         ).pipe(Effect.ignore)
+        if (!Schema.is(SessionEvent.Text.Started)(event) && !Schema.is(SessionEvent.Reasoning.Started)(event)) return
+        if (event.replay || event.seq === undefined || !event.location) return
+        const kind = Schema.is(SessionEvent.Text.Started)(event) ? "text" : "reasoning"
+        const fragmentID = Schema.is(SessionEvent.Text.Started)(event) ? event.data.textID : event.data.reasoningID
+        const row = yield* loadMessageRow(db, event.data.sessionID, event.data.assistantMessageID)
+        if (!row) return
+        const message = decodeRow(row)
+        if (message.type !== "assistant" || message.time.completed) return
+        const index = message.content.findIndex((part) => part.type === kind && part.id === fragmentID)
+        if (index < 0) return
+        const placement = yield* db
+          .select({ directory: SessionTable.directory, workspaceID: SessionTable.workspace_id })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (
+          !placement ||
+          event.location.directory !== placement.directory ||
+          event.location.workspaceID !== (placement.workspaceID ?? undefined)
+        )
+          return
+        const owner = yield* liveWireOwner(db, event.data.sessionID)
+        if (
+          !owner ||
+          owner.mode !== "v2" ||
+          owner.releasedAt !== null ||
+          owner.expiresAt <= owner.now ||
+          !["preparing", "dispatching", "streaming"].includes(owner.state)
+        )
+          return
+        const partID = legacyAssistantPartID(message.id, index)
+        const wire = yield* db
+          .select({ data: PartTable.data })
+          .from(PartTable)
+          .where(
+            and(
+              eq(PartTable.id, partID),
+              eq(PartTable.session_id, event.data.sessionID),
+              eq(PartTable.message_id, SessionV1.MessageID.make(message.id)),
+            ),
+          )
+          .get()
+          .pipe(Effect.orDie)
+        if (wire?.data.type !== kind) return
+        if (liveWireParts.size >= 2048) return yield* Effect.logWarning("Live wire fragment identity limit reached")
+        liveWireParts.set(liveWireKey(event.data.sessionID, message.id, kind, fragmentID), {
+          sessionID: event.data.sessionID,
+          messageID: message.id,
+          partID,
+          receiptID: owner.receiptID,
+          ownerToken: owner.ownerToken,
+          location: structuredClone(event.location),
+        })
       }),
     )
+    yield* Effect.addFinalizer(() => unsubscribe.pipe(Effect.andThen(Effect.sync(() => liveWireParts.clear()))))
   }),
 )
 

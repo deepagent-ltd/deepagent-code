@@ -36,7 +36,11 @@ import { run as runEffect, sha256 } from "./database/backup-fixture"
 // genuine gap and is reported as an honest residual in the companion report.
 
 const runWithFile = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientService>) =>
-  Effect.runPromise(effect.pipe(Effect.provide(SqliteClient.layer({ filename })), Effect.scoped))
+  Effect.runPromise(Effect.gen(function* () {
+      // Migrations run on the same FK-on client contract as production bootstrap.
+      yield* (yield* SqliteClient.SqliteClient).unsafe("PRAGMA foreign_keys = ON")
+      return yield* effect
+    }).pipe(Effect.provide(SqliteClient.layer({ filename })), Effect.scoped))
 
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 

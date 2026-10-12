@@ -433,6 +433,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     flush,
     failUnsettledTools,
     hasAssistantStarted: () => assistantMessageID !== undefined,
+    currentAssistantMessageID: () => assistantMessageID,
     hasProviderError: () => providerFailed,
     hasUnsettledLocalTool,
     startAssistant,

@@ -156,6 +156,7 @@ function stateApi(sync: ReturnType<typeof useSync>): TuiPluginApi["state"] {
           name,
           status: item.status,
           error: item.status === "failed" ? item.error : undefined,
+          ...(item.status === "disconnected" ? { authStatus: item.authStatus, reason: item.reason } : {}),
         }))
     },
   }

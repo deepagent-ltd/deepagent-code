@@ -1,9 +1,11 @@
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import type { ContextItem, Prompt } from "@/context/prompt"
-import { toV2Prompt } from "@deepagent-code/sdk/client"
+import { toV2Prompt, type SessionStatus } from "@deepagent-code/sdk/client"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 
+const statuses: Record<string, SessionStatus> = {}
+const abortedSessions: string[] = []
 const createdClients: string[] = []
 const createdSessions: string[] = []
 const enabledAutoAccept: Array<{ sessionID: string; directory: string }> = []
@@ -78,7 +80,7 @@ const clientFor = (directory: string) => {
       prompt: async () => ({ data: undefined }),
       promptAsync: async () => { throw new Error("legacy prompt path") },
       command: async () => ({ data: undefined }),
-      abort: async () => ({ data: undefined }),
+      abort: async (input: { sessionID: string }) => { abortedSessions.push(input.sessionID); return { data: undefined } },
     },
     v2: { session: {
       prompt: async (payload: {
@@ -319,7 +321,7 @@ beforeAll(async () => {
 
   mock.module("@/context/sync", () => ({
     useSync: () => ({
-      data: { command: [] },
+      data: { command: [], session_status: statuses },
       session: {
         optimistic: {
           add: (value: {
@@ -339,7 +341,7 @@ beforeAll(async () => {
           },
         },
       },
-      set: () => undefined,
+      set: (key: string, sessionID: string, value: SessionStatus) => { if (key === "session_status") statuses[sessionID] = value },
     }),
   }))
 
@@ -360,8 +362,9 @@ beforeAll(async () => {
         syncedDirectories.push(directory)
         storedSessions[directory] ??= []
         return [
-          { session: storedSessions[directory] },
+          { session: storedSessions[directory], session_status: statuses },
           (...args: unknown[]) => {
+            if (args[0] === "session_status") { statuses[args[1] as string] = args[2] as SessionStatus; return }
             if (args[0] !== "session") return
             const next = args[1]
             if (typeof next === "function") {
@@ -396,6 +399,8 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  for (const key of Object.keys(statuses)) delete statuses[key]
+  abortedSessions.length = 0
   createdClients.length = 0
   createdSessions.length = 0
   enabledAutoAccept.length = 0
@@ -425,6 +430,67 @@ beforeEach(() => {
 })
 
 describe("prompt submit worktree selection", () => {
+  const guardedSubmit = (options: Partial<Parameters<typeof createPromptSubmit>[0]> = {}) => createPromptSubmit({
+    info: () => ({ id: "session-1" }), imageAttachments: () => [], commentCount: () => 0,
+    autoAccept: () => false, mode: () => "normal", working: () => false,
+    editor: () => undefined, queueScroll: () => undefined, promptLength: () => 2,
+    addToHistory: () => undefined, resetHistoryNavigation: () => undefined,
+    setMode: () => undefined, setPopover: () => undefined, ...options,
+  })
+
+  test("typed recovery blocks direct submit and abort callbacks without changing the draft or status", async () => {
+    params = { id: "session-1" }
+    const submit = guardedSubmit({ working: () => true })
+    for (const blockedReason of [undefined, "recovery_required", "authority_conflict", "owned_elsewhere"] as const) {
+      const status: SessionStatus = { type: "recovery_required", message: "opaque unrelated text", blockedReason }
+      statuses["session-1"] = status
+      await submit.handleSubmit(new Event("submit", { cancelable: true }))
+      await submit.abort()
+      expect(statuses["session-1"]).toBe(status)
+      expect(promptValue[0]).toMatchObject({ content: "ls" })
+    }
+    expect(sentPromptAsync).toHaveLength(0)
+    expect(preparedDrafts).toHaveLength(0)
+    expect(sentShell).toHaveLength(0)
+    expect(createdSessions).toHaveLength(0)
+    expect(abortedSessions).toHaveLength(0)
+    expect(optimistic).toHaveLength(0)
+  })
+
+  test("a recovery status arriving during draft confirmation fences admission and survives cleanup", async () => {
+    params = { id: "session-1" }
+    promptMode = "intelligence"
+    const status: SessionStatus = { type: "recovery_required", message: "opaque", blockedReason: "recovery_required" }
+    const submit = guardedSubmit({ confirmPromptDraft: async () => {
+      statuses["session-1"] = status
+      return { editedGoal: "Reviewed goal" }
+    } })
+    await submit.handleSubmit(new Event("submit", { cancelable: true }))
+    await flushAsyncSubmit()
+    expect(preparedDrafts).toHaveLength(1)
+    expect(sentPromptAsync).toHaveLength(0)
+    expect(abortedSessions).toHaveLength(0)
+    expect(optimistic).toHaveLength(0)
+    expect(statuses["session-1"]).toBe(status)
+  })
+
+  test("a recovery status arriving while stop joins admission prevents a late abort request", async () => {
+    params = { id: "session-1" }
+    promptValue[0] = { type: "text", content: "prompt waits after admission", start: 0, end: 28 }
+    const submit = guardedSubmit()
+    await submit.handleSubmit(new Event("submit", { cancelable: true }))
+    await flushAsyncSubmit()
+    expect(sentPromptAsync).toHaveLength(1)
+    const stopping = submit.abort()
+    await flushAsyncSubmit()
+    const status: SessionStatus = { type: "recovery_required", message: "opaque", blockedReason: "owned_elsewhere" }
+    statuses["session-1"] = status
+    releaseDelayedPrompt?.()
+    await stopping
+    expect(abortedSessions).toHaveLength(0)
+    expect(statuses["session-1"]).toBe(status)
+  })
+
   test("reads the latest worktree accessor value per submit", async () => {
     const submit = createPromptSubmit({
       info: () => undefined,

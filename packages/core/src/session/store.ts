@@ -10,8 +10,19 @@ import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionMessageTable, SessionTable } from "./sql"
 import { fromRow } from "./info"
+import { WorkSessionGuard } from "./work-session-guard"
+import type { WorkAuthoritySchema } from "./work-authority.schema"
+import { GoalChildExecution } from "../deepagent/goal-child-execution"
+import type { GoalChildSchema } from "../deepagent/goal-child.schema"
 
 export interface Interface {
+  /** Local owned issuer uses this Store's actual database; ordinary mocks may omit it. */
+  readonly goalOwned?: () => ReturnType<typeof GoalChildExecution.make>
+  /** Fences bound work before process-local ownership or Location construction. */
+  readonly requireExecution: (
+    sessionID: SessionSchema.ID,
+    options?: { readonly prepareSource?: boolean },
+  ) => Effect.Effect<void, WorkAuthoritySchema.Error | GoalChildSchema.Error>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info | undefined>
   readonly context: (sessionID: SessionSchema.ID) => Effect.Effect<SessionMessage.Message[], MessageDecodeError>
   readonly runnerContext: (
@@ -49,6 +60,11 @@ export const layer = Layer.effect(
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
 
     return Service.of({
+      goalOwned: () => GoalChildExecution.make(db),
+      requireExecution: (sessionID, options) =>
+        WorkSessionGuard.requireExecution(db, sessionID, options).pipe(
+          Effect.andThen(GoalChildExecution.requireExecution(db, sessionID).pipe(Effect.asVoid)),
+        ),
       get: Effect.fn("SessionStore.get")(function* (sessionID) {
         const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
         return row ? fromRow(row) : undefined

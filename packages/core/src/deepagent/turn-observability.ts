@@ -4,7 +4,7 @@
  * The ablation reports so far had to grep the captured transcript to explain WHERE a run's prompt
  * tokens went and WHY turns happened. This module records both facts at the source, next to the
  * data they describe, in the same style as the mechanism beacon (process-local counters plus
- * stable stderr lines; zero durable-schema change, zero behavior change):
+ * stable log lines; zero durable-schema change, zero behavior change):
  *
  *   [turn] prepared seq=<n> parts=<json>      — after prepare, per provider turn
  *   [turn] summary <json>                     — once per drain end (totals + breakdown sums)
@@ -20,6 +20,8 @@
  * report and summaries accumulated across drains. Every recorder now takes the sessionID; the
  * legacy no-session overloads (tests, beacons) use a shared "_" slot.
  */
+
+import { Log } from "../util/log"
 
 const charsPerToken = 4
 const estimateTokens = (chars: number) => Math.ceil(chars / charsPerToken)
@@ -265,7 +267,7 @@ export type TurnReport = {
   readonly parts?: PreparedParts
 }
 
-const emit = (line: string) => process.stderr.write(line + "\n")
+const emit = (line: string) => Log.raw(line + "\n")
 
 export const recordPrepared = (seq: number, parts: PreparedParts, sessionID?: string): void => {
   const record = recordFor(sessionID)

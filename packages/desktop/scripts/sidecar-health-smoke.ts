@@ -10,6 +10,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { _electron, type ElectronApplication, type Page } from "@playwright/test"
 
+const observedStarted = performance.now()
 const root = await realpath(await mkdtemp(join(tmpdir(), "deepagent-code-sidecar-health-")))
 // Fixed port so CI logs/asserts are deterministic (defaults to the port the
 // workflow sets via DEEPAGENT_CODE_SMOKE_PORT).
@@ -40,9 +41,9 @@ await Promise.all(
 // delivers sidecar credentials (e.g. a dead sidecar URL), and page.evaluate has
 // no default timeout — so a global watchdog covers it. On expiry the watchdog
 // prints the app's main.log tail (where sidecar spawn/health diagnostics land)
-// and exits 1 instead of leaving CI hanging until the job limit. The budget must
-// exceed the worst-case legal startup: sidecar spawn stall (60s) + local health wait (15s).
-const WATCHDOG_TIMEOUT_MS = 180_000
+// rejects so the original finally closes the app. The 150s observation budget
+// is shared with launch/window readiness, leaving 30s in the CI step for cleanup.
+const WATCHDOG_TIMEOUT_MS = 150_000
 
 type Server = { url: string; username: string | null; password: string | null }
 const readServer = (page: Page) =>
@@ -55,16 +56,15 @@ const readServer = (page: Page) =>
 function withWatchdog<T>(probe: Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const watchdog = setTimeout(() => {
-      // No reject here: the finally block would delete the log root before the
-      // tail is read. The watchdog itself prints and exits with 1.
+      // Read the diagnostics before rejection lets finally remove the private root.
+      // process.exit here would bypass owned app shutdown.
       void mainLogTail()
         .catch(() => null)
         .then((tail) => {
           if (tail) console.error(`\nmain.log tail:\n${tail}\n`)
-          console.error(`renderer awaitInitialization timed out after ${WATCHDOG_TIMEOUT_MS}ms`)
-          process.exit(1)
+          reject(new Error(`renderer initialization exceeded the total ${WATCHDOG_TIMEOUT_MS}ms observation budget`))
         })
-    }, WATCHDOG_TIMEOUT_MS)
+    }, Math.max(1, WATCHDOG_TIMEOUT_MS - (performance.now() - observedStarted)))
     probe.then(
       (value) => {
         clearTimeout(watchdog)
@@ -130,6 +130,7 @@ try {
   assert.equal(response.status, 200, `health endpoint responded ${response.status}`)
   const body = (await response.json()) as { healthy?: boolean; version?: string }
   assert.equal(body.healthy, true, `health endpoint body: ${JSON.stringify(body)}`)
+  if (process.env.DEEPAGENT_CODE_VERSION) assert.equal(body.version, process.env.DEEPAGENT_CODE_VERSION)
   console.log("sidecar health smoke passed", {
     url: server.url,
     healthy: body.healthy,

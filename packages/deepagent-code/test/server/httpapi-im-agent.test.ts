@@ -1,212 +1,100 @@
-// E2E for the V2 IM durable-only @mention path through the REAL server stack.
-//
-// The legacy path (ServerAgentExecutor → fresh V1 session per turn → SessionPrompt.promptOrSteer,
-// forked fire-and-forget from the message handler) is deleted. This test pins its durable
-// replacement end-to-end: the handler performs exactly ONE durable SessionV2 admission per mention
-// (the session_input row keyed by the deterministic prompt id), the production V2 runner executes
-// the turn against a fake LLM, the settle drives the im_reply_outbox, and the terminal assistant
-// reply is durably delivered back into the IM group (metadata.sessionID binds the reply to the
-// admitted session — only the outbox writes that linkage).
-//
-// No live-provider key is needed: the V2 runner talks to the in-process TestLLMServer.
-
 import { afterEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
-import { Config, Effect, Layer } from "effect"
-import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
+import { Config, Effect, Layer, Schema } from "effect"
+import { HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
-import { like } from "drizzle-orm"
-import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
-import { Flag } from "@deepagent-code/core/flag/flag"
-import { Workspace } from "../../src/control-plane/workspace"
-import { InstanceBootstrap } from "../../src/project/bootstrap"
-import { InstanceBootstrap as InstanceBootstrapService } from "../../src/project/bootstrap-service"
-import { InstanceStore } from "../../src/project/instance-store"
-import { Project } from "../../src/project/project"
-import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
-import { Session } from "@/session/session"
-import { IMReplyOutbox } from "@/im/im-reply-outbox"
-import { SessionInputTable } from "@deepagent-code/core/session/sql"
 import { Database } from "@deepagent-code/core/database/database"
-import * as Log from "@deepagent-code/core/util/log"
+import { IMMentionIntentTable } from "@deepagent-code/core/im/mention-intent.sql"
+import { IMReplyOutbox } from "@/im/im-reply-outbox"
+import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
+import { InstanceStore } from "../../src/project/instance-store"
+import { InstanceBootstrap } from "../../src/project/bootstrap"
+import { Project } from "../../src/project/project"
+import { Session } from "../../src/session/session"
+import { Workspace } from "../../src/control-plane/workspace"
+import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
-import { TestLLMServer } from "../lib/llm-server"
-import { testProviderConfig } from "../lib/test-provider"
-import { pollWithTimeout, testEffect } from "../lib/effect"
+import { testEffect } from "../lib/effect"
 
-void Log.init({ print: false })
-
-const originalWorkspaces = Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES
-const workspaceLayer = Workspace.defaultLayer.pipe(
-  Layer.provide(InstanceStore.defaultLayer),
-  Layer.provide(InstanceBootstrap.defaultLayer),
-)
-const instanceStoreLayer = InstanceStore.defaultLayer.pipe(
-  Layer.provide(
-    Layer.succeed(InstanceBootstrapService.Service, InstanceBootstrapService.Service.of({ run: Effect.void })),
-  ),
-)
+// Use the existing headless mode: unknown routes are local 404s and no web UI
+// fallback can forward test bodies outside this scoped test server.
 const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
-  HttpApiApp.routes,
-  { disableListenLog: true, disableLogger: true },
+  HttpApiApp.createRoutes(undefined, RuntimeFlags.layer({ disableEmbeddedWebUi: true })), { disableListenLog: true, disableLogger: true },
 )
-const httpApiLayer = servedRoutes.pipe(
-  Layer.provide(layerWebSocketConstructorGlobal),
-  Layer.provideMerge(NodeHttpServer.layerTest),
-  Layer.provideMerge(NodeServices.layer),
+const http = servedRoutes.pipe(
+  Layer.provide(layerWebSocketConstructorGlobal), Layer.provideMerge(NodeHttpServer.layerTest), Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Database.defaultLayer),
 )
-const it = testEffect(
-  Layer.mergeAll(
-    instanceStoreLayer,
-    Project.defaultLayer,
-    Session.defaultLayer,
-    workspaceLayer,
-    Database.defaultLayer,
-    httpApiLayer,
-  ),
-)
+const instances = InstanceStore.defaultLayer.pipe(Layer.provide(Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })))
+const workspace = Workspace.defaultLayer.pipe(Layer.provide(InstanceStore.defaultLayer), Layer.provide(InstanceBootstrap.defaultLayer))
+const it = testEffect(Layer.mergeAll(http, instances, Project.defaultLayer, Session.defaultLayer, workspace, Database.defaultLayer))
+const request = (url: string, body?: unknown) => (body === undefined
+  ? Effect.succeed(HttpClientRequest.get(url))
+  : HttpClientRequest.post(url).pipe(HttpClientRequest.bodyJson(body)))
+  .pipe(Effect.map(HttpClientRequest.setHeader("origin", "http://localhost:3000")), Effect.flatMap(HttpClient.execute))
+afterEach(async () => { await disposeAllInstances(); await resetDatabase() })
 
-function request(path: string, init?: RequestInit) {
-  const url = new URL(path, "http://localhost")
-  return HttpClientRequest.fromWeb(new Request(url, init)).pipe(
-    HttpClientRequest.setUrl(url.pathname),
-    HttpClient.execute,
-  )
-}
-
-function json<T>(response: HttpClientResponse.HttpClientResponse) {
-  if (response.status !== 200)
-    return response.text.pipe(Effect.flatMap((text) => Effect.die(new Error(`HTTP ${response.status}: ${text}`))))
-  return response.json.pipe(Effect.map((value) => value as T))
-}
-
-function requestJson<T>(path: string, init?: RequestInit) {
-  return request(path, init).pipe(Effect.flatMap(json<T>))
-}
-
-afterEach(async () => {
-  Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES = originalWorkspaces
-  await disposeAllInstances()
-  await resetDatabase()
+const originalResponder = process.env.DEEPAGENT_IM_AGENT_RESPONDER
+const executionRows = Effect.gen(function* () {
+  const db = (yield* Database.Service).db
+  return yield* db.all<{ sessions: number; inputs: number; receipts: number; outbox: number }>(
+    "SELECT (SELECT count(*) FROM session) sessions,(SELECT count(*) FROM session_input) inputs,(SELECT count(*) FROM session_v2_provider_turn_receipt) receipts,(SELECT count(*) FROM im_reply_outbox) outbox",
+  ).pipe(Effect.orDie)
+})
+afterEach(() => {
+  if (originalResponder === undefined) delete process.env.DEEPAGENT_IM_AGENT_RESPONDER
+  if (originalResponder !== undefined) process.env.DEEPAGENT_IM_AGENT_RESPONDER = originalResponder
 })
 
-type IMGroup = { id: string }
-type IMMessage = {
-  id: string
-  senderType: string
-  senderID: string
-  content: string
-  metadata: { type?: string; sessionID?: string } | null
-}
-type IMMessagePage = { messages: IMMessage[] }
+describe("IM ordinary HTTP messages never invoke the owner's DAC", () => {
+  it.live("ON, OFF and default ordinary mentions preserve exact message retries without Session admission", () => Effect.gen(function* () {
+    const directory = yield* tmpdirScoped()
+    const query = `?directory=${encodeURIComponent(directory)}`
+    const created = yield* request("/api/v1/im/groups" + query, { type: "project", name: "chat only" })
+    expect(created.status).toBe(200)
+    const group = yield* created.json.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))))
+    const before = yield* executionRows
+    const messageIDs: string[] = []
+    for (const setting of [undefined, "off", "on"]) {
+      if (setting === undefined) delete process.env.DEEPAGENT_IM_AGENT_RESPONDER
+      if (setting !== undefined) process.env.DEEPAGENT_IM_AGENT_RESPONDER = setting
+      const body = { senderType: "user", type: "text", content: "@auto /dac an ordinary remote message is not a private command", clientRequestID: `ordinary-${setting ?? "default"}` }
+      const first = yield* request(`/api/v1/im/groups/${group.id}/messages${query}`, body)
+      expect(first.status).toBe(200)
+      const message = yield* first.json.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))))
+      const duplicate = yield* request(`/api/v1/im/groups/${group.id}/messages${query}`, body)
+      expect(duplicate.status).toBe(200)
+      expect(yield* duplicate.json).toMatchObject({ id: message.id })
+      messageIDs.push(message.id)
+    }
+    const page = yield* request(`/api/v1/im/groups/${group.id}/messages${query}`)
+    expect(page.status).toBe(200)
+    const messages = yield* page.json.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ messages: Schema.Array(Schema.Struct({ id: Schema.String })) }))))
+    expect(messages.messages.map((message) => message.id).sort()).toEqual(messageIDs.sort())
+    expect(yield* executionRows).toEqual(before)
+    expect(before).toEqual([{ sessions: 0, inputs: 0, receipts: 0, outbox: 0 }])
+    expect(yield* (yield* Database.Service).db.select().from(IMMentionIntentTable).all().pipe(Effect.orDie)).toEqual([])
+  }), 30000)
 
-/** All durable IM-lane admissions (the `ses_im_` session identity lane). */
-const imAdmissions = () =>
-  Effect.gen(function* () {
-    const { db } = yield* Database.Service
-    return yield* db
-      .select({ id: SessionInputTable.id, sessionID: SessionInputTable.session_id })
-      .from(SessionInputTable)
-      .where(like(SessionInputTable.session_id, "ses_im_%"))
-      .all()
-      .pipe(Effect.orDie)
-  })
-
-const postMention = (directory: string, groupID: string, content: string) =>
-  request(`/api/v1/im/groups/${groupID}/messages?directory=${encodeURIComponent(directory)}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ senderType: "user", type: "text", content }),
-  })
-
-describe("IM agent HttpApi (V2 durable-only)", () => {
-  it.live(
-    "an @mention performs exactly one durable V2 admission and the outbox delivers the terminal reply",
-    () =>
-      Effect.gen(function* () {
-        const llm = yield* TestLLMServer
-        yield* llm.text("hello from the v2 agent", { usage: { input: 1, output: 1 } })
-
-        const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
-        const group = yield* requestJson<IMGroup>(
-          `/api/v1/im/groups?directory=${encodeURIComponent(directory)}`,
-          { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "project", name: "V2 Smoke" }) },
-        )
-
-        // The send itself synchronously performs the single durable admission.
-        expect((yield* postMention(directory, group.id, "@auto please answer")).status).toBe(200)
-        const admissions = yield* imAdmissions()
-        expect(admissions.length).toBe(1)
-
-        // The agent runs through SessionExecution's advisory wake; the reply returns via the
-        // im_reply_outbox daemon (the ONLY writer of metadata.sessionID on agent messages).
-        const reply = yield* pollWithTimeout(
-          requestJson<IMMessagePage>(
-            `/api/v1/im/groups/${group.id}/messages?directory=${encodeURIComponent(directory)}`,
-          ).pipe(Effect.map((page) => page.messages.find((m) => m.senderType === "agent" && m.metadata?.sessionID))),
-          "the outbox never delivered the agent reply to the group",
-          "60 seconds",
-        )
-        expect(reply.content).toContain("hello from the v2 agent")
-        expect(reply.metadata?.type).toBe("agent_run")
-        expect(reply.metadata?.sessionID).toBe(admissions[0]!.sessionID)
-
-        // No duplicate admission materialized while the turn ran.
-        expect((yield* imAdmissions()).length).toBe(1)
-
-        // The outbox row settles delivered.
-        const { db } = yield* Database.Service
-        const outbox = yield* db
-          .select({ status: IMReplyOutbox.IMReplyOutboxTable.status, text: IMReplyOutbox.IMReplyOutboxTable.reply_text })
-          .from(IMReplyOutbox.IMReplyOutboxTable)
-          .all()
-          .pipe(Effect.orDie)
-        expect(outbox).toEqual([{ status: "delivered", text: "hello from the v2 agent" }])
-      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    120_000,
-  )
-
-  it.live(
-    "a follow-up mention adopts the same (group, agent) session — one stable lane, two admissions",
-    () =>
-      Effect.gen(function* () {
-        const llm = yield* TestLLMServer
-        yield* llm.text("first v2 reply", { usage: { input: 1, output: 1 } })
-        yield* llm.text("second v2 reply", { usage: { input: 1, output: 1 } })
-
-        const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
-        const group = yield* requestJson<IMGroup>(
-          `/api/v1/im/groups?directory=${encodeURIComponent(directory)}`,
-          { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "project", name: "V2 Adopt" }) },
-        )
-
-        yield* postMention(directory, group.id, "@auto first question")
-        const firstReply = yield* pollWithTimeout(
-          requestJson<IMMessagePage>(
-            `/api/v1/im/groups/${group.id}/messages?directory=${encodeURIComponent(directory)}`,
-          ).pipe(Effect.map((page) => page.messages.find((m) => m.senderType === "agent" && m.content.includes("first v2 reply")))),
-          "first reply was never delivered",
-          "60 seconds",
-        )
-        const firstAdmissions = yield* imAdmissions()
-
-        yield* postMention(directory, group.id, "@auto follow-up question")
-        yield* pollWithTimeout(
-          requestJson<IMMessagePage>(
-            `/api/v1/im/groups/${group.id}/messages?directory=${encodeURIComponent(directory)}`,
-          ).pipe(Effect.map((page) => page.messages.find((m) => m.senderType === "agent" && m.content.includes("second v2 reply")))),
-          "second reply was never delivered",
-          "60 seconds",
-        )
-
-        const admissions = yield* imAdmissions()
-        expect(admissions.length).toBe(2)
-        // Adoption: both mentions steered the SAME durable (group, agent) session.
-        expect(new Set(admissions.map((row) => row.sessionID)).size).toBe(1)
-        expect(firstReply.metadata?.sessionID).toBe(admissions[0]!.sessionID)
-        expect(firstAdmissions[0]!.sessionID).toBe(admissions[1]!.sessionID)
-      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    120_000,
-  )
+  it.live("an old pending mention remains unchanged across the real reconcile interval even with responder ON", () => Effect.gen(function* () {
+    process.env.DEEPAGENT_IM_AGENT_RESPONDER = "on"
+    const directory = yield* tmpdirScoped()
+    const query = `?directory=${encodeURIComponent(directory)}`
+    const created = yield* request("/api/v1/im/groups" + query, { type: "project", name: "historical pending" })
+    expect(created.status).toBe(200)
+    const group = yield* created.json.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))))
+    const response = yield* request(`/api/v1/im/groups/${group.id}/messages${query}`, { senderType: "user", type: "text", content: "@auto old pending mention" })
+    expect(response.status).toBe(200)
+    const message = yield* response.json.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))))
+    const db = (yield* Database.Service).db
+    // An immutable historical specimen, not a new automatic admission producer.
+    yield* db.insert(IMMentionIntentTable).values({ id: `imi_old_${message.id}`, message_id: message.id, agent_name: "auto", directory, workspace_id: directory, user_id: "server", origin: "local", status: "pending", created_at: 1, updated_at: 1 }).run().pipe(Effect.orDie)
+    const intents = yield* db.select().from(IMMentionIntentTable).all().pipe(Effect.orDie)
+    const before = yield* executionRows
+    yield* Effect.sleep(`${IMReplyOutbox.IM_REPLY_RECONCILE_INTERVAL_MS + 250} millis`)
+    expect(yield* db.select().from(IMMentionIntentTable).all().pipe(Effect.orDie)).toEqual(intents)
+    expect(yield* executionRows).toEqual(before)
+    expect(before).toEqual([{ sessions: 0, inputs: 0, receipts: 0, outbox: 0 }])
+  }), 30000)
 })

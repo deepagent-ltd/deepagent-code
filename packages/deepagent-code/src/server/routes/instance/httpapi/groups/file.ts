@@ -120,6 +120,8 @@ export const WriteBody = Schema.Struct({
   content: Schema.String,
   /** Base64-encoded snapshot of the bytes that were read; enables CAS save. */
   expected: Schema.optional(Schema.String),
+  /** Original live editor lease; other human owners remain protected. */
+  lockId: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128))),
 }).annotate({ identifier: "FileWriteBody" })
 
 /** Create a new file; fails if it already exists. */
@@ -413,35 +415,43 @@ export const FileApi = HttpApi.make("file")
         HttpApiEndpoint.post("lockAcquire", FilePaths.lockAcquire, {
           payload: LockAcquireBody,
           success: described(LockAcquireResult, "Lock acquire result"),
-        }).annotateMerge(OpenApi.annotations({
-          identifier: "file.lock.acquire",
-          summary: "Acquire file lock",
-          description: "Acquire an edit lock for a file. Human locks take priority over agent locks.",
-        })),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "file.lock.acquire",
+            summary: "Acquire file lock",
+            description: "Acquire an edit lock for a file. Human locks take priority over agent locks.",
+          }),
+        ),
         HttpApiEndpoint.post("lockRenew", FilePaths.lockRenew, {
           payload: LockRenewBody,
           success: described(Schema.Struct({ ok: Schema.Boolean }), "Renew result"),
-        }).annotateMerge(OpenApi.annotations({
-          identifier: "file.lock.renew",
-          summary: "Renew file lock",
-          description: "Extend the TTL of an existing lock. Call every 15s from the editor (heartbeat).",
-        })),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "file.lock.renew",
+            summary: "Renew file lock",
+            description: "Extend the TTL of an existing lock. Call every 15s from the editor (heartbeat).",
+          }),
+        ),
         HttpApiEndpoint.post("lockRelease", FilePaths.lockRelease, {
           payload: LockReleaseBody,
           success: described(Schema.Struct({ ok: Schema.Boolean }), "Release result"),
-        }).annotateMerge(OpenApi.annotations({
-          identifier: "file.lock.release",
-          summary: "Release file lock",
-          description: "Release a lock. No-op if the lockId does not match.",
-        })),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "file.lock.release",
+            summary: "Release file lock",
+            description: "Release a lock. No-op if the lockId does not match.",
+          }),
+        ),
         HttpApiEndpoint.get("lockStatus", FilePaths.lockStatus, {
           query: Schema.Struct({ ...WorkspaceRoutingQueryFields, path: Schema.String }),
           success: described(Schema.NullOr(LockEntry), "Lock status"),
-        }).annotateMerge(OpenApi.annotations({
-          identifier: "file.lock.status",
-          summary: "Get lock status",
-          description: "Returns the current lock entry for a path, or null if not locked.",
-        })),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "file.lock.status",
+            summary: "Get lock status",
+            description: "Returns the current lock entry for a path, or null if not locked.",
+          }),
+        ),
       )
       .annotateMerge(
         OpenApi.annotations({

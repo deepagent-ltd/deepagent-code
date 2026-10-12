@@ -1,6 +1,11 @@
 export * as V2RunnerFrame from "./v2-runner-frame"
 
 import path from "node:path"
+import { BrowserNativeHost } from "@/browser/native-host"
+import { BrowserFiles } from "@/browser/file-exchange"
+import { BrowserHost } from "@deepagent-code/core/browser/host"
+import { Config } from "@deepagent-code/core/config"
+import { LSP } from "@/lsp/lsp"
 import { Location } from "@deepagent-code/core/location"
 import { Global } from "@deepagent-code/core/global"
 import {
@@ -9,9 +14,11 @@ import {
   locationServiceMapDependencies,
 } from "@deepagent-code/core/location-layer"
 import { SessionRuntime } from "@deepagent-code/core/session/runtime"
+import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { SessionCompaction } from "@deepagent-code/core/session/compaction"
 import { TaskTool } from "@deepagent-code/core/tool/task"
+import { WorkToolPolicy } from "@deepagent-code/core/session/work-tool-policy"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { V2OwnerDevMint } from "@deepagent-code/core/session/runner/v2-owner-dev-mint"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
@@ -43,6 +50,12 @@ import { gatewayConfigFromSettings } from "@/deepagent/config"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { SettingsStore } from "@/settings/store"
 import { SlackExternalDelivery } from "@/im/slack-external-delivery"
+import { NativeRuntime } from "@/installation/native-runtime"
+import { ProductionWorkExecution } from "@/installation/work-execution-profile"
+import { EventValidationNative } from "@/installation/event-validation-native"
+import { EventInvestigationHost } from "@/deepagent/event-investigation"
+import { WorkExecutionProfile } from "@deepagent-code/core/session/work-execution-profile"
+import { LLMClient } from "@deepagent-code/llm"
 
 // W3.10 — the V2 runner frame host hook (closes B-review P0 / O-W3-10).
 //
@@ -133,6 +146,8 @@ const runnerFrameHost = Layer.effect(
     // The dev authorization row and its root-owned keypair must exist before the references below
     // are captured for the cached Location map. This dependency makes layer construction ordered.
     yield* V2OwnerDevMint.Service
+    // Capture the installed implementation before admitting its configuration in cached Locations.
+    yield* LSP.Service
     const sources = yield* ProductionV2Sources
     const store = yield* InstanceStore.Service
     const runtime = yield* LocationIndexRuntime.Service
@@ -167,9 +182,13 @@ const runnerFrameHost = Layer.effect(
       Layer.succeed(ContextQueryAuthorization.Controller, queryAuthorizationController),
     )
     return LocationRuntimeHost.of({
+      client: yield* LLMClient.Service,
+      work: yield* ProductionWorkExecution.Service,
+      browser: BrowserNativeHost.current(),
       layer: (ref) =>
         Layer.mergeAll(
           runnerFrameSeamFor(ref, sources),
+          Layer.succeed(Config.ApplicationLSP, { consumer: "ApplicationLSP" }),
           runnerFrameContextToolsFor(ref),
           SlackExternalDelivery.layer,
           V2PlanGate.layer.pipe(Layer.provide(Layer.succeed(RuntimeFlags.Service, flags))),
@@ -190,13 +209,6 @@ const runnerFrameHost = Layer.effect(
         ).pipe(Layer.provide(dependencies)),
     })
   }),
-)
-
-export const runnerFrameHostLayer = runnerFrameHost.pipe(
-  Layer.provide(V2OwnerDevMint.defaultLayer),
-  // Same layer object as sessionRuntimeLayer's mergeAll entry: one memoMap = one shared slot
-  // instance per root, so the host hands drain fibers the very slot the route graph fills.
-  Layer.provide(RuntimeIntegrityIdentity.rootIdentitySlotLayer),
 )
 
 /**
@@ -256,7 +268,7 @@ export const ownerQualificationReferencesLayer = V2ProviderTurn.ownerReferencesL
 export const gatewayRuntimeLayer = Layer.unwrap(
   Effect.gen(function* () {
     const database = yield* Database.Service
-    const settings = yield* Effect.promise(SettingsStore.read)
+    const settings = yield* SettingsStore.readEffect.pipe(Effect.orDie)
     const config = gatewayConfigFromSettings(settings.deepagent)
     // RI-90 transition pin: the goal path (GoalManager, plan bridge, status publisher) and the core
     // `plan` tool still use the module-level plan-store/session-state fallback (RI-71 removes it).
@@ -273,6 +285,32 @@ export const gatewayRuntimeLayer = Layer.unwrap(
   }),
 ).pipe(Layer.provide(Database.defaultLayer))
 
+const nativeClientLayer = NativeRuntime.clientLayer.pipe(Layer.provide(gatewayRuntimeLayer))
+const nativeRuntimeLayer = NativeRuntime.layer.pipe(Layer.provide(nativeClientLayer))
+// This exact layer object is shared with the API. Construction observes only the
+// bootstrap host and database; installed file assets and consent remain lazy.
+export const browserFilesLayer = BrowserFiles.layer.pipe(
+  Layer.provide(Layer.effect(BrowserHost.Current, Effect.sync(BrowserNativeHost.current))),
+  Layer.provide(Database.defaultLayer),
+)
+const workRuntimeLayer = ProductionWorkExecution.layer.pipe(
+  Layer.provide(browserFilesLayer),
+  Layer.provide(nativeRuntimeLayer),
+  Layer.provide(Database.defaultLayer),
+  Layer.provide(Global.defaultLayer),
+)
+const workServicesLayer = Layer.unwrap(Effect.map(ProductionWorkExecution.Service, WorkExecutionProfile.servicesLayer)).pipe(Layer.provide(workRuntimeLayer))
+
+export const runnerFrameHostLayer = runnerFrameHost.pipe(
+  Layer.provide(workRuntimeLayer),
+  Layer.provide(LSP.defaultLayer),
+  Layer.provide(nativeClientLayer),
+  Layer.provide(V2OwnerDevMint.defaultLayer),
+  // Same memoized slot as sessionRuntimeLayer; the explicit client is also shared with the
+  // native factory rather than taken from a later Location acquisition fiber.
+  Layer.provide(RuntimeIntegrityIdentity.rootIdentitySlotLayer),
+)
+
 /**
  * W3.10 — self-contained wiring layer: the augmented map plus its instance-context dependencies, so
  * a host can provide ONE layer to the open Session runtime. The production sources are an explicit
@@ -280,7 +318,13 @@ export const gatewayRuntimeLayer = Layer.unwrap(
  */
 export const runnerFrameLocationMapLayer = LocationServiceMap.layerNoDeps.pipe(
   Layer.provide([
-    ...locationServiceMapDependencies(runnerFrameHostLayer, Database.defaultLayer, eventLayer, gatewayRuntimeLayer),
+    ...locationServiceMapDependencies(
+      runnerFrameHostLayer,
+      Database.defaultLayer,
+      eventLayer,
+      gatewayRuntimeLayer,
+      NativeRuntime.clientLayer,
+    ),
   ]),
   // ContextQueryAuthorization.defaultLayer is the ONE process-local authority store for the whole
   // frame: the same layer object feeds the facades' internal requirements and the host capture
@@ -298,6 +342,7 @@ export const runnerFrameLocationMapLayer = LocationServiceMap.layerNoDeps.pipe(
 )
 
 const coreSessionRuntime = SessionRuntime.layer.pipe(
+  Layer.provide(workServicesLayer),
   Layer.provide(Database.defaultLayer),
   Layer.provide(eventLayer),
   Layer.provide(runnerFrameLocationMapLayer),
@@ -305,10 +350,37 @@ const coreSessionRuntime = SessionRuntime.layer.pipe(
   Layer.provide(TaskTool.delegationSlotLayer),
 )
 
+// Bind the existing executor before the investigation adapter captures its Root.
+// The same layer objects share one memoized DB, Work service and Session owner.
+const captureWorkExecutionLayer = Layer.effectDiscard(Effect.gen(function* () {
+  const work = yield* ProductionWorkExecution.Service
+  const execution = yield* SessionExecution.Service
+  yield* work.captureExecution(execution)
+  const locations = yield* LocationServiceMap
+  yield* work.captureEventLocations(locations)
+  // Reuse this Root's one boot reclamation convention. Collection has no timer/runner and
+  // cannot delay startup; its held resources end with this exact original Root scope.
+  if (work.eventPlacement && work.leafProof) yield* work.eventPlacement.collectStale.pipe(
+    Effect.provideService(WorkToolPolicy.LeafProof, work.leafProof), Effect.catch(() => Effect.void), Effect.forkScoped)
+})).pipe(
+  Layer.provide(workRuntimeLayer),
+  Layer.provide(coreSessionRuntime),
+  Layer.provide(runnerFrameLocationMapLayer),
+)
+const eventInvestigationHostLayer = EventInvestigationHost.layer.pipe(
+  Layer.provide([workRuntimeLayer, coreSessionRuntime, EventValidationNative.layer, Database.defaultLayer, EventV2Bridge.defaultLayer]),
+  Layer.provide(captureWorkExecutionLayer),
+  Layer.provide(Global.defaultLayer),
+)
+
 /** One application V2 runtime: one DB, event bridge, execution owner, restart owner, and Location map. */
 export const sessionRuntimeLayer = Layer.mergeAll(
+  nativeRuntimeLayer,
+  workRuntimeLayer,
+  workServicesLayer,
   coreSessionRuntime,
   runnerFrameLocationMapLayer,
+  eventInvestigationHostLayer,
   Layer.succeed(CompositionDigest.FrameIdentity, frameIdentity),
   RuntimeIntegrityIdentity.rootIdentitySlotLayer,
   // Same memoized slot instance the execution layer carries; same memoized SessionV2 build as
@@ -317,4 +389,5 @@ export const sessionRuntimeLayer = Layer.mergeAll(
     Layer.provide(TaskTool.delegationSlotLayer),
     Layer.provide(coreSessionRuntime),
   ),
+  captureWorkExecutionLayer,
 ).pipe(Layer.provide(EventV2Bridge.defaultLayer))

@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "outDir": "./node_modules/.ts-browser-product" },
+  "include": ["src", "package.json", "test/fixture/browser-unavailable-product.ts", "test/fixture/browser-client-window-descriptor.ts", "test/fixture/browser-canonical-product.ts"],
+  "exclude": ["dist", "ts-dist", "node_modules/.ts-browser-product"]
+}

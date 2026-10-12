@@ -71,6 +71,46 @@ export function stageAndReviewMemories(memories: MemoryItem[], baseDir: string):
   return { staged, writtenToInstructions: false, approved, pending }
 }
 
+/** Durable copy imports prepare one isolated store before publishing its whole directory. */
+export async function stageAndReviewMemoriesControlled(
+  memories: MemoryItem[],
+  baseDir: string,
+  checkpoint: () => Promise<void>,
+): Promise<MemoryImportResult> {
+  const store = memories[0]?.cwd ? openProjectStore(baseDir, memories[0].cwd) : openUserGlobalStore(baseDir)
+  for (const item of memories) {
+    await checkpoint()
+    store.stageCandidate({
+      type: "memory",
+      description: item.description || item.title,
+      body: item.body,
+      domain: null,
+      scope: item.cwd ? "project-shared" : "user-global",
+      ...(item.cwd ? { projectId: projectIdForWorkspace(item.cwd) } : {}),
+      sensitivity: "public",
+      risk: "low",
+      confidence: { evidence_strength: "weak", support_count: 1 },
+      provenance: { source: "human", run_ref: `import:${item.source}:${item.slug}` },
+      tags: ["imported", `source:${item.source}`],
+      idSlug: `${item.source}-${item.slug}`.slice(0, 64),
+    })
+  }
+  const reviewed = { approved: 0, pending: 0 }
+  for (const ref of store.listByStatus("candidate")) {
+    await checkpoint()
+    if (ref.type !== "memory") continue
+    const doc = store.documentStore.get(ref.id)
+    if (!doc) throw new Error("IMPORT_MEMORY_CHANGED: staged candidate is unavailable")
+    if (!shouldAutoApprove(doc)) {
+      reviewed.pending++
+      continue
+    }
+    store.approve(ref.id)
+    reviewed.approved++
+  }
+  return { staged: memories.length, writtenToInstructions: false, ...reviewed }
+}
+
 /**
  * Review the just-stored candidate memories and promote the safe ones to
  * `active`. Returns counts; `pending` is what remains in the Review queue.

@@ -8,7 +8,8 @@ import {
   type ToolContent,
   type ToolFileContent,
 } from "@deepagent-code/llm"
-import { Context, Effect, Layer, Scope } from "effect"
+import { Context, Effect, Layer, Option, Scope } from "effect"
+import { randomUUID } from "node:crypto"
 import { AgentV2 } from "../agent"
 import { Location } from "../location"
 import { makeLocationNode } from "../effect/app-node"
@@ -48,6 +49,18 @@ export interface Materialization {
   }) => Effect.Effect<ToolContent, ToolOutputStore.Error>
 }
 
+// Internal provenance only, never permission. Copies of a materialization cannot obtain
+// this view, and replacing a registration invalidates the original advertisement.
+const materializations = new WeakMap<Materialization, (name: string) => {
+  readonly tool: AnyTool
+  readonly generation: string
+  readonly definition: ToolDefinition
+} | undefined>()
+const generations = new WeakMap<object, string>()
+export function inspect(materialization: Materialization, name: string) {
+  return materializations.get(materialization)?.(name)
+}
+
 export interface Settlement extends ToolSettlement {
   readonly outputPaths?: ReadonlyArray<string>
 }
@@ -62,13 +75,14 @@ const registryLayer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const applications = yield* ApplicationTools.Service
+    const location = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
     const resources = yield* ToolOutputStore.Service
     type Registration = { readonly identity: object; readonly tool: AnyTool }
     const local = new Map<string, Array<{ readonly token: object; readonly registration: Registration }>>()
 
     const settleWith = Effect.fn("ToolRegistry.settle")(function* (input: ExecuteInput, advertised?: object) {
       const registration =
-        local.get(input.call.name)?.at(-1)?.registration ?? applications.entries().get(input.call.name)
+        local.get(input.call.name)?.at(-1)?.registration ?? applications.entries(location).get(input.call.name)
       if (!registration)
         return {
           result: {
@@ -161,7 +175,7 @@ const registryLayer = Layer.effect(
         )
       }),
       materialize: Effect.fn("ToolRegistry.materialize")(function* (permissions = []) {
-        const registrations = new Map(applications.entries())
+        const registrations = new Map(applications.entries(location))
         for (const [name, entries] of local) {
           const registration = entries.at(-1)?.registration
           if (registration) registrations.set(name, registration)
@@ -173,7 +187,7 @@ const registryLayer = Layer.effect(
         const registeredIDs = [...registrations.keys()]
         for (const [name, registration] of registrations)
           if (whollyDisabled(permission(registration.tool, name), permissions)) registrations.delete(name)
-        return {
+        const materialization: Materialization = {
           registeredIDs,
           permissionFilteredIDs: [...registrations.keys()],
           definitions: Array.from(registrations, ([name, registration]) => definition(name, registration.tool)),
@@ -191,6 +205,15 @@ const registryLayer = Layer.effect(
           },
           rehydrateArtifact: resources.rehydrate,
         }
+        materializations.set(materialization, (name) => {
+          const advertised = registrations.get(name)
+          const current = local.get(name)?.at(-1)?.registration ?? applications.entries(location).get(name)
+          if (!advertised || current?.identity !== advertised.identity) return undefined
+          const generation = generations.get(advertised.identity) ?? randomUUID()
+          generations.set(advertised.identity, generation)
+          return { tool: advertised.tool, generation, definition: definition(name, advertised.tool) }
+        })
+        return materialization
       }),
     })
   }),
@@ -225,13 +248,13 @@ function whollyDisabled(action: string, policy: PermissionV2.Ruleset | Permissio
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [ApplicationTools.node, ToolOutputStore.node],
+  deps: [Location.node, ApplicationTools.node, ToolOutputStore.node],
 })
 
 export const toolsNode = makeLocationNode({
   service: Tools.Service,
   layer,
-  deps: [ApplicationTools.node, ToolOutputStore.node],
+  deps: [Location.node, ApplicationTools.node, ToolOutputStore.node],
 })
 
 export const defaultLayer = layer.pipe(

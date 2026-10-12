@@ -8,3 +8,8 @@ export const isCollaborationModeName = (name: string): name is CollaborationMode
 
 export const isSelectableCollaborationMode = (agent: { name: string; mode: string; hidden?: boolean }) =>
   agent.mode === "primary" && !agent.hidden && isCollaborationModeName(agent.name)
+
+export function configuredCollaborationMode(name: string | undefined) {
+  // The server retains this alias for pre-redesign configurations.
+  return name === "build" ? "auto" : name ?? "auto"
+}

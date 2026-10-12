@@ -18,6 +18,10 @@ import { tmpRoot } from "../fixture/tmpdir"
 // per-turn budget of 2 NEW documents as a ToolFailure, session-scoped already_loaded dedupe, and
 // typed not_found states for candidate/unknown refs and an unavailable store.
 
+import { runQuota } from "../fixture/tool-quota"
+
+const run = <A, E>(effect: Effect.Effect<A, E>) => runQuota(effect, SESSION)
+
 const SESSION = SessionV2.ID.make("ses_domain_pack_load")
 const AGENT = AgentV2.ID.make("build")
 
@@ -51,7 +55,11 @@ const seedDoc = (
   })
 
 const settle = (tool: Tool.AnyTool, ref: string, callID: string, turn?: string) =>
-  Tool.settle(tool, { type: "tool-call", id: callID, name: "domain_pack_load", input: { ref } }, toolContext(callID, turn))
+  Tool.settle(
+    tool,
+    { type: "tool-call", id: callID, name: "domain_pack_load", input: { ref } },
+    toolContext(callID, turn),
+  )
 
 const structured = (settlement: { structured: unknown }): DomainPackLoadOutput =>
   settlement.structured as DomainPackLoadOutput
@@ -60,10 +68,15 @@ beforeEach(() => resetDomainPackLoadState())
 
 describe("domain_pack_load", () => {
   test("loads the body of an active seeded pack document", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const store = new DurableKnowledgeStore(path.join(tmpRoot(), "knowledge"))
-        const doc = seedDoc(store, "apply-clock-gating", "Gate clocks to idle registers.", "Insert a glitch-free ICG cell.")
+        const doc = seedDoc(
+          store,
+          "apply-clock-gating",
+          "Gate clocks to idle registers.",
+          "Insert a glitch-free ICG cell.",
+        )
         const tool = makeDomainPackLoadTool({ store: () => store })
         const out = structured(yield* settle(tool, doc.id, "call-load-1"))
         expect(out.state).toBe("loaded")
@@ -79,7 +92,7 @@ describe("domain_pack_load", () => {
     ))
 
   test("bounds the body to ~600 tokens with a truncation marker", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const store = new DurableKnowledgeStore(path.join(tmpRoot(), "knowledge"))
         const body = "x".repeat(3000) // 750 tokens by the 4 chars/token estimate
@@ -97,7 +110,7 @@ describe("domain_pack_load", () => {
     ))
 
   test("the 3rd new load in one turn fails with the load-budget ToolFailure", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const store = new DurableKnowledgeStore(path.join(tmpRoot(), "knowledge"))
         const a = seedDoc(store, "doc-a", "Document A.", "body a")
@@ -112,7 +125,7 @@ describe("domain_pack_load", () => {
     ))
 
   test("an already-loaded document re-loads in a later turn without consuming the turn budget", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const store = new DurableKnowledgeStore(path.join(tmpRoot(), "knowledge"))
         const a = seedDoc(store, "doc-a", "Document A.", "body a")
@@ -136,7 +149,7 @@ describe("domain_pack_load", () => {
     ))
 
   test("a candidate document settles as the typed not_found(not_active) state", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const store = new DurableKnowledgeStore(path.join(tmpRoot(), "knowledge"))
         const candidate = store.stageCandidate({
@@ -163,7 +176,7 @@ describe("domain_pack_load", () => {
     ))
 
   test("an unknown ref (or a non-pack document) settles as the typed not_found(unknown) state", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const store = new DurableKnowledgeStore(path.join(tmpRoot(), "knowledge"))
         const learned = store.seedActive({
@@ -189,7 +202,7 @@ describe("domain_pack_load", () => {
     ))
 
   test("an unavailable store settles as the typed not_found(store_unavailable) state", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const tool = makeDomainPackLoadTool({ store: () => null })
         const out = structured(yield* settle(tool, "doc:strategy:power_design:anything", "call-no-store"))

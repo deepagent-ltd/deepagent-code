@@ -167,7 +167,7 @@ export const deepagentScenarios: Scenario[] = [
     .at((ctx) => ({
       path: "/deepagent/goal/start",
       headers: ctx.headers(),
-      body: { sessionID: "session_httpapi_goal", objective: "Exercise the route" },
+      body: { sessionID: "session_httpapi_goal", requestID: "httpapi-goal-start", objective: "Exercise the route" },
     }))
     .json(400, object, "status"),
   ...["pause", "resume", "stop"].map((action) =>
@@ -176,11 +176,16 @@ export const deepagentScenarios: Scenario[] = [
       .at((ctx) => ({
         path: `/deepagent/goal/${action}`,
         headers: ctx.headers(),
-        body: { sessionID: "session_httpapi_goal" },
+        body: {
+          sessionID: "session_httpapi_goal",
+          goalId: "goal_httpapi_fixture",
+          expectedRevision: 1,
+          requestID: `httpapi-goal-${action}`,
+        },
       }))
-      .json(200, (body) => {
+      .json(409, (body) => {
         object(body)
-        check(body.ok === false, `disabled goal ${action} should fail closed without mutation`)
+        check(body.code === "unsupported", `disabled goal ${action} should reject without mutation`)
       }),
   ),
   http.protected

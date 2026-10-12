@@ -1,0 +1,1029 @@
+diff --git a/dist/cjs/internal/contentType.js b/dist/cjs/internal/contentType.js
+index 51273775344589118d9ba31490745053567c9241..740332f18381ea26ae3839bccb700fea3c8ffcef 100644
+--- a/dist/cjs/internal/contentType.js
++++ b/dist/cjs/internal/contentType.js
+@@ -1,47 +1,79 @@
+-"use strict";
++var __create = Object.create;
++var __getProtoOf = Object.getPrototypeOf;
++var __defProp = Object.defineProperty;
++var __getOwnPropNames = Object.getOwnPropertyNames;
++var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
++var __hasOwnProp = Object.prototype.hasOwnProperty;
++function __accessProp(key) {
++  return this[key];
++}
++var __toESMCache_node;
++var __toESMCache_esm;
++var __toESM = (mod, isNodeMode, target) => {
++  var canCache = mod != null && typeof mod === "object";
++  if (canCache) {
++    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
++    var cached = cache.get(mod);
++    if (cached)
++      return cached;
++  }
++  target = mod != null ? __create(__getProtoOf(mod)) : {};
++  const to = isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
++  if (mod && typeof mod === "object" || typeof mod === "function") {
++    for (let key of __getOwnPropNames(mod))
++      if (!__hasOwnProp.call(to, key))
++        __defProp(to, key, {
++          get: __accessProp.bind(mod, key),
++          enumerable: true
++        });
++  }
++  if (canCache)
++    cache.set(mod, to);
++  return to;
++};
++var __toCommonJS = (from) => {
++  var entry = (__moduleCache ??= new WeakMap).get(from), desc;
++  if (entry)
++    return entry;
++  entry = __defProp({}, "__esModule", { value: true });
++  if (from && typeof from === "object" || typeof from === "function") {
++    for (var key of __getOwnPropNames(from))
++      if (!__hasOwnProp.call(entry, key))
++        __defProp(entry, key, {
++          get: __accessProp.bind(from, key),
++          enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
++        });
++  }
++  __moduleCache.set(from, entry);
++  return entry;
++};
++var __moduleCache;
++var __returnValue = (v) => v;
++function __exportSetter(name, newValue) {
++  this[name] = __returnValue.bind(null, newValue);
++}
++var __export = (target, all) => {
++  for (var name in all)
++    __defProp(target, name, {
++      get: all[name],
++      enumerable: true,
++      configurable: true,
++      set: __exportSetter.bind(all, name)
++    });
++};
+ 
+-Object.defineProperty(exports, "__esModule", {
+-  value: true
++// node_modules/multipasta/src/internal/contentType.ts
++var exports_contentType = {};
++__export(exports_contentType, {
++  parse: () => parse
+ });
+-exports.parse = parse;
+-// taken from https://github.com/fastify/fast-content-type-parse
+-// under the MIT license
+-/**
+- * RegExp to match *( ";" parameter ) in RFC 7231 sec 3.1.1.1
+- *
+- * parameter     = token "=" ( token / quoted-string )
+- * token         = 1*tchar
+- * tchar         = "!" / "#" / "$" / "%" / "&" / "'" / "*"
+- *               / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
+- *               / DIGIT / ALPHA
+- *               ; any VCHAR, except delimiters
+- * quoted-string = DQUOTE *( qdtext / quoted-pair ) DQUOTE
+- * qdtext        = HTAB / SP / %x21 / %x23-5B / %x5D-7E / obs-text
+- * obs-text      = %x80-FF
+- * quoted-pair   = "\" ( HTAB / SP / VCHAR / obs-text )
+- */
+-const paramRE = /; *([!#$%&'*+.^\w`|~-]+)=("(?:[\v\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\v\u0020-\u00ff])*"|[!#$%&'*+.^\w`|~-]+) */gu;
+-/**
+- * RegExp to match quoted-pair in RFC 7230 sec 3.2.6
+- *
+- * quoted-pair = "\" ( HTAB / SP / VCHAR / obs-text )
+- * obs-text    = %x80-FF
+- */
+-const quotedPairRE = /\\([\v\u0020-\u00ff])/gu;
+-/**
+- * RegExp to match type in RFC 7231 sec 3.1.1.1
+- *
+- * media-type = type "/" subtype
+- * type       = token
+- * subtype    = token
+- */
+-const mediaTypeRE = /^[!#$%&'*+.^\w|~-]+\/[!#$%&'*+.^\w|~-]+$/u;
+-const mediaTypeRENoSlash = /^[!#$%&'*+.^\w|~-]+$/u;
+-// default ContentType to prevent repeated object creation
+-const defaultContentType = {
+-  value: "",
+-  parameters: /*#__PURE__*/Object.create(null)
+-};
++module.exports = __toCommonJS(exports_contentType);
++var paramRE = /; *([!#$%&'*+.^\w`|~-]+)=("(?:[\v\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\v\u0020-\u00ff])*"|[!#$%&'*+.^\w`|~-]+) */gu;
++var dispositionParamRE = /; *([!#$%&'*+.^\w`|~-]+)=("(?:[\v\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u{10ffff}]|\\[\v\u0020-\u{10ffff}])*"|[!#$%&'*+.^\w`|~-]+) */gu;
++var quotedPairRE = /\\([\v\u0020-\u00ff])/gu;
++var mediaTypeRE = /^[!#$%&'*+.^\w|~-]+\/[!#$%&'*+.^\w|~-]+$/u;
++var mediaTypeRENoSlash = /^[!#$%&'*+.^\w|~-]+$/u;
++var defaultContentType = { value: "", parameters: Object.create(null) };
+ function parse(header, withoutSlash = false) {
+   if (typeof header !== "string") {
+     return defaultContentType;
+@@ -56,15 +88,15 @@ function parse(header, withoutSlash = false) {
+     value: type.toLowerCase(),
+     parameters: Object.create(null)
+   };
+-  // parse parameters
+   if (index === -1) {
+     return result;
+   }
+   let key;
+   let match;
+   let value;
+-  paramRE.lastIndex = index;
+-  while (match = paramRE.exec(header)) {
++  const parameters = withoutSlash ? dispositionParamRE : paramRE;
++  parameters.lastIndex = index;
++  while (match = parameters.exec(header)) {
+     if (match.index !== index) {
+       return defaultContentType;
+     }
+@@ -72,7 +104,6 @@ function parse(header, withoutSlash = false) {
+     key = match[1].toLowerCase();
+     value = match[2];
+     if (value[0] === '"') {
+-      // remove quotes and escapes
+       value = value.slice(1, value.length - 1);
+       !withoutSlash && quotedPairRE.test(value) && (value = value.replace(quotedPairRE, "$1"));
+     }
+@@ -83,4 +114,3 @@ function parse(header, withoutSlash = false) {
+   }
+   return result;
+ }
+-//# sourceMappingURL=contentType.js.map
+\ No newline at end of file
+diff --git a/dist/cjs/internal/multipart.js b/dist/cjs/internal/multipart.js
+index abc2fd827c71bd3d14c8f4e7c84fbe8c89b94bcb..c1891a6dd73552c3132172e205fdd79a69b22ef0 100644
+--- a/dist/cjs/internal/multipart.js
++++ b/dist/cjs/internal/multipart.js
+@@ -1,62 +1,95 @@
+-"use strict";
+-
+-Object.defineProperty(exports, "__esModule", {
+-  value: true
+-});
+-exports.decodeField = decodeField;
+-exports.defaultIsFile = defaultIsFile;
+-exports.make = make;
+-var CT = /*#__PURE__*/_interopRequireWildcard(/*#__PURE__*/require("./contentType.js"));
+-var HP = /*#__PURE__*/_interopRequireWildcard(/*#__PURE__*/require("./headers.js"));
+-var Search = /*#__PURE__*/_interopRequireWildcard(/*#__PURE__*/require("./search.js"));
+-function _interopRequireWildcard(e, t) {
+-  if ("function" == typeof WeakMap) var r = new WeakMap(),
+-    n = new WeakMap();
+-  return (_interopRequireWildcard = function (e, t) {
+-    if (!t && e && e.__esModule) return e;
+-    var o,
+-      i,
+-      f = {
+-        __proto__: null,
+-        default: e
+-      };
+-    if (null === e || "object" != typeof e && "function" != typeof e) return f;
+-    if (o = t ? n : r) {
+-      if (o.has(e)) return o.get(e);
+-      o.set(e, f);
+-    }
+-    for (const t in e) "default" !== t && {}.hasOwnProperty.call(e, t) && ((i = (o = Object.defineProperty) && Object.getOwnPropertyDescriptor(e, t)) && (i.get || i.set) ? o(f, t, i) : f[t] = e[t]);
+-    return f;
+-  })(e, t);
++var __create = Object.create;
++var __getProtoOf = Object.getPrototypeOf;
++var __defProp = Object.defineProperty;
++var __getOwnPropNames = Object.getOwnPropertyNames;
++var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
++var __hasOwnProp = Object.prototype.hasOwnProperty;
++function __accessProp(key) {
++  return this[key];
+ }
+-var State;
+-(function (State) {
+-  State[State["headers"] = 0] = "headers";
+-  State[State["body"] = 1] = "body";
+-})(State || (State = {}));
+-const errInvalidDisposition = {
+-  _tag: "InvalidDisposition"
++var __toESMCache_node;
++var __toESMCache_esm;
++var __toESM = (mod, isNodeMode, target) => {
++  var canCache = mod != null && typeof mod === "object";
++  if (canCache) {
++    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
++    var cached = cache.get(mod);
++    if (cached)
++      return cached;
++  }
++  target = mod != null ? __create(__getProtoOf(mod)) : {};
++  const to = isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
++  if (mod && typeof mod === "object" || typeof mod === "function") {
++    for (let key of __getOwnPropNames(mod))
++      if (!__hasOwnProp.call(to, key))
++        __defProp(to, key, {
++          get: __accessProp.bind(mod, key),
++          enumerable: true
++        });
++  }
++  if (canCache)
++    cache.set(mod, to);
++  return to;
+ };
+-const errEndNotReached = {
+-  _tag: "EndNotReached"
++var __toCommonJS = (from) => {
++  var entry = (__moduleCache ??= new WeakMap).get(from), desc;
++  if (entry)
++    return entry;
++  entry = __defProp({}, "__esModule", { value: true });
++  if (from && typeof from === "object" || typeof from === "function") {
++    for (var key of __getOwnPropNames(from))
++      if (!__hasOwnProp.call(entry, key))
++        __defProp(entry, key, {
++          get: __accessProp.bind(from, key),
++          enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
++        });
++  }
++  __moduleCache.set(from, entry);
++  return entry;
+ };
+-const errMaxParts = {
+-  _tag: "ReachedLimit",
+-  limit: "MaxParts"
++var __moduleCache;
++var __returnValue = (v) => v;
++function __exportSetter(name, newValue) {
++  this[name] = __returnValue.bind(null, newValue);
++}
++var __export = (target, all) => {
++  for (var name in all)
++    __defProp(target, name, {
++      get: all[name],
++      enumerable: true,
++      configurable: true,
++      set: __exportSetter.bind(all, name)
++    });
+ };
+-const errMaxTotalSize = {
++
++// node_modules/multipasta/src/internal/multipart.ts
++var exports_multipart = {};
++__export(exports_multipart, {
++  decodeField: () => decodeField,
++  defaultIsFile: () => defaultIsFile,
++  make: () => make3
++});
++module.exports = __toCommonJS(exports_multipart);
++var CT = __toESM(require("./contentType.js"));
++var HP = __toESM(require("./headers.js"));
++var Search = __toESM(require("./search.js"));
++var errInvalidDisposition = { _tag: "InvalidDisposition" };
++var errEndNotReached = { _tag: "EndNotReached" };
++var errMaxParts = { _tag: "ReachedLimit", limit: "MaxParts" };
++var errMaxTotalSize = {
+   _tag: "ReachedLimit",
+   limit: "MaxTotalSize"
+ };
+-const errMaxPartSize = {
++var errMaxPartSize = {
+   _tag: "ReachedLimit",
+   limit: "MaxPartSize"
+ };
+-const errMaxFieldSize = {
++var errMaxFieldSize = {
+   _tag: "ReachedLimit",
+   limit: "MaxFieldSize"
+ };
+-const constCR = /*#__PURE__*/new TextEncoder().encode("\r\n");
++var constCR = new TextEncoder().encode(`\r
++`);
+ function defaultIsFile(info) {
+   return info.filename !== undefined || info.contentType === "application/octet-stream";
+ }
+@@ -65,11 +98,11 @@ function parseBoundary(headers) {
+   return contentType.parameters.boundary;
+ }
+ function noopOnChunk(_chunk) {}
+-function make({
++function make3({
+   headers,
+   onFile: onPart,
+   onField,
+-  onError,
++  onError: reportError,
+   onDone,
+   isFile = defaultIsFile,
+   maxParts = Infinity,
+@@ -79,16 +112,14 @@ function make({
+ }) {
+   const boundary = parseBoundary(headers);
+   if (boundary === undefined) {
+-    onError({
+-      _tag: "InvalidBoundary"
+-    });
++    reportError({ _tag: "InvalidBoundary" });
+     return {
+       write: noopOnChunk,
+       end() {}
+     };
+   }
+   const state = {
+-    state: State.headers,
++    state: 0 /* headers */,
+     index: 0,
+     parts: 0,
+     onChunk: noopOnChunk,
+@@ -100,15 +131,35 @@ function make({
+     fieldChunks: [],
+     fieldSize: 0
+   };
++  let failed = false;
++  function onError(error) {
++    if (failed)
++      return;
++    failed = true;
++    state.onChunk(null);
++    state.fieldChunks = [];
++    reportError(error);
++  }
++  function writeBody(chunk) {
++    if ((state.partSize += chunk.length) > maxPartSize)
++      return onError(errMaxPartSize);
++    if (state.isFile)
++      return state.onChunk(chunk);
++    if ((state.fieldSize += chunk.length) > maxFieldSize)
++      return onError(errMaxFieldSize);
++    state.fieldChunks.push(chunk);
++  }
+   function skipBody() {
+-    state.state = State.body;
++    state.state = 1 /* body */;
+     state.isFile = true;
+     state.onChunk = noopOnChunk;
+   }
+   const headerParser = HP.make();
+-  const split = Search.make(`\r\n--${boundary}`, function (index, chunk) {
++  const split = Search.make(`\r
++--${boundary}`, function(index, chunk) {
++    if (failed)
++      return;
+     if (index === 0) {
+-      // data before the first boundary
+       skipBody();
+       return;
+     } else if (index !== state.index) {
+@@ -122,7 +173,7 @@ function make({
+           } else {
+             const buf = new Uint8Array(state.fieldSize);
+             let offset = 0;
+-            for (let i = 0; i < state.fieldChunks.length; i++) {
++            for (let i = 0;i < state.fieldChunks.length; i++) {
+               const chunk = state.fieldChunks[i];
+               buf.set(chunk, offset);
+               offset += chunk.length;
+@@ -133,36 +184,30 @@ function make({
+           state.fieldChunks = [];
+         }
+       }
+-      state.state = State.headers;
++      state.state = 0 /* headers */;
+       state.index = index;
+-      state.headerSkip = 2; // skip the first \r\n
+-      // trailing --
++      state.headerSkip = 2;
++      state.partSize = 0;
+       if (chunk[0] === 45 && chunk[1] === 45) {
+         return onDone();
+       }
+       state.parts++;
+       if (state.parts > maxParts) {
+-        onError(errMaxParts);
++        return onError(errMaxParts);
+       }
+     }
+-    if ((state.partSize += chunk.length) > maxPartSize) {
+-      onError(errMaxPartSize);
+-    }
+-    if (state.state === State.headers) {
++    if (state.state === 0 /* headers */) {
+       const result = headerParser(chunk, state.headerSkip);
+       state.headerSkip = 0;
+       if (result._tag === "Continue") {
+         return;
+       } else if (result._tag === "Failure") {
+         skipBody();
+-        return onError({
+-          _tag: "BadHeaders",
+-          error: result
+-        });
++        return onError({ _tag: "BadHeaders", error: result });
+       }
+       const contentType = CT.parse(result.headers["content-type"]);
+       const contentDisposition = CT.parse(result.headers["content-disposition"], true);
+-      if ("form-data" === contentDisposition.value && !("name" in contentDisposition.parameters)) {
++      if (contentDisposition.value === "form-data" && !("name" in contentDisposition.parameters)) {
+         skipBody();
+         return onError(errInvalidDisposition);
+       }
+@@ -170,7 +215,11 @@ function make({
+       if ("filename*" in contentDisposition.parameters) {
+         const parts = contentDisposition.parameters["filename*"].split("''");
+         if (parts.length === 2) {
+-          encodedFilename = decodeURIComponent(parts[1]);
++          try {
++            encodedFilename = decodeURIComponent(parts[1]);
++          } catch {
++            return onError(errInvalidDisposition);
++          }
+         }
+       }
+       state.info = {
+@@ -182,44 +231,35 @@ function make({
+         contentDispositionParameters: contentDisposition.parameters,
+         headers: result.headers
+       };
+-      state.state = State.body;
++      state.state = 1 /* body */;
+       state.isFile = isFile(state.info);
+       if (state.isFile) {
+         state.onChunk = onPart(state.info);
+       }
+       if (result.endPosition < chunk.length) {
+-        if (state.isFile) {
+-          state.onChunk(chunk.subarray(result.endPosition));
+-        } else {
+-          const buf = chunk.subarray(result.endPosition);
+-          if ((state.fieldSize += buf.length) > maxFieldSize) {
+-            onError(errMaxFieldSize);
+-          }
+-          state.fieldChunks.push(buf);
+-        }
++        writeBody(chunk.subarray(result.endPosition));
+       }
+-    } else if (state.isFile) {
+-      state.onChunk(chunk);
+     } else {
+-      if ((state.fieldSize += chunk.length) > maxFieldSize) {
+-        onError(errMaxFieldSize);
+-      }
+-      state.fieldChunks.push(chunk);
++      writeBody(chunk);
+     }
+   }, constCR);
+   return {
+     write(chunk) {
++      if (failed)
++        return;
+       if ((state.totalSize += chunk.length) > maxTotalSize) {
+         return onError(errMaxTotalSize);
+       }
+       return split.write(chunk);
+     },
+     end() {
++      if (failed)
++        return;
+       split.end();
+-      if (state.state === State.body) {
++      if (state.state === 1 /* body */) {
+         onError(errEndNotReached);
+       }
+-      state.state = State.headers;
++      state.state = 0 /* headers */;
+       state.index = 0;
+       state.parts = 0;
+       state.onChunk = noopOnChunk;
+@@ -231,7 +271,7 @@ function make({
+     }
+   };
+ }
+-const utf8Decoder = /*#__PURE__*/new TextDecoder("utf-8");
++var utf8Decoder = new TextDecoder("utf-8");
+ function getDecoder(charset) {
+   if (charset === "utf-8" || charset === "utf8" || charset === "") {
+     return utf8Decoder;
+@@ -245,4 +285,3 @@ function getDecoder(charset) {
+ function decodeField(info, value) {
+   return getDecoder(info.contentTypeParameters.charset ?? "utf-8").decode(value);
+ }
+-//# sourceMappingURL=multipart.js.map
+\ No newline at end of file
+diff --git a/dist/esm/internal/contentType.js b/dist/esm/internal/contentType.js
+index a73479b1eb48ea74b0d23580563985b06f718cb6..d49a74e259bc2fe3c5dd45ce8197398e6a9360a2 100644
+--- a/dist/esm/internal/contentType.js
++++ b/dist/esm/internal/contentType.js
+@@ -1,42 +1,11 @@
+-// taken from https://github.com/fastify/fast-content-type-parse
+-// under the MIT license
+-/**
+- * RegExp to match *( ";" parameter ) in RFC 7231 sec 3.1.1.1
+- *
+- * parameter     = token "=" ( token / quoted-string )
+- * token         = 1*tchar
+- * tchar         = "!" / "#" / "$" / "%" / "&" / "'" / "*"
+- *               / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
+- *               / DIGIT / ALPHA
+- *               ; any VCHAR, except delimiters
+- * quoted-string = DQUOTE *( qdtext / quoted-pair ) DQUOTE
+- * qdtext        = HTAB / SP / %x21 / %x23-5B / %x5D-7E / obs-text
+- * obs-text      = %x80-FF
+- * quoted-pair   = "\" ( HTAB / SP / VCHAR / obs-text )
+- */
+-const paramRE = /; *([!#$%&'*+.^\w`|~-]+)=("(?:[\v\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\v\u0020-\u00ff])*"|[!#$%&'*+.^\w`|~-]+) */gu;
+-/**
+- * RegExp to match quoted-pair in RFC 7230 sec 3.2.6
+- *
+- * quoted-pair = "\" ( HTAB / SP / VCHAR / obs-text )
+- * obs-text    = %x80-FF
+- */
+-const quotedPairRE = /\\([\v\u0020-\u00ff])/gu;
+-/**
+- * RegExp to match type in RFC 7231 sec 3.1.1.1
+- *
+- * media-type = type "/" subtype
+- * type       = token
+- * subtype    = token
+- */
+-const mediaTypeRE = /^[!#$%&'*+.^\w|~-]+\/[!#$%&'*+.^\w|~-]+$/u;
+-const mediaTypeRENoSlash = /^[!#$%&'*+.^\w|~-]+$/u;
+-// default ContentType to prevent repeated object creation
+-const defaultContentType = {
+-  value: "",
+-  parameters: /*#__PURE__*/Object.create(null)
+-};
+-export function parse(header, withoutSlash = false) {
++// node_modules/multipasta/src/internal/contentType.ts
++var paramRE = /; *([!#$%&'*+.^\w`|~-]+)=("(?:[\v\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\v\u0020-\u00ff])*"|[!#$%&'*+.^\w`|~-]+) */gu;
++var dispositionParamRE = /; *([!#$%&'*+.^\w`|~-]+)=("(?:[\v\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u{10ffff}]|\\[\v\u0020-\u{10ffff}])*"|[!#$%&'*+.^\w`|~-]+) */gu;
++var quotedPairRE = /\\([\v\u0020-\u00ff])/gu;
++var mediaTypeRE = /^[!#$%&'*+.^\w|~-]+\/[!#$%&'*+.^\w|~-]+$/u;
++var mediaTypeRENoSlash = /^[!#$%&'*+.^\w|~-]+$/u;
++var defaultContentType = { value: "", parameters: Object.create(null) };
++function parse(header, withoutSlash = false) {
+   if (typeof header !== "string") {
+     return defaultContentType;
+   }
+@@ -50,15 +19,15 @@ export function parse(header, withoutSlash = false) {
+     value: type.toLowerCase(),
+     parameters: Object.create(null)
+   };
+-  // parse parameters
+   if (index === -1) {
+     return result;
+   }
+   let key;
+   let match;
+   let value;
+-  paramRE.lastIndex = index;
+-  while (match = paramRE.exec(header)) {
++  const parameters = withoutSlash ? dispositionParamRE : paramRE;
++  parameters.lastIndex = index;
++  while (match = parameters.exec(header)) {
+     if (match.index !== index) {
+       return defaultContentType;
+     }
+@@ -66,7 +35,6 @@ export function parse(header, withoutSlash = false) {
+     key = match[1].toLowerCase();
+     value = match[2];
+     if (value[0] === '"') {
+-      // remove quotes and escapes
+       value = value.slice(1, value.length - 1);
+       !withoutSlash && quotedPairRE.test(value) && (value = value.replace(quotedPairRE, "$1"));
+     }
+@@ -77,4 +45,6 @@ export function parse(header, withoutSlash = false) {
+   }
+   return result;
+ }
+-//# sourceMappingURL=contentType.js.map
+\ No newline at end of file
++export {
++  parse
++};
+diff --git a/dist/esm/internal/multipart.js b/dist/esm/internal/multipart.js
+index 70f9c3360cd205e9068bd968ad7314cb0623c968..bff95cdd2991d3a37082f292af471f4a9d27b933 100644
+--- a/dist/esm/internal/multipart.js
++++ b/dist/esm/internal/multipart.js
+@@ -1,35 +1,25 @@
++// node_modules/multipasta/src/internal/multipart.ts
+ import * as CT from "./contentType.js";
+ import * as HP from "./headers.js";
+ import * as Search from "./search.js";
+-var State;
+-(function (State) {
+-  State[State["headers"] = 0] = "headers";
+-  State[State["body"] = 1] = "body";
+-})(State || (State = {}));
+-const errInvalidDisposition = {
+-  _tag: "InvalidDisposition"
+-};
+-const errEndNotReached = {
+-  _tag: "EndNotReached"
+-};
+-const errMaxParts = {
+-  _tag: "ReachedLimit",
+-  limit: "MaxParts"
+-};
+-const errMaxTotalSize = {
++var errInvalidDisposition = { _tag: "InvalidDisposition" };
++var errEndNotReached = { _tag: "EndNotReached" };
++var errMaxParts = { _tag: "ReachedLimit", limit: "MaxParts" };
++var errMaxTotalSize = {
+   _tag: "ReachedLimit",
+   limit: "MaxTotalSize"
+ };
+-const errMaxPartSize = {
++var errMaxPartSize = {
+   _tag: "ReachedLimit",
+   limit: "MaxPartSize"
+ };
+-const errMaxFieldSize = {
++var errMaxFieldSize = {
+   _tag: "ReachedLimit",
+   limit: "MaxFieldSize"
+ };
+-const constCR = /*#__PURE__*/new TextEncoder().encode("\r\n");
+-export function defaultIsFile(info) {
++var constCR = new TextEncoder().encode(`\r
++`);
++function defaultIsFile(info) {
+   return info.filename !== undefined || info.contentType === "application/octet-stream";
+ }
+ function parseBoundary(headers) {
+@@ -37,11 +27,11 @@ function parseBoundary(headers) {
+   return contentType.parameters.boundary;
+ }
+ function noopOnChunk(_chunk) {}
+-export function make({
++function make3({
+   headers,
+   onFile: onPart,
+   onField,
+-  onError,
++  onError: reportError,
+   onDone,
+   isFile = defaultIsFile,
+   maxParts = Infinity,
+@@ -51,16 +41,14 @@ export function make({
+ }) {
+   const boundary = parseBoundary(headers);
+   if (boundary === undefined) {
+-    onError({
+-      _tag: "InvalidBoundary"
+-    });
++    reportError({ _tag: "InvalidBoundary" });
+     return {
+       write: noopOnChunk,
+       end() {}
+     };
+   }
+   const state = {
+-    state: State.headers,
++    state: 0 /* headers */,
+     index: 0,
+     parts: 0,
+     onChunk: noopOnChunk,
+@@ -72,15 +60,35 @@ export function make({
+     fieldChunks: [],
+     fieldSize: 0
+   };
++  let failed = false;
++  function onError(error) {
++    if (failed)
++      return;
++    failed = true;
++    state.onChunk(null);
++    state.fieldChunks = [];
++    reportError(error);
++  }
++  function writeBody(chunk) {
++    if ((state.partSize += chunk.length) > maxPartSize)
++      return onError(errMaxPartSize);
++    if (state.isFile)
++      return state.onChunk(chunk);
++    if ((state.fieldSize += chunk.length) > maxFieldSize)
++      return onError(errMaxFieldSize);
++    state.fieldChunks.push(chunk);
++  }
+   function skipBody() {
+-    state.state = State.body;
++    state.state = 1 /* body */;
+     state.isFile = true;
+     state.onChunk = noopOnChunk;
+   }
+   const headerParser = HP.make();
+-  const split = Search.make(`\r\n--${boundary}`, function (index, chunk) {
++  const split = Search.make(`\r
++--${boundary}`, function(index, chunk) {
++    if (failed)
++      return;
+     if (index === 0) {
+-      // data before the first boundary
+       skipBody();
+       return;
+     } else if (index !== state.index) {
+@@ -94,7 +102,7 @@ export function make({
+           } else {
+             const buf = new Uint8Array(state.fieldSize);
+             let offset = 0;
+-            for (let i = 0; i < state.fieldChunks.length; i++) {
++            for (let i = 0;i < state.fieldChunks.length; i++) {
+               const chunk = state.fieldChunks[i];
+               buf.set(chunk, offset);
+               offset += chunk.length;
+@@ -105,36 +113,30 @@ export function make({
+           state.fieldChunks = [];
+         }
+       }
+-      state.state = State.headers;
++      state.state = 0 /* headers */;
+       state.index = index;
+-      state.headerSkip = 2; // skip the first \r\n
+-      // trailing --
++      state.headerSkip = 2;
++      state.partSize = 0;
+       if (chunk[0] === 45 && chunk[1] === 45) {
+         return onDone();
+       }
+       state.parts++;
+       if (state.parts > maxParts) {
+-        onError(errMaxParts);
++        return onError(errMaxParts);
+       }
+     }
+-    if ((state.partSize += chunk.length) > maxPartSize) {
+-      onError(errMaxPartSize);
+-    }
+-    if (state.state === State.headers) {
++    if (state.state === 0 /* headers */) {
+       const result = headerParser(chunk, state.headerSkip);
+       state.headerSkip = 0;
+       if (result._tag === "Continue") {
+         return;
+       } else if (result._tag === "Failure") {
+         skipBody();
+-        return onError({
+-          _tag: "BadHeaders",
+-          error: result
+-        });
++        return onError({ _tag: "BadHeaders", error: result });
+       }
+       const contentType = CT.parse(result.headers["content-type"]);
+       const contentDisposition = CT.parse(result.headers["content-disposition"], true);
+-      if ("form-data" === contentDisposition.value && !("name" in contentDisposition.parameters)) {
++      if (contentDisposition.value === "form-data" && !("name" in contentDisposition.parameters)) {
+         skipBody();
+         return onError(errInvalidDisposition);
+       }
+@@ -142,7 +144,11 @@ export function make({
+       if ("filename*" in contentDisposition.parameters) {
+         const parts = contentDisposition.parameters["filename*"].split("''");
+         if (parts.length === 2) {
+-          encodedFilename = decodeURIComponent(parts[1]);
++          try {
++            encodedFilename = decodeURIComponent(parts[1]);
++          } catch {
++            return onError(errInvalidDisposition);
++          }
+         }
+       }
+       state.info = {
+@@ -154,44 +160,35 @@ export function make({
+         contentDispositionParameters: contentDisposition.parameters,
+         headers: result.headers
+       };
+-      state.state = State.body;
++      state.state = 1 /* body */;
+       state.isFile = isFile(state.info);
+       if (state.isFile) {
+         state.onChunk = onPart(state.info);
+       }
+       if (result.endPosition < chunk.length) {
+-        if (state.isFile) {
+-          state.onChunk(chunk.subarray(result.endPosition));
+-        } else {
+-          const buf = chunk.subarray(result.endPosition);
+-          if ((state.fieldSize += buf.length) > maxFieldSize) {
+-            onError(errMaxFieldSize);
+-          }
+-          state.fieldChunks.push(buf);
+-        }
++        writeBody(chunk.subarray(result.endPosition));
+       }
+-    } else if (state.isFile) {
+-      state.onChunk(chunk);
+     } else {
+-      if ((state.fieldSize += chunk.length) > maxFieldSize) {
+-        onError(errMaxFieldSize);
+-      }
+-      state.fieldChunks.push(chunk);
++      writeBody(chunk);
+     }
+   }, constCR);
+   return {
+     write(chunk) {
++      if (failed)
++        return;
+       if ((state.totalSize += chunk.length) > maxTotalSize) {
+         return onError(errMaxTotalSize);
+       }
+       return split.write(chunk);
+     },
+     end() {
++      if (failed)
++        return;
+       split.end();
+-      if (state.state === State.body) {
++      if (state.state === 1 /* body */) {
+         onError(errEndNotReached);
+       }
+-      state.state = State.headers;
++      state.state = 0 /* headers */;
+       state.index = 0;
+       state.parts = 0;
+       state.onChunk = noopOnChunk;
+@@ -203,7 +200,7 @@ export function make({
+     }
+   };
+ }
+-const utf8Decoder = /*#__PURE__*/new TextDecoder("utf-8");
++var utf8Decoder = new TextDecoder("utf-8");
+ function getDecoder(charset) {
+   if (charset === "utf-8" || charset === "utf8" || charset === "") {
+     return utf8Decoder;
+@@ -214,7 +211,11 @@ function getDecoder(charset) {
+     return utf8Decoder;
+   }
+ }
+-export function decodeField(info, value) {
++function decodeField(info, value) {
+   return getDecoder(info.contentTypeParameters.charset ?? "utf-8").decode(value);
+ }
+-//# sourceMappingURL=multipart.js.map
+\ No newline at end of file
++export {
++  decodeField,
++  defaultIsFile,
++  make3 as make
++};
+diff --git a/src/internal/contentType.ts b/src/internal/contentType.ts
+index 1ae5ca0c19e7dc6a99a8065f67e5a9fb08b5595f..85e69ef264bac57d125cceac2b31d32bc0561657 100644
+--- a/src/internal/contentType.ts
++++ b/src/internal/contentType.ts
+@@ -18,6 +18,11 @@
+ const paramRE =
+   /; *([!#$%&'*+.^\w`|~-]+)=("(?:[\v\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\v\u0020-\u00ff])*"|[!#$%&'*+.^\w`|~-]+) */gu
+ 
++// Multipart headers are already UTF-8 decoded. Quoted disposition values must retain
++// browser filenames beyond Latin-1; MIME type parameters keep their original grammar.
++const dispositionParamRE =
++  /; *([!#$%&'*+.^\w`|~-]+)=("(?:[\v\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u{10ffff}]|\\[\v\u0020-\u{10ffff}])*"|[!#$%&'*+.^\w`|~-]+) */gu
++
+ /**
+  * RegExp to match quoted-pair in RFC 7230 sec 3.2.6
+  *
+@@ -72,9 +77,10 @@ export function parse(
+   let match: RegExpExecArray | null
+   let value: string
+ 
+-  paramRE.lastIndex = index
++  const parameters = withoutSlash ? dispositionParamRE : paramRE
++  parameters.lastIndex = index
+ 
+-  while ((match = paramRE.exec(header))) {
++  while ((match = parameters.exec(header))) {
+     if (match.index !== index) {
+       return defaultContentType
+     }
+diff --git a/src/internal/multipart.ts b/src/internal/multipart.ts
+index 5e64b36f841da520fe657cee5f9afbd8ba4d7610..da7162bf0b6621db8c76e1323096d11e44e08d2c 100644
+--- a/src/internal/multipart.ts
++++ b/src/internal/multipart.ts
+@@ -44,7 +44,7 @@ export function make({
+   headers,
+   onFile: onPart,
+   onField,
+-  onError,
++  onError: reportError,
+   onDone,
+   isFile = defaultIsFile,
+   maxParts = Infinity,
+@@ -54,7 +54,7 @@ export function make({
+ }: Config) {
+   const boundary = parseBoundary(headers)
+   if (boundary === undefined) {
+-    onError({ _tag: "InvalidBoundary" })
++    reportError({ _tag: "InvalidBoundary" })
+     return {
+       write: noopOnChunk,
+       end() {},
+@@ -75,6 +75,22 @@ export function make({
+     fieldSize: 0,
+   }
+ 
++  let failed = false
++  function onError(error: MultipartError) {
++    if (failed) return
++    failed = true
++    state.onChunk(null)
++    state.fieldChunks = []
++    reportError(error)
++  }
++
++  function writeBody(chunk: Uint8Array) {
++    if ((state.partSize += chunk.length) > maxPartSize) return onError(errMaxPartSize)
++    if (state.isFile) return state.onChunk(chunk)
++    if ((state.fieldSize += chunk.length) > maxFieldSize) return onError(errMaxFieldSize)
++    state.fieldChunks.push(chunk)
++  }
++
+   function skipBody() {
+     state.state = State.body
+     state.isFile = true
+@@ -86,6 +102,7 @@ export function make({
+   const split = Search.make(
+     `\r\n--${boundary}`,
+     function (index, chunk) {
++      if (failed) return
+       if (index === 0) {
+         // data before the first boundary
+         skipBody()
+@@ -116,6 +133,7 @@ export function make({
+         state.state = State.headers
+         state.index = index
+         state.headerSkip = 2 // skip the first \r\n
++        state.partSize = 0
+ 
+         // trailing --
+         if (chunk[0] === 45 && chunk[1] === 45) {
+@@ -124,14 +142,10 @@ export function make({
+ 
+         state.parts++
+         if (state.parts > maxParts) {
+-          onError(errMaxParts)
++          return onError(errMaxParts)
+         }
+       }
+ 
+-      if ((state.partSize += chunk.length) > maxPartSize) {
+-        onError(errMaxPartSize)
+-      }
+-
+       if (state.state === State.headers) {
+         const result = headerParser(chunk, state.headerSkip)
+         state.headerSkip = 0
+@@ -161,7 +175,11 @@ export function make({
+         if ("filename*" in contentDisposition.parameters) {
+           const parts = contentDisposition.parameters["filename*"].split("''")
+           if (parts.length === 2) {
+-            encodedFilename = decodeURIComponent(parts[1])
++            try {
++              encodedFilename = decodeURIComponent(parts[1])
++            } catch {
++              return onError(errInvalidDisposition)
++            }
+           }
+         }
+ 
+@@ -188,23 +206,10 @@ export function make({
+         }
+ 
+         if (result.endPosition < chunk.length) {
+-          if (state.isFile) {
+-            state.onChunk(chunk.subarray(result.endPosition))
+-          } else {
+-            const buf = chunk.subarray(result.endPosition)
+-            if ((state.fieldSize += buf.length) > maxFieldSize) {
+-              onError(errMaxFieldSize)
+-            }
+-            state.fieldChunks.push(buf)
+-          }
++          writeBody(chunk.subarray(result.endPosition))
+         }
+-      } else if (state.isFile) {
+-        state.onChunk(chunk)
+       } else {
+-        if ((state.fieldSize += chunk.length) > maxFieldSize) {
+-          onError(errMaxFieldSize)
+-        }
+-        state.fieldChunks.push(chunk)
++        writeBody(chunk)
+       }
+     },
+     constCR,
+@@ -212,12 +217,14 @@ export function make({
+ 
+   return {
+     write(chunk: Uint8Array) {
++      if (failed) return
+       if ((state.totalSize += chunk.length) > maxTotalSize) {
+         return onError(errMaxTotalSize)
+       }
+       return split.write(chunk)
+     },
+     end() {
++      if (failed) return
+       split.end()
+       if (state.state === State.body) {
+         onError(errEndNotReached)

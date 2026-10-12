@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { AsyncLocalStorage } from "node:async_hooks"
 import path from "node:path"
+import { Context } from "effect"
 import { writeFileAtomic } from "./atomic-write"
 import * as PlanStore from "./plan-store"
 import { DocumentStore, documentRevision } from "./document-store"
@@ -180,6 +181,12 @@ export type RuntimeState = {
 
 const runtime = new AsyncLocalStorage<RuntimeState>()
 const defaultRuntime: RuntimeState = { stateDir: "", sessions: new Map() }
+
+/** Host-owned synchronous storage view. Wrapping an unevaluated Effect would not enter its ALS runtime. */
+export const CurrentStorage = Context.Reference<{ readonly run: <A>(operation: () => A) => A }>(
+  "@deepagent-code/DeepAgentSessionState/CurrentStorage",
+  { defaultValue: () => ({ run: (operation) => operation() }) },
+)
 
 export const createRuntime = (dir: string): RuntimeState => {
   const state = { stateDir: path.resolve(dir), sessions: new Map<string, SessionRunState>() }

@@ -302,11 +302,11 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
         filePath: string,
         content: string,
         expected?: string,
+        lockId?: string,
       ): Promise<{ ok: boolean; error?: string }> =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (sdk.client.file.write({ fileWriteBody: { path: path.normalize(filePath), content, expected } }) as any).then(
-          (r: any) => (r.data as { ok: boolean; error?: string } | undefined) ?? { ok: false, error: "no_response" },
-        ),
+        sdk.client.file
+          .write({ fileWriteBody: { path: path.normalize(filePath), content, expected, lockId } })
+          .then((r) => r.data ?? { ok: false, error: "no_response" }),
 
       createFile: (filePath: string, content = ""): Promise<{ ok: boolean; error?: string }> =>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -322,7 +322,9 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
 
       renameFile: (from: string, to: string): Promise<{ ok: boolean; error?: string }> =>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (sdk.client.file.rename({ fileRenameBody: { from: path.normalize(from), to: path.normalize(to) } }) as any).then(
+        (
+          sdk.client.file.rename({ fileRenameBody: { from: path.normalize(from), to: path.normalize(to) } }) as any
+        ).then(
           (r: any) => (r.data as { ok: boolean; error?: string } | undefined) ?? { ok: false, error: "no_response" },
         ),
 
@@ -334,28 +336,33 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
 
       // ── V3.7 Phase 4.1D 编辑锁方法 ──────────────────────────────────────────
 
-      /** 获取文件编辑锁（human 锁可抢占 agent 锁）。返回 lockId 或 error。 */
-      acquireLock: (filePath: string): Promise<{ ok: boolean; lockId?: string; error?: string }> =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (sdk.client.file.lock.acquire({ lockAcquireBody: { path: path.normalize(filePath), kind: "human" } }) as any).then(
-          (r: any) => {
-            const d = r.data as { ok: boolean; lock?: { lockId: string }; error?: string } | undefined
-            if (!d?.ok) return { ok: false, error: d?.error ?? "no_response" }
-            return { ok: true, lockId: d.lock?.lockId }
+      acquireLock: async (filePath: string) => {
+        // The lease keeps its original server/workspace client across route changes.
+        const client = sdk.client
+        const response = await client.file.lock
+          .acquire({ lockAcquireBody: { path: path.normalize(filePath), kind: "human" } })
+          .catch(() => undefined)
+        const lock = response?.data?.lock
+        if (!response?.data?.ok || !lock)
+          return { ok: false, lease: undefined, error: response?.data?.error ?? "request_failed" }
+        return {
+          ok: true,
+          error: undefined,
+          lease: {
+            lockId: lock.lockId,
+            renew: () =>
+              client.file.lock
+                .renew({ lockRenewBody: { lockId: lock.lockId } })
+                .then((r) => r.data?.ok ?? false)
+                .catch(() => false),
+            release: () =>
+              client.file.lock
+                .release({ lockReleaseBody: { lockId: lock.lockId } })
+                .then(() => undefined)
+                .catch(() => undefined),
           },
-        ),
-
-      /** 续租锁（心跳，每15s调一次）。lockId 不匹配时静默失败。 */
-      renewLock: (lockId: string): Promise<boolean> =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (sdk.client.file.lock.renew({ lockRenewBody: { lockId } }) as any).then(
-          (r: any) => (r.data as { ok: boolean } | undefined)?.ok ?? false,
-        ).catch(() => false),
-
-      /** 释放锁（关闭编辑器时调用）。 */
-      releaseLock: (lockId: string): Promise<void> =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (sdk.client.file.lock.release({ lockReleaseBody: { lockId } }) as any).catch(() => undefined),
+        }
+      },
     }
   },
 })
