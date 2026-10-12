@@ -70,9 +70,10 @@ export async function copyWindowsWorkBuildImage(input: {
     const reject = (predicate: "source_file" | "source_links" | "cargo_alias_missing" | "cargo_alias_multiple" |
       "cargo_alias_file" | "source_symlink" | "bytes_size" | "bytes_bounds" | "pe_magic" | "pe_abi" | "published_single_link" |
       `${"cargo_alias" | "named_before" | "opened_after" | "named_after" | "cargo_alias_after"}_${typeof fields[number]}`) => new Error(`Windows fixed Work build image rejected: asset=${input.name}, predicate=${predicate}`)
-    // This alias exception applies only to Cargo's fixed fresh build artifact.
+    // Cargo omits the executable hash on MSVC so its embedded PDB path stays
+    // stable. Both names belong only to this fixed fresh build artifact.
     const aliases = input.name === "deepagent-work-process-supervisor.exe" && before.nlink === 2n
-      ? (await fs.readdir(path.join(input.cargoDirectory, "release/deps"))).filter((name) => /^deepagent_work_process_supervisor-[a-f0-9]{16}\.exe$/.test(name))
+      ? (await fs.readdir(path.join(input.cargoDirectory, "release/deps"))).filter((name) => /^deepagent_work_process_supervisor(?:-[a-f0-9]{16})?\.exe$/.test(name))
       : []
     const alias = aliases.length === 1 ? path.join(input.cargoDirectory, "release/deps", aliases[0]!) : undefined
     const linked = alias ? await fs.lstat(alias, { bigint: true }) : undefined

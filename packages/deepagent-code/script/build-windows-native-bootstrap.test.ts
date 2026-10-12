@@ -61,12 +61,16 @@ test.each([
   }
 })
 
-test("the unique same-inode Cargo supervisor alias remains build-only and publishes one link", async () => {
+test.each([
+  "deepagent_work_process_supervisor-0123456789abcdef.exe",
+  "deepagent_work_process_supervisor.exe",
+])("the unique same-inode Cargo supervisor alias %s remains build-only and publishes one link", async (name) => {
   const value = await fixture()
+  const filename = path.join(value.input.cargoDirectory, "release/deps", name)
   try {
-    await fs.link(value.input.source, value.alias)
+    await fs.link(value.input.source, filename)
     const source = await fs.lstat(value.input.source, { bigint: true })
-    const alias = await fs.lstat(value.alias, { bigint: true })
+    const alias = await fs.lstat(filename, { bigint: true })
     expect(source.nlink).toBe(2n)
     expect(alias.nlink).toBe(2n)
     expect(alias.dev).toBe(source.dev)
@@ -78,7 +82,24 @@ test("the unique same-inode Cargo supervisor alias remains build-only and publis
     expect(published.nlink).toBe(1n)
     expect(published.ino).not.toBe(source.ino)
     expect((await fs.lstat(value.input.source, { bigint: true })).nlink).toBe(2n)
-    expect((await fs.lstat(value.alias, { bigint: true })).ino).toBe(source.ino)
+    expect((await fs.lstat(filename, { bigint: true })).ino).toBe(source.ino)
+  } finally {
+    await fs.rm(value.directory, { recursive: true, force: true })
+  }
+})
+
+test.each([
+  ["foreign-MSVC-alias", "cargo_alias_ino"],
+  ["mixed-MSVC-and-GNU-aliases", "cargo_alias_multiple"],
+] as const)("fixed Cargo %s fails the closed %s predicate before publication", async (kind, predicate) => {
+  const value = await fixture()
+  try {
+    await fs.link(value.input.source, kind === "mixed-MSVC-and-GNU-aliases" ? value.alias : path.join(value.directory, "foreign-link"))
+    await fs.writeFile(path.join(value.input.cargoDirectory, "release/deps/deepagent_work_process_supervisor.exe"), value.bytes, { flag: "wx" })
+    await expect(copyWindowsWorkBuildImage(value.input)).rejects.toThrow(
+      `Windows fixed Work build image rejected: asset=${value.input.name}, predicate=${predicate}`,
+    )
+    expect(await fs.readdir(value.input.staging)).toEqual([])
   } finally {
     await fs.rm(value.directory, { recursive: true, force: true })
   }

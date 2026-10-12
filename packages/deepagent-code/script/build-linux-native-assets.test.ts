@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { createHash } from "node:crypto"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
-import { buildLinuxNativeAssets, inspectLinuxNativeAssets, linuxNativeCargoInvocation, linuxNativePackageOwnership, linuxNativePackageProvenance, LINUX_NATIVE_DEV_MANIFEST, LINUX_NATIVE_DEV_DOMAIN, type LinuxNativeDevManifest, type LinuxNativeTarget } from "./build-linux-native-assets"
+import { buildLinuxNativeAssets, inspectLinuxNativeAssets, linuxNativeCargoInvocation, linuxNativeImageRejection, linuxNativePackageOwnership, linuxNativePackageProvenance, LINUX_NATIVE_DEV_MANIFEST, LINUX_NATIVE_DEV_DOMAIN, type LinuxNativeDevManifest, type LinuxNativeTarget } from "./build-linux-native-assets"
 
 const names = ["deepagent-work-file-helper", "deepagent-work-storage-cleanup", "deepagent-work-process-supervisor", "bun-command-runtime"]
 const digest = (body: Uint8Array | string) => createHash("sha256").update(body).digest("hex")
@@ -91,6 +91,25 @@ test("non-Linux host refuses physical build before any output, tool or payload e
     await expect(buildLinuxNativeAssets({ destination: path.join(directory, "assets") })).rejects.toThrow("native Linux")
     expect(await fs.readdir(directory)).toEqual([])
   } finally { await fs.rm(directory, { recursive: true, force: true }) }
+})
+
+test("closed image rejection retains hardlink refusal and reveals only fixed copyright metadata", async () => {
+  const value = await fixture()
+  const filename = path.join(value.directory, names[2]!)
+  try {
+    await fs.link(filename, path.join(value.directory, "private-credential-link"))
+    const stats = await fs.stat(filename, { bigint: true })
+    const message = "Linux assets require bounded private regular files; kind=image, predicate=nlink"
+    await expect(inspectLinuxNativeAssets({ directory: value.directory, target: "linux-x64" })).rejects.toThrow(message)
+    expect(linuxNativeImageRejection({ filename, stats, maximum: 1_048_576, executable: true })).toBe(message)
+    expect(linuxNativeImageRejection({ filename: "/usr/share/doc/gcc-14-base/copyright", stats, maximum: 1_048_576, executable: false }))
+      .toBe(`Linux assets require bounded private regular files; kind=copyright, package=gcc-14-base, predicate=nlink, bytes=${stats.size}, nlink=2, maximum=1048576, mode=0o${stats.mode.toString(8)}`)
+    for (const unsafe of ["/private/credential", "/usr/share/doc/../credential/copyright", "/usr/share/doc/gcc-14-base/copyright\nsecret", "/usr/share/doc/gcc-14-base/copyright\n", `/usr/share/doc/${"a".repeat(129)}/copyright`]) {
+      expect(linuxNativeImageRejection({ filename: unsafe, stats, maximum: 1_048_576, executable: false })).toBe(message)
+    }
+    await fs.rm(path.join(value.directory, "private-credential-link"))
+    expect(linuxNativeImageRejection({ filename, stats: await fs.stat(filename, { bigint: true }), maximum: 1_048_576, executable: true })).toBeUndefined()
+  } finally { await fs.rm(value.directory, { recursive: true, force: true }) }
 })
 
 test("actual ELF file cohort accepts both native target headers and preserves exact data-only hash", async () => {

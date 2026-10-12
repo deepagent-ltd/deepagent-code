@@ -5,6 +5,7 @@ import { AttachmentRefMetadata } from "@deepagent-code/core/im/sql"
 import { IMRepository, IMRepositoryError, clientMessageID } from "@deepagent-code/core/im/repository"
 import type { IMRepositoryInterface } from "@deepagent-code/core/im/repository"
 import { Database } from "@deepagent-code/core/database/database"
+import { Log } from "@deepagent-code/core/util/log"
 import { MessageID } from "@deepagent-code/core/im/id"
 import { MediaUploadCheckpoint } from "@deepagent-code/core/im/media-upload-checkpoint"
 import { MediaUploadCheckpointModel } from "@deepagent-code/core/im/media-upload-checkpoint.model"
@@ -21,6 +22,41 @@ import { SERVER_USER_ID } from "@/server/routes/instance/httpapi/utils/workspace
 import { IMReaderRegistry } from "./reader-registry"
 import { IMKernelMediaUpload } from "./media-upload"
 import type { InstanceContext } from "@/project/instance-context"
+
+type SendStage = "request_gate" | "gate_settled" | "wire_validation" | "sdk_send" | "send_settled" | "ack_current" | "ack_write"
+const deliveryLog = Log.create({ service: "im.kernel.sync" })
+export const deliveryFailureDiagnostic = (error: unknown) => {
+  // Observation must neither invoke untrusted accessors nor replace a send error.
+  try {
+    const own = diagnosticData(error)
+    const cause = diagnosticData(own.cause)
+    const reader = error instanceof KernelReaderSchema.Error
+    return {
+      kind: reader ? "kernel_reader" : error instanceof KernelSdk.KernelError ? "kernel_sdk"
+        : error instanceof IMRepositoryError ? "im_repository" : error instanceof KernelDeliverySchema.Error ? "kernel_delivery"
+        : error instanceof TypeError ? "type_error" : error instanceof RangeError ? "range_error" : "unclassified",
+      ...(reader && KernelReaderSchema.CODES.some((code) => code === own.code) ? { readerCode: own.code } : {}),
+      ...(reader && typeof own.operation === "string" && ["native-slots", "workspace-lease", "current", "owner", "lease", "media_workspace", "send"].includes(own.operation) ? { readerOperation: own.operation } : {}),
+      ...(error instanceof KernelSdk.KernelError && typeof own.operation === "string" && ["sendMedia", "media_send", "sendMessage", "sendText"].includes(own.operation) ? { sdkOperation: own.operation } : {}),
+      ...(error instanceof IMRepositoryError && typeof own.code === "string" && ["kernel_delivery_unavailable", "message_identity_conflict", "attachment_unavailable", ...KernelReaderSchema.CODES].includes(own.code) ? { repositoryCode: own.code } : {}),
+      ...(cause.name === "DeliveryError" && typeof cause.operation === "string" && ["media", "media_send", "capabilities", "media_capabilities", "send"].includes(cause.operation) ? { deliveryOperation: cause.operation } : {}),
+      ...(cause.name === "DeliveryError" && typeof cause.kind === "string" && ["invalid_request", "invalid_response", "disconnected", "unknown", "transport_timeout", "capacity", "unavailable", "denied", "reader_required", "stale", "upgrade_required", "unsupported_capability", "conflict", "expired", "not_found", "legacy_api_disabled"].includes(cause.kind) ? { deliveryKind: cause.kind } : {}),
+      ...(cause.name === "DeliveryError" && [11005, 12201, 12202, 12203, 12204, 12205, 12206, 30001].some((code) => code === cause.wireCode) ? { wireCode: cause.wireCode } : {}),
+    }
+  } catch { return { kind: "unclassified" } }
+}
+function diagnosticData(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return {}
+  return Object.fromEntries(Object.entries(Object.getOwnPropertyDescriptors(value)).filter(([key, descriptor]) => ["cause", "code", "name", "operation", "kind", "wireCode"].includes(key) && "value" in descriptor).map(([key, descriptor]) => [key, descriptor.value]))
+}
+function observeDelivery(input: { messageHash: string; lane: "foreground" | "background"; stage: SendStage; event: "begin" | "gate_settled" | "send_settled" | "failure" | "ack_false" }, error?: unknown) {
+  try {
+    const fields = { ...input, ...(error === undefined ? {} : deliveryFailureDiagnostic(error)) }
+    if (input.event === "failure" || input.event === "ack_false") return deliveryLog.warn("protected delivery observation", fields)
+    deliveryLog.debug("protected delivery observation", fields)
+  }
+  catch { /* Logging cannot change the original delivery outcome. */ }
+}
 
 export const kernelConvKey = (conversationType: 1 | 2, conversationID: string) => `k:${conversationType}:${conversationID}`
 export const parseKernelConvKey = (key: string): { readonly conversationType: 1 | 2; readonly conversationID: string } | undefined => {
@@ -97,16 +133,33 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => Laye
         KernelDelivery.withVerification(entry.authority, { conversationType: parsed.conversationType, conversationID: parsed.conversationID, orgID: proof.value.org_id, memberIDs: proof.value.member_uuids }, repo.claimKernelDelivery(entry.authority, input.messageID)),
       )
       if (!dispatch) return
-      const send = dispatch.binding.version === 1 ? client.sendText({ conversationType: dispatch.binding.conversationType, conversationID: dispatch.binding.conversationID, text: dispatch.text, messageID: dispatch.binding.messageID, wireID: dispatch.binding.wireID, expiresAt: dispatch.binding.expiresAt }) : Effect.gen(function* () {
+      const observation = { messageHash: KernelDelivery.hash({ messageID: input.messageID }), lane, stage: "request_gate" as SendStage }
+      observeDelivery({ ...observation, event: "begin" })
+      const send = Effect.suspend(() => {
+        observation.stage = "gate_settled"
+        observeDelivery({ ...observation, event: "gate_settled" })
+        observation.stage = dispatch.binding.version === 1 ? "sdk_send" : "wire_validation"
+        return dispatch.binding.version === 1 ? client.sendText({ conversationType: dispatch.binding.conversationType, conversationID: dispatch.binding.conversationID, text: dispatch.text, messageID: dispatch.binding.messageID, wireID: dispatch.binding.wireID, expiresAt: dispatch.binding.expiresAt }) : Effect.gen(function* () {
         const binding = dispatch.binding
         if (binding.version !== 2 || !client.sendMedia) return yield* new KernelSdk.KernelError({ operation: "media_send", message: "Protected media is unavailable" })
         const body = yield* Effect.try({ try: () => KernelReaderSchema.wireContent(binding.wireContent, binding.messageType, binding.expiresAt), catch: () => new KernelSdk.KernelError({ operation: "media_send", message: "The original media receipt is invalid" }) })
         if (!body.remoteAttachments) return yield* new KernelSdk.KernelError({ operation: "media_send", message: "The original media receipt is invalid" })
         const attachments = body.remoteAttachments.map(({ profile: _profile, ...item }) => item)
         if (JSON.stringify({ v: 1, content: body.content, attachments }) !== binding.wireContent) return yield* new KernelSdk.KernelError({ operation: "media_send", message: "The original media bytes do not match the receipt" })
+        observation.stage = "sdk_send"
         return yield* client.sendMedia({ conversationType: binding.conversationType, conversationID: binding.conversationID, content: body.content, attachments, messageID: binding.messageID, wireID: binding.wireID, expiresAt: binding.expiresAt })
       })
-      const outcome = yield* entry.reader.request(send.pipe(Effect.flatMap((ack) => entry.assertCurrent.pipe(Effect.andThen(repo.acknowledgeKernelDelivery(entry.authority, dispatch, ack.messageID))))), lane).pipe(Effect.option)
+      })
+      const outcome = yield* entry.reader.request(send.pipe(Effect.flatMap((ack) => Effect.gen(function* () {
+        observation.stage = "send_settled"
+        observeDelivery({ ...observation, event: "send_settled" })
+        observation.stage = "ack_current"
+        yield* entry.assertCurrent
+        observation.stage = "ack_write"
+        const acknowledged = yield* repo.acknowledgeKernelDelivery(entry.authority, dispatch, ack.messageID)
+        if (!acknowledged) observeDelivery({ ...observation, event: "ack_false" })
+        return acknowledged
+      }))), lane).pipe(Effect.tapError((error) => Effect.sync(() => observeDelivery({ ...observation, event: "failure" }, error))), Effect.option)
       if (Option.isNone(outcome) || !outcome.value) yield* repo.uncertainKernelDelivery(entry.authority, dispatch).pipe(Effect.ignore)
       yield* entry.assertCurrent
       yield* registry.hint(entry)

@@ -262,13 +262,29 @@ function requireELF(header: Buffer, target: LinuxNativeTarget) {
     ![2,3].includes(header.readUInt16LE(16)) || header.readUInt16LE(18) !== (target === "linux-x64" ? 62 : 183) || header.readUInt32LE(20) !== 1)
     throw new Error("Linux image must be a matching native ELF64 executable or library")
 }
+export function linuxNativeImageRejection(input: { filename: string; stats: BigIntStats; maximum: number; executable: boolean }) {
+  const predicate = !input.stats.isFile() ? "regular"
+    : input.stats.nlink !== 1n ? "nlink"
+    : input.stats.size < 1n ? "size_empty"
+    : input.stats.size > BigInt(input.maximum) ? "size_limit"
+    : (input.stats.mode & 0o022n) !== 0n ? "writable"
+    : input.executable && (input.stats.mode & 0o111n) === 0n ? "executable" : undefined
+  if (!predicate) return
+  // Only the fixed system copyright namespace may disclose bounded provenance metadata.
+  const copyright = /^\/usr\/share\/doc\/([a-z0-9][a-z0-9+.-]{0,127})\/copyright$/.exec(input.filename)
+  return "Linux assets require bounded private regular files; " + (copyright && copyright[0] === input.filename
+    ? `kind=copyright, package=${copyright[1]}, predicate=${predicate}, bytes=${input.stats.size}, nlink=${input.stats.nlink}, maximum=${input.maximum}, mode=0o${input.stats.mode.toString(8)}`
+    : `kind=image, predicate=${predicate}`)
+}
+
 async function image(filename: string, maximum: number, executable: boolean) {
   const canonical = path.resolve(filename)
   if (await fs.realpath(canonical) !== canonical) throw new Error("Linux assets require physical files")
   const file = await fs.open(canonical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
     const before = await file.stat({ bigint: true })
-    if (!before.isFile() || before.nlink !== 1n || before.size < 1n || before.size > BigInt(maximum) || (before.mode & 0o022n) !== 0n || executable && (before.mode & 0o111n) === 0n) throw new Error("Linux assets require bounded private regular files")
+    const rejection = linuxNativeImageRejection({ filename: canonical, stats: before, maximum, executable })
+    if (rejection) throw new Error(rejection)
     const buffer = Buffer.alloc(65_536)
     const hash = createHash("sha256")
     const state = { bytes: 0, header: Buffer.alloc(0) }
