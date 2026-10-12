@@ -233,11 +233,11 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
       return value
     }, catch: () => new IMValidationFailedError({ name: "VALIDATION_FAILED", data: { message: "Invalid group page cursor or limit" } }) })
 
-    const readRequest = <A, E, R>(query: Parameters<typeof getWorkspaceContext>[0], groupID: string | undefined, effect: Effect.Effect<A, E, R> | ((lease?: IMFacade.ReaderLease) => Effect.Effect<A, E, R>), localOnUnavailable: boolean | "partial" = false, mediaMutation = false) => Effect.gen(function* () {
+    const readRequest = <A, E, R>(query: Parameters<typeof getWorkspaceContext>[0], groupID: string | undefined, effect: Effect.Effect<A, E, R> | ((lease?: IMFacade.ReaderLease) => Effect.Effect<A, E, R>), localOnUnavailable: boolean | "partial" = false, mediaMutation = false, options?: { refreshBeforeEffect?: boolean }) => Effect.gen(function* () {
       const context = yield* getWorkspaceContext(query)
       const run = (lease?: IMFacade.ReaderLease) => typeof effect === "function" ? effect(lease) : effect
       if (!facade || Option.isNone(yield* Ref.get(facade.engine))) return yield* run()
-      const guarded = facade.withReader(context, (lease) => mediaMutation ? run(lease) : lease.reader.withOutput({ workspaceID: context.workspaceID, userID: context.userID, ...(groupID ? { groupIDs: [groupID] } : {}) }, run(lease)))
+      const guarded = facade.withReader(context, (lease) => mediaMutation ? run(lease) : lease.reader.withOutput({ workspaceID: context.workspaceID, userID: context.userID, ...(groupID ? { groupIDs: [groupID] } : {}) }, run(lease), options))
       if (localOnUnavailable) return yield* guarded.pipe(Effect.catchIf((error) => error instanceof KernelReaderSchema.Error && (error.code !== "reader_capacity" || localOnUnavailable === "partial"), () => run()), Effect.mapError((error) => error instanceof KernelReaderSchema.Error ? new IMReaderUnavailableError({ name: "IM_READER_UNAVAILABLE", data: { code: error.code, operation: error.operation, wireCode: error.wireCode, message: error.message } }) : error))
       return yield* guarded.pipe(Effect.mapError((error) => error instanceof KernelReaderSchema.Error ? new IMReaderUnavailableError({ name: "IM_READER_UNAVAILABLE", data: { code: error.code, operation: error.operation, wireCode: error.wireCode, message: error.message } }) : error))
     })
@@ -639,7 +639,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
 
             const response = messageResponses([message], lease)
             return (yield* payload.type === "file" && lease ? lease.reader.withOutput({ workspaceID, userID, groupIDs: [groupId] }, response) : response)[0]!
-          }), false, payload.type === "file"),
+          }), false, payload.type === "file", { refreshBeforeEffect: payload.type === "text" }),
         ),
       )
       .handle("markRead", ({ params, query, payload }) =>

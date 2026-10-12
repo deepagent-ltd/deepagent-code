@@ -198,16 +198,19 @@ impl LockedPath {
         for part in &parts[..parts.len().saturating_sub(1)] {
             let parent = ancestors.last().ok_or(io::ErrorKind::InvalidData)?;
             let opened = locked_open(Some(parent), part, true, false, 1)?;
-            require_name(&opened, part)?;
+            require_name(&opened, part).map_err(|error| image_lease_diagnostic(error, "ancestor_name"))?;
             ancestors.push(opened);
         }
         let file = if let Some(leaf) = parts.last() {
             let file = locked_open_sharing(ancestors.last(), leaf, directory, executable, 1, sharing)?;
-            require_name(&file, leaf)?;
+            require_name(&file, leaf).map_err(|error| image_lease_diagnostic(error, "leaf_name"))?;
             file
         } else { ancestors[0].try_clone()? };
-        if !directory && (!regular_file::is_disk_file(&file) || (single_link && information(&file)?.nNumberOfLinks != 1)) {
-            return Err(io::ErrorKind::PermissionDenied.into());
+        if !directory && !regular_file::is_disk_file(&file) {
+            return Err(image_lease_diagnostic(io::ErrorKind::PermissionDenied.into(), "disk"));
+        }
+        if !directory && single_link && information(&file)?.nNumberOfLinks != 1 {
+            return Err(image_lease_diagnostic(io::ErrorKind::PermissionDenied.into(), "singlelink"));
         }
         let canonical = final_path(&file)?;
         let identity = identity(&file)?;
@@ -281,6 +284,11 @@ fn require_name(file: &File, input: &OsStr) -> io::Result<()> {
         return Err(io::ErrorKind::PermissionDenied.into());
     }
     Ok(())
+}
+
+fn image_lease_diagnostic(error: io::Error, phase: &'static str) -> io::Error {
+    eprintln!("dac-native-path-lease:{phase}:{:?}:{:?}", error.kind(), error.raw_os_error());
+    error
 }
 
 fn locked_open(root: Option<&File>, name: &OsStr, directory: bool, executable: bool, disposition: u32) -> io::Result<File> {

@@ -433,12 +433,32 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
     yield* KernelReader.bind(runtime, header.scopeKey, header.version)
     if (!(yield* KernelReader.scope(runtime))) return yield* KernelReaderSchema.failure("reader_unavailable", "scope-proof")
   }).pipe(Effect.mapError((error) => error instanceof KernelReaderSchema.Error ? error : KernelReaderSchema.failure("reader_unavailable", "scope-proof")))
+  const withOutput = <A, E, R>(request: { workspaceID: string; userID: string; groupIDs?: readonly string[] }, effect: Effect.Effect<A, E, R>, options?: { refreshBeforeEffect?: boolean }) => Effect.suspend(() => {
+    if (retired.value || input.ownerCurrent && !input.ownerCurrent()) return KernelReaderSchema.failure("reader_unavailable", "owner")
+    if (!options?.refreshBeforeEffect) return syncLock.withPermits(1)(KernelReader.withOutput(runtime, request, effect))
+    return Effect.gen(function* () {
+      const first = yield* syncLock.withPermits(1)(KernelReader.prepareOutput(runtime, request, effect).pipe(Effect.matchEffect({
+        onFailure: (error) => error instanceof KernelReaderSchema.Error && error.code === "reader_stale" && error.operation === "getDeliveryReadCut" && error.wireCode === 12203
+          ? Effect.succeed({ _tag: "Refresh" as const }) : Effect.fail(error),
+        // This branch runs only after prepare succeeded. Failures in the business
+        // effect or its postframe current check never enter onFailure above.
+        onSuccess: (prepared) => prepared.pipe(Effect.map((value) => ({ _tag: "Done" as const, value }))),
+      })))
+      if (first._tag === "Done") return first.value
+      // Sync commits take this same semaphore, so the failed preparation's
+      // permit must be released first. The original query and time bounds hold.
+      yield* KernelReader.current(runtime)
+      yield* runSync(4, "foreground")
+      yield* KernelReader.current(runtime)
+      return yield* syncLock.withPermits(1)(KernelReader.withOutput(runtime, request, effect))
+    })
+  })
   return { runtime, state, sync, syncSlice, observeLive, refreshGroup: (groupID: string) => commit(KernelReader.refreshGroup(runtime, groupID)).pipe(Effect.tap((changed) => changed ? notify([groupID]) : Effect.void), Effect.asVoid), refreshPending: () => commit(KernelReader.refreshPending(runtime)).pipe(Effect.tap((changed) => changed.length ? notify(changed) : Effect.void), Effect.asVoid), captureTaskSource: (localMessageID: string) => commit(taskSource.capture(localMessageID)), readTaskSource: taskSource.read, assertTaskSource: taskSource.assert, verifyScope, read, invalidate, revoke, retire: KernelReader.retireReads(runtime), request: withRequest, watchGroup, hasActiveConnections: () => watchedGroups.size > 0, pending: (request: { conversationType: 1 | 2; conversationID: string; name: string }) => Effect.gen(function* () {
     if (!(yield* KernelReader.scope(runtime))) {
       const header = yield* query(client.getDeliveryReader())
       yield* KernelReader.bind(runtime, header.scopeKey, header.version)
     }
     return yield* KernelReader.pending(runtime, request)
-  }), withOutput: <A, E, R>(request: { workspaceID: string; userID: string; groupIDs?: readonly string[] }, effect: Effect.Effect<A, E, R>) => Effect.suspend(() => retired.value || input.ownerCurrent && !input.ownerCurrent() ? KernelReaderSchema.failure("reader_unavailable", "owner") : syncLock.withPermits(1)(KernelReader.withOutput(runtime, request, effect))), conversation: (groupID: string) => Effect.gen(function* () { yield* KernelReader.current(runtime); return yield* KernelReader.senderConversation(database.db, groupID, source) }), inspect }
+  }), withOutput, conversation: (groupID: string) => Effect.gen(function* () { yield* KernelReader.current(runtime); return yield* KernelReader.senderConversation(database.db, groupID, source) }), inspect }
 })
 export type Interface = Effect.Success<ReturnType<typeof make>>

@@ -12,6 +12,7 @@ import { IMKernelDeliveryTable } from "./kernel-delivery.sql"
 import { IMKernelReaderMeterTable, IMKernelReaderScopeTable, IMKernelReaderProjectionTable, IMKernelReaderMessageTable, IMKernelReaderReadIntentTable } from "./kernel-reader.sql"
 import { GroupTable, MemberTable, MessageTable } from "./sql"
 import { GroupID, MessageID } from "./id"
+import { Log } from "../util/log"
 import { IMMentionIntentBytes, IMMentionIntentTable } from "./mention-intent.sql"
 
 type Db = Database.Interface["db"]
@@ -343,15 +344,31 @@ export const refreshPending = (runtime: Runtime) => Effect.gen(function* () {
 })
 
 /** Read-only current permission recheck. No ensure, poll, repair or durable writes. */
-export const withOutput = <A, E, R>(runtime: Runtime, input: { workspaceID: string; userID: string; groupIDs?: readonly string[] }, effect: Effect.Effect<A, E, R>) => Effect.gen(function* () {
+export const prepareOutput = <A, E, R>(runtime: Runtime, input: { workspaceID: string; userID: string; groupIDs?: readonly string[] }, effect: Effect.Effect<A, E, R>) => Effect.gen(function* () {
+  const consumed = { value: false }
+  const consume = <PreparedE, PreparedR>(prepared: Effect.Effect<A, PreparedE, PreparedR>) => Effect.suspend<A, PreparedE | KernelReaderSchema.Error, PreparedR>(() => {
+    if (consumed.value) return failure("reader_stale", "output-consumed")
+    consumed.value = true
+    return prepared
+  })
   const started = performance.now()
   const observed = yield* current(runtime).pipe(Effect.option)
-  if (Option.isNone(observed)) return yield* effect
+  if (Option.isNone(observed)) return consume(effect)
   const engine = observed.value
-  if (engine.workspaceID !== input.workspaceID || engine.userID !== input.userID) return yield* effect
+  if (engine.workspaceID !== input.workspaceID || engine.userID !== input.userID) return consume(effect)
   const rows = yield* projections(runtime, input.groupIDs)
   const frame: Frame = { runtime, db: engine.db, workspaceID: input.workspaceID, userID: input.userID, readerKey: engine.readerKey, started, projections: new Map(), active: true }
-  yield* Effect.forEach(rows, (row) => Effect.gen(function* () {
+  const observations: { index: number; visibility: "visible" | "pending" | "revoked"; phase: "observe" | "refresh"; flightMs: number; settledAt: number; deadline: number }[] = []
+  const timing = { consumerStarted: 0, refreshSelectedCount: 0, stage: "prepare" as "prepare" | "consume_check" | "consume" | "postcheck" }
+  const diagnostic = (error: unknown) => Effect.sync(() => {
+    if (!(error instanceof KernelReaderSchema.Error) || error.code !== "reader_stale" || !["output-deadline", "output-revision"].includes(error.operation)) return
+    for (const observation of observations.slice(0, 4)) {
+      const activeWindow = frame.projections.get(rows[observation.index]?.local_group_id ?? "")?.deadline === observation.deadline
+      Log.Default.debug("IM output proof rejected", { index: observation.index, visibility: observation.visibility, phase: observation.phase, flightMs: observation.flightMs, proofAgeMs: Math.max(0, Math.floor(performance.now() - observation.settledAt)), remainingMs: Math.floor(observation.deadline - performance.now()), actualRowCount: rows.length, refreshSelectedCount: timing.refreshSelectedCount, activeWindow, expiredAtFailure: activeWindow && performance.now() >= observation.deadline, consumerMs: timing.consumerStarted ? Math.max(0, Math.floor(performance.now() - timing.consumerStarted)) : 0, outputElapsedMs: Math.max(0, Math.floor(performance.now() - started)), failureStage: timing.stage, operation: error.operation })
+    }
+  }).pipe(Effect.catchCause(() => Effect.void))
+  const observe = (row: Projection, index: number, phase: "observe" | "refresh") => Effect.gen(function* () {
+    yield* current(runtime)
     if (!row.local_group_id || row.visibility === "revoked") return
     const started = performance.now()
     if (row.visibility === "pending") {
@@ -359,7 +376,10 @@ export const withOutput = <A, E, R>(runtime: Runtime, input: { workspaceID: stri
       const metadata = KernelReaderSchema.decode(KernelReaderSchema.Pending, row.metadata, 4096)
       if (metadata.sourceHash !== hash(engine.source)) return yield* failure("reader_scope_mismatch", "pending-output")
       yield* engine.inspect({ conversationType: row.conversation_type, conversationID: row.target_id })
-      frame.projections.set(row.local_group_id, { row, deadline: performance.now() + outputProofWindowMs, serverNow: 0, started })
+      const returned = performance.now()
+      const deadline = returned + outputProofWindowMs
+      frame.projections.set(row.local_group_id, { row, deadline, serverNow: 0, started })
+      if (observations.length < 4) observations.push({ index, visibility: row.visibility, phase, flightMs: Math.max(0, Math.floor(returned - started)), settledAt: returned, deadline })
       return
     }
     if (!engine.scopeKey || !row.projection_key || !row.server_revision) return yield* failure("reader_mapping_conflict", "output")
@@ -368,14 +388,41 @@ export const withOutput = <A, E, R>(runtime: Runtime, input: { workspaceID: stri
     // The local consumption window starts after this current authenticated cut
     // settles. Message expiry still conservatively includes the RPC's full flight.
     const deadline = Math.min(performance.now() + outputProofWindowMs, !row.next_expiry_at ? Infinity : started + row.next_expiry_at - cut.serverNow)
+    const returned = performance.now()
+    if (observations.length < 4) observations.push({ index, visibility: "visible", phase, flightMs: Math.max(0, Math.floor(returned - started)), settledAt: returned, deadline })
     if (performance.now() >= deadline) return yield* failure("reader_stale", "output-deadline")
     frame.projections.set(row.local_group_id, { row, deadline, serverNow: cut.serverNow, started, cut })
-  }), { concurrency: 2 })
-  yield* current(runtime)
-  const witness = {}
-  outputs.set(witness, frame)
-  return yield* effect.pipe(Effect.tap(() => assertOutput(engine.db)), Effect.provideService(Output, witness), Effect.ensuring(Effect.sync(() => { frame.active = false; outputs.delete(witness) })))
+  })
+  const guarded = Effect.gen(function* () {
+    yield* Effect.forEach(rows, (row, index) => observe(row, index, "observe"), { concurrency: 2 })
+    // A fast proof can age while another authenticated row is still settling.
+    // Take new evidence once, never renew the old window or repeat output effects.
+    const expired = Array.from(frame.projections.values()).filter((item) => performance.now() >= item.deadline)
+    timing.refreshSelectedCount = expired.length
+    if (expired.length > 2) return yield* failure("reader_stale", "output-deadline")
+    yield* Effect.forEach(expired, (item) => observe(item.row, rows.indexOf(item.row), "refresh"), { concurrency: 2 })
+    yield* current(runtime)
+    // Preparation returns an unevaluated effect so callers can recover only a
+    // failed current cut. No business operation or Output witness exists yet.
+    return consume(Effect.suspend(() => {
+      const witness = {}
+      outputs.set(witness, frame)
+      return Effect.gen(function* () {
+        timing.stage = "consume_check"
+        // Preparation may have waited before consumption. Current ownership and
+        // the original proof deadline must still hold before any business effect.
+        yield* current(runtime)
+        yield* assertOutput(engine.db)
+        timing.consumerStarted = performance.now()
+        timing.stage = "consume"
+        return yield* effect
+      }).pipe(Effect.tap(() => { timing.stage = "postcheck"; return assertOutput(engine.db) }), Effect.tapError(diagnostic), Effect.provideService(Output, witness), Effect.ensuring(Effect.sync(() => { frame.active = false; outputs.delete(witness) })))
+    }))
+  })
+  return yield* guarded.pipe(Effect.tapError(diagnostic))
 })
+export const withOutput = <A, E, R>(runtime: Runtime, input: { workspaceID: string; userID: string; groupIDs?: readonly string[] }, effect: Effect.Effect<A, E, R>) => Effect.flatten(prepareOutput(runtime, input, effect))
+
 const output = (db: Reader) => Effect.gen(function* () { const witness = yield* Output; const frame = witness ? outputs.get(witness) : undefined; return frame?.active && frame.db === db ? frame : undefined })
 export const assertOutput = (db: Reader) => Effect.gen(function* () {
   const frame = yield* output(db)

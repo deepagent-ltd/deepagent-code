@@ -140,8 +140,9 @@ export async function buildLinuxNativeAssets(input: { destination: string }) {
     const cache = await image("/etc/ld.so.cache", 16_777_216, false)
     const listing = await command(ldconfig, ["-p"])
     const libraries = new Map<string, Awaited<ReturnType<typeof image>>>()
-    const licenses = new Map<string, Awaited<ReturnType<typeof image>>>()
+    const licenses = new Map<string, Awaited<ReturnType<typeof copyright>>>()
     const aliases = new Map<string, string>()
+    await fs.mkdir(path.join(staging, "linux-native-licenses"))
     const pending = [{ logical: "", filename: stagedRuntime.canonical }]
     while (pending.length) {
       const entry = pending.shift()!
@@ -178,15 +179,12 @@ export async function buildLinuxNativeAssets(input: { destination: string }) {
         pending.push({ logical: filename, filename: canonical })
         const packageName = await linuxNativePackageOwnership({ logical: filename, canonical,
           query: (source) => command(dpkg, ["-S", source]) })
-        if (!licenses.has(packageName)) licenses.set(packageName, await image(await fs.realpath(`/usr/share/doc/${packageName}/copyright`), 1_048_576, false))
+        if (!licenses.has(packageName)) licenses.set(packageName, await copyright({ packageName, directory: staging,
+          query: (args) => command(dpkg, args) }))
       }
     }
-    await fs.mkdir(path.join(staging, "linux-native-licenses"))
-    const licenseRecords = await Promise.all([...licenses].map(async ([name, observed]) => {
-      const filename = `linux-native-licenses/${name}.copyright`
-      await fs.copyFile(observed.canonical, path.join(staging, filename), constants.COPYFILE_EXCL)
-      await fs.chmod(path.join(staging, filename), 0o644)
-      return { path: filename, bytes: observed.bytes, sha256: observed.sha256 }
+    const licenseRecords = [...licenses].map(([name, observed]) => ({
+      path: `linux-native-licenses/${name}.copyright`, bytes: observed.bytes, sha256: observed.sha256,
     }))
     const provenance = await Promise.all(["LICENSE", "NOTICE", "UPSTREAM.json"].map(async (name) => {
       const original = sources.find((entry) => entry.path === `packages/work-file-helper/${name}`)
@@ -207,6 +205,7 @@ export async function buildLinuxNativeAssets(input: { destination: string }) {
       return { path: `packages/work-file-helper/bin/${target}/${name}`, bytes: observed.bytes, sha256: observed.sha256 }
     }))
     await Promise.all([runtime, cache, ...sources.map((entry) => entry.image), ...libraries.values(), ...licenses.values(), cargoImage, compilerImage, readelf, ldconfig, dpkg, git, cargo, compiler, ...(rustup ? [rustup] : [])].map(current))
+    await Promise.all([...licenses.values()].map((observed) => observed.sourceCurrent()))
     await Promise.all([...aliases].map(async ([filename, canonical]) => {
       if (await fs.realpath(filename) !== canonical) throw new Error("Linux runtime library alias changed during building")
     }))
@@ -246,6 +245,84 @@ export function linuxNativePackageProvenance(input: { logical: string; canonical
     throw new Error(`Linux runtime library requires unambiguous package provenance (logical=${paths[0]}, canonical=${paths[1]}, records=${Math.min(ownership.length, 129)})`)
   }
   return ownership[0]!.slice(0, ownership[0]!.indexOf(": ")).split(":")[0]!
+}
+
+export async function linuxNativeCopyrightMetadata(input: { canonical: string; query: (args: string[]) => Promise<string> }) {
+  const packageName = /^\/usr\/share\/doc\/([a-z0-9][a-z0-9+.-]{0,127})\/copyright$/.exec(input.canonical)
+  if (!packageName || packageName[0] !== input.canonical) throw new Error("Linux copyright requires a fixed canonical package path")
+  const ownership = await input.query(["-S", input.canonical])
+  const owner = /^([a-z0-9][a-z0-9+.-]{0,127}(?::[a-z0-9]{1,16})?): (\/[^\s]+)$/.exec(ownership.trim())
+  if (!owner || owner[1]!.split(":")[0] !== packageName[1] || owner[2] !== input.canonical)
+    throw new Error("Linux copyright requires one exact registered package owner")
+  const registered = await input.query(["--control-show", owner[1]!, "md5sums"])
+  if (Buffer.byteLength(registered) > manifestLimit) throw new Error("Linux copyright registration exceeds its bound")
+  const records = registered.split("\n").flatMap((line) => {
+    if (!line) return []
+    const record = /^([a-f0-9]{32})[ \t]+(.+)$/.exec(line)
+    if (!record) throw new Error("Linux copyright registration is invalid")
+    return record?.[2] === input.canonical.slice(1) ? [record[1]!] : []
+  })
+  if (records.length !== 1) throw new Error("Linux copyright requires one exact registered content digest")
+  return { ownership, registered, md5: records[0]! }
+}
+
+async function copyright(input: { packageName: string; directory: string; query: (args: string[]) => Promise<string> }) {
+  if (!/^[a-z0-9][a-z0-9+.-]{0,127}$/.test(input.packageName)) throw new Error("Linux copyright package name is invalid")
+  const logical = `/usr/share/doc/${input.packageName}/copyright`
+  const canonical = await fs.realpath(logical)
+  const metadata = await linuxNativeCopyrightMetadata({ canonical, query: input.query })
+  const copied = await linuxNativeCopyrightCopy({ source: canonical,
+    destination: path.join(input.directory, "linux-native-licenses", `${input.packageName}.copyright`), md5: metadata.md5 })
+  if (await fs.realpath(logical) !== canonical) throw new Error("Linux copyright alias changed during capture")
+  return { ...copied, sourceCurrent: async () => {
+    await copied.sourceCurrent()
+    const current = await linuxNativeCopyrightMetadata({ canonical, query: input.query })
+    if (current.ownership !== metadata.ownership || current.registered !== metadata.registered || await fs.realpath(logical) !== canonical)
+      throw new Error("Linux copyright package provenance changed after capture")
+  } }
+}
+
+export async function linuxNativeCopyrightCopy(input: { source: string; destination: string; md5: string }) {
+  const observed = await registeredCopyright(input.source, input.md5)
+  const captured = { bytes: observed.body.length, sha256: observed.sha256, identity: observed.identity }
+  const destination = path.resolve(input.destination)
+  if (await fs.realpath(path.dirname(destination)) !== path.dirname(destination)) throw new Error("Linux copyright requires a physical private destination")
+  await fs.writeFile(destination, observed.body, { mode: 0o644, flag: "wx" })
+  await fs.chmod(destination, 0o644)
+  const copied = await image(destination, manifestLimit, false)
+  if (copied.bytes !== captured.bytes || copied.sha256 !== captured.sha256) throw new Error("Linux copyright copy differs from its registered source")
+  const sourceCurrent = async () => {
+    const next = await registeredCopyright(input.source, input.md5)
+    if (next.body.length !== captured.bytes || next.sha256 !== captured.sha256 || next.identity !== captured.identity)
+      throw new Error("Linux copyright source changed after capture")
+    await current(copied)
+  }
+  await sourceCurrent()
+  return { ...copied, sourceCurrent }
+}
+
+async function registeredCopyright(filename: string, expectedMD5: string) {
+  if (!/^[a-f0-9]{32}$/.test(expectedMD5)) throw new Error("Linux copyright content digest is invalid")
+  const canonical = path.resolve(filename)
+  if (await fs.realpath(canonical) !== canonical) throw new Error("Linux copyright requires a physical source")
+  const file = await fs.open(canonical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  try {
+    const before = await file.stat({ bigint: true })
+    if (!before.isFile() || before.nlink !== 1n || before.size < 1n || before.size > BigInt(manifestLimit))
+      throw new Error("Linux copyright requires a bounded singlelink regular source")
+    const body = Buffer.alloc(Number(before.size))
+    const state = { bytes: 0 }
+    while (state.bytes < body.length) {
+      const read = await file.read(body, state.bytes, body.length - state.bytes, null)
+      if (!read.bytesRead) throw new Error("Linux copyright source changed while reading")
+      state.bytes += read.bytesRead
+    }
+    if ((await file.read(Buffer.alloc(1), 0, 1, null)).bytesRead || stamp(before) !== stamp(await file.stat({ bigint: true })) ||
+      stamp(before) !== stamp(await fs.lstat(canonical, { bigint: true })) || await fs.realpath(canonical) !== canonical)
+      throw new Error("Linux copyright source changed while reading")
+    if (createHash("md5").update(body).digest("hex") !== expectedMD5) throw new Error("Linux copyright differs from registered package content")
+    return { body, sha256: createHash("sha256").update(body).digest("hex"), identity: stamp(before) }
+  } finally { await file.close() }
 }
 
 function relativePath(value: string) {

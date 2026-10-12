@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { createHash } from "node:crypto"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
-import { buildLinuxNativeAssets, inspectLinuxNativeAssets, linuxNativeCargoInvocation, linuxNativeImageRejection, linuxNativePackageOwnership, linuxNativePackageProvenance, LINUX_NATIVE_DEV_MANIFEST, LINUX_NATIVE_DEV_DOMAIN, type LinuxNativeDevManifest, type LinuxNativeTarget } from "./build-linux-native-assets"
+import { buildLinuxNativeAssets, inspectLinuxNativeAssets, linuxNativeCargoInvocation, linuxNativeCopyrightCopy, linuxNativeCopyrightMetadata, linuxNativeImageRejection, linuxNativePackageOwnership, linuxNativePackageProvenance, LINUX_NATIVE_DEV_MANIFEST, LINUX_NATIVE_DEV_DOMAIN, type LinuxNativeDevManifest, type LinuxNativeTarget } from "./build-linux-native-assets"
 
 const names = ["deepagent-work-file-helper", "deepagent-work-storage-cleanup", "deepagent-work-process-supervisor", "bun-command-runtime"]
 const digest = (body: Uint8Array | string) => createHash("sha256").update(body).digest("hex")
@@ -110,6 +110,56 @@ test("closed image rejection retains hardlink refusal and reveals only fixed cop
     await fs.rm(path.join(value.directory, "private-credential-link"))
     expect(linuxNativeImageRejection({ filename, stats: await fs.stat(filename, { bigint: true }), maximum: 1_048_576, executable: true })).toBeUndefined()
   } finally { await fs.rm(value.directory, { recursive: true, force: true }) }
+})
+
+test("copyright metadata requires its canonical package owner and one registered complete digest", async () => {
+  const canonical = "/usr/share/doc/gcc-14-base/copyright"
+  const ownership = `gcc-14-base:amd64: ${canonical}\n`
+  const registered = `${"a".repeat(32)}  ${canonical.slice(1)}\n`
+  const queries: string[][] = []
+  expect(await linuxNativeCopyrightMetadata({ canonical, query: async (args) => {
+    queries.push(args)
+    return args[0] === "-S" ? ownership : registered
+  } })).toEqual({ ownership, registered, md5: "a".repeat(32) })
+  expect(queries).toEqual([["-S", canonical], ["--control-show", "gcc-14-base:amd64", "md5sums"]])
+  for (const output of [`foreign:amd64: ${canonical}\n`, `${ownership}${ownership}`, `gcc-14-base:amd64: /usr/share/doc/foreign/copyright\n`]) {
+    await expect(linuxNativeCopyrightMetadata({ canonical, query: async () => output })).rejects.toThrow("exact registered package owner")
+  }
+  for (const output of [registered + registered, `${"a".repeat(32)}  usr/share/doc/foreign/copyright\n`, registered + "invalid metadata\n"]) {
+    await expect(linuxNativeCopyrightMetadata({ canonical, query: async (args) => args[0] === "-S" ? ownership : output })).rejects.toThrow("Linux copyright")
+  }
+  await expect(linuxNativeCopyrightMetadata({ canonical: canonical + "\n", query: async () => { throw new Error("query must not run") } })).rejects.toThrow("fixed canonical package path")
+  await expect(linuxNativeCopyrightMetadata({ canonical: "/private/credential", query: async () => { throw new Error("query must not run") } })).rejects.toThrow("fixed canonical package path")
+})
+
+test("registered writable copyright copies exact bytes privately while generic assets and source changes remain refused", async () => {
+  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-linux-copyright-copy-"))
+  const source = path.join(directory, "copyright")
+  const destination = path.join(directory, "private.copyright")
+  const body = Buffer.from("complete registered copyright\n")
+  const md5 = createHash("md5").update(body).digest("hex")
+  try {
+    await fs.writeFile(source, body, { mode: 0o777 })
+    await fs.chmod(source, 0o777)
+    const copied = await linuxNativeCopyrightCopy({ source, destination, md5 })
+    expect(await fs.readFile(destination)).toEqual(body)
+    expect(copied.bytes).toBe(body.length)
+    expect(copied.sha256).toBe(digest(body))
+    expect((await fs.stat(destination)).mode & 0o777).toBe(0o644)
+    expect((await fs.stat(destination)).nlink).toBe(1)
+    expect((await fs.stat(source)).mode & 0o777).toBe(0o777)
+    expect(linuxNativeImageRejection({ filename: source, stats: await fs.stat(source, { bigint: true }), maximum: 1_048_576, executable: false }))
+      .toBe("Linux assets require bounded private regular files; kind=image, predicate=writable")
+    await copied.sourceCurrent()
+    await expect(linuxNativeCopyrightCopy({ source, destination: path.join(directory, "wrong-digest"), md5: "0".repeat(32) })).rejects.toThrow("registered package content")
+    expect((await fs.readdir(directory)).toSorted()).toEqual(["copyright", "private.copyright"])
+    await fs.link(source, path.join(directory, "alias"))
+    await expect(linuxNativeCopyrightCopy({ source, destination: path.join(directory, "hardlink"), md5 })).rejects.toThrow("singlelink")
+    await fs.rm(path.join(directory, "alias"))
+    await fs.writeFile(source, "changed content\n")
+    await expect(copied.sourceCurrent()).rejects.toThrow("registered package content")
+    expect(await fs.readFile(destination)).toEqual(body)
+  } finally { await fs.rm(directory, { recursive: true, force: true }) }
 })
 
 test("actual ELF file cohort accepts both native target headers and preserves exact data-only hash", async () => {
