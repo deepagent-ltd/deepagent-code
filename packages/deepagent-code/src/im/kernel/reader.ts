@@ -186,19 +186,19 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
     return yield* commit(KernelReader.applyMessages(runtime, page, undefined, handles))
   })
   const maintainSender = (effect: Effect.Effect<string[], Effect.Error<ReturnType<typeof KernelDelivery.cleanupSender>> |
-    Effect.Error<ReturnType<typeof KernelDelivery.retireSenderMedia>> | Effect.Error<ReturnType<typeof KernelDelivery.retireSenderReplies>>>) => commit(effect).pipe(
+    Effect.Error<ReturnType<typeof KernelDelivery.retireSenderMedia>> | Effect.Error<ReturnType<typeof KernelDelivery.retireSenderReplies>>>) => effect.pipe(
     Effect.catchTag("KernelDelivery.SenderRetirementDeferred", () => Effect.gen(function* () {
       // A fresh scope must be allowed to establish its own projection. This
       // catches only an absent mapping, never a changed owner or membership.
       yield* KernelReader.current(runtime)
-      yield* commit(KernelReader.ensureScope(runtime))
+      yield* KernelReader.ensureScope(runtime)
       return [] as string[]
     })),
     Effect.catchTag("KernelDelivery.SenderCleanupError", (error) => Effect.gen(function* () {
       // A malformed body cannot starve projection or the separate credential
       // retirement batch. Current authority and database failures still escape.
       yield* KernelReader.current(runtime)
-      yield* commit(KernelReader.ensureScope(runtime))
+      yield* KernelReader.ensureScope(runtime)
       if (!maintenance.has(error.code)) {
         maintenance.add(error.code)
         log.warn("Sender text cleanup requires review", { code: error.code, candidates: error.candidates })
@@ -220,20 +220,27 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
       }))
     return Effect.gen(function* () {
     const budget = liveHandle || !input.requestGate ? 15_000 : lane === "background" ? 1000 : 3000
-    const reader = yield* querySync("getDeliveryReader", "reader", client.getDeliveryReader())
-    retirementObserved.set(reader, { serverNow: reader.serverNow, scopeKey: reader.scopeKey, version: reader.version, deadline: performance.now() + 1000 })
-    yield* observe("bind", bindReader(reader))
-    yield* observe("ensure_scope", commit(KernelReader.ensureScope(runtime)))
-    yield* notify(yield* Effect.gen(function* () {
-      const current = yield* observe("sender_cleanup", maintainSender(KernelDelivery.cleanupSender(runtime, reader.serverNow)))
-      const previous = yield* observe("sender_retirement", KernelDelivery.withSenderRetirement(runtime, reader, Effect.gen(function* () {
-        const text = yield* maintainSender(KernelDelivery.retirePreviousSender())
-        const media = yield* maintainSender(KernelDelivery.retireSenderMedia())
-        const replies = yield* maintainSender(KernelDelivery.retireSenderReplies())
-        return [...new Set([...text, ...media, ...replies])]
-      })))
-      return [...new Set([...current, ...previous])]
-    }).pipe(Effect.ensuring(Effect.sync(() => retirementObserved.delete(reader)))))
+    // Wait for a concurrent protected output before issuing the actual header.
+    // The original one-second maintenance frame never ages in the lock queue.
+    const reader = yield* commit(Effect.gen(function* () {
+      const reader = yield* querySync("getDeliveryReader", "reader", client.getDeliveryReader())
+      const deadline = performance.now() + 1000
+      yield* observe("bind", bindReader(reader))
+      yield* observe("ensure_scope", KernelReader.ensureScope(runtime))
+      if (!(yield* observe("sender_cleanup", KernelDelivery.hasSenderCustody(runtime)))) return reader
+      retirementObserved.set(reader, { serverNow: reader.serverNow, scopeKey: reader.scopeKey, version: reader.version, deadline })
+      yield* notify(yield* Effect.gen(function* () {
+        const current = yield* observe("sender_cleanup", maintainSender(KernelDelivery.cleanupSender(runtime, reader.serverNow)))
+        const previous = yield* observe("sender_retirement", KernelDelivery.withSenderRetirement(runtime, reader, Effect.gen(function* () {
+          const text = yield* maintainSender(KernelDelivery.retirePreviousSender())
+          const media = yield* maintainSender(KernelDelivery.retireSenderMedia())
+          const replies = yield* maintainSender(KernelDelivery.retireSenderReplies())
+          return [...new Set([...text, ...media, ...replies])]
+        })))
+        return [...new Set([...current, ...previous])]
+      }).pipe(Effect.ensuring(Effect.sync(() => retirementObserved.delete(reader)))))
+      return reader
+    }))
     yield* SubscriptionRef.set(state, { state: "syncing", displayEpoch: runtime.displayEpoch, legacyMirrorUnavailable: true })
     let queries = 1
     // Capture the original receiver connection before discovering projections.

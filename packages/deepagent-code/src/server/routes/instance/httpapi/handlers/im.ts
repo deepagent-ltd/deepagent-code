@@ -1184,8 +1184,12 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
               yield* IMMedia.enabled(flags.v4FileUploadEnabled)
               const context = yield* getWorkspaceContext()
               const attachment = yield* IMMedia.attachment(repo, { ...context, id: params.attachmentId })
+              const body = IMMedia.localStream(repo, { ...context, id: params.attachmentId }, attachment)
+              // Finish the bounded FD, permission and hash checks before sending success headers.
+              // The cold stream opens a fresh guarded FD again while delivering the response.
+              yield* IMMedia.transfer(Stream.runDrain(body))
               return HttpServerResponse.stream(
-                IMMedia.localStream(repo, { ...context, id: params.attachmentId }, attachment),
+                body,
                 {
                   contentType: AttachmentStorage.isPreviewMime(attachment.mime)
                     ? attachment.mime

@@ -571,6 +571,18 @@ type SenderRetirementFrame = {
 }
 const SenderRetirement = Context.Reference<object | undefined>("IMKernelDelivery.private-sender-retirement", { defaultValue: () => undefined })
 const senderRetirements = new WeakMap<object, SenderRetirementFrame>()
+/** An empty custody store has no sender body to maintain. A positive result is
+ * deliberately broader than the current account; it never grants retirement. */
+export const hasSenderCustody = (runtime: KernelReader.Runtime) => Effect.gen(function* () {
+  const engine = yield* KernelReader.current(runtime)
+  const row = yield* engine.db.get<{ present: number }>(sql`SELECT
+    EXISTS(SELECT 1 FROM ${IMKernelDeliveryTable} LIMIT 1) OR
+    EXISTS(SELECT 1 FROM ${IMKernelMediaBodyTable} LIMIT 1) OR
+    EXISTS(SELECT 1 FROM ${IMReplyBodyTable} LIMIT 1) OR
+    EXISTS(SELECT 1 FROM ${IMReplyOutboxTable} LIMIT 1) AS present`)
+  yield* KernelReader.current(runtime)
+  return row?.present !== 0
+})
 /** No current mapping exists yet. The original body remains unchanged while
  * the Host independently establishes its current projection. */
 export class SenderRetirementDeferred extends Schema.TaggedErrorClass<SenderRetirementDeferred>()("KernelDelivery.SenderRetirementDeferred", {

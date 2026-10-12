@@ -190,7 +190,7 @@ describe("IM media real loopback HTTP", () => {
   )
 
   on.live(
-    "a real filesystem failure retains an unbound owner record that can be cleaned at TTL",
+    "an unsafe media root is refused before reserving an attachment and GET does not clean it",
     () =>
       Effect.gen(function* () {
         const { directory, group } = yield* seed
@@ -200,32 +200,23 @@ describe("IM media real loopback HTTP", () => {
           await fs.mkdir(path.dirname(baseDir), { recursive: true })
           await fs.writeFile(baseDir, "isolated directory obstruction")
         })
-        expect((yield* upload(directory, group.id)).status).toBe(500)
+        expect((yield* upload(directory, group.id)).status).toBe(404)
         const { db } = yield* Database.Service
         const rows = yield* db.select().from(AttachmentTable).all()
-        expect(rows).toHaveLength(1)
-        expect(rows[0].message_id).toBeNull()
-        expect(rows[0].deleted_at).toBeNull()
-        expect((yield* send(directory, group.id, rows[0].id)).status).toBe(404)
-        expect((yield* requestInDirectory(`/api/v1/im/attachments/${rows[0].id}/content`, directory)).status).toBe(404)
-        yield* Effect.promise(() => fs.rm(baseDir))
-        yield* db
-          .update(AttachmentTable)
-          .set({ created_at: Date.now() - AttachmentStorage.ttlMs() - 1000 })
-          .where(eq(AttachmentTable.id, rows[0].id))
-          .run()
+        expect(rows).toHaveLength(0)
         expect(
           yield* requestInDirectory(`/api/v1/im/attachments?groupId=${group.id}`, directory).pipe(
             Effect.flatMap(json<Attachment[]>),
           ),
         ).toEqual([])
-        expect(
-          (yield* db.select().from(AttachmentTable).where(eq(AttachmentTable.id, rows[0].id)).get())?.deleted_at,
-        ).toBeNull()
-        expect((yield* upload(directory, group.id)).status).toBe(200)
-        expect(
-          (yield* db.select().from(AttachmentTable).where(eq(AttachmentTable.id, rows[0].id)).get())?.deleted_at,
-        ).not.toBeNull()
+        expect(yield* db.select().from(AttachmentTable).all()).toHaveLength(0)
+        expect(yield* Effect.promise(() => fs.readFile(baseDir, "utf8"))).toBe("isolated directory obstruction")
+        yield* Effect.promise(() => fs.rm(baseDir))
+        const attachment = yield* upload(directory, group.id).pipe(Effect.flatMap(json<Attachment>))
+        yield* send(directory, group.id, attachment.id).pipe(Effect.flatMap(json))
+        const response = yield* requestInDirectory(`/api/v1/im/attachments/${attachment.id}/content`, directory)
+        expect(response.status).toBe(200)
+        expect(new TextDecoder().decode(yield* response.arrayBuffer)).toBe("fixture content")
       }),
     20_000,
   )
@@ -417,15 +408,22 @@ describe("IM media real loopback HTTP", () => {
         const renamed = `${row.storage_path}.original`
         yield* Effect.promise(() => fs.rename(row.storage_path, renamed))
         yield* Effect.promise(() => fs.symlink(renamed, row.storage_path))
-        expect((yield* requestInDirectory(endpoint, directory)).status).toBe(404)
+        const refusedSymlink = yield* requestInDirectory(endpoint, directory)
+        expect(refusedSymlink.status).toBe(404)
+        expect(yield* refusedSymlink.json).toMatchObject({ name: "ATTACHMENT_UNAVAILABLE" })
         yield* Effect.promise(() => fs.unlink(row.storage_path))
         yield* Effect.promise(() => fs.rename(renamed, row.storage_path))
-        yield* Effect.promise(() => fs.truncate(row.storage_path, 50 * 1024 * 1024 + 1))
+        yield* Effect.promise(() => fs.truncate(row.storage_path, AttachmentStorage.maxAttachmentBytes() + 1))
         expect((yield* requestInDirectory(endpoint, directory)).status).toBe(404)
         yield* Effect.promise(() => fs.writeFile(row.storage_path, original))
-        expect((yield* requestInDirectory(endpoint, directory)).status).toBe(200)
-        yield* Effect.promise(() => fs.writeFile(row.storage_path, "corrupted"))
-        expect((yield* requestInDirectory(endpoint, directory)).status).toBe(404)
+        const restored = yield* requestInDirectory(endpoint, directory)
+        expect(restored.status).toBe(200)
+        expect(new Uint8Array(yield* restored.arrayBuffer)).toEqual(new Uint8Array(original))
+        expect(yield* db.select().from(AttachmentTable).where(eq(AttachmentTable.id, row.id)).get()).toEqual(row)
+        yield* Effect.promise(() => fs.writeFile(row.storage_path, Buffer.alloc(original.length, 0x78)))
+        const refusedChecksum = yield* requestInDirectory(endpoint, directory)
+        expect(refusedChecksum.status).toBe(404)
+        expect(yield* refusedChecksum.json).toMatchObject({ name: "ATTACHMENT_UNAVAILABLE" })
         yield* db
           .update(AttachmentTable)
           .set({ created_at: Date.now() - AttachmentStorage.ttlMs() - 1000 })

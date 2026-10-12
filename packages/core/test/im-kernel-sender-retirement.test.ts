@@ -81,6 +81,28 @@ const fixture = (initialize = true) => Effect.gen(function* () {
     stored, create, observe, snapshot }
 })
 
+test("sender custody preflight is read-only and positive custody never authorizes expired, changed-scope or withdrawn-owner retirement", () =>
+  isolated((filename) => run(filename, Effect.gen(function* () {
+    const s = yield* fixture()
+    expect(yield* KernelDelivery.hasSenderCustody(s.runtime)).toBe(false)
+    const message = yield* s.create("preflight-strict")
+    const before = yield* s.snapshot()
+    expect(yield* KernelDelivery.hasSenderCustody(s.runtime)).toBe(true)
+    expect(yield* s.snapshot()).toEqual(before)
+    expect(Exit.isFailure(yield* Effect.exit(KernelDelivery.withSenderRetirement(s.runtime, s.observe(-1), KernelDelivery.retirePreviousSender())))).toBe(true)
+    const changed = yield* Effect.exit(KernelDelivery.withSenderRetirement(s.runtime, s.observe(), Effect.gen(function* () {
+      yield* s.db.run(sql`UPDATE im_kernel_reader_scope SET local_revision=local_revision+1 WHERE reader_key=${s.stored.reader_key}`)
+      return yield* KernelDelivery.retirePreviousSender()
+    })))
+    expect(Exit.isFailure(changed)).toBe(true)
+    expect(yield* s.snapshot()).toEqual(before)
+    s.owner.current = false
+    expect(Exit.isFailure(yield* Effect.exit(KernelDelivery.hasSenderCustody(s.runtime)))).toBe(true)
+    expect(Exit.isFailure(yield* Effect.exit(KernelDelivery.withSenderRetirement(s.runtime, s.observe(), KernelDelivery.retirePreviousSender())))).toBe(true)
+    expect(yield* s.snapshot()).toEqual(before)
+    expect(yield* s.db.get(sql`SELECT content,deleted_at FROM im_messages WHERE id=${message.id}`)).toEqual({ content: message.content, deleted_at: null })
+  }))))
+
 test("a current one-use purpose retires32 old canonical kr1 bodies independently of the current projection", () =>
   isolated((filename) => run(filename, Effect.gen(function* () {
     const s = yield* fixture()
