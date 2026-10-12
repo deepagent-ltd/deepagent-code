@@ -24,11 +24,17 @@ export async function sealInstalledNativeNode(
 }
 
 async function sealLinuxPackage(context: Pick<AfterPackContext, "appOutDir" | "packager">) {
+  const executable = new Map([
+    ["DeepAgent Code", "deepagent-code"],
+    ["DeepAgent Code Dev", "deepagent-code-dev"],
+    ["DeepAgent Code Beta", "deepagent-code-beta"],
+  ]).get(context.packager.appInfo.productName)
   if (process.platform !== "linux" || !["x64", "arm64"].includes(process.arch) ||
-    !["DeepAgent Code", "DeepAgent Code Dev", "DeepAgent Code Beta"].includes(context.packager.appInfo.productFilename) ||
+    !executable || context.packager.appInfo.sanitizedProductName !== context.packager.appInfo.productName ||
+    context.packager.appInfo.productFilename !== executable ||
     !path.isAbsolute(context.appOutDir) || await fs.realpath(context.appOutDir) !== context.appOutDir ||
     !("executableName" in context.packager) || typeof context.packager.executableName !== "string" ||
-    !context.packager.executableName || path.basename(context.packager.executableName) !== context.packager.executableName)
+    context.packager.executableName !== executable || path.basename(context.packager.executableName) !== context.packager.executableName)
     throw new Error("Linux Native sealing requires the exact target-platform product")
   const directory = path.join(context.appOutDir, "resources/app.asar.unpacked/out/main/chunks")
   const module = path.join(directory, "node.js")
@@ -130,11 +136,12 @@ async function sealWindowsPackage(context: Pick<AfterPackContext, "appOutDir" | 
   const signerHash = createHash("sha256").update(createPublicKey(key).export({ type: "spki", format: "der" })).digest("hex")
   requireNativePublisherSigner(signerHash, pin)
   const { fileURLToPath } = await import("node:url")
-  const signed = await execFileAsync("bun", [
+  const { withWindowsNativePublisherHost } = await import("../../deepagent-code/script/build-windows-native-bootstrap")
+  const signed = await withWindowsNativePublisherHost(files.module, (host) => execFileAsync(host, [
     fileURLToPath(new URL("../../deepagent-code/script/sign-native-node.ts", import.meta.url)),
     "--module", files.module, "--runtime", files.runtime, "--key", configured,
     "--release", process.env.DEEPAGENT_CODE_RELEASE_ID?.trim() || "dac-installed-local-candidate",
-  ], { maxBuffer: 32_768 })
+  ], { maxBuffer: 32_768 }))
   const { Schema } = await import("effect")
   const { NativeInstallationSchema } = await import("../../deepagent-code/src/installation/native-installation.schema")
   const result = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({

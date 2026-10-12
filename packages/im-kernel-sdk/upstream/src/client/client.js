@@ -127,7 +127,7 @@ let init = (config) => {
   if (!protectedReader) return _export;
   const allowed = new Set(["connect", "disconnect", "isConnected", "isNeedConnect",
     "getDeliveryCapabilities", "getDeliveryReceipt", "sendProtectedMessage", "getDeliveryReader",
-    "getDeliveryReceiverBaseline", "getDeliveryLiveCut", "getDeliveryLiveMessages", "getDeliveryChanges", "getDeliveryMessages", "getDeliveryReadCut", "markDeliveryRead", "clear",
+    "getDeliveryReceiverBaseline", "getDeliveryLiveCut", "getDeliveryLiveMessages", "getDeliveryChanges", "getDeliveryMessages", "getDeliveryReadCut", "getDeliveryOutputProof", "markDeliveryRead", "clear",
     "sendProtectedMedia", "getProtectedMediaCapabilities", "getProtectedMediaTransferCapabilities", "getProtectedMediaUploadProgress", "beginProtectedMedia", "putProtectedMediaChunk",
     "finalizeProtectedMedia", "getProtectedMedia", "cancelProtectedMedia", "readProtectedMediaRange"]);
   const guarded = Object.fromEntries(Object.entries(_export).map(([name, value]) => [name,

@@ -3,6 +3,8 @@ export type DeliveryDecimal = string;
 export interface DeliveryReaderInfo {
   version: 1 | 2; scopeKey: string; currentCursor: DeliveryDecimal; serverNow: number;
   maxPageItems: 32; maxChangeBytes: 65536; maxMessageBytes: 4194304; maxWindowPages: 100000;
+  /** Advertised by authenticated reader-v2; older servers omit it. */
+  outputProofAvailable?: boolean;
 }
 export interface DeliveryChangesRequest {
   version: 1 | 2; scopeKey: string; after: DeliveryDecimal; limit: number; pageToken?: string;
@@ -41,6 +43,17 @@ export interface DeliveryReadCutResult {
   version: 1 | 2; scopeKey: string; projectionKey: string; projectionRevision: DeliveryDecimal;
   throughOrdinal: DeliveryDecimal; targetAdmittedOrdinal: DeliveryDecimal; readOrdinal: DeliveryDecimal;
   liveUnread: DeliveryDecimal; storedUnread: DeliveryDecimal; serverNow: number; complete: boolean;
+}
+export type DeliveryOutputProofRow =
+  { kind: "visible"; projectionKey: string; projectionRevision: DeliveryDecimal } |
+  { kind: "pending"; conversationType: 1 | 2; conversationID: string };
+export interface DeliveryOutputProofRequest {
+  version: 2; scopeKey: string; rows: readonly DeliveryOutputProofRow[];
+}
+export interface DeliveryOutputProofResult {
+  version: 2; scopeKey: string; serverNow: number;
+  rows: readonly ({ kind: "visible"; cut: DeliveryReadCutResult } |
+    { kind: "pending"; conversationType: 1 | 2; conversationID: string })[];
 }
 export interface DeliveryError {
   name: "DeliveryError"; operation: string; code: number; wireCode?: number; msg: string;
@@ -517,6 +530,7 @@ declare class IMProvider {
   getDeliveryChanges: (request: DeliveryChangesRequest) => Promise<DeliveryChangesResult>;
   getDeliveryMessages: (request: DeliveryMessagesRequest) => Promise<DeliveryMessagesResult>;
   getDeliveryReadCut: (request: DeliveryProjectionRequest) => Promise<DeliveryReadCutResult>;
+  getDeliveryOutputProof: (request: DeliveryOutputProofRequest) => Promise<DeliveryOutputProofResult>;
   /** Explicit user read action only. Unknown outcomes never automatically resend or widen the cut. */
   markDeliveryRead: (request: DeliveryMarkReadRequest) => Promise<DeliveryReadCutResult>;
 
@@ -653,7 +667,7 @@ export type ProtectedDeliveryProvider = Readonly<Pick<IMProvider,
   "connect" | "disconnect" | "isConnected" | "isNeedConnect" | "isDesktop" |
   "getDeliveryCapabilities" | "getDeliveryReceipt" | "sendProtectedMessage" |
   "getDeliveryReader" | "getDeliveryChanges" | "getDeliveryMessages" |
-  "getDeliveryReadCut" | "markDeliveryRead" | "sendProtectedMedia" | "getProtectedMediaCapabilities" |
+  "getDeliveryReadCut" | "getDeliveryOutputProof" | "markDeliveryRead" | "sendProtectedMedia" | "getProtectedMediaCapabilities" |
   "getProtectedMediaTransferCapabilities" | "getProtectedMediaUploadProgress" |
   "beginProtectedMedia" | "putProtectedMediaChunk" | "finalizeProtectedMedia" | "getProtectedMedia" |
   "cancelProtectedMedia" | "readProtectedMediaRange" | "on" | "once" | "off" | "clear" |

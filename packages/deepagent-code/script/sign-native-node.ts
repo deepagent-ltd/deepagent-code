@@ -172,10 +172,15 @@ async function fingerprint(filename: string) {
 }
 
 if (import.meta.main) {
-  const args = parseArgs({ options: { module: { type: "string" }, runtime: { type: "string" }, key: { type: "string" }, release: { type: "string" } } })
+  const args = parseArgs({ options: { module: { type: "string" }, runtime: { type: "string" }, key: { type: "string" }, release: { type: "string" }, cli: { type: "boolean" } } })
   if (!args.values.module || !args.values.runtime || !args.values.key || !args.values.release)
     throw new Error("Required: --module --runtime --key --release")
-  const result = await signNativeNodeArtifact({ module: args.values.module, runtime: args.values.runtime,
-    releaseID: args.values.release, privateKey: createPrivateKey(await fs.readFile(args.values.key)) })
+  if (args.values.cli && (process.platform !== "win32" || args.values.runtime !== args.values.module))
+    throw new Error("Windows CLI issuer requires its exact compiled executable")
+  const result = args.values.cli
+    ? await signNativeCliArtifact({ executable: args.values.module, releaseID: args.values.release,
+      privateKey: createPrivateKey(await fs.readFile(args.values.key)) })
+    : await signNativeNodeArtifact({ module: args.values.module, runtime: args.values.runtime,
+      releaseID: args.values.release, privateKey: createPrivateKey(await fs.readFile(args.values.key)) })
   console.log(JSON.stringify(result))
 }

@@ -72,9 +72,17 @@ export async function sealTestNativeCLI(input: {
   if (input.target.startsWith("win32-")) {
     if (process.platform !== "win32" || input.target !== `win32-${process.arch}`)
       throw new Refused("QA_WINDOWS_CLI_NATIVE_ISSUER_REQUIRED")
-    const { signNativeCliArtifact } = await import("../../deepagent-code/script/sign-native-node")
+    const { withWindowsNativePublisherHost } = await import("../../deepagent-code/script/build-windows-native-bootstrap")
+    const { fileURLToPath } = await import("node:url")
     const { signWindowsNativeCLI } = await import("../../deepagent-code/script/sign-windows-native-cli")
-    const sealed = await signNativeCliArtifact({ executable: input.executable, releaseID: input.releaseID, privateKey: keys.privateKey })
+    const issued = await withWindowsNativePublisherHost(input.executable, (host) => execute(host, [
+      fileURLToPath(new URL("../../deepagent-code/script/sign-native-node.ts", import.meta.url)),
+      "--cli", "--module", input.executable, "--runtime", input.executable,
+      "--release", input.releaseID, "--key", input.privateKeyFile,
+    ], { maxBuffer: 32_768 }))
+    const sealed = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({
+      payload: NativeInstallationSchema.Payload, signerHash: Schema.String,
+    })), { onExcessProperty: "error" })(issued.stdout)
     const preloader = await signWindowsNativeCLI({ executable: input.executable, privateKey: keys.privateKey })
     if (sealed.signerHash !== keys.signerHash || preloader.signerHash !== keys.signerHash ||
       sealed.payload.target !== input.target || sealed.payload.componentsHash !== digest(CanonicalJson.stringify(components)))

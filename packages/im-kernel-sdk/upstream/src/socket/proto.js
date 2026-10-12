@@ -2682,6 +2682,11 @@ const $root = ($protobuf.roots["default"] || ($protobuf.roots["default"] = new $
           throughOrdinal: {
             type: "string",
             id: 10
+          },
+          outputRows: {
+            rule: "repeated",
+            type: "DeliveryOutputRequestRow",
+            id: 11
           }
         }
       },
@@ -2718,6 +2723,10 @@ const $root = ($protobuf.roots["default"] || ($protobuf.roots["default"] = new $
           maxWindowPages: {
             type: "int32",
             id: 8
+          },
+          outputProofAvailable: {
+            type: "bool",
+            id: 9
           }
         }
       },
@@ -2972,6 +2981,91 @@ const $root = ($protobuf.roots["default"] || ($protobuf.roots["default"] = new $
           complete: {
             type: "bool",
             id: 11
+          }
+        }
+      },
+      DeliveryOutputProjection: {
+        fields: {
+          projectionKey: {
+            type: "string",
+            id: 1
+          },
+          projectionRevision: {
+            type: "string",
+            id: 2
+          }
+        }
+      },
+      DeliveryOutputConversation: {
+        fields: {
+          conversationType: {
+            type: "int32",
+            id: 1
+          },
+          targetId: {
+            type: "string",
+            id: 2
+          }
+        }
+      },
+      DeliveryOutputRequestRow: {
+        oneofs: {
+          selector: {
+            oneof: [
+              "visible",
+              "pending"
+            ]
+          }
+        },
+        fields: {
+          visible: {
+            type: "DeliveryOutputProjection",
+            id: 1
+          },
+          pending: {
+            type: "DeliveryOutputConversation",
+            id: 2
+          }
+        }
+      },
+      DeliveryOutputResultRow: {
+        oneofs: {
+          evidence: {
+            oneof: [
+              "visible",
+              "pending"
+            ]
+          }
+        },
+        fields: {
+          visible: {
+            type: "DeliveryReadCutResult",
+            id: 1
+          },
+          pending: {
+            type: "DeliveryOutputConversation",
+            id: 2
+          }
+        }
+      },
+      DeliveryOutputProofResult: {
+        fields: {
+          version: {
+            type: "int32",
+            id: 1
+          },
+          scopeKey: {
+            type: "string",
+            id: 2
+          },
+          serverNow: {
+            type: "int64",
+            id: 3
+          },
+          rows: {
+            rule: "repeated",
+            type: "DeliveryOutputResultRow",
+            id: 4
           }
         }
       }

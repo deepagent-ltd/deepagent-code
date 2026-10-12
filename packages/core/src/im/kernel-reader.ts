@@ -22,7 +22,7 @@ type Projection = typeof IMKernelReaderProjectionTable.$inferSelect
 type Scope = typeof IMKernelReaderScopeTable.$inferSelect
 type ReadIntent = typeof IMKernelReaderReadIntentTable.$inferSelect
 export type Runtime = { readonly incarnation: string; readonly displayEpoch: string }
-type Engine = { db: Db; workspaceID: string; userID: string; source: KernelDeliverySchema.Source; current: () => Effect.Effect<boolean>; readCut: (input: { version: 1 | 2; scopeKey: string; projectionKey: string; projectionRevision: string }) => Effect.Effect<KernelReaderSchema.Cut, KernelReaderSchema.Error>; inspect: (input: { conversationType: 1 | 2; conversationID: string }) => Effect.Effect<{ name: string }, KernelReaderSchema.Error>; liveObservation?: (handle: object) => KernelReaderSchema.LiveObservation | undefined; retirementObservation?: (handle: object) => { serverNow: number; scopeKey: string; version: 1 | 2; deadline: number } | undefined; active: boolean; scopeKey?: string; readerKey?: string; readerVersion?: 1 | 2 }
+type Engine = { outputProof?: (input: KernelReaderSchema.OutputProofRequest) => Effect.Effect<KernelReaderSchema.OutputProofResult, KernelReaderSchema.Error>; db: Db; workspaceID: string; userID: string; source: KernelDeliverySchema.Source; current: () => Effect.Effect<boolean>; readCut: (input: { version: 1 | 2; scopeKey: string; projectionKey: string; projectionRevision: string }) => Effect.Effect<KernelReaderSchema.Cut, KernelReaderSchema.Error>; inspect: (input: { conversationType: 1 | 2; conversationID: string }) => Effect.Effect<{ name: string }, KernelReaderSchema.Error>; liveObservation?: (handle: object) => KernelReaderSchema.LiveObservation | undefined; retirementObservation?: (handle: object) => { serverNow: number; scopeKey: string; version: 1 | 2; deadline: number } | undefined; active: boolean; scopeKey?: string; readerKey?: string; readerVersion?: 1 | 2 }
 const engines = new WeakMap<Runtime, Engine>()
 const Output = Context.Reference<object | undefined>("IMKernelReader.private-output", { defaultValue: () => undefined })
 type Frame = { runtime: Runtime; db: Db; workspaceID: string; userID: string; readerKey?: string; started: number; emptyProofDeadline?: number; projections: Map<string, { row: Projection; deadline: number; serverNow: number; started: number; cut?: KernelReaderSchema.Cut }>; active: boolean }
@@ -394,13 +394,50 @@ export const prepareOutput = <A, E, R>(runtime: Runtime, input: { workspaceID: s
     frame.projections.set(row.local_group_id, { row, deadline, serverNow: cut.serverNow, started, cut })
   })
   const guarded = Effect.gen(function* () {
-    yield* Effect.forEach(rows, (row, index) => observe(row, index, "observe"), { concurrency: 2 })
-    // A fast proof can age while another authenticated row is still settling.
-    // Take new evidence once, never renew the old window or repeat output effects.
-    const expired = Array.from(frame.projections.values()).filter((item) => performance.now() >= item.deadline)
-    timing.refreshSelectedCount = expired.length
-    if (expired.length > 2) return yield* failure("reader_stale", "output-deadline")
-    yield* Effect.forEach(expired, (item) => observe(item.row, rows.indexOf(item.row), "refresh"), { concurrency: 2 })
+    const selected = rows.filter((row) => row.local_group_id && row.visibility !== "revoked")
+    // Scalar output keeps its original authenticated read-cut or inspection.
+    // A multi-row page needs one current proof covering visible and empty mappings.
+    if (selected.length <= 1 && selected[0]) yield* observe(selected[0], rows.indexOf(selected[0]), "observe")
+    if (selected.length > 1) {
+      if (selected.length > KernelReaderSchema.PAGE_LIMIT) return yield* failure("reader_capacity", "output-proof")
+      if (readerVersion(runtime) !== 2 || !engine.scopeKey || !engine.outputProof) return yield* failure("reader_upgrade_required", "output-proof")
+      const requests: KernelReaderSchema.OutputProofRow[] = []
+      for (const row of selected) {
+        if (row.visibility === "pending") {
+          if ((row.conversation_type !== 1 && row.conversation_type !== 2) || !row.target_id) return yield* failure("reader_mapping_conflict", "pending-output")
+          const metadata = KernelReaderSchema.decode(KernelReaderSchema.Pending, row.metadata, 4096)
+          if (metadata.sourceHash !== hash(engine.source)) return yield* failure("reader_scope_mismatch", "pending-output")
+          requests.push({ kind: "pending", conversationType: row.conversation_type, conversationID: row.target_id })
+          continue
+        }
+        if (row.visibility !== "visible" || !row.projection_key || !row.server_revision) return yield* failure("reader_mapping_conflict", "output")
+        requests.push({ kind: "visible", projectionKey: row.projection_key, projectionRevision: row.server_revision })
+      }
+      const request = yield* Effect.try({ try: () => Schema.decodeUnknownSync(KernelReaderSchema.OutputProofRequest)({ version: 2, scopeKey: engine.scopeKey, rows: requests }, { onExcessProperty: "error" }), catch: () => KernelReaderSchema.failure("reader_mapping_conflict", "output-proof") })
+      // The adapter owns one original native request and its authenticated capability.
+      // No individual cut or inspection can substitute for the combined response.
+      const flightStarted = performance.now()
+      yield* current(runtime)
+      const original = yield* engine.outputProof(request)
+      const returned = performance.now()
+      yield* current(runtime)
+      const proof = yield* Effect.try({ try: () => Schema.decodeUnknownSync(KernelReaderSchema.OutputProofResult)(original, { onExcessProperty: "error" }), catch: () => KernelReaderSchema.failure("reader_stale", "output-batch") })
+      if (proof.scopeKey !== request.scopeKey || proof.rows.length !== selected.length) return yield* failure("reader_stale", "output-batch")
+      for (const [index, row] of selected.entries()) {
+        const expected = request.rows[index]!
+        const observed = proof.rows[index]!
+        if (observed.kind !== expected.kind) return yield* failure("reader_stale", "output-batch")
+        const cut = observed.kind === "visible" ? observed.cut : undefined
+        if (expected.kind === "visible" && (!cut || cut.projectionKey !== expected.projectionKey || cut.projectionRevision !== expected.projectionRevision || cut.serverNow < row.last_server_now))
+          return yield* failure("reader_stale", "output-clock")
+        if (expected.kind === "pending" && (observed.kind !== "pending" || observed.conversationType !== expected.conversationType || observed.conversationID !== expected.conversationID))
+          return yield* failure("reader_scope_mismatch", "pending-output")
+        const deadline = Math.min(returned + outputProofWindowMs, row.visibility !== "visible" || !row.next_expiry_at ? Infinity : flightStarted + row.next_expiry_at - proof.serverNow)
+        if (observations.length < 4) observations.push({ index: rows.indexOf(row), visibility: expected.kind, phase: "observe", flightMs: Math.max(0, Math.floor(returned - flightStarted)), settledAt: returned, deadline })
+        if (performance.now() >= deadline) return yield* failure("reader_stale", "output-deadline")
+        frame.projections.set(row.local_group_id!, { row, deadline, serverNow: proof.serverNow, started: flightStarted, ...(cut ? { cut } : {}) })
+      }
+    }
     yield* current(runtime)
     // Preparation returns an unevaluated effect so callers can recover only a
     // failed current cut. No business operation or Output witness exists yet.

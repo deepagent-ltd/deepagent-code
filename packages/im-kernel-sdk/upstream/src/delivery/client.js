@@ -105,6 +105,7 @@ export default function DeliveryClient(io, message, protectedMedia = false) {
     getDeliveryChanges: async input => reader("qry_delivery_changes", input),
     getDeliveryMessages: async input => reader("qry_delivery_messages", input),
     getDeliveryReadCut: async input => reader("qry_delivery_read_cut", input),
+    getDeliveryOutputProof: async input => reader("qry_delivery_output_proof", input),
     markDeliveryRead: async input => reader("mark_delivery_read", input),
   };
 }

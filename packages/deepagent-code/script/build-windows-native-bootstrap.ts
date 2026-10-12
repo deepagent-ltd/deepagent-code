@@ -1,10 +1,123 @@
 import fs from "node:fs/promises"
+import { constants } from "node:fs"
 import path from "node:path"
 import { createHash, createPublicKey, sign, type KeyObject } from "node:crypto"
+import { Schema } from "effect"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
+import { NativeInstallationSchema } from "../src/installation/native-installation.schema"
 
 const LIMIT = 268_435_456
 const names = ["native-image-factory.node", "node.js", "sidecar.js"] as const
+
+/** Only the current compiler's fixed Bun asset supplies this offline issuer.
+ * Its private copy stays separate from the Work image whose DACL the original
+ * Native preparation changes. No PATH or caller-selected host is consumed. */
+export async function withWindowsNativePublisherHost<T>(artifact: string, use: (host: string) => Promise<T>) {
+  if (process.platform !== "win32" || !["x64", "arm64"].includes(process.arch) || !path.isAbsolute(artifact) ||
+    !["node.js", "deepagent-code.exe"].includes(path.basename(artifact)) || await fs.realpath(artifact) !== artifact)
+    throw new Error("Windows publisher host requires its fixed native artifact")
+  const metadata = await openWindowsPublisherImage(`${artifact}.native-components.json`, NativeInstallationSchema.COMPONENTS_LIMIT)
+  try {
+    const components = Schema.decodeUnknownSync(Schema.fromJsonString(NativeInstallationSchema.Components), {
+      onExcessProperty: "error",
+    })(metadata.content.toString("utf8"))
+    if (metadata.content.toString("utf8") !== CanonicalJson.stringify(components) ||
+      components.target !== `win32-${process.arch}` || new Set(components.components.map((entry) => entry.path)).size !== components.components.length)
+      throw new Error("Windows publisher host inventory rejected")
+    const observations = await Promise.allSettled(["bun-command-runtime.exe", "native-image-factory.node"].map(async (name) => {
+      const expected = components.components.filter((entry) => entry.path === `packages/work-file-helper/bin/${components.target}/${name}`)
+      if (expected.length !== 1) throw new Error("Windows publisher host fixed asset inventory missing")
+      const image = await openWindowsPublisherImage(path.join(path.dirname(artifact), name), LIMIT)
+      try {
+        const pe = image.content.length >= 64 ? image.content.readUInt32LE(0x3c) : image.content.length
+        if (image.content.length !== expected[0]!.bytes || image.sha256 !== expected[0]!.sha256 ||
+          image.content.subarray(0, 2).toString() !== "MZ" || pe > image.content.length - 24 ||
+          image.content.subarray(pe, pe + 4).toString("hex") !== "50450000" ||
+          image.content.readUInt16LE(pe + 4) !== (process.arch === "arm64" ? 0xaa64 : 0x8664))
+          throw new Error("Windows publisher host differs from its fixed PE inventory")
+        return image
+      } catch (error) { await image.close(); throw error }
+    }))
+    const images = observations.flatMap((result) => result.status === "fulfilled" ? [result.value] : [])
+    if (images.length !== observations.length) {
+      await Promise.all(images.map((image) => image.close()))
+      throw new Error("Windows publisher host fixed asset observation rejected")
+    }
+    try {
+      const directory = await fs.mkdtemp(path.join(path.dirname(artifact), ".native-publisher-host-"))
+      try {
+        await fs.chmod(directory, 0o700)
+        if (await fs.realpath(directory) !== directory) throw new Error("Windows publisher host private directory changed")
+        const host = path.join(directory, "bun.exe")
+        const file = await fs.open(host, "wx", 0o700)
+        try { await file.writeFile(images[0]!.content); await file.sync() } finally { await file.close() }
+        await metadata.requireCurrent()
+        await Promise.all(images.map((image) => image.requireCurrent()))
+        const copied = await openWindowsPublisherImage(host, LIMIT)
+        try {
+          if (copied.content.length !== images[0]!.content.length || copied.sha256 !== images[0]!.sha256)
+            throw new Error("Windows publisher host private copy differs from inventory")
+          const parent = await fs.lstat(directory, { bigint: true })
+          const parentStamp = (value: typeof parent) => [value.dev, value.ino, value.size, value.mode, value.nlink, value.mtimeNs, value.ctimeNs].join(":")
+          const requireParentCurrent = async () => {
+            if (!parent.isDirectory() || parent.isSymbolicLink() ||
+              parentStamp(parent) !== parentStamp(await fs.lstat(directory, { bigint: true })) || await fs.realpath(directory) !== directory)
+              throw new Error("Windows publisher host owned parent changed")
+            const entries = await fs.opendir(directory)
+            try {
+              if ((await entries.read())?.name !== "bun.exe" || await entries.read() !== null ||
+                parentStamp(parent) !== parentStamp(await fs.lstat(directory, { bigint: true })))
+                throw new Error("Windows publisher host owned namespace changed")
+            } finally { await entries.close() }
+          }
+          // Native preparation owns the target Work image's DACL update. Its
+          // bytes/identity are revalidated there; this host's immutable lease
+          // instead spans the entire child issuer invocation.
+          await requireParentCurrent()
+          const result = await use(host)
+          await copied.requireCurrent()
+          await requireParentCurrent()
+          await metadata.requireCurrent()
+          await images[1]!.requireCurrent()
+          return result
+        } finally { await copied.close() }
+      } finally { await fs.rm(directory, { recursive: true, force: true }) }
+    } finally { await Promise.all(images.map((image) => image.close())) }
+  } finally { await metadata.close() }
+}
+
+async function openWindowsPublisherImage(filename: string, limit: number) {
+  if (!path.isAbsolute(filename) || await fs.realpath(filename) !== filename)
+    throw new Error("Windows publisher host requires canonical fixed files")
+  const file = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  try {
+    const before = await file.stat({ bigint: true })
+    const stamp = (value: typeof before) => [value.dev, value.ino, value.size, value.mode, value.nlink, value.mtimeNs, value.ctimeNs].join(":")
+    if (!before.isFile() || before.nlink !== 1n || before.size < 1n || before.size > BigInt(limit) ||
+      stamp(before) !== stamp(await fs.lstat(filename, { bigint: true })))
+      throw new Error("Windows publisher host fixed file rejected")
+    const content = await file.readFile()
+    const sha256 = createHash("sha256").update(content).digest("hex")
+    const requireCurrent = async () => {
+      if (stamp(before) !== stamp(await file.stat({ bigint: true })) ||
+        stamp(before) !== stamp(await fs.lstat(filename, { bigint: true })) || await fs.realpath(filename) !== filename)
+        throw new Error("Windows publisher host fixed file changed")
+      const current = Buffer.alloc(content.length)
+      const read = { bytes: 0 }
+      while (read.bytes < current.length) {
+        const next = await file.read(current, read.bytes, current.length - read.bytes, read.bytes)
+        if (!next.bytesRead) break
+        read.bytes += next.bytesRead
+      }
+      if (read.bytes !== current.length || createHash("sha256").update(current).digest("hex") !== sha256 ||
+        stamp(before) !== stamp(await file.stat({ bigint: true })) || stamp(before) !== stamp(await fs.lstat(filename, { bigint: true })))
+        throw new Error("Windows publisher host fixed bytes changed")
+    }
+    if (content.length !== Number(before.size)) throw new Error("Windows publisher host fixed bytes incomplete")
+    await requireCurrent()
+    return { content, sha256, requireCurrent, close: () => file.close() }
+  } catch (error) { await file.close(); throw error }
+}
 
 /** This is the existing internal publisher pin. It is unrelated to Windows
  * application signing, SAC, or a user installation license. */

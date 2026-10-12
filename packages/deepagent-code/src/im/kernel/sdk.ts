@@ -3,7 +3,7 @@ export * as KernelSdk from "./sdk"
 import { Context, Effect, Layer, Queue, Schedule, Schema, Semaphore, Stream } from "effect"
 import * as Log from "@deepagent-code/core/util/log"
 import type { KernelConfig } from "./config"
-import type { DeliveryReaderInfo, DeliveryChangesRequest, DeliveryChangesResult, DeliveryMessagesRequest, DeliveryMessagesResult, DeliveryProjectionRequest, DeliveryReadCutResult, DeliveryMarkReadRequest, ProtectedMediaAttachment, ProtectedMediaCapabilities, ProtectedMediaTransferCapabilities, ProtectedMediaUploadProgress, ProtectedMediaBeginRequest, ProtectedMediaMetadata, ProtectedMediaObjectRequest, ProtectedMediaChunkRequest, ProtectedMediaRangeRequest, ProtectedCurrentLinkFacts } from "@deepagent-code/im-kernel-sdk"
+import type { DeliveryReaderInfo, DeliveryChangesRequest, DeliveryChangesResult, DeliveryMessagesRequest, DeliveryMessagesResult, DeliveryProjectionRequest, DeliveryReadCutResult, DeliveryOutputProofRequest, DeliveryOutputProofResult, DeliveryMarkReadRequest, ProtectedMediaAttachment, ProtectedMediaCapabilities, ProtectedMediaTransferCapabilities, ProtectedMediaUploadProgress, ProtectedMediaBeginRequest, ProtectedMediaMetadata, ProtectedMediaObjectRequest, ProtectedMediaChunkRequest, ProtectedMediaRangeRequest, ProtectedCurrentLinkFacts } from "@deepagent-code/im-kernel-sdk"
 
 // jugglechat-websdk 的机械边界：浏览器 shim 装载、init/connect/disconnect、原生事件→队列、
 // sendMessage/getMessages 调用。本层不做任何业务归一化（那是 client.ts 的职责），也不直接
@@ -118,6 +118,7 @@ export interface Interface {
   readonly getDeliveryChanges: (input: DeliveryChangesRequest) => Effect.Effect<DeliveryChangesResult, KernelError>
   readonly getDeliveryMessages: (input: DeliveryMessagesRequest) => Effect.Effect<DeliveryMessagesResult, KernelError>
   readonly getDeliveryReadCut: (input: DeliveryProjectionRequest) => Effect.Effect<DeliveryReadCutResult, KernelError>
+  readonly getDeliveryOutputProof?: (input: DeliveryOutputProofRequest) => Effect.Effect<DeliveryOutputProofResult, KernelError>
   readonly markDeliveryRead: (input: DeliveryMarkReadRequest) => Effect.Effect<DeliveryReadCutResult, KernelError>
 }
 
@@ -260,6 +261,7 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
         getDeliveryChanges: (input) => boundedRequest("getDeliveryChanges", () => im.getDeliveryChanges(input)),
         getDeliveryMessages: (input) => boundedRequest("getDeliveryMessages", () => im.getDeliveryMessages(input)),
         getDeliveryReadCut: (input) => boundedRequest("getDeliveryReadCut", () => im.getDeliveryReadCut(input)),
+        getDeliveryOutputProof: (input) => boundedRequest("getDeliveryOutputProof", () => im.getDeliveryOutputProof(input)),
         markDeliveryRead: (input) => boundedRequest("markDeliveryRead", () => im.markDeliveryRead(input)),
         disconnect: request("disconnect", () => im.disconnect()).pipe(Effect.ignore),
       })

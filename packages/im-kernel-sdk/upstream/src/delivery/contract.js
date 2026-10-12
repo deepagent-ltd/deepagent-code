@@ -12,6 +12,7 @@ export const topics = Object.freeze({
   qry_delivery_changes: ["changes", "DeliveryChangesResult", 65536],
   qry_delivery_messages: ["messages", "DeliveryMessagesResult", 4194304],
   qry_delivery_read_cut: ["read_cut", "DeliveryReadCutResult", 4096],
+  qry_delivery_output_proof: ["output_proof", "DeliveryOutputProofResult", 16384],
   mark_delivery_read: ["mark_read", "DeliveryReadCutResult", 4096],
   qry_delivery_capabilities: ["capabilities", "DeliveryCapabilities", 4096],
   qry_delivery_receipt: ["receipt", "DeliveryReceiptResult", 4096],
@@ -27,6 +28,7 @@ export function wireError(operation, code) {
 export function readerRequest(topic, input) {
   const value = snapshot(input);
   const purpose = topics[topic]?.[0];
+  if (purpose === "output_proof") return outputProofRequest(value);
   const fields = {
     reader: ["version"],
     changes: ["version", "scopeKey", "after", "pageToken", "limit"],
@@ -43,6 +45,30 @@ export function readerRequest(topic, input) {
         (value.anchorDeliveryCursor !== undefined && !decimal(value.anchorDeliveryCursor)))) ||
       (purpose === "mark_read" && !decimal(value.throughOrdinal))) throw deliveryError(purpose || "reader", "invalid_request");
   return Object.freeze(value);
+}
+
+function outputProofRequest(value) {
+  const invalid = () => { throw deliveryError("output_proof", "invalid_request"); };
+  if (!keys(value, ["version", "scopeKey", "rows"]) || value.version !== 2 || !hash(value.scopeKey) ||
+    !Array.isArray(value.rows) || Object.getPrototypeOf(value.rows) !== Array.prototype ||
+    value.rows.length < 2 || value.rows.length > 32) return invalid();
+  const properties = Object.getOwnPropertyDescriptors(value.rows);
+  if (Reflect.ownKeys(properties).length !== value.rows.length + 1 || Reflect.ownKeys(properties).some(key =>
+    typeof key !== "string" || !("value" in properties[key]) || key !== "length" && !/^(0|[1-9][0-9]*)$/.test(key))) return invalid();
+  const seen = new Set();
+  const rows = value.rows.map(original => {
+    const row = snapshot(original);
+    if (!row || !["visible", "pending"].includes(row.kind)) return invalid();
+    if (row.kind === "visible" && (!keys(row, ["kind", "projectionKey", "projectionRevision"]) ||
+      !hash(row.projectionKey) || !decimal(row.projectionRevision, true))) return invalid();
+    if (row.kind === "pending" && (!keys(row, ["kind", "conversationType", "conversationID"]) ||
+      ![1, 2].includes(row.conversationType) || !utf8(row.conversationID, 512) || row.conversationID.includes("\0"))) return invalid();
+    const key = row.kind === "visible" ? `visible:${row.projectionKey}` : `pending:${row.conversationType}:${row.conversationID}`;
+    if (seen.has(key)) return invalid();
+    seen.add(key);
+    return Object.freeze(row);
+  });
+  return Object.freeze({ version: 2, scopeKey: value.scopeKey, rows: Object.freeze(rows) });
 }
 
 export function receiptRequest(input) {
@@ -85,10 +111,30 @@ export function validateResult(topic, request, value) {
   require(hash(value.scopeKey) && time(value.serverNow, true));
   if (purpose === "reader") {
     require(decimal(value.currentCursor) && value.maxPageItems === 32 && value.maxChangeBytes === 65536 &&
-      value.maxMessageBytes === 4194304 && value.maxWindowPages === 100000);
+      value.maxMessageBytes === 4194304 && value.maxWindowPages === 100000 &&
+      (value.outputProofAvailable === undefined || typeof value.outputProofAvailable === "boolean") &&
+      (!value.outputProofAvailable || value.version === 2));
     return value;
   }
   require(value.scopeKey === request.scopeKey);
+  if (purpose === "output_proof") {
+    require(keys(value, ["version", "scopeKey", "serverNow", "rows"]) && value.version === 2 &&
+      Array.isArray(value.rows) && value.rows.length === request.rows.length);
+    return { version: 2, scopeKey: value.scopeKey, serverNow: value.serverNow,
+      rows: value.rows.map((row, index) => {
+        require(keys(row, ["visible", "pending"]) && (row.visible !== undefined) !== (row.pending !== undefined));
+        const expected = request.rows[index];
+        if (expected.kind === "visible") {
+          require(row.visible !== undefined && row.visible.serverNow === value.serverNow);
+          const cut = validateResult("qry_delivery_read_cut", { version: 2, scopeKey: request.scopeKey,
+            projectionKey: expected.projectionKey, projectionRevision: expected.projectionRevision }, row.visible);
+          return { kind: "visible", cut };
+        }
+        require(row.pending !== undefined && keys(row.pending, ["conversationType", "targetId"]) &&
+          row.pending.conversationType === expected.conversationType && row.pending.targetId === expected.conversationID);
+        return { kind: "pending", conversationType: expected.conversationType, conversationID: expected.conversationID };
+      }) };
+  }
   if (purpose === "changes") {
     require(value.after === request.after && decimal(value.upper) && decimal(value.scanCursor) &&
       BigInt(value.upper) >= BigInt(request.after) && BigInt(value.scanCursor) >= BigInt(request.after) &&

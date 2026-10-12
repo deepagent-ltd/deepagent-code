@@ -60,8 +60,11 @@ export function strictDecode(typeName, bytes, limit) {
   const type = Proto.lookup(`codec.${typeName}`).resolveAll();
   const decode = (schema, body, depth) => {
     if (depth > 2) throw Error("protected nesting limit");
+    // Resolving the outer type does not resolve its child's message fields.
+    // Cold distributed clients have not run an encoder to initialize them.
+    schema.resolveAll();
     const result = {};
-    for (const field of schema.fieldsArray) result[field.name] = field.repeated ? [] :
+    for (const field of schema.fieldsArray) result[field.name] = field.partOf ? undefined : field.repeated ? [] :
       field.type === "string" ? "" : field.type === "bool" ? false : field.type === "int64" && field.name === "msgSeqNo" ? "0" : 0;
     const cursor = { offset: 0 };
     const seen = new Set();
@@ -95,6 +98,8 @@ export function strictDecode(typeName, bytes, limit) {
         result[field.name].push(value);
       } else result[field.name] = value;
     }
+    if (schema.oneofsArray.some(group => group.oneof.filter(name => result[name] !== undefined).length !== 1))
+      throw Error("invalid protected oneof");
     return result;
   };
   return decode(type, bytes, 0);
@@ -116,7 +121,11 @@ export function encodeQuery(topic, input) {
   if (topic === "qry_delivery_capabilities") return new Uint8Array();
   const request = topic === "qry_delivery_receipt" ? receiptRequest(input) : readerRequest(topic, input);
   const type = Proto.lookup(topic === "qry_delivery_receipt" ? "codec.DeliveryReceiptQuery" : "codec.DeliveryReadQuery");
-  const bytes = type.encode(type.create(request)).finish();
+  const wire = topic === "qry_delivery_output_proof" ? { version: request.version, scopeKey: request.scopeKey,
+    outputRows: request.rows.map(row => row.kind === "visible" ?
+      { visible: { projectionKey: row.projectionKey, projectionRevision: row.projectionRevision } } :
+      { pending: { conversationType: row.conversationType, targetId: row.conversationID } }) } : request;
+  const bytes = type.encode(type.create(wire)).finish();
   if (bytes.length > 4096) throw deliveryError(topics[topic][0], "invalid_request");
   return bytes;
 }

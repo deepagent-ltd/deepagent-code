@@ -13,28 +13,31 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { tmpdir } from "node:os"
 
-const control = { mode: "native", nativeOrdinal: 0 }
+const control = { mode: "prepared", nativeOrdinal: 0 }
 const native = KernelLiveFirstSeenFixture.make({
   fetch(request) {
     if (new URL(request.url).pathname !== "/inspect") return undefined
     if (request.headers.get("authorization") !== "Bearer private-first-seen-token") return Response.json({}, { status: 403 })
     return Response.json({ name: "Private diagnostic owned group" })
   },
-  queryDelayMs(topic) { return topic === "qry_delivery_read_cut" && control.mode === "native" && (control.nativeOrdinal === 2 || control.nativeOrdinal === 3) ? 1150 : 0 },
   response(topic, request, response) {
-    if (topic !== "qry_delivery_read_cut") return response
+    if (topic === "qry_delivery_reader") return { name: "DeliveryReaderInfo", value: { version: 2, scopeKey: "a".repeat(64), currentCursor: "2", serverNow: Date.now(), maxPageItems: 32, maxChangeBytes: 65536, maxMessageBytes: 4194304, maxWindowPages: 100000, outputProofAvailable: true } }
+    if (topic !== "qry_delivery_output_proof") return response
     control.nativeOrdinal++
-    return { name: "DeliveryReadCutResult", value: {
-      version: 1, scopeKey: request.scopeKey, projectionKey: request.projectionKey, projectionRevision: request.projectionRevision,
-      throughOrdinal: "1", targetAdmittedOrdinal: "1", readOrdinal: "0", liveUnread: "1", storedUnread: "1", complete: false, serverNow: Date.now(),
+    const now = Date.now()
+    return { name: "DeliveryOutputProofResult", value: { version: 2, scopeKey: request.scopeKey, serverNow: now,
+      rows: (request.outputRows as { visible: { projectionKey: string; projectionRevision: string } }[]).map(row => ({ visible: {
+        version: 2, scopeKey: request.scopeKey, projectionKey: row.visible.projectionKey, projectionRevision: row.visible.projectionRevision,
+        throughOrdinal: "1", targetAdmittedOrdinal: "1", readOrdinal: "0", liveUnread: "1", storedUnread: "1", complete: false, serverNow: now,
+      } })),
     } }
   },
 })
-const config = { appkey: `private-output-proof-${native.server.port}`, navigator: native.server.url.origin, token: "private-first-seen-token", userID: "receiver",
+const config = { appkey: `private-output-proof-${native.server.port}`, navigator: native.server.url.origin, token: "private-first-seen-token", userID: "receiver", protectedMedia: true,
   identity: { uuid: "receiver", orgID: 1, name: "Receiver", orgAllGroupID: "unused" } }
 const client = Layer.provideMerge(KernelClient.layer, KernelSdk.liveFromConfig(config))
 
-test("closed output proof diagnostics distinguish real native-flight skew from local consumption without exposing proof identities or changing failure", async () => {
+test("closed output proof diagnostics distinguish delayed prepared consumption from local business consumption without exposing proof identities or changing failure", async () => {
   const directory = await fs.mkdtemp(path.join(tmpdir(), "dac-output-proof-diagnostic-"))
   const initialLevel = Log.getLevel()
   try {
@@ -47,7 +50,10 @@ test("closed output proof diagnostics distinguish real native-flight skew from l
         if (attempt === 199) return yield* Effect.die(new Error("actual native connection not ready"))
         yield* Effect.sleep("10 millis")
       }
-      for (const mode of ["native", "consumer"]) {
+      if (!sdk.getDeliveryOutputProof) return yield* Effect.die("actual SDK batch method unavailable")
+      const info = yield* sdk.getDeliveryReader()
+      expect(info.outputProofAvailable).toBe(true)
+      for (const mode of ["prepared", "consumer"]) {
         control.mode = mode
         control.nativeOrdinal = 0
         const database = Database.layerFromPath(path.join(directory, `${mode}.sqlite`))
@@ -60,23 +66,27 @@ test("closed output proof diagnostics distinguish real native-flight skew from l
               return await response.json() as { name: string }
             }, catch: () => KernelReaderSchema.failure("reader_scope_mismatch", "inspect") }),
             readCut: (request) => sdk.getDeliveryReadCut(request).pipe(Effect.mapError(() => KernelReaderSchema.failure("reader_unavailable", "getDeliveryReadCut"))),
+            outputProof: (request) => sdk.getDeliveryOutputProof!(request).pipe(Effect.mapError(() => KernelReaderSchema.failure("reader_unavailable", "getDeliveryOutputProof"))),
           })
           yield* Effect.addFinalizer(() => Effect.sync(() => KernelReader.close(runtime)))
-          yield* KernelReader.bind(runtime, "a".repeat(64))
+          yield* KernelReader.bind(runtime, "a".repeat(64), 2)
           yield* KernelReader.ensureScope(runtime)
           const now = Date.now()
-          yield* KernelReader.applyChanges(runtime, { version: 1, scopeKey: "a".repeat(64), after: "0", upper: "2", scanCursor: "2", scanProjectionKey: "c".repeat(64), pageToken: "", windowComplete: true, caughtUp: true, serverNow: now,
-            items: ["b", "c"].map((key) => ({ visibility: "visible" as const, projectionKey: key.repeat(64), revision: "1", cursor: "1", conversationType: 1 as const, targetId: `private-target-${key}`, readOrdinal: "0", admittedOrdinal: "1", liveUnread: "1", storedUnread: "1", latestMessageId: `private-protected-${key}`, latestSequence: "1", latestMessageTime: now, nextExpiryAt: now + 60000 })) })
+          yield* KernelReader.applyChanges(runtime, { version: 2, scopeKey: "a".repeat(64), after: "0", upper: "2", scanCursor: "2", scanProjectionKey: "c".repeat(64), pageToken: "", windowComplete: true, caughtUp: true, serverNow: now,
+            items: ["b", "c"].map((key, index) => ({ visibility: "visible" as const, projectionKey: key.repeat(64), revision: "1", cursor: String(index + 1), conversationType: 1 as const, targetId: `private-target-${key}`, readOrdinal: "0", admittedOrdinal: "1", liveUnread: "1", storedUnread: "1", latestMessageId: `private-protected-${key}`, latestSequence: "1", latestMessageTime: now, nextExpiryAt: now + 60000 })) })
           const groups = yield* KernelReader.projections(runtime)
           const before = yield* db.all(sql`SELECT * FROM im_kernel_reader_projection ORDER BY binding_key`)
           const beforeLog = yield* Effect.promise(() => fs.readFile(Log.file(), "utf8").catch(() => ""))
           const executions = { count: 0 }
-          const result = yield* KernelReader.withOutput(runtime, { workspaceID: "private-output-workspace", userID: "server", groupIDs: groups.map(row => row.local_group_id!) }, Effect.gen(function* () {
+          const probe = Effect.gen(function* () {
             executions.count++
             if (mode === "consumer") yield* Effect.sleep("1150 millis")
             yield* KernelReader.assertOutput(db)
             return "should-not-output"
-          })).pipe(Effect.result)
+          })
+          const prepared = yield* KernelReader.prepareOutput(runtime, { workspaceID: "private-output-workspace", userID: "server", groupIDs: groups.map(row => row.local_group_id!) }, probe)
+          if (mode === "prepared") yield* Effect.sleep("1150 millis")
+          const result = yield* prepared.pipe(Effect.result)
           expect(result._tag).toBe("Failure")
           if (result._tag !== "Failure") return yield* Effect.die(new Error("expired proof produced output"))
           const failure = result.failure as KernelReaderSchema.Error
@@ -101,16 +111,14 @@ test("closed output proof diagnostics distinguish real native-flight skew from l
           expect(added.includes("a".repeat(64))).toBe(false)
           expect(added.includes("b".repeat(64))).toBe(false)
           expect(added.includes("c".repeat(64))).toBe(false)
-          if (mode === "native") {
-            expect(control.nativeOrdinal).toBe(3)
-            expect(records.every(row => row.refreshSelectedCount === "1")).toBe(true)
-            expect(records.some(row => row.phase === "refresh")).toBe(true)
-            expect(records.some(row => row.phase === "observe" && Number(row.flightMs) >= 1000)).toBe(true)
-            expect(records.every(row => Number(row.consumerMs) < 1000)).toBe(true)
+          expect(control.nativeOrdinal).toBe(1)
+          expect(records.every(row => row.phase === "observe" && row.refreshSelectedCount === "0")).toBe(true)
+          if (mode === "prepared") {
+            expect(records.every(row => row.failureStage === "consume_check")).toBe(true)
+            expect(records.every(row => Number(row.consumerMs) === 0)).toBe(true)
           }
           if (mode === "consumer") {
-            expect(control.nativeOrdinal).toBe(2)
-            expect(records.every(row => row.phase === "observe" && row.refreshSelectedCount === "0")).toBe(true)
+            expect(records.every(row => row.failureStage === "consume")).toBe(true)
             expect(records.every(row => Number(row.consumerMs) >= 1000)).toBe(true)
           }
         }).pipe(Effect.provide(database), Effect.scoped)

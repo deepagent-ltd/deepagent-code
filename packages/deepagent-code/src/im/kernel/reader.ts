@@ -78,6 +78,13 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
   const liveCuts = new Map<string, object>()
   const liveSubscriberID = crypto.randomUUID().replaceAll("-", "")
   const receiverBaseline: { handle?: object } = {}
+  // This capability comes only from the authenticated header of this owner.
+  // It advertises support; the batch query still proves every requested row.
+  const outputProofCapability: { scopeKey?: string } = {}
+  const bindReader = (reader: Effect.Success<ReturnType<KernelClient.Interface["getDeliveryReader"]>>) =>
+    KernelReader.bind(runtime, reader.scopeKey, reader.version).pipe(Effect.tap(() => Effect.sync(() => {
+      outputProofCapability.scopeKey = reader.version === 2 && reader.outputProofAvailable === true ? reader.scopeKey : undefined
+    })))
 
   const retirementObserved = new WeakMap<object, { serverNow: number; scopeKey: string; version: 1 | 2; deadline: number }>()
   // A caller deadline never frees a slot while the native SDK promise is still
@@ -110,7 +117,10 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
   const runtime = KernelReader.attach({ db: database.db, workspaceID: input.workspaceID, userID: input.userID ?? SERVER_USER_ID, source, current: () => Effect.gen(function* () {
     if (input.ownerCurrent && !input.ownerCurrent() || input.instanceCurrent && !(yield* input.instanceCurrent)) return false
     return (yield* SubscriptionRef.get(client.state)) === "connected" && KernelReader.hash(KernelConfig.deliverySource(config)) === KernelReader.hash(source)
-  }), readCut: (request) => query(client.getDeliveryReadCut(request)), inspect, retirementObservation: (handle) => {
+  }), readCut: (request) => query(client.getDeliveryReadCut(request)), outputProof: (request) => Effect.suspend(() =>
+    request.version !== 2 || !client.getDeliveryOutputProof || outputProofCapability.scopeKey !== request.scopeKey
+      ? Effect.fail(KernelReaderSchema.failure("reader_upgrade_required", "output-proof"))
+      : query(client.getDeliveryOutputProof(request))), inspect, retirementObservation: (handle) => {
     const observed = retirementObserved.get(handle)
     retirementObserved.delete(handle)
     if (!observed || performance.now() >= observed.deadline || !KernelReader.active(runtime) ||
@@ -212,7 +222,7 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
     const budget = liveHandle || !input.requestGate ? 15_000 : lane === "background" ? 1000 : 3000
     const reader = yield* querySync("getDeliveryReader", "reader", client.getDeliveryReader())
     retirementObserved.set(reader, { serverNow: reader.serverNow, scopeKey: reader.scopeKey, version: reader.version, deadline: performance.now() + 1000 })
-    yield* observe("bind", KernelReader.bind(runtime, reader.scopeKey, reader.version))
+    yield* observe("bind", bindReader(reader))
     yield* observe("ensure_scope", commit(KernelReader.ensureScope(runtime)))
     yield* notify(yield* Effect.gen(function* () {
       const current = yield* observe("sender_cleanup", maintainSender(KernelDelivery.cleanupSender(runtime, reader.serverNow)))
@@ -430,7 +440,7 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
   })
   const verifyScope = Effect.gen(function* () {
     const header = yield* query(client.getDeliveryReader())
-    yield* KernelReader.bind(runtime, header.scopeKey, header.version)
+    yield* bindReader(header)
     if (!(yield* KernelReader.scope(runtime))) return yield* KernelReaderSchema.failure("reader_unavailable", "scope-proof")
   }).pipe(Effect.mapError((error) => error instanceof KernelReaderSchema.Error ? error : KernelReaderSchema.failure("reader_unavailable", "scope-proof")))
   const withOutput = <A, E, R>(request: { workspaceID: string; userID: string; groupIDs?: readonly string[] }, effect: Effect.Effect<A, E, R>, options?: { refreshBeforeEffect?: boolean }) => Effect.suspend(() => {
@@ -456,7 +466,7 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
   return { runtime, state, sync, syncSlice, observeLive, refreshGroup: (groupID: string) => commit(KernelReader.refreshGroup(runtime, groupID)).pipe(Effect.tap((changed) => changed ? notify([groupID]) : Effect.void), Effect.asVoid), refreshPending: () => commit(KernelReader.refreshPending(runtime)).pipe(Effect.tap((changed) => changed.length ? notify(changed) : Effect.void), Effect.asVoid), captureTaskSource: (localMessageID: string) => commit(taskSource.capture(localMessageID)), readTaskSource: taskSource.read, assertTaskSource: taskSource.assert, verifyScope, read, invalidate, revoke, retire: KernelReader.retireReads(runtime), request: withRequest, watchGroup, hasActiveConnections: () => watchedGroups.size > 0, pending: (request: { conversationType: 1 | 2; conversationID: string; name: string }) => Effect.gen(function* () {
     if (!(yield* KernelReader.scope(runtime))) {
       const header = yield* query(client.getDeliveryReader())
-      yield* KernelReader.bind(runtime, header.scopeKey, header.version)
+      yield* bindReader(header)
     }
     return yield* KernelReader.pending(runtime, request)
   }), withOutput, conversation: (groupID: string) => Effect.gen(function* () { yield* KernelReader.current(runtime); return yield* KernelReader.senderConversation(database.db, groupID, source) }), inspect }

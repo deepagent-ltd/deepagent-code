@@ -889,6 +889,7 @@ message DeliveryReadQuery {
   string anchorDeliveryCursor = 8;
   int32 limit = 9;
   string throughOrdinal = 10;
+  repeated DeliveryOutputRequestRow outputRows = 11;
 }
 message DeliveryReaderInfo {
   int32 version = 1;
@@ -899,6 +900,7 @@ message DeliveryReaderInfo {
   int32 maxChangeBytes = 6;
   int32 maxMessageBytes = 7;
   int32 maxWindowPages = 8;
+  bool outputProofAvailable = 9;
 }
 message DeliveryConversationChange {
   string projectionKey = 1;
@@ -968,4 +970,31 @@ message DeliveryReadCutResult {
   string storedUnread = 9;
   int64 serverNow = 10;
   bool complete = 11;
+}
+// A single authenticated query proves the exact ordered multi-conversation page.
+message DeliveryOutputProjection {
+  string projectionKey = 1;
+  string projectionRevision = 2;
+}
+message DeliveryOutputConversation {
+  int32 conversationType = 1;
+  string targetId = 2;
+}
+message DeliveryOutputRequestRow {
+  oneof selector {
+    DeliveryOutputProjection visible = 1;
+    DeliveryOutputConversation pending = 2;
+  }
+}
+message DeliveryOutputResultRow {
+  oneof evidence {
+    DeliveryReadCutResult visible = 1;
+    DeliveryOutputConversation pending = 2;
+  }
+}
+message DeliveryOutputProofResult {
+  int32 version = 1;
+  string scopeKey = 2;
+  int64 serverNow = 3;
+  repeated DeliveryOutputResultRow rows = 4;
 }

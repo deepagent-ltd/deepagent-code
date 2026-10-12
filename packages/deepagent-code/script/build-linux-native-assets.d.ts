@@ -1,3 +1,4 @@
+import { type BigIntStats } from "node:fs";
 import { Schema } from "effect";
 export declare const LINUX_NATIVE_DEV_MANIFEST = "linux-native-dev-assets.json";
 export declare const LINUX_NATIVE_DEV_DOMAIN = "dac.linux-native-dev-assets.v1";
@@ -109,4 +110,40 @@ export declare function buildLinuxNativeAssets(input: {
         sha256: string;
     }[];
 }>;
+export declare function linuxNativePackageOwnership(input: {
+    logical: string;
+    canonical: string;
+    query: (source: string) => Promise<string>;
+}): Promise<string>;
+export declare function linuxNativePackageProvenance(input: {
+    logical: string;
+    canonical: string;
+    output: string;
+}): string;
+export declare function linuxNativeCopyrightMetadata(input: {
+    canonical: string;
+    query: (args: string[]) => Promise<string>;
+}): Promise<{
+    ownership: string;
+    registered: string;
+    md5: string;
+}>;
+export declare function linuxNativeCopyrightCopy(input: {
+    source: string;
+    destination: string;
+    md5: string;
+}): Promise<{
+    sourceCurrent: () => Promise<void>;
+    canonical: string;
+    bytes: number;
+    sha256: string;
+    identity: string;
+    header: Buffer<ArrayBuffer>;
+}>;
+export declare function linuxNativeImageRejection(input: {
+    filename: string;
+    stats: BigIntStats;
+    maximum: number;
+    executable: boolean;
+}): string | undefined;
 export {};

@@ -71,6 +71,7 @@ export interface Interface {
   readonly getDeliveryChanges: KernelSdk.Interface["getDeliveryChanges"]
   readonly getDeliveryMessages: KernelSdk.Interface["getDeliveryMessages"]
   readonly getDeliveryReadCut: KernelSdk.Interface["getDeliveryReadCut"]
+  readonly getDeliveryOutputProof?: KernelSdk.Interface["getDeliveryOutputProof"]
   readonly markDeliveryRead: KernelSdk.Interface["markDeliveryRead"]
 }
 
@@ -214,6 +215,7 @@ export const layer = Layer.effect(
       getDeliveryChanges: sdk.getDeliveryChanges,
       getDeliveryMessages: sdk.getDeliveryMessages,
       getDeliveryReadCut: sdk.getDeliveryReadCut,
+      getDeliveryOutputProof: sdk.getDeliveryOutputProof,
       markDeliveryRead: sdk.markDeliveryRead,
       disconnect: sdk.disconnect,
     })

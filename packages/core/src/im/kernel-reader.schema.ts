@@ -79,6 +79,27 @@ export const LiveObservation = Schema.Struct({ scopeKey: Hash, projectionKey: Ha
 export type LiveObservation = typeof LiveObservation.Type
 export const Cut = Schema.Struct({ version: Schema.Literals([1, 2]), scopeKey: Hash, projectionKey: Hash, projectionRevision: Positive, throughOrdinal: Decimal, targetAdmittedOrdinal: Decimal, readOrdinal: Decimal, liveUnread: Decimal, storedUnread: Decimal, serverNow: Time, complete: Schema.Boolean })
 export type Cut = typeof Cut.Type
+export const OutputProofRow = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("visible"), projectionKey: Hash, projectionRevision: Positive }),
+  Schema.Struct({ kind: Schema.Literal("pending"), conversationType: Schema.Literals([1, 2]), conversationID: text(512) }),
+])
+export type OutputProofRow = typeof OutputProofRow.Type
+export const OutputProofRequest = Schema.Struct({ version: Schema.Literal(2), scopeKey: Hash,
+  rows: Schema.Array(OutputProofRow).check(Schema.isMinLength(2), Schema.isMaxLength(PAGE_LIMIT)),
+}).check(Schema.makeFilter((value) => new Set(value.rows.map((row) => row.kind === "visible" ? `visible:${row.projectionKey}` : `pending:${row.conversationType}:${row.conversationID}`)).size === value.rows.length))
+export type OutputProofRequest = typeof OutputProofRequest.Type
+const OutputProofCut = Cut.check(Schema.makeFilter((value) => value.version === 2 && value.serverNow > 0 &&
+  compareDecimal(value.throughOrdinal, value.targetAdmittedOrdinal) <= 0 &&
+  compareDecimal(value.readOrdinal, value.targetAdmittedOrdinal) <= 0 &&
+  compareDecimal(value.liveUnread, value.storedUnread) <= 0 &&
+  value.complete === (compareDecimal(value.readOrdinal, value.targetAdmittedOrdinal) >= 0)))
+export const OutputProofResult = Schema.Struct({ version: Schema.Literal(2), scopeKey: Hash, serverNow: Time.check(Schema.isGreaterThan(0)),
+  rows: Schema.Array(Schema.Union([
+    Schema.Struct({ kind: Schema.Literal("visible"), cut: OutputProofCut }),
+    Schema.Struct({ kind: Schema.Literal("pending"), conversationType: Schema.Literals([1, 2]), conversationID: text(512) }),
+  ])).check(Schema.isMinLength(2), Schema.isMaxLength(PAGE_LIMIT)),
+}).check(Schema.makeFilter((value) => value.rows.every((row) => row.kind === "pending" || row.cut.scopeKey === value.scopeKey && row.cut.serverNow === value.serverNow)))
+export type OutputProofResult = typeof OutputProofResult.Type
 export const ReadActionSummary = Schema.Struct({ actionID: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/)), cutID: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/)), phase: Schema.Literals(["prepared", "dispatched", "unknown", "confirmed", "cancelled"]), cutIndex: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 31 })), targetAdmitted: Decimal, throughOrdinal: Decimal, targetReached: Schema.Boolean })
 export type ReadActionSummary = typeof ReadActionSummary.Type
 export const GroupPosition = Schema.Struct({ createdAt: Time, id: text(512) })

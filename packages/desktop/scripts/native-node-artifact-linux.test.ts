@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { tmpdir } from "node:os"
 import { createHash, generateKeyPairSync, verify } from "node:crypto"
 import { Packager, LinuxPackager } from "electron-builder"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
@@ -9,6 +10,92 @@ import { sealInstalledNativeNode } from "./native-node-artifact"
 
 const assets = process.env.DAC_LINUX_NATIVE_TEST_ASSETS
 const runtime = process.env.DAC_LINUX_NATIVE_TEST_RUNTIME
+
+test("Linux afterPack accepts the real builder naming pairs and retains product, path and platform fences", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "dac-linux-package-context-")))
+  try {
+    const child = Bun.spawn([process.execPath, "--eval", `
+      import assert from "node:assert/strict"
+      import fs from "node:fs/promises"
+      import path from "node:path"
+      import { Packager, LinuxPackager } from "electron-builder"
+      import { sealInstalledNativeNode } from ${JSON.stringify(path.join(import.meta.dir, "native-node-artifact.ts"))}
+      const root = ${JSON.stringify(root)}
+      const projectDir = ${JSON.stringify(path.resolve(import.meta.dir, ".."))}
+      const context = async (productName, executableName) => {
+        const builder = new Packager({ projectDir, config: {
+          extends: null, productName, extraMetadata: { version: "2.0.3" },
+          linux: { target: ["dir"], executableName },
+        } })
+        await builder.validateConfig()
+        return { appOutDir: root, electronPlatformName: "linux", packager: new LinuxPackager(builder) }
+      }
+      // Only the isolated JS host label is varied. Actual builder derivation,
+      // package path IO and the production afterPack guard run unchanged;
+      // this case supplies no Linux interpreter or publisher qualification.
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true })
+      const pairs = [
+        ["DeepAgent Code", "deepagent-code"],
+        ["DeepAgent Code Dev", "deepagent-code-dev"],
+        ["DeepAgent Code Beta", "deepagent-code-beta"],
+      ]
+      const passed = []
+      for (const arch of ["x64", "arm64"]) {
+        Object.defineProperty(process, "arch", { value: arch, configurable: true })
+        for (const [name, executable] of pairs) {
+          const value = await context(name, executable)
+          assert.equal(value.packager.appInfo.productName, name)
+          assert.equal(value.packager.appInfo.sanitizedProductName, name)
+          assert.equal(value.packager.appInfo.productFilename, executable)
+          assert.equal(value.packager.executableName, executable)
+          assert.deepEqual(await sealInstalledNativeNode(value), { state: "publisher_not_configured" })
+          passed.push(name + ":" + arch)
+        }
+      }
+      const reject = async (value, label) => {
+        await assert.rejects(sealInstalledNativeNode(value), /requires the exact target-platform product/)
+        passed.push(label)
+      }
+      for (const [index, [name]] of pairs.entries())
+        await reject(await context(name, pairs[(index + 1) % pairs.length][1]), "wrong-pair:" + index)
+      await reject(await context("Foreign Product", "deepagent-code-dev"), "unknown-product")
+      const filename = await context(...pairs[1])
+      filename.packager.appInfo.productFilename = "DeepAgent Code Dev"
+      await reject(filename, "foreign-product-filename")
+      const sanitized = await context(...pairs[1])
+      sanitized.packager.appInfo.sanitizedProductName = "Foreign Product"
+      await reject(sanitized, "foreign-sanitized-name")
+      const missing = await context(...pairs[1])
+      delete missing.packager.executableName
+      await reject(missing, "missing-executable")
+      await reject({ ...await context(...pairs[1]), appOutDir: "." }, "relative-path")
+      const alias = path.join(root, "alias")
+      await fs.symlink(root, alias, "dir")
+      await reject({ ...await context(...pairs[1]), appOutDir: alias }, "noncanonical-path")
+      Object.defineProperty(process, "arch", { value: "ia32", configurable: true })
+      await reject(await context(...pairs[1]), "unsupported-arch")
+      Object.defineProperty(process, "arch", { value: "x64", configurable: true })
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true })
+      await reject(await context(...pairs[1]), "foreign-platform")
+      console.log(JSON.stringify({ passed, publisherOperations: 0, nativePackageQualification: false }))
+    `], {
+      cwd: path.resolve(import.meta.dir, ".."),
+      env: { ...process.env, DEEPAGENT_CODE_RELEASE_NATIVE_PRIVATE_KEY: "" },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ])
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" })
+    const result = JSON.parse(stdout.trim().split("\n").pop() ?? "")
+    expect(result.passed).toHaveLength(17)
+    expect(result.publisherOperations).toBe(0)
+    expect(result.nativePackageQualification).toBe(false)
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
 
 // This exercises the actual native cohort and issuer on Linux. A different host
 // or absent compiled assets cannot supply Linux package qualification.
@@ -45,7 +132,8 @@ test.skipIf(process.platform !== "linux" || !assets || !runtime)(
       expect((await Bun.build({ entrypoints: [path.join(root, "entry.ts")], target: "node", format: "esm",
         outdir: chunks, naming: "node.js" })).success).toBe(true)
       const builder = new Packager({ projectDir: path.resolve(import.meta.dir, ".."), config: {
-        extends: null, productName: "DeepAgent Code Dev", extraMetadata: { version: "2.0.3" }, linux: { target: ["dir"] },
+        extends: null, productName: "DeepAgent Code Dev", extraMetadata: { version: "2.0.3" },
+        linux: { target: ["dir"], executableName: "deepagent-code-dev" },
       } })
       await builder.validateConfig()
       const packager = new LinuxPackager(builder)
