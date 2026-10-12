@@ -113,10 +113,10 @@ export interface ProtectedMediaAcceptance extends ProtectedMediaMessage {
 }
 export interface ProtectedMediaCapabilities {
   version: 1; profile: "mysql-protected-media-v1"; capability: "dac:media.v1"; readerVersion: 2;
-  maxFileBytes: 52428800; maxAttachments: 4; chunkBytes: 262144; ttlMillis: 86400000; authenticatedContent: true;
+  maxFileBytes: 10485760; maxAttachments: 4; chunkBytes: 262144; ttlMillis: 86400000; authenticatedContent: true;
 }
 export interface ProtectedMediaTransferCapabilities {
-  version: 1; protocol: "dac-media-resumable-v1"; chunkBytes: 262144; maxChunks: 200; maxFileBytes: 52428800;
+  version: 1; protocol: "dac-media-resumable-v1"; chunkBytes: 262144; maxChunks: 40; maxFileBytes: 10485760;
 }
 export interface ProtectedMediaUploadProgress {
   version: 1; protocol: "dac-media-resumable-v1"; object: ProtectedMediaMetadata;

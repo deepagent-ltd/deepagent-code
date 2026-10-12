@@ -15,7 +15,7 @@ export function mediaTransferCapability(input) {
   const value = snapshot(input);
   if (!keys(value, ["version", "protocol", "chunkBytes", "maxChunks", "maxFileBytes"]) ||
       value.version !== 1 || value.protocol !== "dac-media-resumable-v1" || value.chunkBytes !== CHUNK_BYTES ||
-      value.maxChunks !== 200 || value.maxFileBytes !== FILE_BYTES)
+      value.maxChunks !== FILE_BYTES / CHUNK_BYTES || value.maxFileBytes !== FILE_BYTES)
     throw deliveryError("media_transfer_capabilities", "invalid_response");
   return Object.freeze(value);
 }
@@ -142,7 +142,7 @@ export default function MediaClient(io, enabled) {
     putProtectedMediaChunk: async input => {
       const value = snapshot(input);
       if (!keys(value, ["objectID", "index", "body", "signal"]) || !hash(value.objectID) || !Number.isSafeInteger(value.index) ||
-          value.index < 0 || value.index >= 200 || !(value.body instanceof Uint8Array) || value.body.length < 1 || value.body.length > CHUNK_BYTES ||
+          value.index < 0 || value.index >= FILE_BYTES / CHUNK_BYTES || !(value.body instanceof Uint8Array) || value.body.length < 1 || value.body.length > CHUNK_BYTES ||
           value.signal !== undefined && !(value.signal instanceof AbortSignal)) throw deliveryError("media_chunk", "invalid_request");
       const body = new Uint8Array(value.body);
       const result = mediaMetadata(await request("media_chunk", `/objects/${value.objectID}/chunks/${value.index}`, { method: "PUT", body, signal: value.signal }));

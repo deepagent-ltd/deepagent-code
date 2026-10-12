@@ -9,7 +9,7 @@ import Proto from "../upstream/src/socket/proto";
 const servers = [];
 afterEach(() => servers.splice(0).forEach(server => server.stop(true)));
 const capabilities = { version: 1, profile: "mysql-protected-media-v1", capability: "dac:media.v1", readerVersion: 2,
-  maxFileBytes: 52428800, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true };
+  maxFileBytes: 10485760, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true };
 const descriptor = (index = 1) => { const createdAt = Date.now(); return ({ attachmentID: String(index).repeat(64), contentRef: String(index).repeat(64),
   filename: "中文<&>.png", mime: "image/png", sizeBytes: 3, sha256: "a".repeat(64),
   createdAt, expiresAt: createdAt + 86400000 }); };
@@ -77,6 +77,21 @@ test("actual HTTP uses captured current auth, snapshots upload bytes and checks 
   await pending;
   expect(accepted).toEqual([json(begin), [1, 2, 3]]);
   expect(Array.from(await fixture.client.readProtectedMediaRange({ attachment, start: 0, end: 2 }))).toEqual([1, 2, 3]);
+});
+
+test("10MiB capability accepts the current kernel and rejects oversized descriptors and uploads before HTTP", async () => {
+  let calls = 0;
+  const attachment = { ...descriptor(), sizeBytes: 10485760 };
+  const fixture = transport(() => { calls++; return response(capabilities); });
+  expect(await fixture.client.getProtectedMediaCapabilities()).toEqual(capabilities);
+  expect(mediaContent({ v: 1, content: "current bound", attachments: [attachment] }).attachments[0].sizeBytes).toBe(10485760);
+  expect(() => mediaContent({ v: 1, content: "too large", attachments: [{ ...attachment, sizeBytes: 10485761 }] })).toThrow();
+  await expect(fixture.client.beginProtectedMedia({ conversationType: 1, conversationID: "bob",
+    upload: { uploadID: "oversized", filename: attachment.filename, sizeBytes: 10485761, sha256: attachment.sha256 } }))
+    .rejects.toMatchObject({ operation: "media_begin", kind: "invalid_request" });
+  expect(calls).toBe(1);
+  const stale = transport(() => response({ ...capabilities, maxFileBytes: 52428800 }));
+  await expect(stale.client.getProtectedMediaCapabilities()).rejects.toMatchObject({ operation: "media_capabilities", kind: "invalid_response" });
 });
 
 test("late HTTP bytes from an old credential generation are discarded and redirects or overlength ranges are rejected", async () => {

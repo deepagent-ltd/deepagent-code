@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
 import { Dialog } from "@kobalte/core/dialog"
+import { createSignal } from "solid-js"
 import userEvent from "@testing-library/user-event"
 import { ActivationCard, BlockedCard, IdentityCard } from "@/components/im/facade-cards"
 import { KernelGroupDialog } from "@/components/im/facade-dialogs"
@@ -85,6 +86,47 @@ describe("IM identity components", () => {
     await waitFor(() => expect(recovered).toHaveBeenCalledTimes(1))
     expect(client.facadeRetry).toHaveBeenCalledTimes(1)
     expect(screen.queryByText("private upstream detail")).toBeNull()
+  })
+
+  it("keeps active connection retry reachable without a selected conversation and submits once while busy", async () => {
+    const [recovery, setRecovery] = createSignal<{ status: "pending" | "ready" | "failed" } | undefined>({ status: "pending" })
+    const pending = Promise.withResolvers<unknown>()
+    client.facadeRetry.mockReturnValue(pending.promise)
+    const changed = vi.fn()
+    render(() => (
+      <IdentityCard
+        status={{
+          facade: "active",
+          identity: { uuid: "abcdef123456", name: "alice", orgID: 2, orgAllGroupID: "org2" },
+          blocked: null,
+          kernel: "connected",
+          keyOrigin: "stored",
+          recovery: recovery(),
+        }}
+        onChanged={changed}
+      />
+    ))
+    expect(screen.getByText(dict["im.facade.recovery.pending"])).toBeTruthy()
+    expect(screen.getAllByRole("button", { name: dict["im.facade.retry"] })).toHaveLength(1)
+    setRecovery({ status: "ready" })
+    expect(screen.queryByText(dict["im.facade.recovery.pending"])).toBeNull()
+    expect(screen.getAllByRole("button", { name: dict["im.facade.retry"] })).toHaveLength(1)
+    setRecovery({ status: "failed" })
+    expect(screen.getByText(dict["im.facade.recovery.failed"])).toBeTruthy()
+    expect(screen.getAllByRole("button", { name: dict["im.facade.retry"] })).toHaveLength(1)
+    setRecovery(undefined)
+    const retry = screen.getByRole("button", { name: dict["im.facade.retry"] })
+    expect(screen.queryByText(dict["im.facade.recovery.failed"])).toBeNull()
+    fireEvent.click(retry)
+    expect(retry.hasAttribute("disabled")).toBe(true)
+    fireEvent.click(retry)
+    expect(client.facadeRetry).toHaveBeenCalledTimes(1)
+    expect(changed).not.toHaveBeenCalled()
+    pending.resolve({})
+    await waitFor(() => expect(changed).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false))
+    expect(client.facadeClaim).not.toHaveBeenCalled()
+    expect(client.facadeRebind).not.toHaveBeenCalled()
   })
 
   it("renames through the active identity card and lets Escape cancel without a request", async () => {

@@ -125,7 +125,7 @@ jobs:
           DAC_PACKAGE_FLAGS: ${{ matrix.flags }}
         run: |
           read -r -a dac_package_args <<< "$DAC_PACKAGE_FLAGS"
-          bun ./scripts/package.ts "${dac_package_args[@]}" --publish never
+          bun run package "${dac_package_args[@]}" --publish never
       - name: Verify exact native installer targets and record checksums
         if: inputs.platforms == 'all' || inputs.platforms == matrix.group
         working-directory: packages/desktop

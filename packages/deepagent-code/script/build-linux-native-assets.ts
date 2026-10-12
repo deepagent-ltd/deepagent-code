@@ -176,9 +176,8 @@ export async function buildLinuxNativeAssets(input: { destination: string }) {
         await fs.copyFile(canonical, path.join(staging, "runtime-closure", relative), constants.COPYFILE_EXCL)
         await fs.chmod(path.join(staging, "runtime-closure", relative), 0o755)
         pending.push({ logical: filename, filename: canonical })
-        const ownership = (await command(dpkg, ["-S", filename]).catch(() => command(dpkg, ["-S", canonical]))).trim().split("\n")
-        if (ownership.length !== 1 || !/^([a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?):\s+\//.test(ownership[0]!)) throw new Error("Linux runtime library requires unambiguous package provenance")
-        const packageName = ownership[0]!.slice(0, ownership[0]!.indexOf(": ")).split(":")[0]!
+        const packageName = await linuxNativePackageOwnership({ logical: filename, canonical,
+          query: (source) => command(dpkg, ["-S", source]) })
         if (!licenses.has(packageName)) licenses.set(packageName, await image(await fs.realpath(`/usr/share/doc/${packageName}/copyright`), 1_048_576, false))
       }
     }
@@ -228,6 +227,25 @@ export async function buildLinuxNativeAssets(input: { destination: string }) {
   } finally {
     await fs.rm(staging, { recursive: true, force: true })
   }
+}
+
+export async function linuxNativePackageOwnership(input: { logical: string; canonical: string; query: (source: string) => Promise<string> }) {
+  const output = await input.query(input.canonical).catch((error: unknown) => {
+    // A registered physical image can have a diverted logical alias on merged-/usr.
+    // Only dpkg's exact unregistered-path result permits querying that alias instead.
+    if (!(error instanceof Error) || error.message !== `Linux dpkg-query operation failed (1); dpkg-query: no path found matching pattern ${input.canonical}\n`) throw error
+    return input.query(input.logical)
+  })
+  return linuxNativePackageProvenance({ logical: input.logical, canonical: input.canonical, output })
+}
+
+export function linuxNativePackageProvenance(input: { logical: string; canonical: string; output: string }) {
+  const ownership = input.output.trim().split("\n")
+  if (ownership.length !== 1 || !/^([a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?):\s+\//.test(ownership[0]!)) {
+    const paths = [input.logical, input.canonical].map((value) => systemLibrary(value) && value.length <= 512 && /^[A-Za-z0-9_+./-]+$/.test(value) ? value : "unavailable")
+    throw new Error(`Linux runtime library requires unambiguous package provenance (logical=${paths[0]}, canonical=${paths[1]}, records=${Math.min(ownership.length, 129)})`)
+  }
+  return ownership[0]!.slice(0, ownership[0]!.indexOf(": ")).split(":")[0]!
 }
 
 function relativePath(value: string) {

@@ -3,10 +3,58 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { createHash } from "node:crypto"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
-import { buildLinuxNativeAssets, inspectLinuxNativeAssets, linuxNativeCargoInvocation, LINUX_NATIVE_DEV_MANIFEST, LINUX_NATIVE_DEV_DOMAIN, type LinuxNativeDevManifest, type LinuxNativeTarget } from "./build-linux-native-assets"
+import { buildLinuxNativeAssets, inspectLinuxNativeAssets, linuxNativeCargoInvocation, linuxNativePackageOwnership, linuxNativePackageProvenance, LINUX_NATIVE_DEV_MANIFEST, LINUX_NATIVE_DEV_DOMAIN, type LinuxNativeDevManifest, type LinuxNativeTarget } from "./build-linux-native-assets"
 
 const names = ["deepagent-work-file-helper", "deepagent-work-storage-cleanup", "deepagent-work-process-supervisor", "bun-command-runtime"]
 const digest = (body: Uint8Array | string) => createHash("sha256").update(body).digest("hex")
+
+test("package provenance diagnostics preserve unique-owner refusal and bounded system paths", () => {
+  const logical = "/lib64/ld-linux-x86-64.so.2"
+  const canonical = "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+  expect(linuxNativePackageProvenance({ logical, canonical, output: `libc6:amd64: ${logical}\n` })).toBe("libc6")
+  expect(() => linuxNativePackageProvenance({ logical, canonical, output: `libc6:amd64: ${logical}\nlibc6:amd64: ${canonical}\n` }))
+    .toThrow(`logical=${logical}, canonical=${canonical}, records=2`)
+  expect(() => linuxNativePackageProvenance({ logical, canonical, output: `libc6:amd64: ${logical}\nforeign: ${canonical}\n` }))
+    .toThrow("unambiguous package provenance")
+  expect(() => linuxNativePackageProvenance({ logical, canonical, output: "untrusted ownership" })).toThrow("records=1")
+  expect(() => linuxNativePackageProvenance({ logical: "/private/credential", canonical: "/usr/lib/unsafe\nvalue", output: "invalid" }))
+    .toThrow("logical=unavailable, canonical=unavailable, records=1")
+  expect(() => linuxNativePackageProvenance({ logical: `/lib/${"a".repeat(513)}`, canonical, output: "invalid" }))
+    .toThrow(`logical=unavailable, canonical=${canonical}, records=1`)
+  expect(() => linuxNativePackageProvenance({ logical, canonical, output: Array.from({ length: 200 }, () => `libc6:amd64: ${logical}`).join("\n") }))
+    .toThrow("records=129")
+})
+
+test("canonical package ownership uses physical metadata and only falls back for an unregistered path", async () => {
+  const logical = "/lib64/ld-linux-x86-64.so.2"
+  const canonical = "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+  const queries: string[] = []
+  const owner = await linuxNativePackageOwnership({ logical, canonical, query: async (source) => {
+    queries.push(source)
+    return `libc6:amd64: ${source}\n`
+  } })
+  expect(owner).toBe("libc6")
+  expect(queries).toEqual([canonical])
+  queries.length = 0
+  expect(await linuxNativePackageOwnership({ logical, canonical, query: async (source) => {
+    queries.push(source)
+    if (source === canonical) throw new Error(`Linux dpkg-query operation failed (1); dpkg-query: no path found matching pattern ${canonical}\n`)
+    return `libc6:amd64: ${source}\n`
+  } })).toBe("libc6")
+  expect(queries).toEqual([canonical, logical])
+  for (const message of ["Linux build tool output exceeds its bound", `Linux dpkg-query operation failed (2); dpkg-query: no path found matching pattern ${canonical}\n`, `Linux dpkg-query operation failed (1); dpkg-query: no path found matching pattern ${logical}\n`]) {
+    queries.length = 0
+    await expect(linuxNativePackageOwnership({ logical, canonical, query: async (source) => { queries.push(source); throw new Error(message) } })).rejects.toThrow(message)
+    expect(queries).toEqual([canonical])
+  }
+  queries.length = 0
+  await expect(linuxNativePackageOwnership({ logical, canonical, query: async (source) => {
+    queries.push(source)
+    return `libc6:amd64: ${source}\nforeign: ${source}\n`
+  } })).rejects.toThrow("unambiguous package provenance")
+  expect(queries).toEqual([canonical])
+})
+
 async function fixture(target: LinuxNativeTarget = "linux-x64") {
   const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-linux-dev-asset-core-"))
   const elf = Buffer.alloc(128)

@@ -40,6 +40,165 @@ const meter = (db: Database.Interface["db"]) => db.get<{ used_records: number; u
 const nameState = (db: Database.Interface["db"]) => Effect.gen(function* () {
   return { groups: yield* db.all<Record<string, unknown>>(sql`SELECT * FROM im_groups`), members: yield* db.all(sql`SELECT * FROM im_members`), projections: yield* db.all(sql`SELECT * FROM im_kernel_reader_projection`), scope: yield* db.all(sql`SELECT * FROM im_kernel_reader_scope`), messages: yield* db.all(sql`SELECT * FROM im_messages`), readerMessages: yield* db.all(sql`SELECT * FROM im_kernel_reader_message`), intents: yield* db.all(sql`SELECT * FROM im_kernel_reader_read_intent`), meter: yield* meter(db) }
 })
+test("cold pending credential refresh persists current proof without changing the empty group or delivery state", () => isolated(async (filename) => {
+  const groupID = await run(filename, Effect.gen(function* () {
+    const s = yield* fixture
+    return yield* KernelReader.pending(s.runtime, { conversationType: 2, conversationID: "cold-empty-group", name: "ignored" })
+  }))
+  await run(filename, Effect.gen(function* () {
+    const s = yield* fixture
+    const engine = yield* KernelReader.current(s.runtime)
+    KernelReader.close(s.runtime)
+    const runtime = KernelReader.attach({ db: s.db, workspaceID: engine.workspaceID, userID: engine.userID, source: { ...source, credentialFingerprint: "f".repeat(64) }, current: engine.current, inspect: engine.inspect, readCut: engine.readCut })
+    yield* Effect.addFinalizer(() => Effect.sync(() => KernelReader.close(runtime)))
+    yield* KernelReader.bind(runtime, scopeKey)
+    yield* KernelReader.ensureScope(runtime)
+    const before = yield* nameState(s.db)
+    const original = (yield* KernelReader.projections(runtime))[0]!
+    const output = () => KernelReader.withOutput(runtime, { workspaceID: "workspace", userID: "server", groupIDs: [groupID] }, s.repo.getGroup({ groupID, userID: "server" }))
+    expect(yield* output().pipe(Effect.flip)).toMatchObject({ code: "reader_scope_mismatch", operation: "pending-output" })
+    expect(yield* nameState(s.db)).toEqual(before)
+    expect(yield* KernelReader.refreshGroup(runtime, groupID)).toBe(true)
+    const after = yield* nameState(s.db)
+    const refreshed = (yield* KernelReader.projections(runtime))[0]!
+    expect((yield* output())?.name).toBe(s.permission.name)
+    expect((yield* output())?.reader?.state).toBe("pending")
+    expect(refreshed.local_group_id).toBe(groupID)
+    expect(refreshed.local_revision).toBe(original.local_revision + 1)
+    expect(refreshed.metadata_hash).not.toBe(original.metadata_hash)
+    expect(KernelReaderSchema.decode(KernelReaderSchema.Pending, refreshed.metadata, 4096).sourceHash).not.toBe(KernelReaderSchema.decode(KernelReaderSchema.Pending, original.metadata, 4096).sourceHash)
+    expect(refreshed.accounted_bytes).toBe(KernelReader.accounting(refreshed) + refreshed.owned_group_bytes)
+    expect(after.groups).toEqual(before.groups)
+    expect(after.members).toEqual(before.members)
+    expect(after.scope).toEqual(before.scope)
+    expect(after.messages).toEqual(before.messages)
+    expect(after.readerMessages).toEqual(before.readerMessages)
+    expect(after.intents).toEqual(before.intents)
+    expect(after.meter).toEqual(before.meter)
+    expect(refreshed.newer_after).toBe(original.newer_after)
+    expect(refreshed.server_revision).toBeNull()
+    expect(yield* KernelReader.refreshGroup(runtime, groupID)).toBe(false)
+    expect(yield* nameState(s.db)).toEqual(after)
+  }))
+  await run(filename, Effect.gen(function* () {
+    const s = yield* fixture
+    const engine = yield* KernelReader.current(s.runtime)
+    KernelReader.close(s.runtime)
+    const runtime = KernelReader.attach({ db: s.db, workspaceID: engine.workspaceID, userID: engine.userID, source: { ...source, credentialFingerprint: "f".repeat(64) }, current: engine.current, inspect: engine.inspect, readCut: engine.readCut })
+    yield* Effect.addFinalizer(() => Effect.sync(() => KernelReader.close(runtime)))
+    yield* KernelReader.bind(runtime, scopeKey)
+    yield* KernelReader.ensureScope(runtime)
+    const before = yield* nameState(s.db)
+    expect((yield* KernelReader.withOutput(runtime, { workspaceID: "workspace", userID: "server", groupIDs: [groupID] }, s.repo.getGroup({ groupID, userID: "server" })))?.reader?.state).toBe("pending")
+    expect(yield* nameState(s.db)).toEqual(before)
+  }))
+}))
+test("cold pending credential refresh refuses a foreign account, revoked membership and stale current scope without proof writes", () => isolated(async (filename) => {
+  const groupID = await run(filename, Effect.gen(function* () {
+    const s = yield* fixture
+    return yield* KernelReader.pending(s.runtime, { conversationType: 2, conversationID: "cold-empty-group", name: "ignored" })
+  }))
+  await run(filename, Effect.gen(function* () {
+    const s = yield* fixture
+    const engine = yield* KernelReader.current(s.runtime)
+    KernelReader.close(s.runtime)
+    const attach = (senderID: string) => KernelReader.attach({ db: s.db, workspaceID: engine.workspaceID, userID: engine.userID, source: { ...source, senderID, credentialFingerprint: "f".repeat(64) }, current: engine.current, inspect: engine.inspect, readCut: engine.readCut })
+    const foreign = attach("mallory")
+    yield* Effect.addFinalizer(() => Effect.sync(() => KernelReader.close(foreign)))
+    yield* KernelReader.bind(foreign, scopeKey)
+    yield* KernelReader.ensureScope(foreign)
+    const foreignBefore = yield* nameState(s.db)
+    expect(yield* KernelReader.refreshGroup(foreign, groupID).pipe(Effect.flip)).toMatchObject({ code: "reader_required" })
+    expect(yield* KernelReader.refreshPending(foreign)).toEqual([])
+    expect(yield* nameState(s.db)).toEqual(foreignBefore)
+    const runtime = attach(source.senderID)
+    yield* Effect.addFinalizer(() => Effect.sync(() => KernelReader.close(runtime)))
+    yield* KernelReader.bind(runtime, scopeKey)
+    yield* KernelReader.ensureScope(runtime)
+    const before = yield* nameState(s.db)
+    s.permission.inspectAllowed = false
+    expect(yield* KernelReader.refreshGroup(runtime, groupID).pipe(Effect.flip)).toMatchObject({ code: "reader_scope_mismatch", operation: "inspect" })
+    expect(yield* KernelReader.refreshPending(runtime).pipe(Effect.flip)).toMatchObject({ code: "reader_scope_mismatch", operation: "inspect" })
+    expect(yield* nameState(s.db)).toEqual(before)
+    s.permission.inspectAllowed = true
+    s.permission.online = false
+    expect(yield* KernelReader.refreshGroup(runtime, groupID).pipe(Effect.flip)).toMatchObject({ code: "reader_unavailable" })
+    expect(yield* KernelReader.refreshPending(runtime).pipe(Effect.flip)).toMatchObject({ code: "reader_unavailable" })
+    expect(yield* nameState(s.db)).toEqual(before)
+    s.permission.online = true
+    yield* s.db.run(sql`DELETE FROM im_members WHERE group_id=${groupID}`)
+    const revoked = yield* nameState(s.db)
+    expect(yield* KernelReader.refreshGroup(runtime, groupID).pipe(Effect.flip)).toMatchObject({ code: "reader_scope_mismatch", operation: "group-name" })
+    expect(yield* KernelReader.refreshPending(runtime)).toEqual([])
+    expect(yield* nameState(s.db)).toEqual(revoked)
+  }))
+}))
+test("cold pending credential refresh rolls back its proof and meter when the projection CAS is refused", () => isolated(async (filename) => {
+  const groupID = await run(filename, Effect.gen(function* () {
+    const s = yield* fixture
+    return yield* KernelReader.pending(s.runtime, { conversationType: 2, conversationID: "cold-empty-group", name: "ignored" })
+  }))
+  await run(filename, Effect.gen(function* () {
+    const s = yield* fixture
+    const engine = yield* KernelReader.current(s.runtime)
+    KernelReader.close(s.runtime)
+    const runtime = KernelReader.attach({ db: s.db, workspaceID: engine.workspaceID, userID: engine.userID, source: { ...source, credentialFingerprint: "f".repeat(64) }, current: engine.current, inspect: engine.inspect, readCut: engine.readCut })
+    yield* Effect.addFinalizer(() => Effect.sync(() => KernelReader.close(runtime)))
+    yield* KernelReader.bind(runtime, scopeKey)
+    yield* KernelReader.ensureScope(runtime)
+    yield* s.db.run(sql`CREATE TRIGGER refuse_pending_proof BEFORE UPDATE OF metadata ON im_kernel_reader_projection BEGIN SELECT RAISE(IGNORE); END`)
+    const before = yield* nameState(s.db)
+    expect(yield* KernelReader.refreshGroup(runtime, groupID).pipe(Effect.flip)).toMatchObject({ code: "reader_stale", operation: "group-name" })
+    expect(yield* nameState(s.db)).toEqual(before)
+  }))
+}))
+test("cold pending reconnect recovery crosses a keyset page with two current inspections and excludes foreign or removed memberships", () => isolated(async (filename) => {
+  const groups = await run(filename, Effect.gen(function* () {
+    const s = yield* fixture
+    const groups = yield* Effect.forEach(Array.from({ length: KernelReaderSchema.PAGE_LIMIT + 2 }, (_, index) => index), (index) => KernelReader.pending(s.runtime, { conversationType: 2, conversationID: `cold-empty-${index}`, name: "ignored" }))
+    const foreign = KernelReader.attach({ db: s.db, workspaceID: "workspace", userID: "server", source: { ...source, senderID: "mallory" }, current: () => Effect.succeed(true), inspect: () => Effect.succeed({ name: "foreign peer" }), readCut: () => Effect.fail(KernelReaderSchema.failure("reader_unavailable", "unused-cut")) })
+    yield* Effect.addFinalizer(() => Effect.sync(() => KernelReader.close(foreign)))
+    yield* KernelReader.bind(foreign, scopeKey)
+    const foreignID = yield* KernelReader.pending(foreign, { conversationType: 2, conversationID: "foreign-empty", name: "ignored" })
+    yield* s.db.run(sql`DELETE FROM im_members WHERE group_id=${groups[groups.length - 1]!}`)
+    return { current: groups.slice(0, -1), removed: groups[groups.length - 1]!, foreign: foreignID }
+  }))
+  await run(filename, Effect.gen(function* () {
+    const s = yield* fixture
+    const engine = yield* KernelReader.current(s.runtime)
+    KernelReader.close(s.runtime)
+    const inspected = { active: 0, peak: 0, targets: [] as string[] }
+    const runtime = KernelReader.attach({ db: s.db, workspaceID: engine.workspaceID, userID: engine.userID, source: { ...source, credentialFingerprint: "f".repeat(64) }, current: engine.current, inspect: (request) => Effect.gen(function* () {
+      inspected.active += 1
+      inspected.peak = Math.max(inspected.peak, inspected.active)
+      inspected.targets.push(request.conversationID)
+      yield* Effect.sleep(5)
+      return yield* engine.inspect(request)
+    }).pipe(Effect.ensuring(Effect.sync(() => { inspected.active -= 1 }))), readCut: engine.readCut })
+    yield* Effect.addFinalizer(() => Effect.sync(() => KernelReader.close(runtime)))
+    yield* KernelReader.bind(runtime, scopeKey)
+    yield* KernelReader.ensureScope(runtime)
+    const before = yield* nameState(s.db)
+    const excluded = yield* s.db.all(sql`SELECT * FROM im_kernel_reader_projection WHERE local_group_id IN (${groups.removed}, ${groups.foreign})`)
+    const changed = yield* KernelReader.refreshPending(runtime)
+    expect(changed.toSorted()).toEqual(groups.current.toSorted())
+    expect(inspected.targets).toHaveLength(KernelReaderSchema.PAGE_LIMIT + 1)
+    expect(new Set(inspected.targets).size).toBe(KernelReaderSchema.PAGE_LIMIT + 1)
+    expect(inspected.peak).toBe(2)
+    expect(yield* s.db.all(sql`SELECT * FROM im_kernel_reader_projection WHERE local_group_id IN (${groups.removed}, ${groups.foreign})`)).toEqual(excluded)
+    const after = yield* nameState(s.db)
+    expect(after.groups).toEqual(before.groups)
+    expect(after.members).toEqual(before.members)
+    expect(after.scope).toEqual(before.scope)
+    expect(after.messages).toEqual(before.messages)
+    expect(after.readerMessages).toEqual(before.readerMessages)
+    expect(after.intents).toEqual(before.intents)
+    expect(after.meter).toEqual(before.meter)
+    expect((yield* KernelReader.withOutput(runtime, { workspaceID: "workspace", userID: "server", groupIDs: [changed[0]!] }, s.repo.getGroup({ groupID: changed[0]!, userID: "server" })))?.reader?.state).toBe("pending")
+    expect(yield* KernelReader.refreshPending(runtime)).toEqual([])
+    expect(yield* nameState(s.db)).toEqual(after)
+  }))
+}))
 test("explicit selected metadata refresh updates an unchanged old visible group without scanning deliveries", () => isolated((filename) => run(filename, Effect.gen(function* () {
   const s = yield* fixture
   yield* KernelReader.ensureScope(s.runtime)

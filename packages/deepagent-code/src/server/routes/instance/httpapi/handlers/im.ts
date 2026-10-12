@@ -1267,10 +1267,15 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
           return yield* facade.rebind(payload.newKey)
         }).pipe(mapFacadeErrors),
       )
-      .handle("facadeRetry", () =>
+      .handle("facadeRetry", ({ query }) =>
         Effect.gen(function* () {
           if (!facade) return yield* facadeUnavailable("IM facade is not configured on this server")
-          return yield* facade.retryExchange
+          const identity = yield* facade.retryExchange
+          yield* Effect.gen(function* () {
+            const context = yield* getWorkspaceContext(query)
+            yield* facade.withCurrentConnectedReader(context, (lease) => lease.reader.refreshPending())
+          }).pipe(Effect.mapError(() => facadeUnavailable("IM conversation recovery is currently unavailable")))
+          return identity
         }).pipe(mapFacadeErrors),
       )
       .handle("facadeResolve", ({ query }) =>

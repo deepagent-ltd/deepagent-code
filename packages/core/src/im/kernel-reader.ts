@@ -297,8 +297,49 @@ export const refreshGroup = (runtime: Runtime, groupID: string) => Effect.gen(fu
     if (!freshScope || freshScope.scope_key !== stored.scope_key || freshScope.binding !== stored.binding || !fresh || fresh.local_revision !== original.local_revision || fresh.local_group_id !== groupID || fresh.visibility !== original.visibility || fresh.conversation_type !== original.conversation_type || fresh.target_id !== original.target_id) return yield* failure("reader_stale", "group-name")
     if (!(yield* tx.select().from(MemberTable).where(and(eq(MemberTable.group_id, GroupID.make(groupID)), eq(MemberTable.member_id, engine.userID), eq(MemberTable.member_type, "user"))).get())) return yield* failure("reader_scope_mismatch", "group-name")
     const updated = yield* refreshGroupName(tx, engine, fresh, verified.name)
+    // An explicit authenticated refresh also revalidates an empty mapping after
+    // credential rotation. Public reads keep rejecting its previous source proof.
+    if (updated.visibility === "pending") {
+      const previous = KernelReaderSchema.decode(KernelReaderSchema.Pending, updated.metadata, 4096)
+      const metadata = KernelReaderSchema.encode(KernelReaderSchema.Pending, { ...previous, sourceHash: hash(engine.source), name: verified.name }, 4096)
+      if (metadata !== updated.metadata) {
+        const update = { ...updated, metadata, metadata_hash: hash(metadata), local_revision: updated.local_revision + 1, updated_at: Date.now() }
+        update.accounted_bytes = accounting(update) + update.owned_group_bytes
+        yield* reserve(tx, 0, update.accounted_bytes - updated.accounted_bytes)
+        const changed = yield* tx.update(IMKernelReaderProjectionTable).set(update).where(and(eq(IMKernelReaderProjectionTable.reader_key, stored.reader_key), eq(IMKernelReaderProjectionTable.binding_key, updated.binding_key), eq(IMKernelReaderProjectionTable.local_revision, updated.local_revision))).returning().get()
+        if (!changed) return yield* failure("reader_stale", "group-name")
+        return true
+      }
+    }
     return updated.local_revision !== fresh.local_revision
   }), { behavior: "immediate" })
+})
+
+/** Explicit reconnect recovery enumerates only this account's empty mappings.
+ * It reads no bodies and each selected ID still passes refreshGroup's fresh
+ * authenticated inspection, membership and transaction revision checks. */
+export const refreshPending = (runtime: Runtime) => Effect.gen(function* () {
+  const engine = yield* current(runtime)
+  const stored = yield* scope(runtime)
+  if (!stored) return []
+  const state = { after: "", visited: 0, changed: [] as string[] }
+  for (const round of Array.from({ length: Math.ceil(KernelReaderSchema.RECORD_LIMIT / KernelReaderSchema.PAGE_LIMIT) + 1 }, (_, index) => index)) {
+    yield* current(runtime)
+    const rows = yield* engine.db.select({ bindingKey: IMKernelReaderProjectionTable.binding_key, groupID: GroupTable.id })
+      .from(IMKernelReaderProjectionTable)
+      .innerJoin(GroupTable, and(eq(GroupTable.id, IMKernelReaderProjectionTable.local_group_id), eq(GroupTable.workspace_id, engine.workspaceID), isNull(GroupTable.deleted_at)))
+      .innerJoin(MemberTable, and(eq(MemberTable.group_id, GroupTable.id), eq(MemberTable.member_id, engine.userID), eq(MemberTable.member_type, "user")))
+      .where(and(eq(IMKernelReaderProjectionTable.reader_key, stored.reader_key), eq(IMKernelReaderProjectionTable.visibility, "pending"), sql`${IMKernelReaderProjectionTable.binding_key} > ${state.after}`))
+      .orderBy(IMKernelReaderProjectionTable.binding_key).limit(KernelReaderSchema.PAGE_LIMIT).all()
+    if (!rows.length) return state.changed
+    if (round === Math.ceil(KernelReaderSchema.RECORD_LIMIT / KernelReaderSchema.PAGE_LIMIT) || state.visited + rows.length > KernelReaderSchema.RECORD_LIMIT) return yield* failure("reader_cleanup_required", "pending-refresh")
+    const changed = yield* Effect.forEach(rows, (row) => refreshGroup(runtime, row.groupID).pipe(Effect.map((updated) => updated ? row.groupID : undefined)), { concurrency: 2 })
+    state.changed.push(...changed.filter((groupID): groupID is NonNullable<typeof groupID> => groupID !== undefined))
+    state.visited += rows.length
+    state.after = rows[rows.length - 1]!.bindingKey
+    yield* Effect.yieldNow
+  }
+  return state.changed
 })
 
 /** Read-only current permission recheck. No ensure, poll, repair or durable writes. */

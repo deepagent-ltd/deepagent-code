@@ -45,7 +45,7 @@ async function fixture(size = 786451) {
   const callbacks = { before: async (_method: string) => {} }
   const operation = (method: string) => Effect.promise(async () => { calls.push(method); await callbacks.before(method) })
   const media: KernelSdk.Media = {
-    capabilities: () => operation("capabilities").pipe(Effect.as({ version: 1, profile: "mysql-protected-media-v1", capability: "dac:media.v1", readerVersion: 2, maxFileBytes: 52428800, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true })),
+    capabilities: () => operation("capabilities").pipe(Effect.as({ version: 1, profile: "mysql-protected-media-v1", capability: "dac:media.v1", readerVersion: 2, maxFileBytes: 10485760, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true })),
     begin: () => operation("begin").pipe(Effect.as(metadata)),
     putChunk: (input) => operation("chunk").pipe(Effect.andThen(Effect.sync(() => {
       expect(input.index).toBe(chunks.length)
@@ -84,14 +84,14 @@ test.skipIf(process.platform === "win32")("kernel uploader refuses an unsafe par
   expect(linked.calls).toEqual([])
 })
 
-test("kernel uploader retains exact 50MiB bytes in 200 bounded chunks and closes its original FD", async () => {
+test("kernel uploader retains exact 10MiB bytes in 40 bounded chunks and closes its original FD", async () => {
   await using value = await fixture(AttachmentStorage.hardMaxBytes)
   const identity = await fs.stat(value.local.storagePath, { bigint: true })
   const result = await value.run()
   expect(result._tag).toBe("Success")
-  if (result._tag !== "Success") throw new Error("Private 50MiB upload failed")
+  if (result._tag !== "Success") throw new Error("Private 10MiB upload failed")
   expect(result.value).toMatchObject({ sizeBytes: AttachmentStorage.hardMaxBytes, sha256: value.local.checksum })
-  expect(value.chunks).toHaveLength(200)
+  expect(value.chunks).toHaveLength(40)
   expect(value.chunks.every((bytes) => bytes === 262144)).toBe(true)
   expect(value.received.digest("hex")).toBe(value.local.checksum)
   expect(value.calls.filter((method) => method === "begin")).toHaveLength(1)

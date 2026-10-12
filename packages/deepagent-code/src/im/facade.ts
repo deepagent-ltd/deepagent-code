@@ -12,6 +12,7 @@ import {
   Schema,
   Scope,
   Semaphore,
+  Stream,
   SubscriptionRef,
 } from "effect"
 import { HttpClient } from "effect/unstable/http"
@@ -100,6 +101,8 @@ export interface Interface {
   readonly status: Effect.Effect<StatusSnapshot, KernelReaderSchema.Error>
   readonly acquireReader: (context: ReaderContext) => Effect.Effect<ReaderLease, KernelReaderSchema.Error, Scope.Scope>
   readonly withReader: <A, E, R>(context: ReaderContext, use: (lease: ReaderLease) => Effect.Effect<A, E, R>) => Effect.Effect<A, E | KernelReaderSchema.Error, Exclude<R, Scope.Scope>>
+  /** Explicit reconnect recovery waits only for its captured live generation. */
+  readonly withCurrentConnectedReader: Interface["withReader"]
   // 门面调用不向外要 HttpClient：构造期从 server 图捕获（FetchHttpClient），调用期由
   // withClient 内部提供；构造期缺席 ⇒ 门面整体 disabled，requireSource/requireActive 先 fail-closed。
   readonly claim: (name: string) => Effect.Effect<IdentityInfo, IMKernelExchange.ExchangeError>
@@ -484,6 +487,34 @@ export const layer = (options?: Options) =>
         return yield* current.acquireReader({ instance: actual, workspaceID, userID: SERVER_USER_ID, instanceCurrent: instanceStore.peek(actual.directory).pipe(Effect.map((value) => value === actual)) })
       })
       const withReader: Interface["withReader"] = (context, use) => Effect.scoped(Effect.flatMap(acquireReader(context), use))
+      const withCurrentConnectedReader: Interface["withReader"] = (context, use) => Effect.scoped(Effect.gen(function* () {
+        const generation = owner.current
+        const captured = Option.getOrUndefined(yield* Ref.get(engine))
+        if (!captured || !generation?.active) return yield* KernelReaderSchema.failure("reader_unavailable", "workspace-lease")
+        const assertOwner = Effect.gen(function* () {
+          if (!generation.active || owner.current !== generation || Option.getOrUndefined(yield* Ref.get(engine)) !== captured)
+            return yield* KernelReaderSchema.failure("reader_unavailable", "workspace-lease")
+        })
+        yield* assertOwner
+        // Engine creation starts the SDK handshake asynchronously. The original
+        // connect bound applies here; retirement cancels the wait immediately.
+        yield* Effect.raceFirst(
+          SubscriptionRef.changes(captured.state).pipe(
+            Stream.filter((connection) => connection !== "connecting"),
+            Stream.runHead,
+            Effect.flatMap((connection) => Option.isSome(connection) && connection.value === "connected"
+              ? Effect.void : KernelReaderSchema.failure("reader_unavailable", "current")),
+          ),
+          Effect.callback<void, KernelReaderSchema.Error>((resume) => {
+            const invalidate = () => resume(KernelReaderSchema.failure("reader_unavailable", "workspace-lease"))
+            generation.invalidations.add(invalidate)
+            if (!generation.active || owner.current !== generation) invalidate()
+            return Effect.sync(() => { generation.invalidations.delete(invalidate) })
+          }),
+        ).pipe(Effect.timeoutOrElse({ duration: "20 seconds", orElse: () => KernelReaderSchema.failure("reader_unavailable", "current") }))
+        yield* assertOwner
+        return yield* withReader(context, (lease) => assertOwner.pipe(Effect.andThen(use(lease)), Effect.tap(() => assertOwner)))
+      }))
       const currentReaderContext = Effect.gen(function* () {
         const actual = yield* InstanceRef
         if (!actual) return yield* KernelReaderSchema.failure("reader_scope_mismatch", "workspace-lease")
@@ -513,6 +544,7 @@ export const layer = (options?: Options) =>
         engine,
         acquireReader,
         withReader,
+        withCurrentConnectedReader,
         status: Effect.gen(function* () {
           const current = yield* SubscriptionRef.get(state)
           const running = yield* Ref.get(engine)

@@ -4,17 +4,17 @@
   "files": [
     {
       "path": "lib/index.js",
-      "sha256": "de5c1b957905acce256ec353789ea28797b6cb1ef394d2a4fc06795d6a0ff178"
+      "sha256": "0d6dddc367ac94c0752cd6e76219d158d7de60a1d683f7d2dbe28f6df86045b1"
     },
     {
       "path": "lib/index.d.ts",
-      "sha256": "0b4f2e5bc0459e75cb600e254bb2f2599c043732d4b54f9f767abc7f3a5bb477"
+      "sha256": "31b40fc731dbf5a64ac0364b0c7694cb84689d3a80ae34b6bb7a52bc1417295b"
     }
   ],
   "previousReviewedFiles": [
     {
       "path": "lib/index.js",
-      "sha256": "ae751d2c45aaa292f960786e0687a6f0c7807eaef3c3dc108931cb2a2c06c387"
+      "sha256": "de5c1b957905acce256ec353789ea28797b6cb1ef394d2a4fc06795d6a0ff178"
     },
     {
       "path": "lib/index.d.ts",
@@ -136,6 +136,19 @@
         }
       ],
       "note": "Intermediate cap2 text-reader request bytes retained before matching the shared reader admission guard; not a functional qualification"
+    },
+    {
+      "files": [
+        {
+          "path": "lib/index.js",
+          "sha256": "de5c1b957905acce256ec353789ea28797b6cb1ef394d2a4fc06795d6a0ff178"
+        },
+        {
+          "path": "lib/index.d.ts",
+          "sha256": "0b4f2e5bc0459e75cb600e254bb2f2599c043732d4b54f9f767abc7f3a5bb477"
+        }
+      ],
+      "note": "Prior reviewed bytes retained before aligning the fixed media contract with the 10MiB kernel and 40 resumable chunks"
     }
   ]
 }

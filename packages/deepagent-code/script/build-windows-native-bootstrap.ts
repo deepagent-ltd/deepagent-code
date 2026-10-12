@@ -36,42 +36,11 @@ export async function buildWindowsNativeBootstrap(input: { repository: string; s
   const asset = path.join(input.staging, "native-image-factory.node")
   await fs.writeFile(asset, bytes, { flag: "wx" })
   if (!process.versions.bun) throw new Error("Windows command runtime must be the original build Bun executable")
-  const assets = await Promise.all([
+  const assets = await Promise.all(([
     { name: "deepagent-work-process-supervisor.exe", source: path.join(directory, "release/deepagent-work-process-supervisor.exe") },
     { name: "bun-command-runtime.exe", source: process.execPath },
-  ].map(async (entry) => {
-    const handle = await fs.open(entry.source, "r")
-    try {
-      const before = await handle.stat({ bigint: true })
-      const stamp = (value: typeof before) => [value.dev, value.ino, value.size, value.mode, value.nlink, value.mtimeNs, value.ctimeNs].join(":")
-      // Cargo publishes its fixed executable as a second link to the corresponding deps artifact.
-      // This exception is confined to our fresh owned build tree; installed images still require one link.
-      const aliases = entry.name === "deepagent-work-process-supervisor.exe" && before.nlink === 2n
-        ? (await fs.readdir(path.join(directory, "release/deps"))).filter((name) => /^deepagent_work_process_supervisor-[a-f0-9]{16}\.exe$/.test(name))
-        : []
-      const alias = aliases.length === 1 ? path.join(directory, "release/deps", aliases[0]!) : undefined
-      const linked = alias ? await fs.lstat(alias, { bigint: true }) : undefined
-      const cargoLink = linked?.isFile() === true && !linked.isSymbolicLink() && stamp(linked) === stamp(before)
-      const named = await fs.lstat(entry.source, { bigint: true })
-      const content = await handle.readFile()
-      const after = await handle.stat({ bigint: true })
-      if (!before.isFile() || (before.nlink !== 1n && !(before.nlink === 2n && cargoLink)) || named.isSymbolicLink() ||
-        stamp(named) !== stamp(before) || stamp(after) !== stamp(before) ||
-        stamp(await fs.lstat(entry.source, { bigint: true })) !== stamp(before) ||
-        (alias && stamp(await fs.lstat(alias, { bigint: true })) !== stamp(before)) ||
-        content.length !== Number(before.size) || content.length < 64 || content.length > LIMIT ||
-        content.subarray(0, 2).toString() !== "MZ") throw new Error("Windows fixed Work build image changed or is invalid")
-      const offset = content.readUInt32LE(0x3c)
-      if (offset > content.length - 24 || content.subarray(offset, offset + 4).toString("hex") !== "50450000" ||
-        content.readUInt16LE(offset + 4) !== (process.arch === "arm64" ? 0xaa64 : 0x8664)) throw new Error("Windows fixed Work build image ABI mismatch")
-      await fs.writeFile(path.join(input.staging, entry.name), content, { flag: "wx" })
-      const copied = await fs.lstat(path.join(input.staging, entry.name), { bigint: true })
-      if (!copied.isFile() || copied.isSymbolicLink() || copied.nlink !== 1n || copied.size !== BigInt(content.length))
-        throw new Error("Windows fixed Work published image must have one original link")
-      return Object.freeze({ path: `packages/work-file-helper/bin/win32-${process.arch}/${entry.name}`, bytes: content.length,
-        sha256: createHash("sha256").update(content).digest("hex") })
-    } finally { await handle.close() }
-  }))
+  ] as const).map((entry) => copyWindowsWorkBuildImage({ ...entry, staging: input.staging, cargoDirectory: directory,
+    architecture: process.arch === "arm64" ? "arm64" : "x64" })))
   const licenses = await Promise.all(["ed25519-dalek.LICENSE", "curve25519-dalek.LICENSE", "NOTICE"].map(async (name) => {
     const content = await fs.readFile(path.join(input.repository, "packages/work-file-helper", name))
     await fs.writeFile(path.join(input.staging, name), content, { flag: "wx" })
@@ -80,6 +49,68 @@ export async function buildWindowsNativeBootstrap(input: { repository: string; s
   }))
   return Object.freeze({ assets: Object.freeze(assets), licenses: Object.freeze(licenses), filename: asset, path: `packages/work-file-helper/bin/win32-${process.arch}/native-image-factory.node`,
     bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), publisherPin: windowsNativePublisherPin(input.publicKey) })
+}
+
+/** Copies only the build-owned fixed images. Cargo's unique source hardlink is
+ * checked before an exclusive single-link publication; installed guards stay strict. */
+export async function copyWindowsWorkBuildImage(input: {
+  name: "deepagent-work-process-supervisor.exe" | "bun-command-runtime.exe"
+  source: string
+  staging: string
+  cargoDirectory: string
+  architecture: "x64" | "arm64"
+}) {
+  if (![input.source, input.staging, input.cargoDirectory].every(path.isAbsolute))
+    throw new Error("Windows fixed Work build image requires absolute owned paths")
+  const handle = await fs.open(input.source, "r")
+  try {
+    const before = await handle.stat({ bigint: true })
+    const fields = ["dev", "ino", "size", "mode", "nlink", "mtimeNs", "ctimeNs"] as const
+    const changed = (value: typeof before) => fields.find((field) => value[field] !== before[field])
+    const reject = (predicate: "source_file" | "source_links" | "cargo_alias_missing" | "cargo_alias_multiple" |
+      "cargo_alias_file" | "source_symlink" | "bytes_size" | "bytes_bounds" | "pe_magic" | "pe_abi" | "published_single_link" |
+      `${"cargo_alias" | "named_before" | "opened_after" | "named_after" | "cargo_alias_after"}_${typeof fields[number]}`) => new Error(`Windows fixed Work build image rejected: asset=${input.name}, predicate=${predicate}`)
+    // This alias exception applies only to Cargo's fixed fresh build artifact.
+    const aliases = input.name === "deepagent-work-process-supervisor.exe" && before.nlink === 2n
+      ? (await fs.readdir(path.join(input.cargoDirectory, "release/deps"))).filter((name) => /^deepagent_work_process_supervisor-[a-f0-9]{16}\.exe$/.test(name))
+      : []
+    const alias = aliases.length === 1 ? path.join(input.cargoDirectory, "release/deps", aliases[0]!) : undefined
+    const linked = alias ? await fs.lstat(alias, { bigint: true }) : undefined
+    const named = await fs.lstat(input.source, { bigint: true })
+    const content = await handle.readFile()
+    const after = await handle.stat({ bigint: true })
+    const final = await fs.lstat(input.source, { bigint: true })
+    const finalAlias = alias ? await fs.lstat(alias, { bigint: true }) : undefined
+    if (!before.isFile()) throw reject("source_file")
+    if (before.nlink !== 1n) {
+      if (before.nlink !== 2n || input.name !== "deepagent-work-process-supervisor.exe") throw reject("source_links")
+      if (aliases.length !== 1) throw reject(aliases.length === 0 ? "cargo_alias_missing" : "cargo_alias_multiple")
+      if (!linked?.isFile() || linked.isSymbolicLink()) throw reject("cargo_alias_file")
+      const aliasChanged = changed(linked)
+      if (aliasChanged) throw reject(`cargo_alias_${aliasChanged}`)
+    }
+    if (named.isSymbolicLink()) throw reject("source_symlink")
+    const namedChanged = changed(named)
+    const openedChanged = changed(after)
+    const finalChanged = changed(final)
+    const finalAliasChanged = finalAlias && changed(finalAlias)
+    if (namedChanged) throw reject(`named_before_${namedChanged}`)
+    if (openedChanged) throw reject(`opened_after_${openedChanged}`)
+    if (finalChanged) throw reject(`named_after_${finalChanged}`)
+    if (finalAliasChanged) throw reject(`cargo_alias_after_${finalAliasChanged}`)
+    if (content.length !== Number(before.size)) throw reject("bytes_size")
+    if (content.length < 64 || content.length > LIMIT) throw reject("bytes_bounds")
+    if (content.subarray(0, 2).toString() !== "MZ") throw reject("pe_magic")
+    const offset = content.readUInt32LE(0x3c)
+    if (offset > content.length - 24 || content.subarray(offset, offset + 4).toString("hex") !== "50450000" ||
+      content.readUInt16LE(offset + 4) !== (input.architecture === "arm64" ? 0xaa64 : 0x8664)) throw reject("pe_abi")
+    await fs.writeFile(path.join(input.staging, input.name), content, { flag: "wx" })
+    const copied = await fs.lstat(path.join(input.staging, input.name), { bigint: true })
+    if (!copied.isFile() || copied.isSymbolicLink() || copied.nlink !== 1n || copied.size !== BigInt(content.length))
+      throw reject("published_single_link")
+    return Object.freeze({ path: `packages/work-file-helper/bin/win32-${input.architecture}/${input.name}` as const,
+      bytes: content.length, sha256: createHash("sha256").update(content).digest("hex") })
+  } finally { await handle.close() }
 }
 
 /** Runs after final sidecar and sealed Node bytes exist. Names/placement are

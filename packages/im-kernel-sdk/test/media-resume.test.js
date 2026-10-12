@@ -4,7 +4,7 @@ import { mediaUploadProgress } from "../upstream/src/delivery/media-contract";
 
 const servers = [];
 afterEach(() => servers.splice(0).forEach(server => server.stop(true)));
-const transfer = { version: 1, protocol: "dac-media-resumable-v1", chunkBytes: 262144, maxChunks: 200, maxFileBytes: 52428800 };
+const transfer = { version: 1, protocol: "dac-media-resumable-v1", chunkBytes: 262144, maxChunks: 40, maxFileBytes: 10485760 };
 const progress = () => {
   const createdAt = Date.now();
   return { version: 1, protocol: "dac-media-resumable-v1", chunkBytes: 262144, checkpointRevision: 3,
@@ -40,14 +40,41 @@ test("resume checkpoint snapshots sparse committed chunks and rejects holes, dup
   expect(mediaUploadProgress(last).committedIndices).toEqual([1, 3]);
 });
 
-test("transfer negotiation is independent of the unchanged strict media capability", () => {
+test("transfer negotiation is independent of the strict 10MiB media capability", () => {
   expect(mediaTransferCapability(transfer)).toEqual(transfer);
   expect(() => mediaTransferCapability({ ...transfer, chunkBytes: 1048576 })).toThrow();
   expect(() => mediaTransferCapability({ ...transfer, lease: "not-authority" })).toThrow();
   const old = { version: 1, profile: "mysql-protected-media-v1", capability: "dac:media.v1", readerVersion: 2,
-    maxFileBytes: 52428800, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true };
+    maxFileBytes: 10485760, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true };
   expect(mediaCapability(old)).toEqual(old);
   expect(() => mediaCapability({ ...old, protocol: transfer.protocol })).toThrow();
+  expect(() => mediaTransferCapability({ ...transfer, maxChunks: 200, maxFileBytes: 52428800 })).toThrow();
+  expect(() => mediaTransferCapability({ ...transfer, maxChunks: 41 })).toThrow();
+});
+
+test("10MiB progress and chunk indices stop at the fortieth chunk without extra HTTP", async () => {
+  const checkpoint = progress();
+  checkpoint.object.sizeBytes = 10485760;
+  checkpoint.object.receivedBytes = 10485760;
+  checkpoint.object.receivedChunks = 40;
+  checkpoint.committedIndices = Array.from({ length: 40 }, (_, index) => index);
+  expect(mediaUploadProgress(checkpoint).committedIndices).toHaveLength(40);
+  expect(() => mediaUploadProgress({ ...checkpoint, committedIndices: [...checkpoint.committedIndices.slice(0, 39), 40] })).toThrow();
+  expect(() => mediaUploadProgress({ ...checkpoint, object: { ...checkpoint.object, sizeBytes: 10485761 } })).toThrow();
+  let calls = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    calls++;
+    expect(request.method).toBe("PUT");
+    expect(new URL(request.url).pathname.endsWith("/chunks/39")).toBe(true);
+    return response(checkpoint.object);
+  } });
+  servers.push(server);
+  const client = MediaClient({ isConnected: () => true, deliveryMediaContext: () => ({ generation: 1,
+    user: "bounded-user", token: "private-chunk-token", navigator: server.url.origin }) }, true);
+  expect((await client.putProtectedMediaChunk({ objectID: checkpoint.object.objectID, index: 39, body: new Uint8Array([1]) })).sizeBytes).toBe(10485760);
+  await expect(client.putProtectedMediaChunk({ objectID: checkpoint.object.objectID, index: 40, body: new Uint8Array([1]) }))
+    .rejects.toMatchObject({ operation: "media_chunk", kind: "invalid_request" });
+  expect(calls).toBe(1);
 });
 
 test("original MediaClient sends bounded authenticated progress GETs and rejects old-generation replies", async () => {

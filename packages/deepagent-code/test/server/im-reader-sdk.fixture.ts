@@ -22,6 +22,7 @@ export const make = () => {
   const observed = { database: undefined as Database.Interface | undefined, repository: undefined as IMRepositoryInterface | undefined, broadcaster: undefined as IMBroadcaster | undefined, engine: undefined as IMKernelSync.Interface | undefined, cursor: 0, factories: 0, active: 0, maximum: 0, marks: 0, sends: 0, platformMutations: 0, calls: [] as string[], errors: [] as string[], context: new Map<string, InstanceContext>(), lease: new Map<string, IMFacade.ReaderLease>(), sent: [] as { wireID: string; messageID: string; target: string; text: string; expiresAt: number }[] }
   const stalled: { key?: string; started: () => void; release: () => void; pending?: Promise<void> } = { started: () => {}, release: () => {} }
   const stalledMark: { key?: string; started: () => void; release: () => void; pending?: Promise<void> } = { started: () => {}, release: () => {} }
+  const connection: { next?: { subscribed: () => void; state: Promise<number> } } = {}
   const conversation = (type: 1 | 2, target: string, name = target) => {
     const key = hash(`${type}:${target}`)
     const existing = conversations.get(key)
@@ -107,21 +108,36 @@ export const make = () => {
       return Promise.resolve({ messageID })
     }),
   })
-  const buildEngine: IMFacade.EngineBuilder = (config, options) => Layer.effect(IMKernelSync.Service, Effect.gen(function* () {
-    if (config.appkey !== "appkey_1" || config.identity?.orgID !== 7 || config.userID !== "uuid-alice") return yield* Effect.die("Controlled SDK credential generation mismatch")
-    observed.factories++
-    observed.database = yield* Database.Service
-    observed.repository = yield* IMRepository
-    observed.broadcaster = yield* IMBroadcasterService
-    const engine = yield* IMKernelSync.Service
-    const captured = IMKernelSync.Service.of({ ...engine, acquireReader: (context) => {
-      observed.context.set(context.instance.directory, context.instance)
-      return engine.acquireReader!(context).pipe(Effect.tap((lease) => Effect.sync(() => observed.lease.set(context.instance.directory, lease))), Effect.tapError((error) => Effect.sync(() => observed.errors.push(`${error.code}:${error.operation}`))))
-    } })
-    observed.engine = captured
-    return captured
-  })).pipe(Layer.provide(IMKernelSync.layer(config, options).pipe(Layer.provide(KernelClient.layer.pipe(Layer.provide(Layer.succeed(KernelSdk.Service, sdk)))))))
-  return { observed, buildEngine, publish, conversation, cut, scopeKey, revoke: (type: 1 | 2, target: string) => { const item = conversation(type, target); item.allowed = false; changed(item) }, stall: (projectionKey: string) => {
+  const buildEngine: IMFacade.EngineBuilder = (config, options) => {
+    const delayed = connection.next
+    connection.next = undefined
+    return Layer.effect(IMKernelSync.Service, Effect.gen(function* () {
+      if (config.appkey !== "appkey_1" || config.identity?.orgID !== 7 || config.userID !== "uuid-alice") return yield* Effect.die("Controlled SDK credential generation mismatch")
+      observed.factories++
+      observed.database = yield* Database.Service
+      observed.repository = yield* IMRepository
+      observed.broadcaster = yield* IMBroadcasterService
+      const engine = yield* IMKernelSync.Service
+      const captured = IMKernelSync.Service.of({ ...engine, acquireReader: (context) => {
+        observed.context.set(context.instance.directory, context.instance)
+        return engine.acquireReader!(context).pipe(Effect.tap((lease) => Effect.sync(() => observed.lease.set(context.instance.directory, lease))), Effect.tapError((error) => Effect.sync(() => observed.errors.push(`${error.code}:${error.operation}`))))
+      } })
+      observed.engine = captured
+      return captured
+    })).pipe(Layer.provide(IMKernelSync.layer(config, options).pipe(
+      Layer.provide(KernelClient.layer.pipe(Layer.provide(Layer.succeed(KernelSdk.Service, delayed ? {
+        ...sdk,
+        rawEvents: Stream.fromEffect(Effect.promise(() => { delayed.subscribed(); return delayed.state }).pipe(Effect.map((state) => ({ tag: "state_changed" as const, state })))),
+      } : sdk)))),
+    )))
+  }
+  return { observed, buildEngine, publish, conversation, cut, scopeKey, delayConnection: () => {
+    const control = { subscribed: () => {}, release: (_state: number) => {} }
+    const subscribed = new Promise<void>((resolve) => { control.subscribed = resolve })
+    const state = new Promise<number>((resolve) => { control.release = resolve })
+    connection.next = { subscribed: control.subscribed, state }
+    return { subscribed, release: control.release }
+  }, revoke: (type: 1 | 2, target: string) => { const item = conversation(type, target); item.allowed = false; changed(item) }, stall: (projectionKey: string) => {
     stalled.key = projectionKey
     const started = new Promise<void>((resolve) => { stalled.started = resolve })
     stalled.pending = new Promise<void>((resolve) => { stalled.release = resolve })

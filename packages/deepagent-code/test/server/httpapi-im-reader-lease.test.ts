@@ -62,7 +62,7 @@ const openSocket = (base: URL, directory: string, groupID: string) => {
   return withTimeout(opened, 5000, "protected socket open timed out").then(() => ({ socket, frames, closed }))
 }
 
-const run = <A, E, R>(sdk: IMReaderSDKFixture.Interface, effect: (base: URL) => Effect.Effect<A, E, R>, metadata?: { name: string; allowed: boolean; inspections: number; delayMs?: number }) => Effect.gen(function* () {
+const run = <A, E, R>(sdk: IMReaderSDKFixture.Interface, effect: (base: URL) => Effect.Effect<A, E, R>, metadata?: { name: string; allowed: boolean; inspections: number; delayMs?: number; token?: string }) => Effect.gen(function* () {
   const directory = yield* tmpdirScoped({ git: false })
   const original = Flag.DEEPAGENT_CODE_DB
   Flag.DEEPAGENT_CODE_DB = join(directory, "reader-file.sqlite")
@@ -74,7 +74,7 @@ const run = <A, E, R>(sdk: IMReaderSDKFixture.Interface, effect: (base: URL) => 
       const url = new URL(incoming.url ?? "/", "http://localhost")
       const input = chunks.length ? Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(Buffer.concat(chunks).toString("utf8")) as { conversation_type: 1 | 2; conversation_id: string; name?: string } : undefined
       if (url.pathname.endsWith("/inspect") && metadata) metadata.inspections++
-      const payload = url.pathname.endsWith("/login") ? { kernel_token: "controlled-token", navigator_url: "http://127.0.0.1:9", appkey: "appkey_1", identity: { uuid: "uuid-alice", name: "alice", org_id: 7, org_all_group_id: "org7" }, ttl: { msg_life_time_ms: 259200000 } }
+      const payload = url.pathname.endsWith("/login") || url.pathname.endsWith("/rename") ? { kernel_token: metadata?.token ?? "controlled-token", navigator_url: "http://127.0.0.1:9", appkey: "appkey_1", identity: { uuid: "uuid-alice", name: "alice", org_id: 7, org_all_group_id: "org7" }, ttl: { msg_life_time_ms: 259200000 } }
         : url.pathname.endsWith("/resolve") ? { uuid: `uuid-${url.searchParams.get("name")}`, name: url.searchParams.get("name") }
         : url.pathname.endsWith("/inspect") && input ? { conversation_type: input.conversation_type, conversation_id: input.conversation_id, org_id: 7, member_uuids: sdk.conversation(input.conversation_type, input.conversation_id).allowed && metadata?.allowed !== false ? ["uuid-alice", input.conversation_id] : [input.conversation_id], name: metadata?.name ?? input.conversation_id }
         : url.pathname.endsWith("/groups") ? { group_id: "kg-lease", name: input?.name, member_uuids: ["uuid-alice", "uuid-boba"] }
@@ -232,6 +232,94 @@ it.live("explicit selected group refresh uses the original authenticated inspect
     expect(sdk.observed.platformMutations).toBe(0)
   }), metadata)
 }))
+
+it.live("normal facade retry restores cold pending conversation selection without a known group ID and rejects revoked membership", () => Effect.gen(function* () {
+  const sdk = IMReaderSDKFixture.make()
+  const metadata = { name: "unchanged conversation", allowed: true, inspections: 0, token: "original-test-token" }
+  yield* run(sdk, () => Effect.gen(function* () {
+    const directory = yield* tmpdirScoped({ git: false, config: { formatter: false, lsp: false } })
+    const direct = yield* group(directory, "boba")
+    const created = yield* request(directory, IMPaths.facadeGroups, post({ name: "emptygroup", memberNames: ["boba"] }))
+    expect(created.status).toBe(200)
+    const project = Schema.decodeUnknownSync(IMGroupResponse)(created.body)
+    const db = sdk.observed.database!.db
+    const before = yield* db.all(sql`SELECT reader_key,scope_key,completed_after,window_after,window_upper FROM im_kernel_reader_scope`)
+    const members = yield* db.all(sql`SELECT * FROM im_members`)
+    const groups = yield* db.all(sql`SELECT * FROM im_groups`)
+    const oldPending = yield* db.all<{ metadata: string }>(sql`SELECT metadata FROM im_kernel_reader_projection WHERE visibility='pending' ORDER BY binding_key`)
+    expect(oldPending.length).toBe(2)
+    // The real identity endpoint retires the original connection and activates
+    // a fresh credential while the durable account and reader scope stay fixed.
+    metadata.token = "cold-test-token"
+    expect((yield* request(directory, IMPaths.facadeRename, post({ name: "alice" }))).status).toBe(200)
+    const pageURL = "/api/v1/im/groups/page?lane=protected&limit=2"
+    expect(yield* request(directory, pageURL)).toMatchObject({ status: 503, body: { name: "IM_READER_UNAVAILABLE", data: { code: "reader_scope_mismatch", operation: "pending-output" } } })
+    expect(yield* db.all(sql`SELECT metadata FROM im_kernel_reader_projection WHERE visibility='pending' ORDER BY binding_key`)).toEqual(oldPending)
+    const inspected = metadata.inspections
+    const delayed = sdk.delayConnection()
+    const restoring = yield* Effect.forkChild(request(directory, IMPaths.facadeRetry, { method: "POST" }))
+    yield* Effect.promise(() => delayed.subscribed)
+    expect(metadata.inspections).toBe(inspected)
+    delayed.release(0)
+    const restored = yield* Fiber.join(restoring)
+    expect({ inspections: metadata.inspections - inspected, acquireErrors: sdk.observed.errors }).toEqual({ inspections: 2, acquireErrors: [] })
+    expect(restored).toMatchObject({ status: 200, body: { uuid: "uuid-alice", name: "alice", orgID: 7 } })
+    expect(metadata.inspections).toBe(inspected + 2)
+    const page = yield* request(directory, pageURL)
+    expect(page.status).toBe(200)
+    expect(Schema.decodeUnknownSync(Schema.Struct({ groups: Schema.Array(IMGroupResponse) }))(page.body).groups.map((item) => item.id).toSorted()).toEqual([direct.id, project.id].toSorted())
+    expect(yield* db.all(sql`SELECT reader_key,scope_key,completed_after,window_after,window_upper FROM im_kernel_reader_scope`)).toEqual(before)
+    expect(yield* db.all(sql`SELECT * FROM im_members`)).toEqual(members)
+    expect(yield* db.all(sql`SELECT * FROM im_groups`)).toEqual(groups)
+    const recovered = yield* db.all<{ metadata: string }>(sql`SELECT metadata FROM im_kernel_reader_projection WHERE visibility='pending' ORDER BY binding_key`)
+    expect(recovered).not.toEqual(oldPending)
+    metadata.token = "revoked-test-token"
+    metadata.allowed = false
+    expect((yield* request(directory, IMPaths.facadeRename, post({ name: "alice" }))).status).toBe(200)
+    const denied = yield* request(directory, IMPaths.facadeRetry, { method: "POST" })
+    expect(denied).toEqual({ status: 502, body: { name: "IM_FACADE_UNAVAILABLE", data: { code: "im_unavailable", message: "IM conversation recovery is currently unavailable" } } })
+    expect(JSON.stringify(denied)).not.toContain(metadata.token)
+    expect(yield* db.all(sql`SELECT metadata FROM im_kernel_reader_projection WHERE visibility='pending' ORDER BY binding_key`)).toEqual(recovered)
+    expect((yield* db.get<{ count: number }>(sql`SELECT count(*) count FROM im_messages`))?.count).toBe(0)
+    expect((yield* db.get<{ count: number }>(sql`SELECT count(*) count FROM im_kernel_reader_message`))?.count).toBe(0)
+    expect((yield* db.get<{ count: number }>(sql`SELECT count(*) count FROM session_input`))?.count).toBe(0)
+    expect(sdk.observed.sends).toBe(0)
+    expect(sdk.observed.marks).toBe(0)
+    expect(sdk.observed.platformMutations).toBe(1)
+  }), metadata)
+}), 30000)
+
+it.live("normal facade retry rejects failed, disconnected and retired connections before pending metadata recovery", () => Effect.gen(function* () {
+  const sdk = IMReaderSDKFixture.make()
+  const metadata = { name: "unchanged conversation", allowed: true, inspections: 0, token: "original-test-token" }
+  yield* run(sdk, () => Effect.gen(function* () {
+    const directory = yield* tmpdirScoped({ git: false, config: { formatter: false, lsp: false } })
+    yield* group(directory, "boba")
+    const db = sdk.observed.database!.db
+    const pending = yield* db.all(sql`SELECT metadata FROM im_kernel_reader_projection WHERE visibility='pending' ORDER BY binding_key`)
+    const inspected = metadata.inspections
+    for (const state of [3, 2]) {
+      const delayed = sdk.delayConnection()
+      const restoring = yield* Effect.forkChild(request(directory, IMPaths.facadeRetry, { method: "POST" }))
+      yield* Effect.promise(() => delayed.subscribed)
+      delayed.release(state)
+      expect(yield* Fiber.join(restoring)).toEqual({ status: 502, body: { name: "IM_FACADE_UNAVAILABLE", data: { code: "im_unavailable", message: "IM conversation recovery is currently unavailable" } } })
+      expect(metadata.inspections).toBe(inspected)
+      expect(yield* db.all(sql`SELECT metadata FROM im_kernel_reader_projection WHERE visibility='pending' ORDER BY binding_key`)).toEqual(pending)
+    }
+    const delayed = sdk.delayConnection()
+    const restoring = yield* Effect.forkChild(request(directory, IMPaths.facadeRetry, { method: "POST" }))
+    yield* Effect.promise(() => delayed.subscribed)
+    expect((yield* request(directory, IMPaths.facadeRename, post({ name: "alice" }))).status).toBe(200)
+    expect(yield* Fiber.join(restoring)).toEqual({ status: 502, body: { name: "IM_FACADE_UNAVAILABLE", data: { code: "im_unavailable", message: "IM conversation recovery is currently unavailable" } } })
+    delayed.release(0)
+    expect(metadata.inspections).toBe(inspected)
+    expect(yield* db.all(sql`SELECT metadata FROM im_kernel_reader_projection WHERE visibility='pending' ORDER BY binding_key`)).toEqual(pending)
+    expect(sdk.observed.sends).toBe(0)
+    expect(sdk.observed.marks).toBe(0)
+    expect((yield* db.get<{ count: number }>(sql`SELECT count(*) count FROM im_kernel_reader_message`))?.count).toBe(0)
+  }), metadata)
+}), 30000)
 
 it.live("complete App HTTP and sockets retain the actual workspace lease through stalled A, first B, disposal, recreation, membership and background ACK", () => Effect.gen(function* () {
   const sdk = IMReaderSDKFixture.make()

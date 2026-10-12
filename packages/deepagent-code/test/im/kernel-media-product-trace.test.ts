@@ -35,13 +35,14 @@ test("private trace installs on the original SDK and records a disconnected stag
 })
 
 test("diagnostic callbacks cannot alter the native media result or its original error", async () => {
+  await import("@/im/kernel/shims")
   const sdk = (await import("@deepagent-code/im-kernel-sdk")).default
   const native = sdk.init({ appkey: "trace-private", navList: ["http://127.0.0.1:58642"], isSync: false, protectedDeliveryReader: true, protectedMedia: true })
   const original = Object.freeze({ kind: "denied", code: 30001, message: "private-secret-not-diagnostic" })
   const observed = MediaProductTrace.observe({ ...native, getProtectedMediaCapabilities: () => Promise.reject(original) }, () => { throw new Error("diagnostic sink failure") })
   expect(await observed.getProtectedMediaCapabilities().then(() => undefined, (error: unknown) => error)).toBe(original)
   const result = { version: 1 as const, profile: "mysql-protected-media-v1" as const, capability: "dac:media.v1" as const, readerVersion: 2 as const,
-    maxFileBytes: 52428800 as const, maxAttachments: 4 as const, chunkBytes: 262144 as const, ttlMillis: 86400000 as const, authenticatedContent: true as const }
+    maxFileBytes: 10485760 as const, maxAttachments: 4 as const, chunkBytes: 262144 as const, ttlMillis: 86400000 as const, authenticatedContent: true as const }
   const successful = MediaProductTrace.observe({ ...native, getProtectedMediaCapabilities: () => Promise.resolve(result) }, () => { throw new Error("diagnostic sink failure") })
   expect(await successful.getProtectedMediaCapabilities()).toBe(result)
 })

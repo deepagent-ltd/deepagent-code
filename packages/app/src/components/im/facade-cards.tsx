@@ -235,13 +235,11 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
               props.status.recovery?.status === "failed" ? "im.facade.recovery.failed" : "im.facade.recovery.pending",
             )}
           </p>
-          <Show when={props.status.recovery?.status === "failed"}>
-            <Button variant="secondary" size="small" disabled={busy()} onClick={() => void retryRecovery()}>
-              {language.t("im.facade.retry")}
-            </Button>
-          </Show>
         </div>
       </Show>
+      <Button variant="secondary" size="small" disabled={busy()} onClick={() => void retryRecovery()}>
+        {language.t("im.facade.retry")}
+      </Button>
       <Show when={failure()}>{(f) => <FailureText failure={f()} />}</Show>
     </div>
   )

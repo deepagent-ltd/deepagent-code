@@ -2,7 +2,7 @@ import { deliveryError, snapshot, keys, hash, text, utf8, time } from "./values"
 
 export const MEDIA_TYPE = "dac:media.v1";
 export const MEDIA_BYTES = 16384;
-export const FILE_BYTES = 52428800;
+export const FILE_BYTES = 10485760;
 export const CHUNK_BYTES = 262144;
 export const MEDIA_LIFETIME = 86400000;
 export const mediaMIME = value => typeof value === "string" && value.length <= 127 &&
@@ -90,7 +90,7 @@ export function mediaUploadProgress(input) {
   if (!keys(value, ["version", "protocol", "object", "chunkBytes", "checkpointRevision", "committedIndices"]) ||
       value.version !== 1 || value.protocol !== "dac-media-resumable-v1" || value.chunkBytes !== CHUNK_BYTES ||
       !time(value.checkpointRevision, true) || !Array.isArray(value.committedIndices) ||
-      Object.getPrototypeOf(value.committedIndices) !== Array.prototype || value.committedIndices.length > 200)
+      Object.getPrototypeOf(value.committedIndices) !== Array.prototype || value.committedIndices.length > FILE_BYTES / CHUNK_BYTES)
     throw deliveryError("media_upload_progress", "invalid_response");
   const object = mediaMetadata(value.object);
   const entries = Object.getOwnPropertyDescriptors(value.committedIndices);
