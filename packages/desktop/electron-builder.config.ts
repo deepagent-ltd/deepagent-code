@@ -87,6 +87,7 @@ const getBase = (): Configuration => ({
   asarUnpack: [
     "out/main/chunks/node.js",
     "out/main/sidecar.js",
+    "out/main/renderer-origin-*.js",
     "out/main/chunks/native-image-factory.node",
     "out/main/chunks/native-preloader.installation.json",
     "out/main/chunks/ed25519-dalek.LICENSE",

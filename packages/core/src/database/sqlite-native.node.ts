@@ -5,6 +5,7 @@
 // { readonly, readwrite, create }, run/exec, query().get()/.all()/.run() and
 // close(). PRAGMA statements are issued through run()/exec().
 import { existsSync } from "node:fs"
+import { pathToFileURL } from "node:url"
 import { DatabaseSync, type SQLInputValue } from "node:sqlite"
 
 interface DatabaseOptions {
@@ -48,4 +49,13 @@ export class Database {
   close(): void {
     this.#db.close()
   }
+}
+
+/** Only the fenced closed-file reader uses this URI. The constructor still enforces readOnly. */
+export const openImmutableReadOnly = (filename: string) => {
+  if (!existsSync(filename)) throw new Error("SQLiteDatabase: closed file is absent")
+  const uri = pathToFileURL(filename)
+  uri.searchParams.set("mode", "ro")
+  uri.searchParams.set("immutable", "1")
+  return new Database(uri.href, { readonly: true })
 }
