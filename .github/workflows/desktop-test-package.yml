@@ -233,12 +233,12 @@ jobs:
         run: |
           mkdir -p artifacts/source artifacts/services
           bun -e 'await Bun.write(process.env.RUNNER_TEMP + "/dac-source-roots.json", JSON.stringify({ dac: process.cwd() }))'
-          bun ./scripts/materialize-source-closure.ts --manifest release/source-closure/2.0.3-acceptance-20261012/manifest.json --out "$GITHUB_WORKSPACE/artifacts/source-tree" --roots "$RUNNER_TEMP/dac-source-roots.json" --require dac,kernel,platform
-          cp artifacts/source-tree/source-closure-manifest.json artifacts/source/source-closure-manifest.json
-          cp artifacts/source-tree/source-materialization.json artifacts/source/source-materialization.json
+          bun ./scripts/materialize-source-closure.ts --manifest release/source-closure/2.0.3-acceptance-20261012/manifest.json --out "$RUNNER_TEMP/dac-source-tree" --roots "$RUNNER_TEMP/dac-source-roots.json" --require dac,kernel,platform
+          cp "$RUNNER_TEMP/dac-source-tree/source-closure-manifest.json" artifacts/source/source-closure-manifest.json
+          cp "$RUNNER_TEMP/dac-source-tree/source-materialization.json" artifacts/source/source-materialization.json
           git rev-parse HEAD > artifacts/source/actions-source-commit.txt
       - name: Build the real Platform frontend with its frozen lock
-        working-directory: artifacts/source-tree/platform/web
+        working-directory: ${{ runner.temp }}/dac-source-tree/platform/web
         shell: bash
         run: |
           bun install --frozen-lockfile --ignore-scripts --registry https://registry.npmjs.org
@@ -248,8 +248,8 @@ jobs:
         timeout-minutes: 20
         run: |
           DAC_SERVICE_OUT="$GITHUB_WORKSPACE/artifacts/services"
-          (cd artifacts/source-tree/kernel && go build -mod=readonly -buildvcs=false -p=2 -o "$DAC_SERVICE_OUT/im-kernel-linux-x64" ./launcher)
-          (cd artifacts/source-tree/platform && go build -mod=readonly -buildvcs=false -p=2 -o "$DAC_SERVICE_OUT/im-platform-linux-x64" .)
+          (cd "$RUNNER_TEMP/dac-source-tree/kernel" && go build -mod=readonly -buildvcs=false -p=2 -o "$DAC_SERVICE_OUT/im-kernel-linux-x64" ./launcher)
+          (cd "$RUNNER_TEMP/dac-source-tree/platform" && go build -mod=readonly -buildvcs=false -p=2 -o "$DAC_SERVICE_OUT/im-platform-linux-x64" .)
           go version -m "$DAC_SERVICE_OUT/im-kernel-linux-x64" > "$DAC_SERVICE_OUT/im-kernel-buildinfo.txt"
           go version -m "$DAC_SERVICE_OUT/im-platform-linux-x64" > "$DAC_SERVICE_OUT/im-platform-buildinfo.txt"
           sha256sum "$DAC_SERVICE_OUT/im-kernel-linux-x64" "$DAC_SERVICE_OUT/im-platform-linux-x64" > "$DAC_SERVICE_OUT/SHA256SUMS"
@@ -258,8 +258,8 @@ jobs:
         run: |
           # Dependencies and generated frontend assets are reproducible build products.
           # Archive the reviewed source tree before including any tool cache or binary.
-          rm -rf artifacts/source-tree/platform/web/node_modules artifacts/source-tree/platform/web/dist
-          tar -czf artifacts/source/deepagent-code-2.0.3-full-source.tar.gz -C artifacts/source-tree .
+          rm -rf "$RUNNER_TEMP/dac-source-tree/platform/web/node_modules" "$RUNNER_TEMP/dac-source-tree/platform/web/dist"
+          tar -czf artifacts/source/deepagent-code-2.0.3-full-source.tar.gz -C "$RUNNER_TEMP/dac-source-tree" .
           sha256sum artifacts/source/deepagent-code-2.0.3-full-source.tar.gz artifacts/source/source-closure-manifest.json > artifacts/source/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
