@@ -7,7 +7,7 @@ export async function inspectTestInstallers(input: { directory: string; target: 
   const expected = new Map([
     ["darwin-arm64", ["deepagent-code-desktop-mac-arm64.dmg", "deepagent-code-desktop-mac-arm64.zip"]],
     ["darwin-x64", ["deepagent-code-desktop-mac-x64.dmg", "deepagent-code-desktop-mac-x64.zip"]],
-    ["linux-x64", ["deepagent-code-desktop-linux-x64.deb"]],
+    ["linux-x64", ["deepagent-code-desktop-linux-amd64.deb"]],
     ["win32-x64", ["deepagent-code-desktop-win-x64.exe"]],
   ]).get(input.target)
   if (!expected) throw new Error("Unsupported native test package target")

@@ -29,6 +29,9 @@ export declare function buildWindowsNativeBootstrap(input: {
     sha256: string;
     publisherPin: string;
 }>>;
+/** Only the running build compiler supplies this source. Bun compilation may
+ * add hardlinks to that image; the generic Work copier still requires one link. */
+export declare function withWindowsCompilerBun<T>(staging: string, use: (source: string) => Promise<T>): Promise<T>;
 /** Copies only the build-owned fixed images. Cargo's unique source hardlink is
  * checked before an exclusive single-link publication; installed guards stay strict. */
 export declare function copyWindowsWorkBuildImage(input: {

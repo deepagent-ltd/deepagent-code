@@ -152,8 +152,11 @@ export async function buildWindowsNativeBootstrap(input: { repository: string; s
   const assets = await Promise.all(([
     { name: "deepagent-work-process-supervisor.exe", source: path.join(directory, "release/deepagent-work-process-supervisor.exe") },
     { name: "bun-command-runtime.exe", source: process.execPath },
-  ] as const).map((entry) => copyWindowsWorkBuildImage({ ...entry, staging: input.staging, cargoDirectory: directory,
-    architecture: process.arch === "arm64" ? "arm64" : "x64" })))
+  ] as const).map((entry) => entry.name === "bun-command-runtime.exe"
+    ? withWindowsCompilerBun(input.staging, (source) => copyWindowsWorkBuildImage({ ...entry, source,
+      staging: input.staging, cargoDirectory: directory, architecture: process.arch === "arm64" ? "arm64" : "x64" }))
+    : copyWindowsWorkBuildImage({ ...entry, staging: input.staging, cargoDirectory: directory,
+      architecture: process.arch === "arm64" ? "arm64" : "x64" })))
   const licenses = await Promise.all(["ed25519-dalek.LICENSE", "curve25519-dalek.LICENSE", "NOTICE"].map(async (name) => {
     const content = await fs.readFile(path.join(input.repository, "packages/work-file-helper", name))
     await fs.writeFile(path.join(input.staging, name), content, { flag: "wx" })
@@ -162,6 +165,79 @@ export async function buildWindowsNativeBootstrap(input: { repository: string; s
   }))
   return Object.freeze({ assets: Object.freeze(assets), licenses: Object.freeze(licenses), filename: asset, path: `packages/work-file-helper/bin/win32-${process.arch}/native-image-factory.node`,
     bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), publisherPin: windowsNativePublisherPin(input.publicKey) })
+}
+
+/** Only the running build compiler supplies this source. Bun compilation may
+ * add hardlinks to that image; the generic Work copier still requires one link. */
+export async function withWindowsCompilerBun<T>(staging: string, use: (source: string) => Promise<T>) {
+  if (process.platform !== "win32" || !["x64", "arm64"].includes(process.arch) || !process.versions.bun ||
+    !path.isAbsolute(staging) || await fs.realpath(staging) !== staging)
+    throw new Error("Windows compiler Bun capture requires its current build and owned staging")
+  const source = await fs.realpath(process.execPath)
+  if (path.basename(source).toLowerCase() !== "bun.exe") throw new Error("Windows compiler Bun fixed executable rejected")
+  const file = await fs.open(source, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  try {
+    const before = await file.stat({ bigint: true })
+    const stamp = (value: typeof before) => [value.dev, value.ino, value.size, value.mode, value.nlink, value.mtimeNs, value.ctimeNs].join(":")
+    if (!before.isFile() || before.nlink < 1n || before.size < 64n || before.size > BigInt(LIMIT) ||
+      stamp(before) !== stamp(await fs.lstat(source, { bigint: true })))
+      throw new Error(`Windows compiler Bun source rejected: links=${before.nlink}`)
+    const content = await file.readFile()
+    const sha256 = createHash("sha256").update(content).digest("hex")
+    const pe = content.length >= 64 ? content.readUInt32LE(0x3c) : content.length
+    if (content.length !== Number(before.size) || content.subarray(0, 2).toString() !== "MZ" || pe > content.length - 24 ||
+      content.subarray(pe, pe + 4).toString("hex") !== "50450000" ||
+      content.readUInt16LE(pe + 4) !== (process.arch === "arm64" ? 0xaa64 : 0x8664))
+      throw new Error("Windows compiler Bun fixed PE source rejected")
+    const requireSourceCurrent = async () => {
+      if (await fs.realpath(process.execPath) !== source || stamp(before) !== stamp(await file.stat({ bigint: true })) ||
+        stamp(before) !== stamp(await fs.lstat(source, { bigint: true })))
+        throw new Error("Windows compiler Bun source changed")
+      const current = Buffer.alloc(content.length)
+      const read = { bytes: 0 }
+      while (read.bytes < current.length) {
+        const next = await file.read(current, read.bytes, current.length - read.bytes, read.bytes)
+        if (!next.bytesRead) break
+        read.bytes += next.bytesRead
+      }
+      if (read.bytes !== content.length || createHash("sha256").update(current).digest("hex") !== sha256 ||
+        stamp(before) !== stamp(await file.stat({ bigint: true })) || stamp(before) !== stamp(await fs.lstat(source, { bigint: true })))
+        throw new Error("Windows compiler Bun source bytes changed")
+    }
+    await requireSourceCurrent()
+    const directory = await fs.mkdtemp(path.join(staging, ".compiler-bun-"))
+    try {
+      await fs.chmod(directory, 0o700)
+      const copiedPath = path.join(directory, "bun.exe")
+      const output = await fs.open(copiedPath, "wx", 0o700)
+      try { await output.writeFile(content); await output.sync() } finally { await output.close() }
+      await requireSourceCurrent()
+      const copied = await openWindowsPublisherImage(copiedPath, LIMIT)
+      try {
+        if (copied.content.length !== content.length || copied.sha256 !== sha256)
+          throw new Error("Windows compiler Bun private copy differs from its source")
+        const parent = await fs.lstat(directory, { bigint: true })
+        const parentStamp = (value: typeof parent) => [value.dev, value.ino, value.size, value.mode, value.nlink, value.mtimeNs, value.ctimeNs].join(":")
+        const requireParentCurrent = async () => {
+          if (!parent.isDirectory() || parent.isSymbolicLink() || await fs.realpath(directory) !== directory ||
+            parentStamp(parent) !== parentStamp(await fs.lstat(directory, { bigint: true })))
+            throw new Error("Windows compiler Bun owned parent changed")
+          const entries = await fs.opendir(directory)
+          try {
+            if ((await entries.read())?.name !== "bun.exe" || await entries.read() !== null ||
+              parentStamp(parent) !== parentStamp(await fs.lstat(directory, { bigint: true })))
+              throw new Error("Windows compiler Bun owned namespace changed")
+          } finally { await entries.close() }
+        }
+        await requireParentCurrent()
+        const result = await use(copiedPath)
+        await copied.requireCurrent()
+        await requireParentCurrent()
+        await requireSourceCurrent()
+        return result
+      } finally { await copied.close() }
+    } finally { await fs.rm(directory, { recursive: true, force: true }) }
+  } finally { await file.close() }
 }
 
 /** Copies only the build-owned fixed images. Cargo's unique source hardlink is
