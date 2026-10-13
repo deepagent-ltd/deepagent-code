@@ -71,7 +71,7 @@
     "@types/node": "catalog:",
     "@typescript/native-preview": "catalog:",
     "@valibot/to-json-schema": "1.6.0",
-    "electron": "41.10.3",
+    "electron": "41.10.6",
     "electron-builder": "^26",
     "electron-vite": "^5",
     "solid-js": "catalog:",
