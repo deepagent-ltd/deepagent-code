@@ -147,7 +147,7 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
         .filter(Boolean),
     ),
   ),
-  // Temporarily unavailable in 2.0.3. Old configuration cannot re-enable new panel work;
+  // Temporarily unavailable in 2.0.4. Old configuration cannot re-enable new panel work;
   // already-running jobs retain their history and existing stop/result controls.
   experimentalExpertPanel: Config.succeed(false),
   // V3.9 §B: Repo & Wiki（人向监督层）— the human-facing PROJECTION layer over the four graphs (not a

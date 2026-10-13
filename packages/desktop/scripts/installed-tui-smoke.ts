@@ -110,7 +110,7 @@ try {
   assert.throws(() => process.kill(child.pid, 0), "The owned CLI process must have exited")
   const bytes = await fs.readFile(executable)
   await fs.writeFile(path.join(root, "safe-result.json"), JSON.stringify({
-    version: "2.0.3", executable, executableBytes: bytes.length,
+    version: "2.0.4", executable, executableBytes: bytes.length,
     executableHash: createHash("sha256").update(bytes).digest("hex"),
     terminal: { columns: 100, rows: 40, before, after, originalExitCode: ended, restored: true },
     startupMs, inventory, capturedOutputBytes: state.bytes,

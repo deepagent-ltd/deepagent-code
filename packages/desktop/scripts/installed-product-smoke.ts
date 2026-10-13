@@ -48,7 +48,7 @@ try {
     application: app.getAppPath(),
     userData: app.getPath("userData"),
   }))
-  assert.equal(actual.version, "2.0.3")
+  assert.equal(actual.version, "2.0.4")
   assert.equal(actual.packaged, true)
   assert.equal(actual.executable, executable)
   assert.ok(actual.application.endsWith("/Contents/Resources/app.asar"))
@@ -79,7 +79,7 @@ try {
   assert.equal(health.status, 200)
   const body = (await health.json()) as { healthy?: boolean; version?: string }
   assert.equal(body.healthy, true)
-  assert.equal(body.version, "2.0.3")
+  assert.equal(body.version, "2.0.4")
   await page.waitForFunction(() => document.readyState === "complete" && document.body.innerText.trim().length > 0, undefined, {
     timeout: 30_000,
   })
@@ -130,7 +130,7 @@ try {
           new Response(child.stderr).text(),
         ])
         assert.equal(result[0], 0)
-        assert.equal(result[1].trim(), "2.0.3")
+        assert.equal(result[1].trim(), "2.0.4")
         const bytes = await fs.readFile(cli)
         return {
           version: result[1].trim(),
@@ -143,7 +143,7 @@ try {
     path.join(root, "safe-result.json"),
     JSON.stringify(
       {
-        version: "2.0.3",
+        version: "2.0.4",
         actual,
         renderer,
         healthy: body.healthy,

@@ -3,14 +3,39 @@
 import { $ } from "bun"
 import path from "node:path"
 
-export async function prepareReleaseFiles(version: string, repository: string) {
+export const ReleasePackageManifests = [
+  ["packages/app/package.json", "@deepagent-code/app"],
+  ["packages/cli/package.json", "@deepagent-code/cli"],
+  ["packages/core/package.json", "@deepagent-code/core"],
+  ["packages/deepagent-code/package.json", "deepagent-code"],
+  ["packages/desktop/package.json", "@deepagent-code/desktop"],
+  ["packages/function/package.json", "@deepagent-code/function"],
+  ["packages/plugin/package.json", "@deepagent-code/plugin"],
+  ["packages/sdk/js/package.json", "@deepagent-code/sdk"],
+  ["packages/server/package.json", "@deepagent-code/server"],
+  ["packages/ui/package.json", "@deepagent-code/ui"],
+  ["packages/web/package.json", "@deepagent-code/web"],
+] as const
+
+export async function preparePackageVersions(version: string, repository: string) {
   if (!version) throw new Error("release version is required")
-  const files = await Array.fromAsync(new Bun.Glob("**/package.json").scan({ cwd: repository, absolute: true }))
-  for (const file of files.filter((file) => !file.includes("node_modules") && !file.includes("dist"))) {
-    const before = await Bun.file(file).text()
-    const after = before.replaceAll(/"version": "[^"]+"/g, `"version": "${version}"`)
-    if (after !== before) await Bun.write(file, after)
-  }
+  // Embedded upstream packages and private native helpers keep their own identities.
+  // Validate the complete distribution set before modifying any manifest.
+  const packages = await Promise.all(
+    ReleasePackageManifests.map(async (entry) => {
+      const file = Bun.file(path.join(repository, entry[0]))
+      const before = await file.text()
+      const metadata = JSON.parse(before) as Record<string, unknown>
+      if (metadata.name !== entry[1] || typeof metadata.version !== "string")
+        throw new Error(`Unexpected release package identity: ${entry[0]}`)
+      return { file, before, after: JSON.stringify({ ...metadata, version }, null, 2) + "\n" }
+    }),
+  )
+  await Promise.all(packages.map((entry) => entry.before === entry.after ? undefined : Bun.write(entry.file, entry.after)))
+}
+
+export async function prepareReleaseFiles(version: string, repository: string) {
+  await preparePackageVersions(version, repository)
   await $`bun install`.cwd(repository)
   await $`./packages/sdk/js/script/build.ts`.cwd(repository)
 

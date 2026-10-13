@@ -49,5 +49,5 @@ if (import.meta.main) {
   const target = process.env.DAC_TEST_PACKAGE_TARGET
   if (!target) throw new Error("DAC_TEST_PACKAGE_TARGET is required")
   const files = await inspectTestInstallers({ directory: path.resolve("dist"), target })
-  await Bun.write("dist/test-package-checksums.json", JSON.stringify({ version: "2.0.3", runtimeVersion: process.env.DEEPAGENT_CODE_VERSION ?? null, target, files }, null, 2) + "\n")
+  await Bun.write("dist/test-package-checksums.json", JSON.stringify({ version: "2.0.4", runtimeVersion: process.env.DEEPAGENT_CODE_VERSION ?? null, target, files }, null, 2) + "\n")
 }

@@ -13,7 +13,7 @@ await fs.chmod(root, 0o700)
 const samples = 24
 const idleSamples = 20
 const result: Record<string, unknown> = {
-  version: "2.0.3", root, samples, idleSamples,
+  version: "2.0.4", root, samples, idleSamples,
   workload: { guiSessions: 12, messages: 0, concurrentWorks: 0, imConnections: 0, providerExecuted: false },
   hardware: { platform: process.platform, architecture: process.arch, kernel: os.release(), memoryBytes: os.totalmem(), cpus: os.cpus().length, cpuModel: os.cpus()[0]?.model, machineLoad: os.loadavg() },
   slo: { inputEchoP95Ms: 50, loadedSessionSwitchP95Ms: 300, localListPageP95Ms: 300, coldInteractiveP95Ms: 5000 },
@@ -80,7 +80,7 @@ async function gui() {
   result.gui = measurements
   try {
     const actual = await app.evaluate(({ app }) => ({ version: app.getVersion(), packaged: app.isPackaged, executable: process.execPath, application: app.getAppPath(), userData: app.getPath("userData") }))
-    assert.equal(actual.version, "2.0.3"); assert.equal(actual.packaged, true); assert.ok(actual.userData.startsWith(root + path.sep))
+    assert.equal(actual.version, "2.0.4"); assert.equal(actual.packaged, true); assert.ok(actual.userData.startsWith(root + path.sep))
     measurements.actual = actual
     const page = await app.firstWindow({ timeout: 45_000 })
     const errors: string[] = []

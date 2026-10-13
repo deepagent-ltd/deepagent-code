@@ -118,7 +118,7 @@ export function createMcpAppBridge(input: {
           id: message.id,
           result: {
             protocolVersion: "2026-01-26",
-            hostInfo: { name: "DeepAgent Code", version: "2.0.3" },
+            hostInfo: { name: "DeepAgent Code", version: "2.0.4" },
             hostCapabilities: {
               ...(input.invoke && input.listTools ? { serverTools: {} } : {}),
               sandbox: {

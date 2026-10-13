@@ -488,7 +488,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   }
 
   const shareCmds = () => {
-    // Public sharing is deferred to 2.0.3; keep unshare for existing links.
+    // Public sharing remains disabled by default; keep unshare for existing links.
     return [
       sessionCommand({
         id: "session.unshare",
