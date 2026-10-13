@@ -51,41 +51,6 @@ export const V203_HTTP_RULE_PACKS: readonly RulePack[] = [
     "read",
   ),
   ...reviewed(
-    "http.instance.imTask.",
-    {
-      enable: "LocalTaskPolicy.enable",
-      propose: "IMTaskAuthority.propose",
-      accept: "tasks.accept",
-      cancel: "control.cancel",
-      refuse: "notices.refuse",
-    },
-    "adapter",
-    "packages/core/src/im/task-authority.ts",
-    "LocalTaskAuthority.provide",
-  ),
-  ...reviewed(
-    "http.instance.imTask.",
-    {
-      targets: "RemoteTaskScope.targets",
-      conversation: "LocalTaskPolicy.lookup",
-      read: "tasks.read",
-      state: "state.read",
-      session: "taskSession.read",
-    },
-    "read_only",
-    "packages/core/src/im/task-authority.ts",
-    "LocalTaskAuthority.provide",
-  ),
-  ...reviewed(
-    "http.instance.imTask.",
-    {
-      capability: "LocalTaskAuthority.authenticate",
-    },
-    "read_only",
-    "packages/core/src/im/task-authority.ts",
-    "LocalTaskAuthority.authenticate",
-  ),
-  ...reviewed(
     "http.instance.workRecovery.",
     {
       recoverKnown: "NativeWorkKnownRecovery.recover",
@@ -94,7 +59,7 @@ export const V203_HTTP_RULE_PACKS: readonly RulePack[] = [
     },
     "adapter",
     "packages/core/src/session/work-known-recovery.ts",
-    "LocalTaskAuthority.provide",
+    "LocalAuthority.provide",
   ),
   ...reviewed(
     "http.instance.eventWork.",
@@ -106,7 +71,7 @@ export const V203_HTTP_RULE_PACKS: readonly RulePack[] = [
     },
     "read_only",
     "packages/core/src/deepagent/event-work-management.ts",
-    "LocalTaskAuthority.provide",
+    "LocalAuthority.provide",
   ),
   ...reviewed(
     "http.instance.eventWork.",
@@ -116,7 +81,7 @@ export const V203_HTTP_RULE_PACKS: readonly RulePack[] = [
     },
     "adapter",
     "packages/core/src/deepagent/event-work-management.ts",
-    "LocalTaskAuthority.provide",
+    "LocalAuthority.provide",
   ),
   ...reviewed(
     "http.instance.eventInvestigation.",
@@ -126,7 +91,7 @@ export const V203_HTTP_RULE_PACKS: readonly RulePack[] = [
     },
     "read_only",
     "packages/core/src/deepagent/event-investigation.ts",
-    "LocalTaskAuthority.provide",
+    "LocalAuthority.provide",
   ),
   ...reviewed(
     "http.instance.eventInvestigation.",
@@ -136,7 +101,7 @@ export const V203_HTTP_RULE_PACKS: readonly RulePack[] = [
     },
     "adapter",
     "packages/core/src/deepagent/event-investigation.ts",
-    "LocalTaskAuthority.provide",
+    "LocalAuthority.provide",
   ),
   ...reviewed(
     "http.instance.eventValidation.",
@@ -145,7 +110,7 @@ export const V203_HTTP_RULE_PACKS: readonly RulePack[] = [
     },
     "read_only",
     "packages/core/src/deepagent/event-validation.ts",
-    "LocalTaskAuthority.provide",
+    "LocalAuthority.provide",
   ),
   ...reviewed(
     "http.instance.eventValidation.",
@@ -155,7 +120,7 @@ export const V203_HTTP_RULE_PACKS: readonly RulePack[] = [
     },
     "read_only",
     "packages/core/src/deepagent/event-validation.ts",
-    "LocalTaskAuthority.authenticate",
+    "LocalAuthority.authenticate",
   ),
   ...reviewed(
     "http.instance.eventValidation.",
@@ -167,7 +132,7 @@ export const V203_HTTP_RULE_PACKS: readonly RulePack[] = [
     },
     "adapter",
     "packages/core/src/deepagent/event-validation.ts",
-    "LocalTaskAuthority.provide",
+    "LocalAuthority.provide",
   ),
   ...reviewed(
     "http.instance.deepagent.",

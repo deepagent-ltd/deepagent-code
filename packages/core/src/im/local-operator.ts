@@ -10,7 +10,7 @@ import { EventWorkDagPolicy } from "../deepagent/event-work-dag.policy"
 import { CanonicalJson } from "../util/canonical-json"
 import { Hash } from "../util/hash"
 import { LocationIdentityTable, ProjectScopeIdentityTable, SecurityNamespaceTable } from "../context-federation/sql"
-import { IMTaskAuthoritySchema } from "./task-authority.schema"
+import { LocalAuthoritySchema } from "../session/local-authority.schema"
 import { LocalOperatorSchema } from "./local-operator.schema"
 import { LocalOperatorAuthorityTable, LocalOperatorCommandTable } from "./local-operator.sql"
 
@@ -90,7 +90,6 @@ export const enroll = Effect.fn("LocalOperator.enroll")(function* (
             "Active or differently bound operator identity cannot be replaced",
           )
         const now = input.now ?? Date.now()
-        yield* requireFreshReceivers(policy, now)
         const record = {
           instance_id: installed.instanceID,
           operator_id: input.operatorID,
@@ -173,7 +172,6 @@ export const rotate = Effect.fn("LocalOperator.rotate")(function* (
         if (current.revision !== input.expectedRevision)
           return yield* failure("LOCAL_OPERATOR_REVISION_CONFLICT", "Operator revision changed")
         const now = input.now ?? Date.now()
-        if (input.policy !== undefined) yield* requireFreshReceivers(policy, now)
         const next = {
           ...current,
           username: input.username,
@@ -348,14 +346,14 @@ export const updatePolicyInTransaction = Effect.fn("LocalOperator.updatePolicyIn
 
 export const verifyOperator = Effect.fn("LocalOperator.verifyOperator")(function* (
   tx: Tx,
-  input: IMTaskAuthoritySchema.Principal,
+  input: LocalAuthoritySchema.Principal,
 ) {
   const current = yield* requireCurrent(tx)
   if (hash(input) !== hash(principal(current)))
     return yield* failure("LOCAL_OPERATOR_REVOKED", "Operator authority changed")
   return principal(current)
 })
-export function principal(record: Record): IMTaskAuthoritySchema.Principal {
+export function principal(record: Record): LocalAuthoritySchema.Principal {
   return {
     instanceID: record.instance_id,
     actorID: record.operator_id,
@@ -424,17 +422,6 @@ export const validatePolicy = Effect.fn("LocalOperator.validatePolicy")(function
   policy: LocalOperatorSchema.Policy,
   operatorID: string,
 ) {
-  const receivers = policy.kernelReceivers ?? []
-  if (new Set(receivers.map((receiver) => receiver.id)).size !== receivers.length)
-    return yield* failure("LOCAL_OPERATOR_INVALID", "Kernel receiver mapping identifiers must be unique")
-  const scopes = new Set<string>()
-  for (const receiver of receivers) {
-    const target = policy.targets.find((entry) => entry.id === receiver.targetID)
-    if (!target) return yield* failure("LOCAL_TASK_SCOPE_DENIED", "Kernel receiver mapping requires an enrolled target")
-    const scope = hash([receiver.realmID, receiver.appkeyID, receiver.orgID, receiver.receiverID, receiver.localUserID, target.target.scope.workspaceID])
-    if (scopes.has(scope)) return yield* failure("LOCAL_OPERATOR_INVALID", "Kernel receiver mapping is ambiguous in this workspace")
-    scopes.add(scope)
-  }
   if (new Set(policy.targets.map((target) => target.id)).size !== policy.targets.length)
     return yield* failure("LOCAL_OPERATOR_INVALID", "Policy target identifiers must be unique")
   for (const entry of policy.targets) {
@@ -531,12 +518,6 @@ export const validatePolicy = Effect.fn("LocalOperator.validatePolicy")(function
     }
   }
 })
-
-function requireFreshReceivers(policy: LocalOperatorSchema.Policy, now: number) {
-  return policy.kernelReceivers?.some((receiver) => receiver.issuedAt > now || receiver.expiresAt <= now)
-    ? failure("LOCAL_OPERATOR_INVALID", "New kernel receiver mapping must have a current fixed seven-day lifetime")
-    : Effect.void
-}
 
 function identityHash(record: Omit<Record, "identity_hash">) {
   return hash({

@@ -41,7 +41,7 @@ export function DialogIMModel(props: { client: IMClient; back: () => void }) {
       ...(settings()?.models ?? []).map((model) => ({ value: model.id, title: model.name,
         category: model.provider, footer: model.id,
         onSelect: () => { void select(model.id) } })),
-      { value: "back", title: i18n.t("tui.im.taskProposal.back"), onSelect: props.back },
+      { value: "back", title: i18n.t("tui.im.back"), onSelect: props.back },
     ]}
   />
 }

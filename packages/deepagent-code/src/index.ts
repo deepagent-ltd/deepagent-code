@@ -155,13 +155,6 @@ const cli = yargs(args)
     }
     process.env.DEEPAGENT_CODE = "1"
     process.env.DEEPAGENT_CODE_PID = String(process.pid)
-    // C7-05/W0.1: the V2 event-admission defaults live in src/runtime-defaults.ts (applied at the top
-    // of this module). The former DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM pairing default is removed with
-    // the V2 IM durable-only migration: @mentions are admitted directly as durable SessionV2 work by
-    // the IM handler (src/im/im-agent-execution.ts) and replies return through the im_reply_outbox
-    // daemon — there is no bus-mediated IM path left to pair with, and the v4EventDrivenIm flag itself
-    // is deleted from runtime-flags.ts.
-
     Log.Default.info(scriptName, {
       version: InstallationVersion,
       args: process.argv.slice(2),

@@ -38,7 +38,7 @@ const { Image } = await import("@deepagent-code/core/image")
 const { PermissionV2 } = await import("@deepagent-code/core/permission")
 const { CanonicalJson } = await import("@deepagent-code/core/util/canonical-json")
 const { Hash } = await import("@deepagent-code/core/util/hash")
-const { LocalTaskAuthority } = await import("../../../src/im/local-task-authority")
+const { LocalAuthority } = await import("../../../src/installation/local-authority")
 const { WorkLeafProof } = await import("../../../src/installation/work-leaf-proof")
 const database = WorkAuthorityFixture.database(path.join(directory, "authority.sqlite"))
 const mode = process.argv[2] ?? "known"
@@ -77,7 +77,7 @@ const canonical = (input: unknown) => Hash.sha256(CanonicalJson.stringify(input)
 try {
   await fs.mkdir(path.join(directory, "project"))
   if (mode === "default") await fs.writeFile(path.join(directory, "input.ts"), "hello", { mode: 0o600 })
-  await Effect.runPromise(LocalTaskAuthority.initializeInstallation())
+  await Effect.runPromise(LocalAuthority.initializeInstallation())
   await Effect.runPromise(WorkAuthorityFixture.initialize().pipe(Effect.provide(database), Effect.scoped))
   const fixture = { root: directory, filename: path.join(directory, "authority.sqlite"), candidate: WorkRouteFixture.candidate(),
     state: { bodies: [] as string[], reads: 0, streams: 0, mode: "complete" } }

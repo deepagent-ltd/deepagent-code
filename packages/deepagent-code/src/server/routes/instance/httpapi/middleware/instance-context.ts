@@ -35,15 +35,6 @@ export const instanceContextLayer = Layer.effect(
         // route retains the normal instance bootstrap and permission boundary.
         if (matched.route.method === "GET" && ["/command", "/experimental/resource"].includes(matched.route.path))
           return yield* effect
-        // Management reauthenticates the original durable request and routed
-        // directory; source-offline cancellation must not wait for instance boot.
-        if (
-          (matched.route.method === "GET" && matched.route.path === "/api/v1/im/tasks/requests/:requestID/state") ||
-          (matched.route.method === "POST" && [
-            "/api/v1/im/tasks/requests/:requestID/cancel",
-            "/api/v1/im/tasks/requests/:requestID/refuse",
-          ].includes(matched.route.path))
-        ) return yield* effect
         return yield* provideInstanceContext(effect, store)
       }),
     )

@@ -21,7 +21,7 @@ import { SessionContextSelectionTable, SessionProviderAttemptTable } from "@deep
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { V2ToolEffectAdmissionTable, V2ToolEffectTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
 import { LocalOperator } from "@deepagent-code/core/im/local-operator"
-import { LocalTaskAuthority } from "../im/local-task-authority"
+import { LocalAuthority } from "../installation/local-authority"
 import { WorkFileHelper } from "./work-file-helper"
 import { WorkLeafProofCache } from "./work-leaf-proof-cache"
 
@@ -56,7 +56,7 @@ const decline = (stage: Stage, reason: Reason) =>
  * obtains the native observation from the helper owner through WorkToolPolicy. */
 export const layer = Layer.effect(WorkToolPolicy.LeafProof, Effect.gen(function* () {
   const database = yield* Database.Service
-  const installation = yield* LocalTaskAuthority.readInstallation.pipe(Effect.mapError(() => refused()))
+  const installation = yield* LocalAuthority.readInstallation.pipe(Effect.mapError(() => refused()))
   const context = yield* Effect.context()
   const secret = Buffer.from(installation.secret, "hex")
   const key = createHmac("sha256", secret).update(`${DOMAIN}\0encryption\0${installation.instanceID}`).digest()

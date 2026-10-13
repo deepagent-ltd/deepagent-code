@@ -4,6 +4,7 @@ import { createHash } from "node:crypto"
 import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs"
 import { lstat, open, rm } from "node:fs/promises"
 import { Schema } from "effect"
+import { managedBrowserInputRuntime } from "./managed-browser-input-runtime"
 
 const digest = (value: Uint8Array) => createHash("sha256").update(value).digest("hex")
 const Digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))
@@ -12,8 +13,8 @@ export const WindowsInputAsset = Schema.Struct({
   filename: Schema.Literal("managed-browser-input-windows.node"),
   target: Schema.Literal("win32-x64"),
   napiVersion: Schema.Literal(8),
-  electronVersion: Schema.Literal("41.10.3"),
-  nodeVersion: Schema.Literal("24.18.0"),
+  electronVersion: Schema.Literal(managedBrowserInputRuntime.electronVersion),
+  nodeVersion: Schema.Literal(managedBrowserInputRuntime.nodeVersion),
   bytes: Schema.Int.check(Schema.isBetween({ minimum: 512, maximum: 1_048_576 })),
   sha256: Digest,
   sourceSha256: Digest,
@@ -153,7 +154,7 @@ export async function publishWindowsInputCandidate(input: {
     throw new Error("WINDOWS_INPUT_ASSET_SOURCE")
   const asset = Schema.decodeUnknownSync(WindowsInputAsset)({
     schemaVersion: "dac.managed-browser-input.win32.candidate.v1", filename: "managed-browser-input-windows.node",
-    target: "win32-x64", napiVersion: 8, electronVersion: "41.10.3", nodeVersion: "24.18.0", bytes: body.length,
+    target: "win32-x64", napiVersion: 8, ...managedBrowserInputRuntime, bytes: body.length,
     sha256: digest(body), sourceSha256: current.sourceSha256, headerInventorySha256: current.headerInventorySha256,
     runtimeQualification: "unverified",
   })

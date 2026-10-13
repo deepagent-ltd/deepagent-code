@@ -136,7 +136,6 @@ import { debugHandlers } from "./handlers/debug"
 import { fileHandlers } from "./handlers/file"
 import { profileHandlers } from "./handlers/profile"
 import { globalHandlers } from "./handlers/global"
-import { LocalTaskAuth } from "@deepagent-code/core/im/local-task-auth"
 import { workRecoveryHandlers } from "./handlers/work-recovery"
 import { imHandlers } from "./handlers/im"
 import { imWebSocketHandlers } from "./handlers/im-websocket"
@@ -247,9 +246,8 @@ const oversightServicesLayer = Layer.mergeAll(
   // shared instance runtime graph below (Session.defaultLayer / SessionRevert.defaultLayer).
   RollbackAudit.layer,
 ).pipe(Layer.provide(Database.defaultLayer))
-// V2 IM durable-only: @mentions are admitted by the IM handler directly as durable SessionV2
-// work (src/im/im-agent-execution.ts) on the SHARED V2 runtime graph (V2RunnerFrame.sessionRuntimeLayer —
-// the real SessionExecutionLocal owner, not the noop-execution standalone default). The terminal
+// Private /dac commands admit ordinary SessionV2 inputs on the shared runner graph.
+// Ordinary communication and @mentions never admit work. The terminal
 // assistant reply returns through the im_reply_outbox daemon (IMReplyOutbox.layer), which draws
 // Database/SessionV2/EventV2Bridge from the shared graph and IMRepository/broadcaster/facade
 // from here — mergeAll siblings are invisible to each other, so the facade edge is supplied
@@ -400,7 +398,7 @@ const instanceApiRoutes = () =>
       webhookHandlers,
       experimentalHandlers,
       fileHandlers,
-      imHandlers.pipe(Layer.provide(LocalTaskAuth.layer), Layer.provide(ServerAuth.Config.defaultLayer)),
+      imHandlers.pipe(Layer.provide(ServerAuth.Config.defaultLayer)),
       eventWorkHandlers().pipe(Layer.provide(currentServerAuthLayer)),
       instanceHandlers,
       mcpHandlers.pipe(Layer.provide(currentServerAuthLayer)),

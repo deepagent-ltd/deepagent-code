@@ -38,7 +38,6 @@ interface GroupChatPanelProps {
   // §B3 thread — when true, clicking a message opens its reply thread. Gated by the caller on the
   // server's v4ThreadEnabled capability so the affordance only appears where the route is live.
   threadsEnabled?: boolean
-  onOpenTaskResult?: (message: LocalMessage) => void
   onOpenConversationSession?: (message: LocalMessage) => void
   onUseDac?: (message: LocalMessage) => void
   onDac?: (text: string, delivery: "queue" | "steer") => boolean | void | Promise<boolean | void>
@@ -1234,27 +1233,11 @@ function GroupConversation(
         </Show>
 
         <MessageList
-          protected={protectedGroup()}
           mediaEnabled={props.fileUploadEnabled}
           messages={allMessages()}
           agentStatuses={agentStatuses()}
           agentProgress={agentProgress()}
           onOpenThread={props.threadsEnabled ? (m) => setThreadRoot(m) : undefined}
-          onOpenTaskResult={
-            props.onOpenTaskResult
-              ? (message) => {
-                  const current = allMessages().find((item) => item.id === message.id && item.groupID === props.groupID)
-                  if (
-                    current &&
-                    !history.disposed &&
-                    (current.metadata?.type === "agent_run" ||
-                      current.metadata?.type === "task_status_notice" ||
-                      (protectedGroup() && current.type === "text"))
-                  )
-                    props.onOpenTaskResult?.(current)
-                }
-              : undefined
-          }
           onUseDac={
             props.onUseDac
               ? (message) => {
@@ -1459,7 +1442,6 @@ function GroupConversation(
         {(root) => (
           <ThreadView
             mediaEnabled={props.fileUploadEnabled}
-            protected={protectedGroup()}
             displayEpoch={reader.epoch}
             onReaderInvalidated={() => invalidate()}
             groupID={props.groupID}

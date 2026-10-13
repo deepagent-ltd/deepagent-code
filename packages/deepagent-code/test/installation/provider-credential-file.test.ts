@@ -17,7 +17,7 @@ test("installation key reads are bounded and reject actual grow/replacement race
             {
               name: "controlled-before-source",
               setup(builder) {
-                builder.onLoad({ filter: /\/im\/local-task-authority\.ts$/ }, async () => ({
+                builder.onLoad({ filter: /\/installation\/local-authority\.ts$/ }, async () => ({
                   contents: await fs.readFile(process.env.DAC_ROUTE_AUTHORITY_BEFORE!, "utf8"),
                   loader: "ts",
                 }))

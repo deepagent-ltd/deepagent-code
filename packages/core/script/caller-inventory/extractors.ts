@@ -617,8 +617,8 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     identifier: "makeAuthoritativeManifest",
   },
 
-  // IM: explicit owner /dac admission, durable replies, the retired mention
-  // facade, and the catalog provider. A received mention has no execution role.
+  // IM: explicit owner /dac admission, durable replies and the catalog provider.
+  // A received mention has no execution role.
   {
     id: "im.dac-session",
     surface: "im",
@@ -626,14 +626,6 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     name: "Owner IM /dac ordinary Session admission",
     fileFromRoot: "packages/core/src/im/dac-session.ts",
     declare: "make",
-  },
-  {
-    id: "im.agent-execution",
-    surface: "im",
-    kind: "retired-admission-facade",
-    name: "Retired IM mention admission",
-    fileFromRoot: "packages/deepagent-code/src/im/im-agent-execution.ts",
-    declare: "admitMention",
   },
   {
     id: "im.reply-outbox",

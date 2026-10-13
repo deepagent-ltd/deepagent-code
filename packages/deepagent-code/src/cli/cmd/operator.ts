@@ -9,7 +9,7 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { LocalOperator } from "@deepagent-code/core/im/local-operator"
 import { LocalOperatorSchema } from "@deepagent-code/core/im/local-operator.schema"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { AuthRuntime } from "@/im/auth-runtime"
 import { ServerAuth } from "@/server/auth"
 import { cmd } from "./cmd"
@@ -113,9 +113,9 @@ export const command = Effect.fn("Cli.operator")(function* (input: {
     return yield* LocalOperator.failure("LOCAL_OPERATOR_UNAVAILABLE", "A configured server password is required")
   const password = config.password.value
   const installation = yield* input.action === "enroll"
-    ? LocalTaskAuthority.initializeInstallation()
-    : LocalTaskAuthority.readInstallation
-  const runtime = LocalTaskAuthority.binding(installation, config.username, password)
+    ? LocalAuthority.initializeInstallation()
+    : LocalAuthority.readInstallation
+  const runtime = LocalAuthority.binding(installation, config.username, password)
   const db = (yield* Database.Service).db
   const policy = input.policyPath
     ? yield* Effect.tryPromise({
@@ -174,7 +174,7 @@ export const command = Effect.fn("Cli.operator")(function* (input: {
     !(current.credential_binding === runtime.credentialBinding && current.revision > input.expectedRevision!)
       ? yield* privateCredential(input.previousCredentialPath)
       : password
-  const witness = yield* LocalTaskAuthority.authenticatePassword(
+  const witness = yield* LocalAuthority.authenticatePassword(
     db,
     runtime,
     current.username,
@@ -195,7 +195,7 @@ export const command = Effect.fn("Cli.operator")(function* (input: {
       } finally { await file.close() }
     }, catch: () => new LocalOperatorSchema.Error({ code: "LOCAL_OPERATOR_INVALID", message: "Private rule command is unavailable" }) })
     const command = yield* LocalOperator.decode(Schema.fromJsonString(EventWorkRuleSchema.Command), value)
-    const result = yield* LocalTaskAuthority.provide({ runtime, witness },
+    const result = yield* LocalAuthority.provide({ runtime, witness },
       EventWorkRule.command(db, { ...command, requestID: input.operationID }))
     return { ruleID: result.rule.ruleID, revision: result.rule.revision, epoch: result.rule.epoch,
       state: result.rule.state, expiresAt: result.rule.expiresAt, replayed: result.replayed,
@@ -221,7 +221,7 @@ export const command = Effect.fn("Cli.operator")(function* (input: {
     const { NativeRouteCapture } = yield* Effect.promise(() => import("@/installation/native-route-capture"))
     const credentials = ProviderCredentialBinding.layer.pipe(Layer.provideMerge(NativeRouteCapture.nativeLayer))
     const capture = NativeRouteCapture.layer.pipe(Layer.provideMerge(credentials))
-    return yield* LocalTaskAuthority.provide(
+    return yield* LocalAuthority.provide(
       { runtime, witness },
       Effect.gen(function* () {
         const query = { targetID: input.targetID!, requestID: input.operationID }
@@ -241,7 +241,7 @@ export const command = Effect.fn("Cli.operator")(function* (input: {
             })
         // A successful policy mutation advances the principal revision. Authenticate the read
         // independently; reusing the pre-mutation witness must not bypass its revision fence.
-        const currentWitness = yield* LocalTaskAuthority.authenticatePassword(db, runtime, config.username, password)
+        const currentWitness = yield* LocalAuthority.authenticatePassword(db, runtime, config.username, password)
         const observed = yield* OfflineNativeRouteApproval.history(query).pipe(
           Effect.provideService(LocalOperator.Mutation, currentWitness),
         )
@@ -254,13 +254,13 @@ export const command = Effect.fn("Cli.operator")(function* (input: {
     )
   }
   if (input.action === "revoke")
-    return yield* LocalTaskAuthority.provide(
+    return yield* LocalAuthority.provide(
       { runtime, witness },
       LocalOperator.revoke(db, { operationID: input.operationID, expectedRevision: input.expectedRevision! }),
     )
   const resolved = policy ? yield* resolvePolicy(policy, current.operator_id) : undefined
   const verifier = yield* credential(() => AuthRuntime.hash(password))
-  return yield* LocalTaskAuthority.provide(
+  return yield* LocalAuthority.provide(
     { runtime, witness },
     LocalOperator.rotate(db, {
       operationID: input.operationID,

@@ -35,7 +35,7 @@ import { EventInvestigationRead } from "./event-investigation-read"
 import { EventWorkAdmission } from "@deepagent-code/core/deepagent/event-work-admission"
 import { WorkProviderContract } from "./work-provider-contract"
 import { ProviderCredentialBinding } from "./provider-credential-binding"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { EventWorkPlacementHost } from "./event-work-placement"
 import { EventWorkPlacement } from "@deepagent-code/core/deepagent/event-work-placement"
 import { EventWorkNodeAuthority } from "@deepagent-code/core/deepagent/event-work-node-authority"
@@ -99,7 +99,7 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
   const configurationSnapshot = Exit.isSuccess(configured) ? CanonicalJson.stringify(configured.value) : undefined
   const ready = yield* Effect.gen(function* () {
     if (Exit.isFailure(configured)) return yield* unavailable()
-    const operator = yield* LocalTaskAuthority.configured(configured.value).pipe(Effect.tapError(diagnostic("profile-ready-operator")))
+    const operator = yield* LocalAuthority.configured(configured.value).pipe(Effect.tapError(diagnostic("profile-ready-operator")))
     const contracts = yield* WorkProviderContract.contracts.pipe(Effect.tapError(diagnostic("profile-ready-contracts")))
     const credentials = Context.get(yield* Layer.build(ProviderCredentialBinding.layer.pipe(
       Layer.provide(WorkProviderContract.layer), Layer.provide(Layer.succeed(NativeRuntime.Service, native)),
@@ -182,6 +182,7 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
   const resolve = (id: string) => readApproval(id).pipe(Effect.map(projection))
   const verifier: WorkAuthority.Verification = {
     authorizeSource: (tx, binding) => {
+      if (binding.profile.id === WorkAuthorityPolicy.TEXT_ONLY_PROFILE.id) return Effect.fail(unavailable())
       if (binding.parentWorkID) return Effect.gen(function* () {
         const child = yield* WorkAuthority.get(tx, binding.workID)
         if (!child || child.binding_hash !== Hash.sha256(CanonicalJson.stringify(binding))) return yield* unavailable()
@@ -220,6 +221,7 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
     })), Effect.mapError(map)),
   }
   const prepareSource = (work: WorkAuthority.Work, options?: { readonly fresh?: boolean }) => withAuthority(Effect.gen(function* () {
+    if (work.binding.profile.id === WorkAuthorityPolicy.TEXT_ONLY_PROFILE.id) return yield* unavailable()
     if (work.parent_work_id && work.source_kind === "server_rule" && work.authority_id.startsWith("evwork_"))
       yield* eventPlacement.preparePlacement(work.work_id)
     const source = !work.parent_work_id ? work : yield* database.db.transaction((tx) => Effect.gen(function* () {

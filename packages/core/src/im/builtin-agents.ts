@@ -22,8 +22,7 @@ import type { AgentDescriptor } from "./mention-parser"
  * autonomy/limits ceilings; the actual turn runs as the named agent.
  *
  * MATCHABLE-BUT-HIDDEN: `visible: false` keeps them out of the human @mention UI
- * (mention resolution filters on `visible` — deepagent-code's
- * `EventDispatcher.resolveMentioned`, used by the IM handler) while the pure matchers
+ * while the pure Event matchers
  * (matchByTrigger/matchByCapability/capableAgents — which ignore `visible`) still
  * find them. These built-ins ONLY make an agent MATCHABLE; the §D autonomy gate and
  * the §E security gate still apply on top, so autonomy stays conservative

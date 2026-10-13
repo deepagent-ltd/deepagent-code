@@ -3,7 +3,7 @@ export * as EventWorkPlacement from "./event-work-placement"
 import { Context, Effect, Schema, Scope } from "effect"
 import { WorkAuthoritySchema } from "../session/work-authority.schema"
 import type { EventWorkDagSchema } from "./event-work-dag.schema"
-import type { IMTaskAuthoritySchema } from "../im/task-authority.schema"
+import type { LocalAuthoritySchema } from "../session/local-authority.schema"
 
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512))
 const Path = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048))
@@ -42,8 +42,8 @@ export interface Witness { readonly [witness]: true }
 /** Only the trusted Host Native factory installs this port. No HTTP endpoint accepts or mints
  * a witness; run-time current() is a pure live-object check suitable inside final SQL fences. */
 export class Service extends Context.Service<Service, {
-  readonly available: (target: typeof IMTaskAuthoritySchema.ProjectTarget.Type, plan: EventWorkDagSchema.Plan) => Effect.Effect<boolean, WorkAuthoritySchema.Error>
-  readonly availableCurrent: (target: typeof IMTaskAuthoritySchema.ProjectTarget.Type, plan: EventWorkDagSchema.Plan) => boolean
+  readonly available: (target: typeof LocalAuthoritySchema.ProjectTarget.Type, plan: EventWorkDagSchema.Plan) => Effect.Effect<boolean, WorkAuthoritySchema.Error>
+  readonly availableCurrent: (target: typeof LocalAuthoritySchema.ProjectTarget.Type, plan: EventWorkDagSchema.Plan) => boolean
   readonly prepare: (input: { controllerID: string; nodeID: string; expectedRevision: number }) => Effect.Effect<Witness, WorkAuthoritySchema.Error, Scope.Scope>
   readonly restore: (description: Description) => Effect.Effect<Witness, WorkAuthoritySchema.Error, Scope.Scope>
   readonly describe: (value: Witness) => Description | undefined

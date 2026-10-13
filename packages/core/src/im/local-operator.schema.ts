@@ -1,7 +1,7 @@
 export * as LocalOperatorSchema from "./local-operator.schema"
 
 import { Schema } from "effect"
-import { IMTaskAuthoritySchema } from "./task-authority.schema"
+import { LocalAuthoritySchema } from "../session/local-authority.schema"
 import { WorkAuthoritySchema } from "../session/work-authority.schema"
 import { EventWorkRuleSchema } from "../deepagent/event-work-rule.schema"
 
@@ -11,45 +11,32 @@ export const RegisteredTarget = Schema.Struct({
   id: Text,
   locationKey: Text,
   namespaceBindingHash: WorkAuthoritySchema.Digest,
-  target: IMTaskAuthoritySchema.Target,
+  target: LocalAuthoritySchema.Target,
 })
 export type RegisteredTarget = typeof RegisteredTarget.Type
-export const KERNEL_RECEIVER_LIFETIME_MS = 7 * 86_400_000
-const MappingTime = Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER))
-/** Explicit operator policy, independent of any message body or live transport observation. */
-export const KernelReceiver = Schema.Struct({
-  id: Text,
-  targetID: Text,
-  realmID: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096), Schema.makeFilter((value) => {
-    if (!URL.canParse(value)) return false
-    const url = new URL(value)
-    return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash && url.href === value
-  })),
-  appkeyID: Text,
-  orgID: MappingTime,
-  receiverID: Text,
-  localUserID: Schema.Literal("server"),
-  issuedAt: MappingTime,
-  expiresAt: MappingTime,
-}).check(Schema.makeFilter((value) => value.expiresAt === value.issuedAt + KERNEL_RECEIVER_LIFETIME_MS))
-export type KernelReceiver = typeof KernelReceiver.Type
-const KernelReceivers = Schema.optional(Schema.Array(KernelReceiver).check(Schema.isMinLength(1), Schema.isMaxLength(32)))
+// Opaque retired data preserves persisted policy hashes; no runtime reads it as authority.
+const RetiredReceiverData = Schema.optional(Schema.Array(Schema.Unknown))
 
 export const LegacyPolicy = Schema.Struct({
+  kernelReceivers: RetiredReceiverData,
   version: Schema.Literal(1),
-  kernelReceivers: KernelReceivers,
   targets: Schema.Array(RegisteredTarget).check(Schema.isMinLength(1), Schema.isMaxLength(32)),
 })
-export const ProjectPolicy = Schema.Struct({ version: Schema.Literal(2),
-  kernelReceivers: KernelReceivers,
-  targets: Schema.Array(RegisteredTarget).check(Schema.isMinLength(1), Schema.isMaxLength(32)) })
-export const EventPolicy = Schema.Struct({ version: Schema.Literal(3),
-  kernelReceivers: KernelReceivers,
+export const ProjectPolicy = Schema.Struct({
+  version: Schema.Literal(2),
+  kernelReceivers: RetiredReceiverData,
+  targets: Schema.Array(RegisteredTarget).check(Schema.isMinLength(1), Schema.isMaxLength(32)),
+})
+export const EventPolicy = Schema.Struct({
+  version: Schema.Literal(3),
+  kernelReceivers: RetiredReceiverData,
   targets: ProjectPolicy.fields.targets,
   eventOrigins: Schema.Array(EventWorkRuleSchema.Origin).check(Schema.isMinLength(1), Schema.isMaxLength(32)),
 })
-export const EventDagPolicy = Schema.Struct({ version: Schema.Literal(4),
-  kernelReceivers: KernelReceivers, targets: ProjectPolicy.fields.targets,
+export const EventDagPolicy = Schema.Struct({
+  version: Schema.Literal(4),
+  kernelReceivers: RetiredReceiverData,
+  targets: ProjectPolicy.fields.targets,
   eventOrigins: Schema.Array(EventWorkRuleSchema.AnyOrigin).check(Schema.isMinLength(1), Schema.isMaxLength(32)),
 })
 export const Policy = Schema.Union([LegacyPolicy, ProjectPolicy, EventPolicy, EventDagPolicy])
@@ -61,7 +48,7 @@ export const RuntimeBinding = Schema.Struct({
 })
 export type RuntimeBinding = typeof RuntimeBinding.Type
 export const MutationWitness = Schema.Struct({
-  ...IMTaskAuthoritySchema.Principal.fields,
+  ...LocalAuthoritySchema.Principal.fields,
   credentialGeneration: Revision,
   credentialBinding: WorkAuthoritySchema.Digest,
   installationKeyHash: WorkAuthoritySchema.Digest,

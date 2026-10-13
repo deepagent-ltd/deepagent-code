@@ -5,7 +5,7 @@ import type { RequestExecutor } from "@deepagent-code/llm/route"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { WorkRouteApproval } from "@deepagent-code/core/session/work-route-approval"
 import { WorkRouteApprovalSchema } from "@deepagent-code/core/session/work-route-approval.schema"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { NativeRuntime } from "./native-runtime"
 import { WorkCountAcquisition } from "@deepagent-code/core/session/work-count-acquisition"
 import { WorkCountAcquisitionSchema } from "@deepagent-code/core/session/work-count-acquisition.schema"
@@ -75,7 +75,7 @@ export class NativeFactory extends Context.Service<NativeFactory, {
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const installation = yield* LocalTaskAuthority.readInstallation.pipe(
+    const installation = yield* LocalAuthority.readInstallation.pipe(
       Effect.mapError(() => WorkRouteApproval.failure("ROUTE_PROOF_UNAVAILABLE")),
     )
     const runtime = yield* Effect.serviceOption(NativeRuntime.Service)

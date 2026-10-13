@@ -1,7 +1,6 @@
 import { sql } from "drizzle-orm"
 import { check, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
 import type { LocalOperatorSchema } from "./local-operator.schema"
-import type { IMTaskAuthoritySchema } from "./task-authority.schema"
 
 // Identity and business policy only. WorkAuthority owns all execution state and token escrow.
 export const LocalOperatorAuthorityTable = sqliteTable(
@@ -66,78 +65,6 @@ export const LocalOperatorCommandTable = sqliteTable(
     check(
       "local_operator_command_receipt_check",
       sql`json_valid(${table.receipt}) AND json_type(${table.receipt}) = 'object'`,
-    ),
-  ],
-)
-
-export const LocalTaskConversationTable = sqliteTable(
-  "im_local_task_conversation",
-  {
-    group_id: text().primaryKey(),
-    instance_id: text().notNull(),
-    operator_id: text().notNull(),
-    operator_revision: integer().notNull(),
-    target_id: text().notNull(),
-    revision: integer().notNull(),
-    mode: text().$type<"explicit_task">().notNull(),
-    target: text({ mode: "json" }).$type<IMTaskAuthoritySchema.Target>().notNull(),
-    target_hash: text().notNull(),
-    location_key: text().notNull(),
-    namespace_binding_hash: text().notNull(),
-    created_at: integer().notNull(),
-    updated_at: integer().notNull(),
-  },
-  (table) => [
-    check(
-      "im_local_task_conversation_hash_check",
-      sql`length(${table.target_hash}) = 64 AND ${table.target_hash} NOT GLOB '*[^0-9a-f]*' AND length(${table.namespace_binding_hash}) = 64 AND ${table.namespace_binding_hash} NOT GLOB '*[^0-9a-f]*'`,
-    ),
-    check(
-      "im_local_task_conversation_mode_check",
-      sql`${table.mode} = 'explicit_task' AND ${table.revision} > 0 AND ${table.operator_revision} > 0`,
-    ),
-    check(
-      "im_local_task_conversation_target_check",
-      sql`json_valid(${table.target}) AND json_type(${table.target}) = 'object'`,
-    ),
-  ],
-)
-
-// No cascading FK: history deletion must not erase the fact that an origin was accepted or revoked.
-export const LocalOriginReceiptTable = sqliteTable(
-  "im_local_origin_receipt",
-  {
-    message_id: text().primaryKey(),
-    instance_id: text().notNull(),
-    operator_id: text().notNull(),
-    operator_revision: integer().notNull(),
-    credential_generation: integer().notNull(),
-    group_id: text().notNull(),
-    conversation_revision: integer().notNull(),
-    raw_snapshot: text({ mode: "json" }).$type<unknown>().notNull(),
-    raw_snapshot_hash: text().notNull(),
-    proof: text({ mode: "json" }).$type<IMTaskAuthoritySchema.SourceProof>().notNull(),
-    receipt_hash: text().notNull(),
-    origin: text().$type<"authenticated_local_text">().notNull(),
-    received_at: integer().notNull(),
-    expires_at: integer().notNull(),
-  },
-  (table) => [
-    check(
-      "im_local_origin_hash_check",
-      sql`length(${table.raw_snapshot_hash}) = 64 AND ${table.raw_snapshot_hash} NOT GLOB '*[^0-9a-f]*' AND length(${table.receipt_hash}) = 64 AND ${table.receipt_hash} NOT GLOB '*[^0-9a-f]*'`,
-    ),
-    check(
-      "im_local_origin_revision_check",
-      sql`${table.operator_revision} > 0 AND ${table.credential_generation} > 0 AND ${table.conversation_revision} > 0`,
-    ),
-    check(
-      "im_local_origin_kind_check",
-      sql`${table.origin} = 'authenticated_local_text' AND ${table.expires_at} > ${table.received_at}`,
-    ),
-    check(
-      "im_local_origin_json_check",
-      sql`json_valid(${table.raw_snapshot}) AND json_type(${table.raw_snapshot}) = 'object' AND json_valid(${table.proof}) AND json_type(${table.proof}) = 'object'`,
     ),
   ],
 )

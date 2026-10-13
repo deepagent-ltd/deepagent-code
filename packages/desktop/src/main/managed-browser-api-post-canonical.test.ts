@@ -169,9 +169,9 @@ actual("original canonical Session runner binds both API once permissions to one
     expect(action.command).toMatchObject({ actionTag: BrowserSchema.API_POST_ACTION_TAG, profileVersion: 1,
       contentType: "application/json", body: '{"value":"canonical Unicode 原请求"}' })
     expect(action.commandDigest).toBe(BrowserControl.hash(action.command))
-    const approvals = permissions.filter((value) => value.source?.callID === callID)
+    const approvals = permissions.filter((value) => value.source?.type === "tool" && value.source.callID === callID)
     expect(approvals.map((value) => value.action)).toEqual(["browser", "browser-api-post"])
-    expect(asked.filter((value) => value.source?.callID === callID)).toEqual(approvals)
+    expect(asked.filter((value) => value.source?.type === "tool" && value.source.callID === callID)).toEqual(approvals)
     expect(beforeAPI.filter((value) => value.url === command.url).map((value) => [value.action, value.apiActions]))
       .toEqual([["browser", 0], ["browser-api-post", 0]])
     const admission = facts.admissions.find((value) => value.admission_id === action.admissionID)!
@@ -191,6 +191,7 @@ actual("original canonical Session runner binds both API once permissions to one
     }))
     const source = approvals[0]!.source!
     expect(source.type).toBe("tool")
+    if (source.type !== "tool") throw new Error("API approval requires an original tool source")
     const message = messages.find((value) => value.id === source.messageID)!
     expect(message).toBeDefined()
     const projected = message.content.flatMap((value) => {

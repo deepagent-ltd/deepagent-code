@@ -10,7 +10,7 @@ import { EventValidation } from "../../src/deepagent/event-validation"
 import { EventValidationSchema } from "../../src/deepagent/event-validation.schema"
 import { WorkAuthorityFixture } from "./work-authority"
 import { WorkRouteApprovalFixture } from "./work-route-approval"
-import { IMTaskAuthorityFixture } from "./im-task-authority"
+import { LocalAuthorityFixture } from "./local-authority"
 import { WorkAuthorityPolicy } from "../../src/session/work-authority-policy"
 
 // Controlled native provenance, real formal-migration file DB and LocalOperator guards.
@@ -60,9 +60,9 @@ export function native() {
 export function configuration() {
   const value = { profile:"project_validation_v1",kind:"build",
     scope:{instanceID:WorkRouteApprovalFixture.runtime.instanceID,workspaceID:null,
-      securityNamespaceID:IMTaskAuthorityFixture.proof.securityNamespaceID, namespaceBindingHash:IMTaskAuthorityFixture.proof.namespaceBindingHash,
-      locationKey:IMTaskAuthorityFixture.target.location.directory,projectScopeKey:IMTaskAuthorityFixture.target.scope.projectScopeKey,
-      projectID:"project-validation",canonicalRoot:IMTaskAuthorityFixture.target.location.directory,rootIdentity:{kind:"posix",device:"1",inode:"1"}},
+      securityNamespaceID:LocalAuthorityFixture.namespace.securityNamespaceID, namespaceBindingHash:LocalAuthorityFixture.namespace.namespaceBindingHash,
+      locationKey:LocalAuthorityFixture.target.location.directory,projectScopeKey:LocalAuthorityFixture.target.scope.projectScopeKey,
+      projectID:"project-validation",canonicalRoot:LocalAuthorityFixture.target.location.directory,rootIdentity:{kind:"posix",device:"1",inode:"1"}},
     recipe:{schemaVersion:"work-command-recipe.v1",logicalID:"build",revision:1,
       executable:{assetPath:"packages/work-file-helper/bin/darwin-arm64/bun-command-runtime",sha256:"c".repeat(64),bytes:10,
         platform:"darwin-arm64",identity:{kind:"posix",device:"1",inode:"4"}},argv:[{kind:"literal",value:"build"}],

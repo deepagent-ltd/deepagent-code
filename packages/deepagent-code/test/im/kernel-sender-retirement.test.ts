@@ -15,7 +15,7 @@ import { KernelConfig } from "@/im/kernel/config"
 import { KernelSdk } from "@/im/kernel/sdk"
 import { IMKernelReader } from "@/im/kernel/reader"
 import { IMKernelExchange } from "@/im/kernel/exchange"
-import { KernelTaskSourceWitnessFixture } from "./fixture/kernel-task-source-witness"
+import { ProtectedReaderProtocolFixture } from "./fixture/protected-reader-protocol"
 
 if (process.env.DAC_SENDER_RETIREMENT_CHILD !== "1") test("sender retirement uses one original SDK process and releases its resources", async () => {
   // The upstream SDK keeps module-global initialization state after disconnect.
@@ -40,7 +40,7 @@ if (process.env.DAC_SENDER_RETIREMENT_CHILD !== "1") test("sender retirement use
 
 if (process.env.DAC_SENDER_RETIREMENT_CHILD === "1") test("the original SDK clock retires the old kr1 canonical body; corrupt maintenance stays live and late current membership rolls back", async () => {
   const directory = await mkdtemp(join(tmpdir(), "dac-sender-retirement-sdk-"))
-  const native = KernelTaskSourceWitnessFixture.make()
+  const native = ProtectedReaderProtocolFixture.make()
   const config = { appkey: `private-retirement-${native.server.port}`, navigator: native.server.url.origin,
     token: "private-first-seen-token", userID: "receiver",
     identity: { uuid: "receiver", orgID: 1, name: "Receiver", orgAllGroupID: "unused" } }

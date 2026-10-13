@@ -378,22 +378,12 @@ import type {
   ImMessagesListResponses,
   ImMessagesMarkReadErrors,
   ImMessagesMarkReadResponses,
-  ImMessagesRemoteTaskLocatorErrors,
-  ImMessagesRemoteTaskLocatorResponses,
   ImMessagesSearchErrors,
   ImMessagesSearchResponses,
-  ImMessagesTaskResultErrors,
-  ImMessagesTaskResultResponses,
-  ImMessagesTaskStatusErrors,
-  ImMessagesTaskStatusResponses,
   ImMessagesThreadErrors,
   ImMessagesThreadResponses,
   ImportJobRequest,
   ImportRequest,
-  ImTasksRemoteResultErrors,
-  ImTasksRemoteResultResponses,
-  ImTasksRemoteStatusErrors,
-  ImTasksRemoteStatusResponses,
   ImWebsocketConnectResponses,
   InstanceDisposeErrors,
   InstanceDisposeResponses,
@@ -7728,12 +7718,6 @@ export class Messages extends HeyApiClient {
             liveEligible: boolean
           }
         | {
-            type: "task_status_notice"
-            noticeID: string
-            requestID: string
-            kind: "cancel_requested" | "recovery_required" | "refused"
-          }
-        | {
             type: "file_ref"
             path: string
             line?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -7767,13 +7751,6 @@ export class Messages extends HeyApiClient {
             code: string
             message: string
             retryable: boolean
-          }
-        | {
-            type: "agent_no_trigger_mention"
-            agentID?: string
-            agentNames?: Array<string>
-            eventID?: string
-            messageID?: string
           }
       replyToID?: string
     },
@@ -7895,114 +7872,6 @@ export class Messages extends HeyApiClient {
   }
 
   /**
-   * Locate a task result
-   *
-   * Read the original task location after verifying message visibility and durable result identity. Does not resume execution.
-   */
-  public taskResult<ThrowOnError extends boolean = false>(
-    parameters: {
-      messageId: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "messageId" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<
-      ImMessagesTaskResultResponses,
-      ImMessagesTaskResultErrors,
-      ThrowOnError
-    >({
-      url: "/api/v1/im/messages/{messageId}/task-result",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Read a verified task status notice
-   *
-   * Locate the original fixed notice and read its current owned task state without executing or retrying work.
-   */
-  public taskStatus<ThrowOnError extends boolean = false>(
-    parameters: {
-      messageId: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "messageId" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<
-      ImMessagesTaskStatusResponses,
-      ImMessagesTaskStatusErrors,
-      ThrowOnError
-    >({
-      url: "/api/v1/im/messages/{messageId}/task-status",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Read the verified native result tuple
-   *
-   * Read a current visible message's native identity as a lookup candidate. Does not select a remote URL or authorize execution.
-   */
-  public remoteTaskLocator<ThrowOnError extends boolean = false>(
-    parameters: {
-      messageId: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "messageId" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<
-      ImMessagesRemoteTaskLocatorResponses,
-      ImMessagesRemoteTaskLocatorErrors,
-      ThrowOnError
-    >({
-      url: "/api/v1/im/messages/{messageId}/remote-task-locator",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
    * List thread
    *
    * List the replies to a message (reply_to_id chain) with keyset pagination.
@@ -8114,106 +7983,6 @@ export class Agents extends HeyApiClient {
       ...options,
       ...params,
     })
-  }
-}
-
-export class Tasks extends HeyApiClient {
-  /**
-   * Locate a result on this authenticated instance
-   *
-   * Verify the original acknowledged delivery, owned task and current visibility on the caller-selected instance. Read-only; does not resume execution.
-   */
-  public remoteResult<ThrowOnError extends boolean = false>(
-    parameters: {
-      directory?: string
-      workspace?: string
-      tuple: {
-        version: 1
-        realm: string
-        appkey: string
-        orgID: string
-        kernelMessageID: string
-        senderID: string
-        receiverID: string
-        conversationType: 1 | 2
-        conversationID: string
-      }
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "tuple" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<ImTasksRemoteResultResponses, ImTasksRemoteResultErrors, ThrowOnError>(
-      {
-        url: "/api/v1/im/tasks/remote-result",
-        ...options,
-        ...params,
-        headers: {
-          "Content-Type": "application/json",
-          ...options?.headers,
-          ...params.headers,
-        },
-      },
-    )
-  }
-
-  /**
-   * Read a current task status on this authenticated instance
-   *
-   * Verify the original acknowledged notice and current task management and message visibility on the caller-selected instance. Does not execute, renew or retry work.
-   */
-  public remoteStatus<ThrowOnError extends boolean = false>(
-    parameters: {
-      directory?: string
-      workspace?: string
-      tuple: {
-        version: 1
-        realm: string
-        appkey: string
-        orgID: string
-        kernelMessageID: string
-        senderID: string
-        receiverID: string
-        conversationType: 1 | 2
-        conversationID: string
-      }
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "tuple" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<ImTasksRemoteStatusResponses, ImTasksRemoteStatusErrors, ThrowOnError>(
-      {
-        url: "/api/v1/im/tasks/remote-status",
-        ...options,
-        ...params,
-        headers: {
-          "Content-Type": "application/json",
-          ...options?.headers,
-          ...params.headers,
-        },
-      },
-    )
   }
 }
 
@@ -9097,11 +8866,6 @@ export class Im extends HeyApiClient {
   private _agents?: Agents
   get agents(): Agents {
     return (this._agents ??= new Agents({ client: this.client }))
-  }
-
-  private _tasks?: Tasks
-  get tasks(): Tasks {
-    return (this._tasks ??= new Tasks({ client: this.client }))
   }
 
   private _attachments?: Attachments

@@ -20,7 +20,7 @@ import { EventInvestigationHost } from "@/deepagent/event-investigation"
 import { EventValidationNative } from "@/installation/event-validation-native"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { AppRuntime } from "@/effect/app-runtime"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { ServerAuth } from "@/server/auth"
 import { Server } from "@/server/server"
 import { InvestigationCaptured } from "@/server/routes/instance/httpapi/groups/event-investigation"
@@ -37,8 +37,8 @@ export const DebugCommand = cmd({ command: "debug", handler: async () => {
   const outcome = await AppRuntime.runPromise(Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const config = yield* ServerAuth.Config
-    const configured = yield* LocalTaskAuthority.configured(config)
-    yield* LocalTaskAuthority.authenticatePassword(db, configured.runtime, config.username, configured.password)
+    const configured = yield* LocalAuthority.configured(config)
+    yield* LocalAuthority.authenticatePassword(db, configured.runtime, config.username, configured.password)
     const execution = yield* SessionExecution.Service
     const investigation = yield* EventInvestigationHost.Service
     const listener = yield* Effect.acquireRelease(

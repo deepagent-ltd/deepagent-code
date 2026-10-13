@@ -58,12 +58,6 @@ export const MECHANISMS: readonly MechanismSpec[] = [
     site: "core/deepagent/event-admission.ts admit",
   },
   {
-    id: "im_single_write",
-    env: "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE",
-    unsetDefault: true,
-    site: "core/deepagent/im-single-write.ts",
-  },
-  {
     id: "v2_execution_owner",
     env: "DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER",
     unsetDefault: true,

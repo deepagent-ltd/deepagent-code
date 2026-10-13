@@ -1,0 +1,88 @@
+name: Package Desktop with Native receipts
+description: Build and verify one Desktop Native cohort before exposing package artifacts
+inputs:
+  version:
+    description: Reviewed Desktop version
+    required: true
+  channel:
+    description: Desktop prod or beta channel
+    required: true
+  platform-flags:
+    description: Native electron-builder platform and architecture flags
+    required: true
+  prepare:
+    description: Update the package version through the release prepare script
+    required: false
+    default: "false"
+  macos-signed:
+    description: This package uses the caller's configured Developer ID signature
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Pin the Desktop build identity
+      shell: bash
+      env:
+        DAC_DESKTOP_VERSION: ${{ inputs.version }}
+        DAC_DESKTOP_CHANNEL: ${{ inputs.channel }}
+        DAC_DESKTOP_MACOS_SIGNED: ${{ inputs.macos-signed }}
+        DAC_DESKTOP_PREPARE: ${{ inputs.prepare }}
+      run: |
+        set -euo pipefail
+        # macOS still supplies Bash 3.2, whose standalone [[ ]] does not
+        # reliably honor errexit. Refuse invalid inputs through an explicit exit.
+        if [[ ! "$DAC_DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] ||
+           [[ "$DAC_DESKTOP_CHANNEL" != "prod" && "$DAC_DESKTOP_CHANNEL" != "beta" ]] ||
+           [[ "$DAC_DESKTOP_MACOS_SIGNED" != "true" && "$DAC_DESKTOP_MACOS_SIGNED" != "false" ]] ||
+           [[ "$DAC_DESKTOP_PREPARE" != "true" && "$DAC_DESKTOP_PREPARE" != "false" ]]; then
+          echo "::error::Invalid Desktop build identity or mode"
+          exit 1
+        fi
+        if [[ "$DAC_DESKTOP_MACOS_SIGNED" == "true" && "$RUNNER_OS" != "macOS" ]]; then
+          echo "::error::A Developer ID build requires a native macOS runner"
+          exit 1
+        fi
+        echo "DEEPAGENT_CODE_VERSION=$DAC_DESKTOP_VERSION" >> "$GITHUB_ENV"
+        echo "DEEPAGENT_CODE_CHANNEL=$DAC_DESKTOP_CHANNEL" >> "$GITHUB_ENV"
+        if [[ "$RUNNER_OS" == "Linux" ]]; then
+          echo "DEEPAGENT_CODE_BUILD_LINUX_NATIVE_ASSETS=1" >> "$GITHUB_ENV"
+        fi
+
+    # prepare.ts imports prebuild, so this publisher must precede both prepare
+    # and bun's prebuild lifecycle. Both builds retain this same job publisher.
+    - name: Prepare this job's private Native build publisher
+      shell: bash
+      env:
+        DAC_NATIVE_APPLE_SIGNED: ${{ inputs.macos-signed == 'true' && '1' || '0' }}
+      run: bun ./packages/desktop/scripts/native-publisher.ts prepare
+
+    - name: Prepare the release package version
+      if: inputs.prepare == 'true'
+      shell: bash
+      working-directory: packages/desktop
+      run: bun ./scripts/prepare.ts
+
+    - name: Build renderer and Native assets
+      shell: bash
+      working-directory: packages/desktop
+      run: bun run build
+
+    - name: Package
+      shell: bash
+      working-directory: packages/desktop
+      env:
+        DAC_DESKTOP_PLATFORM_FLAGS: ${{ inputs.platform-flags }}
+      run: |
+        set -euo pipefail
+        read -r -a dac_platform_flags <<< "$DAC_DESKTOP_PLATFORM_FLAGS"
+        npx electron-builder "${dac_platform_flags[@]}" --publish never --config electron-builder.config.ts
+
+    - name: Verify this exact packaged Native build cohort
+      shell: bash
+      run: bun ./packages/desktop/scripts/native-publisher.ts guard
+
+    - name: Destroy this job's private Native build publisher
+      if: always()
+      shell: bash
+      run: bun ./packages/desktop/scripts/native-publisher.ts cleanup

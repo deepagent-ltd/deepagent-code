@@ -1,3 +1,4 @@
+import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -49,8 +50,8 @@ async function run(mode: string) {
 }
 actual("actual DNS/TLS: public-address pin, private/mixed/mapped rejection, proxy CONNECT and startup drift", async () => {
   const result = await run("dns")
-  expect(result.node).toBe("24.18.0")
-  expect(result.electron).toBe("41.10.3")
+  expect(result.node).toBe(managedBrowserInputRuntime.nodeVersion)
+  expect(result.electron).toBe(managedBrowserInputRuntime.electronVersion)
   expect([result.private, result.mixed, result.mapped, result.rebound, result.badTLS]).toEqual(Array(5).fill("BROWSER_NETWORK_DENIED"))
   expect(result.badTLSHTTP).toBe(0)
   expect(result.facts.connects).toEqual(["93.184.216.34:443", "93.184.216.34:443"])

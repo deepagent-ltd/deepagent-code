@@ -42,7 +42,7 @@ export function PersonalCommandEditor(props: {
       "error",
       error instanceof IMFacadeRequestError &&
         error.status === 409 &&
-        (error.code === "command_conflict" || error.code === "task_scope_changed")
+        (error.code === "command_conflict" || error.code === "dac_scope_changed")
         ? "conflict"
         : "unavailable",
     )

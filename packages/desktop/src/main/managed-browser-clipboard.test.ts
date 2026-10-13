@@ -1,3 +1,4 @@
+import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -29,8 +30,8 @@ actual("actual Main clipboard: original confirmation, private utility/fileDB, le
     await Bun.file(path.join(root, "utility-failure.json")).json() : undefined
   expect(code, failure ? JSON.stringify(failure) : stderr.slice(-2000)).toBe(0)
   expect(result.code).toBe(0)
-  expect(result.result.node).toBe("24.18.0")
-  expect(result.result.electron).toBe("41.10.3")
+  expect(result.result.node).toBe(managedBrowserInputRuntime.nodeVersion)
+  expect(result.result.electron).toBe(managedBrowserInputRuntime.electronVersion)
   expect(result.result.oldDenied).toBe("BROWSER_SCOPE_DENIED")
   expect(result.result.copiedDescriptorDenied).toBe(true)
   expect(result.result.inputs).toBe(0)

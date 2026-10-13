@@ -511,7 +511,7 @@ export function Session() {
     ...(navigation.canReturnToIM()
       ? [
           {
-            title: i18n.t("tui.im.taskResult.return"),
+            title: i18n.t("tui.im.dac.returnToChat"),
             value: "session.im.return",
             category: i18n.t("tui.category.session"),
             slash: { name: "im-return" },
@@ -1423,7 +1423,7 @@ export function Session() {
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={navigation.canReturnToIM()}>
               <text fg={theme.primary} onMouseUp={() => navigation.returnToIM()}>
-                {i18n.t("tui.im.taskResult.return")} (/im-return)
+                {i18n.t("tui.im.dac.returnToChat")} (/im-return)
               </text>
             </Show>
             <Show when={session()}>

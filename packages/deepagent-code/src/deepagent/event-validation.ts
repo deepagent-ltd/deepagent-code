@@ -9,7 +9,7 @@ import { EventValidation } from "@deepagent-code/core/deepagent/event-validation
 import { EventValidationSchema } from "@deepagent-code/core/deepagent/event-validation.schema"
 import { EventValidationConsumer } from "@deepagent-code/core/deepagent/event-validation-consumer"
 import { ServerAuth } from "@/server/auth"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { EffectBridge } from "@/effect/bridge"
 import { EventValidationNative } from "@/installation/event-validation-native"
 import { EventValidationPlatform } from "@/installation/event-validation-platform"
@@ -49,7 +49,7 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
   const hints = new Map<string, { next: Hint | undefined; fiber?: Fiber.Fiber<void, never> }>()
   const captures = new Map<string, { input: typeof EventValidationSchema.Capture.Type; configuration: EventValidationSchema.Configuration; operatorRevision: number; expiresAt: number }>()
   const capturing = { count: 0 }
-  const configured = LocalTaskAuthority.configured(config).pipe(Effect.mapError(failure))
+  const configured = LocalAuthority.configured(config).pipe(Effect.mapError(failure))
   const getConsumer = gate.withPermit(Effect.gen(function* () {
     const current = yield* configured
     if (!runtime.active || (runtime.instanceID !== undefined && runtime.instanceID !== current.runtime.instanceID)) return yield* failure()

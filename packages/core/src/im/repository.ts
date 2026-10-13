@@ -3,17 +3,13 @@ import { and, asc, desc, eq, gt, isNotNull, isNull, like, lt, or, sql } from "dr
 import { Database } from "../database/database"
 import { contentDigest } from "../contract/digest"
 import { stringify } from "../util/canonical-json"
-import { IMMentionIntentTable } from "./mention-intent.sql"
 import { AttachmentStorage } from "./attachment-storage"
 import { AttachmentRefMetadata, type MessageMetadataValue } from "./sql"
 import { MediaCleanupCursorTable } from "./media-cleanup.sql"
-import { LocalTaskPolicy } from "./local-task-policy"
-import { LocalOrigin } from "./local-origin"
 import { ReplyBodyRetirement } from "./reply-body-retirement"
 import { MediaUploadCheckpointModel } from "./media-upload-checkpoint.model"
 import { MediaUploadCheckpoint } from "./media-upload-checkpoint"
 import { KernelDelivery } from "./kernel-delivery"
-import { IMTaskStatusNotice } from "./task-status-notice"
 import { KernelDeliverySchema } from "./kernel-delivery.schema"
 import { KernelReader } from "./kernel-reader"
 import { KernelReaderSchema } from "./kernel-reader.schema"
@@ -23,7 +19,7 @@ import { AttachmentTable, GroupTable, MemberTable, MessageTable, SyncCursorTable
 // Repository errors
 export class IMRepositoryError extends Schema.ErrorClass<IMRepositoryError>("IMRepositoryError")({
   message: Schema.String,
-  code: Schema.optional(Schema.Literals(["message_identity_conflict", "attachment_unavailable", "task_authority_unavailable", "task_mode_requires_review", "kernel_delivery_unavailable", ...KernelReaderSchema.CODES])),
+  code: Schema.optional(Schema.Literals(["message_identity_conflict", "attachment_unavailable", "kernel_delivery_unavailable", ...KernelReaderSchema.CODES])),
   operation: Schema.optional(Schema.String),
   wireCode: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 65535 }))),
   cause: Schema.optional(Schema.Unknown),
@@ -260,17 +256,6 @@ export interface ListAttachmentsInput {
   limit: number
 }
 
-export interface LiveMentionContext {
-  readonly names: readonly string[]
-  readonly directory: string
-  readonly workspaceID: string
-  readonly userID: string
-  readonly origin: "local" | "kernel_live"
-  readonly receiverID?: string
-  readonly conversationType?: number
-  readonly conversationID?: string
-}
-export type IMMentionIntent = typeof IMMentionIntentTable.$inferSelect & { readonly message: IMMessage }
 export const clientMessageID = (senderID: string, requestID: string) =>
   IMID.MessageID.make(`imsg_req_${contentDigest(stringify([senderID, requestID])).slice(0, 40)}`)
 
@@ -280,8 +265,6 @@ export interface CreateMessageInput {
   clientRequestID?: string
   attachment?: { id: string; workspaceID: string; expected?: IMAttachment }
   attachments?: { id: string; workspaceID: string; expected?: IMAttachment }[]
-  /** Server-only verified live provenance; never populated by history or HTTP payload metadata. */
-  mentionIntent?: LiveMentionContext
   groupID: string
   senderID: string
   senderType: SenderType
@@ -383,10 +366,6 @@ export interface IMRepositoryInterface {
   // §B3 搜索 — full-text + metadata search scoped to the caller's group memberships.
   readonly searchMessages: (input: SearchMessagesInput) => Effect.Effect<MessagePage, IMRepositoryError, never>
   readonly createMessage: (input: CreateMessageInput) => Effect.Effect<IMMessage & { readonly replayed?: boolean }, IMRepositoryError, never>
-  readonly listPendingMentions: (input: { origin: LiveMentionContext["origin"]; receiverID?: string; limit?: number }) => Effect.Effect<readonly IMMentionIntent[], IMRepositoryError>
-  readonly requireLegacyMention: (groupID: string) => Effect.Effect<void, IMRepositoryError>
-  readonly bindMention: (input: { id: string; agent: string; sessionID: string; inputID: string }) => Effect.Effect<IMMentionIntent | undefined, IMRepositoryError>
-  readonly settleMention: (input: { id: string; status: "pending" | "admitted" | "rejected"; error?: string }) => Effect.Effect<void, IMRepositoryError>
   readonly getMessage: (messageID: string) => Effect.Effect<IMMessage | undefined, IMRepositoryError, never>
   readonly getRawMessageForKernelDelivery?: (messageID: string) => Effect.Effect<IMMessage | undefined, IMRepositoryError, never>
   readonly markRead: (input: MarkReadInput) => Effect.Effect<void, IMRepositoryError, never>
@@ -988,15 +967,13 @@ export const IMRepositoryLive = Layer.effect(
 
       createMessage: (input) =>
         db.transaction((tx) => Effect.gen(function* () {
-          if (input.mentionIntent && (yield* LocalTaskPolicy.lookup(tx, input.groupID)))
-            return yield* new IMRepositoryError({ code: "task_mode_requires_review", message: "Task-mode messages require explicit review and cannot create legacy mention intents" })
           const id = input.clientRequestID ? clientMessageID(input.senderID, input.clientRequestID)
             : input.id ? IMID.MessageID.make(input.id)
             : input.kernelMsgID ? IMID.MessageID.make(`imsg_kernel_${contentDigest(input.kernelMsgID).slice(0, 40)}`)
             : IMID.MessageID.create()
           const now = Date.now()
           // An expired managed identity is refused before this repository's
-          // attachment gates or any new Message/mention admission. Explicit
+          // attachment gates or any new message creation. Explicit
           // historical comparisons use KernelDelivery.history instead.
           if (input.type === "file") yield* KernelDelivery.read(tx, id).pipe(Effect.mapError((error) =>
             new IMRepositoryError({ code: error instanceof KernelDeliverySchema.Error && error.code === "KERNEL_DELIVERY_RETIRED" ? "message_identity_conflict" : "kernel_delivery_unavailable",
@@ -1059,7 +1036,6 @@ export const IMRepositoryLive = Layer.effect(
           }
           yield* ReplyBodyRetirement.preflight(tx,id).pipe(Effect.mapError(() => new IMRepositoryError({code:"message_identity_conflict",message:"Original reply body is unavailable"})))
           const mentions = input.mentions ? Array.from(new Set(input.mentions)).sort() : null
-          yield* IMTaskStatusNotice.requireCreationInTransaction(tx, db, { ...input, id })
           const inserted = yield* tx.insert(MessageTable).values({
             id,
             group_id: input.groupID as IMID.GroupID,
@@ -1089,78 +1065,8 @@ export const IMRepositoryLive = Layer.effect(
             })),
           )
           yield* ReplyBodyRetirement.bindMessage(tx,id).pipe(Effect.mapError(() => new IMRepositoryError({code:"kernel_delivery_unavailable",message:"Original reply body accounting is unavailable"})))
-          yield* LocalOrigin.commit(tx, row, inserted !== undefined, now).pipe(Effect.mapError(() =>
-            new IMRepositoryError({ code: "task_authority_unavailable", message: "Authenticated local task origin is unavailable" }),
-          ))
-          // A local retry cannot retroactively authorize chat sent with the responder off.
-          // Kernel live proof may still reconcile an earlier history-only observation.
-          if (input.mentionIntent && (inserted || input.mentionIntent.origin === "kernel_live")) {
-            const intent = input.mentionIntent
-            for (const name of Array.from(new Set(intent.names.map((name) => name.toLowerCase())))) {
-              yield* tx.insert(IMMentionIntentTable).values({
-                id: `imi_${contentDigest(stringify([id, name])).slice(0, 40)}`,
-                message_id: id,
-                agent_name: name,
-                directory: intent.directory,
-                workspace_id: intent.workspaceID,
-                user_id: intent.userID,
-                origin: intent.origin,
-                receiver_id: intent.receiverID ?? null,
-                conversation_type: intent.conversationType ?? null,
-                conversation_id: intent.conversationID ?? null,
-                status: "pending",
-                created_at: now,
-                updated_at: now,
-              }).onConflictDoNothing().run()
-            }
-            yield* KernelReader.accountObligations(tx, row.id)
-          }
           return { ...mapMessageRow(row), replayed: inserted === undefined }
         })).pipe(Effect.mapError((cause) => cause instanceof IMRepositoryError ? cause : dbError("Database operation failed")(cause))),
-
-      listPendingMentions: (input) => db.select({ intent: IMMentionIntentTable, message: MessageTable })
-        .from(IMMentionIntentTable)
-        .innerJoin(MessageTable, eq(MessageTable.id, IMMentionIntentTable.message_id))
-        .where(and(
-          eq(IMMentionIntentTable.status, "pending"), eq(IMMentionIntentTable.origin, input.origin),
-          ...(input.receiverID ? [eq(IMMentionIntentTable.receiver_id, input.receiverID)] : []),
-          isNull(MessageTable.deleted_at),
-        ))
-        .orderBy(asc(IMMentionIntentTable.updated_at), asc(IMMentionIntentTable.id))
-        .limit(input.limit ?? 64).all()
-        .pipe(Effect.map((rows) => rows.map((row) => ({ ...row.intent, message: mapMessageRow(row.message) }))), Effect.mapError(dbError("Mention intent lookup failed"))),
-
-      requireLegacyMention: (groupID) => Effect.gen(function* () {
-        if (yield* LocalTaskPolicy.lookup(db, groupID))
-          return yield* new IMRepositoryError({ code: "task_mode_requires_review", message: "Task-mode conversation cannot execute legacy mentions" })
-      }),
-
-      bindMention: (input) => db.transaction((tx) => Effect.gen(function* () {
-        const source = yield* tx.select({ groupID: MessageTable.group_id, messageID: MessageTable.id }).from(IMMentionIntentTable)
-          .innerJoin(MessageTable, eq(MessageTable.id, IMMentionIntentTable.message_id))
-          .where(eq(IMMentionIntentTable.id, input.id)).get()
-        if (source && (yield* LocalTaskPolicy.lookup(tx, source.groupID)))
-          return yield* new IMRepositoryError({ code: "task_mode_requires_review", message: "Task-mode conversation cannot bind legacy mentions" })
-        yield* tx.update(IMMentionIntentTable).set({ resolved_agent: input.agent, session_id: input.sessionID, input_id: input.inputID, updated_at: Date.now() })
-          .where(and(eq(IMMentionIntentTable.id, input.id), eq(IMMentionIntentTable.status, "pending"), isNull(IMMentionIntentTable.resolved_agent))).run()
-        if (source) yield* KernelReader.accountObligations(tx, source.messageID)
-        const row = yield* tx.select({ intent: IMMentionIntentTable, message: MessageTable }).from(IMMentionIntentTable)
-          .innerJoin(MessageTable, eq(MessageTable.id, IMMentionIntentTable.message_id))
-          .where(eq(IMMentionIntentTable.id, input.id)).get()
-        if (!row || row.intent.status !== "pending") return
-        if (row.intent.resolved_agent !== input.agent || row.intent.session_id !== input.sessionID || row.intent.input_id !== input.inputID)
-          return yield* new IMRepositoryError({ message: "Mention target changed after durable binding" })
-        return { ...row.intent, message: mapMessageRow(row.message) }
-      })).pipe(Effect.mapError((cause) => cause instanceof IMRepositoryError ? cause : dbError("Mention binding failed")(cause))),
-
-      settleMention: (input) => db.transaction((tx) => Effect.gen(function* () {
-        const source = yield* tx.select({ messageID: IMMentionIntentTable.message_id }).from(IMMentionIntentTable)
-          .where(eq(IMMentionIntentTable.id, input.id)).get()
-        yield* tx.update(IMMentionIntentTable)
-          .set({ status: input.status, last_error: input.error ?? null, updated_at: Date.now() })
-          .where(and(eq(IMMentionIntentTable.id, input.id), eq(IMMentionIntentTable.status, "pending"))).run()
-        if (source) yield* KernelReader.accountObligations(tx, source.messageID)
-      }), { behavior: "immediate" }).pipe(Effect.mapError(dbError("Mention settlement failed"))),
 
       getMessage: (messageID) =>
         Effect.gen(function* () {

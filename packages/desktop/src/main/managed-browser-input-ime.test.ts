@@ -2,6 +2,8 @@ import { expect, test } from "bun:test"
 import { mkdtemp, realpath, symlink } from "node:fs/promises"
 import path from "node:path"
 import { compileManagedBrowserInputNative } from "../../scripts/managed-browser-input-native"
+import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
+import { managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
 test.skipIf(process.platform !== "darwin")("actual Darwin IME source delegates originals, retires replacements and respects shared hook ownership", async () => {
   const fixture = await createFixture()
@@ -30,7 +32,8 @@ test.skipIf(process.platform !== "darwin")("actual Darwin runtime ABI rejects un
   expect(await Bun.file(path.join(fixture.root, "pin-cleanup.json")).json()).toEqual({ restored: true })
   const result = await Bun.file(path.join(fixture.root, "pin-result.json")).json()
   expect(result).toMatchObject({ runtimeGate: true, sameVersionSource: true, initialEmptyRejected: true,
-    documentBoundaryRequired: true, liveAtCleanup: true, physicalHuman: false, runtime: { electron: "41.10.3" } })
+    documentBoundaryRequired: true, liveAtCleanup: true, physicalHuman: false,
+    runtime: { electron: managedBrowserInputRuntime.electronVersion, node: managedBrowserInputRuntime.nodeVersion } })
   expect(result.cdp).toHaveLength(7)
   expect(result.cdp.every((value: { callbacks: number }) => value.callbacks === 0)).toBe(true)
   expect(result.callbacks).toEqual([0, 0, 0])
@@ -56,7 +59,7 @@ async function createFixture() {
 }
 
 async function runFixture(fixture: { root: string; entrypoint: string }, scenario: string) {
-    const child = Bun.spawn([path.resolve(import.meta.dir, "../../node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"),
+    const child = Bun.spawn([managedBrowserInputFixtureExecutable,
       fixture.entrypoint, fixture.root, scenario], { cwd: fixture.root,
       env: { PATH: process.env.PATH, HOME: fixture.root, TMPDIR: fixture.root }, stdout: "pipe", stderr: "pipe" })
     const timer = setTimeout(() => child.kill("SIGKILL"), 20_000)

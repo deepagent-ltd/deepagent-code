@@ -16,7 +16,6 @@ import { capabilityCatalog, capabilityCatalogDigestValue } from "@deepagent-code
 process.env["DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"] = "true"
 process.env["DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"] = "true"
 delete process.env["DEEPAGENT_CODE_EVENT_V2_ADMISSION"]
-delete process.env["DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"]
 
 // C5-05 — the runtime feature registry is DERIVED from the frozen capability catalog, never a
 // hand-duplicated literal. These tests prove the derivation, the fail-closed unknown-feature
@@ -68,6 +67,12 @@ describe("RuntimeFeatures.enabled (fail-closed on unknown feature)", () => {
 
     expect(on.enabled("context_federation_v2")).toBe(true)
     expect(off.enabled("context_federation_v2")).toBe(false)
+  })
+
+  test("retired IM single-write is absent even when its old environment switch is set", () => {
+    const current = createRuntimeFeatureRegistry(undefined, { DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE: "true" })
+    expect(current.all()).not.toContain("event.v2.im_single_write")
+    expect(() => current.enabled("event.v2.im_single_write")).toThrow(UnknownRuntimeFeatureError)
   })
 
   test("an unknown feature throws a typed UnknownRuntimeFeatureError (never a silent false)", () => {

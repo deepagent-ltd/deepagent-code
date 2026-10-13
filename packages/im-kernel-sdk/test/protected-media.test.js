@@ -22,7 +22,8 @@ const transport = fetch => {
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch }); servers.push(server);
   const state = { generation: 1, token: "private-unit-current", user: "alice", navigator: server.url.origin };
   const io = { isConnected: () => true, deliveryMediaContext: () => state, deliveryGeneration: () => state.generation,
-    getCurrentUser: () => ({ id: state.user }), sendCommand: () => Promise.resolve() };
+    getCurrentUser: () => ({ id: state.user }), deliveryReceiverBaselineAvailable: () => false,
+    sendCommand: () => Promise.resolve() };
   return { state, io, client: MediaClient(io, true) };
 };
 

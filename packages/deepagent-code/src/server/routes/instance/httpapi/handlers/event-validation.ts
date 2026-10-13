@@ -5,7 +5,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { EventValidationSchema } from "@deepagent-code/core/deepagent/event-validation.schema"
 import { LocalOperatorSchema } from "@deepagent-code/core/im/local-operator.schema"
 import { EventValidationHost } from "@/deepagent/event-validation"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { ServerAuth } from "@/server/auth"
 import { CorsConfig } from "@/server/cors"
 import { EventValidationHttpApi } from "../api"
@@ -20,20 +20,20 @@ export const eventValidationHandlers = () => HttpApiBuilder.group(EventValidatio
   const cors = yield* CorsConfig
   const service = yield* EventValidationHost.Service
   const authenticate = Effect.gen(function* () {
-    return yield* LocalTaskAuthority.authenticate(db, config, yield* HttpServerRequest.HttpServerRequest, cors)
+    return yield* LocalAuthority.authenticate(db, config, yield* HttpServerRequest.HttpServerRequest, cors)
   })
   return handlers
     .handle("candidates", ({ payload }) => map(Effect.gen(function* () {
       const identity = yield* authenticate
-      return yield* LocalTaskAuthority.provide(identity, service.candidates(payload))
+      return yield* LocalAuthority.provide(identity, service.candidates(payload))
     })))
     .handle("capture", ({ payload }) => map(Effect.gen(function* () {
       const identity = yield* authenticate
-      return yield* LocalTaskAuthority.provide(identity, service.capture(payload))
+      return yield* LocalAuthority.provide(identity, service.capture(payload))
     })))
     .handle("configureCaptured", ({ payload }) => map(Effect.gen(function* () {
       const identity = yield* authenticate
-      return yield* LocalTaskAuthority.provide(identity, service.configureCaptured(payload))
+      return yield* LocalAuthority.provide(identity, service.configureCaptured(payload))
     })))
     .handle("rules", () => map(Effect.gen(function* () { yield* authenticate; return yield* service.list })))
     .handle("runs", ({ params }) => map(Effect.gen(function* () {
@@ -47,11 +47,11 @@ export const eventValidationHandlers = () => HttpApiBuilder.group(EventValidatio
     })))
     .handle("configure", ({ payload }) => map(Effect.gen(function* () {
       const identity = yield* authenticate
-      return yield* LocalTaskAuthority.provide(identity, service.configure(payload))
+      return yield* LocalAuthority.provide(identity, service.configure(payload))
     })))
     .handle("control", ({ params, payload }) => map(Effect.gen(function* () {
       const identity = yield* authenticate
-      return yield* LocalTaskAuthority.provide(identity, service.control({ ...payload, ruleID: params.ruleID }))
+      return yield* LocalAuthority.provide(identity, service.control({ ...payload, ruleID: params.ruleID }))
     })))
 }))
 function map<A, E, R>(effect: Effect.Effect<A, E, R>) {

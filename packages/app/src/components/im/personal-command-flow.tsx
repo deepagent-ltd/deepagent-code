@@ -252,7 +252,7 @@ export function PersonalCommandFlow(props: {
           </Button>
         </Show>
         <Show when={state.invalid}>
-          <p role="alert">{language.t("im.taskResult.scopeChanged")}</p>
+          <p role="alert">{language.t("im.dac.scopeChanged")}</p>
         </Show>
         <Button
           size="small"
@@ -264,7 +264,7 @@ export function PersonalCommandFlow(props: {
             props.onClose()
           }}
         >
-          {language.t("im.taskResult.return")}
+          {language.t("im.dac.returnToChat")}
         </Button>
       </div>
     </Show>

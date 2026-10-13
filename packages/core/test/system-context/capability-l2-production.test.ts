@@ -664,15 +664,6 @@ describe("RuntimeFeatures.enabled mirrors the flip-flag table (W4 step 6)", () =
     ).toBe(true)
   })
 
-  test("event.v2.im_single_write defaults ON and follows its env", () => {
-    expect(createRuntimeFeatureRegistry(undefined, {}).enabled("event.v2.im_single_write")).toBe(true)
-    expect(
-      createRuntimeFeatureRegistry(undefined, { DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE: "false" }).enabled(
-        "event.v2.im_single_write",
-      ),
-    ).toBe(false)
-  })
-
   test("context_federation_v2 defaults ON (W3.8 M1: production semantic) and follows the gate env", () => {
     expect(createRuntimeFeatureRegistry(undefined, {}).enabled("context_federation_v2")).toBe(true)
     expect(

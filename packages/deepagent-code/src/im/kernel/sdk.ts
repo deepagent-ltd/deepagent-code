@@ -172,8 +172,8 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
       yield* Effect.promise(() => import("./shims"))
       const JuggleIM = (yield* Effect.promise(() => import("@deepagent-code/im-kernel-sdk"))).default
       const im = JuggleIM.init({ appkey: config.appkey, navList: [config.navigator], isSync: false, protectedDeliveryReader: true, protectedMedia: config.protectedMedia === true })
-      const { KernelTaskLiveOrigin } = yield* Effect.promise(() => import("./task-live-origin"))
-      const releaseLiveObserver = KernelTaskLiveOrigin.subscribe(im, (handle) => offer({ tag: "protected_live_observed", handle }))
+      const { ProtectedLiveOrigin } = yield* Effect.promise(() => import("./protected-live-origin"))
+      const releaseLiveObserver = ProtectedLiveOrigin.subscribe(im, (handle) => offer({ tag: "protected_live_observed", handle }))
       yield* Effect.addFinalizer(() => Effect.sync(releaseLiveObserver))
 
       im.on(JuggleIM.Event.STATE_CHANGED, (event: { state?: unknown; code?: unknown }) => {
@@ -253,7 +253,7 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
         getDeliveryLiveCut: (input, baseline) => boundedRequest("getDeliveryLiveCut", () => im.getDeliveryLiveCut(input, baseline)),
         getDeliveryLiveMessages: (input, cut) => boundedRequest("getDeliveryLiveMessages", () => im.getDeliveryLiveMessages(input, cut)).pipe(
           Effect.flatMap((handle) => Effect.suspend(() => {
-            const original = KernelTaskLiveOrigin.capturePage(im, handle)
+            const original = ProtectedLiveOrigin.capturePage(im, handle)
             return original ? Effect.succeed(original) : Effect.fail(new KernelError({ operation: "getDeliveryLiveMessages", message: "Original live page unavailable" }))
           })),
         ),

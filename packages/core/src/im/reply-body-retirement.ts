@@ -214,48 +214,6 @@ const origin = (tx: Tx, row: Outbox) =>
       AND b.group_id=${row.group_id} AND a.state='settled'
       AND (a.final_message_id=${row.reply_message_id} OR ${row.reply_message_id} GLOB a.final_message_id || '_impart_[0-9]*') LIMIT 1`)
     if (dac) return { kind: "dac_session" as const, basisHash: ReplyBodyRetirementModel.hash(["dac_session", dac]) }
-    const notice = yield* tx.get<{
-      record_hash: string
-    }>(sql`SELECT record_hash FROM im_task_status_notice WHERE outbox_id=${row.id}
-    AND delivery_message_id=${row.delivery_message_id} AND coalesce(session_id,request_id)=${row.session_id} AND group_id=${row.group_id}
-    AND agent_id=${row.agent_id} AND source_message_id IS ${row.trigger_message_id} AND notice_id=${row.reply_message_id}
-    AND json_extract(record,'$.text')=${row.reply_text}`)
-    if (notice)
-      return {
-        kind: "status_notice" as const,
-        basisHash: ReplyBodyRetirementModel.hash(["notice", notice.record_hash]),
-      }
-    const work = yield* tx.get<{
-      record_hash: string
-      binding_hash: string
-      activity_id: string
-      final_message_id: string | null
-      outcome: string
-    }>(sql`
-    SELECT g.record_hash,w.binding_hash,a.activity_id,a.final_message_id,w.outcome FROM im_task_grant g
-    JOIN work_execution w ON w.work_id=g.work_id JOIN session_activity a ON a.session_id=g.session_id AND a.trigger_input_id=g.input_id
-    JOIN im_task_source s ON s.source_id=(SELECT source_id FROM im_task_request WHERE request_id=g.request_id)
-    WHERE g.result_key=${row.id} AND g.session_id=${row.session_id} AND json_extract(g.binding,'$.agentID')=${row.agent_id}
-    AND s.message_id IS ${row.trigger_message_id} AND json_extract(s.snapshot,'$.group.id')=${row.group_id}
-    AND w.outcome IN ('succeeded','failed') AND (a.final_message_id=${row.reply_message_id} OR (a.final_message_id IS NULL AND g.result_key=${row.reply_message_id})) LIMIT 1`)
-    if (work) return { kind: "work_result" as const, basisHash: ReplyBodyRetirementModel.hash(["work", work]) }
-    const mention = yield* tx.get<{ activity_id: string; trigger_input_id: string; final_message_id: string }>(sql`
-    SELECT a.activity_id,a.trigger_input_id,a.final_message_id FROM session_activity a
-    JOIN session_activity_input ai ON ai.activity_id=a.activity_id JOIN im_mention_intent i ON i.input_id=ai.input_id AND i.session_id=a.session_id
-    JOIN im_messages source ON source.id=i.message_id AND source.group_id=${row.group_id}
-    WHERE a.session_id=${row.session_id} AND a.trigger_input_id IS ${row.trigger_message_id} AND a.final_message_id=${row.reply_message_id}
-    AND a.state='settled' AND i.status='admitted' AND lower(i.agent_name)=lower(${row.agent_id}) LIMIT 1`)
-    if (mention) {
-      // One already-closed trigger cannot acquire another communication identity
-      // if its final pointer is later rewritten, including a sealed legacy denial.
-      // This is conflict prevention, never new admission from those old rows.
-      if (
-        yield* tx.get(sql`SELECT 1 FROM im_reply_outbox WHERE session_id=${row.session_id}
-      AND trigger_message_id IS ${row.trigger_message_id} AND trigger_message_id IS NOT NULL AND id<>${row.id} LIMIT 1`)
-      )
-        return yield* invalid()
-      return { kind: "mention" as const, basisHash: ReplyBodyRetirementModel.hash(["mention", mention]) }
-    }
     return {
       kind: "legacy_unbound" as const,
       basisHash: ReplyBodyRetirementModel.hash([

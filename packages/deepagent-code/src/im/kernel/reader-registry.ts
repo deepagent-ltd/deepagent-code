@@ -197,9 +197,6 @@ export const make = (config: KernelConfig.Info, options?: IMKernelSync.LayerOpti
     yield* Effect.forEach(Array.from(entries.values()).filter((entry) => entry.lifetime.active),
       (entry) => entry.hold(entry.reader.observeLive(handle)).pipe(Effect.ignore), { concurrency: 2, discard: true })
   })).pipe(Effect.forkIn(scope))
-  const withTaskSource = <A, E, R>(input: { workspaceID: string; localUserID: string; messageID: string }, use: (source: { reader: IMKernelReader.Interface; handle: object; assertCurrent: Effect.Effect<void, KernelReaderSchema.Error> }) => Effect.Effect<A, E, R>): Effect.Effect<A, E | KernelReaderSchema.Error, R> => Effect.suspend(() => {
-    return Effect.fail(KernelReaderSchema.failure("reader_unavailable", "retired-task-source"))
-  })
-  return { acquire, hint, withTaskSource, find: (workspaceID: string, userID: string) => entries.get(key({ workspaceID, userID })), entries: () => Array.from(entries.values()), statistics: () => ({ entries: entries.size, owned: owned.size, native: Array.from(owned).reduce((sum, entry) => sum + entry.lifetime.native, 0) }) }
+  return { acquire, hint, find: (workspaceID: string, userID: string) => entries.get(key({ workspaceID, userID })), entries: () => Array.from(entries.values()), statistics: () => ({ entries: entries.size, owned: owned.size, native: Array.from(owned).reduce((sum, entry) => sum + entry.lifetime.native, 0) }) }
 })
 export type Interface = Effect.Success<ReturnType<typeof make>>

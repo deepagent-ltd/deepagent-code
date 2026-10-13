@@ -42,7 +42,5 @@ export function imErrorText(error: unknown, i18n: TuiI18n) {
   if (code === "dac_scope_changed" || code === "binding_unavailable" || code === "reference_unavailable")
     return i18n.t("tui.im.dac.unavailable")
   if (code === "command_conflict") return i18n.t("tui.im.dac.unknown")
-  if (code === "task_session_unavailable" || code === "task_scope_changed")
-    return i18n.t("tui.im.taskSession.unavailable")
   return i18n.t((IM_ERROR_KEYS as Record<string, TuiI18nKey>)[code] ?? "tui.im.facade.error.unknown")
 }

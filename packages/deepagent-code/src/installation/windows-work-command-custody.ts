@@ -11,7 +11,7 @@ import { WorkStorageCleanupSchema } from "@deepagent-code/core/session/work-stor
 import { WorkStorageCleanupWindowsSchema } from "@deepagent-code/core/session/work-storage-cleanup-windows.schema"
 import { WorkToolPolicy } from "@deepagent-code/core/session/work-tool-policy"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
-import { LocalTaskAuthority } from "../im/local-task-authority"
+import { LocalAuthority } from "../installation/local-authority"
 import { NativeWindowsWorkFactory } from "./windows-work-factory"
 import { NativeWorkProcessSupervisor } from "./work-process-supervisor"
 import { WindowsWorkCommand } from "./windows-work-command"
@@ -31,7 +31,7 @@ export const make = Effect.fn("WindowsWorkCommandCustody.make")(function* () {
   if (process.platform !== "win32" || !factory.commandAvailable) return yield* failure()
   const lifetime = { active: true }
   const preparations = new WeakMap<WindowsWorkCommand.Preparation, {
-    held: Effect.Success<typeof LocalTaskAuthority.holdWindowsInstallation>; active: boolean; consumed: boolean
+    held: Effect.Success<typeof LocalAuthority.holdWindowsInstallation>; active: boolean; consumed: boolean
   }>()
   const retained = new WeakMap<WindowsWorkCommandRuntime.Workspace, { manifest: WorkStorageCleanupWindowsSchema.Manifest;
     retirement?: WindowsWorkCommandDescription.Observation; cleaned: boolean }>()
@@ -44,7 +44,7 @@ export const make = Effect.fn("WindowsWorkCommandCustody.make")(function* () {
       const scope = yield* Scope.Scope
       return yield* Effect.gen(function* () {
         yield* current
-        const held = yield* LocalTaskAuthority.holdWindowsInstallation.pipe(Effect.mapError(() => failure()))
+        const held = yield* LocalAuthority.holdWindowsInstallation.pipe(Effect.mapError(() => failure()))
         const prepared = Object.freeze(Object.create(null)) as WindowsWorkCommand.Preparation
         const original = { held, active: true, consumed: false }
         preparations.set(prepared, original)

@@ -2,6 +2,7 @@ export * as V2AdmissionBridge from "./v2-admission-bridge"
 
 import { Effect } from "effect"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
+import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import {
   EventRegistry,
   type EventRegistry as EventRegistryIface,
@@ -89,21 +90,6 @@ export const V4_EVENT_REGISTRY: EventRegistryIface = EventRegistry.createEventRe
     objective: "investigate the CI failure",
     requestedCapability: "deepagent.ci.triage",
     autonomyCeiling: "high",
-  },
-  {
-    eventType: "im.message.created",
-    kind: "command",
-    schemaId: "im.message.created.schema",
-    schemaVersion: "1",
-    payloadContentType: "application/json",
-    payloadVersion: "v1",
-    allowedProducerKinds: ["user"],
-    allowedSourceKinds: ["user"],
-    causation: { allowed: ["causedByEventId"], requiresCause: false },
-    risk: "medium",
-    objective: "respond to the IM message",
-    requestedCapability: "deepagent.im.reply",
-    autonomyCeiling: "medium",
   },
   {
     eventType: "git.push",
@@ -399,6 +385,9 @@ export const makeV2AdmissionBridge = (deps: V2AdmissionBridgeDeps): MultiAgentRu
     receiptOnly: boolean,
   ) =>
     Effect.gen(function* () {
+      // An injected registry cannot restore the retired message-to-execution bridge.
+      if (request.event.type === LMNEvents.IM_MESSAGE_CREATED)
+        return yield* Effect.fail(new EventNotRegisteredError(request.event.type, request.event.id))
       if (request.event.type === EventWorkRule.EVENT_TYPE) {
         if (!deps.eventWork) return yield* EventWorkSource.failure("EVENT_WORK_AUTH_REQUIRED")
         const current = yield* deps.eventWork.lookup(request.event.id)

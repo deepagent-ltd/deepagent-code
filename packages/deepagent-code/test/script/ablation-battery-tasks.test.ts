@@ -38,10 +38,6 @@ describe("ablation battery tasks", () => {
     expect(mechanismEnvKeys.learning).toEqual({ key: "DEEPAGENT_DURABLE_LEARNING", offValue: "false" })
     expect(mechanismEnvKeys.plangate).toEqual({ key: "DEEPAGENT_CODE_STRICT_PLAN_GATE", offValue: "false" })
     expect(mechanismEnvKeys["event-admission"]).toEqual({ key: "DEEPAGENT_CODE_EVENT_V2_ADMISSION", offValue: "false" })
-    expect(mechanismEnvKeys["im-single-write"]).toEqual({
-      key: "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE",
-      offValue: "false",
-    })
     expect(mechanismEnvKeys["v2-owner"]).toEqual({ key: "DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER", offValue: "false" })
   })
 

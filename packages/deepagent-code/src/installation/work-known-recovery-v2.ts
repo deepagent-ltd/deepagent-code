@@ -26,7 +26,7 @@ import { WorkKnownRecoverySchema } from "@deepagent-code/core/session/work-known
 import { WorkKnownRecoveryV2Schema } from "@deepagent-code/core/session/work-known-recovery-v2.schema"
 import { WorkRouteApproval } from "@deepagent-code/core/session/work-route-approval"
 import { WorkRouteApprovalSchema } from "@deepagent-code/core/session/work-route-approval.schema"
-import { LocalTaskAuthority } from "../im/local-task-authority"
+import { LocalAuthority } from "../installation/local-authority"
 import { NativeRuntime } from "./native-runtime"
 import { ProviderCredentialBinding } from "./provider-credential-binding"
 import { WorkProviderContract } from "./work-provider-contract"
@@ -43,7 +43,7 @@ const make = Effect.gen(function* () {
   const locations = yield* LocationServiceMap
   const sessions = yield* SessionStore.Service
   const execution = yield* SessionExecution.Service
-  const installation = yield* LocalTaskAuthority.readInstallation.pipe(Effect.mapError(refused))
+  const installation = yield* LocalAuthority.readInstallation.pipe(Effect.mapError(refused))
   const secret = Buffer.from(installation.secret, "hex")
   const lifetime = { active: true }
   const entries = new WeakMap<WorkKnownRecoveryV2.Prepared, {

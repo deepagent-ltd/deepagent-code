@@ -9,6 +9,10 @@
 #include <memory>
 #include <vector>
 
+#if !defined(DAC_MANAGED_BROWSER_INPUT_ELECTRON_VERSION) || !defined(DAC_MANAGED_BROWSER_INPUT_NODE_VERSION)
+#error The fixed publisher must provide the reviewed managed browser input runtime cohort
+#endif
+
 struct Owner;
 struct HookSlot;
 struct Client { __weak NSView *view; };
@@ -309,16 +313,21 @@ static napi_value observe(napi_env env, napi_callback_info info) {
 static napi_value initialize(napi_env env, napi_value exports) {
   // This private Cocoa ABI and CDP separation were qualified against this exact
   // Electron build. A framework upgrade requires a fresh native source cohort.
-  napi_value global, process, versions, electron, kind;
-  char electronVersion[32], runtimeType[32]; size_t versionLength = 0, runtimeLength = 0;
+  napi_value global, process, versions, electron, node, kind;
+  char electronVersion[32], nodeVersion[32], runtimeType[32]; size_t versionLength = 0, nodeLength = 0, runtimeLength = 0;
   if (napi_get_global(env, &global) != napi_ok ||
       napi_get_named_property(env, global, "process", &process) != napi_ok ||
       napi_get_named_property(env, process, "versions", &versions) != napi_ok ||
       napi_get_named_property(env, versions, "electron", &electron) != napi_ok ||
+      napi_get_named_property(env, versions, "node", &node) != napi_ok ||
       napi_get_named_property(env, process, "type", &kind) != napi_ok ||
       napi_get_value_string_utf8(env, electron, electronVersion, sizeof(electronVersion), &versionLength) != napi_ok ||
+      napi_get_value_string_utf8(env, node, nodeVersion, sizeof(nodeVersion), &nodeLength) != napi_ok ||
       napi_get_value_string_utf8(env, kind, runtimeType, sizeof(runtimeType), &runtimeLength) != napi_ok ||
-      versionLength != 7 || runtimeLength != 7 || std::strcmp(electronVersion, "41.10.3") != 0 || std::strcmp(runtimeType, "browser") != 0) {
+      versionLength != std::strlen(DAC_MANAGED_BROWSER_INPUT_ELECTRON_VERSION) ||
+      nodeLength != std::strlen(DAC_MANAGED_BROWSER_INPUT_NODE_VERSION) || runtimeLength != 7 ||
+      std::strcmp(electronVersion, DAC_MANAGED_BROWSER_INPUT_ELECTRON_VERSION) != 0 ||
+      std::strcmp(nodeVersion, DAC_MANAGED_BROWSER_INPUT_NODE_VERSION) != 0 || std::strcmp(runtimeType, "browser") != 0) {
     napi_throw_error(env, nullptr, "MANAGED_BROWSER_INPUT_RUNTIME_ABI"); return nullptr;
   }
   auto owner = new std::shared_ptr<Owner>(std::make_shared<Owner>()); (*owner)->env = env;

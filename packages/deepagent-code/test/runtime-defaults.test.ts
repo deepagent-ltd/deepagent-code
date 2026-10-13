@@ -7,7 +7,6 @@ import {
   CONTEXT_FEDERATION_PRODUCTION_ENV,
   DEFAULT_MODELS_URL,
   EVENT_V2_ADMISSION_ENV,
-  IM_SINGLE_WRITE_ENV,
   MODELS_URL_ENV,
   RUNTIME_DEFAULTS_SNAPSHOT_ENV,
   runtimeDefaultsFromEnv,
@@ -22,7 +21,6 @@ import {
 
 const DEFAULT_ON_VECTOR = {
   eventV2Admission: true,
-  imSingleWrite: true,
   coreV2ExecutionOwner: true,
   federationActivate: true,
   ownerCampaign: undefined,
@@ -38,13 +36,11 @@ describe("runtimeDefaultsFromEnv", () => {
     // shared table (core/deepagent/flip-flag): "" / "false" / "0" → OFF; any other defined value → ON
     for (const off of ["false", "FALSE", " False ", "0", "0 ", ""]) {
       expect(runtimeDefaultsFromEnv({ [EVENT_V2_ADMISSION_ENV]: off }).eventV2Admission).toBe(false)
-      expect(runtimeDefaultsFromEnv({ [IM_SINGLE_WRITE_ENV]: off }).imSingleWrite).toBe(false)
       expect(runtimeDefaultsFromEnv({ [CORE_V2_EXECUTION_OWNER_ENV]: off }).coreV2ExecutionOwner).toBe(false)
       expect(runtimeDefaultsFromEnv({ [CONTEXT_FEDERATION_PRODUCTION_ENV]: off }).federationActivate).toBe(false)
     }
     for (const on of ["true", "TRUE", " true ", "1", "1 ", "yes", "2"]) {
       expect(runtimeDefaultsFromEnv({ [EVENT_V2_ADMISSION_ENV]: on }).eventV2Admission).toBe(true)
-      expect(runtimeDefaultsFromEnv({ [IM_SINGLE_WRITE_ENV]: on }).imSingleWrite).toBe(true)
       expect(runtimeDefaultsFromEnv({ [CORE_V2_EXECUTION_OWNER_ENV]: on }).coreV2ExecutionOwner).toBe(true)
       expect(runtimeDefaultsFromEnv({ [CONTEXT_FEDERATION_PRODUCTION_ENV]: on }).federationActivate).toBe(true)
     }
@@ -69,11 +65,9 @@ describe("runtimeDefaultsFromEnv", () => {
   test("case 3: applyRuntimeDefaults fills only unset keys — explicit =false/=0 kill-switches survive", () => {
     const env: NodeJS.ProcessEnv = {
       [EVENT_V2_ADMISSION_ENV]: "false",
-      [IM_SINGLE_WRITE_ENV]: "0",
     }
     applyRuntimeDefaults(env)
     expect(env[EVENT_V2_ADMISSION_ENV]).toBe("false")
-    expect(env[IM_SINGLE_WRITE_ENV]).toBe("0")
     expect(env[CORE_V2_EXECUTION_OWNER_ENV]).toBe("true")
     expect(env[CONTEXT_FEDERATION_PRODUCTION_ENV]).toBe("true")
     // Optional strings carry no canonical default: nothing is written.
@@ -81,7 +75,6 @@ describe("runtimeDefaultsFromEnv", () => {
     expect(env[V2_BUILD_IDENTITY_ENV]).toBeUndefined()
     expect(runtimeDefaultsFromEnv(env)).toEqual({
       eventV2Admission: false,
-      imSingleWrite: false,
       coreV2ExecutionOwner: true,
       federationActivate: true,
       ownerCampaign: undefined,
@@ -129,7 +122,6 @@ describe("W0.1 entry parity: CLI and desktop sidecar apply identical runtime def
     expect(sidecar).toEqual(cli)
     expect(cli).toEqual({
       [EVENT_V2_ADMISSION_ENV]: "true",
-      [IM_SINGLE_WRITE_ENV]: "true",
       [CORE_V2_EXECUTION_OWNER_ENV]: "true",
       [CONTEXT_FEDERATION_PRODUCTION_ENV]: "true",
       [MODELS_URL_ENV]: DEFAULT_MODELS_URL,
@@ -151,7 +143,6 @@ describe("W0.1 entry parity: CLI and desktop sidecar apply identical runtime def
     expect(sidecar).toEqual(cli)
     expect(cli[EVENT_V2_ADMISSION_ENV]).toBe("false")
     expect(cli[CORE_V2_EXECUTION_OWNER_ENV]).toBe("0")
-    expect(cli[IM_SINGLE_WRITE_ENV]).toBe("true")
     expect(cli[CONTEXT_FEDERATION_PRODUCTION_ENV]).toBe("false")
     expect(runtimeDefaultsFromEnv(cli).federationActivate).toBe(false)
     expect(cli[MODELS_URL_ENV]).toBe("https://models.dev")

@@ -87,44 +87,21 @@ export const ErrorMetadata = Schema.Struct({
 })
 export type ErrorMetadata = Schema.Schema.Type<typeof ErrorMetadata>
 
-// W0.4 — durable @mention-routing receipt. Written by the event-dispatcher mention router when a
-// mentioned agent did not declare the mention trigger (or no agent declared it), so the user gets an
-// explicit receipt instead of a silent no_match drop. Additive: older rows decode unchanged.
-export const NoTriggerMentionMetadata = Schema.Struct({
-  type: Schema.Literal("agent_no_trigger_mention"),
-  agentID: Schema.optional(Schema.String),
-  agentNames: Schema.optional(Schema.Array(Schema.String)),
-  eventID: Schema.optional(Schema.String),
-  messageID: Schema.optional(Schema.String),
-})
-export type NoTriggerMentionMetadata = Schema.Schema.Type<typeof NoTriggerMentionMetadata>
-
-// A history poll on an established connection can precede the websocket notification.
-// Only that later verified live notification may reconcile Agent admission for this row.
+// Protected message mirror metadata is communication data, never execution authority.
 export const KernelSyncMetadata = Schema.Struct({
   type: Schema.Literal("kernel_sync"),
   liveEligible: Schema.Boolean,
 })
 
-// This is an indexed candidate for a verified fixed status notice, never execution authority.
-export const TaskStatusNoticeMetadata = Schema.Struct({
-  type: Schema.Literal("task_status_notice"),
-  noticeID: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
-  requestID: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
-  kind: Schema.Literals(["cancel_requested", "recovery_required", "refused"]),
-})
-
 export const MessageMetadata = Schema.Union([
   AttachmentRefMetadata,
   KernelSyncMetadata,
-  TaskStatusNoticeMetadata,
   FileRefMetadata,
   CodeRefMetadata,
   AgentRunMetadata,
   DebugMetadata,
   ProfileMetadata,
   ErrorMetadata,
-  NoTriggerMentionMetadata,
 ]).pipe(Schema.toTaggedUnion("type"))
 export type MessageMetadata = Schema.Schema.Type<typeof MessageMetadata>
 
@@ -197,9 +174,8 @@ export const MessageTable = sqliteTable(
     mentions: text({ mode: "json" }).$type<string[]>(),
     metadata: text({ mode: "json" }).$type<MessageMetadataValue>(),
     reply_to_id: text().$type<IMID.MessageID>(),
-    // V4.0 §B4 — the DeepAgent Event Bus event this message was produced from (agent replies / proactive
-    // pushes carry it; user messages that publish im.message.created link back via it). NULL for legacy
-    // V3.8 messages — nullable so the V3.8 write path is unchanged (§H compatibility).
+    // Proactive notifications can reference their originating Event. Ordinary user IM messages
+    // are communication records and never create an Event execution grant.
     event_id: text(),
     // V4.0 §B4 — delivery lifecycle for event-driven messages: pending | delivered | failed. NULL ⇒
     // the legacy synchronous path (no delivery tracking). Nullable for V3.8 compatibility.

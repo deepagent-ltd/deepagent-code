@@ -21,34 +21,9 @@ import { Hash } from "../util/hash"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
-// P3-b (WS7/C4, docs/V2.0.1-001-llm-agent-system-manual.md §8.2): the model's proactive IM send.
-// The send mirrors the app-side `AgentPush.push` (packages/deepagent-code/src/session/agent-push.ts)
-// as closely as core services allow — core cannot import app code, and the Location runner context
-// carries Database but not the app-side IMRepository/RuntimeFlags, so the tool runs the SAME pure
-// `AgentPushPolicy.decide` gate and persists directly over the SAME core tables in ONE immediate
-// transaction: idempotency prior-check → membership + rate-window facts → policy → message insert
-// (deliver only) → im_agent_push_logs audit row. A `digest` outcome holds the scrubbed content in
-// the audit row for the app-side DigestBuilder, exactly like AgentPush.
-//
-// Binding (design §8.2): an IM-originated session carries `metadata.im.{groupID, agent}` (written
-// by the app-side im-agent-execution admission; the reader below mirrors its imSessionMetadata —
-// core cannot import it). A bound session sends to its group by default; a non-IM session must pass
-// an explicit group_id and the policy gate still applies.
-//
-// Sender identity (design §8.2, the SupervisorNotifier SYSTEM_PUSHER_AGENT_ID pattern): when the
-// session's agent is a member of the target group it sends as itself (the policy's membership leg);
-// otherwise the runtime sends under the shared system-pusher identity with the workspace-push
-// permission leg — quiet-hours, rate-limit and content scrub still run after the permission gate.
-//
-// Permission: execution-time `PermissionV2.assert` with action `im_send` — an unconfigured action
-// resolves to ASK (fail-closed), so the user approves each send unless a rule allows it (the MCP
-// write_guarded / external-effect precedent). NOT in readOnlyActions (mutating).
-//
-// The Slack bot is a standalone inbound process; a configured external channel is projected by
-// the host adapter only after the durable IM message and push audit commit. The
-// v4AgentPushEnabled runtime flag gates the app-side proactive-pipeline callers
-// (SupervisorNotifier); this tool's gate is the explicit user ask, not that flag.
-
+// Explicit user-approved sending is independent of /dac execution and final-result delivery.
+// Conversation metadata never grants authority to send; the permission and push policy
+// below both check the requested target group before committing a message.
 export const name = "im_send"
 
 // The shared system-pusher identity. Mirrors supervisor-notifier.ts:57 (app side — core cannot
@@ -58,7 +33,7 @@ export const SYSTEM_PUSHER_AGENT_ID = "agent_system_notifier"
 
 const DESCRIPTION = [
   "Send a message to one of the user's IM groups on your behalf.",
-  "In a session that originated from an IM group the send goes to that bound group by default; any other session must pass group_id explicitly.",
+  "Always pass group_id explicitly. Private /dac commands send only their final answer through the normal result pipeline.",
   "Use it when the user asks you to post to the group, or to report a long-running result the user asked to be delivered there.",
   "Every send asks the user for approval first (permission action im_send, default ask), passes the IM push policy gate (authorization, 20 messages per hour per group, secret/link/path scrubbing), and is held as a digest during the workspace's quiet hours.",
   "If the group is bound to an external channel, a delivered message is also posted there; an external delivery failure leaves the durable IM message intact and is reported separately.",
@@ -69,9 +44,9 @@ const Input = Schema.Struct({
   text: Schema.String.check(Schema.isMinLength(1)).annotate({
     description: "The message text to deliver to the group",
   }),
-  group_id: Schema.optional(Schema.String).annotate({
+  group_id: Schema.String.check(Schema.isMinLength(1)).annotate({
     description:
-      "Target IM group id. Optional in an IM-originated session (defaults to the bound group); required otherwise",
+      "Explicit target IM group id; conversation metadata does not authorize sending",
   }),
 })
 
@@ -84,21 +59,6 @@ const Output = Schema.Struct({
   external_delivery: Schema.optional(Schema.Literals(["delivered", "delivery_failed"])),
   output: Schema.String,
 })
-
-// The session row fields the tool needs: the IM binding (metadata.im) and the workspace directory
-// (the §E3 path-ACL root for the content scrub).
-type SessionBinding = {
-  readonly groupID: string
-  readonly agent: string
-}
-
-// Mirror of the app-side imSessionMetadata reader (im-agent-execution.ts:52-57) — core cannot
-// import app code, and the metadata shape is the cross-package contract of the IM admission.
-const imBindingOf = (metadata: Record<string, unknown> | null): SessionBinding | undefined => {
-  const meta = metadata?.im as Partial<SessionBinding> | null | undefined
-  if (meta == null || typeof meta.groupID !== "string" || typeof meta.agent !== "string") return undefined
-  return { groupID: meta.groupID, agent: meta.agent }
-}
 
 const decodeSettings = Schema.decodeUnknownOption(WorkspaceConfig.Settings)
 
@@ -136,7 +96,6 @@ export const layer = Layer.effectDiscard(
                 return yield* new ToolFailure({
                   message: `im_send: session ${context.sessionID} is not visible in the durable session store`,
                 })
-              const binding = imBindingOf(session.metadata ?? null)
               const requestFingerprint = Hash.sha256(CanonicalJson.stringify({
                 text: input.text,
                 group_id: input.group_id ?? null,
@@ -187,11 +146,11 @@ export const layer = Layer.effectDiscard(
                 }
               }
 
-              const groupID = input.group_id ?? binding?.groupID
+              const groupID = input.group_id
               if (!groupID)
                 return yield* new ToolFailure({
                   message:
-                    "im_send: this session is not bound to an IM group (no im.groupID session metadata), " +
+                    "im_send: an explicit group_id is required, " +
                     "so an explicit group_id is required. Pass the target group's id; the push policy " +
                     "authorization check still applies.",
                 })
@@ -215,7 +174,7 @@ export const layer = Layer.effectDiscard(
                   metadata: {
                     group_id: groupID,
                     session_id: context.sessionID,
-                    agent: binding?.agent ?? context.agent,
+                    agent: context.agent,
                   },
                   sessionID: context.sessionID,
                   agent: context.agent,
@@ -229,7 +188,7 @@ export const layer = Layer.effectDiscard(
                   }),
                 )
 
-              const senderAgent = binding?.agent ?? context.agent
+              const senderAgent = context.agent
 
               // §E4 quiet hours, resolved like AgentPush's fail-safe: no config row / no configured
               // window / undecodable blob ⇒ false (never quiet); the other gates still run.

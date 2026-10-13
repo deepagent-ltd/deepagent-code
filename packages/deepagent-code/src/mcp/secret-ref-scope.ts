@@ -13,7 +13,7 @@ import { projectIdForWorkspace } from "@deepagent-code/core/deepagent/durable-kn
 import { ConfigFileWrite } from "@/config/file-write"
 import { InstanceState } from "@/effect/instance-state"
 import { InstanceRef } from "@/effect/instance-ref"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { isRecord } from "@/util/record"
 
 export const ACCOUNT_PREFIX = "mcp-scoped-v1:"
@@ -139,8 +139,8 @@ export const layer = Layer.effect(
         )
           return yield* new Error({ reason: "changed" })
         const installation = yield* initialize
-          ? LocalTaskAuthority.ensurePrivateInstallation()
-          : LocalTaskAuthority.readInstallation
+          ? LocalAuthority.ensurePrivateInstallation()
+          : LocalAuthority.readInstallation
         const requested = {
           boundary: { kind: "implicit_local" as const },
           directory: AbsolutePath.make(context.directory),

@@ -1,4 +1,4 @@
-[data-im-message-item] .im-task-proposal-action {
+[data-im-message-item] .im-dac-action {
   flex-shrink: 0;
   width: 24px;
   height: 24px;
@@ -8,13 +8,13 @@
 }
 
 @media (hover: none), (pointer: coarse) {
-  [data-im-message-item] .im-task-proposal-action {
+  [data-im-message-item] .im-dac-action {
     width: 44px;
     height: 44px;
   }
 }
 
-[data-im-task-result-card] .im-task-result-open {
+[data-im-dac-result-card] .im-dac-result-open {
   flex-shrink: 0;
   max-width: 100%;
   height: auto;

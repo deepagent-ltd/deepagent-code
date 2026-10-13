@@ -1,7 +1,7 @@
 export * as EventInvestigationAuthoritySchema from "./event-investigation-authority.schema"
 
 import { Schema } from "effect"
-import { IMTaskAuthoritySchema } from "../im/task-authority.schema"
+import { LocalAuthoritySchema } from "../session/local-authority.schema"
 import { WorkAuthorityPolicy } from "../session/work-authority-policy"
 import { WorkAuthoritySchema } from "../session/work-authority.schema"
 import { CanonicalJson } from "../util/canonical-json"
@@ -14,9 +14,9 @@ const Positive = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLes
 /** Independent operator authority. It is excluded from deterministic validation configHash. */
 export const Grant = Schema.Struct({
   version: Schema.Literal(1), grantID: ID, epoch: Positive, ruleID: ID,
-  principal: IMTaskAuthoritySchema.Principal,
+  principal: LocalAuthoritySchema.Principal,
   credentialGeneration: Positive, policyRevision: Positive, policyHash: WorkAuthoritySchema.Digest,
-  targetID: ID, target: IMTaskAuthoritySchema.ProjectTarget,
+  targetID: ID, target: LocalAuthoritySchema.ProjectTarget,
   scopeHash: WorkAuthoritySchema.Digest, createdAt: Positive, expiresAt: Positive,
 }).check(Schema.makeFilter((value) =>
   Buffer.byteLength(CanonicalJson.stringify(value)) <= MAX_GRANT_BYTES && value.expiresAt > value.createdAt &&

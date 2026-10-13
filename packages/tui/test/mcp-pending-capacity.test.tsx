@@ -6,7 +6,7 @@ import { DialogMcpSecrets } from "../src/component/dialog-mcp-secrets"
 import { tmpdir } from "./fixture/fixture"
 import { mountIM } from "./fixture/im-environment"
 
-test("actual keyboard/SDK migration retains 32 unknown IDs per client and only known original receipt releases capacity", async () => {
+test("actual keyboard/SDK migration retains 32 unknown IDs per client, releases only known receipts, and retires selection listeners", async () => {
   await using root = await tmpdir()
   const calls: { path: string; method: string; requestID?: string }[] = []
   const retained = new Map<string, string>()
@@ -35,6 +35,7 @@ test("actual keyboard/SDK migration retains 32 unknown IDs per client and only k
       <DialogMcpSecrets name={current} client={client} directory={root.path} server={server.url.origin} current={() => true} close={() => {}} />
     )}</Show>, 80)
     ui.app.renderer.resize(80, 24)
+    const selections: number[] = []
     const commit = async () => {
       await ui.frame("Migrate these fields")
       ui.app.mockInput.pressArrow("down")
@@ -48,6 +49,7 @@ test("actual keyboard/SDK migration retains 32 unknown IDs per client and only k
       setName(`held-${i}`)
       await commit()
       await ui.frame("Outcome unknown.")
+      selections.push(ui.app.renderer.listenerCount("selection"))
       expect(calls.filter((call) => call.path.endsWith("/commit"))).toHaveLength(i + 1)
     }
     setName("blocked")
@@ -75,5 +77,8 @@ test("actual keyboard/SDK migration retains 32 unknown IDs per client and only k
     await ui.frame("Outcome unknown.")
     expect(calls.filter((call) => call.path.endsWith("/commit"))).toHaveLength(34)
     expect(retained.size).toBe(34)
+    ui[Symbol.dispose]()
+    expect(Math.max(...selections)).toBeLessThanOrEqual(4)
+    expect(ui.app.renderer.listenerCount("selection")).toBe(0)
   } finally { server.stop(true) }
 }, 30_000)

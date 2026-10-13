@@ -3,7 +3,7 @@ export * as KernelClient from "./client"
 import { Cause, Context, Effect, Layer, PubSub, Schema, Stream, SubscriptionRef } from "effect"
 import * as Log from "@deepagent-code/core/util/log"
 import { KernelSdk } from "./sdk"
-import { KernelTaskLiveOrigin } from "./task-live-origin"
+import { ProtectedLiveOrigin } from "./protected-live-origin"
 
 // 内核客户端封装：连接状态机 + 文本消息归一化 + 带 TTL 的发送。架构（design §2）：
 // 内核只做在线路由 + TTL 离线队列，本地 sqlite 是消息权威存储；本服务是内核 WS 的单一口，
@@ -51,7 +51,7 @@ export interface Interface {
   readonly messages: Stream.Stream<KernelTextMessage>
   /** Original protected callbacks, separate from legacy message normalization. */
   readonly liveObservations?: Stream.Stream<object>
-  readonly readLiveObservation?: (handle: object) => ReturnType<typeof KernelTaskLiveOrigin.read>
+  readonly readLiveObservation?: (handle: object) => ReturnType<typeof ProtectedLiveOrigin.read>
   /** ack 后 resolve 出内核 messageId；失败（含 15s ack 超时）为 KernelError。 */
   readonly sendText: (input: SendTextInput) => Effect.Effect<{ readonly messageID: string }, KernelSdk.KernelError>
   readonly sendMedia?: (input: KernelSdk.OutboundMediaMessage) => Effect.Effect<{ readonly messageID: string }, KernelSdk.KernelError>
@@ -138,7 +138,7 @@ export const layer = Layer.effect(
         const mapped = mapState(event.state)
         return mapped ? SubscriptionRef.set(state, mapped) : Effect.void
       }
-      if (event.tag === "protected_live_observed" && KernelTaskLiveOrigin.read(event.handle)) {
+      if (event.tag === "protected_live_observed" && ProtectedLiveOrigin.read(event.handle)) {
         liveHandles.add(event.handle)
         return PubSub.publish(live, event.handle).pipe(Effect.asVoid)
       }
@@ -159,7 +159,7 @@ export const layer = Layer.effect(
       readCurrentLink: sdk.readCurrentLink,
       messages: Stream.fromPubSub(pubsub),
       liveObservations: Stream.fromPubSub(live),
-      readLiveObservation: (handle) => liveHandles.has(handle) ? KernelTaskLiveOrigin.read(handle) : undefined,
+      readLiveObservation: (handle) => liveHandles.has(handle) ? ProtectedLiveOrigin.read(handle) : undefined,
       media: sdk.media,
       sendMedia: (input) => Effect.suspend(() => input.expiresAt <= Date.now() || !sdk.sendMedia ?
         Effect.fail(new KernelSdk.KernelError({ operation: "sendMedia", message: "Protected media is unavailable or expired" })) : sdk.sendMedia(input)),

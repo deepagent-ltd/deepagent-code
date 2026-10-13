@@ -285,7 +285,6 @@ bun run --cwd packages/deepagent-code dev import-history --from codex --dry-run
 
 - [DeepAgent API Platform](https://api.deepagent.ltd/) · [Model Square pricing](https://api.deepagent.ltd/pricing)
 - [Architecture & Design](design/README.md)
-- [Real-LLM Testing Guide](design/real-llm-testing.md)
 - [Security Policy](SECURITY.md)
 - [Privacy Policy](PRIVACY.md)
 - [Contributing](CONTRIBUTING.md)

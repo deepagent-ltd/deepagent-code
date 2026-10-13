@@ -369,7 +369,11 @@ jobs:
 
       - name: Setup Apple API Key
         if: runner.os == 'macOS'
-        run: echo "${{ secrets.APPLE_API_KEY_PATH }}" > $RUNNER_TEMP/apple-api-key.p8
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_PATH }}
+        run: |
+          umask 077
+          printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/apple-api-key.p8"
 
       - uses: ./.github/actions/setup-bun
         with:
@@ -431,23 +435,16 @@ jobs:
           deepagent-code-app-id: ${{ vars.DEEPAGENT_CODE_APP_ID }}
           deepagent-code-app-secret: ${{ secrets.DEEPAGENT_CODE_APP_SECRET }}
 
-      - name: Prepare
-        run: bun ./scripts/prepare.ts
-        working-directory: packages/desktop
+      - name: Build, package and verify Desktop Native assets
+        uses: ./.github/actions/package-desktop
+        timeout-minutes: 90
+        with:
+          version: ${{ needs.version.outputs.version }}
+          channel: ${{ (needs.version.outputs.channel == 'beta' && 'beta') || 'prod' }}
+          platform-flags: ${{ matrix.settings.platform_flag }}
+          prepare: "true"
+          macos-signed: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' }}
         env:
-          DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
-          DEEPAGENT_CODE_CHANNEL: ${{ (needs.version.outputs.channel == 'beta' && 'beta') || 'prod' }}
-          DEEPAGENT_CODE_CLI_ARTIFACT: ${{ (runner.os == 'Windows' && 'deepagent-code-cli-windows') || 'deepagent-code-cli' }}
-          RUST_TARGET: ${{ matrix.settings.target }}
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-
-      - name: Build
-        run: bun run build
-        working-directory: packages/desktop
-        env:
-          DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
-          DEEPAGENT_CODE_CHANNEL: ${{ (needs.version.outputs.channel == 'beta' && 'beta') || 'prod' }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.WEB_SENTRY_PROJECT }}
@@ -455,28 +452,17 @@ jobs:
           VITE_SENTRY_DSN: ${{ vars.WEB_SENTRY_DSN }}
           VITE_SENTRY_ENVIRONMENT: ${{ (github.ref_name == 'beta' && 'beta') || 'production' }}
           VITE_SENTRY_RELEASE: desktop@${{ needs.version.outputs.version }}
-
-      - name: Package
-        if: needs.version.outputs.release
-        run: npx electron-builder ${{ matrix.settings.platform_flag }} --publish never --config electron-builder.config.ts
-        working-directory: packages/desktop
-        timeout-minutes: 60
-        env:
-          DEEPAGENT_CODE_CHANNEL: ${{ (needs.version.outputs.channel == 'beta' && 'beta') || 'prod' }}
+          DEEPAGENT_CODE_CLI_ARTIFACT: ${{ (runner.os == 'Windows' && 'deepagent-code-cli-windows') || 'deepagent-code-cli' }}
+          RUST_TARGET: ${{ matrix.settings.target }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
-          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_API_KEY: ${{ runner.temp }}/apple-api-key.p8
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-
-      - name: Package (no publish)
-        if: ${{ !needs.version.outputs.release }}
-        run: npx electron-builder ${{ matrix.settings.platform_flag }} --publish never --config electron-builder.config.ts
-        working-directory: packages/desktop
-        timeout-minutes: 60
-        env:
-          DEEPAGENT_CODE_CHANNEL: ${{ (needs.version.outputs.channel == 'beta' && 'beta') || 'prod' }}
+          # The Native publisher selects this configured imported Developer ID;
+          # Apple API-key notarization remains the formal release signing path.
+          CSC_NAME: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_CSC_NAME || '' }}
+          CSC_LINK: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_CERTIFICATE || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_API_KEY: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && format('{0}/apple-api-key.p8', runner.temp) || '' }}
+          APPLE_API_KEY_ID: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_API_ISSUER || '' }}
 
       - name: Create macOS .app.tar.gz
         if: runner.os == 'macOS' && needs.version.outputs.release

@@ -15,7 +15,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { registerInstanceStateDisposer } from "@/effect/instance-registry"
 import { InstanceRef } from "@/effect/instance-ref"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { McpAuth } from "./auth"
 import { McpAuthJournal } from "./auth-journal"
 import { McpAuthJournalSchema } from "./auth-journal-schema"
@@ -133,8 +133,8 @@ export const layer = Layer.effect(
       if (observed && initialize) return yield* Effect.fail(new McpAuthJournalSchema.Error("unavailable"))
       const instance = observed ? undefined : yield* InstanceState.context
       const installation = yield* initialize
-        ? LocalTaskAuthority.ensurePrivateInstallation()
-        : LocalTaskAuthority.readInstallation
+        ? LocalAuthority.ensurePrivateInstallation()
+        : LocalAuthority.readInstallation
       const authority = yield* verify ? account.verifyAuthority() : accounts.authority()
       const binding = {
         boundary: { kind: "implicit_local" as const },
@@ -235,7 +235,7 @@ export const layer = Layer.effect(
       const old = !!(yield* legacy.get(name))
       const empty = { tokens: false, expired: false, unknown: false, legacy: old }
       const installed = yield* safePromise(() =>
-        fs.lstat(LocalTaskAuthority.installationPath()).then(
+        fs.lstat(LocalAuthority.installationPath()).then(
           () => true,
           (error: unknown) => {
             if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return false

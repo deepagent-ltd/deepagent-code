@@ -4,7 +4,7 @@ import { Context, Effect, Option, Schema } from "effect"
 import { and, eq, sql } from "drizzle-orm"
 import type { Database } from "../database/database"
 import { LocalOperator } from "../im/local-operator"
-import { IMTaskAuthoritySchema } from "../im/task-authority.schema"
+import { LocalAuthoritySchema } from "../session/local-authority.schema"
 import { WorkAuthority } from "../session/work-authority"
 import { WorkAuthorityPolicy } from "../session/work-authority-policy"
 import { WorkAuthoritySchema } from "../session/work-authority.schema"
@@ -46,8 +46,8 @@ export interface FailureCapture { readonly [failureCapture]: true }
 export type GrantApprovalInput = {
   readonly rule: EventValidationSchema.RuleRecord
   readonly targetID: string
-  readonly target: typeof IMTaskAuthoritySchema.ProjectTarget.Type
-  readonly principal: IMTaskAuthoritySchema.Principal
+  readonly target: typeof LocalAuthoritySchema.ProjectTarget.Type
+  readonly principal: LocalAuthoritySchema.Principal
   readonly expiresAt: number
 }
 export type FailureObservationInput = {
@@ -406,7 +406,7 @@ export const invalidateRuleInTransaction = Effect.fn("EventInvestigation.invalid
   return (yield* Effect.forEach(rows, (row) => invalidateWork(tx, row.work_id))).flat()
 }, preserve)
 
-function principal(actor: LocalOperator.Record): IMTaskAuthoritySchema.Principal {
+function principal(actor: LocalOperator.Record): LocalAuthoritySchema.Principal {
   return { instanceID: actor.instance_id, actorID: actor.operator_id, revision: actor.revision, identityHash: actor.identity_hash }
 }
 function requireRule(tx: Tx, ruleID: string, actor: LocalOperator.Record) {
@@ -419,7 +419,7 @@ function requireRule(tx: Tx, ruleID: string, actor: LocalOperator.Record) {
   })
 }
 function requireTarget(actor: LocalOperator.Record, rule: Rule, targetID: string):
-  Effect.Effect<typeof IMTaskAuthoritySchema.ProjectTarget.Type, EventInvestigationSchema.Error> {
+  Effect.Effect<typeof LocalAuthoritySchema.ProjectTarget.Type, EventInvestigationSchema.Error> {
   const entry = actor.policy.targets.find((target) => target.id === targetID)
   if (!entry || !("version" in entry.target) || entry.target.profile.id !== WorkAuthorityPolicy.EVENT_INVESTIGATE_PROFILE.id ||
     !WorkAuthorityPolicy.profileFor(entry.target.profile) || !WorkAuthorityPolicy.checkInvestigationPolicy(entry.target).ok ||

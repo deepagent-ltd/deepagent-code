@@ -13,6 +13,7 @@ import {
 } from "../../scripts/managed-browser-input-windows-assets"
 import { compileWindowsInputNative } from "../../scripts/managed-browser-input-windows-native"
 import { selectWindowsInputCandidate } from "./managed-browser-input-windows-asset"
+import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
 
 const fixture = await Bun.file(fileURLToPath(new URL("./fixtures/windows-input-pe.fixture.json", import.meta.url))).json() as {
   bytes: number
@@ -84,6 +85,7 @@ test("exclusive publication returns only an unqualified candidate and readback i
   const root = await directory()
   const asset = await candidate(root)
   expect(asset.runtimeQualification).toBe("unverified")
+  expect(asset).toMatchObject(managedBrowserInputRuntime)
   expect(asset.bytes).toBe(original.length)
   expect(await readFile(asset.path)).toEqual(original)
   expect(await verifyWindowsInputPackAsset({ directory: root })).toEqual(asset)

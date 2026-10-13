@@ -7,6 +7,7 @@ import { NativeInstallationSchema } from "../../../deepagent-code/src/installati
 import { sealInstalledNativeNode, signMacWithNativeNode } from "../../scripts/native-node-artifact"
 import { nativeAssetNames, signNativeNodeAssets } from "../../../deepagent-code/script/sign-native-assets"
 import { prepareManagedBrowserInputAsset } from "../../scripts/managed-browser-input-assets"
+import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
 
 test.skipIf(process.platform !== "darwin" || process.arch !== "arm64")(
   "installed macOS utility verifies the final publisher seal after nested and outer signing",
@@ -149,8 +150,8 @@ test.skipIf(process.platform !== "darwin" || process.arch !== "arm64")(
         config: {
           appId: "ai.deepagent-code.installed-fixture",
           productName: name,
-          electronVersion: "41.10.3",
-          electronDist: path.resolve(import.meta.dir, "../../node_modules/electron/dist"),
+          electronVersion: managedBrowserInputRuntime.electronVersion,
+          electronDist: process.env.DAC_INSTALLER_ELECTRON_DIST ?? path.resolve(import.meta.dir, "../../node_modules/electron/dist"),
           directories: { output },
           files: ["main.cjs", "out/**/*"],
           asarUnpack: [

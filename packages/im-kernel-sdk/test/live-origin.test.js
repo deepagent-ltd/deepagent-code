@@ -4,8 +4,10 @@ import { SIGNAL_CMD } from "../upstream/src/enum";
 
 await import("../../deepagent-code/src/im/kernel/shims");
 const JuggleIM = (await import("../lib/index.js")).default;
-const { KernelTaskLiveOrigin } = await import("../../deepagent-code/src/im/kernel/task-live-origin");
+const { ProtectedLiveOrigin } = await import("../../deepagent-code/src/im/kernel/protected-live-origin");
 
+// The package runner isolates files: the real bundle captures storage/navigation state
+// on import, and another file's stopped local peer must not supply this connection.
 test("original protected WS observations are frozen and current; NTF/history/copies grant no observation", async () => {
   const fixture = socket();
   const received = [];
@@ -20,11 +22,12 @@ test("original protected WS observations are frozen and current; NTF/history/cop
   const unsubscribe = client.onProtectedLiveMessage(receive);
   const pending = (id) => {
     const deferred = Promise.withResolvers();
+    const timer = setTimeout(() => deferred.reject(new Error(`Missing original WS observation ${id}; connected=${fixture.connected}; topics=${fixture.topics.join(",")}`)), 2000);
     waiters.set(id, deferred.resolve);
-    return deferred.promise;
+    return deferred.promise.finally(() => clearTimeout(timer));
   };
   const handles = [];
-  const releaseCapture = KernelTaskLiveOrigin.subscribe(client, (handle) => handles.push(handle));
+  const releaseCapture = ProtectedLiveOrigin.subscribe(client, (handle) => handles.push(handle));
   try {
     await client.connect({ token: "private-live-test-token" });
     const first = pending("first-live");
@@ -37,8 +40,8 @@ test("original protected WS observations are frozen and current; NTF/history/cop
     expect(Object.isFrozen(received[0].value)).toBe(true);
     expect(Object.keys(received[0].handle)).toEqual([]);
     expect(client.readProtectedLiveMessage({ ...received[0].handle })).toBeUndefined();
-    expect(KernelTaskLiveOrigin.read(handles[0])).toMatchObject({ observation: received[0].value });
-    expect(KernelTaskLiveOrigin.read({ ...handles[0] })).toBeUndefined();
+    expect(ProtectedLiveOrigin.read(handles[0])).toMatchObject({ observation: received[0].value });
+    expect(ProtectedLiveOrigin.read({ ...handles[0] })).toBeUndefined();
     expect(JuggleIM.init({ appkey: "other", protectedDeliveryReader: true })
       .readProtectedLiveMessage(received[0].handle)).toBeUndefined();
     expect(() => client.emit(JuggleIM.Event.MESSAGE_RECEIVED, {})).toThrow();
@@ -70,14 +73,14 @@ test("original protected WS observations are frozen and current; NTF/history/cop
     const oldCapture = handles[0];
     await client.disconnect();
     expect(client.readProtectedLiveMessage(old)).toBeUndefined();
-    expect(KernelTaskLiveOrigin.read(oldCapture)).toBeUndefined();
+    expect(ProtectedLiveOrigin.read(oldCapture)).toBeUndefined();
     await client.connect({ token: "private-live-test-token" });
     expect(client.readProtectedLiveMessage(old)).toBeUndefined();
     const after = pending("new-generation");
     fixture.publish({ msgId: "new-generation" });
     expect((await after).generation).toBeGreaterThan(received[0].value.generation);
     releaseCapture();
-    expect(KernelTaskLiveOrigin.read(handles.at(-1))).toBeUndefined();
+    expect(ProtectedLiveOrigin.read(handles.at(-1))).toBeUndefined();
     unsubscribe();
     const stopped = received.length;
     const verified = Promise.withResolvers();

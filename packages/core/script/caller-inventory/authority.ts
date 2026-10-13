@@ -119,8 +119,8 @@ export const PORTS: Readonly<Record<string, { service: string; providerModule: s
   // v2f-d IM durable-only migration: both IM Effect service ports are unwired. No production
   // provider constructs AgentExecutorService anymore (agent-executor-server.ts now provides only
   // the AgentListProvider mention resolver), and the AgentReplySinkService provider module
-  // (agent-reply-sink-server.ts) is deleted. @mentions admit durable SessionV2 work directly
-  // (src/im/im-agent-execution.ts), so no portBound consumer edges remain.
+  // (agent-reply-sink-server.ts) is deleted. owner /dac admits ordinary SessionV2 work through
+  // core/src/im/dac-session.ts, so no portBound consumer edges remain.
 }
 /**
  * Client/service INVOCATION call-site bindings: a member-call chain the entry's handler BODY

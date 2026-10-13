@@ -16,7 +16,7 @@ import { WorkStorageCleanupSchema } from "@deepagent-code/core/session/work-stor
 import { WorkStorageCleanupWindowsWriteSchema } from "@deepagent-code/core/session/work-storage-cleanup-windows-write.schema"
 import { WorkToolPolicy } from "@deepagent-code/core/session/work-tool-policy"
 import { WorkWindowsPathSchema } from "@deepagent-code/core/session/work-windows-path.schema"
-import { LocalTaskAuthority } from "../im/local-task-authority"
+import { LocalAuthority } from "../installation/local-authority"
 import { NativeWindowsWorkFactory } from "./windows-work-factory"
 
 const WireIdentity = Schema.Struct({ kind: Schema.Literal("windows"),
@@ -108,7 +108,7 @@ export const make = Effect.fn("WindowsWorkWrite.make")(function* (lookup: (root:
     const witness = yield* WorkToolPolicy.storageProducer("write", state.record.admissionID)
     if (!witness) return yield* failure("WORK_FILE_UNKNOWN")
     const native = yield* available
-    const installation = yield* LocalTaskAuthority.readInstallation.pipe(Effect.mapError(() => failure()))
+    const installation = yield* LocalAuthority.readInstallation.pipe(Effect.mapError(() => failure()))
     if (installation.instanceID !== state.record.instanceID) return yield* failure("WORK_FILE_UNKNOWN")
     const decoded = Schema.decodeUnknownOption(WorkStorageCleanupWindowsWriteSchema.Manifest, { onExcessProperty: "error" })({
       version: 2, target: native.description.target, purpose: "work_write", kind: "write", captureKind: "native_live",
@@ -179,7 +179,7 @@ export const make = Effect.fn("WindowsWorkWrite.make")(function* (lookup: (root:
       if (capable.status !== "work_write_stage_v2" || capable.code !== null ||
         !same(capable.root, wire(current.binding.projectScope.rootIdentity)) || native.description.helper.sha256 !== current.helperHash)
         return yield* failure()
-      const installation = yield* LocalTaskAuthority.readInstallation.pipe(Effect.mapError(() => failure()))
+      const installation = yield* LocalAuthority.readInstallation.pipe(Effect.mapError(() => failure()))
       const basename = randomBytes(16).toString("hex")
       const directory = path.win32.join(global.data, "work-write-stage", basename)
       const prepareID = randomUUID()

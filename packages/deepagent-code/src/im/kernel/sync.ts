@@ -91,7 +91,6 @@ export interface Interface {
   readonly media?: KernelSdk.Media
   readonly acquireReader?: (context: ReaderContext) => Effect.Effect<ReaderLease, KernelReaderSchema.Error, Scope.Scope>
   /** Existing Entry only; this never resolves a path or creates a reader. */
-  readonly withTaskSource?: IMReaderRegistry.Interface["withTaskSource"]
 }
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/im/kernel/Sync") {}
 export interface LayerOptions {
@@ -129,9 +128,7 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => Laye
       const proof = yield* options.inspectConversation!({ ...parsed, senderID: config.userID }).pipe(Effect.option)
       yield* entry.assertCurrent
       if (Option.isNone(proof) || proof.value.org_id !== config.identity!.orgID || proof.value.conversation_id !== parsed.conversationID || proof.value.conversation_type !== parsed.conversationType || !proof.value.member_uuids.includes(config.userID)) return
-      const dispatch = yield* KernelDelivery.withResultDispatch(database.db, entry.authority, input.messageID,
-        KernelDelivery.withVerification(entry.authority, { conversationType: parsed.conversationType, conversationID: parsed.conversationID, orgID: proof.value.org_id, memberIDs: proof.value.member_uuids }, repo.claimKernelDelivery(entry.authority, input.messageID)),
-      )
+      const dispatch = yield* KernelDelivery.withVerification(entry.authority, { conversationType: parsed.conversationType, conversationID: parsed.conversationID, orgID: proof.value.org_id, memberIDs: proof.value.member_uuids }, repo.claimKernelDelivery(entry.authority, input.messageID))
       if (!dispatch) return
       const observation = { messageHash: KernelDelivery.hash({ messageID: input.messageID }), lane, stage: "request_gate" as SendStage }
       observeDelivery({ ...observation, event: "begin" })
@@ -354,7 +351,6 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => Laye
   const drainPending = Effect.suspend(() => Effect.forEach(registry.entries(), (entry) => fixedEngine(entry).pipe(Effect.flatMap((engine) => engine.drainPending)), { discard: true }))
   yield* Effect.suspend(() => drainPending).pipe(Effect.repeat(Schedule.spaced("30 seconds")), Effect.forkScoped)
   return Service.of({
-    withTaskSource: registry.withTaskSource,
     acquireReader: (context) => Effect.gen(function* () {
       const entry = yield* registry.acquire(context)
       return { engine: yield* fixedEngine(entry), reader: entry.reader, workspaceID: context.workspaceID, userID: context.userID, directory: context.instance.directory, assertCurrent: entry.assertCurrent }

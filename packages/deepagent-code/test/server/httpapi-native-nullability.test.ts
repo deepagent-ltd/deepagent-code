@@ -6,8 +6,7 @@ import { Location } from "@deepagent-code/core/location"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { PermissionGroup } from "@deepagent-code/server/groups/permission"
 import { PublicApi } from "../../src/server/routes/instance/httpapi/public"
-import { IMTaskResultResponse, MarkReadPayload } from "../../src/server/routes/instance/httpapi/groups/im"
-import { IMTaskResult } from "../../src/im/task-result"
+import { MarkReadPayload } from "../../src/server/routes/instance/httpapi/groups/im"
 import { InvestigationControl } from "../../src/server/routes/instance/httpapi/groups/event-investigation"
 
 function at(input: unknown, ...keys: string[]): unknown {
@@ -56,24 +55,6 @@ test("permission list HTTP encoders omit absent optional fields and preserve exp
   }
 })
 
-test("task status notices and authenticated remote lookup preserve a refused task's absent execution on the public wire", () => {
-  const spec = OpenApi.fromApi(PublicApi)
-  for (const [path, method] of [["/api/v1/im/messages/{messageId}/task-status", "get"],
-    ["/api/v1/im/tasks/remote-status", "post"]]) {
-    const operation = at(spec, "paths", path!, method!)
-    const variants = at(operation, "responses", "200", "content", "application/json", "schema", "anyOf")
-    const available = Array.isArray(variants) ? variants.find((value) => at(value, "properties", "state", "enum")?.toString() === "available") : undefined
-    for (const key of ["grant", "work"]) {
-      expect(at(available, "properties", "task", "required")).toContain(key)
-      expect(allowsNull(at(available, "properties", "task", "properties", key))).toBe(true)
-    }
-    for (const status of ["401", "404", "503"]) expect(at(operation, "responses", status)).toBeDefined()
-  }
-  const tuple = at(spec, "paths", "/api/v1/im/tasks/remote-status", "post", "requestBody", "content", "application/json", "schema", "properties", "tuple")
-  for (const key of ["url", "sessionID", "grant", "credential"]) expect(at(tuple, "properties", key)).toBeUndefined()
-  expect(at(tuple, "properties", "orgID", "type")).toBe("string")
-})
-
 test("MCP credential and binding operations expose native bounded contracts and preserve absent identity", () => {
   const spec = OpenApi.fromApi(PublicApi)
   const binding = at(spec, "components", "schemas", "McpBindingRepairPreview", "properties", "old")
@@ -96,91 +77,6 @@ test("MCP credential and binding operations expose native bounded contracts and 
     expect(at(operation, "responses", "409")).toBeDefined()
     expect(at(operation, "responses", "503")).toBeDefined()
   }
-})
-
-test("IM task management preserves absent control and independent nullable state on the public wire", () => {
-  const spec = OpenApi.fromApi(PublicApi)
-  const cancel = at(spec, "paths", "/api/v1/im/tasks/requests/{requestID}/cancel", "post")
-  const payload = at(cancel, "requestBody", "content", "application/json", "schema")
-  expect(at(cancel, "requestBody", "required")).toBe(true)
-  expect(at(payload, "required")).toContain("expectedControlRevision")
-  expect(allowsNull(at(payload, "properties", "expectedControlRevision"))).toBe(true)
-  const receipt = at(spec, "components", "schemas", "IMTaskCancelReceipt")
-  for (const key of ["workID", "sessionID", "expectedControlRevision", "controlRevision", "controlState"]) {
-    expect(at(receipt, "required")).toContain(key)
-    expect(allowsNull(at(receipt, "properties", key))).toBe(true)
-  }
-  const state = at(spec, "components", "schemas", "IMTaskState")
-  for (const key of ["source", "grant", "work"]) {
-    expect(at(state, "required")).toContain(key)
-    expect(allowsNull(at(state, "properties", key))).toBe(true)
-  }
-  expect(allowsNull(at(state, "properties", "targetScope", "properties", "workspaceID"))).toBe(true)
-  for (const key of ["outboxStatus", "receiptState"])
-    expect(allowsNull(at(state, "properties", "delivery", "properties", key))).toBe(true)
-  for (const operation of [cancel, at(spec, "paths", "/api/v1/im/tasks/requests/{requestID}/state", "get")]) {
-    expect(at(operation, "responses", "401")).toBeDefined()
-    expect(at(operation, "responses", "403")).toBeDefined()
-    expect(at(operation, "responses", "409")).toBeDefined()
-  }
-})
-
-test("remote result lookup exposes a bounded native candidate and retains authenticated nullable placement", () => {
-  const spec = OpenApi.fromApi(PublicApi)
-  const locator = at(spec, "paths", "/api/v1/im/messages/{messageId}/remote-task-locator", "get")
-  const lookup = at(spec, "paths", "/api/v1/im/tasks/remote-result", "post")
-  const tuple = at(lookup, "requestBody", "content", "application/json", "schema", "properties", "tuple")
-  expect(at(tuple, "properties", "orgID", "type")).toBe("string")
-  expect(at(tuple, "required")).toEqual(expect.arrayContaining(["realm", "appkey", "kernelMessageID", "senderID", "receiverID", "conversationType", "conversationID"]))
-  for (const key of ["url", "endpoint", "credential", "sessionID", "grant", "auditedText"])
-    expect(at(tuple, "properties", key)).toBeUndefined()
-  const variants = at(lookup, "responses", "200", "content", "application/json", "schema", "anyOf")
-  const available = Array.isArray(variants) ? variants.find((value) => at(value, "properties", "state", "enum")?.toString() === "available") : undefined
-  expect(allowsNull(at(available, "properties", "placement", "properties", "workspaceID"))).toBe(true)
-  for (const operation of [locator, lookup]) {
-    expect(at(operation, "responses", "401")).toBeDefined()
-    expect(at(operation, "responses", "503")).toBeDefined()
-  }
-})
-
-test("task proposal review keeps absent workspace, policy and admission on the actual public wire", () => {
-  const spec = OpenApi.fromApi(PublicApi)
-  const target = at(spec, "components", "schemas", "IMTaskTargetReview")
-  for (const key of ["workspaceID", "projectID", "targetID"]) {
-    expect(at(target, "required")).toContain(key)
-    expect(allowsNull(at(target, "properties", key))).toBe(true)
-  }
-  expect(allowsNull(at(target, "properties", "tools", "properties", "fileScope"))).toBe(true)
-  for (const key of ["provider", "endpoint", "credential", "commandRecipes", "environment"])
-    expect(at(target, "properties", key)).toBeUndefined()
-  const conversation = at(spec, "paths", "/api/v1/im/tasks/conversations/{groupID}", "get", "responses", "200", "content", "application/json", "schema")
-  expect(allowsNull(at(conversation, "properties", "target"))).toBe(true)
-  for (const [endpoint, method] of [["/api/v1/im/tasks/requests", "post"],
-    ["/api/v1/im/tasks/requests/{requestID}", "get"],
-    ["/api/v1/im/tasks/requests/{requestID}/accept", "post"]]) {
-    const response = at(spec, "paths", endpoint!, method!, "responses", "200", "content", "application/json", "schema")
-    expect(at(response, "required")).toContain("review")
-    for (const key of ["admission", "workID", "sessionID", "inputID", "control"])
-      expect(allowsNull(at(response, "properties", key))).toBe(true)
-  }
-})
-
-test("task result location retains explicit absent workspace and the actual project path bound", () => {
-  const spec = OpenApi.fromApi(PublicApi)
-  const response = at(spec, "paths", "/api/v1/im/messages/{messageId}/task-result", "get", "responses", "200", "content", "application/json", "schema")
-  const variants = at(response, "anyOf")
-  expect(Array.isArray(variants)).toBe(true)
-  const available = Array.isArray(variants) ? variants.find((value) => at(value, "properties", "state", "enum")?.toString() === "available") : undefined
-  const placement = at(available, "properties", "placement")
-  expect(at(placement, "required")).toContain("workspaceID")
-  expect(allowsNull(at(placement, "properties", "workspaceID"))).toBe(true)
-  const value = { version: 1, state: "available", messageID: "message", groupID: "group",
-    placement: { instanceID: "instance", securityNamespaceID: "namespace", projectID: "project", directory: "/" + "a".repeat(1024), workspaceID: null, sessionID: "session" },
-    attempt: { requestID: "request", workID: "work", inputID: "input", ordinal: 1, outcome: "succeeded" } }
-  expect(Schema.is(IMTaskResultResponse)(value)).toBe(true)
-  expect(Schema.is(IMTaskResult.Result)(value)).toBe(true)
-  expect(Schema.is(IMTaskResultResponse)({ ...value, placement: { ...value.placement, directory: "a".repeat(4097) } })).toBe(false)
-  expect(Schema.is(IMTaskResult.Result)({ ...value, placement: { ...value.placement, directory: "a".repeat(4097) } })).toBe(false)
 })
 
 test("investigation wire has independent authority controls and bounded read-only reports", () => {

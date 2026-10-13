@@ -24,7 +24,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap-service"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { Database } from "@deepagent-code/core/database/database"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { WorkAuthority } from "@deepagent-code/core/session/work-authority"
@@ -280,7 +280,7 @@ const result = await Effect.runPromiseExit(
             const before = await fs.readFile(path.join(a, "deepagent-code.json"))
             assert.equal((await call("GET", "credentials/preview", a, undefined, false)).status, 401)
             assert.equal((await call("GET", "credentials/preview")).status, 503)
-            await assert.rejects(fs.stat(LocalTaskAuthority.installationPath()), { code: "ENOENT" })
+            await assert.rejects(fs.stat(LocalAuthority.installationPath()), { code: "ENOENT" })
             assert.deepEqual(await fs.readFile(path.join(a, "deepagent-code.json")), before)
             assert.equal((await call("POST", "credentials/initialize")).status, 200)
             const preview = await call("GET", "credentials/preview")
@@ -358,14 +358,14 @@ const result = await Effect.runPromiseExit(
         }
         if (mode === "first-empty") {
           const before = await fs.readFile(path.join(a, "deepagent-code.json"))
-          await assert.rejects(fs.stat(LocalTaskAuthority.installationPath()), { code: "ENOENT" })
+          await assert.rejects(fs.stat(LocalAuthority.installationPath()), { code: "ENOENT" })
           const unavailable = await inDirectory(migration.preview("same").pipe(Effect.exit), a)
           assert(Exit.isFailure(unavailable))
-          await assert.rejects(fs.stat(LocalTaskAuthority.installationPath()), { code: "ENOENT" })
+          await assert.rejects(fs.stat(LocalAuthority.installationPath()), { code: "ENOENT" })
           assert.deepEqual(await fs.readFile(path.join(a, "deepagent-code.json")), before)
           const initialized = await inDirectory(migration.initialize("same"), a)
           assert.deepEqual(initialized, { name: "same", source: path.join(a, "deepagent-code.json") })
-          assert.equal((await fs.stat(LocalTaskAuthority.installationPath())).mode & 0o777, 0o600)
+          assert.equal((await fs.stat(LocalAuthority.installationPath())).mode & 0o777, 0o600)
           assert.deepEqual(await fs.readFile(path.join(a, "deepagent-code.json")), before)
           assert.equal(counts.put, 0)
           const committed = await migrate("same", a, "first-empty")
@@ -383,7 +383,7 @@ const result = await Effect.runPromiseExit(
           }
         }
         if (mode === "binding-repair" || mode === "binding-unknown") {
-          await Effect.runPromise(LocalTaskAuthority.ensurePrivateInstallation())
+          await Effect.runPromise(LocalAuthority.ensurePrivateInstallation())
           const boundary = { kind: "implicit_local" as const }
           const old = await Effect.runPromise(
             identities.resolve({

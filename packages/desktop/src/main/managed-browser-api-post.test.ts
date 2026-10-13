@@ -1,3 +1,4 @@
+import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -61,8 +62,8 @@ actual("actual explicit API POST: sealed request, digest-only capacity, redirect
   expect(code, failure ? JSON.stringify(failure) : stderr.slice(-3000)).toBe(0)
   const result = await Bun.file(path.join(root, "result.json")).json()
   expect(result.childExit).toBe(0)
-  expect(result.result.node).toBe("24.18.0")
-  expect(result.result.electron).toBe("41.10.3")
+  expect(result.result.node).toBe(managedBrowserInputRuntime.nodeVersion)
+  expect(result.result.electron).toBe(managedBrowserInputRuntime.electronVersion)
   expect(result.result.profile).toBe("managed-public-api-v1")
   expect(result.result.posted.status).toBe(200)
   expect(result.result.posted.text).toBe('{"accepted":true}')

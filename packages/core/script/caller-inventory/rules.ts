@@ -875,19 +875,6 @@ export const RULE_PACKS: readonly RulePack[] = [
       "packages/core/src/im/dac-session.ts",
     ),
   },
-  // The retained historical API returns a fixed refusal. It cannot regain
-  // Session admission merely by keeping its old identifier helpers/imports.
-  {
-    match: (id) => id === "im.agent-execution",
-    rules: withReadOnlyRest(
-      {},
-      [call("LocalOperator.failure", "packages/deepagent-code/src/im/im-agent-execution.ts"),
-        notBody("v2Session.prompt"), notBody("sessions.prompt"),
-        notBody("SessionV2.prompt"), notBody("SessionExecution.wake"),
-        notBody("promptSvc.promptOrSteer"), notBody("events.publish")],
-      "packages/deepagent-code/src/im/im-agent-execution.ts",
-    ),
-  },
   // v2f-d: the durable REPLY half (src/im/im-reply-outbox.ts). The terminal assistant reply of a
   // settled IM session is collected into the im_reply_outbox table (idempotent on
   // (session, reply)) and delivered at-least-once: claim (lease + attempts CAS) → deliver

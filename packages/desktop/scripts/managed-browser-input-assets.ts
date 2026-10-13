@@ -5,6 +5,7 @@ import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, realpat
 import { mkdir, realpath, rm, writeFile } from "node:fs/promises"
 import { Schema } from "effect"
 import { compileManagedBrowserInputNative } from "./managed-browser-input-native"
+import { managedBrowserInputRuntime } from "./managed-browser-input-runtime"
 
 const filename = "managed-browser-input-darwin.node"
 const manifestFilename = "managed-browser-input.asset.json"
@@ -20,6 +21,8 @@ const Manifest = Schema.Struct({
   filename: Schema.Literal(filename),
   target: Schema.Literals(["darwin-arm64", "darwin-x64"]),
   napiVersion: Schema.Literal(8),
+  electronVersion: Schema.Literal(managedBrowserInputRuntime.electronVersion),
+  nodeVersion: Schema.Literal(managedBrowserInputRuntime.nodeVersion),
   bytes: Bytes,
   sha256: Digest,
   sourceSha256: Digest,
@@ -78,6 +81,7 @@ export async function prepareManagedBrowserInputAsset(input: { directory: string
     requireMachO(body, target)
     const asset: ManagedBrowserInputPortableAsset = Object.freeze({
       schemaVersion: "dac.managed-browser-input.darwin.v1", filename, target, napiVersion: 8,
+      ...managedBrowserInputRuntime,
       bytes: body.length, sha256: digest(body), sourceSha256, headerInventorySha: digest(inventory.upstream),
     })
     await writeFile(path.join(directory, "LICENSE"), inventory.license, { flag: "wx", mode: 0o644 })

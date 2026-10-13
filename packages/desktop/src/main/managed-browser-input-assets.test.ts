@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { chmod, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { prepareManagedBrowserInputAsset, verifyManagedBrowserInputPackAsset } from "../../scripts/managed-browser-input-assets"
+import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
 
 test.skipIf(process.platform !== "darwin")("fixed Darwin input assets compile and reject pack identity and source mismatches", async () => {
   const directory = await realpath(await mkdtemp("/tmp/dac-browser-input-assets-"))
@@ -10,8 +11,9 @@ test.skipIf(process.platform !== "darwin")("fixed Darwin input assets compile an
   if (!asset) throw new Error("Darwin asset unavailable")
   expect(asset.target).toBe(process.arch === "arm64" ? "darwin-arm64" : "darwin-x64")
   expect(Object.keys(asset).toSorted()).toEqual([
-    "bytes", "filename", "headerInventorySha", "napiVersion", "schemaVersion", "sha256", "sourceSha256", "target",
+    "bytes", "electronVersion", "filename", "headerInventorySha", "napiVersion", "nodeVersion", "schemaVersion", "sha256", "sourceSha256", "target",
   ])
+  expect(asset).toMatchObject(managedBrowserInputRuntime)
   expect(await verifyManagedBrowserInputPackAsset({ directory })).toEqual(asset)
   expect((await readdir(directory)).toSorted()).toEqual([
     "LICENSE", "UPSTREAM.json", "keep.txt", "managed-browser-input-darwin.node", "managed-browser-input.asset.json",
@@ -22,6 +24,7 @@ test.skipIf(process.platform !== "darwin")("fixed Darwin input assets compile an
     { filename: "another.node" }, { schemaVersion: "other" }, { napiVersion: 9 }, { bytes: asset.bytes + 1 },
     { sha256: "0".repeat(64) }, { sourceSha256: "0".repeat(64) }, { headerInventorySha: "0".repeat(64) },
     { target: process.arch === "arm64" ? "darwin-x64" : "darwin-arm64" }, { path: "/tmp/arbitrary.node" },
+    { electronVersion: "41.10.3" }, { nodeVersion: "0.0.0" },
   ]) {
     await writeFile(manifest, JSON.stringify({ ...asset, ...change }))
     await expect(verifyManagedBrowserInputPackAsset({ directory })).rejects.toThrow()

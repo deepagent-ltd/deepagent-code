@@ -21,7 +21,6 @@ import { KernelReaderSchema } from "./kernel-reader.schema"
 import { IMKernelReaderProjectionTable, IMKernelReaderScopeTable } from "./kernel-reader.sql"
 import { AttachmentStorage } from "./attachment-storage"
 import { ReplyDeliveryID } from "./reply-delivery-id"
-import { IMTaskStatusNotice } from "./task-status-notice"
 
 type Db = Database.Interface["db"]
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]
@@ -29,75 +28,30 @@ type Reader = Db | Tx
 type Message = typeof MessageTable.$inferSelect
 export type Runtime = { readonly source: KernelDeliverySchema.Source }
 export type Dispatch = { readonly binding: KernelDeliverySchema.Binding; readonly owner: string; readonly text: string }
-export interface ResultOwner {
-  readonly id: string
-  readonly delivery_message_id: string
-  readonly session_id: string
-  readonly group_id: string
-  readonly agent_id: string
-  readonly trigger_message_id: string | null
-  readonly reply_message_id: string
-  readonly reply_text: string
-  readonly task: boolean
-  readonly noticeID?: string
-}
-/** Internal purpose port. A task result's receipt does not itself authorize disclosure. */
-export interface TaskResultDispatch {
-  readonly prepare: (binding: KernelDeliverySchema.Binding, owner: ResultOwner) => Effect.Effect<object, KernelDeliverySchema.Error>
-  readonly verify: (tx: Tx, input: { binding: KernelDeliverySchema.Binding; owner: ResultOwner; original: object }) => Effect.Effect<void, KernelDeliverySchema.Error>
-}
-export const TaskResultDispatch = Context.Reference<TaskResultDispatch | undefined>("IMKernelDelivery.task-result-dispatch", {
-  defaultValue: () => undefined,
-})
-/** Separate fixed-template purpose; it never authorizes an assistant result. */
-export interface TaskStatusDispatch extends TaskResultDispatch {}
-export const TaskStatusDispatch = Context.Reference<TaskStatusDispatch | undefined>("IMKernelDelivery.task-status-dispatch", {
-  defaultValue: () => undefined,
-})
-const PreparedResult = Context.Reference<object | undefined>("IMKernelDelivery.private-task-result-dispatch", { defaultValue: () => undefined })
-const preparedResults = new WeakMap<object, { db: Db; runtime: Runtime; bindingHash: string; guard: TaskResultDispatch; original: object }>()
-
-/** Indexed original outbox ownership, independent of caller metadata and current source deletion. */
-export const resultOwner = (db: Reader, binding: KernelDeliverySchema.Binding) => Effect.gen(function* () {
-  if (!binding.messageID.startsWith("imsg_reply_")) return undefined
-  yield* ReplyBodyRetirement.preflight(db,binding.messageID).pipe(Effect.mapError(() => failure("Original reply body custody is unavailable")))
-  const owner = yield* db.get<Omit<ResultOwner, "task"> & { task: number }>(sql`SELECT o.id,o.delivery_message_id,o.session_id,o.group_id,o.agent_id,
-    o.trigger_message_id,o.reply_message_id,o.reply_text,
-    CASE WHEN substr(o.id,1,9)='imresult_' OR substr(o.session_id,1,11)='ses_imtask_' OR g.grant_id IS NOT NULL THEN 1 ELSE 0 END task
-    FROM im_reply_outbox o LEFT JOIN im_task_grant g ON g.result_key=o.id
-    WHERE o.delivery_message_id=${binding.messageID}`)
+/** Only an admitted personal command may disclose a Session final through IM.
+ * Old grants and status notices remain inert database history. */
+const requirePersonalReply = (db: Reader, binding: KernelDeliverySchema.Binding) => Effect.gen(function* () {
+  if (!binding.messageID.startsWith("imsg_reply_")) return
+  yield* ReplyBodyRetirement.preflight(db, binding.messageID)
+    .pipe(Effect.mapError(() => failure("Original personal reply custody is unavailable")))
+  const custody = yield* ReplyBodyRetirement.forMessage(db, binding.messageID)
+    .pipe(Effect.mapError(() => failure("Original personal reply custody is unavailable")))
+  if (!custody || custody.record.origin.kind !== "dac_session")
+    return yield* failure("Historical IM execution replies cannot be dispatched")
+  const owner = yield* db.get<{
+    id: string; delivery_message_id: string; session_id: string; group_id: string;
+    agent_id: string; reply_text: string
+  }>(sql`SELECT o.id,o.delivery_message_id,o.session_id,o.group_id,o.agent_id,o.reply_text
+    FROM im_reply_outbox o
+    WHERE o.delivery_message_id=${binding.messageID}
+    AND EXISTS(SELECT 1 FROM im_dac_command c JOIN im_dac_binding b ON b.id=c.binding_id
+      WHERE c.session_id=o.session_id AND c.state='admitted' AND b.group_id=o.group_id)`)
   const message = yield* db.select().from(MessageTable).where(sql`${MessageTable.id}=${binding.messageID}`).get()
   if (!owner || !message || owner.delivery_message_id !== ReplyDeliveryID.fromOutbox(owner.id) ||
     owner.group_id !== binding.groupID || owner.group_id !== message.group_id || owner.agent_id !== message.sender_id ||
     message.sender_type !== "agent" || message.type !== "text" || message.content !== owner.reply_text ||
-    !wireMessage(binding, message)) return yield* failure("Original result delivery identity is unavailable")
-  const notice = yield* IMTaskStatusNotice.readByDelivery(db, binding.messageID)
-  if (owner.id.startsWith("imnotice_") || notice) {
-    if (!notice || notice.outboxID !== owner.id || notice.deliveryMessageID !== owner.delivery_message_id ||
-      (notice.sessionID ?? notice.requestID) !== owner.session_id || notice.groupID !== owner.group_id ||
-      notice.agentID !== owner.agent_id || notice.sourceMessageID !== owner.trigger_message_id ||
-      notice.noticeID !== owner.reply_message_id || notice.text !== owner.reply_text)
-      return yield* failure("Original status notice delivery identity is unavailable")
-    return { ...owner, task: true, noticeID: notice.noticeID }
-  }
-  return { ...owner, task: !!owner.task }
+    !wireMessage(binding, message)) return yield* failure("Original personal reply identity is unavailable")
 })
-
-/** Refresh the original native source outside SQL, then consume only this exact private frame. */
-export const withResultDispatch = <A, E, R>(db: Db, runtime: Runtime, messageID: string, effect: Effect.Effect<A, E, R>) =>
-  Effect.gen(function* () {
-    const receipt = yield* read(db, messageID)
-    if (!receipt || receipt.state !== "prepared") return yield* effect
-    const owner = yield* resultOwner(db, receipt.binding)
-    if (!owner?.task) return yield* effect
-    const guard = owner.noticeID ? yield* TaskStatusDispatch : yield* TaskResultDispatch
-    if (!guard) return yield* failure("Task result dispatch authority is unavailable")
-    const original = yield* guard.prepare(receipt.binding, owner)
-    const witness = {}
-    preparedResults.set(witness, { db, runtime, bindingHash: receipt.binding_hash, guard, original })
-    return yield* effect.pipe(Effect.provideService(PreparedResult, witness),
-      Effect.ensuring(Effect.sync(() => preparedResults.delete(witness))))
-  })
 const runtimes = new WeakMap<Runtime, { active: boolean; capacity: number }>()
 const Current = Context.Reference<object | undefined>("IMKernelDelivery.private-creation", {
   defaultValue: () => undefined,
@@ -449,14 +403,7 @@ export const claim = (db: Db, runtime: Runtime, messageID: string) =>
       )
         return undefined
       if (row.binding.expiresAt <= Date.now() || !(yield* matches(tx, row.binding, runtime))) return undefined
-      const result = yield* resultOwner(tx, row.binding)
-      if (result?.task) {
-        const witness = yield* PreparedResult
-        const prepared = witness ? preparedResults.get(witness) : undefined
-        if (!prepared || prepared.db !== db || prepared.runtime !== runtime || prepared.bindingHash !== row.binding_hash)
-          return yield* failure("Original task result dispatch preparation is unavailable")
-        yield* prepared.guard.verify(tx, { binding: row.binding, owner: result, original: prepared.original })
-      }
+      yield* requirePersonalReply(tx, row.binding)
       const owner = randomUUID()
       const changed = yield* tx
         .update(IMKernelDeliveryTable)

@@ -94,13 +94,6 @@ export const Info = Schema.Struct({
 }).annotate({ identifier: "Agent" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 
-/**
- * W0.4 — the IM @mention trigger word. An agent declares mention support by listing a trigger whose
- * `event` is this word (the existing `triggers` field above is the registration convention — spec W0.4
- * item 1's `triggers?: string[]` maps onto it; the mention router checks `event` entries).
- */
-export { MENTION_TRIGGER, MENTION_TRIGGER_WORDS, declaresMentionTrigger } from "@deepagent-code/core/im/mention-parser"
-
 const GeneratedAgent = Schema.Struct({
   identifier: Schema.String,
   whenToUse: Schema.String,

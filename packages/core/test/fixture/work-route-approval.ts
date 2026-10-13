@@ -11,7 +11,7 @@ import { WorkRouteApprovalSchema } from "../../src/session/work-route-approval.s
 import { WorkCountAcquisition } from "../../src/session/work-count-acquisition"
 import { WorkCountAcquisitionSchema } from "../../src/session/work-count-acquisition.schema"
 import { CanonicalJson } from "../../src/util/canonical-json"
-import { IMTaskAuthorityFixture } from "./im-task-authority"
+import { LocalAuthorityFixture } from "./local-authority"
 import { WorkAuthorityFixture } from "./work-authority"
 
 export const NOW = 1000
@@ -25,16 +25,16 @@ export const policy = {
   targets: [
     {
       id: "review",
-      locationKey: IMTaskAuthorityFixture.target.location.directory,
-      namespaceBindingHash: IMTaskAuthorityFixture.proof.namespaceBindingHash,
+      locationKey: LocalAuthorityFixture.target.location.directory,
+      namespaceBindingHash: LocalAuthorityFixture.namespace.namespaceBindingHash,
       target: {
-        ...IMTaskAuthorityFixture.target,
+        ...LocalAuthorityFixture.target,
         scope: {
-          ...IMTaskAuthorityFixture.target.scope,
-          workspaceID: IMTaskAuthorityFixture.target.location.directory,
+          ...LocalAuthorityFixture.target.scope,
+          workspaceID: LocalAuthorityFixture.target.location.directory,
         },
         provider: {
-          ...IMTaskAuthorityFixture.target.provider,
+          ...LocalAuthorityFixture.target.provider,
           protocol: "openai-responses",
           modelID: "fixture-snapshot-1",
           endpoint: "https://api.openai.com/v1/responses",
@@ -45,13 +45,13 @@ export const policy = {
 }
 export const evidence: WorkRouteApprovalSchema.Evidence = {
   instanceID: runtime.instanceID,
-  operatorID: IMTaskAuthorityFixture.principal.actorID,
+  operatorID: LocalAuthorityFixture.principal.actorID,
   targetID: "review",
-  securityNamespaceID: IMTaskAuthorityFixture.proof.securityNamespaceID,
+  securityNamespaceID: LocalAuthorityFixture.namespace.securityNamespaceID,
   projectScopeKey: policy.targets[0].target.scope.projectScopeKey,
-  locationKey: IMTaskAuthorityFixture.target.location.directory,
+  locationKey: LocalAuthorityFixture.target.location.directory,
   canonicalRoot: policy.targets[0].target.location.directory,
-  namespaceBindingHash: IMTaskAuthorityFixture.proof.namespaceBindingHash,
+  namespaceBindingHash: LocalAuthorityFixture.namespace.namespaceBindingHash,
   providerID: policy.targets[0].target.provider.providerID,
   routeID: "approved-responses",
   modelID: "fixture-snapshot-1",
@@ -131,10 +131,10 @@ export function authority(key = randomBytes(32)) {
 }
 
 export const initialize = Effect.gen(function* () {
-  yield* IMTaskAuthorityFixture.initialize()
+  yield* LocalAuthorityFixture.initialize()
   const db = (yield* Database.Service).db
   yield* db.run(
-    sql`UPDATE context_location_identity SET location_key=${IMTaskAuthorityFixture.target.location.directory}`,
+    sql`UPDATE context_location_identity SET location_key=${LocalAuthorityFixture.target.location.directory}`,
   )
   yield* LocalOperator.enroll(db, {
     operationID: "enroll",

@@ -1,7 +1,7 @@
 export * as EventWorkRuleSchema from "./event-work-rule.schema"
 
 import { Schema } from "effect"
-import { IMTaskAuthoritySchema } from "../im/task-authority.schema"
+import { LocalAuthoritySchema } from "../session/local-authority.schema"
 import { WorkAuthoritySchema } from "../session/work-authority.schema"
 import { EventWorkDagSchema } from "./event-work-dag.schema"
 
@@ -37,7 +37,7 @@ export type Source = typeof Source.Type
 export const Rule = Schema.Struct({
   version: Schema.Literal(1), ruleID: Text, instanceID: Text, operatorID: Text, origin: AnyOrigin,
   revision: Positive, epoch: Positive, state: Schema.Literals(["disabled", "enabled", "paused", "revoked"]),
-  enabledAfterOrdinal: ActivityCutoff, target: IMTaskAuthoritySchema.ProjectTarget,
+  enabledAfterOrdinal: ActivityCutoff, target: LocalAuthoritySchema.ProjectTarget,
   instruction: Schema.String.check(Schema.isMinLength(1), Schema.makeFilter((value) => Buffer.byteLength(value, "utf8") <= 65_536)),
   operatorRevision: Positive, credentialGeneration: Positive, policyRevision: Positive, policyHash: Digest,
   expiresAt: Positive, createdAt: Positive, updatedAt: Positive,

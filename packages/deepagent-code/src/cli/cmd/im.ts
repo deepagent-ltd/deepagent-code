@@ -2,7 +2,7 @@ import { Cause, Effect, Exit } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { WorkKnownRecoverySchema } from "@deepagent-code/core/session/work-known-recovery.schema"
 import { WorkStorageCleanupSchema } from "@deepagent-code/core/session/work-storage-cleanup.schema"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { ServerAuth } from "@/server/auth"
 import { cmd } from "./cmd"
 
@@ -66,15 +66,15 @@ export const command = Effect.fn("Cli.im.work")(function* (input: Command) {
   const { NativeWorkKnownRecovery } = yield* Effect.promise(() => import("@/installation/work-known-recovery"))
   const db = (yield* Database.Service).db
   const config = yield* ServerAuth.Config
-  const configured = yield* LocalTaskAuthority.configured(config)
-  const witness = yield* LocalTaskAuthority.authenticatePassword(db, configured.runtime, config.username, configured.password)
+  const configured = yield* LocalAuthority.configured(config)
+  const witness = yield* LocalAuthority.authenticatePassword(db, configured.runtime, config.username, configured.password)
   if (input.kind === "cleanup") {
     const { NativeWorkStorageCleanup } = yield* Effect.promise(() => import("@/installation/work-storage-cleanup"))
-    return yield* LocalTaskAuthority.provide({ runtime: configured.runtime, witness }, NativeWorkStorageCleanup.cleanup(input.request))
+    return yield* LocalAuthority.provide({ runtime: configured.runtime, witness }, NativeWorkStorageCleanup.cleanup(input.request))
   }
-  if (input.kind === "recover") return yield* LocalTaskAuthority.provide({ runtime: configured.runtime, witness },
+  if (input.kind === "recover") return yield* LocalAuthority.provide({ runtime: configured.runtime, witness },
     NativeWorkKnownRecovery.recover(input.request))
-  return yield* LocalTaskAuthority.provide({ runtime: configured.runtime, witness }, NativeWorkKnownRecovery.resume(input.request))
+  return yield* LocalAuthority.provide({ runtime: configured.runtime, witness }, NativeWorkKnownRecovery.resume(input.request))
 })
 async function run(input: Command) {
   const { AppRuntime } = await import("@/effect/app-runtime")

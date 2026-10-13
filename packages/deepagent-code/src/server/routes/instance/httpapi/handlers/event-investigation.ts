@@ -8,7 +8,7 @@ import { EventInvestigationSchema } from "@deepagent-code/core/deepagent/event-i
 import { EventValidation } from "@deepagent-code/core/deepagent/event-validation"
 import { LocalOperatorSchema } from "@deepagent-code/core/im/local-operator.schema"
 import { EventInvestigationHost } from "@/deepagent/event-investigation"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { ServerAuth } from "@/server/auth"
 import { CorsConfig } from "@/server/cors"
 import { EventValidationHttpApi } from "../api"
@@ -29,16 +29,16 @@ export const eventInvestigationHandlers = () => HttpApiBuilder.group(EventValida
   const state = { active: true, inFlight: 0 }
   yield* Effect.addFinalizer(() => Effect.sync(() => { state.active = false; captures.clear() }))
   const authenticate = Effect.gen(function* () {
-    return yield* LocalTaskAuthority.authenticate(db, config, yield* HttpServerRequest.HttpServerRequest, cors)
+    return yield* LocalAuthority.authenticate(db, config, yield* HttpServerRequest.HttpServerRequest, cors)
   })
   return handlers
     .handle("candidates", ({ params }) => map(Effect.gen(function* () {
       const identity = yield* authenticate
-      return yield* LocalTaskAuthority.provide(identity, EventInvestigation.candidates(db, params.ruleID))
+      return yield* LocalAuthority.provide(identity, EventInvestigation.candidates(db, params.ruleID))
     })))
     .handle("reports", ({ params }) => map(Effect.gen(function* () {
       const identity = yield* authenticate
-      return yield* LocalTaskAuthority.provide(identity, EventInvestigation.reports(db, params.ruleID))
+      return yield* LocalAuthority.provide(identity, EventInvestigation.reports(db, params.ruleID))
     })))
     .handle("capture", ({ payload }) => map(Effect.gen(function* () {
       const identity = yield* authenticate
@@ -46,7 +46,7 @@ export const eventInvestigationHandlers = () => HttpApiBuilder.group(EventValida
       if (!state.active) return yield* failure()
       if (captures.size + state.inFlight >= 32) return yield* failure("INVESTIGATION_CAPACITY")
       state.inFlight++
-      return yield* LocalTaskAuthority.provide(identity, Effect.gen(function* () {
+      return yield* LocalAuthority.provide(identity, Effect.gen(function* () {
         const before = yield* EventInvestigation.candidates(db, payload.ruleID)
         const target = before.targets.find((item) => item.targetID === payload.targetID)
         if (!target) return yield* failure("INVESTIGATION_SOURCE_CHANGED")
@@ -74,7 +74,7 @@ export const eventInvestigationHandlers = () => HttpApiBuilder.group(EventValida
         ? entry.capture : undefined
       // Missing/cold/consumed capture still reaches the original command ledger first.
       // Only a new enable can require a fresh opaque capability.
-      const result = yield* LocalTaskAuthority.provide(identity, service.control(input, capture))
+      const result = yield* LocalAuthority.provide(identity, service.control(input, capture))
       if (!result.replayed && payload.captureID && capture) captures.delete(payload.captureID)
       return { receipt: result.receipt, replayed: result.replayed }
     })))

@@ -1,6 +1,6 @@
 import { Effect, Option, Ref, Schema, Stream } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { HttpServerRequest, HttpServerResponse, Multipart } from "effect/unstable/http"
+import { HttpServerResponse, Multipart } from "effect/unstable/http"
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import { and, eq } from "drizzle-orm"
 import { InstanceState } from "@/effect/instance-state"
@@ -14,16 +14,6 @@ import { Config } from "@/config/config"
 import { IMKernelReaderProjectionTable, IMKernelReaderScopeTable } from "@deepagent-code/core/im/kernel-reader.sql"
 import { MemberTable } from "@deepagent-code/core/im/sql"
 import { Database } from "@deepagent-code/core/database/database"
-import { LocalTaskPolicy } from "@deepagent-code/core/im/local-task-policy"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
-import { IMTaskResult } from "@/im/task-result"
-import { IMRemoteTaskResult } from "@/im/remote-task-result"
-import { IMTaskStatusLocator } from "@/im/task-status-locator"
-import { IMRemoteTaskStatus } from "@/im/remote-task-status"
-import { RemoteTaskAuthority } from "@/im/remote-task-authority"
-import { ListenerTransport } from "@/server/listener-transport"
-import { ServerAuth } from "@/server/auth"
-import { CorsConfig } from "@/server/cors"
 import { Global } from "@deepagent-code/core/global"
 import { AttachmentStorage } from "@deepagent-code/core/im/attachment-storage"
 import { MediaBatch } from "@deepagent-code/core/im/media-batch"
@@ -37,7 +27,6 @@ import {
   IMDacCommandError,
   IMReaderUnavailableError,
   IMMessageNotFoundError,
-  IMTaskResultUnavailableError,
   IMMessageTooLargeError,
   IMMessageIdentityConflictError,
   IMRateLimitExceededError,
@@ -182,10 +171,6 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
   Effect.gen(function* () {
     const repo = yield* IMRepository
     const database = yield* Effect.serviceOption(Database.Service)
-    const authConfig = yield* Effect.serviceOption(ServerAuth.Config)
-    const taskStatus = yield* IMTaskStatusLocator.make
-    const remoteTaskStatus = yield* IMRemoteTaskStatus.make(taskStatus)
-    const taskTransport = yield* Effect.serviceOption(ListenerTransport)
     const broadcaster = yield* IMBroadcasterService
     const agentListProvider = yield* AgentListProviderService
     const rateLimiter = new RateLimiter.Service()
@@ -742,151 +727,6 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
           }),
         ),
       )
-      .handle("getTaskResult", ({ params, query }) =>
-        Effect.gen(function* () {
-          const context = yield* getWorkspaceContext(query)
-          const db = Option.getOrUndefined(database)?.db
-          if (!db) return yield* new IMTaskResultUnavailableError({
-            name: "IM_TASK_RESULT_UNAVAILABLE", data: { code: "result_unavailable", message: "Task result is currently unavailable" },
-          })
-          const identity = yield* KernelReader.messageGroup(db, {
-            messageID: params.messageId, workspaceID: context.workspaceID, userID: context.userID,
-          })
-          if (!identity) return yield* new IMMessageNotFoundError({
-            name: "MESSAGE_NOT_FOUND", data: { message: "Message not found" },
-          })
-          return yield* readRequest(query, identity.groupID, Effect.gen(function* () {
-            // The normal reader guards current visibility independently of the old execution grant.
-            const message = yield* repo.getMessage(params.messageId)
-            if (!message) return yield* new IMMessageNotFoundError({
-              name: "MESSAGE_NOT_FOUND", data: { message: "Message not found" },
-            })
-            const installation = yield* LocalTaskAuthority.readInstallation.pipe(Effect.option)
-            if (Option.isNone(installation)) return {
-              version: 1 as const, state: "unavailable" as const,
-              messageID: message.id, groupID: message.groupID, code: "placement_unavailable" as const,
-            }
-            const result = yield* IMTaskResult.read(db, {
-              ...context, messageID: params.messageId, instanceID: installation.value.instanceID,
-            })
-            if (!result) return yield* new IMMessageNotFoundError({
-              name: "MESSAGE_NOT_FOUND", data: { message: "Message not found" },
-            })
-            return result
-          }))
-        }).pipe(Effect.mapError((error) =>
-          error instanceof IMMessageNotFoundError || error instanceof IMReaderUnavailableError || error instanceof IMTaskResultUnavailableError
-            ? error
-            : new IMTaskResultUnavailableError({
-              name: "IM_TASK_RESULT_UNAVAILABLE", data: { code: "result_unavailable", message: "Task result is currently unavailable" },
-            }),
-        )),
-      )
-      .handle("getTaskStatus", ({ params, query }) => Effect.gen(function* () {
-        const context = yield* getWorkspaceContext(query)
-        const db = Option.getOrUndefined(database)?.db
-        if (!db || Option.isNone(authConfig)) return yield* new IMTaskResultUnavailableError({
-          name: "IM_TASK_RESULT_UNAVAILABLE", data: { code: "result_unavailable", message: "Task status authority is unavailable" },
-        })
-        const request = yield* HttpServerRequest.HttpServerRequest
-        const cors = yield* CorsConfig
-        const transport = Option.getOrUndefined(taskTransport)
-        const origin = transport?.tlsOrigin()
-        const auth = transport?.secure && origin
-          ? yield* RemoteTaskAuthority.authenticate(db, authConfig.value, request,
-            { origin, cors, verifyTLSRequest: transport.ownsTLSRequest })
-          : yield* LocalTaskAuthority.authenticate(db, authConfig.value, request, cors)
-        const identity = yield* KernelReader.messageGroup(db, {
-          messageID: params.messageId, workspaceID: context.workspaceID, userID: context.userID,
-        })
-        if (!identity) return yield* new IMMessageNotFoundError({ name: "MESSAGE_NOT_FOUND", data: { message: "Message not found" } })
-        return yield* readRequest(query, identity.groupID, LocalTaskAuthority.provide(auth, Effect.gen(function* () {
-          const result = yield* taskStatus.read({ ...context, messageID: params.messageId })
-          if (!result) return yield* new IMMessageNotFoundError({ name: "MESSAGE_NOT_FOUND", data: { message: "Message not found" } })
-          return result
-        })))
-      }).pipe(Effect.mapError((error) => error instanceof IMMessageNotFoundError || error instanceof IMReaderUnavailableError ||
-        error instanceof IMTaskResultUnavailableError ? error : new IMTaskResultUnavailableError({
-          name: "IM_TASK_RESULT_UNAVAILABLE", data: { code: "result_unavailable", message: "Task status is currently unavailable" },
-        }))))
-      .handle("getRemoteTaskLocator", ({ params, query }) =>
-        Effect.gen(function* () {
-          const context = yield* getWorkspaceContext(query)
-          const db = Option.getOrUndefined(database)?.db
-          if (!db) return yield* new IMTaskResultUnavailableError({
-            name: "IM_TASK_RESULT_UNAVAILABLE", data: { code: "result_unavailable", message: "Task result is currently unavailable" },
-          })
-          const identity = yield* KernelReader.messageGroup(db, {
-            messageID: params.messageId, workspaceID: context.workspaceID, userID: context.userID,
-          })
-          if (!identity) return yield* new IMMessageNotFoundError({ name: "MESSAGE_NOT_FOUND", data: { message: "Message not found" } })
-          return yield* readRequest(query, identity.groupID, Effect.gen(function* () {
-            const installation = yield* LocalTaskAuthority.readInstallation.pipe(Effect.option)
-            if (Option.isNone(installation)) return {
-              version: 1 as const, messageID: params.messageId, groupID: identity.groupID,
-              state: "unavailable" as const, code: "remote_result_unlinked" as const,
-            }
-            const result = yield* IMRemoteTaskResult.locator(db, {
-              ...context, messageID: params.messageId, instanceID: installation.value.instanceID,
-            })
-            if (!result) return yield* new IMMessageNotFoundError({ name: "MESSAGE_NOT_FOUND", data: { message: "Message not found" } })
-            return result
-          }))
-        }).pipe(Effect.mapError((error) =>
-          error instanceof IMMessageNotFoundError || error instanceof IMReaderUnavailableError || error instanceof IMTaskResultUnavailableError
-            ? error : new IMTaskResultUnavailableError({
-              name: "IM_TASK_RESULT_UNAVAILABLE", data: { code: "result_unavailable", message: "Remote task result is currently unavailable" },
-            }),
-        )),
-      )
-      .handle("lookupRemoteTaskResult", ({ payload, query }) =>
-        Effect.gen(function* () {
-          const context = yield* getWorkspaceContext(query)
-          const db = Option.getOrUndefined(database)?.db
-          if (!db) return yield* new IMTaskResultUnavailableError({
-            name: "IM_TASK_RESULT_UNAVAILABLE", data: { code: "result_unavailable", message: "Task result is currently unavailable" },
-          })
-          return yield* readRequest(query, undefined, Effect.gen(function* () {
-            const installation = yield* LocalTaskAuthority.readInstallation.pipe(Effect.option)
-            if (Option.isNone(installation)) return {
-              version: 1 as const, state: "unavailable" as const, code: "placement_unavailable" as const,
-            }
-            return yield* IMRemoteTaskResult.lookup(db, {
-              ...context, tuple: payload.tuple, instanceID: installation.value.instanceID,
-            })
-          }))
-        }).pipe(Effect.mapError((error) =>
-          error instanceof IMMessageNotFoundError || error instanceof IMReaderUnavailableError || error instanceof IMTaskResultUnavailableError
-            ? error : new IMTaskResultUnavailableError({
-              name: "IM_TASK_RESULT_UNAVAILABLE", data: { code: "result_unavailable", message: "Remote task result is currently unavailable" },
-            }),
-        )),
-      )
-      .handle("lookupRemoteTaskStatus", ({ payload, query }) => Effect.gen(function* () {
-        const context = yield* getWorkspaceContext(query)
-        const db = Option.getOrUndefined(database)?.db
-        if (!db || Option.isNone(authConfig)) return yield* new IMTaskResultUnavailableError({
-          name: "IM_TASK_RESULT_UNAVAILABLE", data: { code: "result_unavailable", message: "Task status authority is unavailable" },
-        })
-        const request = yield* HttpServerRequest.HttpServerRequest
-        const cors = yield* CorsConfig
-        const transport = Option.getOrUndefined(taskTransport)
-        const origin = transport?.tlsOrigin()
-        const auth = transport?.secure && origin
-          ? yield* RemoteTaskAuthority.authenticate(db, authConfig.value, request,
-            { origin, cors, verifyTLSRequest: transport.ownsTLSRequest })
-          : yield* LocalTaskAuthority.authenticate(db, authConfig.value, request, cors)
-        return yield* readRequest(query, undefined, LocalTaskAuthority.provide(auth, Effect.gen(function* () {
-          const installation = yield* LocalTaskAuthority.readInstallation.pipe(Effect.option)
-          if (Option.isNone(installation)) return {
-            version: 1 as const, state: "unavailable" as const, code: "placement_unavailable" as const,
-          }
-          return yield* remoteTaskStatus.lookup({ ...context, tuple: payload.tuple, instanceID: installation.value.instanceID })
-        })))
-      }).pipe(Effect.mapError((error) => error instanceof IMMessageNotFoundError || error instanceof IMReaderUnavailableError ||
-        error instanceof IMTaskResultUnavailableError ? error : new IMTaskResultUnavailableError({
-          name: "IM_TASK_RESULT_UNAVAILABLE", data: { code: "result_unavailable", message: "Remote task status is currently unavailable" },
-        }))))
       .handle("listThread", ({ params, query }) =>
         mapRepositoryError(
           readRequest(query, params.groupId, (lease) => Effect.gen(function* () {

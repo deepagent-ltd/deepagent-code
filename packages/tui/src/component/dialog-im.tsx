@@ -16,7 +16,7 @@ import { createIMActivation } from "./im-activation"
 import { createIMDacDraft, imDacText, type IMDacDraftSnapshot } from "./im-dac-draft"
 import { useDialog } from "../ui/dialog"
 import { useOptionalRoute } from "../context/route"
-import { createIMTaskReturn } from "../util/im-task-return"
+import { createIMDacSessionReturn } from "../util/im-dac-session-return"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { AttachmentPreview } from "@deepagent-code/core/im/attachment-preview"
@@ -442,9 +442,9 @@ export function DialogIM(props: { restore?: IMChatRestore } = {}) {
   const openDacSession = (sessionID: string, restore: IMChatRestore | undefined, captured = client.scope()) => {
     const sameOwner = () => !captured.signal?.aborted && client.scope() === captured && sdk.client === captured.client
     if (!route || !sourceRoute || !sameOwner()) return
-    route.openIMTask(
+    route.openIMDacSession(
       sessionID,
-      createIMTaskReturn({
+      createIMDacSessionReturn({
         sessionID,
         current: sameOwner,
         restore: () => {

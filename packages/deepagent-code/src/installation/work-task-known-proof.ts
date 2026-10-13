@@ -6,13 +6,13 @@ import { WorkChildAuthority } from "@deepagent-code/core/session/work-child-auth
 import { WorkTaskKnownProof } from "@deepagent-code/core/session/work-task-known-proof"
 import { WorkTaskKnownProofSchema } from "@deepagent-code/core/session/work-task-known-proof.schema"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
-import { LocalTaskAuthority } from "../im/local-task-authority"
+import { LocalAuthority } from "../installation/local-authority"
 
 const DOMAIN = "dac-work-native-task-outcome.v2"
 /** A separate installation-key purpose. Its only sealing input is the original canonical
  * opaque Task settlement; caller JSON and historical Task output cannot mint a new MAC. */
 export const layer = Layer.effect(WorkTaskKnownProof.Authority, Effect.gen(function* () {
-  const installation = yield* LocalTaskAuthority.readInstallation.pipe(
+  const installation = yield* LocalAuthority.readInstallation.pipe(
     Effect.mapError(() => WorkTaskKnownProof.failure("TASK_PROOF_UNAVAILABLE")),
   )
   const secret = Buffer.from(installation.secret, "hex")

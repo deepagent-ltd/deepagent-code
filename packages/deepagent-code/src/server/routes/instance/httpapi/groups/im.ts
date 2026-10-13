@@ -6,9 +6,6 @@ import { MediaBatch } from "@deepagent-code/core/im/media-batch"
 import { MessageMetadata } from "@deepagent-code/core/im/sql"
 import { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { KernelReaderSchema } from "@deepagent-code/core/im/kernel-reader.schema"
-import { IMRemoteTaskResult } from "@/im/remote-task-result"
-import { IMTaskStatusLocator } from "@/im/task-status-locator"
-import { IMRemoteTaskStatus } from "@/im/remote-task-status"
 import { IMGroup, MessagePage } from "@deepagent-code/core/im/repository"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
@@ -117,40 +114,6 @@ export class IMInternalServerError extends Schema.ErrorClass<IMInternalServerErr
   { httpApiStatus: 500 },
 ) {}
 export class IMReaderUnavailableError extends Schema.ErrorClass<IMReaderUnavailableError>("IMReaderUnavailableError")({ name: Schema.Literal("IM_READER_UNAVAILABLE"), data: Schema.Struct({ code: KernelReaderSchema.Code, operation: Schema.String, wireCode: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 65535 }))), message: Schema.String }) }, { httpApiStatus: 503 }) {}
-
-export class IMTaskResultUnavailableError extends Schema.ErrorClass<IMTaskResultUnavailableError>("IMTaskResultUnavailableError")({
-  name: Schema.Literal("IM_TASK_RESULT_UNAVAILABLE"),
-  data: Schema.Struct({ code: Schema.Literal("result_unavailable"), message: Schema.String }),
-}, { httpApiStatus: 503 }) {}
-
-const ResultIdentity = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512))
-const resultFields = { version: Schema.Literal(1), messageID: ResultIdentity, groupID: ResultIdentity }
-export const IMTaskResultResponse = Schema.Union([
-  Schema.Struct({
-    ...resultFields,
-    state: Schema.Literal("available"),
-    placement: Schema.Struct({
-      instanceID: ResultIdentity,
-      securityNamespaceID: ResultIdentity,
-      projectID: ResultIdentity,
-      directory: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
-      workspaceID: Schema.NullOr(ResultIdentity),
-      sessionID: ResultIdentity,
-    }),
-    attempt: Schema.Struct({
-      requestID: ResultIdentity,
-      workID: ResultIdentity,
-      inputID: ResultIdentity,
-      ordinal: Schema.Literal(1),
-      outcome: Schema.Literals(["succeeded", "failed"]),
-    }),
-  }),
-  Schema.Struct({
-    ...resultFields,
-    state: Schema.Literal("unavailable"),
-    code: Schema.Literals(["not_task_result", "remote_result_unlinked", "result_changed", "placement_unavailable"]),
-  }),
-])
 
 // Request/Response schemas
 export const IMGroupResponse = Schema.Struct({
@@ -639,55 +602,6 @@ export const IMApi = HttpApi.make("im")
             description: "Get a single message by ID.",
           }),
         ),
-        HttpApiEndpoint.get("getTaskResult", `${IMPaths.message}/task-result`, {
-          params: { messageId: ResultIdentity },
-          query: WorkspaceRoutingQuery,
-          success: described(IMTaskResultResponse, "Verified task result location"),
-          error: [IMReaderUnavailableError, IMMessageNotFoundError, IMTaskResultUnavailableError],
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "im.messages.taskResult",
-            summary: "Locate a task result",
-            description: "Read the original task location after verifying message visibility and durable result identity. Does not resume execution.",
-          }),
-        ),
-        HttpApiEndpoint.get("getTaskStatus", `${IMPaths.message}/task-status`, {
-          params: { messageId: ResultIdentity }, query: WorkspaceRoutingQuery,
-          success: IMTaskStatusLocator.Result,
-          error: [IMReaderUnavailableError, IMMessageNotFoundError, IMTaskResultUnavailableError],
-        }).annotateMerge(OpenApi.annotations({
-          identifier: "im.messages.taskStatus", summary: "Read a verified task status notice",
-          description: "Locate the original fixed notice and read its current owned task state without executing or retrying work.",
-        })),
-        HttpApiEndpoint.get("getRemoteTaskLocator", `${IMPaths.message}/remote-task-locator`, {
-          params: { messageId: ResultIdentity },
-          query: WorkspaceRoutingQuery,
-          success: IMRemoteTaskResult.Locator,
-          error: [IMReaderUnavailableError, IMMessageNotFoundError, IMTaskResultUnavailableError],
-        }).annotateMerge(OpenApi.annotations({
-          identifier: "im.messages.remoteTaskLocator",
-          summary: "Read the verified native result tuple",
-          description: "Read a current visible message's native identity as a lookup candidate. Does not select a remote URL or authorize execution.",
-        })),
-        HttpApiEndpoint.post("lookupRemoteTaskResult", `${root}/tasks/remote-result`, {
-          query: WorkspaceRoutingQuery,
-          payload: Schema.Struct({ tuple: IMRemoteTaskResult.Tuple }),
-          success: IMRemoteTaskResult.Lookup,
-          error: [IMReaderUnavailableError, IMMessageNotFoundError, IMTaskResultUnavailableError],
-        }).annotateMerge(OpenApi.annotations({
-          identifier: "im.tasks.remoteResult",
-          summary: "Locate a result on this authenticated instance",
-          description: "Verify the original acknowledged delivery, owned task and current visibility on the caller-selected instance. Read-only; does not resume execution.",
-        })),
-        HttpApiEndpoint.post("lookupRemoteTaskStatus", `${root}/tasks/remote-status`, {
-          query: WorkspaceRoutingQuery, payload: Schema.Struct({ tuple: IMRemoteTaskResult.Tuple }),
-          success: IMRemoteTaskStatus.Lookup,
-          error: [IMReaderUnavailableError, IMMessageNotFoundError, IMTaskResultUnavailableError],
-        }).annotateMerge(OpenApi.annotations({
-          identifier: "im.tasks.remoteStatus", summary: "Read a current task status on this authenticated instance",
-          description: "Verify the original acknowledged notice and current task management and message visibility on the caller-selected instance. Does not execute, renew or retry work.",
-        })),
-        // §B3 Thread — list the replies to a parent message, ASC chronological, keyset paginated.
         HttpApiEndpoint.get("listThread", IMPaths.thread, {
           params: { groupId: Schema.String, messageId: Schema.String },
           query: ThreadQuery,

@@ -2,6 +2,7 @@ import path from "node:path"
 import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, realpath, readFile, rm, writeFile } from "node:fs/promises"
 import { publishWindowsInputCandidate, requireWindowsInputPE, windowsInputSourceCensus } from "./managed-browser-input-windows-assets"
+import { managedBrowserInputRuntime } from "./managed-browser-input-runtime"
 
 /** Native publisher build only. The caller is a trusted build coordinator, not Main/HTTP. */
 export async function compileWindowsInputNative(input: {
@@ -42,7 +43,10 @@ export async function compileWindowsInputNative(input: {
     // The native MSVC/SDK INCLUDE/LIB closure must also be held and inventoried
     // by the release coordinator. This helper is not an SDK/toolchain installer.
     const result = await runWindowsInputCompiler({ command: [input.compiler.path, "/nologo", "/std:c++17", "/O2", "/MT", "/GR-", "/LD",
-      "/DNAPI_VERSION=8", "/DBUILDING_NODE_EXTENSION", "/D_WIN32_WINNT=0x0A00", `/I${include}`,
+      "/DNAPI_VERSION=8", "/DBUILDING_NODE_EXTENSION", "/D_WIN32_WINNT=0x0A00",
+      `/DDAC_MANAGED_BROWSER_INPUT_ELECTRON_VERSION=${JSON.stringify(managedBrowserInputRuntime.electronVersion)}`,
+      `/DDAC_MANAGED_BROWSER_INPUT_NODE_VERSION=${JSON.stringify(managedBrowserInputRuntime.nodeVersion)}`,
+      `/I${include}`,
       `/Fo${path.join(stage, "managed-browser-input-windows.obj")}`, entry, "/link", `/OUT:${filename}`,
       input.electronImportLibrary.path, "user32.lib", "msctf.lib", "ole32.lib", "uuid.lib"], cwd: stage })
     if (result.exitCode !== 0) throw new Error(`WINDOWS_INPUT_BUILD_FAILED:${result.stderr}`)

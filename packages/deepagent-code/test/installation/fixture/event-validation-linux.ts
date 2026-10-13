@@ -16,7 +16,7 @@ import { EventValidationNative } from "../../../src/installation/event-validatio
 import { NativeInstallation } from "../../../src/installation/native-installation"
 import { NativeWorkProcessSupervisor } from "../../../src/installation/work-process-supervisor"
 import { WorkFileHelper } from "../../../src/installation/work-file-helper"
-import { LocalTaskAuthority } from "../../../src/im/local-task-authority"
+import { LocalAuthority } from "../../../src/installation/local-authority"
 import { ServerAuth } from "../../../src/server/auth"
 
 // Original Rule/operator and Consumer lifecycle, with an installed signed factory.
@@ -72,8 +72,8 @@ const program = Effect.gen(function* () {
   const authConfig = yield* ServerAuth.Config
   if (Option.isNone(authConfig.password)) throw new Error("Missing private operator password")
   const password = authConfig.password.value
-  yield* LocalTaskAuthority.ensurePrivateInstallation()
-  const identity = yield* LocalTaskAuthority.configured(authConfig)
+  yield* LocalAuthority.ensurePrivateInstallation()
+  const identity = yield* LocalAuthority.configured(authConfig)
   yield* LocalOperator.enroll(db, { operationID: "enroll", operatorID: "linux-ev-operator", username: authConfig.username,
     credentialVerifier: yield* Effect.promise(() => Bun.password.hash(password, { algorithm: "argon2id", memoryCost: 4096, timeCost: 2 })),
     policy: { version: 2, targets: [{ id: "project", locationKey: placement.locationKey, namespaceBindingHash: namespace.binding_hash,
@@ -95,7 +95,7 @@ const program = Effect.gen(function* () {
           completion: { parameter: "max_output_tokens", hardLimit: true, includesReasoning: true, maxTokens: 4096 } },
         budget: WorkAuthorityPolicy.TEXT_ONLY_PROFILE.budget, durationMs: 60000 } }] },
   }).pipe(Effect.provideService(LocalOperator.Runtime, identity.runtime))
-  const witness = yield* LocalTaskAuthority.authenticatePassword(db, identity.runtime, authConfig.username, password)
+  const witness = yield* LocalAuthority.authenticatePassword(db, identity.runtime, authConfig.username, password)
   const auth = { runtime: identity.runtime, witness }
   const configuration = Schema.decodeUnknownSync(EventValidationSchema.Configuration)({ profile: "project_validation_v1", kind: "test", recipe,
     scope: { instanceID: identity.runtime.instanceID, workspaceID: null, securityNamespaceID: placement.securityNamespaceId,
@@ -103,11 +103,11 @@ const program = Effect.gen(function* () {
       projectID: "linux-ev-project", canonicalRoot: root, rootIdentity: observed.rootIdentity }, helperHash: observed.helperHash,
     parameters: [], watch: recipe.inputs, recipient: "local_status", maxRuns: 2, expiresAt: Date.now() + 180000,
     investigation: "disabled", autoFix: false })
-  yield* LocalTaskAuthority.provide(auth, host.configure({ ruleID: "actual-rule", requestID: "create", expectedRevision: 0, configuration }))
+  yield* LocalAuthority.provide(auth, host.configure({ ruleID: "actual-rule", requestID: "create", expectedRevision: 0, configuration }))
   // Core enable creates no advisory hint. The original Host manual action is the
   // sole Consumer trigger, so this bounded cohort starts exactly one validation.
-  yield* LocalTaskAuthority.provide(auth, EventValidation.control(db, { ruleID: "actual-rule", requestID: "enable", expectedRevision: 1, action: "enable" }))
-  const verified = yield* LocalTaskAuthority.provide(auth, host.control({ ruleID: "actual-rule", requestID: "verify", expectedRevision: 2, action: "verify" }))
+  yield* LocalAuthority.provide(auth, EventValidation.control(db, { ruleID: "actual-rule", requestID: "enable", expectedRevision: 1, action: "enable" }))
+  const verified = yield* LocalAuthority.provide(auth, host.control({ ruleID: "actual-rule", requestID: "verify", expectedRevision: 2, action: "verify" }))
   const wait = (predicate: (run: EventValidationSchema.RunRecord) => boolean) => Effect.gen(function* () {
     const deadline = Date.now() + 90000
     while (Date.now() < deadline) {
@@ -126,7 +126,7 @@ const program = Effect.gen(function* () {
       yield* Effect.sleep(25)
     }
     if (!(yield* Effect.promise(() => fs.readFile(path.join(directory, "data/work-command-stage", active.workspaceBasename, "result.txt"), "utf8").then((value) => value === "started", () => false)))) throw new Error("Actual payload marker missing")
-    yield* LocalTaskAuthority.provide(auth, host.control({ ruleID: "actual-rule", requestID: "cancel", expectedRevision: verified.receipt.ruleRevision, action: "cancel" }))
+    yield* LocalAuthority.provide(auth, host.control({ ruleID: "actual-rule", requestID: "cancel", expectedRevision: verified.receipt.ruleRevision, action: "cancel" }))
   }
   const result = yield* wait((run) => run.terminalAt !== null && run.releasedAt !== null)
   const before = yield* counts()
@@ -138,7 +138,7 @@ const program = Effect.gen(function* () {
     stdoutEOF: result.result?.stdout.complete, stderrEOF: result.result?.stderr.complete, retained: result.retainedBytes, released: result.releasedAt !== null,
     ruleRevision: currentRule.revision, historyCount: history.length, historyHash: EventValidation.hash(history),
   }), { mode: 0o600 }))
-  yield* LocalTaskAuthority.provide(auth, host.control({ ruleID: "actual-rule", requestID: "pause", expectedRevision: currentRule.revision, action: "pause" }))
+  yield* LocalAuthority.provide(auth, host.control({ ruleID: "actual-rule", requestID: "pause", expectedRevision: currentRule.revision, action: "pause" }))
   yield* Effect.sleep(800)
   const after = yield* counts()
   if (EventValidation.hash(before) !== EventValidation.hash(after)) throw new Error("Terminal pause added an execution")

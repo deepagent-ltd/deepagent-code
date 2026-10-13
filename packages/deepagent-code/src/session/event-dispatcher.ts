@@ -13,8 +13,6 @@ import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { isEventV2AdmissionEnabled } from "@deepagent-code/core/deepagent/event-admission"
 import type { RuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
-export { resolveMentioned } from "@deepagent-code/core/im/mention-parser"
-export type { MentionedAgent } from "@deepagent-code/core/im/mention-parser"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventNotRegisteredError } from "./v2-admission-bridge"
 import { Log } from "@deepagent-code/core/util/log"
@@ -66,10 +64,7 @@ export interface DispatchPort {
   readonly dispatch: (request: DispatchRequest) => Effect.Effect<void, unknown>
 }
 
-/** Historical receipts remain decodable; new IM events are terminally dropped. */
-export type HandleDecision =
-  | EventRouter.RouteDecision
-  | { readonly type: "receipted"; readonly reason: MentionReceiptReason }
+export type HandleDecision = EventRouter.RouteDecision
 
 // Observe-only default: log the routing decision, accept the delivery. Used until Wave 3 provides a
 // session-driving port. Safe to enable the flags with this in place — routes + traces, never executes.
@@ -85,49 +80,7 @@ export const observeOnlyDispatchPort: DispatchPort = {
     ),
 }
 
-// Historical mention metadata and pure parsing remain compatible. Neither a
-// mention nor a generic Event trigger may invoke the owner's personal DAC.
-
-/** W0.4 — the durable mention-routing receipt message type (IM message `metadata.type` discriminant). */
-export const AGENT_NO_TRIGGER_MENTION = "agent_no_trigger_mention"
-
-/** W0.4 — why a mention was receipted instead of dispatched. `agent_no_trigger_mention` = the mentioned
- * agent resolved but did not declare the mention trigger; `no_declared_trigger` = no agent at all was
- * mentionable (unknown names / no declarer). Both write a `AGENT_NO_TRIGGER_MENTION` message. */
-export type MentionReceiptReason = "agent_no_trigger_mention" | "no_declared_trigger"
-
-/** W0.4 — the durable mention-routing receipt payload (written into the initiating IM conversation /
- * session; the receipt carries the mentioned agent id when the name resolved to a registered agent). */
-export interface MentionReceiptInput {
-  readonly eventID: string
-  /** The IM group (initiating conversation) — absent when the payload carries no group. */
-  readonly groupID: string | undefined
-  /** The initiating IM message id. */
-  readonly messageID: string | undefined
-  /** The mentioned agent id; absent only for the generic no-declarer receipt. */
-  readonly agentID: string | undefined
-  readonly agentNames: ReadonlyArray<string>
-  readonly reason: MentionReceiptReason
-}
-
-/** Historical receipt shape; the dispatcher never calls this port. */
-export interface MentionReceiptPort {
-  readonly receipt: (input: MentionReceiptInput) => Effect.Effect<void, unknown>
-}
-
-/** Historical interface only. No mention receipt or execution is produced. */
-export const defaultMentionReceiptPort: MentionReceiptPort = { receipt: () => Effect.void }
-
-export const mentionNamesFor = (event: DeepAgentEvent.Event): string[] => {
-  if (event.type !== LMNEvents.IM_MESSAGE_CREATED) return []
-  const payload = event.payload as { mentions?: unknown } | null
-  const mentions = payload?.mentions
-  return Array.isArray(mentions) ? mentions.filter((m): m is string => typeof m === "string") : []
-}
-
-// Map an event type to the feature flag that gates its dispatch path (fail-closed: flag OFF ⇒ dropped).
-//   agent.push.*    → v4AgentPushEnabled  (proactive agent-initiated push)
-//   other events   → v4MultiAgentRuntime. IM_MESSAGE_CREATED is rejected before flag resolution.
+// IM communication events are dropped before ordinary Event feature resolution.
 export const flagForEventType = (flags: RuntimeFlags.Info, eventType: string): boolean => {
   if (eventType.startsWith("agent.push")) return flags.v4AgentPushEnabled
   return flags.v4MultiAgentRuntime
@@ -170,8 +123,6 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 export interface LayerOptions {
   readonly runtimeFeatures?: RuntimeFeatureRegistry
   readonly dispatchPort?: DispatchPort
-  // Historical layer option only; it never authorizes an IM dispatch or writes a receipt.
-  readonly mentionReceiptPort?: MentionReceiptPort
   readonly maxQueueDepth?: number
   readonly dedupeWindowMs?: number
   readonly tickIntervalMs?: number

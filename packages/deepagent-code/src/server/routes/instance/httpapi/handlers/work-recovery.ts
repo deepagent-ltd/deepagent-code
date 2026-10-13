@@ -5,7 +5,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { WorkKnownRecoverySchema } from "@deepagent-code/core/session/work-known-recovery.schema"
 import { WorkStorageCleanupSchema } from "@deepagent-code/core/session/work-storage-cleanup.schema"
 import { LocalOperatorSchema } from "@deepagent-code/core/im/local-operator.schema"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { NativeWorkKnownRecovery } from "@/installation/work-known-recovery"
 import { NativeWorkStorageCleanup } from "@/installation/work-storage-cleanup"
 import { ServerAuth } from "@/server/auth"
@@ -21,23 +21,23 @@ export const workRecoveryHandlers = () => HttpApiBuilder.group(RootHttpApi, "wor
   const cors = yield* CorsConfig
   const context = yield* Effect.context()
   const authenticate = Effect.gen(function* () {
-    return yield* LocalTaskAuthority.authenticate(db, config, yield* HttpServerRequest.HttpServerRequest, cors)
+    return yield* LocalAuthority.authenticate(db, config, yield* HttpServerRequest.HttpServerRequest, cors)
   })
   return handlers
     .handle("recoverKnown", ({ params, payload }) => map(Effect.gen(function* () {
       const identity = yield* authenticate
-      return yield* LocalTaskAuthority.provide(identity, NativeWorkKnownRecovery.recover({
+      return yield* LocalAuthority.provide(identity, NativeWorkKnownRecovery.recover({
         ...payload, workID: params.workID, action: payload.action ?? "recover_only",
       }).pipe(Effect.provide(context)))
     })))
     .handle("resumeRecovered", ({ params, payload }) => map(Effect.gen(function* () {
       const identity = yield* authenticate
-      return yield* LocalTaskAuthority.provide(identity,
+      return yield* LocalAuthority.provide(identity,
         NativeWorkKnownRecovery.resume(payload, params.workID).pipe(Effect.provide(context)))
     })))
     .handle("cleanupKnown", ({ payload }) => mapCleanup(Effect.gen(function* () {
       const identity = yield* authenticate
-      return yield* LocalTaskAuthority.provide(identity,
+      return yield* LocalAuthority.provide(identity,
         NativeWorkStorageCleanup.cleanup(payload).pipe(Effect.provide(context)))
     })))
 }))

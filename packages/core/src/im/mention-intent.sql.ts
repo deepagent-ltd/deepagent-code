@@ -1,3 +1,5 @@
+// Inert historical mention receipts. Only retention accounting and Session denial read these rows.
+// No repository method creates, binds, promotes or executes mention intents.
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
 import { sql } from "drizzle-orm"
 import { MessageTable } from "./sql"

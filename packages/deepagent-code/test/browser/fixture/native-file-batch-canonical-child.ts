@@ -17,7 +17,7 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { NativeInstallation } from "../../../src/installation/native-installation"
-import { LocalTaskAuthority } from "../../../src/im/local-task-authority"
+import { LocalAuthority } from "../../../src/installation/local-authority"
 
 const root = process.env.DAC_BROWSER_TEST_ROOT!
 const directory = path.join(root, "project")
@@ -107,7 +107,7 @@ try {
   state.stage = "private-installed-setup"
   await AppRuntime.runPromise(Effect.gen(function* () {
     yield* NativeInstallation.current()
-    yield* LocalTaskAuthority.initializeInstallation()
+    yield* LocalAuthority.initializeInstallation()
   }))
   state.listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
   for (const direction of (process.env.DAC_BROWSER_FILE_BATCH_DIRECTION === "download" ? ["download"] : ["upload", "download"]) as ReadonlyArray<"upload" | "download">) {

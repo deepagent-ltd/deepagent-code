@@ -5,7 +5,7 @@ import { Auth, RequestExecutor, VendorContextBound } from "@deepagent-code/llm/r
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { NativeInstallation } from "./native-installation"
 import { NativeBootstrap } from "@/runtime/native-bootstrap"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { WorkRouteApprovalSchema } from "@deepagent-code/core/session/work-route-approval.schema"
 import { Config } from "@deepagent-code/core/config"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
@@ -58,7 +58,7 @@ export const requiredComponents = Object.freeze([
   "packages/llm/src/schema/options.ts",
   "packages/core/src/session/runner/model.ts",
   "packages/core/src/config.ts",
-  "packages/deepagent-code/src/im/local-task-authority.ts",
+  "packages/deepagent-code/src/installation/local-authority.ts",
   "packages/core/src/location-layer.ts",
   "packages/deepagent-code/src/installation/native-installation.ts",
   "packages/deepagent-code/src/installation/native-runtime.ts",
@@ -380,7 +380,7 @@ export const layer = Layer.effect(
           !headers.authorization?.startsWith("Bearer ") || headers.authorization.length <= 7 ? "bearer-header" :
           Object.keys(headers).some((name) => !["authorization", "content-type", "accept"].includes(name)) ? "extra-header" :
           headers["content-type"] !== "application/json" ? "content-type" : "accept")
-      const installation = yield* LocalTaskAuthority.readInstallation.pipe(
+      const installation = yield* LocalAuthority.readInstallation.pipe(
         Effect.mapError(() => refusal("NATIVE_RUNTIME_UNAVAILABLE")),
         Effect.tapError(report("installation-read")),
       )
@@ -692,7 +692,7 @@ export const layer = Layer.effect(
           Effect.fail(refusal(code)).pipe(Effect.tapError(report(branch)))
         const before = yield* requireCurrent(handle).pipe(Effect.tapError(report("current")))
         const resolved = before.entry.resolved
-        const installation = yield* LocalTaskAuthority.readInstallation.pipe(
+        const installation = yield* LocalAuthority.readInstallation.pipe(
           Effect.mapError(() => refusal("NATIVE_RUNTIME_UNAVAILABLE")),
           Effect.tapError(report("installation")),
         )

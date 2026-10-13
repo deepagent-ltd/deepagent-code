@@ -3,7 +3,7 @@ import { createSimpleContext } from "./helper"
 import type { PromptInfo } from "../prompt/history"
 import { useTuiStartup } from "./runtime"
 import { createEffect, createSignal, onCleanup, useContext } from "solid-js"
-import type { IMTaskReturn } from "../util/im-task-return"
+import type { IMDacSessionReturn } from "../util/im-dac-session-return"
 
 export type HomeRoute = {
   type: "home"
@@ -31,7 +31,7 @@ const routeContext = createSimpleContext({
     const [store, setStore] = createStore<Route>(
       props.initialRoute ?? initialRoute(startup.initialRoute) ?? { type: "home" },
     )
-    const [returnToIM, setReturnToIM] = createSignal<IMTaskReturn>()
+    const [returnToIM, setReturnToIM] = createSignal<IMDacSessionReturn>()
     onCleanup(() => setReturnToIM(undefined))
     createEffect(() => {
       const record = returnToIM()
@@ -46,7 +46,7 @@ const routeContext = createSimpleContext({
         setReturnToIM(undefined)
         setStore(reconcile(route))
       },
-      openIMTask(sessionID: string, record: IMTaskReturn) {
+      openIMDacSession(sessionID: string, record: IMDacSessionReturn) {
         setStore(reconcile({ type: "session", sessionID }))
         setReturnToIM(record)
       },

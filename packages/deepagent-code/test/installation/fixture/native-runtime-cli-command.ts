@@ -12,7 +12,7 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import type { Capture } from "@/installation/provider-credential-binding"
 import { NativeRuntime } from "@/installation/native-runtime"
 import { NativeBootstrap } from "@/runtime/native-bootstrap"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { AppRuntime } from "@/effect/app-runtime"
 import { cmd } from "@/cli/cmd/cmd"
 
@@ -377,8 +377,8 @@ export const DebugCommand = cmd({
               () => import("@/installation/native-route-approval"),
             )
             const database = yield* Database.Service
-            const installation = yield* LocalTaskAuthority.initializeInstallation()
-            const identity = LocalTaskAuthority.binding(installation, "fixture", "fixture-offline-password")
+            const installation = yield* LocalAuthority.initializeInstallation()
+            const identity = LocalAuthority.binding(installation, "fixture", "fixture-offline-password")
             const approvalID = `route_${WorkRouteApproval.hash([installation.instanceID, "fixture-operator", "review"])}`
             return yield* Effect.gen(function* () {
               if (args.mode !== "approval-reopen") {
@@ -422,7 +422,7 @@ export const DebugCommand = cmd({
                   Effect.provideService(WorkRouteApproval.Authority, credentials.authority),
                 )
               const previous = yield* read()
-              const witness = yield* LocalTaskAuthority.authenticatePassword(
+              const witness = yield* LocalAuthority.authenticatePassword(
                 database.db,
                 identity,
                 "fixture",
@@ -533,7 +533,7 @@ export const DebugCommand = cmd({
             )
           }
           if (args.mode.startsWith("capture")) {
-            const installation = yield* LocalTaskAuthority.initializeInstallation()
+            const installation = yield* LocalAuthority.initializeInstallation()
             const captured: {
               handle?: NativeRuntime.CredentialCapture
               description?: NativeRuntime.CredentialDescription

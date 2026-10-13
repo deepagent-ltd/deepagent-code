@@ -70,17 +70,6 @@ function isBuiltInEndpointError(name: string) {
 }
 
 describe("PublicApi OpenAPI v2 errors", () => {
-  test("keeps the original task Session workspace nullable in the public contract", () => {
-    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
-    const operation = spec.paths["/api/v1/im/tasks/requests/{requestID}/session"]?.get
-    expect(operation?.operationId).toBe("imTask.session")
-    expect(Object.keys(operation?.responses ?? {})).toEqual(expect.arrayContaining(["200", "400", "403", "409", "503"]))
-    const ref = responseRef(operation?.responses?.["200"])
-    const placement = spec.components.schemas[componentName(ref ?? "")]?.properties?.placement
-    expect(placement?.required).toContain("workspaceID")
-    expect(placement?.properties?.workspaceID?.anyOf?.some((item) => item.type === "null")).toBe(true)
-  })
-
   test("documents the typed plan admission error matrix", () => {
     const spec = OpenApi.fromApi(DeepAgentApi) as OpenApiSpec
 

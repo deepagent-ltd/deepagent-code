@@ -6,7 +6,6 @@ import { Icon } from "@deepagent-code/ui/icon"
 
 interface MessageMetadataCardProps {
   metadata: MessageMetadata
-  onOpenTaskResult?: () => void
   onOpenConversationSession?: () => void
 }
 
@@ -76,44 +75,26 @@ export function MessageMetadataCard(props: MessageMetadataCardProps) {
     case "agent_run":
       return (
         <div
-          data-im-task-result-card
+          data-im-dac-result-card
           class="min-w-0 max-w-full grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 bg-surface-raised-base border border-border-base rounded-lg"
         >
           <div class="min-w-0 flex items-start gap-2 text-left">
             <Icon name="agent-tree" size="small" class="shrink-0 text-icon-weak mt-0.5" />
             <div class="min-w-0">
-              <div class="whitespace-nowrap text-12-medium text-text-strong">
-                {language.t("im.taskResult.cardTitle")}
-              </div>
+              <div class="whitespace-nowrap text-12-medium text-text-strong">{language.t("im.dac.resultTitle")}</div>
               <div class="text-12-regular text-text-weak [overflow-wrap:anywhere]">
-                {language.t("im.taskResult.status")}: {metadata.status}
+                {language.t("im.dac.resultStatus")}: {metadata.status}
               </div>
             </div>
           </div>
-          <Show when={props.onOpenConversationSession || props.onOpenTaskResult}>
+          <Show when={props.onOpenConversationSession}>
             <Button
               size="small"
               variant="secondary"
-              class="im-task-result-open shrink-0 whitespace-nowrap"
-              onClick={() =>
-                props.onOpenConversationSession ? props.onOpenConversationSession() : props.onOpenTaskResult?.()
-              }
+              class="im-dac-result-open shrink-0 whitespace-nowrap"
+              onClick={() => props.onOpenConversationSession?.()}
             >
-              {language.t(props.onOpenConversationSession ? "im.dac.conversationSession" : "im.taskResult.view")}
-            </Button>
-          </Show>
-        </div>
-      )
-
-    case "task_status_notice":
-      return (
-        <div class="flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-lg border border-border-base bg-surface-raised-base px-2 py-2">
-          <span class="min-w-0 flex-1 text-12-medium text-text-base">
-            {language.t(`im.taskStatus.${metadata.kind}`)}
-          </span>
-          <Show when={props.onOpenTaskResult}>
-            <Button size="small" variant="secondary" onClick={() => props.onOpenTaskResult?.()}>
-              {language.t("im.taskStatus.view")}
+              {language.t("im.dac.conversationSession")}
             </Button>
           </Show>
         </div>
@@ -151,12 +132,5 @@ export function MessageMetadataCard(props: MessageMetadataCardProps) {
           </div>
         </div>
       )
-
-    // W0.4 (P9) — `agent_no_trigger_mention` receipt: deliberately rendered as NULL (no card chunk, no
-    // pixel change). The receipt is a plain text IM message whose body already tells the user their
-    // @mention was not dispatched; the metadata fields are the durable/diagnostic link to the
-    // initiating mention. Showing a card on top of the body would duplicate the same information.
-    case "agent_no_trigger_mention":
-      return null
   }
 }

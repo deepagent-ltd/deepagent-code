@@ -76,7 +76,7 @@ export function DialogBrowserFiles(props: { view: BrowserGetResponse; active: ()
       { title: text("new"), value: "new", disabled: state.unknown },
       { title: text("first"), value: "first", disabled: !state.cursor },
       { title: text("next"), value: "next", disabled: !state.page?.nextCursor },
-      { title: i18n.t("tui.im.taskProposal.back"), value: "back" },
+      { title: i18n.t("tui.im.back"), value: "back" },
     ]}
     onSelect={(option) => {
       if (!current() || state.busy || option.disabled) return

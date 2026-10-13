@@ -148,10 +148,6 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
   // from all component schemas so both request and response types match.
   for (const [name, schema] of Object.entries(spec.components?.schemas ?? {})) {
     spec.components!.schemas![name] = [
-      "IMTaskTargetReview",
-      "IMTaskState",
-      "IMTaskSession",
-      "IMTaskCancelReceipt",
       "McpBindingRepairPreview",
       "EventWorkCandidate",
       "EventWorkRule",
@@ -210,25 +206,6 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
         ].includes(path) ||
         (method === "get" && path === "/command") ||
         (method === "get" && ["/api/v1/im/groups/page", "/api/v1/im/groups/{groupId}"].includes(path)) ||
-        (method === "get" && path === "/api/v1/im/messages/{messageId}/task-result") ||
-        (method === "get" && path === "/api/v1/im/messages/{messageId}/task-status") ||
-        (method === "get" && path === "/api/v1/im/messages/{messageId}/remote-task-locator") ||
-        (method === "post" && path === "/api/v1/im/tasks/remote-result") ||
-        (method === "post" && path === "/api/v1/im/tasks/remote-status") ||
-        (method === "get" &&
-          [
-            "/api/v1/im/tasks/targets",
-            "/api/v1/im/tasks/conversations/{groupID}",
-            "/api/v1/im/tasks/requests/{requestID}",
-            "/api/v1/im/tasks/requests/{requestID}/state",
-          ].includes(path)) ||
-        (method === "post" &&
-          [
-            "/api/v1/im/tasks/requests",
-            "/api/v1/im/tasks/requests/{requestID}/accept",
-            "/api/v1/im/tasks/requests/{requestID}/cancel",
-            "/api/v1/im/tasks/requests/{requestID}/refuse",
-          ].includes(path)) ||
         (method === "get" &&
           [
             "/api/v1/im/groups/{groupId}/messages/{messageId}/attachments/{attachmentId}",

@@ -16,7 +16,6 @@ import { KernelConfig } from "./config"
 import { KernelClient } from "./client"
 import { KernelSdk } from "./sdk"
 import type { IMKernelExchange } from "./exchange"
-import type { KernelTaskSourceWitness } from "./task-source-witness"
 
 export const readerError = (error: KernelSdk.KernelError): KernelReaderSchema.Error => {
   const cause = typeof error.cause === "object" && error.cause !== null ? error.cause as { kind?: unknown; wireCode?: unknown } : undefined
@@ -168,13 +167,6 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
   const invalidate = (code: KernelReaderSchema.Code = "reader_unavailable") => SubscriptionRef.set(state, { state: "unavailable", code, displayEpoch: runtime.displayEpoch, legacyMirrorUnavailable: true }).pipe(Effect.andThen(Effect.suspend(() => notify([...watchedGroups.keys()], code))))
   yield* Effect.addFinalizer(() => Effect.sync(revoke).pipe(Effect.andThen(invalidate())))
   const commit = <A, E>(effect: Effect.Effect<A, E>) => syncLock.withPermits(1)(effect)
-  // Retained method shapes let historical readers decode old task records. No
-  // reader incarnation can mint an IM execution witness after the cutover.
-  const taskSource = {
-    capture: (_messageID: string) => Effect.fail(KernelReaderSchema.failure("reader_unavailable", "retired-task-source")),
-    read: (_handle: object): KernelTaskSourceWitness.Current | undefined => undefined,
-    assert: (_handle: object) => Effect.fail(KernelReaderSchema.failure("reader_unavailable", "retired-task-source")),
-  }
   const applyPage = (page: KernelReader.MessagesPage, started: number, handles: readonly object[]) => Effect.gen(function* () {
     handles.forEach((handle) => {
       const original = client.readLiveObservation?.(handle)
@@ -470,7 +462,7 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
       return yield* syncLock.withPermits(1)(KernelReader.withOutput(runtime, request, effect))
     })
   })
-  return { runtime, state, sync, syncSlice, observeLive, refreshGroup: (groupID: string) => commit(KernelReader.refreshGroup(runtime, groupID)).pipe(Effect.tap((changed) => changed ? notify([groupID]) : Effect.void), Effect.asVoid), refreshPending: () => commit(KernelReader.refreshPending(runtime)).pipe(Effect.tap((changed) => changed.length ? notify(changed) : Effect.void), Effect.asVoid), captureTaskSource: (localMessageID: string) => commit(taskSource.capture(localMessageID)), readTaskSource: taskSource.read, assertTaskSource: taskSource.assert, verifyScope, read, invalidate, revoke, retire: KernelReader.retireReads(runtime), request: withRequest, watchGroup, hasActiveConnections: () => watchedGroups.size > 0, pending: (request: { conversationType: 1 | 2; conversationID: string; name: string }) => Effect.gen(function* () {
+  return { runtime, state, sync, syncSlice, observeLive, refreshGroup: (groupID: string) => commit(KernelReader.refreshGroup(runtime, groupID)).pipe(Effect.tap((changed) => changed ? notify([groupID]) : Effect.void), Effect.asVoid), refreshPending: () => commit(KernelReader.refreshPending(runtime)).pipe(Effect.tap((changed) => changed.length ? notify(changed) : Effect.void), Effect.asVoid), verifyScope, read, invalidate, revoke, retire: KernelReader.retireReads(runtime), request: withRequest, watchGroup, hasActiveConnections: () => watchedGroups.size > 0, pending: (request: { conversationType: 1 | 2; conversationID: string; name: string }) => Effect.gen(function* () {
     if (!(yield* KernelReader.scope(runtime))) {
       const header = yield* query(client.getDeliveryReader())
       yield* bindReader(header)

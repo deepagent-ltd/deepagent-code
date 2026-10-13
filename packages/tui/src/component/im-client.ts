@@ -55,16 +55,9 @@ export type MessageMetadata =
   | { type: "file_ref"; path: string; line?: number }
   | { type: "code_ref"; path?: string; startLine?: number; endLine?: number }
   | { type: "agent_run"; sessionID?: string; status: string }
-  | {
-      type: "task_status_notice"
-      noticeID: string
-      requestID: string
-      kind: "cancel_requested" | "recovery_required" | "refused"
-    }
   | { type: "debug"; info: string }
   | { type: "profile"; operation: string; duration: number }
   | { type: "error"; code: string; message: string }
-  | { type: "agent_no_trigger_mention"; agentID?: string; agentNames?: string[]; eventID?: string; messageID?: string }
 
 export type IMMessage = {
   remoteAttachments?: ImMessagesCreateResponse["remoteAttachments"]

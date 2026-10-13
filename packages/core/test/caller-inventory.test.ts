@@ -65,7 +65,9 @@ describe("C0-01 caller inventory gate", () => {
     // endpoint retirement, plus its separately audited ordinary Session bridge.
     // Every new endpoint retains exact owner/body proofs; no unclassified waiver.
     // Explicit final-delivery retry adds one reviewed adapter; it never admits Session work.
-    expect(inventory.entries.length).toBe(526)
+    // 2026-10-13 removes five retired IM HTTP task endpoints and its separate
+    // im.agent-execution adapter; ordinary /dac and Session ownership stay.
+    expect(inventory.entries.length).toBe(520)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)
@@ -180,7 +182,8 @@ describe("C0-01 caller inventory gate", () => {
     expect(submit?.roles.every((role) => role.verdict === "adapter")).toBe(true)
     const retry = inventory.entries.find((entry) => entry.entry.id === "http.instance.im.dacReplyRetry")
     expect(retry?.roles.every((role) => role.verdict === "adapter")).toBe(true)
-    for (const id of ["http.instance.im.createMessage", "im.agent-execution"]) {
+    expect(inventory.entries.find((entry) => entry.entry.id === "im.agent-execution")).toBeUndefined()
+    for (const id of ["http.instance.im.createMessage"]) {
       const entry = inventory.entries.find((entry) => entry.entry.id === id)
       expect(entry?.roles.every((role) => role.verdict === "read_only")).toBe(true)
     }

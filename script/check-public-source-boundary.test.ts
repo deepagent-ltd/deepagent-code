@@ -1,9 +1,15 @@
 import { expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { devNull, tmpdir } from "node:os"
 import { resolve } from "node:path"
 
 const script = resolve(import.meta.dir, "check-public-source-boundary.ts")
+// A temporary repository must not inherit the host worktree/index or user hooks/signing config.
+const environment = {
+  ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))),
+  GIT_CONFIG_GLOBAL: devNull,
+  GIT_CONFIG_NOSYSTEM: "1",
+}
 
 async function repository(run: (root: string) => Promise<void>) {
   const root = mkdtempSync(resolve(tmpdir(), "dac-public-boundary-"))
@@ -19,13 +25,13 @@ async function repository(run: (root: string) => Promise<void>) {
 }
 
 function git(root: string, args: string[]) {
-  const result = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" })
+  const result = Bun.spawnSync(["git", ...args], { cwd: root, env: environment, stdout: "pipe", stderr: "pipe" })
   if (result.exitCode !== 0) throw new Error(result.stderr.toString())
   return result.stdout.toString()
 }
 
 function check(root: string, args: string[]) {
-  return Bun.spawnSync([process.execPath, script, ...args], { cwd: root, stdout: "pipe", stderr: "pipe" })
+  return Bun.spawnSync([process.execPath, script, ...args], { cwd: root, env: environment, stdout: "pipe", stderr: "pipe" })
 }
 
 test("verified public documents and ignored private archives pass", async () => {

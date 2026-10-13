@@ -1,10 +1,10 @@
 import fs from "node:fs/promises"
 import { Effect, Exit, Cause } from "effect"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 
 const mode = Bun.argv.at(-1)
-await Effect.runPromise(LocalTaskAuthority.initializeInstallation())
-const filename = LocalTaskAuthority.installationPath()
+await Effect.runPromise(LocalAuthority.initializeInstallation())
+const filename = LocalAuthority.installationPath()
 const original = fs.open
 const state = { changed: false, bytes: 0 }
 if (mode === "grow" || mode === "replace") {
@@ -37,7 +37,7 @@ if (mode === "grow" || mode === "replace") {
     },
   })
 }
-const result = await Effect.runPromiseExit(LocalTaskAuthority.readInstallation)
+const result = await Effect.runPromiseExit(LocalAuthority.readInstallation)
 Object.defineProperty(fs, "open", { configurable: true, writable: true, value: original })
 state.bytes = (await fs.stat(filename)).size
 const error = Exit.isFailure(result) ? Cause.squash(result.cause) : undefined

@@ -9,7 +9,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { NativeInstallation } from "../../../src/installation/native-installation"
-import { LocalTaskAuthority } from "../../../src/im/local-task-authority"
+import { LocalAuthority } from "../../../src/installation/local-authority"
 import { BrowserControl } from "@deepagent-code/core/browser/control"
 import { BrowserSchema } from "@deepagent-code/core/browser/schema"
 import { BrowserFiles } from "../../../src/browser/file-exchange"
@@ -27,7 +27,7 @@ await BrowserNativeHost.prepare()
 const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
 await AppRuntime.runPromise(Effect.gen(function* () {
   yield* NativeInstallation.current()
-  yield* LocalTaskAuthority.initializeInstallation()
+  yield* LocalAuthority.initializeInstallation()
 }))
 async function post(route: string, input: unknown) {
   const response = await fetch(new URL(route, listener.url), { method: "POST",

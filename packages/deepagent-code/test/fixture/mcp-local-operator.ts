@@ -473,7 +473,7 @@ async function workerProbe() {
           )
           const { AbsolutePath } = yield* Effect.promise(() => import("@deepagent-code/core/schema"))
           const { Project } = yield* Effect.promise(() => import("../../src/project/project"))
-          const { LocalTaskAuthority } = yield* Effect.promise(() => import("../../src/im/local-task-authority"))
+          const { LocalAuthority } = yield* Effect.promise(() => import("../../src/installation/local-authority"))
           const { Global } = yield* Effect.promise(() => import("@deepagent-code/core/global"))
           const { McpAuthJournal } = yield* Effect.promise(() => import("../../src/mcp/auth-journal"))
           const observed = yield* (yield* Project.Service).fromDirectory(process.cwd())
@@ -485,7 +485,7 @@ async function workerProbe() {
               project: { kind: "registered_root", observedProjectId: observed.project.id },
             })
           }).pipe(Effect.provide(LocationIdentity.layer.pipe(Layer.provide(FSUtil.defaultLayer))))
-          const installation = yield* LocalTaskAuthority.ensurePrivateInstallation()
+          const installation = yield* LocalAuthority.ensurePrivateInstallation()
           const journal = yield* Effect.promise(() =>
             McpAuthJournal.open(path.join(Global.Path.config, "mcp-oauth", "journal.sqlite"), "1".repeat(64), "write"),
           )

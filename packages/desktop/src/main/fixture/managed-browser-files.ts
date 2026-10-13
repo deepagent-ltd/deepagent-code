@@ -27,7 +27,7 @@ async function utility() {
   const { BrowserHost } = await import("@deepagent-code/core/browser/host")
   const { BrowserNativeHost } = await import("../../../../deepagent-code/src/browser/native-host")
   const { BrowserFiles } = await import("../../../../deepagent-code/src/browser/file-exchange")
-  const { LocalTaskAuthority } = await import("../../../../deepagent-code/src/im/local-task-authority")
+  const { LocalAuthority } = await import("../../../../deepagent-code/src/installation/local-authority")
   const parent = Reflect.get(process, "parentPort") as { postMessage(value: unknown): void }
   await BrowserNativeHost.prepare()
   BrowserNativeHost.captureServerConfiguration({ username: "deepagent-code", password: Option.some("private-files-module") })
@@ -41,7 +41,7 @@ async function utility() {
     const db = (yield* Database.Service).db
     const api = yield* BrowserFiles.Service
     const cap = yield* BrowserFileCapability.Service
-    yield* LocalTaskAuthority.initializeInstallation()
+    yield* LocalAuthority.initializeInstallation()
     yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make(directory), sandboxes: [] }).run()
     yield* db.insert(SessionTable).values({ id: SessionSchema.ID.make("ses_browser_files_fixture"), project_id: Project.ID.global,
       slug: "files", title: "Installed file exchange module", directory, version: "fixture", v2_authority: true }).run()

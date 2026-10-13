@@ -12,7 +12,7 @@ import { McpAuth } from "../../src/mcp/auth"
 import { MCP } from "../../src/mcp/index"
 import { oauthHttp } from "../fixture/mcp-oauth-http"
 import { Config } from "../../src/config/config"
-import { LocalTaskAuthority } from "../../src/im/local-task-authority"
+import { LocalAuthority } from "../../src/installation/local-authority"
 import { AccountRepo } from "../../src/account/repo"
 import { Account } from "../../src/account/account"
 import { AccountID, AccessToken, RefreshToken, OrgID } from "../../src/account/schema"
@@ -116,7 +116,7 @@ it.instance(
       expect(yield* Effect.promise(a.current)).toBe(true)
       expect(yield* Effect.promise(other.current)).toBe(true)
       expect(yield* repo.authority()).toEqual(before)
-      expect((yield* LocalTaskAuthority.readInstallation).instanceID).toMatch(/^local_[a-f0-9]{32}$/)
+      expect((yield* LocalAuthority.readInstallation).instanceID).toMatch(/^local_[a-f0-9]{32}$/)
       const db = (yield* Database.Service).db
       expect(yield* db.get<{ n: number }>(sql`SELECT COUNT(*) AS n FROM local_operator_authority`)).toEqual({ n: 0 })
       expect(yield* McpAuth.use.get("same")).toBeUndefined()

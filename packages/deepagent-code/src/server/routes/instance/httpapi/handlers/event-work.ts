@@ -6,7 +6,7 @@ import { EventWorkRuleSchema } from "@deepagent-code/core/deepagent/event-work-r
 import { EventWorkDagSchema } from "@deepagent-code/core/deepagent/event-work-dag.schema"
 import { LocalOperatorSchema } from "@deepagent-code/core/im/local-operator.schema"
 import { EventWorkManagementHost } from "@/session/event-work-management"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { ServerAuth } from "@/server/auth"
 import { CorsConfig } from "@/server/cors"
 import { InstanceHttpApi } from "../api"
@@ -28,7 +28,7 @@ export const eventWorkHandlers = () =>
       ) =>
         map(
           Effect.gen(function* () {
-            const identity = yield* LocalTaskAuthority.authenticate(
+            const identity = yield* LocalAuthority.authenticate(
               database.db,
               config,
               yield* HttpServerRequest.HttpServerRequest,
@@ -40,7 +40,7 @@ export const eventWorkHandlers = () =>
               directory: route.directory,
               workspaceID: route.workspaceID,
             })
-            return yield* LocalTaskAuthority.provide(identity, operation(management))
+            return yield* LocalAuthority.provide(identity, operation(management))
           }),
         )
       return handlers

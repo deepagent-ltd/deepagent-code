@@ -110,10 +110,10 @@ export async function installationConfigurationStamp(
 ) {
   if (!current() || (process.platform === "win32" && !context)) return undefined
   const { Effect } = await import("effect")
-  const { LocalTaskAuthority } = await import("@/im/local-task-authority")
+  const { LocalAuthority } = await import("@/installation/local-authority")
   const installation = await Effect.runPromise(context
-    ? LocalTaskAuthority.readInstallation.pipe(Effect.provide(context))
-    : LocalTaskAuthority.readInstallation)
+    ? LocalAuthority.readInstallation.pipe(Effect.provide(context))
+    : LocalAuthority.readInstallation)
   if (
     !current() ||
     installation.instanceID !== scope.instanceID ||

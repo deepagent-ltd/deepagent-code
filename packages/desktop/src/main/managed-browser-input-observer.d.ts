@@ -3,6 +3,8 @@ export type ManagedBrowserInputAsset = Readonly<{
     schemaVersion: "dac.managed-browser-input.darwin.v1";
     target: "darwin-arm64" | "darwin-x64";
     napiVersion: 8;
+    electronVersion: string;
+    nodeVersion: string;
     path: string;
     bytes: number;
     sha256: string;

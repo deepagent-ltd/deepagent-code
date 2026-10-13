@@ -138,7 +138,7 @@ it("opens the admitted ordinary Session with its original scope then returns to 
   expect(runtime.panel).toHaveBeenCalledWith("im")
   expect(close).not.toHaveBeenCalled()
   runtime.location.pathname = runtime.navigate.mock.calls[0][0]
-  fireEvent.click(screen.getByRole("button", { name: dict["im.taskResult.return"] }))
+  fireEvent.click(screen.getByRole("button", { name: dict["im.dac.returnToChat"] }))
   expect(runtime.navigate).toHaveBeenLastCalledWith("/original/chat")
   expect(close).toHaveBeenCalledOnce()
   expect(api.dacSubmit).toHaveBeenCalledOnce()

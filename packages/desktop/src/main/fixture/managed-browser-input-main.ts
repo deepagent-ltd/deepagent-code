@@ -61,12 +61,33 @@ async function runUtility() {
   const first = await execute({ type: "snapshot", tabID: tab.tabID, generation: tab.generation })
   const ref = first.result.refs?.find((value) => value.name === "Name")
   assert.ok(ref)
-  const target = { tabID: tab.tabID, generation: tab.generation, ref: ref.ref,
+  const initialTarget = { tabID: tab.tabID, generation: tab.generation, ref: ref.ref,
     frameID: first.result.frameID!, observationRevision: first.result.observationRevision! }
   await native("other")
+  const otherWindowTab = (await execute({ type: "tabs.list" })).result.tabs[0]!
+  await writeFile(path.join(root, "source-boundary.json"), JSON.stringify({
+    before: tab.generation, afterOtherWindow: otherWindowTab.generation,
+  }))
+  assert.equal(otherWindowTab.tabID, tab.tabID)
+  const reobserved = otherWindowTab.generation !== tab.generation
+  if (reobserved) {
+    const before = await native("counts")
+    const stale = await Effect.runPromise(Effect.exit(request({ type: "fill", ...initialTarget, text: "MUST_NOT_DISPATCH" })))
+    assert.ok(Exit.isFailure(stale))
+    const error = Exit.isFailure(stale) ? Option.getOrUndefined(Cause.findErrorOption(stale.cause)) : undefined
+    assert.equal(error && typeof error === "object" && "code" in error ? error.code : null, "BROWSER_STALE_TARGET")
+    assert.equal(await native("counts"), before)
+  }
+  // A real Cocoa callback can retire the prior observation. Only an explicit
+  // original snapshot admits new references; no native/source gate is bypassed.
+  const current = await execute({ type: "snapshot", tabID: otherWindowTab.tabID, generation: otherWindowTab.generation })
+  const currentRef = current.result.refs?.find((value) => value.name === "Name")
+  assert.ok(currentRef)
+  const target = { tabID: otherWindowTab.tabID, generation: otherWindowTab.generation, ref: currentRef.ref,
+    frameID: current.result.frameID!, observationRevision: current.result.observationRevision! }
   await execute({ type: "fill", ...target, text: "owned中文" })
   const unchanged = (await execute({ type: "tabs.list" })).result.tabs[0]!
-  assert.equal(unchanged.generation, tab.generation)
+  assert.equal(unchanged.generation, otherWindowTab.generation)
   const before = await native("own")
   const stale = await Effect.runPromise(Effect.exit(request({ type: "fill", ...target, text: "MUST_NOT_DISPATCH" })))
   assert.ok(Exit.isFailure(stale))
@@ -77,7 +98,7 @@ async function runUtility() {
   const freshTab = (await execute({ type: "tabs.list" })).result.tabs[0]!
   // One user input may pass both an AppKit event and a text-client callback;
   // generations invalidate authority, they do not count gestures exactly once.
-  assert.ok(freshTab.generation > tab.generation)
+  assert.ok(freshTab.generation > otherWindowTab.generation)
   const fresh = await execute({ type: "snapshot", tabID: freshTab.tabID, generation: freshTab.generation })
   const freshRef = fresh.result.refs?.find((value) => value.name === "Name")
   assert.ok(freshRef)
@@ -88,7 +109,8 @@ async function runUtility() {
   const stopped = await Effect.runPromise(host.cancel({ ...control, state: "cancel_requested", epoch: 2, revision: 3,
     cancel: { requestID: "stop-source", expectedRevision: 2, requestedAt: Date.now() } }))
   assert.equal(stopped, true)
-  parent.postMessage({ type: "source-result", result: { otherWindowPreserved: true, ownSourceRetired: true,
+  parent.postMessage({ type: "source-result", result: { otherWindowResourcePreserved: true, reobserved,
+    initialGeneration: tab.generation, afterOtherGeneration: otherWindowTab.generation, ownSourceRetired: true,
     staleDispatches: after - before, freshOwnCDPPreserved: true, stopped, actions: sequence.value } })
   process.exit(0)
 }
@@ -100,6 +122,9 @@ async function runMain() {
   const { installManagedBrowser } = await import("../managed-browser")
   app.setPath("userData", path.join(root, "profile"))
   app.commandLine.appendSwitch("disable-background-networking")
+  // Keep qualification windows away from unrelated cursor/focus input. Native
+  // events below still target their original AppKit handles in this process.
+  app.on("browser-window-created", (_event, window) => window.hide())
   app.on("window-all-closed", () => {})
   await app.whenReady()
   const qa = createRequire(import.meta.url)(path.join(root, "qa.node")) as {
@@ -108,7 +133,7 @@ async function runMain() {
   qa.cleanup(path.join(root, "cleanup.json"))
   const peer = createServer((_request, response) => {
     response.setHeader("Content-Type", "text/html; charset=utf-8")
-    response.end('<label>Name<input></label><div style="height:1000px">Source target</div>')
+    response.end('<label>Name<input autofocus></label><div style="height:1000px">Source target</div>')
   })
   await new Promise<void>((resolve) => peer.listen(0, "127.0.0.1", resolve))
   const address = peer.address()
@@ -117,13 +142,20 @@ async function runMain() {
     DAC_SOURCE_ORIGIN: `http://127.0.0.1:${address.port}` }, stdio: "pipe" })
   child.stdout?.on("data", (bytes) => process.stdout.write(bytes))
   child.stderr?.on("data", (bytes) => process.stderr.write(bytes))
+  // Create the independent window before observing a target. Creating it later
+  // can legitimately retire the first window's IME source while focus changes.
   const state = { close: undefined as undefined | (() => void), result: undefined as unknown,
-    other: undefined as BrowserWindow | undefined, dispatches: 0, observed: false }
+    other: new BrowserWindow({ show: false,
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } }),
+    dispatches: 0, observed: false }
   const timer = setTimeout(() => { child.kill(); app.exit(2) }, 20_000)
   qa.tracking(true)
   child.on("message", (message) => {
     if (message.type === "managed-browser-bootstrap-ready-v1") {
-      state.close = installManagedBrowser(child, "source-fixture", managedBrowserInputFixtureAsset(root))
+      // The default ESM qualification exercises the product's fixed build-selected asset path.
+      state.close = process.argv[1]!.endsWith(".cjs")
+        ? installManagedBrowser(child, "source-fixture", managedBrowserInputFixtureAsset(root))
+        : installManagedBrowser(child, "source-fixture")
       return
     }
     if (message.type === "source-result") { state.result = message.result; return }
@@ -142,8 +174,6 @@ async function runMain() {
       child.postMessage({ type: "source-event-processed", dispatches: state.dispatches })
       return
     }
-    if (message.kind === "other" && !state.other) state.other = new BrowserWindow({ show: false,
-      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } })
     qa.postKey((message.kind === "other" ? state.other! : window).getNativeWindowHandle())
     // The later generation assertion proves that the actual AppKit event was consumed.
     setTimeout(() => child.postMessage({ type: "source-event-processed", dispatches: state.dispatches }), 75)
@@ -155,6 +185,8 @@ async function runMain() {
     peer.closeAllConnections()
     peer.close(() => {
       void writeFile(path.join(root, "result.json"), JSON.stringify({ childExit: code, result: state.result,
+        runtime: { electron: process.versions.electron, node: process.versions.node, arch: process.arch },
+        defaultProductAsset: !process.argv[1]!.endsWith(".cjs"),
         monitors: qa.counts(), windows: BrowserWindow.getAllWindows().length,
         boundary: { physicalHuman: false, canonicalRunner: false, provider: 0, clipboard: 0, externalNetwork: 0 } }),
       { mode: 0o600 }).then(() => code === 0 ? resolve() : reject(new Error("QA_CHILD_FAILED")))

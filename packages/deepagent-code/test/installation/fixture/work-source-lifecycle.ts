@@ -33,7 +33,7 @@ const { Image } = await import("@deepagent-code/core/image")
 const { PermissionV2 } = await import("@deepagent-code/core/permission")
 const { CanonicalJson } = await import("@deepagent-code/core/util/canonical-json")
 const { Hash } = await import("@deepagent-code/core/util/hash")
-const { LocalTaskAuthority } = await import("../../../src/im/local-task-authority")
+const { LocalAuthority } = await import("../../../src/installation/local-authority")
 const { WorkLeafProof } = await import("../../../src/installation/work-leaf-proof")
 
 const mode = process.argv[2] ?? "complete"
@@ -73,7 +73,7 @@ const dependencies = Layer.mergeAll(files,
     get: ordinary, forSession: ordinary, list: ordinary }),
   ToolRegistry.defaultLayer,
 )
-await Effect.runPromise(LocalTaskAuthority.initializeInstallation())
+await Effect.runPromise(LocalAuthority.initializeInstallation())
 const registry = Layer.mergeAll(dependencies, ReadTool.layer.pipe(Layer.provide(dependencies)))
 const definitionHash = await Effect.runPromise(Effect.gen(function* () {
   const materialized = yield* (yield* ToolRegistry.Service).materialize()

@@ -29,7 +29,6 @@ import { submitCreateDirect, submitCreateGroup, submitFacadeName } from "@/pages
 import { facadeFailureText, type FacadeFailureLike } from "@/components/im/facade-errors"
 import { ActivationCard, BlockedCard, IdentityCard } from "@/components/im/facade-cards"
 import { KernelGroupDialog } from "@/components/im/facade-dialogs"
-import { Dialog } from "@deepagent-code/ui/dialog"
 import { PersonalCommandFlow } from "@/components/im/personal-command-flow"
 import { createDacDrafts, type DacDraft } from "@/components/im/personal-command"
 import type { LocalMessage } from "@/hooks/use-im-websocket"
@@ -105,7 +104,6 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
     return draft
   }
   let panel: HTMLDivElement | undefined
-  const [taskMessage, setTaskMessage] = createSignal<LocalMessage>()
   const personalDrafts = createDacDrafts(restoring?.personal)
   const personalScope = client.scope()
   const [personalFlow, setPersonalFlow] = createStore({
@@ -498,7 +496,6 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
   }
   createEffect(() => {
     selectedGroupID()
-    setTaskMessage(undefined)
     setSelectedReadyID(undefined)
     observations.detail.generation++
     observations.detail.active = false
@@ -514,7 +511,6 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
     const initialRestore = scopeReset.initial ? restoring : undefined
     scopeReset.initial = false
     if (!initialRestore) setPersonalFlow({ groupID: "", draft: undefined, autoSubmit: false, error: "" })
-    setTaskMessage(undefined)
     refresh.generation++
     clearTrailing()
     refresh.abort.abort()
@@ -766,7 +762,7 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
               navigate(original.path)
             }}
           >
-            {language.t("im.taskResult.return")}
+            {language.t("im.dac.returnToChat")}
           </Button>
         )}
       </Show>
@@ -779,17 +775,7 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
           !canReturn()
         }
       >
-        <p role="alert">{language.t("im.taskResult.scopeChanged")}</p>
-      </Show>
-      <Show when={taskMessage()} keyed>
-        {(message) => (
-          <TaskHistoryFlow
-            message={message}
-            client={client}
-            active={() => !refresh.disposed && selectedGroupID() === message.groupID}
-            onClose={() => setTaskMessage(undefined)}
-          />
-        )}
+        <p role="alert">{language.t("im.dac.scopeChanged")}</p>
       </Show>
       <Show when={personalFlow.draft && { draft: personalFlow.draft, invocation: personalFlow.invocation }} keyed>
         {(entry) => (
@@ -1173,7 +1159,6 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
                   ServerConnection.local(server.current)
                     ? (message) => {
                         if (message.groupID !== selectedGroupID() || message.senderType !== "user") return
-                        setTaskMessage(undefined)
                         beginPersonal("", message)
                       }
                     : undefined
@@ -1185,11 +1170,6 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
                 }
                 onOpenConversationSession={ServerConnection.local(server.current) ? () => beginPersonal("") : undefined}
                 headerOwned
-                onOpenTaskResult={(message) => {
-                  if (!refresh.disposed && message.groupID === selectedGroupID()) {
-                    setTaskMessage(message)
-                  }
-                }}
                 drafts={drafts}
                 groupID={id}
                 protected={
@@ -1222,58 +1202,4 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
       </Show>
     </div>
   )
-}
-
-function TaskHistoryFlow(props: {
-  message: LocalMessage
-  client: IMClient
-  active: () => boolean
-  onClose: () => void
-}) {
-  const language = useLanguage()
-  const dialog = useDialog()
-  const scope = props.client.scope()
-  const requests = new AbortController()
-  const owner = { active: true }
-  const [state, setState] = createStore({ loading: true, value: "" })
-  const current = () => owner.active && props.active() && scope === props.client.scope()
-  onCleanup(() => {
-    owner.active = false
-    requests.abort()
-  })
-  onMount(() => {
-    dialog.show(
-      () => (
-        <Dialog title={language.t("im.taskResult.title")}>
-          <div class="flex flex-col gap-3 px-4 pb-4">
-            <p>{language.t("im.dac.historyOnly")}</p>
-            <Show when={state.loading}>
-              <p role="status">{language.t("im.taskResult.loading")}</p>
-            </Show>
-            <p class="text-12-regular whitespace-pre-wrap break-words">{props.message.content}</p>
-            <Show when={state.value}>
-              <p role="status">{state.value}</p>
-            </Show>
-            <Button variant="ghost" onClick={() => dialog.close()}>
-              {language.t("common.close")}
-            </Button>
-          </div>
-        </Dialog>
-      ),
-      props.onClose,
-    )
-    const signal = AbortSignal.any([requests.signal, AbortSignal.timeout(10_000)])
-    const read =
-      props.message.metadata?.type === "task_status_notice"
-        ? props.client.getTaskStatus(props.message.id, signal).then((value) => value.state)
-        : props.client.getTaskResult(props.message.id, signal).then((value) => value.state)
-    void read
-      .then((value) => {
-        if (current()) setState({ loading: false, value })
-      })
-      .catch(() => {
-        if (current()) setState({ loading: false, value: language.t("im.dac.error.unavailable") })
-      })
-  })
-  return null
 }

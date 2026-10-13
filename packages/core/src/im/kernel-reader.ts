@@ -201,36 +201,6 @@ export const projection = (runtime: Runtime, projectionKey: string) => Effect.ge
   if (!row?.local_group_id) return undefined
   return (yield* projections(runtime, [row.local_group_id]))[0]
 })
-/** Original retained source identity. This read neither grants task authority
- * nor replaces the Host's fresh native membership and connection witness. */
-export const taskSourceDescriptor = (runtime: Runtime, localMessageID: string) => Effect.gen(function* () {
-  const messageID = Schema.decodeUnknownOption(MessageID)(localMessageID)
-  if (Option.isNone(messageID)) return yield* failure("reader_unavailable", "task-source")
-  const engine = yield* current(runtime)
-  const stored = yield* scope(runtime)
-  if (!stored) return yield* failure("reader_unavailable", "task-source")
-  const found = yield* engine.db.select({ row: IMKernelReaderMessageTable, message: MessageTable }).from(IMKernelReaderMessageTable)
-    .innerJoin(MessageTable, eq(MessageTable.id, IMKernelReaderMessageTable.local_message_id))
-    .where(and(eq(IMKernelReaderMessageTable.reader_key, stored.reader_key), eq(IMKernelReaderMessageTable.local_message_id, messageID.value),
-      sql`length(CAST(${MessageTable.content} AS BLOB)) <= 65536`, sql`length(CAST(${IMKernelReaderMessageTable.metadata} AS BLOB)) <= 2048`)).get()
-  if (!found || found.row.storage_state !== "present" || found.row.owns_message !== 1 || found.message.deleted_at !== null || found.message.sender_type !== "user" || found.message.type !== "text" || found.message.reply_to_id !== null || found.message.kernel_msg_id !== null || found.message.sender_id !== found.row.sender_id || found.message.created_at !== found.row.message_time)
-    return yield* failure("reader_unavailable", "task-source")
-  const row = found.row
-  const visible = yield* projection(runtime, row.projection_key)
-  const metadata = yield* Effect.try({ try: () => KernelReaderSchema.decode(SchemaMessageMetadata, row.metadata, 2048), catch: () => failure("reader_mapping_conflict", "task-source") })
-  if (!visible || visible.visibility !== "visible" || visible.binding_key !== row.binding_key || visible.local_group_id !== found.message.group_id || visible.conversation_type !== row.conversation_type || visible.target_id !== row.target_id || !visible.server_revision || metadata.isSend || metadata.messageType !== undefined && metadata.messageType !== "jg:text" || metadata.firstSeen?.origin !== "kernel_live" || metadata.firstSeen.sourceHash !== hash(engine.source) || metadata.firstSeen.receiverID !== engine.source.senderID || metadata.firstSeen.sourceExpiresAt > row.expires_at || Math.min(row.expires_at, metadata.firstSeen.sourceExpiresAt) <= Date.now() || bodyHash(found.message.content) !== row.body_hash || KernelReaderSchema.bytes(found.message.content) !== row.body_bytes || row.immutable_hash !== hash({ reader_key: row.reader_key, effect_key: row.effect_key, binding_key: row.binding_key, projection_key: row.projection_key, message_id: row.message_id, sequence: row.sequence, delivery_cursor: row.delivery_cursor, message_time: row.message_time, expires_at: row.expires_at, sender_id: row.sender_id, target_id: row.target_id, conversation_type: row.conversation_type, body_hash: row.body_hash, metadata: row.metadata }))
-    return yield* failure("reader_unavailable", "task-source")
-  const binding = KernelReaderSchema.decode(KernelReaderSchema.Binding, stored.binding, 8192)
-  return { workspaceID: engine.workspaceID, localUserID: engine.userID, readerKey: row.reader_key, bindingKey: row.binding_key,
-    scopeKey: stored.scope_key, projectionKey: row.projection_key, currentProjectionRevision: visible.server_revision,
-    localProjectionRevision: visible.local_revision, realm: binding.realm, appkey: binding.appkey, orgID: binding.orgID,
-    receiverID: binding.userID, localGroupID: found.message.group_id, localMessageID: found.message.id,
-    effectKey: row.effect_key, nativeMessageID: row.message_id, sequence: row.sequence, deliveryCursor: row.delivery_cursor,
-    messageTime: row.message_time, nativeExpiresAt: row.expires_at, senderID: row.sender_id,
-    conversationType: KernelReaderSchema.decode(KernelReaderSchema.Visible, visible.metadata, 4096).conversationType,
-    conversationID: row.target_id, rawContent: found.message.content, immutableHash: row.immutable_hash, firstSeen: metadata.firstSeen }
-})
-export type TaskSourceDescriptor = Effect.Success<ReturnType<typeof taskSourceDescriptor>>
 export const pageIdentity = (runtime: Runtime, input: { workspaceID: string; userID: string }) => Effect.gen(function* () {
   const engine = yield* current(runtime)
   if (engine.workspaceID !== input.workspaceID || engine.userID !== input.userID) return yield* failure("reader_scope_mismatch", "group-page")

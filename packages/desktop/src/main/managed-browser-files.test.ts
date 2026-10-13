@@ -1,3 +1,4 @@
+import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -96,8 +97,8 @@ actual("physical installed browser file module: original Main confirmation, once
   expect(result.code).toBe(0)
   expect(result.result.actualInstalled).toBe(true)
   expect(result.result.controlledAdmission).toBe(true)
-  expect(result.result.node).toBe("24.18.0")
-  expect(result.result.electron).toBe("41.10.3")
+  expect(result.result.node).toBe(managedBrowserInputRuntime.nodeVersion)
+  expect(result.result.electron).toBe(managedBrowserInputRuntime.electronVersion)
   expect(result.result.grantCount).toBe(2)
   expect(result.result.artifactCount).toBe(2)
   expect(result.result.selected[0].state).toBe("selected")

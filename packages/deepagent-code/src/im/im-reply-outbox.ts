@@ -1,14 +1,13 @@
 export * as IMReplyOutbox from "./im-reply-outbox"
 
 import { Cause, Effect, Layer, Option, Ref, Schedule, Duration } from "effect"
-import { and, asc, eq, isNull, like, lte, or, sql } from "drizzle-orm"
+import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm"
 import { IMReplyOutboxTable } from "@deepagent-code/core/im/reply-outbox.sql"
 import { ReplyBodyRetirement } from "@deepagent-code/core/im/reply-body-retirement"
 import { ReplyBodyRetirementModel } from "@deepagent-code/core/im/reply-body-retirement.model"
 export { IMReplyOutboxTable } from "@deepagent-code/core/im/reply-outbox.sql"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionV2 } from "@deepagent-code/core/session"
-import { SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionActivityInputTable, SessionActivityTable } from "@deepagent-code/core/context-federation/session-sql"
 import type { WorkExecutionProfile } from "@deepagent-code/core/session/work-execution-profile"
 import { IMDacBindingTable, IMDacCommandTable } from "@deepagent-code/core/im/dac-session.sql"
@@ -27,7 +26,6 @@ import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
 import type { IMBroadcaster } from "@deepagent-code/core/im/websocket"
 import { contentDigest } from "@deepagent-code/core/contract/digest"
 import { ReplyDeliveryID } from "@deepagent-code/core/im/reply-delivery-id"
-import type { IMTaskStatusNoticeHost } from "./task-status-notice"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { IMKernelSync } from "@/im/kernel/sync"
 import { IMFacade } from "./facade"
@@ -340,9 +338,9 @@ export function collectSessionReply(deps: CollectDeps, sessionID: string, now?: 
 export function imSessionIDs(db: Database.Interface["db"]) {
   return Effect.gen(function* () {
     const rows = yield* db
-      .select({ id: SessionTable.id })
-      .from(SessionTable)
-      .where(like(SessionTable.id, "ses_im_%"))
+      .selectDistinct({ id: IMDacCommandTable.session_id })
+      .from(IMDacCommandTable)
+      .where(eq(IMDacCommandTable.state, "admitted"))
       .all()
       .pipe(Effect.orDie)
     return rows.map((row) => row.id)
@@ -365,7 +363,6 @@ export interface DeliveryDeps {
   readonly db: Database.Interface["db"]
   readonly repo: IMRepositoryInterface
   readonly broadcaster: IMBroadcaster
-  readonly notices?: IMTaskStatusNoticeHost.Interface
   // IM-kernel (B1): when present, a delivered reply bound to a kernel conversation is also
   // forwarded to the kernel (best-effort — the sync engine owns ack write-back and pending retry).
   readonly kernelSync?: IMKernelSync.Interface

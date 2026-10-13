@@ -18,7 +18,10 @@
     "assert:docs-claims": "bun run script/assert-docs-claims.ts",
     "postinstall": "bun run --cwd packages/core fix-node-pty",
     "prepare": "husky",
-    "test": "bun turbo test",
+    "test": "bun run test:tools && bun turbo test",
+    "test:ci": "bun run test:tools:ci && bun turbo test:ci",
+    "test:tools": "bun test ./script --timeout 30000",
+    "test:tools:ci": "mkdir -p .artifacts/unit && bun run test:tools --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
     "test:llm:all": "bun run script/run-live-llm-all.ts"
   },
   "workspaces": {

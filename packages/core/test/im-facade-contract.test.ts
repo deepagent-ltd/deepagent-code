@@ -12,51 +12,41 @@ import {
 // （^[\p{Han}\p{L}\p{N}]{1,20}$，码点计长）、错误码目录的完整性与状态归桶。
 
 describe("normalizeIMName", () => {
-  it("trims surrounding whitespace including the ideographic space", () => {
-    expect(normalizeIMName("  alice  ")).toBe("alice")
-    expect(normalizeIMName("　alice　")).toBe("alice")
-  })
-
-  it("folds full-width ASCII letters/digits to half-width", () => {
-    expect(normalizeIMName("Ａｌｉｃｅ１２３")).toBe("alice123")
-  })
-
-  it("case-folds latin and keeps han/numeric untouched", () => {
-    expect(normalizeIMName("Alice")).toBe("alice")
-    expect(normalizeIMName("张伟007")).toBe("张伟007")
-  })
-
-  it("folds an interior ideographic space to a plain space (rejected later by validation)", () => {
-    expect(normalizeIMName("张　伟")).toBe("张 伟")
+  it.each([
+    ["ASCII whitespace", "  alice  ", "alice"],
+    ["ideographic whitespace", "　alice　", "alice"],
+    ["full-width letters/digits", "Ａｌｉｃｅ１２３", "alice123"],
+    ["latin case", "Alice", "alice"],
+    ["Han/numeric preservation", "张伟007", "张伟007"],
+    ["interior ideographic space", "张　伟", "张 伟"],
+  ])("normalizes %s", (_label, input, output) => {
+    expect(normalizeIMName(input)).toBe(output)
   })
 })
 
 describe("validateIMName", () => {
-  it("accepts han, letters and numbers, returning the normalized name", () => {
-    expect(validateIMName(" Ａｌｉｃｅ ")).toEqual({ ok: true, name: "alice" })
-    expect(validateIMName("张伟")).toEqual({ ok: true, name: "张伟" })
-    expect(validateIMName("user007")).toEqual({ ok: true, name: "user007" })
+  it.each([
+    ["normalized latin", " Ａｌｉｃｅ ", "alice"],
+    ["Han", "张伟", "张伟"],
+    ["letters/numbers", "user007", "user007"],
+    ["Latin length boundary", "a".repeat(IM_NAME_MAX_LENGTH), "a".repeat(IM_NAME_MAX_LENGTH)],
+    ["Han length boundary", "汉".repeat(IM_NAME_MAX_LENGTH), "汉".repeat(IM_NAME_MAX_LENGTH)],
+  ])("accepts %s", (_label, input, name) => {
+    expect(validateIMName(input)).toEqual({ ok: true, name })
   })
 
-  it("rejects empty input", () => {
-    expect(validateIMName("")).toEqual({ ok: false, reason: "empty" })
-    expect(validateIMName("  　 ")).toEqual({ ok: false, reason: "empty" })
-  })
-
-  it("rejects names longer than 20 code points (counted as code points, not UTF-16 units)", () => {
-    expect(validateIMName("a".repeat(IM_NAME_MAX_LENGTH))).toEqual({ ok: true, name: "a".repeat(20) })
-    expect(validateIMName("a".repeat(IM_NAME_MAX_LENGTH + 1))).toEqual({ ok: false, reason: "too_long" })
-    // 20 个汉字正好通过（汉字是 BMP 单码点）
-    expect(validateIMName("汉".repeat(20)).ok).toBe(true)
-    expect(validateIMName("汉".repeat(21))).toEqual({ ok: false, reason: "too_long" })
-  })
-
-  it("rejects characters outside Han/L/N (punctuation, emoji, underscore, interior space)", () => {
-    expect(validateIMName("alice_wonderland")).toEqual({ ok: false, reason: "invalid_chars" })
-    expect(validateIMName("alice wonderland")).toEqual({ ok: false, reason: "invalid_chars" })
-    expect(validateIMName("alice!")).toEqual({ ok: false, reason: "invalid_chars" })
-    expect(validateIMName("😀")).toEqual({ ok: false, reason: "invalid_chars" })
-    expect(validateIMName("张伟！")).toEqual({ ok: false, reason: "invalid_chars" })
+  it.each([
+    ["empty", "", "empty"],
+    ["whitespace", "  　 ", "empty"],
+    ["overlong Latin", "a".repeat(IM_NAME_MAX_LENGTH + 1), "too_long"],
+    ["overlong Han", "汉".repeat(IM_NAME_MAX_LENGTH + 1), "too_long"],
+    ["underscore", "alice_wonderland", "invalid_chars"],
+    ["interior whitespace", "alice wonderland", "invalid_chars"],
+    ["punctuation", "alice!", "invalid_chars"],
+    ["emoji", "😀", "invalid_chars"],
+    ["full-width punctuation", "张伟！", "invalid_chars"],
+  ] as const)("rejects %s", (_label, input, reason) => {
+    expect(validateIMName(input)).toEqual({ ok: false, reason })
   })
 })
 

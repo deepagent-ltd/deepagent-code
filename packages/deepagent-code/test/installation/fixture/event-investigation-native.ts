@@ -11,7 +11,7 @@ import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { WorkExecutionProfile } from "@deepagent-code/core/session/work-execution-profile"
 import { EventInvestigationHost } from "@/deepagent/event-investigation"
 import { AppRuntime } from "@/effect/app-runtime"
-import { LocalTaskAuthority } from "@/im/local-task-authority"
+import { LocalAuthority } from "@/installation/local-authority"
 import { ServerAuth } from "@/server/auth"
 import { Server } from "@/server/server"
 import { InvestigationCaptured } from "@/server/routes/instance/httpapi/groups/event-investigation"
@@ -27,8 +27,8 @@ export const DebugCommand = cmd({
       Effect.gen(function* () {
         const db = (yield* Database.Service).db
         const config = yield* ServerAuth.Config
-        const configured = yield* LocalTaskAuthority.configured(config)
-        yield* LocalTaskAuthority.authenticatePassword(db, configured.runtime, config.username, configured.password)
+        const configured = yield* LocalAuthority.configured(config)
+        yield* LocalAuthority.authenticatePassword(db, configured.runtime, config.username, configured.password)
         // Server.listen adopts this already-built AppRuntime memo map. TCP socket facts
         // are required for the real mutation witness; fetch-only adapters fail closed.
         const listener = yield* Effect.acquireRelease(

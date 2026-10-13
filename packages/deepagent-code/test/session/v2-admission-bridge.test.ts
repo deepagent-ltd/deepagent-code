@@ -270,8 +270,50 @@ describe("C5-12 V2 admission bridge provider", () => {
         const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(calls) })
         const outcome = yield* provider.admit({ request: req, scope: scope(req.event) }).pipe(Effect.exit)
         expect(Exit.isFailure(outcome)).toBe(true)
-        if (outcome._tag === "Failure") expect(Cause.squash(outcome.cause)).toMatchObject({ code: "EVENT_WORK_AUTH_REQUIRED" })
+        if (outcome._tag === "Failure")
+          expect(Cause.squash(outcome.cause)).toMatchObject({ code: "EVENT_WORK_AUTH_REQUIRED" })
         expect(calls).toEqual([])
+      }),
+    )
+  })
+
+  test.each(["default", "custom"] as const)("%s registry cannot revive automatic IM admission", async (kind) => {
+    expect(V4_EVENT_REGISTRY.lookup("im.message.created")).toBeUndefined()
+    const registration = V4_EVENT_REGISTRY.lookup("ci.failure")
+    if (!registration) throw new Error("Missing current Event registration")
+    const custom = EventRegistry.createEventRegistry([
+      { ...registration, eventType: "im.message.created", execution: "single" },
+    ])
+    expect(custom.lookup("im.message.created")).toBeDefined()
+    const calls: V2PromptCall[] = []
+    const req = {
+      ...request(),
+      event: event({
+        type: "im.message.created",
+        source: "im",
+        payload: {
+          groupID: "conversation",
+          messageID: "ordinary",
+          content: "@auto /dac unauthorized received text",
+          mentions: ["auto"],
+        },
+      }),
+    }
+    await runWithDb((db) =>
+      Effect.gen(function* () {
+        const provider = makeV2AdmissionBridge({
+          db,
+          v2Session: fakeV2Session(calls),
+          ...(kind === "custom" ? { registry: custom } : {}),
+        })
+        for (const admit of [provider.admit, provider.admitReceiptOnly!]) {
+          const outcome = yield* admit({ request: req, scope: scope(req.event) }).pipe(Effect.exit)
+          expect(Exit.isFailure(outcome)).toBe(true)
+          if (outcome._tag === "Failure") expect(String(Cause.squash(outcome.cause))).toContain("is not registered")
+        }
+        expect(calls).toEqual([])
+        expect(yield* EventAdmission.forSession(db, parentSessionIDFor(req.event.id))).toEqual([])
+        expect(yield* db.all("SELECT count(*) count FROM session_input")).toEqual([{ count: 0 }])
       }),
     )
   })
@@ -304,7 +346,8 @@ describe("C5-12 V2 admission bridge provider", () => {
           const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(calls) })
           const outcome = yield* provider.admit({ request: req, scope: scope(req.event) }).pipe(Effect.exit)
           expect(Exit.isFailure(outcome)).toBe(true)
-          if (outcome._tag === "Failure") expect(Cause.squash(outcome.cause)).toMatchObject({ code: "EVENT_WORK_AUTH_REQUIRED" })
+          if (outcome._tag === "Failure")
+            expect(Cause.squash(outcome.cause)).toMatchObject({ code: "EVENT_WORK_AUTH_REQUIRED" })
           expect(yield* EventAdmission.forSession(db, parentSessionIDFor(req.event.id))).toEqual([])
           expect(calls).toEqual([])
         }
@@ -344,7 +387,9 @@ describe("C5-12 V2 admission bridge provider", () => {
         const calls: V2PromptCall[] = []
         const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(calls) })
         const badRequest = { ...req, event: { ...req.event, type: "some.unknown.type" } }
-        const outcome = yield* provider.admitReceiptOnly!({ request: badRequest, scope: scope(req.event) }).pipe(Effect.exit)
+        const outcome = yield* provider.admitReceiptOnly!({ request: badRequest, scope: scope(req.event) }).pipe(
+          Effect.exit,
+        )
         expect(Exit.isFailure(outcome)).toBe(true)
         expect(String(outcome)).toContain("is not registered")
         expect(calls).toEqual([])
@@ -360,7 +405,8 @@ describe("C5-12 V2 admission bridge provider", () => {
         const provider = makeV2AdmissionBridge({ db })
         const outcome = yield* provider.admit({ request: req, scope: scope(req.event) }).pipe(Effect.exit)
         expect(Exit.isFailure(outcome)).toBe(true)
-        if (outcome._tag === "Failure") expect(Cause.squash(outcome.cause)).toMatchObject({ code: "EVENT_WORK_AUTH_REQUIRED" })
+        if (outcome._tag === "Failure")
+          expect(Cause.squash(outcome.cause)).toMatchObject({ code: "EVENT_WORK_AUTH_REQUIRED" })
       }),
     )
   })
@@ -374,7 +420,8 @@ describe("C5-12 V2 admission bridge provider", () => {
       return providerRuntimeEffect(provider).pipe(Effect.exit)
     })
     expect(Exit.isFailure(outcome)).toBe(true)
-    if (outcome._tag === "Failure") expect(Cause.squash(outcome.cause)).toMatchObject({ code: "EVENT_WORK_AUTH_REQUIRED" })
+    if (outcome._tag === "Failure")
+      expect(Cause.squash(outcome.cause)).toMatchObject({ code: "EVENT_WORK_AUTH_REQUIRED" })
     expect(v2Calls.length).toBe(0)
     expect(runnerRan.length).toBe(0)
   })

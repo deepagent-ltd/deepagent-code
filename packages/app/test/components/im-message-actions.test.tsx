@@ -66,40 +66,26 @@ it("proposal controls are keyboard reachable and absent when their owner supplie
   expect(screen.queryByRole("button", { name: dict["im.dac.action"] })).toBeNull()
 })
 
-it("the task card keeps its supplied status and opens only through the original message callback", () => {
-  const original = {
-    ...message("agent", "agent"),
-    metadata: {
-      type: "agent_run" as const,
-      sessionID: "untrusted-session-hint",
-      status: "completed_with_an_unusually_long_status",
-    },
-  }
-  const open = vi.fn()
-  const view = render(() => <MessageItem message={original} onOpenTaskResult={open} />)
-  expect(screen.getByText(dict["im.taskResult.cardTitle"])).toBeDefined()
-  expect(screen.getByText(`${dict["im.taskResult.status"]}: ${original.metadata.status}`)).toBeDefined()
-  const control = screen.getByRole("button", { name: dict["im.taskResult.view"] })
-  control.focus()
-  expect(open).not.toHaveBeenCalled()
-  fireEvent.click(control)
-  expect(open).toHaveBeenCalledOnce()
-  expect(open.mock.calls[0][0]).toBe(original)
-  view.unmount()
-  render(() => <MessageItem message={original} />)
-  expect(screen.queryByRole("button", { name: dict["im.taskResult.view"] })).toBeNull()
-})
-
 it("a public final offers current-conversation navigation without trusting its advertised Session ID", () => {
   const original = {
     ...message("agent", "agent"),
     metadata: { type: "agent_run" as const, sessionID: "untrusted-session-hint", status: "completed" },
   }
   const open = vi.fn()
-  const history = vi.fn()
-  render(() => <MessageItem message={original} onOpenConversationSession={open} onOpenTaskResult={history} />)
+  render(() => <MessageItem message={original} onOpenConversationSession={open} />)
+  expect(screen.getByText(dict["im.dac.resultTitle"])).toBeDefined()
+  expect(screen.getByText(`${dict["im.dac.resultStatus"]}: completed`)).toBeDefined()
+  expect(document.querySelector("[data-im-dac-result-card]")).not.toBeNull()
+  expect(document.querySelector("[data-im-task-result-card]")).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: dict["im.dac.conversationSession"] }))
   expect(open).toHaveBeenCalledWith(original)
-  expect(history).not.toHaveBeenCalled()
+  expect(screen.queryByText("untrusted-session-hint")).toBeNull()
+})
+
+it("a final card without a local conversation owner has no Session opening action", () => {
+  render(() => <MessageItem message={{ ...message("agent", "agent"),
+    metadata: { type: "agent_run", sessionID: "untrusted-session-hint", status: "completed" } }} />)
+  expect(screen.getByText(dict["im.dac.resultTitle"])).toBeDefined()
+  expect(screen.queryByRole("button", { name: dict["im.dac.conversationSession"] })).toBeNull()
   expect(screen.queryByText("untrusted-session-hint")).toBeNull()
 })

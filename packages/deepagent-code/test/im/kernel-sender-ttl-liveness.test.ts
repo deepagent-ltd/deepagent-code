@@ -14,13 +14,13 @@ import { KernelConfig } from "@/im/kernel/config"
 import { KernelSdk } from "@/im/kernel/sdk"
 import { IMKernelReader } from "@/im/kernel/reader"
 import { IMKernelExchange } from "@/im/kernel/exchange"
-import { KernelTaskSourceWitnessFixture } from "./fixture/kernel-task-source-witness"
+import { ProtectedReaderProtocolFixture } from "./fixture/protected-reader-protocol"
 
 async function isolated(
-  body: (native: ReturnType<typeof KernelTaskSourceWitnessFixture.make>, directory: string) => Promise<void>,
+  body: (native: ReturnType<typeof ProtectedReaderProtocolFixture.make>, directory: string) => Promise<void>,
 ) {
   const directory = await mkdtemp(join(tmpdir(), "dac-sender-ttl-live-"))
-  const native = KernelTaskSourceWitnessFixture.make()
+  const native = ProtectedReaderProtocolFixture.make()
   try {
     await body(native, directory)
   } finally {
@@ -29,7 +29,7 @@ async function isolated(
   }
 }
 
-const fixture = (native: ReturnType<typeof KernelTaskSourceWitnessFixture.make>, directory: string) => {
+const fixture = (native: ReturnType<typeof ProtectedReaderProtocolFixture.make>, directory: string) => {
   const config = {
     appkey: `private-ttl-live-${native.server.port}`,
     navigator: native.server.url.origin,

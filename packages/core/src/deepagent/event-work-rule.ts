@@ -4,7 +4,7 @@ import { and, eq, getTableColumns, sql } from "drizzle-orm"
 import { Effect, Option, Schema } from "effect"
 import type { Database } from "../database/database"
 import { LocalOperator } from "../im/local-operator"
-import { IMTaskAuthoritySchema } from "../im/task-authority.schema"
+import { LocalAuthoritySchema } from "../session/local-authority.schema"
 import { WorkAuthority } from "../session/work-authority"
 import { CanonicalJson } from "../util/canonical-json"
 import { Hash } from "../util/hash"
@@ -85,7 +85,7 @@ export const command = Effect.fn("EventWorkRule.command")(function* (db: Db, inp
       if (!origin || !target || !("version" in target) || hash(origin) !== hash(old.origin) || hash(target) !== hash(old.target))
         return yield* failure("EVENT_WORK_SOURCE_CHANGED")
       if (!Schema.is(EventWorkRuleSchema.DagOrigin)(origin) || !origin.execution.plan.nodes.some((node) => node.requiresWriteIsolation)) return undefined
-      if (!Schema.is(IMTaskAuthoritySchema.ProjectTarget)(target)) return yield* failure("EVENT_WORK_UNAVAILABLE")
+      if (!Schema.is(LocalAuthoritySchema.ProjectTarget)(target)) return yield* failure("EVENT_WORK_UNAVAILABLE")
       return { target, plan: origin.execution.plan }
     }))
     if (approved) {
@@ -122,7 +122,7 @@ export const command = Effect.fn("EventWorkRule.command")(function* (db: Db, inp
     if (!origin || !target || !("version" in target)) return yield* failure("EVENT_WORK_AUTH_REQUIRED")
     if (input.action === "enable" && Schema.is(EventWorkRuleSchema.DagOrigin)(origin) && origin.execution.plan.nodes.some((node) => node.requiresWriteIsolation)) {
       const placement = yield* Effect.serviceOption(EventWorkPlacement.Service)
-      if (!Schema.is(IMTaskAuthoritySchema.ProjectTarget)(target) || Option.isNone(placement) || !placement.value.availableCurrent(target, origin.execution.plan))
+      if (!Schema.is(LocalAuthoritySchema.ProjectTarget)(target) || Option.isNone(placement) || !placement.value.availableCurrent(target, origin.execution.plan))
         return yield* failure("EVENT_WORK_UNAVAILABLE")
     }
     if (old && !control && hash(origin) !== hash(old.origin)) return yield* failure("EVENT_WORK_SOURCE_CHANGED")
@@ -159,7 +159,7 @@ export const command = Effect.fn("EventWorkRule.command")(function* (db: Db, inp
     if (!control) yield* LocalOperator.validatePolicy(tx, current.policy, current.operator_id)
     if (input.action === "enable" && Schema.is(EventWorkRuleSchema.DagOrigin)(origin) && origin.execution.plan.nodes.some((node) => node.requiresWriteIsolation)) {
       const placement = yield* Effect.serviceOption(EventWorkPlacement.Service)
-      if (!Schema.is(IMTaskAuthoritySchema.ProjectTarget)(target) || Option.isNone(placement) || !placement.value.availableCurrent(target, origin.execution.plan))
+      if (!Schema.is(LocalAuthoritySchema.ProjectTarget)(target) || Option.isNone(placement) || !placement.value.availableCurrent(target, origin.execution.plan))
         return yield* failure("EVENT_WORK_UNAVAILABLE")
     }
     const interrupted = old ? yield* tx.all<{ session_id: string }>(sql`SELECT w.session_id FROM work_execution w

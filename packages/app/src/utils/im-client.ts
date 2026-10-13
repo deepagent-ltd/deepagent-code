@@ -259,22 +259,22 @@ export function createIMClient(config: () => IMClientConfig) {
     return response
   }
 
-  const taskSDK = () => {
+  const dacSDK = () => {
     const captured = scope()
     return {
       captured,
       client: createSdkForServer({ server: captured, directory: captured.directory, workspace: captured.workspace }),
     }
   }
-  const taskResponse = <T>(response: { data?: T; error?: unknown; response?: Response }, captured: IMClientConfig) => {
-    if (captured !== scope()) throw new IMFacadeRequestError("task_scope_changed", "Task scope changed", 409)
+  const dacResponse = <T>(response: { data?: T; error?: unknown; response?: Response }, captured: IMClientConfig) => {
+    if (captured !== scope()) throw new IMFacadeRequestError("dac_scope_changed", "DAC session scope changed", 409)
     if (!response.response?.ok || response.data === undefined) {
       const error = response.error
       const data = error && typeof error === "object" && "data" in error ? error.data : undefined
       const code =
         data && typeof data === "object" && "code" in data && typeof data.code === "string"
           ? data.code
-          : "task_request_failed"
+          : "dac_request_failed"
       const notAdmitted =
         error &&
         typeof error === "object" &&
@@ -284,7 +284,7 @@ export function createIMClient(config: () => IMClientConfig) {
         typeof data === "object" &&
         "admitted" in data &&
         data.admitted === false
-      throw new IMFacadeRequestError(code, "Task request failed", response.response?.status ?? 0, !!notAdmitted)
+      throw new IMFacadeRequestError(code, "DAC command request failed", response.response?.status ?? 0, !!notAdmitted)
     }
     return response.data
   }
@@ -293,9 +293,9 @@ export function createIMClient(config: () => IMClientConfig) {
     // Memory-only identity. Callers remount and discard receipts when this changes; never render it.
     scope,
     dacBinding: async (groupID: string, signal: AbortSignal) => {
-      const target = taskSDK()
+      const target = dacSDK()
       return Schema.decodeUnknownSync(IMDacSessionSchema.BindingResponse)(
-        taskResponse(
+        dacResponse(
           await target.client.im.dacBinding(
             { groupId: groupID, directory: target.captured.directory, workspace: target.captured.workspace },
             { signal },
@@ -305,9 +305,9 @@ export function createIMClient(config: () => IMClientConfig) {
       )
     },
     dacSubmit: async (groupID: string, input: DacInput, signal: AbortSignal) => {
-      const target = taskSDK()
+      const target = dacSDK()
       return Schema.decodeUnknownSync(IMDacSessionSchema.CommandResponse)(
-        taskResponse(
+        dacResponse(
           await target.client.im.dacSubmit(
             {
               groupId: groupID,
@@ -323,9 +323,9 @@ export function createIMClient(config: () => IMClientConfig) {
       )
     },
     dacCommand: async (groupID: string, commandID: string, signal: AbortSignal) => {
-      const target = taskSDK()
+      const target = dacSDK()
       return Schema.decodeUnknownSync(IMDacSessionSchema.CommandResponse)(
-        taskResponse(
+        dacResponse(
           await target.client.im.dacCommand(
             { groupId: groupID, commandID, directory: target.captured.directory, workspace: target.captured.workspace },
             { signal },
@@ -335,9 +335,9 @@ export function createIMClient(config: () => IMClientConfig) {
       )
     },
     dacReplyRetry: async (groupID: string, commandID: string, signal: AbortSignal) => {
-      const target = taskSDK()
+      const target = dacSDK()
       return Schema.decodeUnknownSync(IMDacSessionSchema.CommandResponse)(
-        taskResponse(
+        dacResponse(
           await target.client.im.dacReplyRetry(
             { groupId: groupID, commandID, directory: target.captured.directory, workspace: target.captured.workspace },
             { signal },
@@ -345,32 +345,6 @@ export function createIMClient(config: () => IMClientConfig) {
           target.captured,
         ),
       )
-    },
-    getTaskStatus: async (messageID: string, signal?: AbortSignal) => {
-      const captured = scope()
-      const result = await createSdkForServer({
-        server: captured,
-        directory: captured.directory,
-        workspace: captured.workspace,
-      }).im.messages.taskStatus(
-        { messageId: messageID, directory: captured.directory, workspace: captured.workspace },
-        { signal, throwOnError: true },
-      )
-      if (captured !== scope()) throw new IMFacadeRequestError("status_changed", "Task status scope changed", 503)
-      return result.data
-    },
-    getTaskResult: async (messageID: string, signal?: AbortSignal) => {
-      const captured = scope()
-      const result = await createSdkForServer({
-        server: captured,
-        directory: captured.directory,
-        workspace: captured.workspace,
-      }).im.messages.taskResult(
-        { messageId: messageID, directory: captured.directory, workspace: captured.workspace },
-        { signal, throwOnError: true },
-      )
-      if (captured !== scope()) throw new IMFacadeRequestError("result_changed", "Task result scope changed", 503)
-      return result.data
     },
     listGroups: (signal?: AbortSignal) => request<IMGroup[]>(`/api/v1/im/groups`, { signal }),
     listGroupPage: (lane: IMGroupPage["lane"], cursor?: string, signal?: AbortSignal) =>

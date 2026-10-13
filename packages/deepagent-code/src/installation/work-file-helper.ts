@@ -23,7 +23,7 @@ import { Global } from "@deepagent-code/core/global"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { NativeInstallation } from "./native-installation"
-import { LocalTaskAuthority } from "../im/local-task-authority"
+import { LocalAuthority } from "../installation/local-authority"
 import { BrowserFileSchema } from "@deepagent-code/core/browser/file-exchange.schema"
 import { LinuxWorkWritePolicy } from "./linux-work-write-policy"
 import { WindowsWorkWrite } from "./windows-work-write"
@@ -419,7 +419,7 @@ export const layer = Layer.effect(WorkFileCapability.Service, Effect.gen(functio
         ? yield* Effect.tryPromise({ try: () => WorkCommandRuntime.verifiedMacRecipeRuntime(entry.installation, recipe), catch: () => failure() })
         : { filename: path.join(yield* NativeInstallation.assetDirectory(entry.installation), "bun-command-runtime"),
             executable: (yield* NativeWorkProcessSupervisor.inspectRuntime(entry.installation)).executable }
-      const installation = yield* LocalTaskAuthority.readInstallation.pipe(Effect.mapError(() => failure()))
+      const installation = yield* LocalAuthority.readInstallation.pipe(Effect.mapError(() => failure()))
       yield* trace("command.reserve.current", currentBinding(entry))
       const reserved = yield* trace("command.reserve", WorkCommand.reserve(database.db, { commandID: randomUUID(), admissionID: input.admissionID,
         instanceID: installation.instanceID, workID: entry.binding.workID, rootWorkID: entry.binding.rootWorkID,
@@ -686,7 +686,7 @@ export const layer = Layer.effect(WorkFileCapability.Service, Effect.gen(functio
       // The ordinary-UID helper must enter the exact installed current-path policy
       // before a durable custody slot or a stage can be created.
       if (process.platform === "linux") yield* trace("write.linux.policy", linuxWriteCurrent(entry))
-      const installation = yield* trace("write.installation", LocalTaskAuthority.readInstallation).pipe(Effect.mapError(() => failure()))
+      const installation = yield* trace("write.installation", LocalAuthority.readInstallation).pipe(Effect.mapError(() => failure()))
       // Observe the bounded retained namespace before adding a new obligation. External
       // old-FD growth can exceed its reservation; record that fact and stop new admission.
       const custody = yield* trace("write.custody", WorkWriteStage.custody(database.db, installation.instanceID))
@@ -879,12 +879,12 @@ export const browserAsset = Effect.fn("WorkFileHelper.browserAsset")(function* (
   if (process.platform === "win32") return yield* unavailable()
   const installation = yield* NativeInstallation.current().pipe(Effect.mapError(unavailable))
   const asset = yield* Effect.tryPromise({ try: () => verifiedAsset(installation), catch: unavailable })
-  const instance = yield* LocalTaskAuthority.readInstallation.pipe(Effect.mapError(unavailable))
+  const instance = yield* LocalAuthority.readInstallation.pipe(Effect.mapError(unavailable))
   return { instanceID: instance.instanceID, filename: asset.filename, helperHash: asset.hash,
     current: Effect.gen(function* () {
       yield* NativeInstallation.requireCurrent(installation).pipe(Effect.mapError(changed))
       const actual = yield* Effect.tryPromise({ try: () => verifiedAsset(installation), catch: changed })
-      const currentInstance = yield* LocalTaskAuthority.readInstallation.pipe(Effect.mapError(changed))
+      const currentInstance = yield* LocalAuthority.readInstallation.pipe(Effect.mapError(changed))
       if (actual.hash !== asset.hash || actual.identity !== asset.identity ||
         currentInstance.instanceID !== instance.instanceID || currentInstance.secret !== instance.secret)
         return yield* changed()

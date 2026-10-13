@@ -1,5 +1,5 @@
-// Manual live check for the JuggleIM kernel B1 path — NOT part of the test suite (needs the aly
-// tunnel + the PoC env). Two modes in one file:
+// Manual live check for the JuggleIM kernel B1 path — NOT part of the test suite (needs a test
+// kernel endpoint + the PoC env). Two modes in one file:
 //
 //   set -a; source /tmp/juggle-im-poc/server.env; set +a
 //   bun script/im-kernel-live.ts        # alice side: real IMKernelSync stack, spawns the bob child

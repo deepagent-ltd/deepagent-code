@@ -41,7 +41,7 @@ export async function certificate(directory: string) {
   return { ca: await fs.readFile(certificatePath, "utf8"), keyPath, certificatePath }
 }
 
-/** Actual signed installation. The four fixed overlays are test transport/CLI only;
+/** Actual signed installation. Fixed overlays are test transport/CLI only;
  * the production bootstrap, source verifier, profile, count and dispatch gates are captured unchanged. */
 export async function build(input: {
   directory: string
@@ -77,28 +77,46 @@ export async function build(input: {
   const executor = await fs.readFile(path.join(repository, executorPath), "utf8")
   if (executor.match(/tls: \{ rejectUnauthorized: true \}/g)?.length !== 2)
     throw new Error("The original two verified TLS request sites changed")
+  const ordinary = "export const defaultLayer = layer.pipe(Layer.provide(FetchHttpClient.layer))"
+  if (executor.split(ordinary).length !== 2) throw new Error("The original ordinary HTTP layer changed")
+  const fixedFetch = `Object.assign((resource: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof resource === "string" ? resource : resource instanceof URL ? resource.href : resource.url)
+    const mapped = fixturePhysicalURL(url.href)
+    return globalThis.fetch(resource instanceof Request ? new Request(mapped, resource) : mapped,
+      { ...init, tls: { rejectUnauthorized: true, ca: ${JSON.stringify(input.ca)} } })
+  }, { preconnect: globalThis.fetch.preconnect })`
+  const physical = `function fixturePhysicalURL(canonical: string) {
+    if (!["https://api.openai.com/v1/responses", "https://api.openai.com/v1/responses/input_tokens", "https://api.deepseek.com/responses"].includes(canonical))
+      throw new Error("Unmatched fixture provider dispatch denied")
+    return ${JSON.stringify(input.origin)} + new URL(canonical).pathname
+  }
+  `
+  const nativeTLS = "...(boundary ? { keepalive: false, tls: { rejectUnauthorized: true } } : {}),"
+  const ordinaryExecute = "          .execute(request)\n          .pipe("
+  if (
+    executor.split(nativeTLS).length !== 2 ||
+    executor.split("boundary.fetch(url.href, {").length !== 2 ||
+    executor.split("fetch(url.href, {").length !== 3
+  )
+    throw new Error("The original two native HTTP call sites changed")
+  if (executor.split(ordinaryExecute).length !== 2) throw new Error("The original ordinary HTTP call site changed")
   replacements.set(
     executorPath,
-    executor.replaceAll(
-      "tls: { rejectUnauthorized: true }",
-      `tls: { rejectUnauthorized: true, ca: ${JSON.stringify(input.ca)} }`,
-    ),
-  )
-  const contractPath = "packages/deepagent-code/src/installation/work-provider-contract.ts"
-  const contract = await fs.readFile(path.join(repository, contractPath), "utf8")
-  if (contract.match(/https:\/\/api\.openai\.com/g)?.length !== 2)
-    throw new Error("The fixed provider contract changed")
-  replacements.set(contractPath, contract.replaceAll("https://api.openai.com", input.origin))
-  const routePath = "packages/core/src/session/work-route-policy.ts"
-  const route = await fs.readFile(path.join(repository, routePath), "utf8")
-  const needle = '  if (endpoint === "https://api.openai.com/v1/responses") return true'
-  if (route.split(needle).length !== 2) throw new Error("The original provider endpoint gate changed")
-  replacements.set(
-    routePath,
-    route.replace(
-      needle,
-      `${needle}\n  if (endpoint === ${JSON.stringify(`${input.origin}/v1/responses`)}) return true`,
-    ),
+    executor
+      .replace(
+        nativeTLS,
+        `...(boundary ? { keepalive: false } : {}), tls: { rejectUnauthorized: true, ca: ${JSON.stringify(input.ca)} },`,
+      )
+      .replaceAll(
+        "tls: { rejectUnauthorized: true }",
+        `tls: { rejectUnauthorized: true, ca: ${JSON.stringify(input.ca)} }`,
+      )
+      .replace(ordinary, physical + ordinary)
+      .replace(
+        ordinaryExecute,
+        `          .execute(request)\n          .pipe(Effect.provideService(FetchHttpClient.Fetch, ${fixedFetch}),`,
+      )
+      .replaceAll("fetch(url.href, {", "fetch(fixturePhysicalURL(url.href), {"),
   )
   await Promise.all(
     [...replacements].map(async ([name, contents]) => {
@@ -141,26 +159,77 @@ export async function build(input: {
   if (input.supervisorAssets) {
     if (!input.target?.startsWith("linux-") || input.supervisorAssets.runtimeClosure.length > 128)
       throw new Error("Supervisor assets require their actual Linux target")
-    for (const asset of [{ source: input.supervisorAssets.supervisor, relative: "deepagent-work-process-supervisor", executable: true },
-      ...input.supervisorAssets.runtimeClosure.map((library) => ({ source: library.source,
-        relative: `runtime-closure${library.mountPath}`, executable: false }))]) {
-      if (!/^(deepagent-work-process-supervisor|runtime-closure\/(?:lib|lib64|usr\/lib|usr\/lib64)\/[^\0]+)$/.test(asset.relative) ||
-        asset.relative.split("/").some((part) => !part || part === "." || part === "..")) throw new Error("Invalid installed supervisor closure")
+    for (const asset of [
+      { source: input.supervisorAssets.supervisor, relative: "deepagent-work-process-supervisor", executable: true },
+      ...input.supervisorAssets.runtimeClosure.map((library) => ({
+        source: library.source,
+        relative: `runtime-closure${library.mountPath}`,
+        executable: false,
+      })),
+    ]) {
+      if (
+        !/^(deepagent-work-process-supervisor|runtime-closure\/(?:lib|lib64|usr\/lib|usr\/lib64)\/[^\0]+)$/.test(
+          asset.relative,
+        ) ||
+        asset.relative.split("/").some((part) => !part || part === "." || part === "..")
+      )
+        throw new Error("Invalid installed supervisor closure")
       const source = await fs.realpath(asset.source)
       const before = await fs.lstat(source, { bigint: true })
       const bytes = await fs.readFile(source)
       const after = await fs.lstat(source, { bigint: true })
-      if (!before.isFile() || before.nlink !== 1n || (before.mode & 0o022n) !== 0n ||
-        bytes.length > 268435456 || [before.dev, before.ino, before.size, before.mtimeNs, before.ctimeNs].join(":") !==
-          [after.dev, after.ino, after.size, after.mtimeNs, after.ctimeNs].join(":")) throw new Error("Supervisor asset changed during capture")
+      if (
+        !before.isFile() ||
+        before.nlink !== 1n ||
+        (before.mode & 0o022n) !== 0n ||
+        bytes.length > 268435456 ||
+        [before.dev, before.ino, before.size, before.mtimeNs, before.ctimeNs].join(":") !==
+          [after.dev, after.ino, after.size, after.mtimeNs, after.ctimeNs].join(":")
+      )
+        throw new Error("Supervisor asset changed during capture")
       await fs.mkdir(path.dirname(path.join(install, asset.relative)), { recursive: true })
-      await fs.writeFile(path.join(install, asset.relative), bytes, { mode: asset.executable || (before.mode & 0o111n) !== 0n ? 0o755 : 0o644 })
-      assets.push({ path: `packages/work-file-helper/bin/${input.target}/${asset.relative}`, bytes: bytes.length, sha256: hash(bytes) })
+      await fs.writeFile(path.join(install, asset.relative), bytes, {
+        mode: asset.executable || (before.mode & 0o111n) !== 0n ? 0o755 : 0o644,
+      })
+      assets.push({
+        path: `packages/work-file-helper/bin/${input.target}/${asset.relative}`,
+        bytes: bytes.length,
+        sha256: hash(bytes),
+      })
     }
   }
   const pair = generateKeyPairSync("ed25519")
   const sources = new Map<string, Buffer>()
   const originals = new Map<string, string>()
+  // These binaries implement Rust capabilities; their current source closure belongs
+  // to the signed installation even though Bun does not import Rust files.
+  const nativePaths = Bun.spawnSync(
+    [
+      "git",
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "packages/work-file-helper/src",
+      "packages/work-file-helper/Cargo.toml",
+      "packages/work-file-helper/Cargo.lock",
+      "packages/work-file-helper/LICENSE",
+      "packages/work-file-helper/NOTICE",
+      "packages/work-file-helper/UPSTREAM.json",
+      "packages/work-file-helper/ed25519-dalek.LICENSE",
+      "packages/work-file-helper/curve25519-dalek.LICENSE",
+    ],
+    { cwd: repository },
+  )
+  if (nativePaths.exitCode !== 0) throw new Error("Current Native source inventory is unavailable")
+  await Promise.all(
+    [...new Set(nativePaths.stdout.toString().trim().split("\n"))].filter(Boolean).map(async (name) => {
+      const bytes = await fs.readFile(path.join(repository, name))
+      if (!bytes.length) return
+      sources.set(name, bytes)
+      originals.set(name, hash(bytes))
+    }),
+  )
   const plugin = {
     name: "signed-private-fixed-https",
     setup(builder: Parameters<NonNullable<Bun.BuildConfig["plugins"]>[number]["setup"]>[0]) {
@@ -199,7 +268,18 @@ export async function build(input: {
       OTUI_TREE_SITTER_WORKER_PATH: JSON.stringify(`/$bunfs/root/${path.relative(host, parser)}`),
     },
   }
-  const discovered = await Bun.build(options)
+  const discovered = await Bun.build({
+    ...options,
+    define: {
+      ...options.define,
+      ...(!input.target || input.target === `${process.platform}-${process.arch}`
+        ? {
+            "process.platform": JSON.stringify(process.platform),
+            "process.arch": JSON.stringify(process.arch),
+          }
+        : {}),
+    },
+  })
   if (!discovered.success) throw new Error(discovered.logs.join("\n"))
   const components = new NativeInstallationSchema.Components({
     schemaVersion: "dac.native-components.v1",
@@ -215,8 +295,15 @@ export async function build(input: {
   const executable = path.join(install, "deepagent-code")
   const compiled = await Bun.build({
     ...options,
-    compile: { outfile: executable, ...(input.target?.startsWith("linux-") ? { target: `bun-${input.target}` as "bun-linux-arm64" | "bun-linux-x64" } : {}),
-      autoloadDotenv: false, autoloadBunfig: false, execArgv: ["--use-system-ca", "--"] },
+    compile: {
+      outfile: executable,
+      ...(input.target?.startsWith("linux-")
+        ? { target: `bun-${input.target}` as "bun-linux-arm64" | "bun-linux-x64" }
+        : {}),
+      autoloadDotenv: false,
+      autoloadBunfig: false,
+      execArgv: ["--use-system-ca", "--"],
+    },
     define: { ...options.define, DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST: JSON.stringify(componentText) },
   })
   await fs.writeFile(
@@ -262,7 +349,12 @@ export async function build(input: {
 export type SignedInstallation = Awaited<ReturnType<typeof build>>
 
 /** Each Root gets one new private DB/home/policy; cold callers reuse this exact object. */
-export async function caseFor(input: { installation: SignedInstallation; directory: string; sourceText: string }) {
+export async function caseFor(input: {
+  installation: SignedInstallation
+  directory: string
+  sourceText: string
+  provider?: "openai" | "deepseek"
+}) {
   await fs.mkdir(input.directory, { recursive: true, mode: 0o700 })
   const directory = await fs.realpath(input.directory)
   await Promise.all(
@@ -277,16 +369,21 @@ export async function caseFor(input: { installation: SignedInstallation; directo
     JSON.stringify({
       formatter: false,
       lsp: false,
-      model: "openai/gpt-4.1-2025-04-14",
+      model: input.provider === "deepseek" ? "deepseek/deepseek-flash" : "openai/gpt-4.1-2025-04-14",
       providers: {
-        openai: {
+        [input.provider ?? "openai"]: {
           env: ["DAC_FIXTURE_NATIVE_KEY"],
-          api: { type: "native", settings: {}, protocol: "openai.responses", url: `${input.installation.origin}/v1` },
+          api: {
+            type: "native",
+            settings: {},
+            protocol: input.provider === "deepseek" ? "openai-compatible.responses" : "openai.responses",
+            url: input.provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com/v1",
+          },
           models: {
-            "gpt-4.1-2025-04-14": {
-              api: { id: "gpt-4.1-2025-04-14" },
+            [input.provider === "deepseek" ? "deepseek-flash" : "gpt-4.1-2025-04-14"]: {
+              api: { id: input.provider === "deepseek" ? "deepseek-flash" : "gpt-4.1-2025-04-14" },
               capabilities: { input: ["text"], output: ["text"], tools: true },
-              limit: { context: 100000, output: 4096 },
+              limit: { context: input.provider === "deepseek" ? 1048576 : 100000, output: 4096 },
             },
           },
         },

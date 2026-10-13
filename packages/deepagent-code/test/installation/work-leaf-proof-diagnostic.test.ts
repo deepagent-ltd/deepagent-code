@@ -2,14 +2,14 @@ import { expect, test } from "bun:test"
 import { Context, Effect, Exit, Layer, Logger, Scope } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { WorkToolPolicy } from "@deepagent-code/core/session/work-tool-policy"
-import { LocalTaskAuthority } from "../../src/im/local-task-authority"
+import { LocalAuthority } from "../../src/installation/local-authority"
 import { WorkLeafProof } from "../../src/installation/work-leaf-proof"
 
 test("original file database refusals report fixed stages without exposing the effect identifier", async () => {
   const entries: string[] = []
   const identifier = "private-effect-identifier-not-for-logs"
   const result = await Effect.runPromise(Effect.gen(function* () {
-    yield* LocalTaskAuthority.initializeInstallation()
+    yield* LocalAuthority.initializeInstallation()
     const context = yield* Layer.build(WorkLeafProof.layer.pipe(Layer.provide(Database.defaultLayer)))
     const proof = Context.get(context, WorkToolPolicy.LeafProof)
     return [yield* proof.verify(identifier).pipe(Effect.result),
@@ -31,7 +31,7 @@ test("original file database refusals report fixed stages without exposing the e
 test("closing the original Scope reports inactive lifetime and preserves both refusal methods", async () => {
   const entries: string[] = []
   await Effect.runPromise(Effect.gen(function* () {
-    yield* LocalTaskAuthority.initializeInstallation()
+    yield* LocalAuthority.initializeInstallation()
     const scope = yield* Scope.make()
     const context = yield* Layer.buildWithScope(WorkLeafProof.layer.pipe(Layer.provide(Database.defaultLayer)), scope)
     const proof = Context.get(context, WorkToolPolicy.LeafProof)
@@ -51,7 +51,7 @@ test("closing the original Scope reports inactive lifetime and preserves both re
 
 test("a failing diagnostic logger cannot replace or turn a cache refusal into success", async () => {
   const outcome = await Effect.runPromise(Effect.gen(function* () {
-    yield* LocalTaskAuthority.initializeInstallation()
+    yield* LocalAuthority.initializeInstallation()
     const context = yield* Layer.build(WorkLeafProof.layer.pipe(Layer.provide(Database.defaultLayer)))
     return yield* Context.get(context, WorkToolPolicy.LeafProof).requireVerified("missing").pipe(Effect.result)
   }).pipe(Effect.scoped, Effect.provide(Logger.layer([

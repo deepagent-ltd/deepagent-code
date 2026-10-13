@@ -297,8 +297,8 @@ const result = await (async () => {
       const crossOrigin = await request(auth, "http://127.0.0.1:45124")
       const concurrent = await Promise.all([request(), request(), request()])
       const parallelRules = await Promise.all(Array.from({ length: 3 }, () => request(auth, undefined, "/api/v1/event-validation/rules")))
-      const { LocalTaskAuthority } = await import("../../../src/im/local-task-authority")
-      const installation = LocalTaskAuthority.installationPath()
+      const { LocalAuthority } = await import("../../../src/installation/local-authority")
+      const installation = LocalAuthority.installationPath()
       await fs.rename(installation, installation + ".temporarily-unavailable")
       const unavailableReads = await (async () => {
         try {

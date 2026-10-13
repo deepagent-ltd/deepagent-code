@@ -226,7 +226,7 @@ describe("trusted receiving-side conversation discovery", () => {
       expect((yield* repo.getSyncCursor(IMKernelSync.historyCursorKey("k:2:invited")))?.lastSyncTime).toBe(
         1_700_000_000_223,
       )
-      expect(yield* repo.listPendingMentions({ origin: "kernel_live", receiverID: "alice" })).toEqual([])
+      expect(yield* (yield* Database.Service).db.all("SELECT count(*) count FROM im_mention_intent")).toEqual([{ count: 0 }])
       yield* engine.catchUp
       expect((yield* repo.listMessages({ groupID: group!.id, limit: 500 })).messages).toHaveLength(220)
     }),
@@ -391,7 +391,7 @@ describe("trusted receiving-side conversation discovery", () => {
       yield* land(inbound({ messageID: "live_barrier" }))
       expect((yield* SubscriptionRef.get(engine.recovery)).status).toBe("failed")
       expect(yield* repo.getMessageByKernelMsgID("live_denied")).toBeUndefined()
-      expect(yield* repo.listPendingMentions({ origin: "kernel_live", receiverID: "alice" })).toEqual([])
+      expect(yield* (yield* Database.Service).db.all("SELECT count(*) count FROM im_mention_intent")).toEqual([{ count: 0 }])
     }),
   )
 

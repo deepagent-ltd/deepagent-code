@@ -253,14 +253,10 @@ export const DeepAgentCodeToolInventory: CapabilityInventory = {
     "code_intel",
   ]),
   runtimeFeatures: new Set([
-    // E2 runtime-feature registry canonical set: context federation is V2-only; the event-runtime
-    // admission + IM single-write are DECLARED features (C4 wave closed → catalog successor applied
-    // per K3 delegation). Their production default remains OFF behind module-local switches until
-    // C5-12/操作验证; the registry only declares availability/diagnostics.
+    // Canonical runtime features have current implementations and explicit environment gates.
     "context_federation_v2",
     "context_query_tools_v2",
     "event.v2.admission",
-    "event.v2.im_single_write",
   ]),
   permissionActions: new Set([
     "read",

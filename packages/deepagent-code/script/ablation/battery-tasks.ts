@@ -12,7 +12,6 @@ export type MechanismID =
   | "learning"
   | "plangate"
   | "event-admission"
-  | "im-single-write"
   | "v2-owner"
   | "none"
 
@@ -355,7 +354,6 @@ export const mechanismEnvKeys: Record<Exclude<MechanismID, "none">, { key: strin
   learning: { key: "DEEPAGENT_DURABLE_LEARNING", offValue: "false" },
   plangate: { key: "DEEPAGENT_CODE_STRICT_PLAN_GATE", offValue: "false" },
   "event-admission": { key: "DEEPAGENT_CODE_EVENT_V2_ADMISSION", offValue: "false" },
-  "im-single-write": { key: "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE", offValue: "false" },
   "v2-owner": { key: "DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER", offValue: "false" },
 }
 

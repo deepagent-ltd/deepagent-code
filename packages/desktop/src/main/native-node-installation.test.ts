@@ -5,6 +5,7 @@ import { createHash, generateKeyPairSync } from "node:crypto"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { NativeInstallationSchema } from "../../../deepagent-code/src/installation/native-installation.schema"
 import { signNativeNodeArtifact } from "../../../deepagent-code/script/sign-native-node"
+import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
 
 test("actual Electron utility interpreter verifies a sealed physical Node entry and adjacent assets", async () => {
   const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-native-node-electron-"))
@@ -15,7 +16,7 @@ test("actual Electron utility interpreter verifies a sealed physical Node entry 
     outdir: root, target: "node", external: ["electron"], naming: "main.mjs" })
   expect(main.success).toBe(true)
   const run = async (entry: string) => {
-    const child = Bun.spawn([path.join(import.meta.dir, "../../node_modules/.bin/electron"), main.outputs[0]!.path], {
+    const child = Bun.spawn([process.env.DAC_BROWSER_INPUT_ELECTRON_EXECUTABLE ?? path.join(import.meta.dir, "../../node_modules/.bin/electron"), main.outputs[0]!.path], {
       env: { PATH: process.env.PATH, HOME: root, TMPDIR: root, XDG_DATA_HOME: root, XDG_CONFIG_HOME: root,
         XDG_CACHE_HOME: root, DAC_NATIVE_NODE_ROOT: root, DAC_NATIVE_NODE_ENTRY: entry }, stdout: "pipe", stderr: "pipe",
     })
@@ -31,7 +32,7 @@ test("actual Electron utility interpreter verifies a sealed physical Node entry 
     const first = await run(probe)
     expect(first.code).toBe(0)
     const runtime = JSON.parse(first.stdout) as { runtime: string; electron: string }
-    expect(runtime.electron).toBe("41.10.3")
+    expect(runtime.electron).toBe(managedBrowserInputRuntime.electronVersion)
     const source = await fs.readFile(fixture)
     const components = new NativeInstallationSchema.Components({ schemaVersion: "dac.native-components.v1",
       target: `${process.platform}-${process.arch}`, sourceCommit: "a".repeat(40), sourceTree: "b".repeat(40),

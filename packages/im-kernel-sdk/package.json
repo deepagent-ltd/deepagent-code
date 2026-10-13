@@ -22,6 +22,8 @@
     "script"
   ],
   "scripts": {
-    "build": "bun run script/build.ts"
+    "build": "bun run script/build.ts",
+    "test": "bun test --isolate ./test --timeout 30000",
+    "test:ci": "mkdir -p .artifacts/unit && bun run test --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml"
   }
 }

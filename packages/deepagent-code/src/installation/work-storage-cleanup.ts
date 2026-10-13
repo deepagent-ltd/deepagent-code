@@ -34,7 +34,7 @@ import { WorkStorageCleanupSchema } from "@deepagent-code/core/session/work-stor
 import { WorkStorageCleanupWindowsSchema } from "@deepagent-code/core/session/work-storage-cleanup-windows.schema"
 import { WorkStorageCleanupWindowsWriteSchema } from "@deepagent-code/core/session/work-storage-cleanup-windows-write.schema"
 import { V2ToolEffectTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
-import { LocalTaskAuthority } from "../im/local-task-authority"
+import { LocalAuthority } from "../installation/local-authority"
 import { NativeInstallation } from "./native-installation"
 import { LinuxWorkWritePolicy } from "./linux-work-write-policy"
 import { WindowsWorkWriteCleanup } from "./windows-work-write-cleanup"
@@ -99,7 +99,7 @@ const make = Effect.gen(function* () {
   const runtime = yield* Effect.serviceOption(LocalOperator.Runtime)
   const mutation = yield* Effect.serviceOption(LocalOperator.Mutation)
   const context = yield* Effect.context<Scope.Scope>()
-  const installation = yield* LocalTaskAuthority.readInstallation.pipe(
+  const installation = yield* LocalAuthority.readInstallation.pipe(
     diagnostic("installation"),
     Effect.mapError(() => failure("STORAGE_UNAVAILABLE")),
   )
@@ -1067,7 +1067,7 @@ export const refuseUncapturedCommand = Effect.fn("NativeWorkStorageCleanup.refus
   function* (input: WorkStorageCleanupSchema.Request) {
     const request = yield* decode(WorkStorageCleanupSchema.Request, input)
     const database = yield* Database.Service
-    const installation = yield* LocalTaskAuthority.readInstallation
+    const installation = yield* LocalAuthority.readInstallation
     const secret = Buffer.from(installation.secret, "hex")
     yield* Effect.addFinalizer(() => Effect.sync(() => secret.fill(0)))
     const recovery = yield* WorkKnownRecovery.read(

@@ -8,6 +8,8 @@ export type ManagedBrowserInputAsset = Readonly<{
   schemaVersion: "dac.managed-browser-input.darwin.v1"
   target: "darwin-arm64" | "darwin-x64"
   napiVersion: 8
+  electronVersion: string
+  nodeVersion: string
   path: string
   bytes: number
   sha256: string
@@ -57,6 +59,7 @@ export function observeManagedBrowserInput(input: {
 
 export function verifyManagedBrowserInputAsset(asset: ManagedBrowserInputAsset) {
   if (asset.schemaVersion !== "dac.managed-browser-input.darwin.v1" || asset.napiVersion !== 8 ||
+    asset.electronVersion !== process.versions.electron || asset.nodeVersion !== process.versions.node ||
     asset.target !== `darwin-${process.arch}` || !Number.isSafeInteger(asset.bytes) ||
     asset.bytes < 32 || asset.bytes > 1_048_576 || !/^[a-f0-9]{64}$/.test(asset.sha256) ||
     !/^[a-f0-9]{64}$/.test(asset.sourceSha256) || !path.isAbsolute(asset.path) ||

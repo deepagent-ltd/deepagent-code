@@ -5,6 +5,10 @@
 #include <node_api.h>
 #include <stddef.h>
 
+#if !defined(DAC_MANAGED_BROWSER_INPUT_ELECTRON_VERSION) || !defined(DAC_MANAGED_BROWSER_INPUT_NODE_VERSION)
+#error The fixed publisher must provide the reviewed managed browser input runtime cohort
+#endif
+
 // Candidate only. The fixed publisher must qualify the real current TSF objects,
 // child windows, native IME and CDP separation before selecting this asset.
 // No process/window/text authority is returned to JavaScript.
@@ -93,7 +97,8 @@ static bool runtime(napi_env env) {
     property(env, process, "platform", "win32") && property(env, process, "arch", "x64") &&
     property(env, process, "type", "browser") &&
     napi_get_named_property(env, process, "versions", &versions) == napi_ok &&
-    property(env, versions, "electron", "41.10.3") && property(env, versions, "node", "24.18.0");
+    property(env, versions, "electron", DAC_MANAGED_BROWSER_INPUT_ELECTRON_VERSION) &&
+    property(env, versions, "node", DAC_MANAGED_BROWSER_INPUT_NODE_VERSION);
 }
 static void retain(Watch* watch) { ++watch->refs; }
 static void drop(Watch* watch) {

@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Result } from "effect"
 import { IMRepository, IMRepositoryLive } from "../src/im/repository"
 import { Database } from "../src/database/database"
-import { IMMentionIntentTable } from "../src/im/mention-intent.sql"
 
 const database = Database.layerFromPath(":memory:")
 const runtime = Layer.mergeAll(database, IMRepositoryLive.pipe(Layer.provide(database)))
@@ -13,7 +12,7 @@ const setup = Effect.gen(function* () {
 })
 
 describe("IM request identity and lossless local history", () => {
-  test("exact concurrent retries preserve one row and one intent; changed bound payloads conflict", async () => {
+  test("exact concurrent retries preserve one ordinary message without execution; changed bound payloads conflict", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const { repo, group } = yield* setup
@@ -25,13 +24,6 @@ describe("IM request identity and lossless local history", () => {
           content: "@auto hello",
           mentions: ["auto"],
           clientRequestID: "request-1",
-          mentionIntent: {
-            names: ["auto"],
-            directory: "/tmp",
-            workspaceID: "ws",
-            userID: "alice",
-            origin: "local" as const,
-          },
         }
         const messages = yield* Effect.all(
           Array.from({ length: 8 }, () => repo.createMessage(input)),
@@ -39,8 +31,7 @@ describe("IM request identity and lossless local history", () => {
         )
         expect(new Set(messages.map((row) => row.id)).size).toBe(1)
         expect(messages.filter((row) => !row.replayed)).toHaveLength(1)
-        const intents = yield* (yield* Database.Service).db.select().from(IMMentionIntentTable).all().pipe(Effect.orDie)
-        expect(intents).toHaveLength(1)
+        expect(yield* (yield* Database.Service).db.all("SELECT (SELECT count(*) FROM im_mention_intent) intents, (SELECT count(*) FROM session_input) inputs")).toEqual([{ intents: 0, inputs: 0 }])
         const other = yield* repo.createGroup({ workspaceID: "ws", type: "project", name: "other", createdBy: "alice" })
         for (const change of [
           { content: "different" },

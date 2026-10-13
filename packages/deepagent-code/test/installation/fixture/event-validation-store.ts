@@ -11,7 +11,7 @@ import type { EventValidationSchema } from "@deepagent-code/core/deepagent/event
 import { WorkAuthorityPolicy } from "@deepagent-code/core/session/work-authority-policy"
 import { LocalOperator } from "@deepagent-code/core/im/local-operator"
 import { EventValidationHost } from "../../../src/deepagent/event-validation"
-import { LocalTaskAuthority } from "../../../src/im/local-task-authority"
+import { LocalAuthority } from "../../../src/installation/local-authority"
 import { ServerAuth } from "../../../src/server/auth"
 
 export function run(configuration: EventValidationSchema.Configuration, directory: string, mode = "store") {
@@ -49,8 +49,8 @@ export function run(configuration: EventValidationSchema.Configuration, director
     const config=yield* ServerAuth.Config
     if(Option.isNone(config.password))throw new Error("No isolated operator configuration")
     const password=config.password.value
-    yield* LocalTaskAuthority.ensurePrivateInstallation()
-    const identity=yield* LocalTaskAuthority.configured(config)
+    yield* LocalAuthority.ensurePrivateInstallation()
+    const identity=yield* LocalAuthority.configured(config)
     const provider={providerID:"unused-validation",modelID:"unused",protocol:"openai-responses",routeID:"unused",
       configurationHash:"a".repeat(64),endpoint:"https://example.invalid/v1/responses",evidenceID:"unused",evidenceHash:"b".repeat(64),
       endpointPinned:true,redirectsDenied:true,transportRetriesDenied:true,
@@ -68,7 +68,7 @@ export function run(configuration: EventValidationSchema.Configuration, director
             commandScope:[],commandRecipes:[configuration.recipe],integrations:[]},childPolicy:"deny_all",
           provider,budget:WorkAuthorityPolicy.TEXT_ONLY_PROFILE.budget,durationMs:60000}}]},
     }).pipe(Effect.provideService(LocalOperator.Runtime,identity.runtime))
-    const witness=yield* LocalTaskAuthority.authenticatePassword(db,identity.runtime,config.username,password)
+    const witness=yield* LocalAuthority.authenticatePassword(db,identity.runtime,config.username,password)
     const auth={runtime:identity.runtime,witness}
     const actual={...configuration,scope:{...configuration.scope,instanceID:identity.runtime.instanceID,
       securityNamespaceID:placement.securityNamespaceId,namespaceBindingHash:namespace.binding_hash,locationKey:placement.locationKey,
@@ -76,14 +76,14 @@ export function run(configuration: EventValidationSchema.Configuration, director
     const host=yield* EventValidationHost.Service
     if (mode === "store-prepare") {
       const { runPreparation } = yield* Effect.promise(() => import("./event-validation-preparation"))
-      return yield* LocalTaskAuthority.provide(auth,runPreparation({...actual,maxRuns:14}))
+      return yield* LocalAuthority.provide(auth,runPreparation({...actual,maxRuns:14}))
     }
     if (mode === "store-capture" && session) {
       const { runHTTP } = yield* Effect.promise(() => import("./event-validation-http"))
       return yield* runHTTP({ sessionID: session.id, configuration: actual, password })
     }
-    yield* LocalTaskAuthority.provide(auth,host.configure({ruleID:"actual-rule",requestID:"create",expectedRevision:0,configuration:actual}))
-    yield* LocalTaskAuthority.provide(auth,host.control({ruleID:"actual-rule",requestID:"enable",expectedRevision:1,action:"enable"}))
+    yield* LocalAuthority.provide(auth,host.configure({ruleID:"actual-rule",requestID:"create",expectedRevision:0,configuration:actual}))
+    yield* LocalAuthority.provide(auth,host.control({ruleID:"actual-rule",requestID:"enable",expectedRevision:1,action:"enable"}))
     const wait = (predicate:(rule:EventValidationSchema.RuleRecord,history:readonly EventValidationSchema.RunRecord[])=>boolean) => Effect.gen(function*(){
       const deadline=Date.now()+45000
       while(Date.now()<deadline){
@@ -106,9 +106,9 @@ export function run(configuration: EventValidationSchema.Configuration, director
         history.some(run=>run.resultCurrent && rule.currentRunID===run.runID))
       const latest=current.history.find(run=>run.resultCurrent)
       const prior=current.history.find(run=>run.runID===active.history[0]?.runID)
-      yield* LocalTaskAuthority.provide(auth,host.control({ruleID:"actual-rule",requestID:"manual-cancel",expectedRevision:2,action:"verify"}))
+      yield* LocalAuthority.provide(auth,host.control({ruleID:"actual-rule",requestID:"manual-cancel",expectedRevision:2,action:"verify"}))
       yield* wait((_rule,history)=>history.some(run=>run.ruleRevision===3 && run.state==="dispatching" && run.processID!==null))
-      yield* LocalTaskAuthority.provide(auth,host.control({ruleID:"actual-rule",requestID:"cancel",expectedRevision:3,action:"cancel"}))
+      yield* LocalAuthority.provide(auth,host.control({ruleID:"actual-rule",requestID:"cancel",expectedRevision:3,action:"cancel"}))
       const cancelled=yield* wait((_rule,history)=>history.length===3 && history.every(run=>run.releasedAt!==null))
       const stopped=cancelled.history.find(run=>run.ruleRevision===3)
       const counts=yield* db.get<{inputs:number;providers:number}>(sql`SELECT (SELECT count(*) FROM session_input) inputs,(SELECT count(*) FROM session_v2_provider_turn_receipt) providers`)
@@ -121,10 +121,10 @@ export function run(configuration: EventValidationSchema.Configuration, director
     yield* Effect.promise(()=>fs.appendFile(path.join(configuration.scope.canonicalRoot,"binary.dat"),Buffer.from([255,0,128])))
     const changed=yield* wait((rule,history)=>rule.contentRevision>first.rule.contentRevision && history.some(run=>run.resultCurrent && run.releasedAt!==null && rule.currentRunID===run.runID))
     const manual={ruleID:"actual-rule",requestID:"manual",expectedRevision:2,action:"verify" as const}
-    const requested=yield* LocalTaskAuthority.provide(auth,host.control(manual))
+    const requested=yield* LocalAuthority.provide(auth,host.control(manual))
     const verified=yield* wait((rule,history)=>rule.revision===3 && history.some(run=>run.ruleRevision===3 && run.resultCurrent && run.releasedAt!==null))
-    const retry=yield* LocalTaskAuthority.provide(auth,host.control(manual))
-    yield* LocalTaskAuthority.provide(auth,host.control({ruleID:"actual-rule",requestID:"pause",expectedRevision:3,action:"pause"}))
+    const retry=yield* LocalAuthority.provide(auth,host.control(manual))
+    yield* LocalAuthority.provide(auth,host.control({ruleID:"actual-rule",requestID:"pause",expectedRevision:3,action:"pause"}))
     yield* Effect.promise(()=>fs.appendFile(path.join(configuration.scope.canonicalRoot,"guard.test.ts"),"\n// paused modification\n"))
     yield* Effect.sleep(900)
     const paused=yield* host.list
