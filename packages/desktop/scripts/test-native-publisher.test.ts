@@ -5,8 +5,10 @@ import os from "node:os"
 import { createHash, createPrivateKey, generateKeyPairSync, sign } from "node:crypto"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { NativeInstallationSchema } from "../../deepagent-code/src/installation/native-installation.schema"
-import { cleanupTestNativePublisher, guardTestNativeAssets, prepareTestNativePublisher,
+import { cleanupNativePublisher, cleanupTestNativePublisher, guardTestNativeAssets, prepareNativePublisher, prepareTestNativePublisher,
   sealTestNativeCLI, verifyTestNativeReceipt, verifyTestWindowsPreloader, verifyTestWindowsCLIPreloader } from "./test-native-publisher"
+import { guardReleaseNativePackage, prepareReleaseNativePublisher, releaseMacAssetIdentity } from "./native-publisher"
+import { sealInstalledNativeNode } from "./native-node-artifact"
 
 async function fixture() {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-ci-native-publisher-")))
@@ -55,6 +57,168 @@ test("one job gets fresh private temp keys, public-only environment references, 
     await expect(prepareTestNativePublisher({ runnerTemp: value.root, environmentFile: path.join(value.root, "../foreign.env"),
       target: value.target, releaseID: "dac-test-foreign" })).rejects.toThrow("QA_PUBLISHER_TEMP_REJECTED")
   } finally { await fs.rm(value.root, { recursive: true, force: true }) }
+})
+
+test("release certificate selection preserves the configured unique Developer ID subject without ad-hoc fallback", () => {
+  const identity = "a".repeat(40)
+  const developer = `1) ${identity} "Developer ID Application: Acme LLC (TEAM)"`
+  for (const certificateName of ["Acme", "Acme LLC (TEAM)", "Developer ID Application: Acme", identity.toUpperCase()])
+    expect(releaseMacAssetIdentity({ signed: true, certificateName, identities: developer })).toBe(identity)
+  expect(releaseMacAssetIdentity({ signed: false, identities: developer })).toBeNull()
+  for (const certificateName of [undefined, "", "-", "Other", "\nAcme", "Acme\n"])
+    expect(() => releaseMacAssetIdentity({ signed: true, certificateName, identities: developer }))
+      .toThrow("RELEASE_MAC_CERTIFICATE_REJECTED")
+  expect(() => releaseMacAssetIdentity({ signed: true, certificateName: "Acme", identities:
+    `${developer}\n2) ${"b".repeat(40)} "Developer ID Application: Acme Two (TEAM)"` }))
+    .toThrow("RELEASE_MAC_CERTIFICATE_REJECTED")
+  for (const subject of ["Apple Development: Acme", "Developer ID Installer: Acme"])
+    expect(() => releaseMacAssetIdentity({ signed: true, certificateName: "Acme", identities: `1) ${identity} "${subject}"` }))
+      .toThrow("RELEASE_MAC_CERTIFICATE_REJECTED")
+})
+
+test("release publisher uses real temporary keys and exact job identity, with isolated QA cleanup", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-ci-release-publisher-")))
+  const environmentFile = path.join(root, "job.env")
+  await fs.writeFile(environmentFile, "", { mode: 0o600 })
+  try {
+    const input = { runnerTemp: root, environmentFile, version: "2.0.4", runID: "1234", attempt: "2", macAssetSigningIdentity: null }
+    const publisher = await prepareReleaseNativePublisher(input)
+    expect(publisher.releaseID).toBe(`dac-desktop-2.0.4-${process.platform}-${process.arch}-gh1234.2`)
+    expect(path.dirname(publisher.directory)).toBe(root)
+    expect(path.basename(publisher.directory)).toStartWith("dac-release-native-publisher-")
+    const environment = await fs.readFile(environmentFile, "utf8")
+    expect(environment).toContain("DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED=1\n")
+    expect(environment).not.toContain("-----BEGIN")
+    expect(environment).not.toContain("PRIVATE KEY")
+    if (process.platform === "darwin") expect(environment).toContain("DEEPAGENT_CODE_NATIVE_ASSET_SIGN_IDENTITY=\n")
+    if (process.platform !== "win32") {
+      expect((await fs.stat(publisher.privateKeyFile)).mode & 0o777).toBe(0o600)
+      expect((await fs.stat(publisher.directory)).mode & 0o777).toBe(0o700)
+    }
+    await expect(cleanupTestNativePublisher({ runnerTemp: root, ...publisher })).rejects.toThrow("QA_PUBLISHER_CLEANUP_REJECTED")
+    expect(await Bun.file(publisher.privateKeyFile).exists()).toBe(true)
+    expect(await cleanupNativePublisher({ runnerTemp: root, ...publisher, release: true })).toEqual({ state: "removed" })
+    expect(await Bun.file(publisher.privateKeyFile).exists()).toBe(false)
+    const signed = await prepareReleaseNativePublisher({ ...input, macAssetSigningIdentity: "c".repeat(40) })
+    if (process.platform === "darwin") expect(await fs.readFile(environmentFile, "utf8"))
+      .toContain(`DEEPAGENT_CODE_NATIVE_ASSET_SIGN_IDENTITY=${"c".repeat(40)}\n`)
+    await cleanupNativePublisher({ runnerTemp: root, ...signed, release: true })
+    expect(await cleanupNativePublisher({ runnerTemp: root, release: true })).toEqual({ state: "not_prepared" })
+  } finally { await fs.rm(root, { recursive: true, force: true }) }
+})
+
+test("release publisher refuses unsafe physical files and cleanup symlinks without deleting foreign files", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-ci-release-boundary-")))
+  const foreign = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-ci-foreign-publisher-")))
+  const environmentFile = path.join(root, "job.env")
+  await fs.writeFile(environmentFile, "", { mode: 0o600 })
+  try {
+    const input = { runnerTemp: root, environmentFile, version: "2.0.4", runID: "12", attempt: "1", macAssetSigningIdentity: null }
+    for (const change of [{ version: "2.0.4\nOTHER=1" }, { runID: "12\nOTHER=1" }, { attempt: "" }])
+      await expect(prepareReleaseNativePublisher({ ...input, ...change })).rejects.toThrow("RELEASE_NATIVE_IDENTITY_REJECTED")
+    await expect(prepareReleaseNativePublisher({ ...input, macAssetSigningIdentity: "-" }))
+      .rejects.toThrow("RELEASE_NATIVE_ASSET_IDENTITY_REJECTED")
+    await expect(prepareNativePublisher({ runnerTemp: root, environmentFile, target: "foreign-target", releaseID: "release" }))
+      .rejects.toThrow("QA_PUBLISHER_TARGET_REJECTED")
+    await expect(prepareReleaseNativePublisher({ ...input, environmentFile: path.join(foreign, "job.env") }))
+      .rejects.toThrow("QA_PUBLISHER_TEMP_REJECTED")
+    await fs.link(environmentFile, path.join(root, "hardlinked.env"))
+    await expect(prepareReleaseNativePublisher(input)).rejects.toThrow("QA_PUBLISHER_TEMP_REJECTED")
+    await fs.unlink(path.join(root, "hardlinked.env"))
+    await fs.writeFile(path.join(foreign, "publisher-private.pem"), "foreign private file")
+    await fs.writeFile(path.join(foreign, "publisher-public.pem"), "foreign public file")
+    // Junctions use the same parent-redirection boundary on Windows without requiring symlink privilege.
+    const redirected = path.join(root, "dac-release-native-publisher-redirected")
+    await fs.symlink(foreign, redirected, process.platform === "win32" ? "junction" : "dir")
+    await expect(cleanupNativePublisher({ runnerTemp: root, release: true,
+      privateKeyFile: path.join(redirected, "publisher-private.pem"), publicKeyFile: path.join(redirected, "publisher-public.pem") }))
+      .rejects.toThrow("QA_PUBLISHER_CLEANUP_REJECTED")
+    expect(await fs.readFile(path.join(foreign, "publisher-private.pem"), "utf8")).toBe("foreign private file")
+    expect(await fs.readFile(path.join(foreign, "publisher-public.pem"), "utf8")).toBe("foreign public file")
+    const redirectedEnv = path.join(redirected, "publisher-public.pem")
+    await expect(prepareReleaseNativePublisher({ ...input, environmentFile: redirectedEnv }))
+      .rejects.toThrow("QA_PUBLISHER_TEMP_REJECTED")
+    expect((await fs.readdir(root)).filter((name) => name.startsWith("dac-release-native-publisher-")))
+      .toEqual(["dac-release-native-publisher-redirected"])
+    expect(await fs.readFile(environmentFile, "utf8")).toBe("")
+  } finally { await fs.rm(root, { recursive: true, force: true }); await fs.rm(foreign, { recursive: true, force: true }) }
+})
+
+test("release package guard refuses missing publisher, wrong target, changed pin and absent compiled metadata", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-ci-release-package-")))
+  const environmentFile = path.join(root, "job.env")
+  await fs.writeFile(environmentFile, "", { mode: 0o600 })
+  try {
+    const publisher = await prepareReleaseNativePublisher({ runnerTemp: root, environmentFile, version: "2.0.4",
+      runID: "12", attempt: "1", macAssetSigningIdentity: null })
+    const input = { ...publisher, directory: root, channel: "prod" }
+    await expect(guardReleaseNativePackage({ ...input, privateKeyFile: undefined }))
+      .rejects.toThrow("RELEASE_NATIVE_ENVIRONMENT_REJECTED")
+    await expect(guardReleaseNativePackage({ ...input, target: "foreign-target" }))
+      .rejects.toThrow("RELEASE_NATIVE_ENVIRONMENT_REJECTED")
+    await expect(guardReleaseNativePackage({ ...input, channel: "dev" }))
+      .rejects.toThrow("RELEASE_NATIVE_ENVIRONMENT_REJECTED")
+    const wrongPin = path.join(root, "wrong-public.pem")
+    await fs.writeFile(wrongPin, generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "pem" }))
+    await expect(guardReleaseNativePackage({ ...input, publicKeyFile: wrongPin })).rejects.toThrow("QA_PUBLISHER_PIN_CHANGED")
+    await expect(guardReleaseNativePackage(input)).rejects.toThrow("ENOENT")
+    await cleanupNativePublisher({ runnerTemp: root, ...publisher, release: true })
+  } finally { await fs.rm(root, { recursive: true, force: true }) }
+})
+
+test("release sealing fails fast when required job keys are absent while optional local packaging retains its behavior", async () => {
+  const names = ["DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED", "DEEPAGENT_CODE_RELEASE_NATIVE_PRIVATE_KEY",
+    "DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY", "DEEPAGENT_CODE_RELEASE_ID"]
+  const previous = names.map((name) => process.env[name])
+  try {
+    names.forEach((name) => delete process.env[name])
+    process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED = "1"
+    const context = { appOutDir: "/unused", electronPlatformName: "darwin", packager: { appInfo: { productFilename: "DeepAgent Code" } } } as Parameters<typeof sealInstalledNativeNode>[0]
+    await expect(sealInstalledNativeNode(context)).rejects.toThrow("Required Native release publisher is missing its key or release identity")
+    delete process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED
+    expect(await sealInstalledNativeNode(context)).toEqual({ state: "publisher_not_configured" })
+  } finally {
+    names.forEach((name, index) => previous[index] === undefined ? delete process.env[name] : process.env[name] = previous[index])
+  }
+})
+
+test("release publisher CLI prepares and destroys its real job keys and reports build failures without key material", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-ci-release-entry-")))
+  const environmentFile = path.join(root, "job.env")
+  await fs.writeFile(environmentFile, "", { mode: 0o600 })
+  try {
+    const environment = { ...process.env, RUNNER_TEMP: root, GITHUB_ENV: environmentFile, GITHUB_RUN_ID: "123",
+      GITHUB_RUN_ATTEMPT: "1", DEEPAGENT_CODE_VERSION: "2.0.4", DEEPAGENT_CODE_CHANNEL: "prod",
+      DAC_NATIVE_APPLE_SIGNED: "0", DEEPAGENT_CODE_RELEASE_NATIVE_PRIVATE_KEY: "",
+      DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY: "", DEEPAGENT_CODE_RELEASE_ID: "" }
+    const run = async (phase: string, env: Record<string, string | undefined>) => {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "native-publisher.ts"), phase],
+        { cwd: root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+      const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+      return { exit, stdout, stderr }
+    }
+    const prepared = await run("prepare", environment)
+    expect(prepared.exit).toBe(0)
+    expect(prepared.stderr).toBe("")
+    expect(JSON.parse(prepared.stdout)).toMatchObject({ state: "prepared", keyStorage: "RUNNER_TEMP",
+      privateKeyUploaded: false, functionalAcceptance: false })
+    expect(prepared.stdout).not.toContain("-----BEGIN")
+    expect(prepared.stdout).not.toContain("publisher-private.pem")
+    const references = Object.fromEntries((await fs.readFile(environmentFile, "utf8")).trimEnd().split("\n")
+      .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]))
+    const guarded = await run("guard", { ...environment, ...references })
+    expect(guarded.exit).toBe(1)
+    expect(guarded.stdout).toBe("")
+    expect(JSON.parse(guarded.stderr)).toMatchObject({ state: "refused", phase: "guard", functionalAcceptance: false })
+    expect(guarded.stderr).not.toContain("-----BEGIN")
+    expect(guarded.stderr).not.toContain(root)
+    expect(await Bun.file(references.DEEPAGENT_CODE_RELEASE_NATIVE_PRIVATE_KEY).exists()).toBe(true)
+    const cleanup = await run("cleanup", { ...environment, ...references })
+    expect(cleanup.exit).toBe(0)
+    expect(JSON.parse(cleanup.stdout)).toEqual({ state: "removed" })
+    expect(await Bun.file(references.DEEPAGENT_CODE_RELEASE_NATIVE_PRIVATE_KEY).exists()).toBe(false)
+    expect(await Bun.file(references.DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY).exists()).toBe(false)
+  } finally { await fs.rm(root, { recursive: true, force: true }) }
 })
 
 test("real CLI Payload signing verifies exact files and refuses changed executable, inventory and signer", async () => {

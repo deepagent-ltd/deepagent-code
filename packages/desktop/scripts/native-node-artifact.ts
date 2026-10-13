@@ -7,7 +7,14 @@ import { constants } from "node:fs"
 import type { AfterPackContext, Configuration } from "electron-builder"
 
 const execFileAsync = promisify(execFile)
-const privateKeyPath = () => process.env.DEEPAGENT_CODE_RELEASE_NATIVE_PRIVATE_KEY?.trim()
+const privateKeyPath = () => {
+  const value = process.env.DEEPAGENT_CODE_RELEASE_NATIVE_PRIVATE_KEY?.trim()
+  if (process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED === "1" &&
+    (!value || !process.env.DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY?.trim() ||
+      !/^[A-Za-z0-9_.-]{1,128}$/.test(process.env.DEEPAGENT_CODE_RELEASE_ID?.trim() ?? "")))
+    throw new Error("Required Native release publisher is missing its key or release identity")
+  return value
+}
 type MacSignOptions = Parameters<Exclude<NonNullable<NonNullable<Configuration["mac"]>["sign"]>, string>>[0]
 
 /** The publisher owns this builder hook. Paths come only from the actual staged product;

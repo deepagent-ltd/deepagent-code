@@ -22,12 +22,30 @@ export async function prepareTestNativePublisher(input: {
   target: string
   releaseID: string
 }) {
+  return prepareNativePublisher(input)
+}
+
+export async function prepareNativePublisher(input: {
+  runnerTemp: string
+  environmentFile: string
+  target: string
+  releaseID: string
+  release?: true
+  macAssetSigningIdentity?: string | null
+}) {
   if (!targets.includes(input.target) || input.target !== `${process.platform}-${process.arch}` ||
     !/^[A-Za-z0-9_.-]{1,128}$/.test(input.releaseID)) throw new Refused("QA_PUBLISHER_TARGET_REJECTED")
   const root = await fs.realpath(input.runnerTemp)
   if (root !== input.runnerTemp || !path.isAbsolute(root) || /[\r\n]/.test(root) ||
     !inside(root, path.resolve(input.environmentFile))) throw new Refused("QA_PUBLISHER_TEMP_REJECTED")
-  const directory = await fs.mkdtemp(path.join(root, "dac-test-native-publisher-"))
+  const identity = input.release ? input.macAssetSigningIdentity : process.platform === "darwin" ? "-" : undefined
+  if (input.release && identity !== null && identity !== undefined && !/^[0-9a-f]{40}$/i.test(identity))
+    throw new Refused("RELEASE_NATIVE_ASSET_IDENTITY_REJECTED")
+  const environment = await fs.lstat(input.environmentFile)
+  if (!environment.isFile() || environment.isSymbolicLink() || environment.nlink !== 1 ||
+    await fs.realpath(input.environmentFile) !== path.resolve(input.environmentFile))
+    throw new Refused("QA_PUBLISHER_TEMP_REJECTED")
+  const directory = await fs.mkdtemp(path.join(root, input.release ? "dac-release-native-publisher-" : "dac-test-native-publisher-"))
   await fs.chmod(directory, 0o700)
   if (process.platform === "win32") {
     const owner = await execute("whoami.exe", ["/user", "/fo", "csv", "/nh"], { maxBuffer: 8192 })
@@ -46,7 +64,8 @@ export async function prepareTestNativePublisher(input: {
       `DEEPAGENT_CODE_RELEASE_NATIVE_PRIVATE_KEY=${privateKeyFile}`,
       `DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY=${publicKeyFile}`,
       `DEEPAGENT_CODE_RELEASE_ID=${input.releaseID}`,
-      ...(process.platform === "darwin" ? ["DEEPAGENT_CODE_NATIVE_ASSET_SIGN_IDENTITY=-"] : []),
+      ...(input.release ? ["DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED=1"] : []),
+      ...(process.platform === "darwin" ? [`DEEPAGENT_CODE_NATIVE_ASSET_SIGN_IDENTITY=${identity ?? ""}`] : []),
       "",
     ].join("\n"))
     return { directory, privateKeyFile, publicKeyFile, target: input.target, releaseID: input.releaseID,
@@ -68,7 +87,7 @@ export async function sealTestNativeCLI(input: {
   publicKeyFile: string
 }) {
   const components = await readComponents(input.executable, input.target)
-  const keys = await publisherKeys(input.privateKeyFile, input.publicKeyFile)
+  const keys = await verifyNativePublisherKeys(input.privateKeyFile, input.publicKeyFile)
   if (input.target.startsWith("win32-")) {
     if (process.platform !== "win32" || input.target !== `win32-${process.arch}`)
       throw new Refused("QA_WINDOWS_CLI_NATIVE_ISSUER_REQUIRED")
@@ -224,15 +243,26 @@ export async function verifyTestWindowsPreloader(input: { main: string; target: 
 }
 
 export async function cleanupTestNativePublisher(input: { runnerTemp: string; privateKeyFile?: string; publicKeyFile?: string }) {
+  return cleanupNativePublisher(input)
+}
+
+export async function cleanupNativePublisher(input: {
+  runnerTemp: string; privateKeyFile?: string; publicKeyFile?: string; release?: true
+}) {
   if (!input.privateKeyFile && !input.publicKeyFile) return { state: "not_prepared" }
   const root = await fs.realpath(input.runnerTemp)
-  if (!input.privateKeyFile || !input.publicKeyFile || !inside(root, input.privateKeyFile) ||
+  if (root !== input.runnerTemp || !input.privateKeyFile || !input.publicKeyFile || !inside(root, input.privateKeyFile) ||
+    path.resolve(input.privateKeyFile) !== input.privateKeyFile || path.resolve(input.publicKeyFile) !== input.publicKeyFile ||
     path.dirname(input.privateKeyFile) !== path.dirname(input.publicKeyFile) ||
     path.basename(input.privateKeyFile) !== "publisher-private.pem" || path.basename(input.publicKeyFile) !== "publisher-public.pem" ||
-    !path.basename(path.dirname(input.privateKeyFile)).startsWith("dac-test-native-publisher-"))
+    !path.basename(path.dirname(input.privateKeyFile)).startsWith(input.release ? "dac-release-native-publisher-" : "dac-test-native-publisher-"))
     throw new Refused("QA_PUBLISHER_CLEANUP_REJECTED")
+  const directory = path.dirname(input.privateKeyFile)
+  const physical = await fs.lstat(directory)
+  if (path.dirname(directory) !== root || !physical.isDirectory() || physical.isSymbolicLink() ||
+    await fs.realpath(directory) !== directory) throw new Refused("QA_PUBLISHER_CLEANUP_REJECTED")
   await Promise.all([input.privateKeyFile, input.publicKeyFile].map((name) => fs.rm(name, { force: true })))
-  await fs.rmdir(path.dirname(input.privateKeyFile))
+  await fs.rmdir(directory)
   return { state: "removed" }
 }
 
@@ -249,7 +279,7 @@ async function readComponents(executable: string, target: string) {
   return value
 }
 
-async function publisherKeys(privateKeyFile: string, publicKeyFile: string) {
+export async function verifyNativePublisherKeys(privateKeyFile: string, publicKeyFile: string) {
   const key = createPrivateKey(await fs.readFile(privateKeyFile))
   const pin = createPublicKey(await fs.readFile(publicKeyFile))
   if (key.asymmetricKeyType !== "ed25519" || pin.asymmetricKeyType !== "ed25519" ||

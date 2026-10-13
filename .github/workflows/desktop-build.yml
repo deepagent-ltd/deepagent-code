@@ -128,6 +128,7 @@ jobs:
       # so the pipeline needs a federated service principal in addition to the endpoint /
       # account / profile names. When any piece is missing the build proceeds unsigned.
       HAS_TRUSTED_SIGNING: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE != '' && secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_TENANT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID != '' }}
+      DEEPAGENT_CODE_BUILD_LINUX_NATIVE_ASSETS: ${{ matrix.group == 'linux' && '1' || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -185,6 +186,13 @@ jobs:
           subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
 
       # bun run build invokes the package prebuild lifecycle before electron-vite.
+      - name: Prepare this job's private Native build publisher
+        env:
+          DEEPAGENT_CODE_VERSION: ${{ steps.release-version.outputs.version }}
+          DAC_NATIVE_APPLE_SIGNED: ${{ matrix.group == 'mac' && env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true' && '1' || '0' }}
+          CSC_NAME: ${{ secrets.APPLE_CSC_NAME }}
+        run: bun ./packages/desktop/scripts/native-publisher.ts prepare
+
       - name: Build renderer
         working-directory: packages/desktop
         env:
@@ -216,6 +224,11 @@ jobs:
           AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
         run: npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts
+
+      - name: Verify this exact packaged Native build cohort
+        env:
+          DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
+        run: bun ./packages/desktop/scripts/native-publisher.ts guard
 
       # Assert that packaging produced the supported x64 installer and, when
       # Trusted Signing ran, that its signature validates on Windows.
@@ -288,6 +301,10 @@ jobs:
             packages/desktop/dist/*.zip
             packages/desktop/dist/*.deb
             packages/desktop/dist/*.exe
+
+      - name: Destroy this job's private Native build publisher
+        if: always()
+        run: bun ./packages/desktop/scripts/native-publisher.ts cleanup
 
   release:
     needs: build
