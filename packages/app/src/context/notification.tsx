@@ -268,6 +268,19 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
       client: serverSDK.client,
       clientFor: (directory) => serverSDK.createClient({ directory }),
       currentDirectory,
+      active: (sessionID) => {
+        const directory = currentDirectory()
+        return (
+          !!directory && serverSync.child(directory, { bootstrap: false })[0].session_status[sessionID]?.type === "busy"
+        )
+      },
+      subscribeHint: (hint) =>
+        serverSDK.event.listen((event) => {
+          const directory = currentDirectory()
+          if (meta.disposed || !directory || event.name !== directory) return
+          const properties = event.details.properties
+          if ("sessionID" in properties && typeof properties.sessionID === "string") hint(properties.sessionID)
+        }),
       sessionsOf: (directory: string) => {
         const [childStore] = serverSync.child(directory, { bootstrap: false })
         return childStore.session.map((item) => item.id)

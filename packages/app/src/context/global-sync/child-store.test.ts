@@ -147,11 +147,25 @@ describe("createChildStoreManager", () => {
     try {
       if (!manager) throw new Error("manager required")
 
-      const [store] = manager.child("/project")
+      const [store, setStore] = manager.child("/project")
 
       expect(store.status).toBe("loading")
       expect(store.limit).toBe(5)
       expect(bootstraps).toEqual(["/project"])
+      expect(store.session_working("session-1")).toBe(false)
+      setStore("session_status", "session-1", { type: "busy" })
+      expect(store.session_working("session-1")).toBe(true)
+      setStore("session_status", "session-1", { type: "retry", attempt: 1, message: "retrying", next: 1000 })
+      expect(store.session_working("session-1")).toBe(true)
+      setStore("session_status", "session-1", {
+        type: "recovery_required",
+        message: "opaque server detail",
+        blockedReason: "owned_elsewhere",
+      })
+      expect(store.session_working("session-1")).toBe(false)
+      expect(store.session_status["session-1"].type).toBe("recovery_required")
+      setStore("session_status", "session-1", { type: "idle" })
+      expect(store.session_working("session-1")).toBe(false)
     } finally {
       dispose()
     }

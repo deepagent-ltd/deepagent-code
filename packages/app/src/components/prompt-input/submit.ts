@@ -280,7 +280,9 @@ export async function fetchLatestSuggestion(
 export async function sendFollowupDraft(input: FollowupSendInput) {
   const text = draftText(input.draft.prompt)
   const images = draftImages(input.draft.prompt)
-  const [, setStore] = input.serverSync.child(input.draft.sessionDirectory)
+  const [store, setStore] = input.serverSync.child(input.draft.sessionDirectory)
+  const recoveryRequired = () => store.session_status?.[input.draft.sessionID]?.type === "recovery_required"
+  if (recoveryRequired()) return false
 
   const setBusy = () => {
     if (!input.optimisticBusy) return
@@ -288,14 +290,14 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   }
 
   const setIdle = () => {
-    if (!input.optimisticBusy) return
+    if (!input.optimisticBusy || recoveryRequired()) return
     setStore("session_status", input.draft.sessionID, { type: "idle" })
   }
 
   const wait = async () => {
-    if (input.promptPrepareSignal?.aborted) return false
+    if (input.promptPrepareSignal?.aborted || recoveryRequired()) return false
     const ok = await input.before?.()
-    if (ok === false || input.promptPrepareSignal?.aborted) return false
+    if (ok === false || input.promptPrepareSignal?.aborted || recoveryRequired()) return false
     return true
   }
 
@@ -475,7 +477,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     if (!waited && !(await wait())) {
       return false
     }
-    if (input.promptPrepareSignal?.aborted) return false
+    if (input.promptPrepareSignal?.aborted || recoveryRequired()) return false
     input.onBeforeSubmit?.()
 
     batch(() => {
@@ -566,6 +568,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const layout = useLayout()
   const language = useLanguage()
   const params = useParams()
+  const recoveryRequired = (sessionID = params.id) =>
+    !!sessionID && sync.data.session_status?.[sessionID]?.type === "recovery_required"
   const pendingKey = (sessionID: string) => ScopedKey.from(sdk.scope, sessionID)
   let submissionSequence = 0
   let retryIdentity: SubmissionIdentity | undefined
@@ -607,7 +611,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
   const abort = async () => {
     const sessionID = activeSubmission?.sessionID ?? params.id
-    if (!sessionID) return Promise.resolve()
+    if (!sessionID || recoveryRequired(sessionID)) return
 
     // D3: any stop resets the scenario to `direct` and pauses scenario automation for this
     // session and its directory scope, so the next user message is a plain direct submission
@@ -617,6 +621,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     input.onAbort?.()
 
     const submission = await cancelPending({ preserveDraft: true })
+    if (recoveryRequired(sessionID)) return
     if (submission) {
       if (submission.admissionStarted) {
         await sdk.client.session.abort({ sessionID }).catch(() => {})
@@ -681,7 +686,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
   const handleSubmit = async (event: Event) => {
     event.preventDefault()
-    if (activeSubmission) return
+    if (activeSubmission || recoveryRequired()) return
 
     const currentPrompt = prompt.current()
     const text = currentPrompt.map((part) => ("content" in part ? part.content : "")).join("")
@@ -939,7 +944,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       }
 
       const cleanup = () => {
-        if (sessionDirectory === projectDirectory) {
+        if (sessionDirectory === projectDirectory && !recoveryRequired(session.id)) {
           sync.set("session_status", session.id, { type: "idle" })
         }
         removeOptimisticMessage()
@@ -1047,7 +1052,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           }
           return
         }
-        if (sessionDirectory === projectDirectory) {
+        if (sessionDirectory === projectDirectory && !recoveryRequired(session.id)) {
           sync.set("session_status", session.id, { type: "idle" })
         }
         removeOptimisticMessage()
@@ -1059,7 +1064,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         activeSubmission = undefined
         pending.delete(pendingKey(session.id))
         if (controller.signal.aborted) return
-        if (sessionDirectory === projectDirectory) {
+        if (sessionDirectory === projectDirectory && !recoveryRequired(session.id)) {
           sync.set("session_status", session.id, { type: "idle" })
         }
         showToast({

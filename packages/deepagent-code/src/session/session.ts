@@ -1,3 +1,4 @@
+import { GoalChild } from "@deepagent-code/core/deepagent/goal-child"
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { Slug } from "@deepagent-code/core/util/slug"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
@@ -79,6 +80,7 @@ import { SessionInfo } from "@deepagent-code/core/session/info"
 import { SessionInput } from "@deepagent-code/core/session/input"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
+import { WorkSessionGuard } from "@deepagent-code/core/session/work-session-guard"
 import { SessionPromptEpochTable } from "./prompt-epoch.sql"
 import { HistoryAuthority } from "./history-authority"
 import { SessionDiffArtifact } from "./diff-artifact"
@@ -898,6 +900,8 @@ export const layer: Layer.Layer<
       metadata?: typeof Metadata.Type
       permission?: PermissionV1.Ruleset
     }) {
+      if (input?.id) yield* GoalChild.requireOrdinary(db, input.id).pipe(Effect.orDie)
+      if (input?.parentID) yield* GoalChild.requireOrdinary(db, input.parentID).pipe(Effect.orDie)
       const ctx = yield* InstanceState.context
       const result: Info = {
         id: SessionID.descending(input.id),
@@ -922,7 +926,13 @@ export const layer: Layer.Layer<
       }
       log.info("created", result)
 
-      yield* events.publish(SessionEvent.Created, v2Created(result))
+      yield* events.publish(SessionEvent.Created, v2Created(result), {
+        commit: () =>
+          Effect.gen(function* () {
+            yield* GoalChild.requireOrdinary(db, result.id)
+            if (result.parentID) yield* GoalChild.requireOrdinary(db, result.parentID)
+          }),
+      })
 
       return result
     })
@@ -1066,6 +1076,7 @@ export const layer: Layer.Layer<
     // in-process callers use Session.Service directly. The projection's V2 authority bit is the
     // same durable predicate as SessionV2.requireWritable, without adding a V2 layer cycle here.
     const requireWritable = Effect.fn("Session.requireWritable")(function* (sessionID: SessionID) {
+      yield* GoalChild.requireOrdinary(db, sessionID).pipe(Effect.orDie)
       const row = yield* db
         .select({ v2Authority: SessionTable.v2_authority })
         .from(SessionTable)
@@ -1121,6 +1132,7 @@ export const layer: Layer.Layer<
 
     const updateMessage = <T extends SessionV1.Info>(msg: T): Effect.Effect<T> =>
       Effect.gen(function* () {
+        yield* GoalChild.requireOrdinary(db, msg.sessionID).pipe(Effect.orDie)
         const existing = yield* db
           .select({ session_id: MessageTable.session_id })
           .from(MessageTable)
@@ -1196,6 +1208,7 @@ export const layer: Layer.Layer<
     const publishMessageProjection: Interface["publishMessageProjection"] = Effect.fn(
       "Session.publishMessageProjection",
     )(function* (input) {
+      yield* GoalChild.requireOrdinary(db, input.sessionID).pipe(Effect.orDie)
       const message = yield* MessageV2.get(input).pipe(
         Effect.provideService(Database.Service, database),
         Effect.catchIf(NotFoundError.isInstance, () =>
@@ -1215,6 +1228,7 @@ export const layer: Layer.Layer<
 
     const updatePart = <T extends SessionV1.Part>(part: T): Effect.Effect<T> =>
       Effect.gen(function* () {
+        yield* GoalChild.requireOrdinary(db, part.sessionID).pipe(Effect.orDie)
         yield* requireMessageOwnership({ sessionID: part.sessionID, messageID: part.messageID }).pipe(Effect.orDie)
         const existing = yield* db
           .select({ message_id: PartTable.message_id, session_id: PartTable.session_id })
@@ -1307,6 +1321,8 @@ export const layer: Layer.Layer<
       // instance worktree root + the chosen directory.
       directory?: string
     }) {
+      if (input?.id) yield* GoalChild.requireOrdinary(db, input.id).pipe(Effect.orDie)
+      if (input?.parentID) yield* GoalChild.requireOrdinary(db, input.parentID).pipe(Effect.orDie)
       const ctx = yield* InstanceState.context
       const workspace = yield* InstanceState.workspaceID
       const directory = input?.directory ?? ctx.directory
@@ -1535,11 +1551,7 @@ export const layer: Layer.Layer<
         }
         const completeEventID = EventV2.ID.make(`evt_${Hash.sha256(`fork-event:v1:${intentID}:complete`).slice(0, 26)}`)
         yield* publishOnce((commit) =>
-          events.publish(
-            SessionEvent.Updated,
-            v2Created(complete),
-            { id: completeEventID, idempotent: true, commit },
-          ),
+          events.publish(SessionEvent.Updated, v2Created(complete), { id: completeEventID, idempotent: true, commit }),
         )
         if (cursor !== claimed.event_count) {
           return yield* Effect.die(
@@ -2152,6 +2164,22 @@ export const layer: Layer.Layer<
       childDepth?: number
       taskRequestHash?: string
     }) {
+      yield* WorkSessionGuard.requireOrdinary(db, input.sessionID).pipe(
+        Effect.mapError(
+          (error) => new ForkConflict({ intentID: input.intentID, reason: `${error.code}: ${error.message}` }),
+        ),
+      )
+      yield* GoalChild.requireOrdinary(db, input.sessionID).pipe(
+        Effect.mapError(
+          (error) => new ForkConflict({ intentID: input.intentID, reason: `${error.code}: ${error.message}` }),
+        ),
+      )
+      if (input.targetSessionID)
+        yield* GoalChild.requireOrdinary(db, input.targetSessionID).pipe(
+          Effect.mapError(
+            (error) => new ForkConflict({ intentID: input.intentID, reason: `${error.code}: ${error.message}` }),
+          ),
+        )
       yield* requireWritable(input.sessionID)
       const forkMode = input.forkMode ?? "foreground"
       const intentID = input.intentID
@@ -2609,6 +2637,8 @@ export const layer: Layer.Layer<
         .publish(SessionEvent.Created, v2Created(session), {
           commit: () =>
             Effect.gen(function* () {
+              yield* GoalChild.requireOrdinary(db, input.sessionID)
+              yield* GoalChild.requireOrdinary(db, session.id)
               const admitted = yield* db
                 .select({
                   state: SessionForkAdmissionTable.state,
@@ -3195,6 +3225,7 @@ export const layer: Layer.Layer<
     // durable V2 event authorities below.
     const publishUpdated = (sessionID: SessionID, apply: (info: SessionSchema.Info) => SessionSchema.Info) =>
       Effect.gen(function* () {
+        yield* GoalChild.requireOrdinary(db, sessionID).pipe(Effect.orDie)
         const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
         if (!row) return yield* new NotFoundError({ message: `Session not found: ${sessionID}` })
         yield* events.publish(SessionEvent.Updated, {
@@ -3221,6 +3252,7 @@ export const layer: Layer.Layer<
     // Write-once: the preview snapshots the FIRST user message only. Later prompts must not overwrite
     // it, so we skip if the session already has a preview (or the incoming text is empty/whitespace).
     const setPreview = Effect.fn("Session.setPreview")(function* (input: { sessionID: SessionID; preview: string }) {
+      yield* GoalChild.requireOrdinary(db, input.sessionID).pipe(Effect.orDie)
       const trimmed = input.preview.trim()
       if (!trimmed) return
       const current = yield* get(input.sessionID).pipe(Effect.orDie)
@@ -3234,6 +3266,7 @@ export const layer: Layer.Layer<
       sessionID: SessionID
       time?: number | null
     }) {
+      yield* GoalChild.requireOrdinary(db, input.sessionID).pipe(Effect.orDie)
       // `undefined` keeps the current flag (the version 1 patch omitted the key); `null` clears it.
       if (input.time === undefined) return
       const archived = input.time === null ? undefined : DateTime.makeUnsafe(input.time)
@@ -3256,6 +3289,7 @@ export const layer: Layer.Layer<
       sessionID: SessionID
       directory: string
     }) {
+      yield* GoalChild.requireOrdinary(db, input.sessionID).pipe(Effect.orDie)
       const current = yield* get(input.sessionID).pipe(Effect.orDie)
       if (current.directory === input.directory) return
       if (current.workspaceID)
@@ -3292,6 +3326,7 @@ export const layer: Layer.Layer<
        */
       notice?: boolean
     }) {
+      yield* GoalChild.requireOrdinary(db, input.sessionID).pipe(Effect.orDie)
       const now = Date.now()
       const row = yield* db
         .select()
@@ -3449,6 +3484,7 @@ export const layer: Layer.Layer<
       summary: Info["summary"]
       diff?: Snapshot.FileDiff[]
     }) {
+      yield* GoalChild.requireOrdinary(db, input.sessionID).pipe(Effect.orDie)
       if (!input.summary) return
       yield* events.publish(SessionEvent.DiffUpdated, {
         sessionID: input.sessionID,
@@ -3477,6 +3513,7 @@ export const layer: Layer.Layer<
       sessionID: SessionID
       workspaceID: Info["workspaceID"]
     }) {
+      yield* GoalChild.requireOrdinary(db, input.sessionID).pipe(Effect.orDie)
       const current = yield* get(input.sessionID).pipe(Effect.orDie)
       if (current.workspaceID === input.workspaceID) return
       return yield* new PlacementChangeUnsupportedError({
@@ -3501,22 +3538,33 @@ export const layer: Layer.Layer<
       "Session.snapshotRangeFromMessage",
     )(function* (input) {
       const target = yield* db
-        .select({ id: MessageTable.id, time: MessageTable.time_created })
+        .select({ id: MessageTable.id, time: MessageTable.time_created, seq: SessionMessageTable.seq })
         .from(MessageTable)
+        .leftJoin(
+          SessionMessageTable,
+          and(eq(SessionMessageTable.id, MessageTable.id), eq(SessionMessageTable.session_id, MessageTable.session_id)),
+        )
         .where(and(eq(MessageTable.session_id, input.sessionID), eq(MessageTable.id, input.messageID)))
         .get()
         .pipe(Effect.orDie)
       if (!target) return yield* new NotFoundError({ message: `Message not found: ${input.messageID}` })
-      const atOrAfter = or(
-        gt(MessageTable.time_created, target.time),
-        and(eq(MessageTable.time_created, target.time), gte(MessageTable.id, target.id)),
-      )
+      const atOrAfter =
+        target.seq !== null
+          ? gte(SessionMessageTable.seq, target.seq)
+          : or(
+              gt(MessageTable.time_created, target.time),
+              and(eq(MessageTable.time_created, target.time), gte(MessageTable.id, target.id)),
+            )
       const start = yield* db
         .select({ snapshot: sql<string | null>`json_extract(${PartTable.data}, '$.snapshot')` })
         .from(PartTable)
         .innerJoin(
           MessageTable,
           and(eq(MessageTable.id, PartTable.message_id), eq(MessageTable.session_id, PartTable.session_id)),
+        )
+        .leftJoin(
+          SessionMessageTable,
+          and(eq(SessionMessageTable.id, MessageTable.id), eq(SessionMessageTable.session_id, MessageTable.session_id)),
         )
         .where(
           and(
@@ -3525,7 +3573,11 @@ export const layer: Layer.Layer<
             eq(sql<string>`json_extract(${PartTable.data}, '$.type')`, "step-start"),
           ),
         )
-        .orderBy(asc(MessageTable.time_created), asc(MessageTable.id), asc(PartTable.id))
+        .orderBy(
+          target.seq !== null ? asc(SessionMessageTable.seq) : asc(MessageTable.time_created),
+          asc(MessageTable.id),
+          asc(PartTable.id),
+        )
         .get()
         .pipe(Effect.orDie)
       const finish = yield* db
@@ -3535,6 +3587,10 @@ export const layer: Layer.Layer<
           MessageTable,
           and(eq(MessageTable.id, PartTable.message_id), eq(MessageTable.session_id, PartTable.session_id)),
         )
+        .leftJoin(
+          SessionMessageTable,
+          and(eq(SessionMessageTable.id, MessageTable.id), eq(SessionMessageTable.session_id, MessageTable.session_id)),
+        )
         .where(
           and(
             eq(MessageTable.session_id, input.sessionID),
@@ -3542,7 +3598,11 @@ export const layer: Layer.Layer<
             eq(sql<string>`json_extract(${PartTable.data}, '$.type')`, "step-finish"),
           ),
         )
-        .orderBy(desc(MessageTable.time_created), desc(MessageTable.id), desc(PartTable.id))
+        .orderBy(
+          target.seq !== null ? desc(SessionMessageTable.seq) : desc(MessageTable.time_created),
+          desc(MessageTable.id),
+          desc(PartTable.id),
+        )
         .get()
         .pipe(Effect.orDie)
       return {
@@ -3576,6 +3636,7 @@ export const layer: Layer.Layer<
       sessionID: SessionID
       messageID: MessageID
     }) {
+      yield* GoalChild.requireOrdinary(db, input.sessionID).pipe(Effect.orDie)
       yield* requireMessageOwnership(input).pipe(Effect.orDie)
       yield* events.publish(SessionV1.Event.MessageRemoved, {
         sessionID: input.sessionID,
@@ -3589,6 +3650,7 @@ export const layer: Layer.Layer<
       messageID: MessageID
       partID: PartID
     }) {
+      yield* GoalChild.requireOrdinary(db, input.sessionID).pipe(Effect.orDie)
       yield* requirePartOwnership(input).pipe(Effect.orDie)
       yield* events.publish(SessionV1.Event.PartRemoved, {
         sessionID: input.sessionID,
@@ -3605,6 +3667,7 @@ export const layer: Layer.Layer<
       field: string
       delta: string
     }) {
+      yield* GoalChild.requireOrdinary(db, input.sessionID).pipe(Effect.orDie)
       // A streamed part emits thousands of deltas; re-validating ownership per delta is a
       // synchronous SQLite select each time (measured: dominant `prepare`/`values` hot frames and
       // multi-second event-loop stalls). The part's owning turn is immutable once created, so the

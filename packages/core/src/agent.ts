@@ -73,6 +73,7 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Age
 
 type Data = {
   agents: Map<ID, Info>
+  goalRoles: Map<ID, GoalRole>
   default?: ID
 }
 
@@ -82,6 +83,28 @@ export type Editor = {
   default: (id: ID | undefined) => void
   update: (id: ID, fn: (agent: Draft<Info>) => void) => void
   remove: (id: ID) => void
+  goalRole: (id: ID, role: GoalRole) => void
+}
+
+/** Trusted native registration only; never part of Info or its HTTP representation. */
+export type GoalRole = {
+  readonly version: "owned-goal-v2"
+  readonly kind: "worker" | "reviewer" | "panel"
+  readonly planWriteOwnGoal: boolean
+}
+const snapshotIdentity: unique symbol = Symbol("AgentV2.Snapshot")
+export type Snapshot = { readonly [snapshotIdentity]: true }
+export type SnapshotView = {
+  readonly instanceID: string
+  readonly generation: number
+  readonly selector: string | undefined
+  readonly info: Info
+  readonly role: GoalRole | undefined
+}
+const snapshots = new WeakMap<object, { view: SnapshotView; current: () => boolean }>()
+export function snapshotView(snapshot: Snapshot): SnapshotView | undefined {
+  const saved = snapshots.get(snapshot)
+  return saved?.current() ? saved.view : undefined
 }
 
 export interface Interface {
@@ -92,6 +115,8 @@ export interface Interface {
   readonly resolve: (id?: ID | string) => Effect.Effect<Info | undefined>
   readonly select: (id?: ID | string) => Effect.Effect<Selection>
   readonly all: () => Effect.Effect<Info[]>
+  /** Optional only for existing service fixtures. Managed admission requires this real capability. */
+  readonly snapshot?: (id?: ID | string) => Effect.Effect<Snapshot, NotFoundError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/Agent") {}
@@ -101,8 +126,20 @@ enableMapSet()
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const instanceID = crypto.randomUUID()
+    let generation = 0
+    let live = true
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        live = false
+      }),
+    )
     const state = State.create<Data, Editor>({
-      initial: () => ({ agents: new Map() }),
+      initial: () => ({ agents: new Map(), goalRoles: new Map() }),
+      committed: () => {
+        generation++
+        return undefined
+      },
       editor: (draft) => ({
         list: () => Array.fromIterable(draft.agents.values()) as Info[],
         get: (id) => draft.agents.get(id),
@@ -117,6 +154,10 @@ export const layer = Layer.effect(
         },
         remove: (id) => {
           draft.agents.delete(id)
+          draft.goalRoles.delete(id)
+        },
+        goalRole: (id, role) => {
+          draft.goalRoles.set(id, role)
         },
       }),
     })
@@ -161,9 +202,41 @@ export const layer = Layer.effect(
       all: Effect.fn("AgentV2.all")(function* () {
         return Array.fromIterable(state.get().agents.values())
       }),
+      snapshot: Effect.fn("AgentV2.snapshot")(function* (selector?: ID | string) {
+        const info = selector === undefined ? selectedDefault() : state.get().agents.get(resolveID(ID.make(selector)))
+        if (!info) return yield* new NotFoundError({ id: ID.make(selector ?? "auto") })
+        const observed = generation
+        const view = freezeSnapshot({
+          instanceID,
+          generation: observed,
+          selector,
+          info: new Info(structuredClone(info)),
+          role: structuredClone(state.get().goalRoles.get(info.id)),
+        })
+        const token: Snapshot = Object.freeze({ [snapshotIdentity]: true as const })
+        const content = JSON.stringify([info, state.get().goalRoles.get(info.id)])
+        snapshots.set(token, {
+          view,
+          current: () => {
+            if (!live || generation !== observed) return false
+            const selected =
+              selector === undefined ? selectedDefault() : state.get().agents.get(resolveID(ID.make(selector)))
+            return JSON.stringify([selected, selected ? state.get().goalRoles.get(selected.id) : undefined]) === content
+          },
+        })
+        return token
+      }),
     })
   }),
 )
+
+function freezeSnapshot<T>(value: T): T {
+  if (value && typeof value === "object") {
+    Object.values(value).forEach(freezeSnapshot)
+    Object.freeze(value)
+  }
+  return value
+}
 
 export const node = makeLocationNode({ service: Service, layer, deps: [] })
 

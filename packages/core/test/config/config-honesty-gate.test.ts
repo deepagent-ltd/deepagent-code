@@ -25,14 +25,15 @@ describe("config honesty gate (C-P2-03)", () => {
     for (const consumer of Object.values(RuntimeFieldConsumers)) expect(consumer.trim().length).toBeGreaterThan(0)
   })
 
-  test("no refused key carries a named consumer, beyond the flag-gated references pair", () => {
+  test("no refused key carries a named consumer, beyond explicit application and flag gates", () => {
     // `references` is deliberately BOTH consumed (ProjectReference plugin) and refused while
     // DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES is off — the only sanctioned dual member. Any
-    // OTHER key appearing on both sides means a consumer went live without leaving the
+    // `lsp` also requires the internal ApplicationLSP consumer; bare Core rejects it.
+    // Any OTHER key appearing on both sides means a consumer went live without leaving the
     // refusal list (or vice versa) and must be reconciled consciously.
     const consumed = new Set(Object.keys(RuntimeFieldConsumers))
     const dual = [...UNSUPPORTED_V1_RUNTIME_FIELDS, ...UNSUPPORTED_V2_RUNTIME_FIELDS].filter((key) => consumed.has(key))
-    expect([...new Set(dual)].sort()).toEqual(["references"])
+    expect([...new Set(dual)].sort()).toEqual(["lsp", "references"])
   })
 
   test("the disabled-compat escape hatch covers exactly formatter/lsp/snapshot(s)", () => {

@@ -2,16 +2,17 @@ export * as DomainPackLoadTool from "./domain-pack-load-tool"
 
 import { Effect, Layer, Schema } from "effect"
 import { ToolFailure } from "@deepagent-code/llm"
+import { and, count, eq, sql } from "drizzle-orm"
+import { Database } from "../database/database"
+import { EventV2 } from "../event"
+import { EventTable } from "../event/sql"
+import { SessionToolQuota } from "../session/tool-quota.schema"
+import { SessionTable } from "../session/sql"
 import { Tool } from "../tool/tool"
 import { Tools } from "../tool/tools"
 import { Token } from "../util/token"
 import { domainPackLoadName } from "./capability-load-tool"
-import {
-  findPackDoc,
-  packDocName,
-  productionStoreResolver,
-  type StoreResolver,
-} from "./domain-pack-docs"
+import { findPackDoc, packDocName, productionStoreResolver, type StoreResolver } from "./domain-pack-docs"
 
 // P2-a (WS3 chain repair, docs/V2.0.1-001-llm-agent-system-manual.md §4.5): the production
 // `domain_pack_load` tool — the L1 -> L2 link that makes the seeded domain-pack manual loadable by
@@ -22,22 +23,18 @@ import {
 // (design §4.6, enforced as a ToolFailure) and returns the title/summary plus the body bounded to
 // ~600 tokens.
 //
-// Load recording (design §4.5 "加载记录进 Context Epoch，同会话不重复加载"): capability_load
-// records durable `session_capability_load` receipt rows whose frozen decode is capability-only
-// (a domain-pack row would fail the receipt decode loudly), so this tool mirrors the semantics with
-// a minimal SESSION-scoped loaded-set in module state — the same pattern the loader kernel uses
-// (capability-loader-memory.ts turnBudgets). A ref already loaded in the session settles as
-// `already_loaded` WITH the body and is never re-charged; NEW loads are charged to the turn keyed
-// by the execute Context's assistantMessageID (one assistant message == one provider turn). The
-// maps are process-local and keyed by globally unique session/message ids, so concurrent Locations
-// cannot collide.
+// Quota facts remain in the original Session event aggregate across restart and projection
+// compaction. They are deliberately outside the projection codec's rebuildEventTypes: neither
+// metadata edits nor retiring a host may grant the same Session a fresh disclosure budget.
 
 export const name = domainPackLoadName
 
 /** Disclosure budget for one domain-pack document load (design §4.6). */
 export const DomainPackLoadBudget = {
-  perTurnMaxNew: 2,
+  perTurnMaxNew: SessionToolQuota.LIMITS.newPerTurn,
   bodyMaxTokens: 600,
+  perSessionMaxLoaded: SessionToolQuota.LIMITS.loaded,
+  refMaxBytes: SessionToolQuota.LIMITS.refBytes,
 } as const
 
 // Token.estimate uses 4 chars/token, so this many chars lands exactly on the token ceiling.
@@ -45,7 +42,7 @@ const maxBodyChars = DomainPackLoadBudget.bodyMaxTokens * 4
 
 /** The model-facing input: the opaque durable doc ref from a `pack_search` card. */
 export const DomainPackLoadInput = Schema.Struct({
-  ref: Schema.String.check(Schema.isPattern(/^doc:\S+$/)),
+  ref: SessionToolQuota.Ref,
 })
 export type DomainPackLoadInput = typeof DomainPackLoadInput.Type
 
@@ -77,16 +74,8 @@ export interface DomainPackLoadToolOptions {
   readonly store?: StoreResolver
 }
 
-// Session/turn load state (see the module header): sessionID -> refs loaded in the session;
-// `${sessionID}::${assistantMessageID}` -> refs newly loaded in that turn.
-const sessionLoaded = new Map<string, Set<string>>()
-const turnCharged = new Map<string, Set<string>>()
-
-/** Test hook: clear all session/turn load state (mirrors resetCapabilityLoader). */
-export function resetDomainPackLoadState(): void {
-  sessionLoaded.clear()
-  turnCharged.clear()
-}
+/** Compatibility test hook. Durable Session facts are never reset by a process-local call. */
+export function resetDomainPackLoadState(): void {}
 
 /** A ready-to-register `domain_pack_load` tool (permission `capability.read`, like the load family). */
 export function makeDomainPackLoadTool(options: DomainPackLoadToolOptions = {}): Tool.AnyTool {
@@ -116,21 +105,103 @@ export function makeDomainPackLoadTool(options: DomainPackLoadToolOptions = {}):
           })
           if (!found) return notFound(input.ref, "domain_pack_document_unknown")
           if (found.doc.status !== "active") return notFound(input.ref, "domain_pack_document_not_active")
-          const loaded = sessionLoaded.get(context.sessionID)
-          if (loaded?.has(input.ref)) return loadedOutput(found, input.ref, "already_loaded", store)
-          const turnKey = `${context.sessionID}::${context.assistantMessageID}`
-          const charged = turnCharged.get(turnKey) ?? new Set<string>()
-          if (charged.size >= DomainPackLoadBudget.perTurnMaxNew)
-            return yield* Effect.fail(
-              new ToolFailure({
-                message: `Domain pack load budget exhausted for this turn: at most ${DomainPackLoadBudget.perTurnMaxNew} new documents load per turn. Documents already loaded in this session can be re-loaded freely, or load this document in a later turn.`,
-              }),
+          const database = yield* Effect.serviceOption(Database.Service)
+          const events = yield* Effect.serviceOption(EventV2.Service)
+          if (database._tag === "None" || events._tag === "None")
+            return yield* new ToolFailure({
+              message: "Domain pack load quota requires the original Session database and event service",
+            })
+          const db = database.value.db
+          const scope = and(
+            eq(EventTable.aggregate_id, context.sessionID),
+            eq(EventTable.type, EventV2.durableType(SessionToolQuota.Loaded)),
+          )
+          const loaded = yield* db
+            .select({ id: EventTable.id })
+            .from(EventTable)
+            .where(and(scope, sql`json_extract(${EventTable.data}, '$.ref') = ${input.ref}`))
+            .get()
+            .pipe(Effect.orDie)
+          if (
+            !(yield* db
+              .select({ id: SessionTable.id })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, context.sessionID))
+              .get()
+              .pipe(Effect.orDie))
+          )
+            return yield* new ToolFailure({ message: "Domain pack load requires a durable Session" })
+          if (loaded) return loadedOutput(found, input.ref, "already_loaded", store)
+          // The body read is outside the quota transaction; only the bounded fact and SQL enter it.
+          const output = loadedOutput(found, input.ref, "loaded", store)
+          const admitted = yield* events.value
+            .publishChecked(
+              SessionToolQuota.Loaded,
+              {
+                sessionID: context.sessionID,
+                assistantMessageID: context.assistantMessageID,
+                toolCallID: context.toolCallID,
+                ref: input.ref,
+              },
+              {
+                commit: () =>
+                  Effect.gen(function* () {
+                    if (
+                      !(yield* db
+                        .select({ id: SessionTable.id })
+                        .from(SessionTable)
+                        .where(eq(SessionTable.id, context.sessionID))
+                        .get()
+                        .pipe(Effect.orDie))
+                    )
+                      return yield* new ToolFailure({ message: "Domain pack load requires a durable Session" })
+                    if (
+                      yield* db
+                        .select({ id: EventTable.id })
+                        .from(EventTable)
+                        .where(and(scope, sql`json_extract(${EventTable.data}, '$.ref') = ${input.ref}`))
+                        .get()
+                        .pipe(Effect.orDie)
+                    )
+                      return yield* new ToolFailure({ message: "DOMAIN_PACK_ALREADY_LOADED" })
+                    const total = yield* db
+                      .select({ value: count() })
+                      .from(EventTable)
+                      .where(scope)
+                      .get()
+                      .pipe(Effect.orDie)
+                    if ((total?.value ?? 0) >= DomainPackLoadBudget.perSessionMaxLoaded)
+                      return yield* new ToolFailure({ message: "Domain pack load capacity exhausted for this Session" })
+                    const turn = yield* db
+                      .select({ value: count() })
+                      .from(EventTable)
+                      .where(
+                        and(
+                          scope,
+                          sql`json_extract(${EventTable.data}, '$.assistantMessageID') = ${context.assistantMessageID}`,
+                        ),
+                      )
+                      .get()
+                      .pipe(Effect.orDie)
+                    if ((turn?.value ?? 0) >= DomainPackLoadBudget.perTurnMaxNew)
+                      return yield* new ToolFailure({
+                        message: `Domain pack load budget exhausted for this turn: at most ${DomainPackLoadBudget.perTurnMaxNew} new documents load per turn`,
+                      })
+                  }),
+              },
             )
-          charged.add(input.ref)
-          turnCharged.set(turnKey, charged)
-          if (loaded) loaded.add(input.ref)
-          else sessionLoaded.set(context.sessionID, new Set([input.ref]))
-          return loadedOutput(found, input.ref, "loaded", store)
+            .pipe(
+              Effect.mapError((error) =>
+                error.cause instanceof ToolFailure
+                  ? error.cause
+                  : new ToolFailure({ message: "Domain pack load quota is unavailable" }),
+              ),
+              Effect.result,
+            )
+          if (admitted._tag === "Success") return output
+          if (admitted.failure.message === "DOMAIN_PACK_ALREADY_LOADED")
+            return { ...output, state: "already_loaded" as const }
+          return yield* admitted.failure
         }),
       toModelOutput: ({ output }) => [{ type: "text", text: renderLoadText(output) }],
     }),

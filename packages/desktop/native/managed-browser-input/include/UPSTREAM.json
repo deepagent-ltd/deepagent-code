@@ -1,0 +1,83 @@
+{
+  "schemaVersion": "dac.node-api-headers.upstream.v1",
+  "repository": "https://github.com/nodejs/node",
+  "tag": "v24.18.0",
+  "tagObject": "b881107b8f7b03347c32fad94b053b61d0e249ae",
+  "commit": "20da4aeadabc5b0a01e3fcf520f91df8285c68a2",
+  "tagVerification": {
+    "source": "https://api.github.com/repos/nodejs/node/git/tags/b881107b8f7b03347c32fad94b053b61d0e249ae",
+    "reportedVerified": true,
+    "reportedReason": "valid",
+    "localPGPVerification": false
+  },
+  "license": {
+    "identifier": "MIT",
+    "file": "LICENSE",
+    "scope": "Node core declarations; full upstream LICENSE preserved"
+  },
+  "napiVersion": 8,
+  "modifications": [],
+  "files": [
+    {
+      "file": "node_api.h",
+      "source": "src/node_api.h",
+      "url": "https://raw.githubusercontent.com/nodejs/node/20da4aeadabc5b0a01e3fcf520f91df8285c68a2/src/node_api.h",
+      "bytes": 10370,
+      "sha256": "2d4560831e525b47b060ec8a0864ab73993df9e20215ce9f0fe7b24cd31af32a",
+      "includes": [
+        "js_native_api.h",
+        "node_api_types.h"
+      ]
+    },
+    {
+      "file": "node_api_types.h",
+      "source": "src/node_api_types.h",
+      "url": "https://raw.githubusercontent.com/nodejs/node/20da4aeadabc5b0a01e3fcf520f91df8285c68a2/src/node_api_types.h",
+      "bytes": 1930,
+      "sha256": "a25356630d3058f0a0c8937d9f297e9471e037fda58c2696d8a505c2bd99cb00",
+      "includes": [
+        "js_native_api_types.h"
+      ]
+    },
+    {
+      "file": "js_native_api.h",
+      "source": "src/js_native_api.h",
+      "url": "https://raw.githubusercontent.com/nodejs/node/20da4aeadabc5b0a01e3fcf520f91df8285c68a2/src/js_native_api.h",
+      "bytes": 33158,
+      "sha256": "8808ef8899a1691411928ef5dd7dae0537aedc93d3a34e223b2d89692e79c788",
+      "includes": [
+        "js_native_api_types.h"
+      ]
+    },
+    {
+      "file": "js_native_api_types.h",
+      "source": "src/js_native_api_types.h",
+      "url": "https://raw.githubusercontent.com/nodejs/node/20da4aeadabc5b0a01e3fcf520f91df8285c68a2/src/js_native_api_types.h",
+      "bytes": 7871,
+      "sha256": "4f19cb90d240765cc0961d92a1ee20f65fdc50db7de1ab0a5cb6bc227224e1a0",
+      "includes": []
+    },
+    {
+      "file": "LICENSE",
+      "source": "LICENSE",
+      "url": "https://raw.githubusercontent.com/nodejs/node/20da4aeadabc5b0a01e3fcf520f91df8285c68a2/LICENSE",
+      "bytes": 157606,
+      "sha256": "148eacf7863ef4329224a29398623077200a27194aa075569faf4a0a85566ca5"
+    }
+  ],
+  "qaComparison": {
+    "path": "/tmp/dac-clipboard-functional-184-8902de0a/meta.json",
+    "unchanged": [
+      "node_api.h",
+      "node_api_types.h",
+      "js_native_api.h"
+    ],
+    "different": {
+      "file": "js_native_api_types.h",
+      "qaBytes": 8335,
+      "qaSha256": "c12406a8c0036aefdb66b98065fc88e2e7a053c1f274deef33af6c26c099b933",
+      "officialBytes": 7871,
+      "officialSha256": "4f19cb90d240765cc0961d92a1ee20f65fdc50db7de1ab0a5cb6bc227224e1a0"
+    }
+  }
+}

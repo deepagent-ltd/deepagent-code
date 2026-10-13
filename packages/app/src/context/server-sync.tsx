@@ -9,6 +9,7 @@ import type {
 } from "@deepagent-code/sdk/client"
 import { showToast } from "@/utils/toast"
 import { getFilename } from "@deepagent-code/core/util/path"
+import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
 import { batch, getOwner, onCleanup, onMount, untrack } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useLanguage } from "@/context/language"
@@ -141,6 +142,14 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   const sessionLoads = new Map<string, Promise<void>>()
   const planLoads = new Map<string, Promise<void>>()
   const planReloads = new Set<string>()
+  const goalLoads = new Map<string, Promise<void>>()
+  const goalReloads = new Set<string>()
+  const goalWrites = new Map<string, number>()
+  let goalDisposed = false
+  onCleanup(() => {
+    goalDisposed = true
+    goalReloads.clear()
+  })
   const sessionReloaders = new Map<string, (sessionID: string) => Promise<void>>()
   const sessionMeta = new Map<string, { limit: number }>()
 
@@ -303,8 +312,13 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
 
   // V3.9 §D: set/clear the live goal status for a session (mirrors setSessionPlan). The goal object is
   // a single record per session; reconcile keeps field-level updates minimal-diff.
-  const setSessionGoal = (sessionID: string, goal: SessionGoal | undefined) => {
+  const setSessionGoal = (
+    sessionID: string,
+    goal: SessionGoal | undefined,
+    options?: { source: "event" | "status" },
+  ) => {
     if (!sessionID) return
+    if (options?.source !== "event") goalWrites.set(sessionID, (goalWrites.get(sessionID) ?? 0) + 1)
     if (!goal) {
       setGlobalStore(
         "session_goal",
@@ -314,7 +328,67 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       )
       return
     }
+    const current = globalStore.session_goal[sessionID]
+    if (options?.source === "event") {
+      // Old events have no revision/inFlight evidence. Preserve authoritative status; a different
+      // hinted Goal must first be confirmed by a scoped GET rather than displacing the target.
+      setGlobalStore(
+        "session_goal",
+        sessionID,
+        reconcile({
+          ...(current ?? goal),
+          ...(current?.goalId === goal.goalId
+            ? { ledger: goal.ledger, stallCount: goal.stallCount, gaps: goal.gaps }
+            : {}),
+          eventHint: (current?.eventHint ?? 0) + 1,
+        }),
+      )
+      return
+    }
+    if (goal.control && !GoalClient.accepts(current?.control, goal.control)) return
     setGlobalStore("session_goal", sessionID, reconcile(goal))
+  }
+
+  const syncSessionGoal = (directory: string, sessionID: string): Promise<void> => {
+    const key = `${directoryKey(directory)}\n${sessionID}`
+    const pending = goalLoads.get(key)
+    if (pending) {
+      goalReloads.add(key)
+      return pending
+    }
+    const previous = { goalId: globalStore.session_goal[sessionID]?.goalId, write: goalWrites.get(sessionID) ?? 0 }
+    const promise = GoalClient.status(sdkFor(directory) as unknown as GoalClient.Client, sessionID)
+      .then((snapshot) => {
+        if (goalDisposed) return
+        const current = globalStore.session_goal[sessionID]
+        if (current?.goalId !== previous.goalId || (goalWrites.get(sessionID) ?? 0) !== previous.write) return
+        if (snapshot === null) {
+          setSessionGoal(sessionID, undefined)
+          return
+        }
+        if (!GoalClient.accepts(current?.control, snapshot)) return
+        setSessionGoal(
+          sessionID,
+          {
+            goalId: snapshot.goalId,
+            planDocId: snapshot.planDocId,
+            phase: snapshot.phase,
+            control: snapshot,
+            ledger:
+              current?.goalId === snapshot.goalId ? current.ledger : { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0 },
+            stallCount: current?.goalId === snapshot.goalId ? current.stallCount : 0,
+            gaps: current?.goalId === snapshot.goalId ? current.gaps : [],
+            eventHint: current?.eventHint,
+          },
+          { source: "status" },
+        )
+      })
+      .finally(() => {
+        goalLoads.delete(key)
+        if (!goalDisposed && goalReloads.delete(key)) void syncSessionGoal(directory, sessionID).catch(() => undefined)
+      })
+    goalLoads.set(key, promise)
+    return promise
   }
 
   const syncSessionPlan = (directory: string, sessionID: string): Promise<void> => {
@@ -600,7 +674,10 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
           recalibrateSessionPlan(directory, sessionID)
         }
       },
-      setSessionGoal,
+      setSessionGoal: (sessionID, goal, options) => {
+        setSessionGoal(sessionID, goal, options)
+        void syncSessionGoal(directory, sessionID).catch(() => undefined)
+      },
       refetchSession: (sessionID) => {
         const reload = sessionReloaders.get(key)
         if (reload)
@@ -670,6 +747,11 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
 
   const updateConfigMutation = useMutation(() => ({
     mutationFn: (config: Config) => serverSDK.client.global.config.update({ config }),
+    onError: (error) => showToast({
+      variant: "error",
+      title: language.t("common.requestFailed"),
+      description: formatServerError(error, language.t),
+    }),
     onSuccess: () => {
       // Invalidate all provider queries so newly configured custom providers
       // appear immediately in the available provider list across all directories.
@@ -699,13 +781,8 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   const removeMcpConfig = async (directory: string, name: string) => {
     const key = directoryKey(directory)
     const sdk = sdkFor(key)
-    await sdk.mcp.disconnect({ name }).catch(() => {})
-    const nextMcp = { ...(globalStore.config.mcp ?? {}) }
-    delete nextMcp[name]
-    await updateConfigMutation.mutateAsync({
-      ...globalStore.config,
-      mcp: nextMcp,
-    })
+    const result = await sdk.mcp.removeConfig({ name })
+    if (result.data?.removed !== true) throw new Error("MCP configuration removal was not confirmed")
     await queryClient.refetchQueries(queryOptionsApi.globalConfig())
     await queryClient.refetchQueries(queryOptionsApi.mcp(key))
   }
@@ -764,6 +841,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     },
     goal: {
       set: setSessionGoal,
+      sync: syncSessionGoal,
     },
     registerSessionReloader(directory: string, reload: (sessionID: string) => Promise<void>) {
       sessionReloaders.set(directoryKey(directory), reload)
@@ -772,10 +850,11 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       sessionReloaders.delete(directoryKey(directory))
     },
     mcp: {
+      refresh: (directory: string) => queryClient.refetchQueries(queryOptionsApi.mcp(directoryKey(directory))),
       toggle: async (directory: string, name: string) => {
         const key = directoryKey(directory)
         const sdk = sdkFor(key)
-        const status = children.child(key, { bootstrap: false })[0].mcp[name].status
+        const status = children.child(key, { bootstrap: false })[0].mcp[name]
         await toggleMcp({
           status,
           connect: async () => {

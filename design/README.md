@@ -1,10 +1,18 @@
 # DeepAgent Code Architecture & Design
 
-> **Public architecture overview.** Internal implementation details and roadmap documents live in the private `docs/` tree and are intentionally not version-controlled.
+> **Public architecture overview for the 2.0.4 source line.** For installation and product usage, start with the [repository README](../README.md).
 
 DeepAgent Code is a document-centered, event-driven AI coding system. It combines a coding-agent runtime with a durable control plane that owns context, planning, learning, collaboration, safety, and human oversight.
 
 The architecture is designed around one requirement: a long-running agent must remain correct and governable after many model turns, tool calls, user interventions, process restarts, and worker handoffs.
+
+## Product boundaries in 2.0.4
+
+GUI and TUI call the same local DAC backend for Sessions, models, permissions, and tools. Public IM is a messaging transport: `/dac` admits a normal local Session prompt, reuses the conversation's Session for follow-up, and returns the final answer through a durable outbox. Commands and execution remain private to the caller. IM attachments are bounded to 10 MiB, and IM activation requires an explicit purchase separate from provider connection.
+
+The Desktop-managed browser is a Session-authorized host capability. It supports only the interactions available on the current platform, validates targets before action, and applies separate controls to file exchange and clipboard operations. It is not a whole-desktop Computer Use service or a public remote-execution relay.
+
+Durable state preserves intent and execution evidence. A process restart does not establish that an in-flight external operation completed or can be repeated safely; such uncertainty follows an explicit recovery path.
 
 ## Design Principles
 
@@ -22,7 +30,7 @@ Sessions, inputs, plans, documents, goals, events, approvals, and learning decis
 
 A user instruction is durably admitted before execution is scheduled. A successful API response therefore means the instruction is recorded, not merely present in a process-local queue.
 
-DeepAgent is built **on top of** the opencode agent/runtime/session/tool/MCP stack. Its durable control plane does not replace the current turn engine, tool system, or provider layer.
+DeepAgent builds on the opencode foundation for coding tools, providers, LSP, and MCP. The current DAC Session V2 runtime owns durable prompt admission and provider-turn execution; the control plane coordinates that runtime rather than creating a separate IM execution engine.
 
 ### Durable delegated execution
 
@@ -90,13 +98,13 @@ Session V2 separates durable prompt admission from model execution.
 
 ### Delivery vocabulary
 
-| Delivery | Meaning |
-|---|---|
-| normal turn | Start a normal activity when the Session is idle |
-| `steer` | Add guidance to the active activity at the next safe provider-turn boundary |
-| `goal_steer` | Add guidance to the next Goal tick |
-| `queue` | Open a future FIFO activity after the active activity settles |
-| interrupt | Target the active process-local ownership chain immediately |
+| Delivery     | Meaning                                                                     |
+| ------------ | --------------------------------------------------------------------------- |
+| normal turn  | Start a normal activity when the Session is idle                            |
+| `steer`      | Add guidance to the active activity at the next safe provider-turn boundary |
+| `goal_steer` | Add guidance to the next Goal tick                                          |
+| `queue`      | Open a future FIFO activity after the active activity settles               |
+| interrupt    | Target the active process-local ownership chain immediately                 |
 
 Steering never aborts an in-flight tool or stream. The input is persisted first, absorbed in stable order, and materialized into history exactly once.
 
@@ -106,9 +114,9 @@ Steering never aborts an in-flight tool or stream. The input is persisted first,
 
 Same-Session resumes join one coordinator; advisory wakes coalesce; different Sessions can run concurrently. Every provider turn performs one explicit `llm.stream(request)` call and reloads projected history before durable continuation.
 
-All production-private filesystem data resolves from one root: `~/.deepagent/code/`. Core databases and configuration, CLI state, Desktop state/logs/caches, credential references, and runtime temporary files remain under that directory; native secret values remain in the operating system's credential store. `DEEPAGENT_CODE_HOME` is honored only together with an explicit test-home boundary, so ordinary production environments cannot redirect private writes.
+On macOS and Linux, production-private configuration and state resolve under `~/.deepagent/code/`. Native Windows uses `%APPDATA%\deepagent-code` for configuration and `%LOCALAPPDATA%\deepagent-code` for data. Provider credentials follow the provider authentication path; supported MCP secret handles use native credential storage where available. `DEEPAGENT_CODE_HOME` is honored only together with an explicit test-home boundary; production placement follows the platform path policy.
 
-**Credentials** are declared by key name in the catalog template (`CredentialSpec`). Configuration stores environment references or `secret://` handles instead of plaintext values. Handles resolve at connection time through macOS Keychain, Linux Secret Service (`libsecret`), or Windows DPAPI-backed credential storage.
+**MCP credentials** are declared by key name in the catalog template (`CredentialSpec`). Configuration stores environment references or `secret://` handles instead of plaintext values. Handles resolve at connection time through macOS Keychain, Linux Secret Service (`libsecret`), or Windows DPAPI-backed credential storage.
 
 - Agent instructions, stable policy, and System Context baseline stay in the prefix.
 - Round state, budgets, plan snapshots, prior results, fan-out decisions, and steering stay in the tail.
@@ -117,15 +125,7 @@ All production-private filesystem data resolves from one root: `~/.deepagent/cod
 
 ## Document System
 
-| Mechanism | Status |
-|-----------|--------|
-| MCP risk tier — catalog-derived, not config-injectable | Available |
-| MCP catalog defaults to not connected | Available |
-| Dangerous writes: approval gate (`ctx.ask`) | Available |
-| Read-only DB: restricted mode enforced at server | Available |
-| Credential indirection (`${VAR}` / `secret://`) | Available |
-| Native secret storage (macOS / Linux / Windows) | Available |
-| Subagent write isolation and conflict-aware return | Available |
+Documents carry:
 
 - a stable ID and monotonic version;
 - type, scope, status, domain, tags, and description;
@@ -135,16 +135,13 @@ All production-private filesystem data resolves from one root: `~/.deepagent/cod
 
 Writes use atomic replacement and conflict detection. Concurrent handles observe one authority, process-level writers coordinate through lock/CAS semantics, and migrations are incremental, restartable, and integrity-checked.
 
-DeepAgent Code is licensed under **AGPL-3.0-or-later**.
-Source code: [github.com/deepagent-ltd/deepagent-code](https://github.com/deepagent-ltd/deepagent-code)
-
-| Scope | Purpose |
-|---|---|
-| `session-private` | Current conversation and run-local state |
-| `project-shared` | Knowledge and decisions shared by one project |
-| `user-global` | Cross-project preferences and explicitly promoted knowledge |
-| `public-system` | Built-in skills and domain-pack documents |
-| `sealed` | Audit/evaluator material that cannot enter model context |
+| Scope             | Purpose                                                     |
+| ----------------- | ----------------------------------------------------------- |
+| `session-private` | Current conversation and run-local state                    |
+| `project-shared`  | Knowledge and decisions shared by one project               |
+| `user-global`     | Cross-project preferences and explicitly promoted knowledge |
+| `public-system`   | Built-in skills and domain-pack documents                   |
+| `sealed`          | Audit/evaluator material that cannot enter model context    |
 
 Plans, run context, worklogs, designs, diagnoses, evaluations, knowledge, memory, strategies, methodologies, skills, and failure dossiers share this document algebra instead of maintaining separate storage models.
 
@@ -190,17 +187,17 @@ A Goal has objective completion criteria, a plan, a durable run context, a budge
 5. evaluates objective criteria and stall state;
 6. emits facts and schedules the next tick only when eligible.
 
-`goal.tick.requested` is a durable command, not a post-hoc trace marker. Duplicate delivery cannot repeat provider or tool side effects. Pause, stop, takeover, hard limits, quiet hours, needs-human, and terminal state all stop self-continuation.
+`goal.tick.requested` is a durable command, not a post-hoc trace marker. Duplicate delivery reconciles the same durable tick; it does not itself authorize replaying an uncertain provider or tool call. Pause, stop, takeover, hard limits, quiet hours, needs-human, and terminal state all stop self-continuation.
 
 Hot plan edits preserve reusable step IDs and completed evidence, increment the plan version, and reset progress/stall baselines without interrupting the in-flight tick.
 
 ## Event-Driven Agent Runtime
 
-The Event Bus provides persist-before-dispatch delivery, idempotency, priority, retry, acknowledgement, dead-letter handling, retention, replay, and correlation. Local deployments use the embedded backend; distributed deployments use Redis Streams or Kafka through the same backend contract.
+The Event Bus provides persist-before-dispatch delivery, idempotency, priority, retry, acknowledgement, dead-letter handling, retention, replay, and correlation. The current production backend is local SQLite. A transport interface separates storage from delivery behavior; distributed Redis Streams or Kafka implementations are not part of the 2.0.4 delivery.
 
 The Router combines event type, trusted source, actor identity, Agent trigger/capability metadata, autonomy ceiling, approval intent, context strategy, deduplication, priority, and workspace backpressure into one traceable route decision.
 
-The Worker Pool owns bounded concurrency, placement, claims, leases, renewal, recovery, and handoff. Independent DAG nodes run concurrently; dependency edges remain ordered. File and symbol claims are shared across Workers so conflicting writes cannot run together.
+Local worker coordination owns bounded concurrency, claims, leases, renewal, and recovery. Session execution remains process-local; durable event ownership does not imply clustered Session scheduling. Independent DAG nodes run concurrently; dependency edges remain ordered. File and symbol claims are shared across Workers so conflicting writes cannot run together.
 
 Write-capable Agents use isolated worktrees by default. Parent Agents receive bounded summaries, status, artifact/session references, and necessary diffs; complete child transcripts remain in their own Sessions.
 
@@ -224,13 +221,11 @@ Queue state, reviewer identities, verdict SHA, batch review, merge state, and cl
 
 Repo & Wiki is a human-facing projection, never a second source of truth. It exposes document and code navigation, full-text search, docs-to-code links, knowledge governance, and execution archives. Organization and workspace identity are enforced on query, index, archive, and promotion paths.
 
-### Expert Panel
+### IM and personal agent delivery
 
-Panelists receive the same frozen question and evidence under differentiated lenses. Anonymous multi-round debate avoids identity anchoring. A deterministic Arbiter applies quorum, preserves minority opinions, and routes unsafe ambiguity to the Approval Queue. Distributed panelists run through the Worker Pool.
+Public IM supports direct and group conversations, search, and file/image sharing with a 10 MiB per-attachment limit. The caller's explicit `/dac` command creates or reuses a normal local DAC Session, using its model, tools, and permission flow. Follow-up requests in the same conversation retain that Session unless the user explicitly starts a new one.
 
-### IM and proactive delivery
-
-Project IM supports groups, direct conversations, threads, search, attachments, agent mentions, progress streaming, and permission revalidation when project bindings change. Event-driven notifications and digests pass through content safety, path ACL, external-link, rate, and quiet-hours policies before delivery.
+Commands and execution are visible only to the caller, who can open the normal DAC Session for streaming progress. Only the final answer is returned to the original IM conversation through a durable outbox with delivery state and retry handling. IM activation is an explicit purchase; provider connection does not activate or charge for it. The caller can select a separate IM model from locally configured providers.
 
 ### Oversight
 
@@ -285,15 +280,15 @@ Additional controls include durable budgets, rate limits, quiet hours, secret/pa
 
 ## Repository Map
 
-| Area | Path |
-|---|---|
-| Core Session, documents, context, event, and policy algebra | `packages/core/src/` |
-| CLI/server runtime, tools, Goal and event wiring | `packages/deepagent-code/src/` |
-| Desktop/Web application UI | `packages/app/src/` |
-| Electron host and isolated browser views | `packages/desktop/src/` |
-| Provider abstraction | `packages/llm/` |
-| Domain knowledge packs | `packages/domain-packs/` |
-| Generated JavaScript SDK | `packages/sdk/js/` |
+| Area                                                        | Path                           |
+| ----------------------------------------------------------- | ------------------------------ |
+| Core Session, documents, context, event, and policy algebra | `packages/core/src/`           |
+| CLI/server runtime, tools, Goal and event wiring            | `packages/deepagent-code/src/` |
+| Desktop/Web application UI                                  | `packages/app/src/`            |
+| Electron host and isolated browser views                    | `packages/desktop/src/`        |
+| Provider abstraction                                        | `packages/llm/`                |
+| Domain knowledge packs                                      | `packages/domain-packs/`       |
+| Generated JavaScript SDK                                    | `packages/sdk/js/`             |
 
 ## License and Source
 

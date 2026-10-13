@@ -9,9 +9,7 @@ export type Runtime = {
   Todo: (typeof import("../../../src/session/todo"))["Todo"]
   Worktree: (typeof import("../../../src/worktree"))["Worktree"]
   Project: (typeof import("../../../src/project/project"))["Project"]
-  disposeAllInstances: (typeof import("../../fixture/fixture"))["disposeAllInstances"]
   tmpdir: (typeof import("../../fixture/fixture"))["tmpdir"]
-  resetDatabase: (typeof import("../../fixture/db"))["resetDatabase"]
 }
 
 let runtimePromise: Promise<Runtime> | undefined
@@ -29,7 +27,6 @@ export function runtime() {
     const worktree = await import("../../../src/worktree")
     const project = await import("../../../src/project/project")
     const fixture = await import("../../fixture/fixture")
-    const db = await import("../../fixture/db")
     return {
       PublicApi: publicApi.PublicApi,
       HttpApiApp: httpApiServer.HttpApiApp,
@@ -41,9 +38,7 @@ export function runtime() {
       Todo: todo.Todo,
       Worktree: worktree.Worktree,
       Project: project.Project,
-      disposeAllInstances: fixture.disposeAllInstances,
       tmpdir: fixture.tmpdir,
-      resetDatabase: db.resetDatabase,
     }
   })())
 }

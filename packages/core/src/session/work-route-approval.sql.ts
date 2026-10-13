@@ -1,0 +1,48 @@
+import { sql } from "drizzle-orm"
+import { check, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { WorkRouteApprovalSchema } from "./work-route-approval.schema"
+
+// Tombstones survive Session/operator deletion. A new ID must not erase old command identities.
+export const WorkRouteApprovalTable = sqliteTable("work_route_approval", {
+  approval_id: text().primaryKey().notNull(),
+  instance_id: text().notNull(),
+  operator_id: text().notNull(),
+  target_id: text().notNull(),
+  security_namespace_id: text().notNull(),
+  project_scope_key: text().notNull(),
+  location_key: text().notNull(),
+  canonical_root: text().notNull(),
+  namespace_binding_hash: text().notNull(),
+  state: text().$type<"active" | "revoked">().notNull(),
+  revision: integer().notNull(),
+  operator_revision: integer().notNull(),
+  policy_revision: integer().notNull(),
+  credential_generation: integer().notNull(),
+  evidence_hash: text().notNull(),
+  configuration_stamp: text().notNull(),
+  credential_fingerprint: text().notNull(),
+  expires_at: integer().notNull(),
+  record: text().notNull(),
+  record_hash: text().notNull(),
+  record_mac: text().notNull(),
+  created_at: integer().notNull(),
+  updated_at: integer().notNull(),
+}, (table) => [
+  uniqueIndex("work_route_approval_target_idx").on(table.instance_id, table.operator_id, table.target_id),
+  check("work_route_approval_id_check", sql`${table.approval_id} IS NOT NULL AND length(${table.approval_id}) > 0`),
+  check("work_route_approval_state_check", sql`${table.state} IN ('active','revoked')`),
+  check("work_route_approval_revision_check", sql`${table.revision} > 0 AND ${table.operator_revision} > 0 AND ${table.policy_revision} > 0 AND ${table.credential_generation} > 0`),
+  check("work_route_approval_record_check", sql`json_valid(${table.record}) AND length(${table.record_hash}) = 64 AND length(${table.record_mac}) = 64`),
+  check("work_route_approval_time_check", sql`${table.created_at} >= 0 AND ${table.updated_at} >= ${table.created_at} AND ${table.expires_at} > 0`),
+  ...[table.revision, table.operator_revision, table.policy_revision, table.credential_generation, table.expires_at,
+    table.created_at, table.updated_at].map((column) => check(`work_route_approval_${column.name}_integer_check`,
+      sql`typeof(${column}) = 'integer' AND ${column} >= 0 AND ${column} <= 9007199254740991`)),
+  ...[table.approval_id, table.instance_id, table.operator_id, table.target_id, table.security_namespace_id,
+    table.project_scope_key, table.location_key].map((column) => check(`work_route_approval_${column.name}_text_check`,
+      sql`typeof(${column}) = 'text' AND length(CAST(${column} AS BLOB)) BETWEEN 1 AND 512`)),
+  check("work_route_approval_root_text_check", sql`typeof(${table.canonical_root}) = 'text' AND length(CAST(${table.canonical_root} AS BLOB)) BETWEEN 1 AND 2048`),
+  ...[table.namespace_binding_hash, table.evidence_hash, table.configuration_stamp, table.credential_fingerprint,
+    table.record_hash, table.record_mac].map((column) => check(`work_route_approval_${column.name}_digest_check`,
+      sql`typeof(${column}) = 'text' AND length(CAST(${column} AS BLOB)) = 64 AND ${column} NOT GLOB '*[^0-9a-f]*'`)),
+  check("work_route_approval_record_bytes_check", sql`typeof(${table.record}) = 'text' AND length(CAST(${table.record} AS BLOB)) BETWEEN 1 AND ${sql.raw(String(WorkRouteApprovalSchema.MAX_RECORD_BYTES))}`),
+])

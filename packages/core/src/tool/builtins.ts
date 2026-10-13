@@ -2,6 +2,7 @@ export * as BuiltInTools from "./builtins"
 
 import { Layer } from "effect"
 import { BashTool } from "./bash"
+import { BrowserTool } from "./browser"
 import { ApplyPatchChunkTool } from "./apply-patch-chunk"
 import { ApplyPatchTool } from "./apply-patch"
 import { EditTool } from "./edit"
@@ -21,6 +22,7 @@ import { KnowledgeProposeTool } from "./knowledge-propose"
 import { IMSendTool } from "./im-send"
 import { WebFetchTool } from "./webfetch"
 import { WebSearchTool } from "./websearch"
+import { ManagedCommandTool } from "./work-command"
 import { WriteTool } from "./write"
 import { PlanWriteTool } from "./plan"
 import { CapabilityRuntimeSearch } from "../system-context/capability-runtime-search"
@@ -41,6 +43,7 @@ export const builtinToolNames = readonlySet(new Set([
   ApplyPatchChunkTool.name,
   ApplyPatchTool.name,
   BashTool.name,
+  BrowserTool.name,
   EditTool.name,
   GlobTool.name,
   GrepTool.name,
@@ -60,6 +63,7 @@ export const builtinToolNames = readonlySet(new Set([
   WebFetchTool.name,
   WebSearchTool.name,
   WriteTool.name,
+  ManagedCommandTool.name,
   CapabilityRuntimeSearch.name,
   CapabilityLoadTool.capabilityLoadName,
   DomainPackLoadTool.name,
@@ -93,6 +97,7 @@ export const locationLayer = Layer.mergeAll(
   ApplyPatchChunkTool.layer,
   ApplyPatchTool.layer,
   BashTool.layer,
+  BrowserTool.layer,
   EditTool.layer,
   GlobTool.layer,
   GrepTool.layer,
@@ -111,6 +116,7 @@ export const locationLayer = Layer.mergeAll(
   WebFetchTool.layer,
   WebSearchTool.layer.pipe(Layer.provide(WebSearchTool.defaultConfigLayer)),
   WriteTool.layer,
+  ManagedCommandTool.layer,
   PlanWriteTool.layer,
   CapabilityRuntimeSearch.layer,
   CapabilityLoadTool.layer,

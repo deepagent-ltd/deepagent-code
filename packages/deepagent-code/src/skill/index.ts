@@ -1,10 +1,11 @@
 import path from "path"
 import { pathToFileURL } from "url"
-import { Effect, Layer, Context, Schema } from "effect"
+import { Effect, Layer, Context, Schema, Option, ScopedCache } from "effect"
 import { NamedError } from "@deepagent-code/core/util/error"
 import type { Agent } from "@/agent/agent"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstanceState } from "@/effect/instance-state"
+import type { InstanceContext } from "@/project/instance-context"
 import { Global } from "@deepagent-code/core/global"
 import { SkillPlugin } from "@deepagent-code/core/plugin/skill"
 import { Permission } from "@/permission"
@@ -82,6 +83,7 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Ski
 
 type State = {
   skills: Record<string, Info>
+  source?: string
   dirs: Set<string>
 }
 
@@ -99,11 +101,12 @@ export interface Interface {
   readonly get: (name: string) => Effect.Effect<Info | undefined>
   readonly require: (name: string) => Effect.Effect<Info, NotFoundError>
   readonly all: () => Effect.Effect<Info[]>
+  readonly readonlyAt?: (snapshot: Config.ReadSnapshot, observed?: InstanceContext) => Effect.Effect<Info[]>
   readonly dirs: () => Effect.Effect<string[]>
   readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
 }
 
-const add = Effect.fnUntraced(function* (state: State, match: string, events: EventV2Bridge.Service["Service"]) {
+const add = Effect.fnUntraced(function* (state: State, match: string, events?: EventV2Bridge.Service["Service"]) {
   const md = yield* Effect.tryPromise({
     try: () => ConfigMarkdown.parse(match),
     catch: (err) => err,
@@ -111,8 +114,10 @@ const add = Effect.fnUntraced(function* (state: State, match: string, events: Ev
     Effect.catch(
       Effect.fnUntraced(function* (err) {
         const message = FrontmatterError.isInstance(err) ? err.data.message : `Failed to parse skill ${match}`
-        const { Session } = yield* Effect.promise(() => import("@/session/session"))
-        yield* events.publish(Session.Event.Error, { error: new NamedError.Unknown({ message }).toObject() })
+        if (events) {
+          const { Session } = yield* Effect.promise(() => import("@/session/session"))
+          yield* events.publish(Session.Event.Error, { error: new NamedError.Unknown({ message }).toObject() })
+        }
         log.error("failed to load skill", { skill: match, err })
         return undefined
       }),
@@ -179,6 +184,7 @@ const discoverSkills = Effect.fnUntraced(function* (
   disableClaudeCodeSkills: boolean,
   directory: string,
   worktree: string,
+  snapshot?: Config.ReadSnapshot,
 ) {
   const state: ScanState = { matches: new Set(), dirs: new Set() }
 
@@ -202,12 +208,12 @@ const discoverSkills = Effect.fnUntraced(function* (
     }
   }
 
-  const configDirs = yield* config.directories()
+  const configDirs = snapshot?.directories ?? (yield* config.directories())
   for (const dir of configDirs) {
     yield* scan(state, dir, DEEPAGENT_CODE_SKILL_PATTERN)
   }
 
-  const cfg = yield* config.get()
+  const cfg = snapshot?.config ?? (yield* config.get())
   for (const item of cfg.skills?.paths ?? []) {
     const expanded = item.startsWith("~/") ? path.join(global.home, item.slice(2)) : item
     const dir = path.isAbsolute(expanded) ? expanded : path.join(directory, expanded)
@@ -219,7 +225,7 @@ const discoverSkills = Effect.fnUntraced(function* (
     yield* scan(state, dir, SKILL_PATTERN)
   }
 
-  for (const url of cfg.skills?.urls ?? []) {
+  for (const url of snapshot ? [] : (cfg.skills?.urls ?? [])) {
     const pulledDirs = yield* discovery.pull(url)
     for (const dir of pulledDirs) {
       yield* scan(state, dir, SKILL_PATTERN)
@@ -272,7 +278,11 @@ export const layer = Layer.effect(
     )
     const state = yield* InstanceState.make(
       Effect.fn("Skill.state")(function* () {
-        const s: State = { skills: {}, dirs: new Set() }
+        const s: State = {
+          skills: {},
+          dirs: new Set(),
+          source: config.mcpSnapshot ? (yield* config.mcpSnapshot()).source : undefined,
+        }
         // Register the built-in skill BEFORE disk discovery so a user-disk
         // skill with the same name can override it.
         s.skills[CUSTOMIZE_DEEPAGENT_CODE_SKILL_NAME] = {
@@ -303,6 +313,39 @@ export const layer = Layer.effect(
       return Object.values(s.skills)
     })
 
+    const readonlyAt = Effect.fn("Skill.readonlyAt")(function* (
+      snapshot: Config.ReadSnapshot,
+      observed?: InstanceContext,
+    ) {
+      const cached = observed ? Option.getOrUndefined(yield* ScopedCache.getSuccess(state.cache, observed)) : undefined
+      if (snapshot.remoteCurrent && cached?.source === snapshot.source)
+        return Object.values(cached.skills).map((item) => ({ ...item }))
+      const projected: State = {
+        skills: {
+          [CUSTOMIZE_DEEPAGENT_CODE_SKILL_NAME]: {
+            name: CUSTOMIZE_DEEPAGENT_CODE_SKILL_NAME,
+            description: CUSTOMIZE_DEEPAGENT_CODE_SKILL_DESCRIPTION,
+            location: "<built-in>",
+            content: CUSTOMIZE_DEEPAGENT_CODE_SKILL_BODY,
+          },
+        },
+        dirs: new Set(),
+      }
+      const local = yield* discoverSkills(
+        config,
+        discovery,
+        fsys,
+        global,
+        flags.disableExternalSkills,
+        flags.disableClaudeCodeSkills,
+        snapshot.directory,
+        snapshot.worktree,
+        snapshot,
+      )
+      yield* Effect.forEach(local.matches, (match) => add(projected, match), { concurrency: 16, discard: true })
+      return Object.values(projected.skills)
+    })
+
     const dirs = Effect.fn("Skill.dirs")(function* () {
       return (yield* InstanceState.get(discovered)).dirs
     })
@@ -314,7 +357,7 @@ export const layer = Layer.effect(
       return list.filter((skill) => Permission.evaluate("skill", skill.name, agent.permission).action !== "deny")
     })
 
-    return Service.of({ get, require, all, dirs, available })
+    return Service.of({ get, require, all, readonlyAt, dirs, available })
   }),
 )
 

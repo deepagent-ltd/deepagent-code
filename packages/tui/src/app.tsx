@@ -46,6 +46,7 @@ import { DialogKnowledgeReview } from "./component/dialog-knowledge-review"
 import { DialogOversight } from "./component/dialog-oversight"
 import { DialogDeepAgentSettings } from "./component/dialog-deepagent-settings"
 import { DialogIM } from "./component/dialog-im"
+import { attentionCommand } from "./component/dialog-attention"
 import { DialogStats } from "./component/dialog-stats"
 import { DialogGitTimeline } from "./component/dialog-git-timeline"
 import { DialogTerminal } from "./component/dialog-terminal"
@@ -91,6 +92,9 @@ import {
 } from "./keymap"
 
 import type { EventSource } from "./context/sdk"
+import type { GoalPlanClient } from "@deepagent-code/core/deepagent/goal-plan-client"
+import type { McpOperatorClient } from "@deepagent-code/core/mcp/operator-client"
+import type { TaskHumanClient } from "@deepagent-code/core/session/task-human-client"
 import { DialogVariant } from "./component/dialog-variant"
 import { createTuiAttention } from "./attention"
 import * as TuiAudio from "./audio"
@@ -154,6 +158,9 @@ export type TuiInput = {
   fetch?: typeof fetch
   headers?: RequestInit["headers"]
   events?: EventSource
+  goalPlan?: GoalPlanClient.Transport
+  mcpOperator?: McpOperatorClient.Transport
+  taskControl?: TaskHumanClient.Transport
   pluginHost: TuiPluginHost
 }
 
@@ -294,6 +301,9 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                         fetch={input.fetch}
                                         headers={input.headers}
                                         events={input.events}
+                                        goalPlan={input.goalPlan}
+                                        mcpOperator={input.mcpOperator}
+                                        taskControl={input.taskControl}
                                       >
                                         <ProjectProvider>
                                           <SyncProvider>
@@ -955,6 +965,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         },
         category: i18n.t("tui.category.system"),
       },
+      attentionCommand(dialog, i18n),
       {
         // W4-3 — IM panel: group list, chat view with live WS messages, send.
         name: "im.list",
@@ -1130,6 +1141,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
   event.on("tui.command.execute", (evt, { workspace }) => {
     if (workspace !== project.workspace.current()) return
+    // HTTP event relays cannot act as the local keyboard while a private Goal
+    // interaction (including its approval wait and child dialogs) is in progress.
+    if (sdk.goalPlanProtected() || sdk.mcpProtected() || sdk.taskControlProtected()) return
     keymap.dispatchCommand(evt.properties.command)
   })
 
@@ -1145,6 +1159,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
   event.on("tui.session.select", (evt, { workspace }) => {
     if (workspace !== project.workspace.current()) return
+    if (sdk.goalPlanProtected() || sdk.mcpProtected() || sdk.taskControlProtected()) return
     route.navigate({
       type: "session",
       sessionID: evt.properties.sessionID,

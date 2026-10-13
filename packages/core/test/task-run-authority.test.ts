@@ -98,6 +98,33 @@ const inputRowCount = (db: DatabaseService, sessionID: SessionSchema.ID) =>
     .pipe(Effect.orDie)
 
 describe("Core V2 durable TaskRun authority", () => {
+  test("a real unresolved child preserves its ready workspace and evidence across a cold fileDB reopen", async () => {
+    await using tmp = await tmpdir()
+    const fixture = path.join(import.meta.dirname, "fixture", "task-run-unconfirmed-process.ts")
+    const parentID = SessionSchema.ID.create()
+    const env = {
+      ...process.env,
+      DEEPAGENT_CODE_TEST_HOME: path.join(tmp.path, "home"),
+      DEEPAGENT_CODE_HOME: path.join(tmp.path, "home"),
+    }
+    const run = (phase: string) =>
+      Bun.spawnSync([process.execPath, fixture, path.join(tmp.path, "authority.sqlite"), phase, tmp.path, parentID], {
+        env,
+        cwd: import.meta.dirname + "/..",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+    const first = run("quarantine")
+    expect(first.stderr.toString()).toBe("")
+    expect(first.exitCode).toBe(0)
+    expect(first.stdout.toString()).toContain('"state":"recovery_required","worktreeState":"ready","inputs":1')
+    const cold = run("cold")
+    expect(cold.stderr.toString()).toBe("")
+    expect(cold.exitCode).toBe(0)
+    expect(cold.stdout.toString()).toContain('"phase":"cold","state":"recovery_required"')
+    expect(cold.stdout.toString()).toContain('"locationAcquisitions":0,"terminalReceipts":0,"outbox":0,"dispatcher":0')
+  }, 30_000)
+
   it.effect("admitRun admits once; exact retry returns the existing run with zero new rows", () =>
     Effect.gen(function* () {
       const { db, sessions } = yield* services

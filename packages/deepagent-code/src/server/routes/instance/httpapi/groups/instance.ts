@@ -14,6 +14,7 @@ import {
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
 import { described } from "./metadata"
+import { ServiceUnavailableError } from "../errors"
 
 const PathInfo = Schema.Struct({
   home: Schema.String,
@@ -185,7 +186,8 @@ export const InstanceApi = HttpApi.make("instance")
         ),
         HttpApiEndpoint.get("command", InstancePaths.command, {
           query: WorkspaceRoutingQuery,
-          success: described(Schema.Array(Command.Info), "List of commands"),
+          success: described(Schema.Array(Command.ReadInfo), "Read-only command metadata"),
+          error: ServiceUnavailableError,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "command.list",

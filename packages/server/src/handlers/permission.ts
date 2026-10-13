@@ -4,6 +4,8 @@ import { PermissionSaved } from "@deepagent-code/core/permission/saved"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentActivityAuthority } from "@deepagent-code/core/deepagent/activity-authority"
+import { SessionActivityTable } from "@deepagent-code/core/context-federation/session-sql"
+import { and, eq } from "drizzle-orm"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -48,8 +50,14 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
                 activityKind: "v2",
                 activityID,
               }).pipe(Effect.provideService(Database.Service, database), Effect.orDie)
-              if (current.objective.state === "active")
-                yield* session.resume(ctx.params.sessionID).pipe(
+              const active = current.objective.state === "active" && (yield* database.db
+                .select({ activityID: SessionActivityTable.activity_id })
+                .from(SessionActivityTable)
+                .where(and(eq(SessionActivityTable.activity_id, activityID),
+                  eq(SessionActivityTable.session_id, ctx.params.sessionID), eq(SessionActivityTable.state, "active")))
+                .get().pipe(Effect.orDie))
+              if (active)
+                yield* session.resume(ctx.params.sessionID, { activityID }).pipe(
                   Effect.catchCause((cause) => Effect.logError("V2 no-progress continuation failed", { cause })),
                   Effect.forkDetach,
                 )

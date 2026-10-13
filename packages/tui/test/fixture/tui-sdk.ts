@@ -62,6 +62,8 @@ export function createFetch(override?: FetchHandler) {
     if (url.pathname === "/project/current") return json({ id: "proj_test" })
     if (url.pathname === "/provider") return json({ all: [], default: {}, connected: [] })
     if (url.pathname === "/session") return json([])
+    if (url.pathname === "/context/eventsCursor") return json({ watermark: 0, cursor: 0, floor: 0 })
+    if (url.pathname === "/context/events") return json({ events: [], floor: 0 })
     if (url.pathname === "/vcs") return json({ branch: "main" })
     throw new Error(`unexpected request: ${url.pathname}`)
   }) as typeof globalThis.fetch

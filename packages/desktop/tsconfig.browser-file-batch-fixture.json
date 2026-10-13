@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.browser-public-fixture.json",
+  "compilerOptions": { "types": ["bun", "node"] },
+  "include": [
+    "src/main/managed-browser-file-batch-canonical.test.ts",
+    "src/main/fixture/managed-browser-file-batch-canonical.ts",
+    "../deepagent-code/test/browser/fixture/native-file-batch-canonical-child.ts",
+    "../deepagent-code/src/audio.d.ts"
+  ]
+}

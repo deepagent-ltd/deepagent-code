@@ -3,17 +3,26 @@ import { Location } from "@deepagent-code/core/location"
 import { PermissionSaved } from "@deepagent-code/core/permission/saved"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { optionalOmitUndefined } from "@deepagent-code/core/schema"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { PermissionNotFoundError, SessionNotFoundError } from "../errors"
 import { SessionLocationMiddleware } from "../middleware/session-location"
 import { LocationQuery, locationQueryOpenApi, LocationMiddleware } from "./location"
 
+// Internal permission events retain their schema; HTTP lists omit absent JSON fields to match the SDK.
+export const PermissionRequestView = Schema.Struct({
+  ...PermissionV2.Request.fields,
+  save: optionalOmitUndefined(Schema.Array(Schema.String)),
+  metadata: optionalOmitUndefined(Schema.Record(Schema.String, Schema.Unknown)),
+  source: optionalOmitUndefined(PermissionV2.Source),
+}).annotate({ identifier: "PermissionRequestView" })
+
 export const PermissionGroup = HttpApiGroup.make("server.permission")
   .add(
     HttpApiEndpoint.get("permission.request.list", "/api/permission/request", {
       query: LocationQuery,
-      success: Location.response(Schema.Array(PermissionV2.Request)),
+      success: Location.response(Schema.Array(PermissionRequestView)),
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -52,7 +61,7 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
   .add(
     HttpApiEndpoint.get("session.permission.list", "/api/session/:sessionID/permission", {
       params: { sessionID: SessionV2.ID },
-      success: Schema.Struct({ data: Schema.Array(PermissionV2.Request) }),
+      success: Schema.Struct({ data: Schema.Array(PermissionRequestView) }),
       error: SessionNotFoundError,
     })
       .middleware(SessionLocationMiddleware)

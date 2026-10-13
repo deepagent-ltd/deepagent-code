@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@deepagent-code/sdk",
-  "version": "1.0.0-beta",
+  "version": "2.0.4",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "scripts": {
@@ -14,12 +14,14 @@
     "./client": "./src/client.ts",
     "./server": "./src/server.ts",
     "./transcript": "./src/transcript.ts",
-    "./transcript-file": "./src/transcript-file.ts"
+    "./transcript-file": "./src/transcript-file.ts",
+    "./mcp-app-observer": "./src/mcp-app-observer.ts"
   },
   "files": [
     "dist"
   ],
   "devDependencies": {
+    "@types/bun": "catalog:",
     "@hey-api/openapi-ts": "0.97.3",
     "@tsconfig/node22": "catalog:",
     "@types/cross-spawn": "catalog:",

@@ -1126,6 +1126,12 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
         onSelect: () => openServer(),
       },
       {
+        id: "attention.open",
+        title: language.t("attention.title"),
+        category: language.t("command.category.view"),
+        onSelect: () => void openAttention(),
+      },
+      {
         id: "settings.open",
         title: language.t("command.settings.open"),
         category: language.t("command.category.settings"),
@@ -1327,11 +1333,36 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
     })
   }
 
-  function openSettings() {
+  async function openAttention() {
     const run = ++dialogRun
+    const { DialogAttention } = await import("@/components/dialog-attention")
+    if (dialogDead || dialogRun !== run) return
+    layout.mobileSidebar.hide()
+    dialog.show(() => (
+      <DialogAttention
+        onOpenSession={(session) => {
+          openProject(session.directory, false)
+          navigateWithSidebarReset(`/${base64Encode(session.directory)}/session/${session.id}`)
+          dialog.close()
+        }}
+      />
+    ))
+  }
+
+  function openSettings() {
+    const selected = command.options.find((option) => option.id === "settings.currentSession" && !option.disabled)
+    if (params.id && selected) {
+      selected.onSelect?.()
+      return
+    }
+    const run = ++dialogRun
+    const captured = { directory: currentDir(), scope: server.scope() }
     void import("@/components/settings-v2").then((x) => {
       if (dialogDead || dialogRun !== run) return
-      dialog.show(() => <x.DialogSettings />)
+      dialog.show(() => <x.DialogSettings mcp={{
+        directory: captured.directory,
+        current: () => !dialogDead && server.scope() === captured.scope && currentDir() === captured.directory,
+      }} />)
     })
   }
 
@@ -2508,6 +2539,8 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
       knowledgeLabel={() => language.t("knowledge.title")}
       onOpenKnowledge={() => openKnowledge()}
       reviewPending={() => !!reviewPending.latest}
+      attentionLabel={() => language.t("attention.title")}
+      onOpenAttention={() => void openAttention()}
       historyLabel={() => language.t("sidebar.history")}
       onOpenHistory={openHistoryProjects}
       archivedLabel={() => language.t("session.archived.title")}

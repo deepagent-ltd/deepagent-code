@@ -11,6 +11,23 @@ export function SessionPermissionDock(props: {
   onDecide: (response: "once" | "always" | "reject") => void
 }) {
   const language = useLanguage()
+  const app = () => {
+    const source = props.request.metadata?.mcpApp
+    if (
+      !source ||
+      typeof source !== "object" ||
+      !("type" in source) ||
+      source.type !== "mcp_app" ||
+      !("server" in source) ||
+      typeof source.server !== "string" ||
+      !("tool" in source) ||
+      typeof source.tool !== "string" ||
+      !("invocationID" in source) ||
+      typeof source.invocationID !== "string"
+    )
+      return
+    return { server: source.server, tool: source.tool, invocationID: source.invocationID }
+  }
 
   const toolDescription = () => {
     const key = `settings.permissions.tool.${props.request.permission}.description`
@@ -52,6 +69,17 @@ export function SessionPermissionDock(props: {
         </>
       }
     >
+      <Show when={app()}>
+        {(source) => (
+          <div data-slot="permission-row" data-mcp-app-permission={source().invocationID}>
+            <span data-slot="permission-spacer" aria-hidden="true" />
+            <div data-slot="permission-hint">
+              <p>{language.t("mcp.apps.source", { server: source().server, tool: source().tool })}</p>
+              <code class="break-all">{source().invocationID}</code>
+            </div>
+          </div>
+        )}
+      </Show>
       <Show when={toolDescription()}>
         <div data-slot="permission-row">
           <span data-slot="permission-spacer" aria-hidden="true" />

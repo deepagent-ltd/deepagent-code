@@ -1,10 +1,13 @@
 import { NodeHttpServer } from "@effect/platform-node"
 import { Session } from "@/session/session"
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
+import { ServerAuth } from "@/server/auth"
+import { CorsConfig } from "@/server/cors"
+import { mcpMutationAuthorizationLayer } from "@/server/routes/instance/httpapi/handlers/mcp"
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
-import { McpApi, McpPaths } from "../../src/server/routes/instance/httpapi/groups/mcp"
+import { McpApi, McpPaths, McpAppInvocationOperationError } from "../../src/server/routes/instance/httpapi/groups/mcp"
 import { Authorization } from "../../src/server/routes/instance/httpapi/middleware/authorization"
 import { InstanceContextMiddleware } from "../../src/server/routes/instance/httpapi/middleware/instance-context"
 import {
@@ -18,6 +21,15 @@ const fakeSession = Layer.mock(Session.Service)({})
 const testMcpHandlers = HttpApiBuilder.group(TestHttpApi, "mcp", (handlers) =>
   Effect.succeed(
     handlers
+      .handle("apps", () => Effect.die("unexpected MCP apps"))
+      .handle("appOpen", () => Effect.die("unexpected MCP appOpen"))
+      .handle("appCheck", () => Effect.die("unexpected MCP appCheck"))
+      .handle("appClose", () => Effect.die("unexpected MCP appClose"))
+      .handle("appInvoke", () => Effect.fail(new McpAppInvocationOperationError({ code: "unavailable", error: "App invocation is not installed in this OAuth-only fixture" })))
+      .handle("appInvocationStatus", () => Effect.fail(new McpAppInvocationOperationError({ code: "unavailable", error: "App invocation is not installed in this OAuth-only fixture" })))
+      .handle("appInvocationResult", () => Effect.fail(new McpAppInvocationOperationError({ code: "unavailable", error: "App invocation is not installed in this OAuth-only fixture" })))
+      .handle("appInvocationList", () => Effect.fail(new McpAppInvocationOperationError({ code: "unavailable", error: "App invocation is not installed in this OAuth-only fixture" })))
+      .handle("appViewTools", () => Effect.fail(new McpAppInvocationOperationError({ code: "unavailable", error: "App invocation is not installed in this OAuth-only fixture" })))
       .handle("status", () => Effect.die("unexpected MCP status"))
       .handle("add", () => Effect.die("unexpected MCP add"))
       .handle("catalog", () => Effect.die("unexpected MCP catalog"))
@@ -29,7 +41,15 @@ const testMcpHandlers = HttpApiBuilder.group(TestHttpApi, "mcp", (handlers) =>
       .handle("authAuthenticate", () => Effect.die("unexpected MCP authAuthenticate"))
       .handle("authRemove", () => Effect.die("unexpected MCP authRemove"))
       .handle("connect", () => Effect.die("unexpected MCP connect"))
-      .handle("disconnect", () => Effect.die("unexpected MCP disconnect")),
+      .handle("disconnect", () => Effect.die("unexpected MCP disconnect"))
+      .handle("removeConfig", () => Effect.die("unexpected MCP removeConfig"))
+      .handle("credentialsInitialize", () => Effect.die("unexpected MCP credentialsInitialize"))
+      .handle("credentialsPreview", () => Effect.die("unexpected MCP credentialsPreview"))
+      .handle("credentialsCommit", () => Effect.die("unexpected MCP credentialsCommit"))
+      .handle("credentialsStatus", () => Effect.die("unexpected MCP credentialsStatus"))
+      .handle("credentialsReconcile", () => Effect.die("unexpected MCP credentialsReconcile"))
+      .handle("bindingPreview", () => Effect.die("unexpected MCP bindingPreview"))
+      .handle("bindingRepair", () => Effect.die("unexpected MCP bindingRepair")),
   ),
 )
 
@@ -50,10 +70,19 @@ const testWorkspaceRouting = Layer.succeed(
   ),
 )
 
+const credentials = { username: "mcp-fixture", password: crypto.randomUUID() }
+const currentAuthorization = mcpMutationAuthorizationLayer.pipe(
+  Layer.provide(
+    ServerAuth.Config.layer({ username: credentials.username, password: Option.some(credentials.password) }),
+  ),
+  Layer.provide(Layer.succeed(CorsConfig, undefined)),
+)
+
 const it = testEffect(
   HttpRouter.serve(
     HttpApiBuilder.layer(TestHttpApi).pipe(
       Layer.provide(testMcpHandlers),
+      Layer.provide(currentAuthorization),
       Layer.provide([passthroughAuthorization, passthroughInstanceContext, testWorkspaceRouting, fakeSession]),
     ),
     { disableListenLog: true, disableLogger: true },
@@ -61,9 +90,19 @@ const it = testEffect(
 )
 
 describe("mcp HttpApi OAuth", () => {
-  it.live("preserves oauth state when starting OAuth", () =>
+  it.live("rejects an unauthenticated OAuth start before its handler", () =>
     Effect.gen(function* () {
       const response = yield* HttpClientRequest.post(McpPaths.auth.replace(":name", "demo")).pipe(HttpClient.execute)
+      expect(response.status).toBe(401)
+    }),
+  )
+
+  it.live("preserves oauth state when starting OAuth", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post(McpPaths.auth.replace(":name", "demo")).pipe(
+        HttpClientRequest.setHeader("Authorization", ServerAuth.header(credentials)!),
+        HttpClient.execute,
+      )
 
       expect(response.status).toBe(200)
       expect(yield* response.json).toEqual({

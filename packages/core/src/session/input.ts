@@ -1,12 +1,14 @@
+import { GoalChildSchema } from "../deepagent/goal-child.schema"
 export * as SessionInput from "./input"
 
-import { and, asc, eq, inArray, isNull, lte } from "drizzle-orm"
-import { DateTime, Effect, Schema } from "effect"
+import { and, asc, count, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm"
+import { DateTime, Effect, Option, Schema } from "effect"
 import type { Database } from "../database/database"
-import type { EventV2 } from "../event"
-import { EventSequenceTable } from "../event/sql"
+import { EventV2 } from "../event"
+import { EventTable, EventSequenceTable } from "../event/sql"
 import { Hash } from "../util/hash"
 import { NonNegativeInt } from "../schema"
+import { SessionV1 } from "../v1/session"
 import { V2Schema } from "../v2-schema"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
@@ -87,35 +89,40 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
   const existing = yield* find(db, input.id)
   if (existing !== undefined) return existing
   const timestamp = yield* DateTime.now
-  const commit = input.revertEpoch === undefined && input.commit === undefined
-    ? undefined
-    : (seq: number, event: EventV2.Payload) =>
-        Effect.gen(function* () {
-          if (input.revertEpoch !== undefined) {
-            const session = yield* db
-              .select({ mutationEpoch: SessionTable.mutation_epoch })
-              .from(SessionTable)
-              .where(eq(SessionTable.id, input.sessionID))
-              .get()
-              .pipe(Effect.orDie)
-            if (session?.mutationEpoch !== input.revertEpoch)
-              return yield* new StaleRevertEpoch({
-                sessionID: input.sessionID,
-                expected: input.revertEpoch,
-                actual: session?.mutationEpoch ?? 0,
-              })
-          }
-          if (input.commit) yield* input.commit(seq, event)
-        })
+  const commit =
+    input.revertEpoch === undefined && input.commit === undefined
+      ? undefined
+      : (seq: number, event: EventV2.Payload) =>
+          Effect.gen(function* () {
+            if (input.revertEpoch !== undefined) {
+              const session = yield* db
+                .select({ mutationEpoch: SessionTable.mutation_epoch })
+                .from(SessionTable)
+                .where(eq(SessionTable.id, input.sessionID))
+                .get()
+                .pipe(Effect.orDie)
+              if (session?.mutationEpoch !== input.revertEpoch)
+                return yield* new StaleRevertEpoch({
+                  sessionID: input.sessionID,
+                  expected: input.revertEpoch,
+                  actual: session?.mutationEpoch ?? 0,
+                })
+            }
+            if (input.commit) yield* input.commit(seq, event)
+          })
   return yield* events
-    .publishChecked(SessionEvent.PromptLifecycle.Admitted, {
-      messageID: input.id,
-      sessionID: input.sessionID,
-      timestamp,
-      prompt: input.prompt,
-      delivery: input.delivery,
-      ...(input.revertEpoch === undefined ? {} : { revertEpoch: input.revertEpoch }),
-    }, commit === undefined ? undefined : { commit })
+    .publishChecked(
+      SessionEvent.PromptLifecycle.Admitted,
+      {
+        messageID: input.id,
+        sessionID: input.sessionID,
+        timestamp,
+        prompt: input.prompt,
+        delivery: input.delivery,
+        ...(input.revertEpoch === undefined ? {} : { revertEpoch: input.revertEpoch }),
+      },
+      commit === undefined ? undefined : { commit },
+    )
     .pipe(
       Effect.flatMap((event) =>
         event.seq === undefined
@@ -133,7 +140,9 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
             ),
       ),
       Effect.catch((error) =>
-        error.cause instanceof StaleRevertEpoch ? Effect.fail(error.cause) : Effect.die(error),
+        error.cause instanceof StaleRevertEpoch || error.cause instanceof GoalChildSchema.Error
+          ? Effect.fail(error.cause)
+          : Effect.die(error),
       ),
       Effect.catchDefect((defect) =>
         find(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
@@ -291,9 +300,7 @@ export const equivalent = (
     readonly revertEpoch?: number
   },
 ) =>
-  input.delivery === expected.delivery &&
-  input.revertEpoch === expected.revertEpoch &&
-  matchesPrompt(input, expected)
+  input.delivery === expected.delivery && input.revertEpoch === expected.revertEpoch && matchesPrompt(input, expected)
 
 const matchesPrompt = (input: Admitted, expected: { readonly sessionID: SessionSchema.ID; readonly prompt: Prompt }) =>
   input.sessionID === expected.sessionID &&
@@ -437,42 +444,469 @@ export const pendingQueueInputs = Effect.fn("SessionInput.pendingQueueInputs")(f
   return rows.map(fromRow)
 })
 
-// Non-consuming peek of the agent/model selection the NEXT promotion batch would activate on
-// the session row. The projector applies each promoted prompt's agent/model (last-wins), so the
-// runner can resolve the model/agent for a first prompt BEFORE the safe promotion boundary —
-// promotion itself must wait, because a turn that fails before dispatch has to leave every
-// input pending.
+/** A preparation witness, never an admission or an execution permission. */
+export interface SelectionSnapshot {
+  readonly sessionID: SessionSchema.ID
+  readonly cutoff: number
+  readonly agent: string | undefined
+  readonly model: Prompt["model"]
+}
+
+export class SelectionMismatch extends Error {
+  constructor(readonly reason: "snapshot" | "sequence" | "session" | "input" = "snapshot") {
+    super(`Session selection changed: ${reason}`)
+  }
+}
+
+type SelectionState = {
+  readonly session: typeof SessionTable.$inferSelect
+  readonly count: number
+  readonly digest: string
+  readonly pendingAgent: string | undefined
+  readonly pendingModel: Prompt["model"]
+  readonly queueSequence: number | undefined
+  readonly firstSteerSequence: number | undefined
+  readonly cutoff: number
+  readonly promotion: Delivery | undefined
+}
+const selections = new WeakMap<SelectionSnapshot, SelectionState>()
+const selectionSession = (session: typeof SessionTable.$inferSelect) => ({
+  id: session.id,
+  project: session.project_id,
+  directory: session.directory,
+  workspace: session.workspace_id,
+  parent: session.parent_id,
+  epoch: session.mutation_epoch,
+  interrupt: session.interrupt_seq,
+  agent: session.agent,
+  model: session.model,
+  permission: session.permission,
+})
+const sameSelectionSession = (a: typeof SessionTable.$inferSelect, b: typeof SessionTable.$inferSelect) =>
+  JSON.stringify(selectionSession(a)) === JSON.stringify(selectionSession(b))
+const selectionState = (snapshot: SelectionSnapshot) => {
+  const state = selections.get(snapshot)
+  if (!state) throw new SelectionMismatch()
+  return state
+}
+
+const selectionRows = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  promotion: Delivery | undefined,
+  cutoff: number,
+  after?: number,
+) {
+  if (promotion !== "steer" && promotion !== "queue") return []
+  const steers = yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(
+      and(
+        eq(SessionInputTable.session_id, sessionID),
+        isNull(SessionInputTable.promoted_seq),
+        lte(SessionInputTable.admitted_seq, cutoff),
+        eq(SessionInputTable.delivery, "steer"),
+        after === undefined ? undefined : gt(SessionInputTable.admitted_seq, after),
+      ),
+    )
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .limit(128)
+    .all()
+    .pipe(Effect.orDie)
+  if (promotion === "steer" || after !== undefined) return steers
+  const queued = yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(
+      and(
+        eq(SessionInputTable.session_id, sessionID),
+        isNull(SessionInputTable.promoted_seq),
+        lte(SessionInputTable.admitted_seq, cutoff),
+        eq(SessionInputTable.delivery, "queue"),
+      ),
+    )
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  return queued ? [queued, ...steers] : steers
+})
+
+// Admitted events are intentionally outside the Session snapshot codec's compaction set.
+// Their original projection is the per-page immutable fact, not a caller-created page hash.
+const requireSelectionRows = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  rows: ReadonlyArray<typeof SessionInputTable.$inferSelect>,
+) {
+  if (rows.length === 0) return
+  const admitted = yield* db
+    .select({ seq: EventTable.seq, data: EventTable.data })
+    .from(EventTable)
+    .where(
+      and(
+        eq(EventTable.aggregate_id, sessionID),
+        eq(EventTable.type, EventV2.durableType(SessionEvent.PromptLifecycle.Admitted)),
+        inArray(
+          EventTable.seq,
+          rows.map((row) => row.admitted_seq),
+        ),
+      ),
+    )
+    .all()
+    .pipe(Effect.orDie)
+  if (admitted.length !== rows.length) return yield* Effect.die(new SelectionMismatch("input"))
+  const bySequence = new Map(admitted.map((event) => [event.seq, event.data]))
+  for (const row of rows) {
+    const source = Schema.decodeUnknownOption(SessionEvent.PromptLifecycle.Admitted.data)(
+      bySequence.get(row.admitted_seq),
+    )
+    if (
+      Option.isNone(source) ||
+      source.value.sessionID !== sessionID ||
+      source.value.messageID !== row.id ||
+      source.value.delivery !== row.delivery ||
+      (source.value.revertEpoch ?? null) !== row.revert_epoch ||
+      DateTime.toEpochMillis(source.value.timestamp) !== row.time_created ||
+      !Prompt.equivalence(source.value.prompt, decodePrompt(row.prompt))
+    )
+      return yield* Effect.die(new SelectionMismatch("input"))
+  }
+})
+
+const selectionBatch = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  promotion: Delivery | undefined,
+  cutoff: number,
+) {
+  const batch = {
+    count: 0,
+    digest: Hash.sha256("session.selection.v1"),
+    pendingAgent: undefined as string | undefined,
+    pendingModel: undefined as Prompt["model"],
+    queueSequence: undefined as number | undefined,
+    firstSteerSequence: undefined as number | undefined,
+  }
+  const cursor = { after: undefined as number | undefined }
+  while (true) {
+    const rows = yield* selectionRows(db, sessionID, promotion, cutoff, cursor.after)
+    yield* requireSelectionRows(db, sessionID, rows)
+    for (const row of rows) {
+      batch.count++
+      batch.digest = Hash.sha256(`${batch.digest}\n${JSON.stringify(row)}`)
+      batch.pendingAgent = row.prompt.agent ?? batch.pendingAgent
+      batch.pendingModel = row.prompt.model ?? batch.pendingModel
+      if (row.delivery === "queue") batch.queueSequence = row.admitted_seq
+      if (row.delivery === "steer" && batch.firstSteerSequence === undefined)
+        batch.firstSteerSequence = row.admitted_seq
+    }
+    const steers = rows.filter((row) => row.delivery === "steer")
+    if (steers.length < 128) return batch
+    cursor.after = steers.at(-1)!.admitted_seq
+  }
+})
+
+// Read promotion pages from the original admissions so a deleted or reclassified pending
+// projection cannot silently disappear between pages. Previously promoted rows stay excluded;
+// this batch's own committed prefix is skipped by the immutable admission cursor.
+const selectionPromotionRows = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  state: SelectionState,
+  after: number | undefined,
+) {
+  const page = (delivery: "queue" | "steer") =>
+    db
+      .select({ input: SessionInputTable })
+      .from(EventTable)
+      .leftJoin(
+        SessionInputTable,
+        and(
+          eq(SessionInputTable.session_id, EventTable.aggregate_id),
+          eq(SessionInputTable.admitted_seq, EventTable.seq),
+        ),
+      )
+      .where(
+        and(
+          eq(EventTable.aggregate_id, sessionID),
+          eq(EventTable.type, EventV2.durableType(SessionEvent.PromptLifecycle.Admitted)),
+          eq(sql<string>`json_extract(${EventTable.data}, '$.delivery')`, delivery),
+          lte(EventTable.seq, state.cutoff),
+          delivery === "queue"
+            ? eq(EventTable.seq, state.queueSequence!)
+            : gt(EventTable.seq, after ?? state.firstSteerSequence! - 1),
+          or(
+            isNull(SessionInputTable.promoted_seq),
+            gt(SessionInputTable.promoted_seq, state.cutoff),
+            // Only a real earlier canonical promotion can exclude a historical member.
+            // A changed projection stamp must remain visible and fail before publication.
+            sql`NOT EXISTS (SELECT 1 FROM event selection_promotion
+              WHERE selection_promotion.aggregate_id=${EventTable.aggregate_id}
+                AND selection_promotion.seq=${SessionInputTable.promoted_seq}
+                AND selection_promotion.type=${EventV2.durableType(SessionEvent.PromptLifecycle.Promoted)}
+                AND json_extract(selection_promotion.data, '$.sessionID')=${sessionID}
+                AND json_extract(selection_promotion.data, '$.messageID')=${SessionInputTable.id})`,
+          ),
+        ),
+      )
+      .orderBy(asc(EventTable.seq))
+      .limit(delivery === "queue" ? 1 : 128)
+      .all()
+      .pipe(Effect.orDie)
+  const queue = after === undefined && state.queueSequence !== undefined ? yield* page("queue") : []
+  const steers = state.firstSteerSequence === undefined ? [] : yield* page("steer")
+  const rows = [...queue, ...steers].map((item) => {
+    if (!item.input || item.input.promoted_seq !== null) throw new SelectionMismatch("input")
+    return item.input
+  })
+  yield* requireSelectionRows(db, sessionID, rows)
+  return rows
+})
+
+// Capture one real SQL batch. Agent and model are independently last-wins, exactly like the
+// projector. The aggregate sequence catches even A→B→A switches before an epoch exists.
+export const captureSelection = Effect.fn("SessionInput.captureSelection")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  promotion: Delivery | undefined,
+) {
+  return yield* db
+    .transaction(
+      () =>
+        Effect.gen(function* () {
+          const session = yield* db
+            .select()
+            .from(SessionTable)
+            .where(eq(SessionTable.id, sessionID))
+            .get()
+            .pipe(Effect.orDie)
+          if (!session) return yield* Effect.die(new SelectionMismatch())
+          const cutoff = yield* latestSeq(db, sessionID)
+          const batch = yield* selectionBatch(db, sessionID, promotion, cutoff)
+          const agent = batch.pendingAgent ?? session.agent ?? undefined
+          const model = batch.pendingModel ?? session.model ?? undefined
+          const snapshot: SelectionSnapshot = Object.freeze({
+            sessionID,
+            cutoff,
+            agent,
+            model: model === undefined ? undefined : Object.freeze({ ...model }),
+          })
+          selections.set(snapshot, { session, ...batch, cutoff, promotion })
+          return snapshot
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie)
+})
+
+// Call inside the epoch's transaction, after expensive Context observation. A snapshot carries
+// only observed facts; a caller-created object cannot substitute a guessed selector or batch.
+export const requireSelection = Effect.fn("SessionInput.requireSelection")(function* (
+  db: DatabaseService,
+  snapshot: SelectionSnapshot,
+) {
+  const state = selectionState(snapshot)
+  const session = yield* db
+    .select()
+    .from(SessionTable)
+    .where(eq(SessionTable.id, snapshot.sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  if (
+    !session ||
+    !sameSelectionSession(state.session, session) ||
+    (yield* latestSeq(db, snapshot.sessionID)) !== state.cutoff
+  )
+    return yield* Effect.die(new SelectionMismatch())
+  const batch = yield* selectionBatch(db, snapshot.sessionID, state.promotion, state.cutoff)
+  if (batch.count !== state.count || batch.digest !== state.digest) return yield* Effect.die(new SelectionMismatch())
+})
+
+const requireMirrorGap = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  after: number,
+  through: number,
+) {
+  if (through < after) return yield* Effect.die(new SelectionMismatch("sequence"))
+  if (through === after) return
+  const mirrored = yield* db
+    .select({ count: count() })
+    .from(EventTable)
+    .where(
+      and(
+        eq(EventTable.aggregate_id, sessionID),
+        gt(EventTable.seq, after),
+        lte(EventTable.seq, through),
+        inArray(EventTable.type, [
+          EventV2.versionedType(SessionV1.Event.MessageUpdated.type, SessionV1.Event.MessageUpdated.sync!.version),
+          EventV2.versionedType(SessionV1.Event.PartUpdated.type, SessionV1.Event.PartUpdated.sync!.version),
+        ]),
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  // The aggregate/sequence uniqueness constraint makes this an exact coverage check. Missing
+  // (e.g. compacted) evidence is not permission to ignore a gap.
+  if (mirrored?.count !== through - after) return yield* Effect.die(new SelectionMismatch("sequence"))
+})
+
+// ContextUpdated is the only selection-neutral canonical event preparation may publish. Its
+// exact committed sequence advances this witness; it never recaptures a different pending batch.
+export const afterContextUpdate = Effect.fn("SessionInput.afterContextUpdate")(function* (
+  db: DatabaseService,
+  snapshot: SelectionSnapshot,
+  event: Pick<EventV2.Payload, "id" | "seq" | "type">,
+) {
+  const seq = event.seq ?? -1
+  const state = selectionState(snapshot)
+  if (seq !== state.cutoff + 1) return yield* Effect.die(new SelectionMismatch("sequence"))
+  return yield* db
+    .transaction(
+      () =>
+        Effect.gen(function* () {
+          const committed = yield* db
+            .select({ id: EventTable.id })
+            .from(EventTable)
+            .where(
+              and(
+                eq(EventTable.id, event.id),
+                eq(EventTable.aggregate_id, snapshot.sessionID),
+                eq(EventTable.seq, seq),
+                eq(
+                  EventTable.type,
+                  EventV2.versionedType(SessionEvent.ContextUpdated.type, SessionEvent.ContextUpdated.sync!.version),
+                ),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+          if (!committed || event.type !== SessionEvent.ContextUpdated.type)
+            return yield* Effect.die(new SelectionMismatch("sequence"))
+          const cutoff = yield* latestSeq(db, snapshot.sessionID)
+          yield* requireMirrorGap(db, snapshot.sessionID, seq, cutoff)
+          const next = Object.freeze({ ...snapshot, cutoff })
+          selections.set(next, { ...state, cutoff })
+          yield* requireSelection(db, next).pipe(
+            Effect.onExit((exit) =>
+              Effect.sync(() => {
+                if (exit._tag === "Failure") selections.delete(next)
+              }),
+            ),
+          )
+          selections.delete(snapshot)
+          return next
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie)
+})
+
+export interface SelectionPromotion {
+  readonly seq: number
+  readonly selectionChanges: number
+  readonly replacementSeq: number | undefined
+}
+
+// Revalidate each promotion in its existing EventV2 transaction. Do not put publish inside an
+// outer transaction: its observers must only see committed projections. New admissions or a
+// switch between batch members cause a rebuild; already committed members remain durable.
+export const promoteSelection = Effect.fn("SessionInput.promoteSelection")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  snapshot: SelectionSnapshot,
+  commit?: (promotion: SelectionPromotion) => Effect.Effect<void>,
+) {
+  const state = selectionState(snapshot)
+  return yield* Effect.gen(function* () {
+    yield* requireSelection(db, snapshot)
+    const promoted: string[] = []
+    const cursor = {
+      seq: state.cutoff,
+      selectionChanges: 0,
+      replacementSeq: undefined as number | undefined,
+      after: undefined as number | undefined,
+    }
+    const expected = { ...state.session }
+    while (promoted.length < state.count) {
+      const rows = yield* db
+        .transaction(() => selectionPromotionRows(db, snapshot.sessionID, state, cursor.after), {
+          behavior: "immediate",
+        })
+        .pipe(Effect.orDie)
+      if (rows.length === 0 || promoted.length + rows.length > state.count)
+        return yield* Effect.die(new SelectionMismatch("input"))
+      for (const row of rows) {
+        expected.agent = row.prompt.agent ?? expected.agent
+        expected.model = row.prompt.model ?? expected.model
+        yield* events.publish(
+          SessionEvent.PromptLifecycle.Promoted,
+          {
+            sessionID: snapshot.sessionID,
+            timestamp: yield* DateTime.now,
+            messageID: SessionMessage.ID.make(row.id),
+            prompt: decodePrompt(row.prompt),
+            timeCreated: DateTime.makeUnsafe(row.time_created),
+          },
+          {
+            commit: (seq) =>
+              Effect.gen(function* () {
+                const session = yield* db
+                  .select()
+                  .from(SessionTable)
+                  .where(eq(SessionTable.id, snapshot.sessionID))
+                  .get()
+                  .pipe(Effect.orDie)
+                const current = yield* db
+                  .select()
+                  .from(SessionInputTable)
+                  .where(eq(SessionInputTable.id, row.id))
+                  .get()
+                  .pipe(Effect.orDie)
+                // Synchronous V1 egress may occupy the sequence gap, but no new admission, switch,
+                // control or canonical history event may enter the frozen promotion batch.
+                if (seq <= cursor.seq) return yield* Effect.die(new SelectionMismatch("sequence"))
+                yield* requireMirrorGap(db, snapshot.sessionID, cursor.seq, seq - 1)
+                if (!session || !sameSelectionSession(expected, session))
+                  return yield* Effect.die(new SelectionMismatch("session"))
+                if (JSON.stringify(current) !== JSON.stringify({ ...row, promoted_seq: seq }))
+                  return yield* Effect.die(new SelectionMismatch("input"))
+                cursor.seq = seq
+                if (row.prompt.agent !== undefined || row.prompt.model !== undefined) {
+                  cursor.selectionChanges++
+                  cursor.replacementSeq = seq
+                }
+                if (promoted.length === state.count - 1 && commit) yield* commit(cursor)
+              }),
+          },
+        )
+        promoted.push(row.id)
+        if (row.delivery === "steer") cursor.after = row.admitted_seq
+      }
+      // Page publication has released every EventV2 transaction before yielding. The next
+      // original admission page and current frontier must still pass their own fences.
+      if (promoted.length < state.count) yield* Effect.yieldNow
+    }
+    return promoted as PromotedInputs
+  }).pipe(Effect.ensuring(Effect.sync(() => selections.delete(snapshot))))
+})
+
+// Compatibility read-only projection for callers that only need pending overrides.
 export const peekActiveSelection = Effect.fn("SessionInput.peekActiveSelection")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   promotion: Delivery | undefined,
 ) {
   if (promotion !== "steer" && promotion !== "queue") return undefined
-  const cutoff = yield* latestSeq(db, sessionID)
-  const pending = (delivery: "steer" | "queue") =>
-    db
-      .select()
-      .from(SessionInputTable)
-      .where(
-        and(
-          eq(SessionInputTable.session_id, sessionID),
-          isNull(SessionInputTable.promoted_seq),
-          eq(SessionInputTable.delivery, delivery),
-          ...(delivery === "steer" ? [lte(SessionInputTable.admitted_seq, cutoff)] : []),
-        ),
-      )
-      .orderBy(asc(SessionInputTable.admitted_seq))
-      .all()
-      .pipe(Effect.orDie)
-  const steers = (yield* pending("steer")).map(fromRow)
-  const queuedRow = promotion === "queue" ? (yield* pending("queue"))[0] : undefined
-  const batch = queuedRow === undefined ? steers : [fromRow(queuedRow), ...steers]
-  const last = batch.findLast((input) => input.prompt.agent !== undefined || input.prompt.model !== undefined)
-  if (last === undefined) return undefined
-  return {
-    ...(last.prompt.agent === undefined ? {} : { agent: last.prompt.agent }),
-    ...(last.prompt.model === undefined ? {} : { model: last.prompt.model }),
-  }
+  const snapshot = yield* captureSelection(db, sessionID, promotion)
+  const state = selectionState(snapshot)
+  selections.delete(snapshot)
+  const agent = state.pendingAgent
+  const model = state.pendingModel
+  if (agent === undefined && model === undefined) return undefined
+  return { ...(agent === undefined ? {} : { agent }), ...(model === undefined ? {} : { model: { ...model } }) }
 })
 
 export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(function* (
@@ -548,7 +982,10 @@ export const consumeGoalSteers = Effect.fn("SessionInput.consumeGoalSteers")(fun
     .where(
       and(
         eq(SessionInputTable.session_id, sessionID),
-        inArray(SessionInputTable.id, ids.map((id) => id)),
+        inArray(
+          SessionInputTable.id,
+          ids.map((id) => id),
+        ),
         isNull(SessionInputTable.promoted_seq),
       ),
     )
@@ -599,15 +1036,18 @@ export const GOAL_STEER_PENDING_NOTICE =
  * goal could receive. Idempotent by the derived deterministic message id: a crash between the notice
  * and the consume (or repeated no-goal drains) never repeats the notice for the same steer.
  */
-export const publishGoalSteerPendingNotice = Effect.fn("SessionInput.publishGoalSteerPendingNotice")(
-  function* (db: DatabaseService, events: EventV2.Interface, sessionID: SessionSchema.ID, steerID: SessionMessage.ID) {
-    yield* publishSyntheticNoticeOnce(db, events, {
-      sessionID,
-      messageID: goalSteerNoticeID(steerID),
-      text: GOAL_STEER_PENDING_NOTICE,
-    })
-  },
-)
+export const publishGoalSteerPendingNotice = Effect.fn("SessionInput.publishGoalSteerPendingNotice")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  sessionID: SessionSchema.ID,
+  steerID: SessionMessage.ID,
+) {
+  yield* publishSyntheticNoticeOnce(db, events, {
+    sessionID,
+    messageID: goalSteerNoticeID(steerID),
+    text: GOAL_STEER_PENDING_NOTICE,
+  })
+})
 
 const toMessage = (input: Admitted) =>
   new SessionMessage.User({

@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS `im_kernel_reader_read_intent_pending_idx`;--> statement-breakpoint
+CREATE UNIQUE INDEX `im_kernel_reader_read_intent_inflight_idx` ON `im_kernel_reader_read_intent` (`reader_key`,`projection_key`) WHERE "im_kernel_reader_read_intent"."phase" IN ('prepared','dispatched');--> statement-breakpoint
+CREATE INDEX `im_kernel_reader_read_intent_unknown_idx` ON `im_kernel_reader_read_intent` (`reader_key`,`projection_key`,`binding_key`,`created_at`,`cut_index`,`action_id`) WHERE "im_kernel_reader_read_intent"."phase" = 'unknown';--> statement-breakpoint
+CREATE INDEX `im_kernel_reader_read_intent_root_idx` ON `im_kernel_reader_read_intent` (`reader_key`,`binding_key`,`projection_key`,`created_at`,`action_id`) WHERE "im_kernel_reader_read_intent"."cut_index" = 0;

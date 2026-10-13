@@ -17,6 +17,6 @@
     "outDir": "node_modules/.ts-dist",
     "types": ["bun", "node"]
   },
-  "include": ["*.ts"],
+  "include": ["*.ts", "../../deepagent-code/src/installation/native-installation.schema.ts", "../../deepagent-code/script/sign-native-node.ts", "../../deepagent-code/script/sign-windows-native-cli.ts", "../../deepagent-code/script/build-linux-native-assets.ts", "../../deepagent-code/script/build-work-file-helper.ts", "../../deepagent-code/script/build-work-storage-cleanup.ts", "../../deepagent-code/script/build-windows-native-bootstrap.ts"],
   "exclude": ["live-llm/**", "subagents-live.ts"]
 }

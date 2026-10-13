@@ -1,4 +1,5 @@
-import { WebContentsView, BrowserWindow, session as electronSession, shell } from "electron"
+import { WebContentsView, BrowserWindow, ipcMain, session, shell } from "electron"
+import type { IpcMainInvokeEvent } from "electron"
 
 // U7 (S1 §P2): a FULLY ISOLATED in-app browser. Hard rules:
 //  - Runs on its OWN session partition ("persist:isolated-browser") — cookies/localStorage/cache are
@@ -16,14 +17,24 @@ const HOME = "about:blank"
 
 type BrowserState = { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean }
 
-let view: WebContentsView | null = null
-let host: BrowserWindow | null = null
-let bounds = { x: 0, y: 0, width: 0, height: 0 }
-let visible = false
+type Entry = {
+  view: WebContentsView
+  bounds: { x: number; y: number; width: number; height: number }
+  visible: boolean
+  closed: () => void
+  closing?: Promise<void>
+}
+// Human browser cookies retain the existing profile. Views and navigation belong to their
+// actual host window; Agent browsing must use a separate empty profile and authority.
+const views = new WeakMap<BrowserWindow, Entry>()
+// Actual contents, including an unconfirmed close, keep their original host and slot alive.
+// Weak window membership alone cannot own a physical WebContents after a close timeout.
+const custody = new Set<Entry>()
+const MAX_BROWSER_VIEWS = 32
 
-function emit() {
-  if (!host || host.isDestroyed() || !view) return
-  const wc = view.webContents
+function emit(host: BrowserWindow, entry: Entry) {
+  if (host.isDestroyed() || views.get(host) !== entry || entry.closing || entry.view.webContents.isDestroyed()) return
+  const wc = entry.view.webContents
   const state: BrowserState = {
     url: wc.getURL(),
     title: wc.getTitle(),
@@ -34,13 +45,16 @@ function emit() {
   host.webContents.send("browser-state", state)
 }
 
-function ensureView(window: BrowserWindow): WebContentsView {
-  if (view && !view.webContents.isDestroyed()) return view
-  host = window
-  const isolated = electronSession.fromPartition(PARTITION)
-  view = new WebContentsView({
+function ensureView(window: BrowserWindow): Entry {
+  const existing = views.get(window)
+  if (existing && !existing.view.webContents.isDestroyed()) {
+    if (existing.closing) throw new Error("Browser contents destruction is unconfirmed")
+    return existing
+  }
+  if (custody.size >= MAX_BROWSER_VIEWS) throw new Error("Browser view capacity is exhausted")
+  const view = new WebContentsView({
     webPreferences: {
-      session: isolated,
+      session: session.fromPartition(PARTITION),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -49,8 +63,21 @@ function ensureView(window: BrowserWindow): WebContentsView {
       // back. There is deliberately no channel for page content to reach the app.
     },
   })
+  const closed = () => {
+    if (views.get(window)?.view === view)
+      void browserView.destroy(window).catch((error) => console.error("Browser view cleanup failed", error))
+  }
+  const entry: Entry = { view, bounds: { x: 0, y: 0, width: 0, height: 0 }, visible: false, closed }
+  views.set(window, entry)
+  custody.add(entry)
 
   const wc = view.webContents
+  wc.once("destroyed", () => {
+    // A late confirmation retires only this physical incarnation, never its replacement.
+    if (views.get(window) === entry) views.delete(window)
+    window.removeListener("closed", entry.closed)
+    custody.delete(entry)
+  })
   // Navigation escape guards: window.open / target=_blank go to the OS browser, never a host window.
   wc.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
@@ -58,67 +85,152 @@ function ensureView(window: BrowserWindow): WebContentsView {
   })
   // The host renderer must never be navigated away by page content. (The browser view itself is
   // free to navigate; this protects the app window, which is a different webContents.)
-  wc.on("will-navigate", () => emit())
-  wc.on("did-navigate", () => emit())
-  wc.on("did-navigate-in-page", () => emit())
-  wc.on("page-title-updated", () => emit())
-  wc.on("did-start-loading", () => emit())
-  wc.on("did-stop-loading", () => emit())
+  wc.on("will-navigate", () => emit(window, entry))
+  wc.on("did-navigate", () => emit(window, entry))
+  wc.on("did-navigate-in-page", () => emit(window, entry))
+  wc.on("page-title-updated", () => emit(window, entry))
+  wc.on("did-start-loading", () => emit(window, entry))
+  wc.on("did-stop-loading", () => emit(window, entry))
+  // Capture this incarnation: a late close event must never close a replacement view.
+  window.once("closed", closed)
 
   window.contentView.addChildView(view)
-  applyBounds()
-  return view
+  applyBounds(entry)
+  return entry
 }
 
-function applyBounds() {
-  if (!view) return
-  view.setBounds(visible ? bounds : { x: 0, y: 0, width: 0, height: 0 })
-  view.setVisible(visible)
+function applyBounds(entry: Entry) {
+  if (entry.closing || entry.view.webContents.isDestroyed()) return
+  entry.view.setBounds(entry.visible ? entry.bounds : { x: 0, y: 0, width: 0, height: 0 })
+  entry.view.setVisible(entry.visible)
 }
 
 export const browserView = {
   show(window: BrowserWindow, rect: { x: number; y: number; width: number; height: number }) {
-    const v = ensureView(window)
-    bounds = rect
-    visible = true
-    applyBounds()
-    if (!v.webContents.getURL()) void v.webContents.loadURL(HOME)
-    emit()
+    if (window.isDestroyed()) return
+    const entry = ensureView(window)
+    entry.bounds = rect
+    entry.visible = true
+    if (!window.contentView.children.includes(entry.view)) window.contentView.addChildView(entry.view)
+    applyBounds(entry)
+    if (!entry.view.webContents.getURL()) void entry.view.webContents.loadURL(HOME).catch(() => {})
+    emit(window, entry)
   },
-  hide() {
-    visible = false
-    applyBounds()
+  hide(window: BrowserWindow) {
+    const entry = views.get(window)
+    if (!entry) return
+    entry.visible = false
+    // A hidden attached child can occlude its host after a renderer reload on macOS.
+    // Detach the same physical view; its contents and custody survive until real close.
+    if (window.contentView.children.includes(entry.view)) window.contentView.removeChildView(entry.view)
+    applyBounds(entry)
   },
-  setBounds(rect: { x: number; y: number; width: number; height: number }) {
-    bounds = rect
-    applyBounds()
+  setBounds(window: BrowserWindow, rect: { x: number; y: number; width: number; height: number }) {
+    const entry = views.get(window)
+    if (!entry) return
+    entry.bounds = rect
+    applyBounds(entry)
   },
-  navigate(url: string) {
-    if (!view) return
-    let target = url.trim()
-    if (!target) return
+  navigate(window: BrowserWindow, url: string) {
+    const entry = views.get(window)
+    const target = url.trim()
+    if (!entry || entry.closing || entry.view.webContents.isDestroyed() || !target) return
     // Only http(s) — never file:// or app protocols that could reach local resources.
-    if (!/^https?:\/\//i.test(target)) target = `https://${target}`
-    void view.webContents.loadURL(target).catch(() => {})
+    void entry.view.webContents.loadURL(/^https?:\/\//i.test(target) ? target : `https://${target}`).catch(() => {})
   },
-  back() {
-    if (view?.webContents.navigationHistory.canGoBack()) view.webContents.navigationHistory.goBack()
+  back(window: BrowserWindow) {
+    const entry = views.get(window)
+    const wc = !entry?.closing ? entry?.view.webContents : undefined
+    if (wc && !wc.isDestroyed() && wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
   },
-  forward() {
-    if (view?.webContents.navigationHistory.canGoForward()) view.webContents.navigationHistory.goForward()
+  forward(window: BrowserWindow) {
+    const entry = views.get(window)
+    const wc = !entry?.closing ? entry?.view.webContents : undefined
+    if (wc && !wc.isDestroyed() && wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward()
   },
-  reload() {
-    view?.webContents.reload()
+  reload(window: BrowserWindow) {
+    const entry = views.get(window)
+    const wc = !entry?.closing ? entry?.view.webContents : undefined
+    if (wc && !wc.isDestroyed()) wc.reload()
   },
-  openExternal() {
-    const url = view?.webContents.getURL()
+  openExternal(window: BrowserWindow) {
+    const entry = views.get(window)
+    const wc = !entry?.closing ? entry?.view.webContents : undefined
+    const url = wc && !wc.isDestroyed() ? wc.getURL() : undefined
     if (url && /^https?:\/\//i.test(url)) void shell.openExternal(url)
   },
-  destroy() {
-    if (view && host && !host.isDestroyed()) host.contentView.removeChildView(view)
-    view = null
-    visible = false
+  async destroy(window: BrowserWindow) {
+    const entry = views.get(window)
+    if (!entry) return
+    if (entry.closing) return entry.closing
+    if (!window.isDestroyed() && window.contentView.children.includes(entry.view))
+      window.contentView.removeChildView(entry.view)
+    const wc = entry.view.webContents
+    if (wc.isDestroyed()) return
+    // Closing is issued once. A timeout retains the original contents, listener and capacity;
+    // only its actual destroyed event makes a new physical view eligible for this host.
+    entry.closing = new Promise<void>((resolve, reject) => {
+      const finish = () => {
+        clearTimeout(timer)
+        resolve()
+      }
+      const timer = setTimeout(() => {
+        wc.removeListener("destroyed", finish)
+        reject(new Error("Browser contents did not confirm destruction"))
+      }, 5000)
+      wc.once("destroyed", finish)
+      wc.close({ waitForBeforeUnload: false })
+    })
+    return entry.closing
   },
 }
 
 export type { BrowserState }
+
+/** Navigation-only IPC. The page view and subframes cannot control a host window. */
+export function registerBrowserViewIpc() {
+  ipcMain.handle("browser-show", (event: IpcMainInvokeEvent, rect: Entry["bounds"]) => {
+    const window = browserWindow(event)
+    if (window) browserView.show(window, rect)
+  })
+  ipcMain.handle("browser-hide", (event: IpcMainInvokeEvent) => {
+    const window = browserWindow(event)
+    if (window) browserView.hide(window)
+  })
+  ipcMain.handle("browser-set-bounds", (event: IpcMainInvokeEvent, rect: Entry["bounds"]) => {
+    const window = browserWindow(event)
+    if (window) browserView.setBounds(window, rect)
+  })
+  ipcMain.handle("browser-navigate", (event: IpcMainInvokeEvent, url: string) => {
+    const window = browserWindow(event)
+    if (window) browserView.navigate(window, url)
+  })
+  ipcMain.handle("browser-back", (event: IpcMainInvokeEvent) => {
+    const window = browserWindow(event)
+    if (window) browserView.back(window)
+  })
+  ipcMain.handle("browser-forward", (event: IpcMainInvokeEvent) => {
+    const window = browserWindow(event)
+    if (window) browserView.forward(window)
+  })
+  ipcMain.handle("browser-reload", (event: IpcMainInvokeEvent) => {
+    const window = browserWindow(event)
+    if (window) browserView.reload(window)
+  })
+  ipcMain.handle("browser-open-external", (event: IpcMainInvokeEvent) => {
+    const window = browserWindow(event)
+    if (window) browserView.openExternal(window)
+  })
+}
+
+function browserWindow(event: IpcMainInvokeEvent) {
+  const window = BrowserWindow.fromWebContents(event.sender)
+  if (
+    !window ||
+    window.isDestroyed() ||
+    window.webContents !== event.sender ||
+    event.senderFrame !== event.sender.mainFrame
+  )
+    return
+  return window
+}

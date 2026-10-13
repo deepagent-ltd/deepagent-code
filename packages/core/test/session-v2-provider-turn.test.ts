@@ -1,5 +1,8 @@
 import { describe, expect } from "bun:test"
 import { generateKeyPairSync } from "node:crypto"
+import { LLM } from "@deepagent-code/llm"
+import { LLMClient, RequestExecutor } from "@deepagent-code/llm/route"
+import { OpenAIResponses } from "@deepagent-code/llm/protocols/openai-responses"
 import { eq, sql } from "drizzle-orm"
 import { Layer, Effect, Stream, Cause } from "effect"
 import { Database } from "../src/database/database"
@@ -25,6 +28,7 @@ import { SessionSchema } from "../src/session/schema"
 import { SessionInputTable, SessionTable } from "../src/session/sql"
 import { PreparedProviderTurn } from "../src/session/runner/prepared-provider-turn"
 import { V2ProviderTurn } from "../src/session/runner/v2-provider-turn"
+import { WorkAuthoritySchema } from "../src/session/work-authority.schema"
 import {
   RuntimeIntegrityEvidenceArtifactTable,
   V2ProviderParityReceiptTable,
@@ -161,6 +165,81 @@ describe("V2 provider turn authority", () => {
       ).toMatchObject({ _tag: "Failure" })
     }),
   )
+
+  it.live("keeps a real pre-seal refusal with production integrity identity and no fictitious dispatched evidence", () =>
+    Effect.gen(function* () {
+      yield* seed()
+      const service = yield* V2ProviderTurn.Service
+      const receipt = yield* admit(service, "msg-integrity-before-seal")
+      const refusal = new WorkAuthoritySchema.Error({ code: "WORK_REVOKED", message: "Count source was revoked" })
+      const observed = { prepared: 0, events: 0 }
+      const outcome = yield* V2ProviderTurn.stream({
+        service, receipt,
+        prepare: (wireHash) => { observed.prepared++; return prepared(receipt, wireHash, true) },
+        beforeSeal: () => Effect.fail(refusal),
+        stream: sealedStream("wire-before-seal", ["unexpected"]).pipe(Stream.tap(() => Effect.sync(() => { observed.events++ }))),
+        outcomeArtifact: () => [], errorCode: () => "count_refused",
+        integrityIdentity: { candidateID: "candidate-before-seal", commit: "commit-before-seal", tree: "tree-before-seal",
+          packageDigest: Hash.sha256("package"), schemaDigest: Hash.sha256("schema"),
+          rootCompositionDigest: Hash.sha256("root"), databaseSchemaDigest: Hash.sha256("database"),
+          eventSchemaDigest: Hash.sha256("event"), capabilityManifestDigest: Hash.sha256("capability") },
+      }).pipe(Stream.runDrain, Effect.exit)
+      expect(outcome._tag).toBe("Failure")
+      if (outcome._tag === "Failure") expect(Cause.squash(outcome.cause)).toBe(refusal)
+      expect(observed).toEqual({ prepared: 0, events: 0 })
+      const stored = yield* service.get(receipt.receiptId)
+      expect(stored).toMatchObject({ state: "failed", errorCode: "wire_seal_failed_before_dispatch" })
+      expect(stored?.preparedTurn).toBeUndefined()
+      expect(stored?.wireRequestHash).toBeUndefined()
+      expect(stored?.integrityEvidence).toBeUndefined()
+      const row = yield* (yield* Database.Service).db.select().from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.receipt_id, receipt.receiptId)).get()
+      expect(row?.dispatching_at).toBeNull()
+      expect(row?.first_event_at).toBeNull()
+      expect(yield* service.listIntegrityEvidenceArtifacts()).toEqual([])
+    }),
+  )
+
+  for (const mode of ["seal-refusal", "provider-invalid", "provider-http"] as const) {
+    it.live(`preserves the actual codec boundary for ${mode}`, () =>
+      Effect.gen(function* () {
+        yield* seed()
+        const service = yield* V2ProviderTurn.Service
+        const receipt = yield* admit(service, `msg-codec-${mode}`)
+        const refusal = new WorkAuthoritySchema.Error({ code: "WORK_REVOKED", message: "Actual seal refused" })
+        const observed = { requests: 0, prepared: 0 }
+        const server = Bun.serve({
+          hostname: "127.0.0.1", port: 0,
+          fetch: () => {
+            observed.requests++
+            return mode === "provider-http"
+              ? Response.json({ error: { message: "Fixture rejected", type: "invalid_request_error" } }, { status: 400 })
+              : new Response("data: invalid JSON\n\n", { headers: { "content-type": "text/event-stream" } })
+          },
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
+        const client = yield* LLMClient.Service
+        const outcome = yield* V2ProviderTurn.stream({
+          service, receipt,
+          prepare: (wireHash) => { observed.prepared++; return prepared(receipt, wireHash, true) },
+          beforeSeal: () => mode === "seal-refusal" ? Effect.fail(refusal) : Effect.void,
+          stream: client.stream(LLM.request({
+            model: OpenAIResponses.route.with({ endpoint: { baseURL: `${server.url.origin}/v1` } }).model({ id: "fixture-model" }),
+            system: "Fixed fixture instructions", prompt: "Actual encoded fixture", generation: { maxTokens: 16 },
+          })),
+          outcomeArtifact: () => [], errorCode: () => "provider_stream_failed:fixture",
+        }).pipe(Stream.runDrain, Effect.exit)
+        expect(outcome._tag).toBe("Failure")
+        if (outcome._tag === "Failure") {
+          const failure = Cause.squash(outcome.cause)
+          if (mode === "seal-refusal") expect(failure).toBe(refusal)
+          if (mode !== "seal-refusal") expect(failure).toMatchObject({ _tag: "LLM.Error" })
+        }
+        expect(observed).toEqual(mode === "seal-refusal" ? { requests: 0, prepared: 0 } : { requests: 1, prepared: 1 })
+        expect((yield* service.get(receipt.receiptId))?.state).toBe(mode === "seal-refusal" ? "failed" : "indeterminate_after_crash")
+      }).pipe(Effect.provide(LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer)))),
+    )
+  }
 
   it.live("exports and persists one immutable runtime-integrity evidence bundle", () =>
     Effect.gen(function* () {
@@ -373,11 +452,30 @@ describe("V2 provider turn authority", () => {
       const receipt = yield* admit(service, "msg-non-retryable-terminal")
       yield* service.abandon(receipt, "provider_unavailable")
 
-      // Only the pre-dispatch owner-loss code is re-openable; every other terminal state is refused.
+      // Only the pre-dispatch failure codes are re-openable; every other terminal state is refused.
       const refused = yield* admit(service, "msg-non-retryable-terminal").pipe(Effect.exit)
       expect(refused._tag).toBe("Failure")
       if (refused._tag === "Failure")
         expect(Cause.squash(refused.cause)).toMatchObject({ _tag: "V2ProviderTurn.UnsafeRetryError" })
+    }),
+  )
+
+  it.live("re-opens an exact retry of a turn abandoned before the wire seal", () =>
+    Effect.gen(function* () {
+      yield* seed()
+      const service = yield* V2ProviderTurn.Service
+      const receipt = yield* admit(service, "msg-seal-failed")
+      // A stream failure before the wire seal abandons the preparing receipt: the turn provably
+      // never dispatched (no generation, no billing), so the exact retry opens a fresh receipt.
+      yield* service.abandon(receipt, "wire_seal_failed_before_dispatch")
+      expect(yield* service.get(receipt.receiptId)).toMatchObject({
+        state: "failed",
+        errorCode: "wire_seal_failed_before_dispatch",
+      })
+
+      const retried = yield* admit(service, "msg-seal-failed")
+      expect(retried.receiptId).not.toBe(receipt.receiptId)
+      expect(retried.state).toBe("preparing")
     }),
   )
 

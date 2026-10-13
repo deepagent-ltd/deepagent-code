@@ -5,6 +5,14 @@ import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { FastCheck } from "effect/testing"
 import { Config } from "@deepagent-code/core/config"
 import { ConfigProvider } from "@deepagent-code/core/config/provider"
+import { ConfigProviderPlugin } from "@deepagent-code/core/config/plugin/provider"
+import { ConfigAgentPlugin } from "@deepagent-code/core/config/plugin/agent"
+import { AgentV2 } from "@deepagent-code/core/agent"
+import { Catalog } from "@deepagent-code/core/catalog"
+import { ModelV2 } from "@deepagent-code/core/model"
+import { PermissionV2 } from "@deepagent-code/core/permission"
+import { ProviderV2 } from "@deepagent-code/core/provider"
+import { eventLayer } from "../fixture/event-layer"
 import { ConfigMigrateV1 } from "@deepagent-code/core/v1/config/migrate"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -86,7 +94,7 @@ describe("Config", () => {
               JSON.stringify({
                 provider: { kimi: { name: "Kimi" } },
                 permission: {},
-                providers: { kimi: { name: "Kimi", models: {} } },
+                providers: { native: { name: "Native only", models: {} }, kimi: { name: "Native Kimi", models: {} } },
               }),
             )
           })
@@ -98,9 +106,138 @@ describe("Config", () => {
             expect(docs.length).toBeGreaterThan(0)
             const providers = docs.flatMap((doc) => Object.keys(doc.info.providers ?? {}))
             expect(providers).toContain("kimi")
+            expect(providers).toContain("native")
+            expect(docs.findLast((doc) => doc.info.providers?.kimi)?.info.providers?.kimi.name).toBe("Native Kimi")
           }).pipe(Effect.provide(testLayer(tmp.path)))
         })
       }),
+    ),
+  )
+
+  it.live("mixed config reaches the actual provider catalog and ordered agent permissions", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(tmp.path, "config.json"),
+              JSON.stringify({
+                provider: {
+                  mixed: {
+                    name: "Legacy",
+                    env: ["LEGACY_TEST_KEY"],
+                    npm: "@ai-sdk/openai",
+                    models: { old: { name: "Old model" } },
+                  },
+                },
+                tools: { bash: true },
+                permission: { bash: "deny", edit: "deny" },
+                providers: {
+                  mixed: {
+                    name: "Native",
+                    api: { type: "native", url: "https://native.invalid/v1", settings: {} },
+                    models: { fresh: { name: "Native model" } },
+                  },
+                  separate: { name: "Native only" },
+                },
+                permissions: [
+                  { action: "bash", resource: "git status", effect: "allow" },
+                  { action: "read", resource: "*", effect: "deny" },
+                  { action: "read", resource: "README.md", effect: "ask" },
+                ],
+              }),
+            ),
+          )
+          return yield* Effect.gen(function* () {
+            const catalog = yield* Catalog.Service
+            const agents = yield* AgentV2.Service
+            yield* agents.update((editor) => editor.update(AgentV2.ID.make("configured"), () => {}))
+            yield* ConfigProviderPlugin.Plugin.effect
+            yield* ConfigAgentPlugin.Plugin.effect
+            expect(yield* catalog.provider.get(ProviderV2.ID.make("mixed"))).toMatchObject({
+              name: "Native",
+              env: ["LEGACY_TEST_KEY"],
+              origin: "config",
+              api: { type: "native", url: "https://native.invalid/v1" },
+            })
+            expect((yield* catalog.provider.get(ProviderV2.ID.make("separate"))).name).toBe("Native only")
+            expect((yield* catalog.model.get(ProviderV2.ID.make("mixed"), ModelV2.ID.make("old"))).name).toBe("Old model")
+            expect((yield* catalog.model.get(ProviderV2.ID.make("mixed"), ModelV2.ID.make("fresh"))).name).toBe(
+              "Native model",
+            )
+            const agent = yield* agents.get(AgentV2.ID.make("configured"))
+            if (!agent) throw new Error("configured agent missing")
+            expect(PermissionV2.evaluate("bash", "git status", agent.permissions).effect).toBe("allow")
+            expect(PermissionV2.evaluate("bash", "rm -rf something", agent.permissions).effect).toBe("deny")
+            expect(PermissionV2.evaluate("edit", "README.md", agent.permissions).effect).toBe("deny")
+            expect(PermissionV2.evaluate("read", "secret", agent.permissions).effect).toBe("deny")
+            expect(PermissionV2.evaluate("read", "README.md", agent.permissions).effect).toBe("ask")
+          }).pipe(
+            Effect.provide(testLayer(tmp.path)),
+            Effect.provide(
+              Layer.mergeAll(Catalog.locationLayer, AgentV2.locationLayer, FSUtil.defaultLayer).pipe(
+                Layer.provide(eventLayer()),
+                Layer.provide(
+                  Layer.succeed(
+                    Location.Service,
+                    Location.Service.of(location({ directory: AbsolutePath.make(tmp.path) })),
+                  ),
+                ),
+              ),
+            ),
+          )
+        }),
+      ),
+    ),
+  )
+
+  it.live("empty native permissions retain legacy denies and invalid native fields fail real loading", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(tmp.path, "config.json"),
+              JSON.stringify({
+                permission: { bash: "deny" },
+                permissions: [],
+              }),
+            ),
+          )
+          const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+            Effect.provide(testLayer(tmp.path)),
+          )
+          expect(
+            PermissionV2.evaluate(
+              "bash",
+              "anything",
+              ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info.permissions ?? []] : [])),
+            ).effect,
+          ).toBe("deny")
+          for (const native of [
+            { permissions: [{ action: "bash", resource: "*", effect: "ALLOW" }] },
+            { permissions: [{ action: "bash", resource: "*", effect: "allow", typo: true }] },
+            { providers: { bad: { api: { type: "unknown" } } } },
+            { providers: { bad: { modelz: {} } } },
+          ]) {
+            yield* Effect.promise(() =>
+              fs.writeFile(path.join(tmp.path, "config.json"), JSON.stringify({ permission: {}, ...native })),
+            )
+            const result = yield* Config.Service.use((config) => config.entries()).pipe(
+              Effect.provide(testLayer(tmp.path)),
+              Effect.exit,
+            )
+            expect(Exit.isFailure(result)).toBe(true)
+            if (Exit.isFailure(result)) expect(Cause.pretty(result.cause)).toContain("Invalid config in")
+          }
+        }),
+      ),
     ),
   )
 
@@ -640,6 +777,36 @@ describe("Config", () => {
           )
           const entries = yield* Config.Service.use((config) => config.entries()).pipe(Effect.provide(testLayer(tmp.path)))
           expect(Config.latest(entries, "mcp")).toEqual(mcp)
+        }),
+      ),
+    ),
+  )
+
+  it.live("requires the installed application LSP consumer and preserves valid V1 configuration", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const lsp = { fixture: { command: ["/fixture/server"], extensions: [".ts"] } }
+          for (const fields of [{}, { permission: {} }]) {
+            yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "deepagent-code.json"), JSON.stringify({ ...fields, lsp })))
+            const absent = yield* Config.Service.use((config) => config.entries()).pipe(Effect.provide(testLayer(tmp.path)), Effect.exit)
+            expect(Exit.isFailure(absent)).toBe(true)
+            if (Exit.isFailure(absent)) expect(Cause.pretty(absent.cause)).toContain("Unsupported Core V2 config")
+            const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+              Effect.provide(testLayer(tmp.path).pipe(Layer.provide(Layer.succeed(Config.ApplicationLSP, { consumer: "ApplicationLSP" })))),
+            )
+            expect(Config.latest(entries, "lsp")).toEqual(lsp)
+          }
+          yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "deepagent-code.json"), JSON.stringify({ lsp: { fixture: { command: [7], extensions: [".ts"] } } })))
+          const malformed = yield* Config.Service.use((config) => config.entries()).pipe(
+            Effect.provide(testLayer(tmp.path).pipe(Layer.provide(Layer.succeed(Config.ApplicationLSP, { consumer: "ApplicationLSP" })))),
+            Effect.exit,
+          )
+          expect(Exit.isFailure(malformed)).toBe(true)
+          if (Exit.isFailure(malformed)) expect(Cause.pretty(malformed.cause)).toContain("Invalid config")
         }),
       ),
     ),

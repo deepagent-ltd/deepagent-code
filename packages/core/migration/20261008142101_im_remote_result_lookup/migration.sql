@@ -1,0 +1,1 @@
+CREATE INDEX `im_kernel_delivery_result_lookup_idx` ON `im_kernel_delivery` (`kernel_message_id`,`state`);

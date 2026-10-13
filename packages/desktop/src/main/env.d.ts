@@ -7,6 +7,12 @@ interface ImportMeta {
 }
 
 declare module "virtual:deepagent-code-server" {
+  export namespace NativeWindowsBootstrap {
+    export function installFixedEntry(): Promise<void>
+  }
+  export namespace BrowserNativeHost {
+    export function prepare(): Promise<void>
+  }
   export namespace Server {
     export const listen: typeof import("../../../deepagent-code/dist/types/src/node").Server.listen
     export type Listener = import("../../../deepagent-code/dist/types/src/node").Server.Listener

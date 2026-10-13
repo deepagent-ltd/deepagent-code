@@ -1,4 +1,5 @@
 import { flipFlagValueOn } from "./flip-flag"
+import { Log } from "../util/log"
 
 /**
  * Mechanism beacon — ablation-correctness instrumentation.
@@ -11,8 +12,8 @@ import { flipFlagValueOn } from "./flip-flag"
  *   [beacon] engage mechanism=<name> detail=<...> — emitted on real use (bounded per mechanism)
  *   [beacon] summary mechanisms=<json>            — engagement counts, emitted on drain end/exit
  *
- * Everything goes to stderr with a stable prefix, so the pier adapter's captured transcript
- * (deepagent.txt) carries the evidence next to the trajectory. Counters are process-local.
+ * Stable prefixes follow the configured log sink. Explicit print logging retains the pier
+ * transcript evidence; normal TUI runs keep instrumentation in their file log.
  */
 
 /** One ablable mechanism: the env key that gates it, the default when unset, and a stable id. */
@@ -55,12 +56,6 @@ export const MECHANISMS: readonly MechanismSpec[] = [
     env: "DEEPAGENT_CODE_EVENT_V2_ADMISSION",
     unsetDefault: true,
     site: "core/deepagent/event-admission.ts admit",
-  },
-  {
-    id: "im_single_write",
-    env: "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE",
-    unsetDefault: true,
-    site: "core/deepagent/im-single-write.ts",
   },
   {
     id: "v2_execution_owner",
@@ -108,7 +103,7 @@ export function emitStartupBeacon(env: Readonly<Record<string, string | undefine
   const summary = Object.fromEntries(
     states.map((state) => [state.id, `${state.enabled ? "ON" : "OFF"}/${state.source}`]),
   )
-  process.stderr.write(`[beacon] startup ${JSON.stringify(summary)}\n`)
+  Log.raw(`[beacon] startup ${JSON.stringify(summary)}\n`)
 }
 
 /**
@@ -120,7 +115,7 @@ export function recordEngagement(mechanism: string, detail?: string): void {
   if (detail !== undefined) details.set(mechanism, detail)
   if (engagedLogged < MAX_ENGAGE_LOGS) {
     engagedLogged++
-    process.stderr.write(`[beacon] engage mechanism=${mechanism}${detail ? ` detail=${detail}` : ""}\n`)
+    Log.raw(`[beacon] engage mechanism=${mechanism}${detail ? ` detail=${detail}` : ""}\n`)
   }
 }
 
@@ -129,7 +124,7 @@ export function emitSummaryBeacon(): void {
   const summary = Object.fromEntries(
     [...counts.entries()].map(([id, count]) => [id, { count, last: details.get(id) ?? null }]),
   )
-  process.stderr.write(`[beacon] summary ${JSON.stringify(summary)}\n`)
+  Log.raw(`[beacon] summary ${JSON.stringify(summary)}\n`)
 }
 
 /** Test/inspection accessor. */

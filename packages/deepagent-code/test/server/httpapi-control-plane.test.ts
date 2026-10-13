@@ -1,3 +1,4 @@
+import { GlobalRuntimeFixture } from "./fixture/global-runtime"
 import { NodeHttpServer } from "@effect/platform-node"
 import { describe, expect } from "bun:test"
 import { Context, Effect, Layer, Option, Ref } from "effect"
@@ -16,6 +17,7 @@ import { RootHttpApi } from "../../src/server/routes/instance/httpapi/api"
 import { controlHandlers } from "../../src/server/routes/instance/httpapi/handlers/control"
 import { controlPlaneHandlers } from "../../src/server/routes/instance/httpapi/handlers/control-plane"
 import { globalHandlers } from "../../src/server/routes/instance/httpapi/handlers/global"
+import { workRecoveryHandlers } from "../../src/server/routes/instance/httpapi/handlers/work-recovery"
 import { authorizationLayer } from "../../src/server/routes/instance/httpapi/middleware/authorization"
 import { schemaErrorLayer } from "../../src/server/routes/instance/httpapi/middleware/schema-error"
 import { testEffect } from "../lib/effect"
@@ -34,7 +36,7 @@ const called = Ref.makeUnsafe<MoveSession.Input | undefined>(undefined)
 
 const apiLayer = HttpRouter.serve(
   HttpApiBuilder.layer(RootHttpApi).pipe(
-    Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
+    Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers, workRecoveryHandlers()]),
     Layer.provide([authorizationLayer, schemaErrorLayer]),
     // Raw HttpApi routes expose an opaque handler context at the request boundary.
     // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
@@ -44,6 +46,7 @@ const apiLayer = HttpRouter.serve(
 ).pipe(
   Layer.provideMerge(NodeHttpServer.layerTest),
   Layer.provide(Layer.mock(Auth.Service)({})),
+    Layer.provide(GlobalRuntimeFixture.layer),
   Layer.provide(Layer.mock(Config.Service)({})),
   Layer.provide(Layer.mock(Installation.Service)({})),
   Layer.provide(
@@ -68,6 +71,22 @@ const apiLayer = HttpRouter.serve(
 const it = testEffect(apiLayer)
 
 describe("control-plane HttpApi", () => {
+  it.live("explicit Work recovery rejects a listener without an enrolled local operator", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post("/api/v1/im/work/work_unenrolled/recover-known").pipe(
+        HttpClientRequest.setBody(HttpBody.jsonUnsafe({
+          sessionID: "ses_unenrolled",
+          requestID: "recover_unenrolled",
+          expectedClaimToken: 1,
+          expectedControlRevision: 1,
+        })),
+        HttpClient.execute,
+      )
+      expect(response.status).toBe(403)
+      expect(yield* response.json).toMatchObject({ status: 403, code: "RECOVERY_AUTH_REQUIRED" })
+    }),
+  )
+
   it.live("moves a session through the root control-plane route", () =>
     Effect.gen(function* () {
       const response = yield* HttpClientRequest.post("/experimental/control-plane/move-session").pipe(

@@ -143,7 +143,7 @@ export function applyDirectoryEvent(input: {
     plan: SessionPlan | undefined,
     options?: SessionPlanUpdateOptions,
   ) => void
-  setSessionGoal?: (sessionID: string, goal: SessionGoal | undefined) => void
+  setSessionGoal?: (sessionID: string, goal: SessionGoal | undefined, options?: { source: "event" | "status" }) => void
   refetchSession?: (sessionID: string) => void
   retainedLimit?: number
 }) {
@@ -264,14 +264,19 @@ export function applyDirectoryEvent(input: {
         stallCount: number
         gaps: string[]
       }
-      input.setSessionGoal?.(props.sessionID, {
-        goalId: props.goalId,
-        planDocId: props.planDocId,
-        phase: props.phase,
-        ledger: props.ledger,
-        stallCount: props.stallCount,
-        gaps: props.gaps,
-      })
+      input.setSessionGoal?.(
+        props.sessionID,
+        {
+          goalId: props.goalId,
+          planDocId: props.planDocId,
+          // The legacy event phase reflects requested intent, not physical completion.
+          phase: "unknown",
+          ledger: props.ledger,
+          stallCount: props.stallCount,
+          gaps: props.gaps,
+        },
+        { source: "event" },
+      )
       break
     }
     case "session.status": {

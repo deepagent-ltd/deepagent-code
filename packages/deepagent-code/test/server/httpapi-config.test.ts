@@ -117,11 +117,16 @@ describe("config HttpApi", () => {
         lsp: false,
       })
       yield* Fiber.join(disposed)
-      expect(yield* Effect.promise(() => Bun.file(path.join(tmp.path, "config.json")).json())).toMatchObject({
+      expect(yield* Effect.promise(() => Bun.file(path.join(tmp.path, "deepagent-code.json")).json())).toMatchObject({
         username: "patched-user",
         formatter: false,
         lsp: false,
       })
+      const reloaded = yield* Effect.promise(() =>
+        Promise.resolve(app().request("/config", { headers: { "x-deepagent-code-directory": tmp.path } })),
+      )
+      expect(reloaded.status).toBe(200)
+      expect(yield* Effect.promise(() => reloaded.json())).toMatchObject({ username: "patched-user" })
     }),
   )
 

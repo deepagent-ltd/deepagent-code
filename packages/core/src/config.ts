@@ -2,7 +2,7 @@ export * as Config from "./config"
 
 import path from "path"
 import { type ParseError, parse } from "jsonc-parser"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import { makeLocationNode } from "./effect/app-node"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
@@ -22,10 +22,12 @@ import { ConfigProvider } from "./config/provider"
 import { ConfigReference } from "./config/reference"
 import { ConfigToolOutput } from "./config/tool-output"
 import { ConfigWatcher } from "./config/watcher"
+import { ConfigIM } from "./config/im"
 import { ConfigVariable } from "./config/variable"
 import { Flag } from "./flag/flag"
 import { ConfigV1 } from "./v1/config/config"
 import { ConfigMigrateV1 } from "./v1/config/migrate"
+import { ConfigLSPV1 } from "./v1/config/lsp"
 import { ConfigMCPV1 } from "./v1/config/mcp"
 
 export class Info extends Schema.Class<Info>("Config.Info")({
@@ -37,6 +39,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   model: Schema.String.pipe(Schema.optional).annotate({
     description: "Default model to use when no session or agent model is selected",
+  }),
+  im: ConfigIM.Info.pipe(Schema.optional).annotate({
+    description: "Independent model selection for personal IM Agent sessions",
   }),
   default_agent: Schema.String.pipe(Schema.optional).annotate({
     description: "Default primary agent to use when no session agent is selected",
@@ -71,6 +76,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   mcp: Schema.Record(Schema.String, Schema.Union([ConfigMCPV1.Info, Schema.Struct({ enabled: Schema.Boolean })])).pipe(Schema.optional).annotate({
     description: "MCP servers consumed by the application V2 MCP tool bridge",
   }),
+  lsp: ConfigLSPV1.Info.pipe(Schema.optional).annotate({
+    description: "Language servers consumed by the explicitly installed application LSP service",
+  }),
   references: ConfigReference.Info.pipe(Schema.optional).annotate({
     description: "Named local directories or Git repositories available as external context",
   }),
@@ -82,11 +90,20 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   providers: Schema.Record(Schema.String, ConfigProvider.Info).pipe(Schema.optional),
 }) {}
 
+// These native fields may coexist with their V1 counterparts in one source file.
+// Both loaders validate them; only the Core plugins consume their native shapes.
+export const MixedNativeFields = Schema.Struct({
+  im: Info.fields.im,
+  providers: Info.fields.providers,
+  permissions: Info.fields.permissions,
+}).annotate({ parseOptions: { onExcessProperty: "error" } })
+
 /** Every field accepted by the Core V2 runtime schema has a named production consumer. */
 export const RuntimeFieldConsumers = {
   $schema: "editor-metadata",
   shell: "BashTool",
   model: "ConfigProviderPlugin",
+  im: "IMDacSession",
   default_agent: "ConfigAgentPlugin",
   permissions: "ConfigAgentPlugin",
   agents: "ConfigAgentPlugin-and-SessionRunner",
@@ -98,6 +115,7 @@ export const RuntimeFieldConsumers = {
   instructions: "ConfigInstructions",
   commands: "ConfigCommandPlugin",
   mcp: "V2McpBridge",
+  lsp: "ApplicationLSP",
   references: "ProjectReference",
   docs_sync: "ProjectDocsSync",
   experimental: "Policy",
@@ -128,7 +146,24 @@ export interface Interface {
   readonly entries: () => Effect.Effect<Entry[]>
 }
 
+/** A trusted placement inherits the actual opened parent service, including document paths.
+ * Apply its policies to the child's Policy service without copying configuration into its tree. */
+export const inheritedLayer = (service: Interface) => Layer.effect(Service, Effect.gen(function* () {
+  const entries = yield* service.entries()
+  yield* (yield* Policy.Service).load([
+    ...entries.filter((entry): entry is Document => entry.type === "document").toReversed()
+      .flatMap((entry) => entry.info.experimental?.policies ?? []),
+    ...ServerCapabilities.envStatements(),
+  ])
+  return service
+})).pipe(Layer.provideMerge(Policy.locationLayer))
+
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/Config") {}
+
+/** Internal application capability. This records an installed consumer, not permission to read or spawn. */
+export class ApplicationLSP extends Context.Service<ApplicationLSP, { readonly consumer: "ApplicationLSP" | null }>()(
+  "@deepagent-code/v2/Config/ApplicationLSP",
+) {}
 
 export const layer = Layer.effect(
   Service,
@@ -137,6 +172,7 @@ export const layer = Layer.effect(
     const global = yield* Global.Service
     const location = yield* Location.Service
     const policy = yield* Policy.Service
+    const applicationLSP = yield* Effect.serviceOption(ApplicationLSP)
     // "config.jsonc" is the canonical global config name the deepagent-code config service
     // consolidates legacy files into (and removes the originals); without it a consolidated
     // global config — providers, model defaults — is invisible to every V2 Location.
@@ -147,7 +183,7 @@ export const layer = Layer.effect(
 
     const loadFile = Effect.fnUntraced(function* (filepath: string) {
       const text = yield* fs.readFileStringSafe(filepath)
-      if (!text) return
+      if (!text) return []
 
       const errors: ParseError[] = []
       const input: unknown = parse(yield* ConfigVariable.substitute({ text, path: filepath, filesystem: fs }), errors, {
@@ -161,7 +197,7 @@ export const layer = Layer.effect(
         )
 
       const v1 = ConfigMigrateV1.isV1(input)
-      const unsupported = unsupportedRuntimeFields(input, v1)
+      const unsupported = unsupportedRuntimeFields(input, v1, Option.isSome(applicationLSP) && applicationLSP.value.consumer === "ApplicationLSP")
       if (unsupported.length > 0) {
         return yield* Effect.die(
           new Error(
@@ -186,33 +222,32 @@ export const layer = Layer.effect(
       // value (formatter/lsp/snapshot/snapshots = false) is accepted regardless of which
       // generation's shape the file uses.
       const stripped = withoutRemovedFeatureFields(withoutDisabledCompatibilityFields(input))
-      //
-      // D3 — `providers` (the Core V2 catalog schema) is stripped before the V1 decode too: a
-      // mixed file (V1 `provider` keys + V2 `providers`) classifies as V1, and decodeV1Info
-      // runs with onExcessProperty:"error" — the V2-only key would die the whole location
-      // config load. The V1 schema has no consumer for it; strip, decode V1, migrate, and the
-      // final decodeInfo re-admits it. (Files with NO V1 keys classify as V2 natively and keep
-      // the key untouched.)
-      let strippedInput = stripped
-      if (v1 && typeof stripped === "object" && stripped !== null && !Array.isArray(stripped) && "providers" in stripped) {
-        const { providers: _v2Providers, ...rest } = stripped as Record<string, unknown>
-        strippedInput = rest
-      }
-      const info = yield* (
-        v1
-          ? decodeV1Info(strippedInput).pipe(Effect.map(ConfigMigrateV1.migrate), Effect.flatMap(decodeInfo))
-          : decodeInfo(strippedInput)
+      // Keep both generations as ordered documents from the same file. Native fields
+      // follow migration, so the existing plugins merge provider fields/models and
+      // append explicit permission rules without discarding unmatched legacy denies.
+      const infos = yield* (
+        v1 && typeof stripped === "object" && stripped !== null && !Array.isArray(stripped)
+          ? Effect.gen(function* () {
+              const fields = Object.entries(stripped)
+              const legacy = yield* decodeV1Info(
+                Object.fromEntries(fields.filter(([key]) => !Object.hasOwn(MixedNativeFields.fields, key))),
+              ).pipe(Effect.map(ConfigMigrateV1.migrate), Effect.flatMap(decodeInfo))
+              const native = fields.filter(([key]) => Object.hasOwn(MixedNativeFields.fields, key))
+              if (!native.length) return [legacy]
+              return [legacy, yield* decodeInfo(Object.fromEntries(native))]
+            })
+          : decodeInfo(stripped).pipe(Effect.map((info) => [info]))
       ).pipe(
         Effect.mapError((error) => new Error(`Invalid config in ${filepath}: ${error.message}`)),
         Effect.orDie,
       )
-      return new Document({ type: "document", path: filepath, info })
+      return infos.map((info) => new Document({ type: "document", path: filepath, info }))
     })
 
     const loadDirectory = Effect.fnUntraced(function* (directory: AbsolutePath) {
       return [
         ...(yield* Effect.forEach(names, (file) => loadFile(path.join(directory, file))).pipe(
-          Effect.map((configs) => configs.filter((config): config is Document => config !== undefined)),
+          Effect.map((configs) => configs.flat()),
         )),
         new Directory({ type: "directory", path: directory }),
       ]
@@ -243,7 +278,7 @@ export const layer = Layer.effect(
     const directPaths = discovered.filter((item) => path.basename(item) !== ".deepagent-code").toReversed()
     const direct = yield* Effect.forEach(directPaths, loadFile).pipe(
       Effect.orDie,
-      Effect.map((configs) => configs.filter((config): config is Document => config !== undefined)),
+      Effect.map((configs) => configs.flat()),
     )
     const supplementary = yield* Effect.forEach(directories, loadDirectory).pipe(Effect.orDie)
     // Apply general settings first and more specific settings last:
@@ -296,7 +331,7 @@ const unsupportedFieldLabel = (key: string) =>
       ? `${key} (DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES is disabled)`
       : key
 
-function unsupportedRuntimeFields(input: unknown, v1: boolean) {
+function unsupportedRuntimeFields(input: unknown, v1: boolean, applicationLSP: boolean) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return []
   const info = input as Record<string, unknown>
   const fields = v1 ? UNSUPPORTED_V1_RUNTIME_FIELDS : UNSUPPORTED_V2_RUNTIME_FIELDS
@@ -304,6 +339,7 @@ function unsupportedRuntimeFields(input: unknown, v1: boolean) {
     ...fields
       .filter((key) => info[key] !== undefined)
       .filter((key) => !isDisabledCompatibilityField(key, info[key]))
+      .filter((key) => key !== "lsp" || !applicationLSP)
       .filter((key) =>
         key === "reference" || key === "references" ? !Flag.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES : true,
       )

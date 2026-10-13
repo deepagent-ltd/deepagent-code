@@ -46,6 +46,7 @@ function normalize(text: string): string {
 const TOP_LEVEL = [
   "acp",
   "mcp",
+  "im",
   "attach",
   "run",
   "debug",
@@ -77,6 +78,9 @@ const TOP_LEVEL = [
 // distinct argv shape, not every leaf. Add new entries when a subcommand
 // gains user-visible flags that we want to lock in.
 const SUBCOMMANDS = [
+  ["im", "work"],
+  ["im", "work", "recover-known"],
+  ["im", "work", "resume-recovered"],
   ["mcp", "list"],
   ["mcp", "add"],
   ["mcp", "auth"],

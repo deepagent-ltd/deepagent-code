@@ -4,7 +4,7 @@ import { Deferred, Effect, Layer, Context, Stream } from "effect"
 import * as HttpServer from "effect/unstable/http/HttpServer"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 
-export type Usage = { input: number; output: number }
+export type Usage = { input: number; output: number; cacheRead?: number }
 
 type Line = Record<string, unknown>
 
@@ -64,6 +64,7 @@ function tokens(input?: Usage) {
     prompt_tokens: input.input,
     completion_tokens: input.output,
     total_tokens: input.input + input.output,
+    ...(input.cacheRead === undefined ? {} : { prompt_tokens_details: { cached_tokens: input.cacheRead } }),
   }
 }
 
@@ -636,7 +637,7 @@ namespace TestLLMServer {
     readonly pushMatch: (match: Match, ...input: (Item | Reply)[]) => Effect.Effect<void>
     readonly textMatch: (match: Match, value: string, opts?: { usage?: Usage }) => Effect.Effect<void>
     readonly toolMatch: (match: Match, name: string, input: unknown) => Effect.Effect<void>
-    readonly toolFrom: (resolve: (hit: Hit) => { name: string; input: unknown }) => Effect.Effect<void>
+    readonly toolFrom: (resolve: (hit: Hit) => { name: string; input: unknown }, opts?: { usage?: Usage }) => Effect.Effect<void>
     readonly text: (value: string, opts?: { usage?: Usage }) => Effect.Effect<void>
     readonly tool: (name: string, input: unknown) => Effect.Effect<void>
     readonly toolHang: (name: string, input: unknown) => Effect.Effect<void>
@@ -756,13 +757,16 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
         }),
         toolFrom: Effect.fn("TestLLMServer.toolFrom")(function* (
           resolve: (hit: Hit) => { name: string; input: unknown },
+          opts?: { usage?: Usage },
         ) {
           list = [
             ...list,
             {
               item: (hit: Hit) => {
                 const tool = resolve(hit)
-                return reply().tool(tool.name, tool.input).item()
+                const out = reply().tool(tool.name, tool.input)
+                if (opts?.usage) out.usage(opts.usage)
+                return out.item()
               },
             },
           ]

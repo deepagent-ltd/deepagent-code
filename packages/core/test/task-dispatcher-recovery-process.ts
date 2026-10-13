@@ -60,6 +60,8 @@ const stack = Layer.mergeAll(
   Layer.mergeAll(TaskRunDispatcher.layer(), TaskOutbox.layer()).pipe(
     Layer.provide(database),
     Layer.provide(sessionsLayer),
+    Layer.provide(events),
+    Layer.provide(SessionExecution.noopLayer),
   ),
 )
 const phase = process.argv[3]!
@@ -119,8 +121,8 @@ const gen = Effect.gen(function* () {
     .get()
     .pipe(Effect.orDie)
 
-  // The settle transaction enqueued the background notification; delivery admits exactly ONE
-  // parent session_input under the deterministic id and marks the row delivered.
+  // This direct programmatic run never registered a canonical parent wait. The result remains
+  // durable/readable after recovery, but a dead owner's claim cannot mint parent inference.
   const outbox = yield* TaskOutbox.Service
   if ((yield* outbox.tick) !== 1) throw new Error("outbox delivery did not run")
   const row = yield* db
@@ -129,14 +131,15 @@ const gen = Effect.gen(function* () {
     .where(eq(TaskNotificationOutboxTable.run_id, runID))
     .get()
     .pipe(Effect.orDie)
-  if (row?.status !== "delivered") throw new Error(`outbox status: ${row?.status}`)
+  if (row?.status !== "dead" || !row.last_error?.includes("unregistered")) throw new Error(`outbox status: ${row?.status}`)
+  if (row.payload.text !== recovered.output) throw new Error("original task result was lost")
   const inputs = yield* db
     .select({ total: count() })
     .from(SessionInputTable)
     .where(eq(SessionInputTable.session_id, parentID))
     .get()
     .pipe(Effect.orDie)
-  if (inputs?.total !== 1) throw new Error(`parent session_input rows: ${inputs?.total}`)
+  if (inputs?.total !== 0) throw new Error(`parent session_input rows: ${inputs?.total}`)
   if ((yield* outbox.tick) !== 0) throw new Error("delivered row was re-claimed")
   if (settledEvents === undefined) throw new Error("run ledger missing")
   console.log("RECOVERED_OK")

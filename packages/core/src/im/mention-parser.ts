@@ -15,8 +15,8 @@ export class MentionParser {
     // Remove fenced code blocks and inline code
     const withoutCode = this.removeCode(content)
 
-    // Extract mentions: @word (alphanumeric, underscore, hyphen)
-    const mentionRegex = /@([\w-]+)/g
+    // Extract Unicode names, including facade identities written in Chinese.
+    const mentionRegex = /@([\p{L}\p{N}_-]+)/gu
     const matches = withoutCode.matchAll(mentionRegex)
 
     const mentions = new Set<string>()

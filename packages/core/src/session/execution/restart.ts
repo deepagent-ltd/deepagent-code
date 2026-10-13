@@ -1,7 +1,7 @@
 export * as SessionRestart from "./restart"
 
 import { Context, Effect, Layer } from "effect"
-import { and, eq, inArray, sql } from "drizzle-orm"
+import { and, eq, gt, inArray, isNotNull, isNull, notLike, or, sql } from "drizzle-orm"
 import { Database } from "../../database/database"
 import {
   SessionProviderAttemptResolutionTable,
@@ -16,7 +16,8 @@ import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { V2ProviderTurnReceiptTable } from "../runner/v2-provider-turn.sql"
 import { V2ToolEffectAdmissionTable, V2ToolEffectTable } from "../runner/v2-tool-effect.sql"
-import { SessionInputTable } from "../sql"
+import { SessionInputTable, SessionTable } from "../sql"
+import { WorkAuthority } from "../work-authority"
 
 export type RecoveryReceipt = {
   readonly receiptId: string
@@ -61,12 +62,7 @@ export type RecoveryTurn = {
 export type RecoveryToolReceipt = {
   readonly receiptId: string
   readonly providerAttemptId?: string
-  readonly providerState:
-    | "preparing"
-    | "prepared"
-    | "dispatching"
-    | "streaming"
-    | "indeterminate_after_crash"
+  readonly providerState: "preparing" | "prepared" | "dispatching" | "streaming" | "indeterminate_after_crash"
   readonly requestState: string
   readonly dispatchingAt?: number
   readonly classification: "safe_before_dispatch" | "recovery_required"
@@ -125,6 +121,17 @@ export type StartupRedrive = {
   }>
 }
 
+export type PendingToolEffect = {
+  readonly sessionID: SessionSchema.ID
+  readonly admissionID: string
+  readonly activityID: string
+  readonly receiptID: string
+  readonly providerAttemptID: string
+  readonly toolCallID: string
+  readonly toolName: string
+  readonly effectKind: "mutating" | "read_only"
+}
+
 export function classifyTurn(receipt: RecoveryReceipt, attempt?: RecoveryAttempt): RecoveryTurn["classification"] {
   if (!attempt || receipt.providerAttemptId !== attempt.attemptId) return "authority_conflict"
   if (
@@ -180,8 +187,7 @@ export function classifyTurn(receipt: RecoveryReceipt, attempt?: RecoveryAttempt
 export function classifyToolReceipt(receipt: {
   readonly providerState: RecoveryToolReceipt["providerState"]
 }): RecoveryToolReceipt["classification"] {
-  if (receipt.providerState === "preparing" || receipt.providerState === "prepared")
-    return "safe_before_dispatch"
+  if (receipt.providerState === "preparing" || receipt.providerState === "prepared") return "safe_before_dispatch"
   return "recovery_required"
 }
 
@@ -197,10 +203,8 @@ export function classifyTaskRun(
   },
   observedAt: number,
 ): RecoveryTaskRun["classification"] {
-  if (run.executionOwner !== undefined && (run.leaseExpiresAt ?? 0) > observedAt)
-    return "owned_elsewhere"
-  if (run.state === "admitted" || run.state === "queued" || run.state === "provisioning")
-    return "safe_before_dispatch"
+  if (run.executionOwner !== undefined && (run.leaseExpiresAt ?? 0) > observedAt) return "owned_elsewhere"
+  if (run.state === "admitted" || run.state === "queued" || run.state === "provisioning") return "safe_before_dispatch"
   return "recovery_required"
 }
 
@@ -222,6 +226,14 @@ export interface Interface {
   readonly suspendActiveSessions: Effect.Effect<void>
   /** Lists unowned claims requiring explicit recovery classification. Never starts provider work. */
   readonly pendingRecovery: Effect.Effect<ReadonlyArray<PendingRecovery>>
+  /** Read-only classification restricted before inventory queries to already-authorized Sessions. */
+  readonly pendingRecoveryFor: (
+    sessionIDs: readonly SessionSchema.ID[],
+  ) => Effect.Effect<ReadonlyArray<PendingRecovery>>
+  /** Reads orphaned tool admissions after a drain released its claim. Never claims or replays work. */
+  readonly pendingToolEffectsFor: (
+    sessionIDs: readonly SessionSchema.ID[],
+  ) => Effect.Effect<ReadonlyArray<PendingToolEffect>>
   /** Exact-releases and re-wakes only provably safe startup work. Past-dispatch work remains fenced. */
   readonly redriveStartup: Effect.Effect<StartupRedrive, SessionRunner.RunError>
 }
@@ -235,22 +247,23 @@ export const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const execution = yield* SessionExecution.Service
     const db = (yield* Database.Service).db
-    const service = Service.of({
-      suspendActiveSessions: Effect.gen(function* () {
-        yield* Effect.forEach(
-          yield* execution.active,
-          (sessionID) =>
-            store.claimToken(sessionID).pipe(
-              Effect.flatMap((token) =>
-                token === undefined ? Effect.die(`Active Session has no durable claim: ${sessionID}`) : Effect.void,
-              ),
-            ),
-          { discard: true },
-        )
-      }),
-      pendingRecovery: Effect.gen(function* () {
+    const pendingRecovery = (allowed?: readonly SessionSchema.ID[]) =>
+      Effect.gen(function* () {
         const active = yield* execution.active
-        const claims = (yield* store.listSuspendedClaims()).filter((claim) => !active.has(claim.sessionID))
+        if (allowed?.length === 0) return []
+        const candidates =
+          allowed === undefined
+            ? yield* store.listSuspendedClaims()
+            : yield* db
+                .select({ sessionID: SessionTable.id, token: SessionTable.execution_claim_token })
+                .from(SessionTable)
+                .where(and(inArray(SessionTable.id, [...allowed]), isNotNull(SessionTable.execution_claim_token)))
+                .all()
+                .pipe(Effect.orDie)
+        const claims = candidates.filter(
+          (claim): claim is { sessionID: SessionSchema.ID; token: number } =>
+            claim.token !== null && !active.has(claim.sessionID),
+        )
         const sessionIDs = claims.map((claim) => claim.sessionID)
         if (sessionIDs.length === 0) return []
         const inventory = yield* db
@@ -272,6 +285,7 @@ export const layer = Layer.effect(
                   wireRequestHash: V2ProviderTurnReceiptTable.wire_request_hash,
                   dispatchingAt: V2ProviderTurnReceiptTable.dispatching_at,
                   attemptState: SessionProviderAttemptTable.state,
+                  attemptSessionId: SessionProviderAttemptTable.session_id,
                   attemptActivityId: SessionProviderAttemptTable.activity_id,
                   attemptTurnSeq: SessionProviderAttemptTable.provider_turn_seq,
                   attemptRequestHash: SessionProviderAttemptTable.request_hash,
@@ -340,6 +354,7 @@ export const layer = Layer.effect(
                   effectKind: V2ToolEffectAdmissionTable.effect_kind,
                   state: V2ToolEffectTable.state,
                   grantReceiptId: V2ToolEffectTable.grant_receipt_id,
+                  ownerToken: V2ToolEffectAdmissionTable.owner_token,
                 })
                 .from(V2ToolEffectAdmissionTable)
                 .leftJoin(
@@ -347,6 +362,11 @@ export const layer = Layer.effect(
                   and(
                     eq(V2ToolEffectAdmissionTable.receipt_id, V2ToolEffectTable.receipt_id),
                     eq(V2ToolEffectAdmissionTable.tool_call_id, V2ToolEffectTable.tool_call_id),
+                    eq(V2ToolEffectAdmissionTable.session_id, V2ToolEffectTable.session_id),
+                    eq(V2ToolEffectAdmissionTable.provider_attempt_id, V2ToolEffectTable.provider_attempt_id),
+                    eq(V2ToolEffectAdmissionTable.tool_name, V2ToolEffectTable.tool_name),
+                    eq(V2ToolEffectAdmissionTable.effect_kind, V2ToolEffectTable.effect_kind),
+                    eq(V2ToolEffectAdmissionTable.owner_token, V2ToolEffectTable.owner_token),
                   ),
                 )
                 .where(inArray(V2ToolEffectAdmissionTable.session_id, sessionIDs))
@@ -364,7 +384,20 @@ export const layer = Layer.effect(
                 WHERE parent_session_id IN (${inSessions})
                   AND state NOT IN ('completed', 'failed', 'error', 'cancelled', 'interrupted', 'closed')
               `)
-              return { observedAt, rows, toolRows, taskRows, effectRows }
+              const work = yield* Effect.forEach(
+                [
+                  ...new Set(
+                    effectRows
+                      .filter((row) => row.state !== null && row.grantReceiptId === null)
+                      .map((row) => row.sessionID),
+                  ),
+                ],
+                (sessionID) =>
+                  WorkAuthority.lookupSession(tx, sessionID).pipe(
+                    Effect.map((value) => ({ sessionID, kind: value.kind })),
+                  ),
+              )
+              return { observedAt, rows, toolRows, taskRows, effectRows, work }
             }),
           )
           .pipe(Effect.orDie)
@@ -412,9 +445,7 @@ export const layer = Layer.effect(
               // recovery must release that claim instead of fencing on the dead chain's lease.
               const receiptTerminal = ["settled", "failed", "indeterminate_after_crash"].includes(receipt.state)
               const ownedElsewhere =
-                !receiptTerminal &&
-                row.ownerReleasedAt === null &&
-                (row.ownerExpiresAt ?? 0) > inventory.observedAt
+                !receiptTerminal && row.ownerReleasedAt === null && (row.ownerExpiresAt ?? 0) > inventory.observedAt
               // A turn recorded under a DIFFERENT execution claim belongs to an older ownership
               // chain: the claim CAS only lets this claim exist after that chain released, and a
               // release follows the turn's terminal classification — so a TERMINAL row under a
@@ -450,33 +481,65 @@ export const layer = Layer.effect(
             })
           const tasks = inventory.taskRows
             .filter((row) => row.parent_session_id === sessionID)
-            .map((row): RecoveryTaskRun => ({
-              runId: row.run_id,
-              childSessionId: row.child_session_id,
-              state: row.state,
-              ...(row.execution_owner === null ? {} : { executionOwner: row.execution_owner }),
-              classification: classifyTaskRun(
-                {
-                  state: row.state,
-                  ...(row.execution_owner === null ? {} : { executionOwner: row.execution_owner }),
-                  ...(row.lease_expires_at === null ? {} : { leaseExpiresAt: row.lease_expires_at }),
-                },
-                inventory.observedAt,
-              ),
-            }))
+            .map(
+              (row): RecoveryTaskRun => ({
+                runId: row.run_id,
+                childSessionId: row.child_session_id,
+                state: row.state,
+                ...(row.execution_owner === null ? {} : { executionOwner: row.execution_owner }),
+                classification: classifyTaskRun(
+                  {
+                    state: row.state,
+                    ...(row.execution_owner === null ? {} : { executionOwner: row.execution_owner }),
+                    ...(row.lease_expires_at === null ? {} : { leaseExpiresAt: row.lease_expires_at }),
+                  },
+                  inventory.observedAt,
+                ),
+              }),
+            )
+          const sourceReceipts = new Set(
+            inventory.rows
+              .filter((receipt) => receipt.sessionID === sessionID && receipt.attemptSessionId === sessionID)
+              .map((receipt) => receipt.receiptId),
+          )
+          const ordinaryTerminals = inventory.work.some(
+            (work) => work.sessionID === sessionID && work.kind === "ordinary",
+          )
+            ? new Map(
+                turns
+                  .filter(
+                    (turn) =>
+                      sourceReceipts.has(turn.receipt.receiptId) &&
+                      turn.classification === "terminal_consistent" &&
+                      classifyTurn(turn.receipt, turn.attempt) === "terminal_consistent",
+                  )
+                  .map((turn) => [turn.receipt.receiptId, turn.receipt]),
+              )
+            : undefined
           const effects = inventory.effectRows
             .filter((row) => row.sessionID === sessionID)
-            .map((row): RecoveryToolEffect => ({
-              effectId: row.effectId ?? row.admissionId,
-              receiptId: row.receiptId,
-              providerAttemptId: row.providerAttemptId,
-              toolCallId: row.toolCallId,
-              toolName: row.toolName,
-              effectKind: row.effectKind,
-              state: row.state ?? "admitted",
-              grantBound: row.grantReceiptId !== null,
-              classification: row.state === null || row.grantReceiptId === null ? "recovery_required" : "terminal_consistent",
-            }))
+            .map((row): RecoveryToolEffect => {
+              // Ordinary DAC tools have no restricted Work grant. Their immutable terminal
+              // outcome still needs the exact provider authority; pending or foreign effects
+              // cannot turn a missing grant into permission to replay side effects.
+              const receipt = ordinaryTerminals?.get(row.receiptId)
+              const ordinaryTerminal =
+                receipt?.providerAttemptId === row.providerAttemptId && receipt.ownerToken === row.ownerToken
+              return {
+                effectId: row.effectId ?? row.admissionId,
+                receiptId: row.receiptId,
+                providerAttemptId: row.providerAttemptId,
+                toolCallId: row.toolCallId,
+                toolName: row.toolName,
+                effectKind: row.effectKind,
+                state: row.state ?? "admitted",
+                grantBound: row.grantReceiptId !== null,
+                classification:
+                  row.state !== null && (row.grantReceiptId !== null || ordinaryTerminal)
+                    ? "terminal_consistent"
+                    : "recovery_required",
+              }
+            })
           return {
             sessionID,
             claimToken: claim.token,
@@ -492,18 +555,116 @@ export const layer = Layer.effect(
             ]),
           }
         })
+      })
+    const service = Service.of({
+      suspendActiveSessions: Effect.gen(function* () {
+        yield* Effect.forEach(
+          yield* execution.active,
+          (sessionID) =>
+            store
+              .claimToken(sessionID)
+              .pipe(
+                Effect.flatMap((token) =>
+                  token === undefined ? Effect.die(`Active Session has no durable claim: ${sessionID}`) : Effect.void,
+                ),
+              ),
+          { discard: true },
+        )
+      }),
+      pendingRecovery: pendingRecovery(),
+      pendingRecoveryFor: (sessionIDs) => pendingRecovery(sessionIDs),
+      pendingToolEffectsFor: Effect.fn("SessionRestart.pendingToolEffectsFor")(function* (sessionIDs) {
+        const active = yield* execution.active
+        const allowed = sessionIDs.filter((id) => !active.has(id))
+        if (allowed.length === 0) return []
+        // A released execution claim is not a resolved external effect. Retain the receipt's
+        // original ownership proof instead of inventing a successor claim for discovery.
+        return yield* db
+          .select({
+            sessionID: V2ToolEffectAdmissionTable.session_id,
+            admissionID: V2ToolEffectAdmissionTable.admission_id,
+            activityID: V2ProviderTurnReceiptTable.activity_id,
+            receiptID: V2ToolEffectAdmissionTable.receipt_id,
+            providerAttemptID: V2ToolEffectAdmissionTable.provider_attempt_id,
+            toolCallID: V2ToolEffectAdmissionTable.tool_call_id,
+            toolName: V2ToolEffectAdmissionTable.tool_name,
+            effectKind: V2ToolEffectAdmissionTable.effect_kind,
+          })
+          .from(V2ToolEffectAdmissionTable)
+          .innerJoin(SessionTable, eq(V2ToolEffectAdmissionTable.session_id, SessionTable.id))
+          .innerJoin(
+            V2ProviderTurnReceiptTable,
+            and(
+              eq(V2ToolEffectAdmissionTable.receipt_id, V2ProviderTurnReceiptTable.receipt_id),
+              eq(V2ToolEffectAdmissionTable.session_id, V2ProviderTurnReceiptTable.session_id),
+              eq(V2ToolEffectAdmissionTable.provider_attempt_id, V2ProviderTurnReceiptTable.provider_attempt_id),
+              eq(V2ToolEffectAdmissionTable.owner_token, V2ProviderTurnReceiptTable.owner_token),
+            ),
+          )
+          .innerJoin(
+            SessionProviderAttemptTable,
+            and(
+              eq(V2ToolEffectAdmissionTable.provider_attempt_id, SessionProviderAttemptTable.attempt_id),
+              eq(V2ToolEffectAdmissionTable.session_id, SessionProviderAttemptTable.session_id),
+              eq(V2ToolEffectAdmissionTable.owner_token, SessionProviderAttemptTable.owner_token),
+              eq(V2ProviderTurnReceiptTable.activity_id, SessionProviderAttemptTable.activity_id),
+              eq(V2ProviderTurnReceiptTable.provider_turn_seq, SessionProviderAttemptTable.provider_turn_seq),
+              eq(V2ProviderTurnReceiptTable.request_input_hash, SessionProviderAttemptTable.request_hash),
+              eq(V2ProviderTurnReceiptTable.provider_id, SessionProviderAttemptTable.provider_id),
+              sql`${V2ProviderTurnReceiptTable.prepared_turn_hash} IS ${SessionProviderAttemptTable.prepared_turn_hash}`,
+              sql`${V2ProviderTurnReceiptTable.wire_request_hash} IS ${SessionProviderAttemptTable.wire_request_hash}`,
+            ),
+          )
+          .innerJoin(
+            SessionProviderOwnerLeaseTable,
+            eq(V2ToolEffectAdmissionTable.owner_token, SessionProviderOwnerLeaseTable.owner_token),
+          )
+          .leftJoin(
+            V2ToolEffectTable,
+            and(
+              eq(V2ToolEffectAdmissionTable.receipt_id, V2ToolEffectTable.receipt_id),
+              eq(V2ToolEffectAdmissionTable.tool_call_id, V2ToolEffectTable.tool_call_id),
+            ),
+          )
+          .where(
+            and(
+              inArray(SessionTable.id, allowed),
+              isNull(SessionTable.execution_claim_token),
+              isNull(SessionTable.workspace_id),
+              eq(SessionTable.v2_authority, true),
+              notLike(SessionTable.id, `${SessionSchema.LEARNING_REVIEWER_SESSION_PREFIX}%`),
+              eq(V2ProviderTurnReceiptTable.owner_mode, "v2"),
+              gt(SessionProviderAttemptTable.execution_claim_token, 0),
+              isNull(V2ToolEffectTable.effect_id),
+              // Owner leases are process-wide: a terminal provider receipt may have a live
+              // lease while its tool outcome remains unknown. Non-terminal remote work is
+              // discoverable only after its owner lease is released or expires.
+              or(
+                inArray(V2ProviderTurnReceiptTable.state, ["settled", "failed", "indeterminate_after_crash"]),
+                isNotNull(SessionProviderOwnerLeaseTable.released_at),
+                sql`${SessionProviderOwnerLeaseTable.lease_expires_at} <= CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`,
+              ),
+            ),
+          )
+          .all()
+          .pipe(
+            Effect.map((rows) => rows.map((row) => ({ ...row, sessionID: SessionSchema.ID.make(row.sessionID) }))),
+            Effect.orDie,
+          )
       }),
       redriveStartup: Effect.gen(function* () {
         const recoveries = yield* Effect.suspend(() => service.pendingRecovery)
         const active = yield* execution.active
         const claims = yield* store.listSuspendedClaims()
         const pendingInputs = yield* db
-          .all<{ session_id: string; admitted_seq: number }>(sql`
+          .all<{ session_id: string; admitted_seq: number }>(
+            sql`
             SELECT session_id, MAX(admitted_seq) AS admitted_seq
             FROM ${SessionInputTable}
             WHERE promoted_seq IS NULL AND delivery IN ('steer', 'queue', 'goal_steer')
             GROUP BY session_id
-          `)
+          `,
+          )
           .pipe(Effect.orDie)
         const released: SessionSchema.ID[] = []
         const woken: SessionSchema.ID[] = []

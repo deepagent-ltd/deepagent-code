@@ -1,4 +1,6 @@
+import type { Effect } from "effect"
 import type { ImportSource } from "./ir"
+import type { ParsedSource, SourceSession } from "./ir"
 export type { ImportSource } from "./ir"
 
 /**
@@ -90,6 +92,28 @@ export interface ImportReport {
   warnings: string[]
   /** Elapsed milliseconds. */
   elapsedMs: number
+  /** True only after the driver reached a boundary without starting another batch. */
+  cancelled?: boolean
+}
+
+/** Durable-job hooks; the CLI may still invoke the same driver without job control. */
+export interface ImportControl {
+  parsed: ParsedSource
+  jobID: string
+  sourceDigest: string
+  assertBatch: (index: number) => Effect.Effect<void, Error>
+  beforeBatch: (session: SourceSession, index: number) => Promise<boolean>
+  afterBatch: (result: SessionImportResult | { error: string; sourceId: string }, index: number) => Promise<void>
+  files?: ImportFileControl
+  sourceFiles?: readonly { path: string; size: number; sha256: string }[]
+}
+
+export interface ImportFileControl {
+  checkpoint: () => Promise<void>
+  beforeBatch: (batchID: string) => Promise<void>
+  preparedBatch: (batchID: string, manifestHash: string) => Promise<string>
+  publish: (batchID: string, action: () => Promise<void>) => Promise<void>
+  afterBatch: () => Promise<void>
 }
 
 export const ALL_SCOPES: ImportScope[] = ["session", "memory", "skill"]

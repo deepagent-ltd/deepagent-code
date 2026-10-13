@@ -13,7 +13,7 @@ import { Context, Data, Effect, Layer, Option, Schema } from "effect"
 import { HttpClient, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
 import * as Socket from "effect/unstable/socket/Socket"
-import { InvalidRequestError } from "../errors"
+import { InvalidRequestError, ServiceUnavailableError } from "../errors"
 
 // Query fields this middleware reads from the URL. Spread into every
 // endpoint query schema in groups that apply WorkspaceRoutingMiddleware,
@@ -231,7 +231,26 @@ function routeHttpApiWorkspace<E>(
 > {
   return Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest
-    const sessionID = getWorkspaceRouteSessionID(requestURL(request))
+    const url = requestURL(request)
+    // MCP's current read model is an implicit-local projection. Reject an
+    // explicit placement before workspace lookup/proxy, not after forwarding.
+    const display = request.method === "GET" &&
+      ["/mcp", "/mcp/catalog", "/experimental/resource", "/command"].includes(url.pathname)
+    const credentials = (request.method === "GET" &&
+      /^\/mcp\/[^/]+\/(?:credentials\/[^/]+|binding\/preview)$/.test(url.pathname)) ||
+      (request.method === "POST" &&
+        /^\/mcp\/[^/]+\/(?:credentials\/(?:initialize|commit|[^/]+\/reconcile)|binding\/repair)$/.test(url.pathname))
+    if ((display || credentials) &&
+      ((credentials ? url.searchParams.has("workspace") : url.searchParams.get("workspace")) || configuredWorkspaceID()))
+      return HttpServerResponse.jsonUnsafe(
+        new ServiceUnavailableError({
+          message: credentials ? "MCP credential operations require implicit-local placement" :
+            "MCP display reads require implicit-local placement",
+          service: "mcp",
+        }),
+        { status: 503 },
+      )
+    const sessionID = getWorkspaceRouteSessionID(url)
     const session = sessionID
       ? yield* Session.Service.use((svc) => svc.get(sessionID)).pipe(
           Effect.catchIf(

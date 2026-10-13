@@ -22,7 +22,11 @@ import { tmpdir } from "./fixture/tmpdir"
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 const issuanceKey = V2OwnerAuthorization.generateAuthorizationKeyPair()
 const run = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientService>) =>
-  Effect.runPromise(effect.pipe(Effect.provide(SqliteClient.layer({ filename, disableWAL: true })), Effect.scoped))
+  Effect.runPromise(Effect.gen(function* () {
+      // Migrations run on the same FK-on client contract as production bootstrap.
+      yield* (yield* SqliteClient.SqliteClient).unsafe("PRAGMA foreign_keys = ON")
+      return yield* effect
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, disableWAL: true })), Effect.scoped))
 
 describe("V2 provider owner containment", () => {
   test("upgrades pre-V2 and pre-campaign disk databases without losing durable sessions", async () => {

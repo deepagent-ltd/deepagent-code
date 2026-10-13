@@ -1,0 +1,1 @@
+CREATE INDEX `im_kernel_reader_read_intent_lookup_idx` ON `im_kernel_reader_read_intent` (`reader_key`,`binding_key`,`projection_key`,`created_at`,`cut_index`,`action_id`);

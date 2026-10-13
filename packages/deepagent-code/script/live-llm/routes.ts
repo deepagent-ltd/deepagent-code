@@ -196,6 +196,61 @@ const allHarnessRuns = [
 
 export const routeManifest = [
   {
+    id: "v2-work-authority-runtime",
+    paths: [
+      "packages/core/src/session/work-*.ts",
+      "packages/core/src/session/tool-quota.schema.ts",
+      "packages/core/src/tool/work-command.ts",
+    ],
+    checks: ["session-v2", "permission", "tool-bash-sandbox", "worktree-routing"],
+    runs: [v2Provider, v4MultiAgentRuntime],
+  },
+  {
+    id: "v2-task-human-control",
+    paths: [
+      "packages/core/src/session/task-human-*.ts",
+      "packages/core/src/session/task-continuation.ts",
+    ],
+    checks: ["session-v2", "permission", "session-continuation"],
+    runs: [v2Provider, interruptedPermissionPackage],
+  },
+  {
+    id: "v2-mcp-app-invocation",
+    paths: ["packages/core/src/session/mcp-app-invocation*.ts"],
+    checks: ["session-v2", "mcp", "permission"],
+    runs: [v2Provider, mcpMarker],
+  },
+  {
+    id: "event-work-host-runtime",
+    paths: [
+      "packages/deepagent-code/src/session/event-work-*.ts",
+      "packages/deepagent-code/src/session/windows-event-git.ts",
+    ],
+    checks: ["session-v2", "permission", "worktree-routing"],
+    runs: [v2Provider, v4MultiAgentRuntime],
+  },
+  {
+    id: "v2-runtime-status-projection",
+    paths: ["packages/deepagent-code/src/session/runtime-status-events.ts"],
+    checks: ["session-v2", "session-continuation", "ui-runtime"],
+    runs: [activityProgressLifecycle, activityProgressRestart],
+  },
+  {
+    id: "v2-canonical-browser-tool",
+    paths: ["packages/core/src/tool/browser.ts"],
+    checks: ["session-v2", "permission", "desktop-runtime"],
+    runs: [v2Provider, packagedSidecar],
+  },
+  {
+    id: "settings-durable-transaction",
+    paths: [
+      "packages/deepagent-code/src/settings/private-file.ts",
+      "packages/deepagent-code/src/settings/transaction.ts",
+    ],
+    checks: ["live-llm-routes", "permission"],
+    runs: [cliHeadless, subagentIntensity],
+  },
+  {
     id: "proxy-gateway",
     paths: [
       "packages/core/src/proxy/**",

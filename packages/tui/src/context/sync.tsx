@@ -6,7 +6,7 @@ import type {
   Part,
   Config,
   SessionTodoInfo,
-  Command,
+  CommandRead,
   PermissionRequest,
   QuestionRequest,
   LspStatus,
@@ -21,8 +21,11 @@ import type {
   ConsoleState,
 } from "@deepagent-code/sdk"
 
-// W2-1 — the projected goal.updated payload shape (kept structural; the SDK schema lives server-side).
+import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
+
+// SSE is a ledger hint; only the status endpoint supplies control authority.
 export type GoalStatus = {
+  control?: GoalClient.Snapshot
   goalId: string
   planDocId: string
   phase: string
@@ -40,7 +43,7 @@ import { useTuiStartup } from "./runtime"
 import { createSimpleContext } from "./helper"
 import { useRenderer } from "@opentui/solid"
 import { useArgs } from "./args"
-import { batch, onMount } from "solid-js"
+import { batch, onCleanup, onMount } from "solid-js"
 import path from "path"
 import { aggregateFailures } from "./aggregate-failures"
 import { useKV } from "./kv"
@@ -82,7 +85,7 @@ export const {
       console_state: ConsoleState
       provider_auth: Record<string, ProviderAuthMethod[]>
       agent: Agent[]
-      command: Command[]
+      command: CommandRead[]
       permission: {
         [sessionID: string]: PermissionRequest[]
       }
@@ -153,6 +156,80 @@ export const {
     const event = useEvent()
     const project = useProject()
     const sdk = useSDK()
+
+    const goalLoads = new Map<string, Promise<void>>()
+    const goalReloads = new Set<string>()
+    const goalWrites = new Map<string, number>()
+    let goalDisposed = false
+    onCleanup(() => {
+      goalDisposed = true
+      goalReloads.clear()
+    })
+    const goalScope = (sessionID: string) => ({
+      server: sdk.url,
+      directory: project.instance.path().directory,
+      sessionID,
+    })
+    const setGoal = (sessionID: string, snapshot: GoalClient.Snapshot | null) => {
+      goalWrites.set(sessionID, (goalWrites.get(sessionID) ?? 0) + 1)
+      const current = store.session_goal[sessionID]
+      if (!snapshot) {
+        setStore("session_goal", sessionID, undefined!)
+        return
+      }
+      if (!GoalClient.accepts(current?.control, snapshot)) return
+      const same = current?.goalId === snapshot.goalId
+      setStore(
+        "session_goal",
+        sessionID,
+        reconcile({
+          goalId: snapshot.goalId,
+          planDocId: snapshot.planDocId,
+          phase: snapshot.phase,
+          control: snapshot,
+          ticks: same ? current.ticks : 0,
+          tokens: same ? current.tokens : 0,
+          cost: same ? current.cost : 0,
+          gaps: same ? current.gaps : [],
+          stallCount: same ? current.stallCount : 0,
+        }),
+      )
+    }
+    const syncGoal = (sessionID: string): Promise<void> => {
+      const scope = goalScope(sessionID)
+      const key = GoalClient.scopeKey(scope)
+      const pending = goalLoads.get(key)
+      if (pending) {
+        goalReloads.add(key)
+        return pending
+      }
+      const client = sdk.client
+      const captured = { goalId: store.session_goal[sessionID]?.goalId, write: goalWrites.get(sessionID) ?? 0 }
+      const task = GoalClient.status(client as unknown as GoalClient.Client, sessionID)
+        .then((snapshot) => {
+          if (
+            goalDisposed ||
+            client !== sdk.client ||
+            key !== GoalClient.scopeKey(goalScope(sessionID)) ||
+            captured.goalId !== store.session_goal[sessionID]?.goalId ||
+            captured.write !== (goalWrites.get(sessionID) ?? 0)
+          )
+            return
+          setGoal(sessionID, snapshot)
+        })
+        .finally(() => {
+          goalLoads.delete(key)
+          if (
+            goalReloads.delete(key) &&
+            !goalDisposed &&
+            client === sdk.client &&
+            key === GoalClient.scopeKey(goalScope(sessionID))
+          )
+            void syncGoal(sessionID).catch(() => undefined)
+        })
+      goalLoads.set(key, task)
+      return task
+    }
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
@@ -243,9 +320,11 @@ export const {
             sessionID: event.properties.sessionID,
             permission: event.properties.action,
             patterns: event.properties.resources,
-            metadata: event.properties.metadata ?? {},
+            metadata: event.properties.source?.type === "mcp_app"
+              ? { ...(event.properties.metadata ?? {}), mcpApp: event.properties.source }
+              : event.properties.metadata ?? {},
             always: event.properties.save ?? [],
-            ...(event.properties.source
+            ...(event.properties.source?.type === "tool"
               ? {
                   tool: {
                     messageID: event.properties.source.messageID,
@@ -352,23 +431,26 @@ export const {
         }
 
         case "goal.updated": {
-          const goal = event.properties
-          const terminal = ["done", "stopped", "rolled_back"].includes(goal.phase)
-          setStore(
-            "session_goal",
-            goal.sessionID,
-            reconcile({
-              goalId: goal.goalId,
-              planDocId: goal.planDocId,
-              phase: goal.phase,
-              ticks: Number(goal.ledger?.ticks ?? 0),
-              tokens: Number(goal.ledger?.tokens ?? 0),
-              cost: Number(goal.ledger?.cost ?? 0),
-              gaps: goal.gaps ?? [],
-              stallCount: Number(goal.stallCount ?? 0),
-            }),
-          )
-          if (terminal) setTimeout(() => setStore("session_goal", goal.sessionID, undefined as unknown as GoalStatus), 8000)
+          const hint = event.properties
+          const current = store.session_goal[hint.sessionID]
+          if (!current || current.goalId === hint.goalId)
+            setStore(
+              "session_goal",
+              hint.sessionID,
+              reconcile({
+                ...current,
+                goalId: hint.goalId,
+                planDocId: hint.planDocId,
+                phase: current?.phase ?? "unknown",
+                ticks: Number(hint.ledger?.ticks ?? 0),
+                tokens: Number(hint.ledger?.tokens ?? 0),
+                cost: Number(hint.ledger?.cost ?? 0),
+                gaps: hint.gaps ?? [],
+                stallCount: Number(hint.stallCount ?? 0),
+              }),
+            )
+          // Never delete an in-flight or newer Goal on a legacy terminal hint or a wall-clock timer.
+          void syncGoal(hint.sessionID).catch(() => undefined)
           break
         }
 
@@ -610,6 +692,7 @@ export const {
     })
 
     const result = {
+      goal: { sync: syncGoal, set: setGoal },
       data: store,
       set: setStore,
       get status() {

@@ -2,6 +2,7 @@ import { Component, createMemo, createResource, createSignal, For, Show } from "
 import { useSync } from "@/context/sync"
 import { useLanguage } from "@/context/language"
 import { IconButton } from "@deepagent-code/ui/icon-button"
+import { Button } from "@deepagent-code/ui/button"
 import { useNavigate, useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
@@ -209,14 +210,16 @@ export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) =>
                     </span>
                   </button>
                   {/* §3.4.3: sibling interactive control — never nest a button inside the row button. */}
-                  <button
+                  <Button
                     type="button"
-                    class="shrink-0 text-11-regular text-text-link hover:underline px-1"
+                    size="small"
+                    variant="ghost"
+                    class="shrink-0"
                     aria-label={`${language.t("session.subagents.open")} ${child.title || child.id}`}
                     onClick={() => navigate(`/${params.dir}/session/${child.id}`)}
                   >
                     {language.t("session.subagents.open")}
-                  </button>
+                  </Button>
                 </div>
               )
             }}

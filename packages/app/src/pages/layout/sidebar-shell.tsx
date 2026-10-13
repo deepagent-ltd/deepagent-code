@@ -21,6 +21,8 @@ export const SidebarContent = (props: {
   settingsLabel: Accessor<string>
   settingsKeybind: Accessor<string | undefined>
   onOpenSettings: () => void
+  attentionLabel: Accessor<string>
+  onOpenAttention: () => void
   historyLabel: Accessor<string>
   onOpenHistory: () => void
   knowledgeLabel: Accessor<string>
@@ -101,6 +103,15 @@ export const SidebarContent = (props: {
           </Tooltip>
         </div>
         <div class="shrink-0 w-full pt-3 pb-6 flex flex-col items-center gap-2">
+          <Tooltip placement={placement()} value={props.attentionLabel()}>
+            <IconButton
+              icon="warning"
+              variant="ghost"
+              size="large"
+              onClick={props.onOpenAttention}
+              aria-label={props.attentionLabel()}
+            />
+          </Tooltip>
           <Tooltip placement={placement()} value={props.historyLabel()}>
             <IconButton
               icon="history"

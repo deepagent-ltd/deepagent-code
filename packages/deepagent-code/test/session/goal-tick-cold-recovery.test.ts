@@ -141,7 +141,7 @@ const coldRunTick: GoalTickConsumer.GoalTickPort = (request) =>
 
 const busLayer = DeepAgentEventBus.layerWith({ now }).pipe(Layer.provideMerge(database))
 const flagLayer = RuntimeFlags.layer({ v4MultiAgentRuntime: true })
-const consumerLayer = GoalTickConsumer.layerWith({ runTick: coldRunTick, runLoop: false }).pipe(
+const consumerLayer = GoalTickConsumer.layerWith({ runTick: coldRunTick, runLoop: false, now }).pipe(
   Layer.provide(busLayer),
   Layer.provide(flagLayer),
 )
@@ -164,6 +164,7 @@ describe("V4.1 §N — goal-tick COLD recovery (disk-only reconstruction)", () =
 
         // ── phase 2: a COLD consumer (fresh bus, fresh everything) drives one tick from a command ──
         const bus = yield* DeepAgentEventBus.Service
+        yield* bus.registerConsumerGroup(GoalTickConsumer.TICK_GROUP, "goal.tick.requested")
         const consumer = yield* GoalTickConsumer.Service
         const cmd = yield* bus.publish(
           GoalTickConsumer.tickCommand({
@@ -202,6 +203,7 @@ describe("V4.1 §N — goal-tick COLD recovery (disk-only reconstruction)", () =
       const handle = yield* makeGoalLoop(coldDeps(root)).start(spec(planDocId))
       const before = readGoalTickCursor(new DocumentStore(root), SESSION, handle.goalId)!
       const bus = yield* DeepAgentEventBus.Service
+      yield* bus.registerConsumerGroup(GoalTickConsumer.TICK_GROUP, "goal.tick.requested")
       const consumer = yield* GoalTickConsumer.Service
       const request = {
         sessionID: SESSION,

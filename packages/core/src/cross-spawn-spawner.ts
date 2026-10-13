@@ -26,6 +26,7 @@ import { PassThrough } from "node:stream"
 import launch from "cross-spawn"
 import { makeGlobalNode } from "./effect/app-node"
 import { filesystem, path } from "./effect/app-node-platform"
+import { ProcessStopUnknown } from "./process-stop-unknown"
 
 const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
 
@@ -95,6 +96,28 @@ const toPlatformError = (
 }
 
 type ExitSignal = Deferred.Deferred<readonly [code: number | null, signal: NodeJS.Signals | null]>
+
+// Shared across spawner layers: an unknown stop keeps its original process in
+// quarantine for this process lifetime, including after its owning Scope closes.
+export const PROCESS_CUSTODY_LIMIT = 128
+const processCustody = new Map<object, { process?: NodeChildProcess.ChildProcess; unknown: boolean }>()
+const processSlots = new WeakMap<NodeChildProcess.ChildProcess, object>()
+
+export function inspectCustody() {
+  return Object.freeze({
+    limit: PROCESS_CUSTODY_LIMIT,
+    live: Array.from(processCustody.values()).filter((entry) => !entry.unknown).length,
+    quarantine: Array.from(processCustody.values()).filter((entry) => entry.unknown).length,
+  })
+}
+
+function releaseCustody(proc: NodeChildProcess.ChildProcess) {
+  const slot = processSlots.get(proc)
+  const entry = slot ? processCustody.get(slot) : undefined
+  if (!slot || !entry || entry.unknown) return
+  processCustody.delete(slot)
+  processSlots.delete(proc)
+}
 
 export const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -266,11 +289,31 @@ export const make = Effect.gen(function* () {
 
   const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
     Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
+      if (processCustody.size >= PROCESS_CUSTODY_LIMIT) {
+        const cause = Object.assign(new Error("PROCESS_CUSTODY_CAPACITY"), { code: "EBUSY" })
+        resume(Effect.fail(toPlatformError("spawn", cause, command)))
+        return
+      }
+      const slot = Object.freeze({})
+      const custody: { process?: NodeChildProcess.ChildProcess; unknown: boolean } = { unknown: false }
+      processCustody.set(slot, custody)
       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
-      const proc = launch(command.command, command.args, opts)
+      const proc = (() => {
+        try {
+          return launch(command.command, command.args, opts)
+        } catch (cause) {
+          processCustody.delete(slot)
+          resume(Effect.fail(toPlatformError("spawn", toError(cause), command)))
+          return undefined
+        }
+      })()
+      if (!proc) return
+      custody.process = proc
+      processSlots.set(proc, slot)
       let end = false
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
       proc.on("error", (err) => {
+        if (proc.pid === undefined) releaseCustody(proc)
         resume(Effect.fail(toPlatformError("spawn", err, command)))
       })
       proc.on("exit", (...args) => {
@@ -284,9 +327,7 @@ export const make = Effect.gen(function* () {
       proc.on("spawn", () => {
         resume(Effect.succeed([proc, signal]))
       })
-      return Effect.sync(() => {
-        proc.kill("SIGTERM")
-      })
+      return stop(command, proc, signal).pipe(Effect.tap(() => Effect.sync(() => releaseCustody(proc))))
     })
 
   const killGroup = (
@@ -342,6 +383,37 @@ export const make = Effect.gen(function* () {
       })
     }
 
+  const unknownStops = new WeakSet<NodeChildProcess.ChildProcess>()
+  const stop = (command: ChildProcess.StandardCommand, proc: NodeChildProcess.ChildProcess,
+    exited: ExitSignal, opts?: ChildProcess.KillOptions) => {
+    if (unknownStops.has(proc)) return Effect.die(new ProcessStopUnknown.Error(proc.pid ?? 0))
+    const send = (signal: NodeJS.Signals) =>
+      proc.exitCode !== null || proc.signalCode !== null
+        ? Effect.void
+        : Effect.catch(killGroup(command, proc, signal), () => killOne(command, proc, signal))
+    const join = Deferred.await(exited).pipe(Effect.asVoid)
+    return Effect.timeoutOrElse(send(opts?.killSignal ?? "SIGTERM").pipe(Effect.ignore, Effect.andThen(join)), {
+      duration: opts?.forceKillAfter ?? 3000,
+      orElse: () => send("SIGKILL").pipe(Effect.ignore, Effect.andThen(join), Effect.timeoutOrElse({
+        duration: 2000,
+        orElse: () => Effect.sync(() => {
+          // Escaped descendants can keep inherited pipes open after the root exits. Closing
+          // our streams bounds the host resource wait; it does not prove those descendants
+          // stopped, so the caller must retain the original unknown effect.
+          proc.stdin?.destroy()
+          proc.stdout?.destroy()
+          proc.stderr?.destroy()
+          proc.unref()
+          unknownStops.add(proc)
+          const slot = processSlots.get(proc)
+          const custody = slot ? processCustody.get(slot) : undefined
+          if (custody) custody.unknown = true
+          return new ProcessStopUnknown.Error(proc.pid ?? 0)
+        }).pipe(Effect.flatMap(Effect.die)),
+      })),
+    })
+  }
+
   const source = (handle: ChildProcessHandle, from: ChildProcess.PipeFromOption | undefined) => {
     const opt = from ?? "stdout"
     switch (opt) {
@@ -379,7 +451,8 @@ export const make = Effect.gen(function* () {
               shell: command.options.shell,
               windowsHide: process.platform === "win32",
             }),
-            Effect.fnUntraced(function* ([proc, signal]) {
+            ([proc, signal]) => Effect.gen(function* () {
+              if (unknownStops.has(proc)) return
               const done = yield* Deferred.isDone(signal)
               const kill = timeout(proc, command, command.options)
               if (done) {
@@ -388,18 +461,8 @@ export const make = Effect.gen(function* () {
                 if (code !== 0 && Predicate.isNotNull(code)) return yield* Effect.ignore(kill(killGroup))
                 return yield* Effect.void
               }
-              const send = (s: NodeJS.Signals) =>
-                Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
-              const sig = command.options.killSignal ?? "SIGTERM"
-              const attempt = send(sig).pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid)
-              const escalated = command.options.forceKillAfter
-                ? Effect.timeoutOrElse(attempt, {
-                    duration: command.options.forceKillAfter,
-                    orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
-                  })
-                : attempt
-              return yield* Effect.ignore(escalated)
-            }),
+              return yield* stop(command, proc, signal, command.options)
+            }).pipe(Effect.tap(() => Effect.sync(() => releaseCustody(proc)))),
           )
 
           const fd = yield* setupFds(command, proc, extra)
@@ -425,15 +488,7 @@ export const make = Effect.gen(function* () {
               )
             }),
             kill: (opts?: ChildProcess.KillOptions) => {
-              const sig = opts?.killSignal ?? "SIGTERM"
-              const send = (s: NodeJS.Signals) =>
-                Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
-              const attempt = send(sig).pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid)
-              if (!opts?.forceKillAfter) return attempt
-              return Effect.timeoutOrElse(attempt, {
-                duration: opts.forceKillAfter,
-                orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
-              })
+              return stop(command, proc, signal, opts)
             },
             unref: Effect.sync(() => {
               if (ref) {

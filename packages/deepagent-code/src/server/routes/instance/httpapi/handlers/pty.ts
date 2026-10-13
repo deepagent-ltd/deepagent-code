@@ -37,296 +37,298 @@ const ticketScope = Effect.gen(function* () {
   return { directory: instance?.directory, workspaceID }
 })
 
-export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handlers) =>
-  Effect.gen(function* () {
-    const tickets = yield* PtyTicket.Service
-    const cors = yield* CorsConfig
-    const locations = yield* LocationServiceMap
-    const unregister = yield* registerDisposer((directory) =>
-      Effect.runPromise(locations.invalidate({ directory: AbsolutePath.make(directory) })),
-    )
-    yield* Effect.addFinalizer(() => Effect.sync(unregister))
+export const ptyHandlers = () =>
+  HttpApiBuilder.group(InstanceHttpApi, "pty", (handlers) =>
+    Effect.gen(function* () {
+      const tickets = yield* PtyTicket.Service
+      const cors = yield* CorsConfig
+      const locations = yield* LocationServiceMap
+      const unregister = yield* registerDisposer((directory) =>
+        Effect.runPromise(locations.invalidate({ directory: AbsolutePath.make(directory) })),
+      )
+      yield* Effect.addFinalizer(() => Effect.sync(unregister))
 
-    // Building the per-directory location layer (plugins, watcher, tools, …)
-    // throws when the directory no longer exists — a stale project path is the
-    // common trigger. Left unhandled inside the scope, that defect races the
-    // scope teardown and the runtime emits an empty-body `503` server-abort,
-    // which the client renders as "(empty response body)". Guard the directory
-    // up front so PTY routes fail with a clear, typed `400` instead.
-    const requireDirectory = Effect.fnUntraced(function* () {
-      const directory = (yield* InstanceState.context).directory
-      const fs = yield* FSUtil.Service
-      if (!(yield* fs.isDir(directory))) {
-        return yield* Effect.fail(
-          new ApiError.InvalidRequestError({
-            message: `Working directory no longer exists: ${directory}`,
-            kind: "Directory",
-            field: "directory",
-          }),
-        )
-      }
-      return directory
-    })
-
-    const pty = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
-      const directory = (yield* InstanceState.context).directory
-      return yield* effect.pipe(Effect.provide(locations.get({ directory: AbsolutePath.make(directory) })))
-    })
-
-    // Same guard, but scoped to routes that must build the location layer for a
-    // live directory. `create` uses this so a stale cwd yields a clean 400.
-    const ptyChecked = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
-      yield* requireDirectory()
-      return yield* pty(effect)
-    })
-
-    const shells = Effect.fn("PtyHttpApi.shells")(function* () {
-      return yield* Effect.promise(() => Shell.list())
-    })
-
-    const list = Effect.fn("PtyHttpApi.list")(function* () {
-      // A stale/removed directory has no sessions — return empty rather than
-      // building the location layer (which would defect on a missing path).
-      const directory = (yield* InstanceState.context).directory
-      const fs = yield* FSUtil.Service
-      if (!(yield* fs.isDir(directory))) return []
-      return yield* pty(Pty.Service.use((service) => service.list()))
-    })
-
-    const create = Effect.fn("PtyHttpApi.create")(function* (ctx: { payload: typeof Pty.CreateInput.Type }) {
-      return yield* ptyChecked(
-        Pty.Service.use((service) =>
-          Effect.flatMap(
-            PtyPreparation.prepareCreate({
-              ...ctx.payload,
-              args: ctx.payload.args ? [...ctx.payload.args] : undefined,
-              env: ctx.payload.env ? { ...ctx.payload.env } : undefined,
-            }),
-            service.create,
-          ),
-        ),
-      ).pipe(
-        // A spawn failure (typically a stale/nonexistent cwd) is a client-fixable
-        // condition, not a server fault — surface it as 400 with a real message
-        // instead of letting the defect become an empty-body 503.
-        Effect.catchTag("Pty.SpawnError", (error) =>
-          Effect.fail(
+      // Building the per-directory location layer (plugins, watcher, tools, …)
+      // throws when the directory no longer exists — a stale project path is the
+      // common trigger. Left unhandled inside the scope, that defect races the
+      // scope teardown and the runtime emits an empty-body `503` server-abort,
+      // which the client renders as "(empty response body)". Guard the directory
+      // up front so PTY routes fail with a clear, typed `400` instead.
+      const requireDirectory = Effect.fnUntraced(function* () {
+        const directory = (yield* InstanceState.context).directory
+        const fs = yield* FSUtil.Service
+        if (!(yield* fs.isDir(directory))) {
+          return yield* Effect.fail(
             new ApiError.InvalidRequestError({
-              message: `Cannot open terminal in "${error.cwd}": ${error.message}`,
-              kind: "Spawn",
-              field: "cwd",
+              message: `Working directory no longer exists: ${directory}`,
+              kind: "Directory",
+              field: "directory",
             }),
-          ),
-        ),
-        Effect.catchTag("Pty.CapacityError", (error) =>
-          Effect.fail(
-            new ApiError.InvalidRequestError({
-              message: `Too many active terminal sessions (limit ${error.limit})`,
-              kind: "Capacity",
-              field: "pty",
-            }),
-          ),
-        ),
-      )
-    })
-
-    const get = Effect.fn("PtyHttpApi.get")(function* (ctx: { params: { ptyID: PtyID } }) {
-      return yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
-        Effect.catchTag("Pty.NotFoundError", (error) =>
-          Effect.fail(
-            new ApiError.PtyNotFoundError({
-              ptyID: error.ptyID,
-              message: `PTY session not found: ${error.ptyID}`,
-            }),
-          ),
-        ),
-      )
-    })
-
-    const update = Effect.fn("PtyHttpApi.update")(function* (ctx: {
-      params: { ptyID: PtyID }
-      payload: typeof Pty.UpdateInput.Type
-    }) {
-      return yield* pty(
-        Pty.Service.use((service) =>
-          service.update(ctx.params.ptyID, {
-            ...ctx.payload,
-            size: ctx.payload.size ? { ...ctx.payload.size } : undefined,
-          }),
-        ),
-      ).pipe(
-        Effect.catchTag("Pty.NotFoundError", (error) =>
-          Effect.fail(
-            new ApiError.PtyNotFoundError({
-              ptyID: error.ptyID,
-              message: `PTY session not found: ${error.ptyID}`,
-            }),
-          ),
-        ),
-      )
-    })
-
-    const remove = Effect.fn("PtyHttpApi.remove")(function* (ctx: { params: { ptyID: PtyID } }) {
-      yield* pty(Pty.Service.use((service) => service.remove(ctx.params.ptyID))).pipe(
-        Effect.catchTag("Pty.NotFoundError", (error) =>
-          Effect.fail(
-            new ApiError.PtyNotFoundError({
-              ptyID: error.ptyID,
-              message: `PTY session not found: ${error.ptyID}`,
-            }),
-          ),
-        ),
-      )
-      return true
-    })
-
-    const connectToken = Effect.fn("PtyHttpApi.connectToken")(function* (ctx: { params: { ptyID: PtyID } }) {
-      const request = yield* HttpServerRequest.HttpServerRequest
-      if (request.headers[PTY_CONNECT_TOKEN_HEADER] !== PTY_CONNECT_TOKEN_HEADER_VALUE || !validOrigin(request, cors))
-        return yield* new ApiError.PtyForbiddenError({ message: "Invalid PTY connect token request" })
-      yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
-        Effect.catchTag("Pty.NotFoundError", (error) =>
-          Effect.fail(
-            new ApiError.PtyNotFoundError({
-              ptyID: error.ptyID,
-              message: `PTY session not found: ${error.ptyID}`,
-            }),
-          ),
-        ),
-      )
-      return yield* tickets.issue({ ptyID: ctx.params.ptyID, ...(yield* ticketScope) })
-    })
-
-    return handlers
-      .handle("shells", shells)
-      .handle("list", list)
-      .handle("create", create)
-      .handle("get", get)
-      .handle("update", update)
-      .handle("remove", remove)
-      .handle("connectToken", connectToken)
-  }),
-)
-
-export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-connect", (handlers) =>
-  Effect.gen(function* () {
-    const tickets = yield* PtyTicket.Service
-    const cors = yield* CorsConfig
-    const locations = yield* LocationServiceMap
-    const unregister = yield* registerDisposer((directory) =>
-      Effect.runPromise(locations.invalidate({ directory: AbsolutePath.make(directory) })),
-    )
-    yield* Effect.addFinalizer(() => Effect.sync(unregister))
-
-    const pty = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
-      return yield* effect.pipe(
-        Effect.provide(locations.get({ directory: AbsolutePath.make((yield* InstanceState.context).directory) })),
-      )
-    })
-
-    return handlers.handleRaw(
-      "connect",
-      Effect.fn("PtyHttpApi.connect")(function* (ctx: {
-        params: { ptyID: PtyID }
-        request: HttpServerRequest.HttpServerRequest
-      }) {
-        const exists = yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
-          Effect.as(true),
-          Effect.catchTag("Pty.NotFoundError", () => Effect.succeed(false)),
-        )
-        if (!exists) return HttpServerResponse.empty({ status: 404 })
-
-        const query = Schema.decodeUnknownOption(CursorQuery)(yield* HttpServerRequest.ParsedSearchParams)
-        if (Option.isNone(query)) return HttpServerResponse.empty({ status: 400 })
-        const ticket = new URL(ctx.request.url, "http://localhost").searchParams.get(PTY_CONNECT_TICKET_QUERY)
-        if (ticket) {
-          const valid = validOrigin(ctx.request, cors)
-            ? yield* tickets.consume({ ticket, ptyID: ctx.params.ptyID, ...(yield* ticketScope) })
-            : false
-          if (!valid) return HttpServerResponse.empty({ status: 403 })
+          )
         }
-        const parsedCursor = query.value.cursor === undefined ? undefined : Number(query.value.cursor)
-        const cursor =
-          parsedCursor !== undefined && Number.isSafeInteger(parsedCursor) && parsedCursor >= -1
-            ? parsedCursor
-            : undefined
-        const socket = yield* Effect.orDie(ctx.request.upgrade)
-        const write = yield* socket.writer
-        const closeAccepted = (event: Socket.CloseEvent) =>
-          socket
-            .runRaw(() => Effect.void, { onOpen: write(event).pipe(Effect.catch(() => Effect.void)) })
-            .pipe(
-              Effect.timeout("1 second"),
-              Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
-              Effect.catch(() => Effect.void),
-            )
-        const registration = yield* WebSocketTracker.register(write(WebSocketTracker.SERVER_CLOSING_EVENT()))
-        if (!registration.accepted) {
-          yield* closeAccepted(WebSocketTracker.SERVER_CLOSING_EVENT())
-          return HttpServerResponse.empty()
-        }
-        const outgoing = yield* Queue.dropping<string | Uint8Array>(MAX_PTY_OUTGOING_FRAMES)
-        const closeRequested = yield* Deferred.make<Socket.CloseEvent>()
-        let closed = false
-        const close = (code?: number, reason?: string) => {
-          if (closed) return
-          closed = true
-          Deferred.doneUnsafe(closeRequested, Effect.succeed(new Socket.CloseEvent(code, reason)))
-        }
-        const adapter = {
-          get readyState() {
-            return closed ? 3 : 1
-          },
-          send: (data: string | Uint8Array | ArrayBuffer) => {
-            if (closed) return
-            if (Queue.offerUnsafe(outgoing, data instanceof ArrayBuffer ? new Uint8Array(data) : data)) return
-            close(1013, `Slow PTY WebSocket consumer (queue ${MAX_PTY_OUTGOING_FRAMES})`)
-          },
-          close,
-        }
-        yield* Stream.fromQueue(outgoing).pipe(
-          Stream.runForEach(write),
-          Effect.onError(() => Effect.sync(() => close(1011, "PTY WebSocket write failed"))),
-          Effect.forkScoped,
-        )
-        const handler = yield* pty(
-          Pty.Service.use((service) => service.connect(ctx.params.ptyID, adapter, cursor)),
+        return directory
+      })
+
+      const pty = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+        const directory = (yield* InstanceState.context).directory
+        return yield* effect.pipe(Effect.provide(locations.get({ directory: AbsolutePath.make(directory) })))
+      })
+
+      // Same guard, but scoped to routes that must build the location layer for a
+      // live directory. `create` uses this so a stale cwd yields a clean 400.
+      const ptyChecked = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+        yield* requireDirectory()
+        return yield* pty(effect)
+      })
+
+      const shells = Effect.fn("PtyHttpApi.shells")(function* () {
+        return yield* Effect.promise(() => Shell.list())
+      })
+
+      const list = Effect.fn("PtyHttpApi.list")(function* () {
+        // A stale/removed directory has no sessions — return empty rather than
+        // building the location layer (which would defect on a missing path).
+        const directory = (yield* InstanceState.context).directory
+        const fs = yield* FSUtil.Service
+        if (!(yield* fs.isDir(directory))) return []
+        return yield* pty(Pty.Service.use((service) => service.list()))
+      })
+
+      const create = Effect.fn("PtyHttpApi.create")(function* (ctx: { payload: typeof Pty.CreateInput.Type }) {
+        return yield* ptyChecked(
+          Pty.Service.use((service) =>
+            Effect.flatMap(
+              PtyPreparation.prepareCreate({
+                ...ctx.payload,
+                args: ctx.payload.args ? [...ctx.payload.args] : undefined,
+                env: ctx.payload.env ? { ...ctx.payload.env } : undefined,
+              }),
+              service.create,
+            ),
+          ),
         ).pipe(
-          Effect.catchTag("Pty.NotFoundError", () =>
-            closeAccepted(new Socket.CloseEvent(4404, "session not found")).pipe(Effect.as(undefined)),
+          // A spawn failure (typically a stale/nonexistent cwd) is a client-fixable
+          // condition, not a server fault — surface it as 400 with a real message
+          // instead of letting the defect become an empty-body 503.
+          Effect.catchTag("Pty.SpawnError", (error) =>
+            Effect.fail(
+              new ApiError.InvalidRequestError({
+                message: `Cannot open terminal in "${error.cwd}": ${error.message}`,
+                kind: "Spawn",
+                field: "cwd",
+              }),
+            ),
+          ),
+          Effect.catchTag("Pty.CapacityError", (error) =>
+            Effect.fail(
+              new ApiError.InvalidRequestError({
+                message: `Too many active terminal sessions (limit ${error.limit})`,
+                kind: "Capacity",
+                field: "pty",
+              }),
+            ),
           ),
         )
-        if (!handler) {
-          yield* Queue.shutdown(outgoing)
-          return HttpServerResponse.empty()
-        }
+      })
 
-        // The handshake runs inside `socket.runRaw`, after the input callback is
-        // registered, so the client cannot send frames before PTY input is wired.
-        // raceAllFirst: a client disconnect fails runRaw and must end the race
-        // (raceAll would swallow the failure and wait for shutdown). The
-        // 1-second timeout bounds only the close-frame write; applying it to
-        // the Deferred.await would terminate every connection after 1 second.
-        yield* Effect.raceAllFirst([
-          socket.runRaw((message) => handlePtyInput(handler, message)),
-          registration.shutdown,
-          Deferred.await(closeRequested).pipe(
-            Effect.flatMap((event) => write(event).pipe(Effect.timeout("1 second"))),
-            Effect.catch(() => Effect.void),
+      const get = Effect.fn("PtyHttpApi.get")(function* (ctx: { params: { ptyID: PtyID } }) {
+        return yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
+          Effect.catchTag("Pty.NotFoundError", (error) =>
+            Effect.fail(
+              new ApiError.PtyNotFoundError({
+                ptyID: error.ptyID,
+                message: `PTY session not found: ${error.ptyID}`,
+              }),
+            ),
           ),
-        ]).pipe(
-          Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
-          Effect.ensuring(
-            Effect.gen(function* () {
-              closed = true
-              handler.onClose()
-              yield* Queue.shutdown(outgoing)
+        )
+      })
+
+      const update = Effect.fn("PtyHttpApi.update")(function* (ctx: {
+        params: { ptyID: PtyID }
+        payload: typeof Pty.UpdateInput.Type
+      }) {
+        return yield* pty(
+          Pty.Service.use((service) =>
+            service.update(ctx.params.ptyID, {
+              ...ctx.payload,
+              size: ctx.payload.size ? { ...ctx.payload.size } : undefined,
             }),
           ),
-          Effect.orDie,
+        ).pipe(
+          Effect.catchTag("Pty.NotFoundError", (error) =>
+            Effect.fail(
+              new ApiError.PtyNotFoundError({
+                ptyID: error.ptyID,
+                message: `PTY session not found: ${error.ptyID}`,
+              }),
+            ),
+          ),
         )
-        return HttpServerResponse.empty()
-      }),
-    )
-  }),
-)
+      })
+
+      const remove = Effect.fn("PtyHttpApi.remove")(function* (ctx: { params: { ptyID: PtyID } }) {
+        yield* pty(Pty.Service.use((service) => service.remove(ctx.params.ptyID))).pipe(
+          Effect.catchTag("Pty.NotFoundError", (error) =>
+            Effect.fail(
+              new ApiError.PtyNotFoundError({
+                ptyID: error.ptyID,
+                message: `PTY session not found: ${error.ptyID}`,
+              }),
+            ),
+          ),
+        )
+        return true
+      })
+
+      const connectToken = Effect.fn("PtyHttpApi.connectToken")(function* (ctx: { params: { ptyID: PtyID } }) {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        if (request.headers[PTY_CONNECT_TOKEN_HEADER] !== PTY_CONNECT_TOKEN_HEADER_VALUE || !validOrigin(request, cors))
+          return yield* new ApiError.PtyForbiddenError({ message: "Invalid PTY connect token request" })
+        yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
+          Effect.catchTag("Pty.NotFoundError", (error) =>
+            Effect.fail(
+              new ApiError.PtyNotFoundError({
+                ptyID: error.ptyID,
+                message: `PTY session not found: ${error.ptyID}`,
+              }),
+            ),
+          ),
+        )
+        return yield* tickets.issue({ ptyID: ctx.params.ptyID, ...(yield* ticketScope) })
+      })
+
+      return handlers
+        .handle("shells", shells)
+        .handle("list", list)
+        .handle("create", create)
+        .handle("get", get)
+        .handle("update", update)
+        .handle("remove", remove)
+        .handle("connectToken", connectToken)
+    }),
+  )
+
+export const ptyConnectHandlers = () =>
+  HttpApiBuilder.group(PtyConnectApi, "pty-connect", (handlers) =>
+    Effect.gen(function* () {
+      const tickets = yield* PtyTicket.Service
+      const cors = yield* CorsConfig
+      const locations = yield* LocationServiceMap
+      const unregister = yield* registerDisposer((directory) =>
+        Effect.runPromise(locations.invalidate({ directory: AbsolutePath.make(directory) })),
+      )
+      yield* Effect.addFinalizer(() => Effect.sync(unregister))
+
+      const pty = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+        return yield* effect.pipe(
+          Effect.provide(locations.get({ directory: AbsolutePath.make((yield* InstanceState.context).directory) })),
+        )
+      })
+
+      return handlers.handleRaw(
+        "connect",
+        Effect.fn("PtyHttpApi.connect")(function* (ctx: {
+          params: { ptyID: PtyID }
+          request: HttpServerRequest.HttpServerRequest
+        }) {
+          const exists = yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
+            Effect.as(true),
+            Effect.catchTag("Pty.NotFoundError", () => Effect.succeed(false)),
+          )
+          if (!exists) return HttpServerResponse.empty({ status: 404 })
+
+          const query = Schema.decodeUnknownOption(CursorQuery)(yield* HttpServerRequest.ParsedSearchParams)
+          if (Option.isNone(query)) return HttpServerResponse.empty({ status: 400 })
+          const ticket = new URL(ctx.request.url, "http://localhost").searchParams.get(PTY_CONNECT_TICKET_QUERY)
+          if (ticket) {
+            const valid = validOrigin(ctx.request, cors)
+              ? yield* tickets.consume({ ticket, ptyID: ctx.params.ptyID, ...(yield* ticketScope) })
+              : false
+            if (!valid) return HttpServerResponse.empty({ status: 403 })
+          }
+          const parsedCursor = query.value.cursor === undefined ? undefined : Number(query.value.cursor)
+          const cursor =
+            parsedCursor !== undefined && Number.isSafeInteger(parsedCursor) && parsedCursor >= -1
+              ? parsedCursor
+              : undefined
+          const socket = yield* Effect.orDie(ctx.request.upgrade)
+          const write = yield* socket.writer
+          const closeAccepted = (event: Socket.CloseEvent) =>
+            socket
+              .runRaw(() => Effect.void, { onOpen: write(event).pipe(Effect.catch(() => Effect.void)) })
+              .pipe(
+                Effect.timeout("1 second"),
+                Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
+                Effect.catch(() => Effect.void),
+              )
+          const registration = yield* WebSocketTracker.register(write(WebSocketTracker.SERVER_CLOSING_EVENT()))
+          if (!registration.accepted) {
+            yield* closeAccepted(WebSocketTracker.SERVER_CLOSING_EVENT())
+            return HttpServerResponse.empty()
+          }
+          const outgoing = yield* Queue.dropping<string | Uint8Array>(MAX_PTY_OUTGOING_FRAMES)
+          const closeRequested = yield* Deferred.make<Socket.CloseEvent>()
+          let closed = false
+          const close = (code?: number, reason?: string) => {
+            if (closed) return
+            closed = true
+            Deferred.doneUnsafe(closeRequested, Effect.succeed(new Socket.CloseEvent(code, reason)))
+          }
+          const adapter = {
+            get readyState() {
+              return closed ? 3 : 1
+            },
+            send: (data: string | Uint8Array | ArrayBuffer) => {
+              if (closed) return
+              if (Queue.offerUnsafe(outgoing, data instanceof ArrayBuffer ? new Uint8Array(data) : data)) return
+              close(1013, `Slow PTY WebSocket consumer (queue ${MAX_PTY_OUTGOING_FRAMES})`)
+            },
+            close,
+          }
+          yield* Stream.fromQueue(outgoing).pipe(
+            Stream.runForEach(write),
+            Effect.onError(() => Effect.sync(() => close(1011, "PTY WebSocket write failed"))),
+            Effect.forkScoped,
+          )
+          const handler = yield* pty(
+            Pty.Service.use((service) => service.connect(ctx.params.ptyID, adapter, cursor)),
+          ).pipe(
+            Effect.catchTag("Pty.NotFoundError", () =>
+              closeAccepted(new Socket.CloseEvent(4404, "session not found")).pipe(Effect.as(undefined)),
+            ),
+          )
+          if (!handler) {
+            yield* Queue.shutdown(outgoing)
+            return HttpServerResponse.empty()
+          }
+
+          // The handshake runs inside `socket.runRaw`, after the input callback is
+          // registered, so the client cannot send frames before PTY input is wired.
+          // raceAllFirst: a client disconnect fails runRaw and must end the race
+          // (raceAll would swallow the failure and wait for shutdown). The
+          // 1-second timeout bounds only the close-frame write; applying it to
+          // the Deferred.await would terminate every connection after 1 second.
+          yield* Effect.raceAllFirst([
+            socket.runRaw((message) => handlePtyInput(handler, message)),
+            registration.shutdown,
+            Deferred.await(closeRequested).pipe(
+              Effect.flatMap((event) => write(event).pipe(Effect.timeout("1 second"))),
+              Effect.catch(() => Effect.void),
+            ),
+          ]).pipe(
+            Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
+            Effect.ensuring(
+              Effect.gen(function* () {
+                closed = true
+                handler.onClose()
+                yield* Queue.shutdown(outgoing)
+              }),
+            ),
+            Effect.orDie,
+          )
+          return HttpServerResponse.empty()
+        }),
+      )
+    }),
+  )

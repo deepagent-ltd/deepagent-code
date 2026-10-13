@@ -163,6 +163,50 @@ function waitForRequest() {
 }
 
 describe("PermissionV2", () => {
+  it.effect("publishes the original request cancellation and removes its exact pending wait", () =>
+    Effect.gen(function* () {
+      yield* setup([])
+      const events = yield* EventV2.Service
+      const replies: { sessionID: string; requestID: string; reply: string }[] = []
+      const unsubscribe = yield* events.listen((event) => event.type === PermissionV2.Event.Replied.type
+        ? Effect.sync(() => { replies.push(event.data as typeof replies[number]) }) : Effect.void)
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const waiting = yield* waitForRequest()
+      yield* Fiber.interrupt(waiting.fiber)
+      expect(yield* waiting.service.list()).toEqual([])
+      expect(replies).toEqual([{ sessionID: waiting.request.sessionID, requestID: waiting.request.id, reply: "reject" }])
+      expect(yield* waiting.service.reply({ requestID: waiting.request.id, reply: "once" }).pipe(Effect.flip))
+        .toBeInstanceOf(PermissionV2.NotFoundError)
+      expect(replies).toHaveLength(1)
+    }),
+  )
+
+  it.effect("rejects a once approval after a hard deny is introduced while waiting", () =>
+    Effect.gen(function* () {
+      yield* setup([])
+      const waiting = yield* waitForRequest()
+      yield* setRules([{ action: "read", resource: "*", effect: "deny" }])
+      yield* waiting.service.reply({ requestID: waiting.request.id, reply: "once" })
+      expect(yield* Fiber.join(waiting.fiber).pipe(Effect.flip)).toBeInstanceOf(PermissionV2.DeniedError)
+      expect(yield* waiting.service.list()).toEqual([])
+    }),
+  )
+
+  it.effect("revalidates Session existence after approving an outstanding request", () =>
+    Effect.gen(function* () {
+      yield* setup([])
+      const waiting = yield* waitForRequest()
+      yield* (yield* Database.Service).db
+        .delete(SessionTable)
+        .where(eq(SessionTable.id, waiting.request.sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* waiting.service.reply({ requestID: waiting.request.id, reply: "once" })
+      expect(yield* Fiber.join(waiting.fiber).pipe(Effect.flip)).toMatchObject({ _tag: "Session.NotFoundError" })
+      expect(yield* waiting.service.list()).toEqual([])
+    }),
+  )
+
   it.effect("rotates an expired no-progress owner and fences its old pending challenge", () =>
     Effect.gen(function* () {
       const challenge = yield* durableNoProgressChallenge()
@@ -173,16 +217,22 @@ describe("PermissionV2", () => {
       yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID: "unrelated-live-owner", leaseMs: 60_000 })
       yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID: oldOwnerID, leaseMs: 5 })
       yield* Effect.promise(() => Bun.sleep(20))
-      expect((yield* db.get<{ lease_expires_at: number }>(
-        sql`SELECT lease_expires_at FROM session_activity_permission_owner_lease WHERE owner_id = ${oldOwnerID}`,
-      ))?.lease_expires_at).toBeLessThan(Date.now())
+      expect(
+        (yield* db.get<{ lease_expires_at: number }>(
+          sql`SELECT lease_expires_at FROM session_activity_permission_owner_lease WHERE owner_id = ${oldOwnerID}`,
+        ))?.lease_expires_at,
+      ).toBeLessThan(Date.now())
       yield* TestClock.adjust("10 seconds")
       const newOwnerID = yield* service.currentNoProgressOwnerID!()
       expect(newOwnerID).not.toBe(oldOwnerID)
-      expect((yield* db.all<{ owner_id: string }>(
-        "SELECT owner_id FROM session_activity_permission_owner_lease",
-      )).map((row) => row.owner_id).sort()).toEqual([newOwnerID, "unrelated-live-owner"].sort())
-      expect((yield* DeepAgentActivityAuthority.permissionRequestForRequest(challenge.requestID))?.state).toBe("interrupted")
+      expect(
+        (yield* db.all<{ owner_id: string }>("SELECT owner_id FROM session_activity_permission_owner_lease"))
+          .map((row) => row.owner_id)
+          .sort(),
+      ).toEqual([newOwnerID, "unrelated-live-owner"].sort())
+      expect((yield* DeepAgentActivityAuthority.permissionRequestForRequest(challenge.requestID))?.state).toBe(
+        "interrupted",
+      )
       expect((yield* DeepAgentActivityAuthority.reconstruct(challenge.ref)).objective.state).toBe("interrupted")
     }),
   )

@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js"
 import { Persist, persisted } from "@/utils/persist"
-import { createStore, produce } from "solid-js/store"
+import { createStore, produce, unwrap } from "solid-js/store"
 import { useServerSDK } from "@/context/server-sdk"
 import { useParams } from "@solidjs/router"
 import type { Prompt } from "@/context/prompt"
@@ -30,7 +30,7 @@ export function createPromptStash() {
   const push = (prompt: Prompt) => {
     setStore(
       produce((draft) => {
-        draft.entries.push({ prompt: structuredClone(prompt), timestamp: Date.now() })
+        draft.entries.push({ prompt: structuredClone(unwrap(prompt)), timestamp: Date.now() })
         if (draft.entries.length > MAX_STASH_ENTRIES) draft.entries = draft.entries.slice(-MAX_STASH_ENTRIES)
       }),
     )

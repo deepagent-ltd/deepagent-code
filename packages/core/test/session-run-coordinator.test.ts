@@ -1123,3 +1123,58 @@ describe("SessionRunCoordinator", () => {
     ),
   )
 })
+
+describe("activity-bound continuations", () => {
+  it.effect("preserves the activity when a continuation upgrades a pending wake", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const demands: Array<{ mode: SessionRunCoordinator.Mode; activityID?: string }> = []
+      const coordinator = yield* SessionRunCoordinator.make({
+        drain: (_key: string, mode, _receipt, activityID) => Effect.gen(function* () {
+          demands.push({ mode, activityID })
+          if (demands.length === 1) {
+            yield* Deferred.succeed(started, undefined)
+            yield* Deferred.await(release)
+          }
+        }),
+      })
+      yield* coordinator.wake("session")
+      yield* Deferred.await(started)
+      const resumed = yield* coordinator.run("session", { activityID: "original" }).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* coordinator.wake("session", 2)
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(resumed)
+      yield* coordinator.awaitIdle("session")
+      expect(demands).toEqual([{ mode: "wake", activityID: undefined }, { mode: "run", activityID: "original" }])
+    })),
+  )
+
+  it.effect("retains explicit unbounded resume authority when demands coalesce", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const demands: Array<string | undefined> = []
+      const coordinator = yield* SessionRunCoordinator.make({
+        drain: (_key: string, _mode, _receipt, activityID) => Effect.gen(function* () {
+          demands.push(activityID)
+          if (demands.length === 1) {
+            yield* Deferred.succeed(started, undefined)
+            yield* Deferred.await(release)
+          }
+        }),
+      })
+      yield* coordinator.wake("session")
+      yield* Deferred.await(started)
+      const explicit = yield* coordinator.run("session").pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      const bounded = yield* coordinator.run("session", { activityID: "original" }).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(explicit)
+      yield* Fiber.join(bounded)
+      expect(demands).toEqual([undefined, undefined])
+    })),
+  )
+})

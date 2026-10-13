@@ -17,14 +17,17 @@ import {
   type PackSearchOutput,
 } from "@deepagent-code/core/system-context/pack-search-tool"
 import { tmpRoot } from "../fixture/tmpdir"
+import { runQuota } from "../fixture/tool-quota"
 
 // P2-a (WS3 chain repair, design §4.5): the sibling `pack_search` L1 surface against a REAL
 // tmp-root DurableKnowledgeStore (no mocks) — seeded active pack documents surface as cards whose
 // refs point at `domain_pack_load`, results stay bounded (5 cards, ~200 tokens rendered), and an
 // unavailable store degrades to an empty result.
 
+const SESSION = SessionV2.ID.make("ses_pack_search")
+
 const toolContext = (callID: string): Tool.Context => ({
-  sessionID: SessionV2.ID.make("ses_pack_search"),
+  sessionID: SESSION,
   agent: AgentV2.ID.make("build"),
   assistantMessageID: SessionMessage.ID.make("msg_pack_search"),
   toolCallID: callID,
@@ -157,7 +160,7 @@ describe("pack_search", () => {
 
 describe("pack_search + domain_pack_load over the real seeded corpus", () => {
   test("the L1 -> L2 chain walks from a search card to a real pack document body", () =>
-    Effect.runPromise(
+    runQuota(
       Effect.gen(function* () {
         // The real boot path: knowledge-seed.ts scans packages/domain-packs/ into the user-global
         // store; the tools read a second store instance over the same root (the production
@@ -179,10 +182,11 @@ describe("pack_search + domain_pack_load over the real seeded corpus", () => {
         expect(loaded.body).toContain("clock")
         expect(loaded.token_count).toBeLessThanOrEqual(620)
       }),
+      SESSION,
     ))
 
   test("the dac-manual system manual pack is seeded, searchable, and loadable", () =>
-    Effect.runPromise(
+    runQuota(
       Effect.gen(function* () {
         // P2-c (V2.0.1-001 §4.4): the deepagent.dac-manual pack ships with the built-in corpus, so
         // the same boot seed must surface it through pack_search (pack-filtered) and disclose a
@@ -207,5 +211,6 @@ describe("pack_search + domain_pack_load over the real seeded corpus", () => {
         expect(loaded.truncated).toBe(false)
         expect(loaded.token_count).toBeLessThanOrEqual(620)
       }),
+      SESSION,
     ))
 })

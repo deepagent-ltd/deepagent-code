@@ -800,10 +800,11 @@ const driveReviewer = (
 
 const lastAssistantText = (messages: readonly SessionMessage.Message[]) =>
   messages
-    .filter((message): message is SessionMessage.Assistant => message.type === "assistant")
-    .flatMap((message) => message.content)
-    .filter((part): part is SessionMessage.AssistantText => part.type === "text")
-    .at(-1)?.text ?? ""
+    .findLast((message): message is SessionMessage.Assistant => message.type === "assistant")
+    ?.content.filter((part): part is SessionMessage.AssistantText => part.type === "text")
+    .map((part) => part.text)
+    .filter((text) => text.trim().length > 0)
+    .join("\n\n") ?? ""
 
 const lastAssistantMessageID = (sessions: SessionV2.Interface, childID: SessionSchema.ID) =>
   sessions

@@ -23,6 +23,9 @@ const lock = Semaphore.makeUnsafe(1)
 // The migration transaction rolls back cleanly, so retrying once the competing connection
 // releases is safe; without the retry a desktop startup dies on a transient race.
 class TransientLock extends Data.TaggedError("DatabaseMigration.TransientLock")<{ readonly detail: string }> {}
+class UnsafePlanRebaseMigration extends Data.TaggedError("DatabaseMigration.UnsafePlanRebaseMigration")<{
+  readonly reason: "nested_deferred" | "reference_actions" | "foreign_key_integrity"
+}> {}
 
 const isLockError = (value: unknown): boolean => {
   if (typeof value !== "object" || value === null) return false
@@ -419,6 +422,8 @@ function applyMigrations(
           Effect.gen(function* () {
             if (reconcileMergedHistory && migration.id === "20260812120000_legacy_provider_recovery")
               yield* reconcileLegacyProviderRecovery(tx)
+            else if (migration.id === "20261007052936_goal_plan_rebase")
+              yield* applyPlanRebaseMigration(tx, migration)
             else yield* migration.up(tx)
             const journalColumns = yield* tx.all<{ name: string }>("PRAGMA table_info('migration')")
             yield* (journalColumns.some((column) => column.name === "content_hash")
@@ -480,6 +485,33 @@ function applyMigrations(
           }),
         )
     }
+  })
+}
+
+function applyPlanRebaseMigration(tx: Transaction, migration: Migration) {
+  return Effect.gen(function* () {
+    // Rebuilding this parent under immediate FK enforcement refuses populated Goals.
+    // Cascading/custom actions cannot be deferred safely: refuse before any DDL instead.
+    if ((yield* tx.get<{ defer_foreign_keys: number }>("PRAGMA defer_foreign_keys"))?.defer_foreign_keys !== 0)
+      return yield* new UnsafePlanRebaseMigration({ reason: "nested_deferred" })
+    const actions = yield* tx.get(sql`
+      SELECT 1 AS unsafe FROM sqlite_master AS source
+      JOIN pragma_foreign_key_list(source.name) AS reference
+      WHERE source.type='table'
+        AND reference."table" IN ('goal_control','goal_tick_checkpoint','goal_control_command')
+        AND (reference.on_delete<>'NO ACTION' OR reference.on_update<>'NO ACTION')
+      LIMIT 1
+    `)
+    if (actions) return yield* new UnsafePlanRebaseMigration({ reason: "reference_actions" })
+    const enabled = (yield* tx.get<{ foreign_keys: number }>("PRAGMA foreign_keys"))?.foreign_keys === 1
+    if (enabled) yield* tx.run("PRAGMA defer_foreign_keys=ON")
+    yield* migration.up(tx)
+    if (yield* tx.get(sql`SELECT 1 AS invalid FROM pragma_foreign_key_check LIMIT 1`))
+      return yield* new UnsafePlanRebaseMigration({ reason: "foreign_key_integrity" })
+    // DROP/recreate retains a deferred deletion counter even after a clean FK readback.
+    // Clear it only after validating every current FK. Enforcement itself stays ON; the
+    // remaining journal/upgrade receipt writes are immediately checked in this same TX.
+    if (enabled) yield* tx.run("PRAGMA defer_foreign_keys=OFF")
   })
 }
 

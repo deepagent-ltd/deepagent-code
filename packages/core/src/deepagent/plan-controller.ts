@@ -150,6 +150,10 @@ const MUTATING_TOOLS = new Set([
   // is `patch`, not the V2 pair.
   "apply_patch_chunk",
   "multiedit",
+  // Both builtins can perform effects outside the file-edit path. A fixed
+  // command recipe or browser action still has to observe the current plan.
+  "managed_command",
+  "browser",
   // FEAT-011 T5: the unified activity facade's MUTATING entry points — activity_start spawns a
   // supervised background activity (task/goal/panel) and activity_control pause/resume/stop/steers
   // one; both mutate execution state and must respect the stale-plan gate. activity_status /

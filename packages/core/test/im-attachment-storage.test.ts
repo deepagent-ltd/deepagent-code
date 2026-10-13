@@ -9,6 +9,27 @@ import { AttachmentStorage } from "../src/im/attachment-storage"
 // test server). The route handler is a thin wrapper over these functions.
 describe("AttachmentStorage — upload policy + storage-path derivation", () => {
   describe("validateUpload", () => {
+    it("rejects declared raster MIME when the bytes are HTML", () => {
+      expect(
+        AttachmentStorage.validateUpload({
+          contentType: "image/png",
+          bytes: new TextEncoder().encode("<html><script>alert(1)</script></html>"),
+        }).ok,
+      ).toBe(false)
+    })
+
+    it("derives a raster MIME from bytes and never previews SVG", () => {
+      const bytes = Uint8Array.from(
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1EAAAAASUVORK5CYII=",
+          "base64",
+        ),
+      )
+      const result = AttachmentStorage.validateUpload({ contentType: "application/octet-stream", bytes })
+      expect(result.ok && result.mime).toBe("image/png")
+      expect(AttachmentStorage.isPreviewMime("image/svg+xml")).toBe(false)
+      expect(AttachmentStorage.previewMime(new TextEncoder().encode("<svg onload='alert(1)'/>"))).toBeUndefined()
+    })
     it("accepts an allowed mime, returns size + correct sha256 checksum", () => {
       const bytes = new TextEncoder().encode("hello attachment payload")
       const result = AttachmentStorage.validateUpload({ contentType: "text/plain", bytes })

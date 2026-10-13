@@ -22,9 +22,28 @@ const tmpdir = (init?: (dir: string) => Effect.Effect<void>) =>
 
 const write = (file: string, data: string) => Effect.promise(() => Bun.write(file, data))
 
+// Native behavior needs an explicit opt-in because the standard isolated test
+// home deliberately selects ripgrep. Restore the gate even when a case fails.
+const native = Effect.acquireRelease(
+  Effect.sync(() => {
+    const previous = process.env.DEEPAGENT_CODE_TEST_HOME
+    delete process.env.DEEPAGENT_CODE_TEST_HOME
+    return previous
+  }),
+  (previous) =>
+    Effect.sync(() => {
+      if (previous === undefined) {
+        delete process.env.DEEPAGENT_CODE_TEST_HOME
+        return
+      }
+      process.env.DEEPAGENT_CODE_TEST_HOME = previous
+    }),
+)
+
 describe("file.search", () => {
   it.live("uses fff for Bun-backed grep", () =>
     Effect.gen(function* () {
+      yield* native
       expect(Fff.available()).toBe(true)
       const dir = yield* tmpdir()
       yield* write(path.join(dir, "src", "match.ts"), "const needle = 1\n")
@@ -40,6 +59,7 @@ describe("file.search", () => {
 
   it.live("keeps fuzzy file abbreviation matches", () =>
     Effect.gen(function* () {
+      yield* native
       expect(Fff.available()).toBe(true)
       const dir = yield* tmpdir()
       yield* write(path.join(dir, "README.md"), "hello\n")
@@ -64,6 +84,7 @@ describe("file.search", () => {
 
   it.live("keeps empty file query candidates", () =>
     Effect.gen(function* () {
+      yield* native
       expect(Fff.available()).toBe(true)
       const dir = yield* tmpdir()
       yield* write(path.join(dir, "README.md"), "hello\n")
@@ -80,6 +101,7 @@ describe("file.search", () => {
 
   it.live("keeps paging grep results without an explicit limit", () =>
     Effect.gen(function* () {
+      yield* native
       expect(Fff.available()).toBe(true)
       const dir = yield* tmpdir()
       yield* write(path.join(dir, "matches.txt"), Array.from({ length: 150 }, (_, idx) => `needle ${idx}\n`).join(""))
@@ -93,6 +115,7 @@ describe("file.search", () => {
 
   it.live("uses byte ranges for UTF-8 grep submatches", () =>
     Effect.gen(function* () {
+      yield* native
       expect(Fff.available()).toBe(true)
       const dir = yield* tmpdir()
       yield* write(path.join(dir, "unicode.txt"), "éneedle\n")
@@ -106,6 +129,7 @@ describe("file.search", () => {
 
   it.live("post-filters fff grep include matches", () =>
     Effect.gen(function* () {
+      yield* native
       expect(Fff.available()).toBe(true)
       const dir = yield* tmpdir()
       yield* write(path.join(dir, "src", "match.ts"), "needle\n")
@@ -121,6 +145,7 @@ describe("file.search", () => {
 
   it.live("keeps fff grep include no-match results", () =>
     Effect.gen(function* () {
+      yield* native
       expect(Fff.available()).toBe(true)
       const dir = yield* tmpdir()
       yield* write(path.join(dir, "src", "match.ts"), "needle\n")
@@ -135,6 +160,7 @@ describe("file.search", () => {
 
   it.live("post-filters fff glob matches", () =>
     Effect.gen(function* () {
+      yield* native
       expect(Fff.available()).toBe(true)
       const dir = yield* tmpdir()
       yield* write(path.join(dir, "src", "match.ts"), "export const value = 1\n")
@@ -149,6 +175,7 @@ describe("file.search", () => {
 
   it.live("tracks an opened file against its originating query", () =>
     Effect.gen(function* () {
+      yield* native
       expect(Fff.available()).toBe(true)
       const dir = yield* tmpdir()
       yield* write(path.join(dir, "alpha-target-one.ts"), "export const one = 1\n")
@@ -174,8 +201,19 @@ describe("file.search", () => {
     Effect.gen(function* () {
       // Gate the native engine off for the duration of the test, restoring the env after.
       yield* Effect.acquireRelease(
-        Effect.sync(() => (process.env.DEEPAGENT_CODE_TEST_HOME = path.join(os.tmpdir(), "fff-degrade-probe"))),
-        () => Effect.sync(() => delete process.env.DEEPAGENT_CODE_TEST_HOME),
+        Effect.sync(() => {
+          const previous = process.env.DEEPAGENT_CODE_TEST_HOME
+          process.env.DEEPAGENT_CODE_TEST_HOME = path.join(os.tmpdir(), "fff-degrade-probe")
+          return previous
+        }),
+        (previous) =>
+          Effect.sync(() => {
+            if (previous === undefined) {
+              delete process.env.DEEPAGENT_CODE_TEST_HOME
+              return
+            }
+            process.env.DEEPAGENT_CODE_TEST_HOME = previous
+          }),
       )
 
       const dir = yield* tmpdir()

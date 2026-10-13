@@ -32,3 +32,78 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Managed browser reference provenance
+------------------------------------
+
+The managed browser adapter refers to OpenCode commit
+6bffe7932efa9adc36b74e389598daecb4b17ac1 for browser RPC, Chromium/CDP,
+AX observations, and native image output semantics. The DAC managed adapter
+is independently implemented against DAC Session/Permission/canonical Tool
+contracts. The upstream MIT notice above is retained; this reference does not
+imply endorsement or compatibility with every upstream operation.
+
+hash-wasm 4.12.0
+----------------
+
+The Node password adapter uses Argon2id from hash-wasm 4.12.0 inside a bounded
+worker when the native runtime reports that Argon2 is unsupported.
+Upstream: https://github.com/Daninet/hash-wasm/tree/v4.12.0
+Published package SHA-256:
+1db32a125fb46177932ec8ac438d3cd8214ebdfaccb5d6611b657d88eb586f92
+The package is included under its MIT notice:
+
+MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak <solar@openwall.com>
+- Aleksey Kravchenko <rhash.admin@gmail.com>
+- Colin Percival
+- Stephan Brumme <create@stephan-brumme.com>
+- Steve Reid <steve@edmweb.com>
+- Samuel Neves <sneves@dei.uc.pt>
+- Solar Designer <solar@openwall.com>
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+
+
+JuggleIM protected reader SDK
+=============================
+
+DeepAgent Code includes @deepagent-code/im-kernel-sdk, derived from
+JuggleIM im-web-sdk 1.9.17, source commit
+f69cbe450fc79fceac7ae24a54baee57f9b1a5c3.
+https://github.com/Juggleim/im-web-sdk
+
+Original LICENSE/package metadata: Apache-2.0. The original generated MIT
+banner is retained unchanged; the differing upstream notices are documented
+in packages/im-kernel-sdk/NOTICE. Readable source, original build scripts,
+locked tools, attribution and LICENSE are distributed with the workspace
+package. DAC changes add durable receipts, bounded protected reader queries,
+exact decimal int64 handling and immutable protected reader mode.

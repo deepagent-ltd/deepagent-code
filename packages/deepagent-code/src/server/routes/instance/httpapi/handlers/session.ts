@@ -1,3 +1,4 @@
+import { GoalChildSchema } from "@deepagent-code/core/deepagent/goal-child.schema"
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { Database } from "@deepagent-code/core/database/database"
 import { Agent } from "@/agent/agent"
@@ -18,6 +19,7 @@ import { LegacyExecutionUnavailable, guardLegacyExecution } from "@/session/lega
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { WorkAuthoritySchema } from "@deepagent-code/core/session/work-authority.schema"
 import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
 import { SessionMutationEpoch } from "@/session/mutation-epoch"
 import { SessionRevert } from "@/session/revert"
@@ -68,6 +70,7 @@ import {
 import {
   ApiNotFoundError,
   ConflictError,
+  InvalidRequestError,
   PermissionNotFoundError,
   ServiceUnavailableError,
   SessionBusyError,
@@ -171,7 +174,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
             ? { type: "busy" as const }
             : {
                 type: "recovery_required" as const,
-                message: "Execution stopped with an unresolved durable claim; inspect recovery before resuming",
+                message: "Execution stopped with unresolved durable work; inspect recovery before resuming",
                 ...(state.blockedReason ? { blockedReason: state.blockedReason } : {}),
               },
         ]),
@@ -197,11 +200,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const requireWritableSession = (sessionID: SessionID) =>
-      coreV2Session
-        .requireWritable(SessionV2.ID.make(sessionID))
-        .pipe(
-          Effect.mapError((error) =>
-            error instanceof SessionV2.LegacySessionRequiresAdoption
+      coreV2Session.requireWritable(SessionV2.ID.make(sessionID)).pipe(
+        Effect.mapError((error) =>
+          error instanceof WorkAuthoritySchema.Error || error instanceof GoalChildSchema.Error
+            ? new ConflictError({ message: error.message, resource: error.code })
+            : error instanceof SessionV2.LegacySessionRequiresAdoption
               ? new ConflictError({
                   message: `Historical session ${sessionID} requires explicit audited adoption`,
                   resource: error.code,
@@ -223,7 +226,37 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
-      return yield* requireSession(ctx.params.sessionID)
+      const info = yield* requireSession(ctx.params.sessionID)
+      // This read snapshot is only a display hint. Every mutation rechecks its original authority.
+      const ordinaryEligible = yield* coreV2Session.requireWritable(SessionV2.ID.make(ctx.params.sessionID)).pipe(
+        Effect.as(true),
+        Effect.catch((error) => {
+          if (
+            (error instanceof WorkAuthoritySchema.Error &&
+              (error.code === "PROFILE_UNAVAILABLE" || error.code === "WORK_AUTHORITY_MISSING")) ||
+            (error instanceof GoalChildSchema.Error && error.code === "GOAL_CHILD_MANAGED") ||
+            error instanceof SessionV2.LegacySessionRequiresAdoption
+          )
+            return Effect.succeed(false)
+          return Effect.fail(
+            error instanceof SessionV2.NotFoundError
+              ? notFound(`Session not found: ${ctx.params.sessionID}`)
+              : new ServiceUnavailableError({
+                  service: "session.ordinary-eligibility",
+                  message: "Session eligibility could not be read",
+                }),
+          )
+        }),
+        Effect.catchDefect(() =>
+          Effect.fail(
+            new ServiceUnavailableError({
+              service: "session.ordinary-eligibility",
+              message: "Session eligibility could not be read",
+            }),
+          ),
+        ),
+      )
+      return { ...info, ordinaryEligible }
     })
 
     const children = Effect.fn("SessionHttpApi.children")(function* (ctx: { params: { sessionID: SessionID } }) {
@@ -381,6 +414,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           .pipe(
             // RI-04 admission validation surfaces as a typed 400 like the public V2 endpoint.
             Effect.catchTags({
+              "GoalChild.Error": (error) => Effect.fail(new ConflictError({ message: error.message, resource: error.code })),
+              "WorkAuthority.Error": (error) =>
+                Effect.fail(new InvalidRequestError({ message: error.message, kind: error.code })),
               "AgentV2.NotFoundError": (error) => Effect.fail(new HttpApiError.BadRequest({})),
               "Session.AgentNotSelectableError": (error) => Effect.fail(new HttpApiError.BadRequest({})),
             }),
@@ -446,12 +482,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         })
         .pipe(
           Effect.mapError((error) =>
-            error instanceof SessionV2.LegacySessionRequiresAdoption
-              ? new ConflictError({
-                  message: `Historical session ${ctx.params.sessionID} requires explicit audited adoption`,
-                  resource: error.code,
-                })
-              : notFound(`Session not found: ${ctx.params.sessionID}`),
+            error instanceof WorkAuthoritySchema.Error || error instanceof GoalChildSchema.Error
+              ? new ConflictError({ message: error.message, resource: error.code })
+              : error instanceof SessionV2.LegacySessionRequiresAdoption
+                ? new ConflictError({
+                    message: `Historical session ${ctx.params.sessionID} requires explicit audited adoption`,
+                    resource: error.code,
+                  })
+                : notFound(`Session not found: ${ctx.params.sessionID}`),
           ),
         )
       return yield* requireSession(ctx.params.sessionID)
@@ -1172,8 +1210,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           Queue.offerUnsafe(queue, { type: "progress", phase, percent, bytes })
         },
       }).pipe(
-        Effect.tap((bytes) => Effect.sync(() => Queue.offerUnsafe(queue, { type: "result", archive: "zip", bundle: Buffer.from(bytes).toString("base64") }))),
-        Effect.catchCause((cause) => Effect.sync(() => Queue.offerUnsafe(queue, { type: "error", message: Cause.pretty(cause) }))),
+        Effect.tap((bytes) =>
+          Effect.sync(() =>
+            Queue.offerUnsafe(queue, { type: "result", archive: "zip", bundle: Buffer.from(bytes).toString("base64") }),
+          ),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.sync(() => Queue.offerUnsafe(queue, { type: "error", message: Cause.pretty(cause) })),
+        ),
         Effect.forkScoped({ startImmediately: true }),
       )
       return HttpServerResponse.stream(
@@ -1184,7 +1228,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           Stream.encodeText,
           Stream.ensuring(Queue.shutdown(queue)),
         ),
-        { contentType: "text/event-stream", headers: { "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" } },
+        {
+          contentType: "text/event-stream",
+          headers: { "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
+        },
       )
     })
 
@@ -1209,31 +1256,53 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ShareBundlePayload.Type
     }) {
       if (!publicSharingEnabled())
-        return yield* new ServiceUnavailableError({ service: "session.shareBundle", message: "Public sharing is disabled" })
+        return yield* new ServiceUnavailableError({
+          service: "session.shareBundle",
+          message: "Public sharing is disabled",
+        })
       yield* requireSession(ctx.params.sessionID)
       const service = process.env.DEEPAGENT_SHARE_PUBLIC_URL
       const uploadToken = process.env.DEEPAGENT_SHARE_UPLOAD_TOKEN
       if (!service || !uploadToken)
-        return yield* new ServiceUnavailableError({ service: "session.shareBundle", message: "Bundle share host is not configured" })
-      const bytes = yield* exportSessionBundle({ sessionID: ctx.params.sessionID, tier: ctx.payload.tier, share: true })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
-      return yield* Effect.tryPromise(() => uploadSessionBundle({ bytes, service, uploadToken }))
-        .pipe(Effect.mapError(() => new ServiceUnavailableError({ service: "session.shareBundle", message: "Bundle upload failed" })))
+        return yield* new ServiceUnavailableError({
+          service: "session.shareBundle",
+          message: "Bundle share host is not configured",
+        })
+      const bytes = yield* exportSessionBundle({
+        sessionID: ctx.params.sessionID,
+        tier: ctx.payload.tier,
+        share: true,
+      }).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      return yield* Effect.tryPromise(() => uploadSessionBundle({ bytes, service, uploadToken })).pipe(
+        Effect.mapError(
+          () => new ServiceUnavailableError({ service: "session.shareBundle", message: "Bundle upload failed" }),
+        ),
+      )
     })
 
     const importBundleShare = Effect.fn("SessionHttpApi.importBundleShare")(function* (ctx: {
       payload: typeof ImportBundleSharePayload.Type
     }) {
       if (!publicSharingEnabled())
-        return yield* new ServiceUnavailableError({ service: "session.importBundleShare", message: "Public sharing is disabled" })
+        return yield* new ServiceUnavailableError({
+          service: "session.importBundleShare",
+          message: "Public sharing is disabled",
+        })
       const service = process.env.DEEPAGENT_SHARE_PUBLIC_URL
       if (!service)
-        return yield* new ServiceUnavailableError({ service: "session.importBundleShare", message: "Bundle share host is not configured" })
-      const parsed = yield* Effect.tryPromise(() => downloadSessionBundle({ url: ctx.payload.url, service }))
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        return yield* new ServiceUnavailableError({
+          service: "session.importBundleShare",
+          message: "Bundle share host is not configured",
+        })
+      const parsed = yield* Effect.tryPromise(() => downloadSessionBundle({ url: ctx.payload.url, service })).pipe(
+        Effect.mapError(() => new HttpApiError.BadRequest({})),
+      )
       const instanceCtx = yield* InstanceState.context
-      return yield* importSessionSnapshot({ snapshot: parsed.snapshot, projectID: instanceCtx.project.id, directory: instanceCtx.directory })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      return yield* importSessionSnapshot({
+        snapshot: parsed.snapshot,
+        projectID: instanceCtx.project.id,
+        directory: instanceCtx.directory,
+      }).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
     const revokeBundleShare = Effect.fn("SessionHttpApi.revokeBundleShare")(function* (ctx: {
@@ -1241,9 +1310,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       const service = process.env.DEEPAGENT_SHARE_PUBLIC_URL
       if (!service)
-        return yield* new ServiceUnavailableError({ service: "session.revokeBundleShare", message: "Bundle share host is not configured" })
-      yield* Effect.tryPromise(() => revokeSessionBundle({ ...ctx.payload, service }))
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        return yield* new ServiceUnavailableError({
+          service: "session.revokeBundleShare",
+          message: "Bundle share host is not configured",
+        })
+      yield* Effect.tryPromise(() => revokeSessionBundle({ ...ctx.payload, service })).pipe(
+        Effect.mapError(() => new HttpApiError.BadRequest({})),
+      )
       return { revoked: true }
     })
 

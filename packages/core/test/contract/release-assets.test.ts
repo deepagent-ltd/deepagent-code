@@ -131,7 +131,7 @@ test("staging covers supported CLI targets, owner row and four desktop targets",
       "deepagent-code-desktop-win-x64.exe",
       "deepagent-code-desktop-mac-x64.app.tar.gz",
       "deepagent-code-desktop-mac-arm64.app.tar.gz",
-      "deepagent-code-desktop-linux-x64.deb",
+      "deepagent-code-desktop-linux-amd64.deb",
     ].map((name) => Bun.write(join(desktopDir, name), name)),
   )
   await stageReleaseAssets({
@@ -198,7 +198,7 @@ test("RI-51 binds staged asset bytes into the archived ledger before NO-GO", asy
     "deepagent-code-desktop-win-x64.exe",
     "deepagent-code-desktop-mac-x64.app.tar.gz",
     "deepagent-code-desktop-mac-arm64.app.tar.gz",
-    "deepagent-code-desktop-linux-x64.deb",
+    "deepagent-code-desktop-linux-amd64.deb",
   ]
   const assets = await Promise.all(
     names.map(async (name) => {

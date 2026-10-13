@@ -26,9 +26,11 @@ export const SidePanelContext: Component<{ onClose: () => void }> = (props) => {
     () => params.id,
     async (sessionID) => (await sdk.client.session.contextDiagnostics({ sessionID })).data,
   )
-  const latest = createMemo(() => diagnostics()?.selections[0])
-  const indeterminate = createMemo(
-    () => diagnostics()?.attempts.filter((attempt) => attempt.state === "indeterminate_after_crash") ?? [],
+  const latest = createMemo(() => (diagnostics.error ? undefined : diagnostics()?.selections[0]))
+  const indeterminate = createMemo(() =>
+    diagnostics.error
+      ? []
+      : (diagnostics()?.attempts.filter((attempt) => attempt.state === "indeterminate_after_crash") ?? []),
   )
 
   const resolve = async (attempt: Attempt, decision: "abandoned" | "settled" | "replayed") => {
@@ -251,7 +253,7 @@ export const SidePanelContext: Component<{ onClose: () => void }> = (props) => {
           </div>
         </Show>
 
-        <Show when={diagnostics()} keyed>
+        <Show when={!diagnostics.error && diagnostics()} keyed>
           {(value) => (
             <div class="px-3 py-2.5">
               <div class="text-11-medium text-text-weak uppercase">{language.t("session.context.metrics")}</div>

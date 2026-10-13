@@ -43,6 +43,8 @@ import {
   updateDeepAgentOptions,
 } from "@/utils/deepagent-settings"
 import { useModels } from "@/context/models"
+import { configuredCollaborationMode, isSelectableCollaborationMode } from "@/utils/collaboration-mode"
+import { useModeLabel } from "../deepagent/mode-selector"
 
 let demoSoundState = {
   cleanup: undefined as (() => void) | undefined,
@@ -94,7 +96,60 @@ const playDemoSound = (id: string | undefined) => {
   }, 100)
 }
 
-export const SettingsGeneralV2: Component = () => {
+export type SettingsSession = {
+  current: () => boolean
+  editable: () => boolean
+  mode: () => string | undefined
+  select: (name: string) => void
+}
+
+export function SettingsCollaborationMode(props: {
+  modes: () => { name: string }[]
+  loading: boolean
+  session?: SettingsSession
+}) {
+  const language = useLanguage()
+  const serverSync = useServerSync()
+  const modeLabel = useModeLabel()
+  const currentSession = () => props.session?.current() === true && props.session.editable()
+  const currentMode = () =>
+    (currentSession() ? props.session?.mode() : undefined) ??
+    configuredCollaborationMode(serverSync.data.config.default_agent)
+  return (
+    <SettingsRowV2
+      title={language.t(
+        currentSession()
+          ? "settings.general.row.collaborationMode.currentTitle"
+          : "settings.general.row.collaborationMode.title",
+      )}
+      description={language.t(
+        currentSession()
+          ? "settings.general.row.collaborationMode.currentDescription"
+          : "settings.general.row.collaborationMode.description",
+      )}
+    >
+      <SelectV2
+        appearance="inline"
+        data-action="settings-collaboration-mode"
+        options={props.modes()}
+        placement="bottom-end"
+        gutter={6}
+        current={props.modes().find((mode) => mode.name === currentMode())}
+        value={(mode) => mode.name}
+        label={(mode) => modeLabel(mode.name)}
+        disabled={props.loading || props.modes().length === 0}
+        onSelect={(mode) => {
+          if (!mode) return
+          if (currentSession()) props.session?.select(mode.name)
+          if (mode.name !== configuredCollaborationMode(serverSync.data.config.default_agent))
+            void serverSync.updateConfig({ default_agent: mode.name })
+        }}
+      />
+    </SettingsRowV2>
+  )
+}
+
+export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (props) => {
   const theme = useTheme()
   const language = useLanguage()
   const platform = usePlatform()
@@ -110,6 +165,14 @@ export const SettingsGeneralV2: Component = () => {
 
   const serverSync = useServerSync()
   const serverSdk = useServerSDK()
+  const [collaborationModes] = createResource(
+    () => serverSdk.client,
+    // Agent options are provider configuration, while SelectV2 uses `options` for groups.
+    (client) => client.app.agents().then((result) =>
+      result.data?.filter(isSelectableCollaborationMode).map((mode) => ({ name: mode.name })) ?? [],
+    ),
+    { initialValue: [] },
+  )
 
   const [shells] = createResource(
     () =>
@@ -343,6 +406,11 @@ export const SettingsGeneralV2: Component = () => {
       <h3 class="settings-v2-section-title">{language.t("settings.general.section.deepagent")}</h3>
 
       <SettingsListV2>
+        <SettingsCollaborationMode
+          modes={collaborationModes}
+          loading={collaborationModes.loading}
+          session={props.session}
+        />
         <SettingsRowV2
           title={language.t("settings.general.deepagent.mode.title")}
           description={
@@ -555,17 +623,6 @@ export const SettingsGeneralV2: Component = () => {
           </div>
         </SettingsRowV2>
 
-        <SettingsRowV2
-          title={language.t("settings.general.row.expertPanelDefault.title")}
-          description={language.t("settings.general.row.expertPanelDefault.description")}
-        >
-          <div data-action="settings-expert-panel-default">
-            <Switch
-              checked={settings.general.expertPanelDefault()}
-              onChange={(checked) => settings.general.setExpertPanelDefault(checked)}
-            />
-          </div>
-        </SettingsRowV2>
       </SettingsListV2>
     </div>
   )

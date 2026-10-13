@@ -1,5 +1,5 @@
-import { Cause, Context, Effect, Layer, Random } from "effect"
-import { createHash } from "node:crypto"
+import { Cause, Context, Effect, Layer, Option, Random, Redacted, Schema } from "effect"
+import { createHash, createHmac, randomBytes } from "node:crypto"
 import {
   FetchHttpClient,
   Headers,
@@ -25,6 +25,8 @@ import {
   UnknownProviderReason,
 } from "../schema"
 import { isContextOverflow } from "../provider-error"
+import { BuiltinNode } from "./builtin-node"
+import { VendorContextBound } from "./vendor-context-bound"
 
 export interface Interface {
   readonly execute: (
@@ -35,6 +37,13 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/LLM/RequestExecutor") {}
 
 export interface RequestSealInput {
+  /** Present at the actual HTTP boundary; synthetic legacy seals may omit these. */
+  readonly method?: string
+  readonly url?: string
+  /** Internal validation only: the final encoded body after protocol and HTTP overlays. */
+  readonly bodyText?: string
+  /** Ephemeral native application headers. Never persist, serialize, or log the revealed value. */
+  readonly headers?: Redacted.Redacted<Readonly<Headers.Headers>>
   readonly wireHash: string
   readonly bodyHash: string
   readonly bodyLength: number
@@ -101,6 +110,12 @@ export const CurrentStatusRetryLimit = Context.Reference<number>(
 export const CurrentRetryLimit = Context.Reference<number | undefined>(
   "@deepagent-code/LLM/RequestExecutor/CurrentRetryLimit",
   { defaultValue: () => undefined },
+)
+
+/** Restricted callers select manual redirects before sealing the physical request. */
+export const CurrentRedirectPolicy = Context.Reference<"follow" | "manual">(
+  "@deepagent-code/LLM/RequestExecutor/CurrentRedirectPolicy",
+  { defaultValue: () => "follow" },
 )
 
 // One source of truth for what counts as a sensitive name across headers,
@@ -271,11 +286,18 @@ const sealRequest = (request: HttpClientRequest.HttpClientRequest) =>
     const seal = yield* CurrentRequestSeal
     if (!seal) return
     if (request.body._tag !== "Uint8Array") return yield* Effect.die("Durable provider request body is not sealable")
+    const url = Option.getOrUndefined(HttpClientRequest.toUrl(request))
+    if (!url) return yield* Effect.die("Durable provider request URL is not sealable")
+    // Fragments do not travel over HTTP. Query parameters do, including structured urlParams.
+    url.hash = ""
     const bodyText = new TextDecoder().decode(request.body.body)
     yield* seal.seal({
+      method: request.method,
+      url: url.href,
+      bodyText,
       wireHash: wireRequestHash({
         method: request.method,
-        url: request.url,
+        url: url.href,
         contentType: request.body.contentType,
         bodyText,
       }),
@@ -535,7 +557,9 @@ const retryFailures = <A, R>(
         retryFailures(
           effect,
           limits,
-          isTransport ? { transport: spent + 1, status: used.status } : { transport: used.transport, status: spent + 1 },
+          isTransport
+            ? { transport: spent + 1, status: used.status }
+            : { transport: used.transport, status: spent + 1 },
           attempt + 1,
         ),
       ),
@@ -550,9 +574,17 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.e
       Effect.gen(function* () {
         const redactedNames = yield* Headers.CurrentRedactedNames
         yield* sealRequest(request)
+        const redirectPolicy = yield* CurrentRedirectPolicy
+        const options = Option.getOrUndefined(yield* Effect.serviceOption(FetchHttpClient.RequestInit))
         return yield* http
           .execute(request)
-          .pipe(Effect.mapError(toHttpError(redactedNames)), Effect.flatMap(statusError(request, redactedNames)))
+          .pipe(
+            redirectPolicy === "manual"
+              ? Effect.provideService(FetchHttpClient.RequestInit, { ...options, redirect: "manual" })
+              : (effect) => effect,
+            Effect.mapError(toHttpError(redactedNames)),
+            Effect.flatMap(statusError(request, redactedNames)),
+          )
       })
     return Service.of({
       execute: (request) =>
@@ -567,5 +599,409 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.e
 )
 
 export const defaultLayer = layer.pipe(Layer.provide(FetchHttpClient.layer))
+
+const nativeFetch = globalThis.fetch
+const nativeObservations = new WeakSet<RequestSealInput>()
+const builtinExecutors = new WeakMap<Interface, BuiltinBoundary>()
+const builtinObservations = new WeakMap<RequestSealInput, { boundary: BuiltinBoundary; request: object }>()
+
+// This describes the environment actually captured by a native runtime, not a route approval.
+// Bun versions differ in when they read these variables; changing one invalidates the boundary.
+const nativeEnvironmentKeys = [
+  "HTTP_PROXY",
+  "http_proxy",
+  "HTTPS_PROXY",
+  "https_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+  "NO_PROXY",
+  "no_proxy",
+  "NODE_TLS_REJECT_UNAUTHORIZED",
+  "NODE_EXTRA_CA_CERTS",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "BUN_CA_FILE",
+  "NODE_OPTIONS",
+  "BUN_OPTIONS",
+] as const
+const nativeEnvironment = () => JSON.stringify(nativeEnvironmentKeys.map((key) => [key, process.env[key] ?? null]))
+
+type BuiltinBoundary = {
+  active: boolean
+  readonly fetch: typeof globalThis.fetch
+  readonly globalFetch: typeof globalThis.fetch
+  readonly environment: string
+  readonly current?: () => boolean
+  readonly description: Readonly<{ runtime: string; proxyPolicy: "startup-environment"; configurationHash: string }>
+}
+
+/** Read-only construction evidence. It cannot be supplied by an injected executor or copied handle. */
+export const builtinDescription = (executor: Interface) => {
+  const boundary = builtinExecutors.get(executor)
+  return boundary && builtinCurrent(boundary) ? boundary.description : undefined
+}
+
+export const observesBuiltin = (executor: Interface, request: object, observation: RequestSealInput) => {
+  const boundary = builtinExecutors.get(executor)
+  const observed = builtinObservations.get(observation)
+  return !!boundary && builtinCurrent(boundary) && observed?.boundary === boundary && observed.request === request
+}
+
+/** The request identity is process-local and must be tied to the actual client/model by the host.
+ * This only chooses an executor constructed here; it grants no business execution authority. */
+export const forBuiltinRequest = (executor: Interface, request: object): Interface | undefined => {
+  const boundary = builtinExecutors.get(executor)
+  if (!boundary || !builtinCurrent(boundary)) return undefined
+  return nativeBoundary(boundary.fetch, boundary, request)
+}
+
+const countedObservations = new WeakSet<RequestSealInput>()
+
+/** One local certificate from the same native final request lease. No HTTP request, tokenizer
+ * estimate, or fake provider response is involved; generation must fit the vendor context cap. */
+export const boundBuiltinDeepSeekResponses = Effect.fn("RequestExecutor.boundBuiltinDeepSeekResponses")(function* (
+  executor: Interface, request: object, observation: RequestSealInput, deadline: number,
+) {
+  const boundary = builtinExecutors.get(executor)
+  const context = yield* Effect.context<never>()
+  if (!boundary || !observesBuiltin(executor, request, observation) || countedObservations.has(observation) ||
+    Context.getOrUndefined(context, FetchHttpClient.RequestInit) !== undefined ||
+    Context.getOrUndefined(context, FetchHttpClient.Fetch) !== undefined || (yield* CurrentRetryLimit) !== 0 ||
+    (yield* CurrentRedirectPolicy) !== "manual" || observation.method !== "POST" ||
+    observation.url !== VendorContextBound.DEEPSEEK_FLASH.endpoint || !observation.bodyText || !observation.headers ||
+    !Number.isSafeInteger(deadline) || deadline <= Date.now() || deadline > Date.now() + 10_000)
+    return yield* nativeRefusal("Native context-bound observation is unavailable")
+  const input = responsesCountInput(observation.bodyText)
+  if (Option.isNone(input) || input.value.model !== VendorContextBound.DEEPSEEK_FLASH.modelID || !builtinCurrent(boundary))
+    return yield* nativeRefusal("Native context-bound request is unavailable")
+  const countBodyHash = createHash("sha256").update(JSON.stringify(input.value)).digest("hex")
+  const responseHash = createHash("sha256").update(JSON.stringify([
+    "dac.vendor-context-input-upper-bound.v1", VendorContextBound.DEEPSEEK_FLASH,
+    countBodyHash, observation.bodyHash, observation.wireHash,
+  ])).digest("hex")
+  if (!builtinCurrent(boundary) || Date.now() >= deadline)
+    return yield* nativeRefusal("Native context-bound configuration changed")
+  countedObservations.add(observation)
+  return Object.freeze({ inputTokens: VendorContextBound.DEEPSEEK_FLASH.inputUpperBound,
+    countBodyHash, responseHash, countedAt: Date.now() })
+})
+const CountResponse = Schema.Struct({ object: Schema.Literal("response.input_tokens"), input_tokens: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)) })
+const ResponsesCountBody = Schema.Struct({
+  model: Schema.String,
+  input: Schema.Array(Schema.Unknown),
+  instructions: Schema.optional(Schema.String),
+  tools: Schema.optional(Schema.Array(Schema.Record(Schema.String, Schema.Unknown))),
+  tool_choice: Schema.optional(Schema.Union([
+    Schema.Literals(["auto", "none", "required"]),
+    Schema.Struct({ type: Schema.Literal("function"), name: Schema.String }),
+  ])),
+  parallel_tool_calls: Schema.optional(Schema.Boolean),
+  reasoning: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  text: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  truncation: Schema.optional(Schema.Literal("disabled")),
+  stream: Schema.Literal(true),
+  store: Schema.Literal(false),
+  max_output_tokens: Schema.Int.check(Schema.isGreaterThanOrEqualTo(16), Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)),
+  temperature: Schema.optional(Schema.Number.check(Schema.isFinite())),
+  top_p: Schema.optional(Schema.Number.check(Schema.isFinite())),
+})
+
+/** Pure projection, never authorization. Preserve every accepted input-bearing field from the
+ * actual final encoded request, including tool schemas and output formatting. Provider-side
+ * conversation references and unknown fields cannot be counted from these local bytes.
+ * https://developers.openai.com/api/reference/python/resources/responses/subresources/input_tokens/methods/count
+ * The Work profile separately validates exact history, tool identity, model and field ceilings. */
+export function responsesCountInput(bodyText: string) {
+  if (Buffer.byteLength(bodyText) > 524_288) return Option.none()
+  const parsed = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(bodyText)
+  if (Option.isNone(parsed) || JSON.stringify(parsed.value) !== bodyText) return Option.none()
+  const decoded = Schema.decodeUnknownOption(ResponsesCountBody, { onExcessProperty: "error" })(parsed.value)
+  if (Option.isNone(decoded)) return Option.none()
+  const { stream, store, max_output_tokens, temperature, top_p, ...input } = decoded.value
+  return Option.some(input)
+}
+
+/** Fixed Responses operation, only from this executor's actual final generation observation.
+ * No caller body, headers, fetch function or endpoint is accepted. The host must authorize and
+ * durably consume its count slot BEFORE calling. A failed disclosure is never replayed here. */
+export const countBuiltinResponses = Effect.fn("RequestExecutor.countBuiltinResponses")(function* (
+  executor: Interface,
+  request: object,
+  observation: RequestSealInput,
+  deadline: number,
+) {
+  const boundary = builtinExecutors.get(executor)
+  const context = yield* Effect.context<never>()
+  if (
+    !boundary || !observesBuiltin(executor, request, observation) || countedObservations.has(observation) ||
+    Context.getOrUndefined(context, FetchHttpClient.RequestInit) !== undefined ||
+    Context.getOrUndefined(context, FetchHttpClient.Fetch) !== undefined ||
+    (yield* CurrentRetryLimit) !== 0 || (yield* CurrentRedirectPolicy) !== "manual" ||
+    observation.method !== "POST" || !observation.url || !observation.bodyText || !observation.headers ||
+    !Number.isSafeInteger(deadline) || deadline <= Date.now() || deadline > Date.now() + 10_000
+  ) return yield* nativeRefusal("Native input-count observation is unavailable")
+  const url = new URL(observation.url)
+  if (url.pathname !== "/v1/responses" || url.search || url.hash || url.username || url.password)
+    return yield* nativeRefusal("Native input-count endpoint is unavailable")
+  const decoded = responsesCountInput(observation.bodyText)
+  if (Option.isNone(decoded)) return yield* nativeRefusal("Native input-count body is unavailable")
+  const body = JSON.stringify(decoded.value)
+  const headers = Redacted.value(observation.headers)
+  url.pathname += "/input_tokens"
+  // The single-use marker is set synchronously with the final native boundary check.
+  if (!builtinCurrent(boundary)) return yield* nativeRefusal("Native input-count configuration changed")
+  countedObservations.add(observation)
+  return yield* Effect.tryPromise({
+    try: async (signal) => {
+      const abort = new AbortController()
+      const cancel = () => abort.abort()
+      signal.addEventListener("abort", cancel, { once: true })
+      if (signal.aborted) cancel()
+      const timeout = setTimeout(cancel, Math.max(0, deadline - Date.now()))
+      const response = await boundary.fetch(url.href, {
+        method: "POST", headers, body, redirect: "manual", signal: abort.signal,
+        keepalive: false, tls: { rejectUnauthorized: true },
+      }).catch(() => undefined)
+      try {
+        if (!response || response.status !== 200 || !response.body || !builtinCurrent(boundary) || Date.now() >= deadline)
+          throw nativeRefusal("Native input-count response is unavailable")
+        const type = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase()
+        if (type !== "application/json") throw nativeRefusal("Native input-count response type is invalid")
+        const reader = response.body.getReader()
+        const chunks: Uint8Array[] = []
+        let bytes = 0
+        try {
+          while (true) {
+            const part = await reader.read()
+            if (part.done) break
+            bytes += part.value.byteLength
+            if (bytes > 16_384 || Date.now() >= deadline || !builtinCurrent(boundary))
+              throw nativeRefusal("Native input-count response exceeds its bounds")
+            chunks.push(part.value)
+          }
+        } finally { await reader.cancel().catch(() => undefined) }
+        const text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks))
+        const result = Schema.decodeUnknownOption(Schema.fromJsonString(CountResponse), { onExcessProperty: "error" })(text)
+        if (Option.isNone(result) || Date.now() >= deadline || !builtinCurrent(boundary))
+          throw nativeRefusal("Native input-count result is invalid")
+        return Object.freeze({
+          inputTokens: result.value.input_tokens,
+          responseHash: createHash("sha256").update(text).digest("hex"),
+          countBodyHash: createHash("sha256").update(body).digest("hex"),
+          countedAt: Date.now(),
+        })
+      } finally {
+        clearTimeout(timeout)
+        signal.removeEventListener("abort", cancel)
+        await response?.body?.cancel().catch(() => undefined)
+      }
+    },
+    catch: () => nativeRefusal("Native input-count outcome is unavailable"),
+  })
+})
+
+function builtinCurrent(boundary: BuiltinBoundary) {
+  return boundary.active && (boundary.current ? boundary.current() :
+    globalThis.fetch === boundary.globalFetch && nativeEnvironment() === boundary.environment)
+}
+
+/** Construction identity only; this is not an installed-build or route approval. Copies are not observations. */
+export const isNativeObservation = (input: RequestSealInput) => nativeObservations.has(input)
+
+const nativeRefusal = (message: string) =>
+  new LLMError({
+    module: "RequestExecutor",
+    method: "execute",
+    reason: new InvalidRequestReason({ message }),
+  })
+
+/** Opt-in boundary for sealed UTF-8 HTTP requests. The ordinary injectable executor is unchanged.
+ * Application headers are observed; fetch/OS-generated Host, User-Agent and Content-Length are not.
+ * The captured platform function is a local construction fact, not a signed runtime attestation. */
+export const nativeSealedLayer = Layer.sync(Service, () => nativeBoundary(nativeFetch))
+
+/** Literal guarded import keeps ordinary LLM clients usable in Node. No callback, fetch override,
+ * registry registration, or caller hash can construct this builtin boundary. */
+export const builtinBunLayer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    if (!process.versions.bun) return yield* Effect.die("Builtin Bun HTTP is unavailable")
+    const builtin = yield* Effect.promise(() => import("bun"))
+    const environment = nativeEnvironment()
+    const boundary: BuiltinBoundary = {
+      active: true,
+      fetch: builtin.fetch,
+      globalFetch: globalThis.fetch,
+      environment,
+      description: Object.freeze({
+        runtime: `bun:${process.versions.bun}`,
+        proxyPolicy: "startup-environment",
+        // Local identity only, not a persistent configuration/credential authorization hash.
+        configurationHash: createHmac("sha256", randomBytes(32))
+          .update("dac.native-executor.configuration.v1\0")
+          .update(environment)
+          .digest("hex"),
+      }),
+    }
+    const executor = nativeBoundary(builtin.fetch, boundary)
+    builtinExecutors.set(executor, boundary)
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        boundary.active = false
+        builtinExecutors.delete(executor)
+      }),
+    )
+    return executor
+  }),
+)
+
+/** The early executable prefix is mandatory for construction evidence. A library import
+ * without that prefix keeps its ordinary client; it cannot acquire a native request lease. */
+export const builtinNodeLayer = Layer.effect(Service, Effect.gen(function* () {
+  const transport = BuiltinNode.create()
+  if (!transport) return nativeBoundary(Object.assign(async () => {
+    throw new Error("Builtin Node HTTP is unavailable")
+  }, { preconnect: globalThis.fetch.preconnect }))
+  const boundary: BuiltinBoundary = {
+    active: true, fetch: transport.fetch, globalFetch: globalThis.fetch,
+    environment: nativeEnvironment(), current: transport.current, description: transport.description,
+  }
+  const executor = nativeBoundary(transport.fetch, boundary)
+  builtinExecutors.set(executor, boundary)
+  yield* Effect.addFinalizer(() => Effect.promise(async () => {
+    boundary.active = false
+    builtinExecutors.delete(executor)
+    await transport.close()
+  }))
+  return executor
+}))
+
+function nativeBoundary(
+  fetch: typeof globalThis.fetch,
+  boundary?: BuiltinBoundary,
+  requestIdentity?: object,
+): Interface {
+  // HttpClient.make retains Effect's response-stream cancellation, but no injected client, Fetch,
+  // RequestInit or tracing-header transform can run between this callback and the platform call.
+  const http = HttpClient.make((request, url, signal) =>
+    Effect.gen(function* () {
+      const seal = yield* CurrentRequestSeal
+      if (!seal) return yield* Effect.die("Native HTTP request seal is unavailable")
+      if (request.body._tag !== "Uint8Array") return yield* Effect.die("Native HTTP snapshot is unavailable")
+      const bodyText = new TextDecoder("utf-8", { fatal: true }).decode(request.body.body)
+      const headers = Object.freeze(Headers.remove(Headers.fromInput({ ...request.headers }), "content-length"))
+      const observation: RequestSealInput = Object.freeze({
+        method: request.method,
+        url: url.href,
+        bodyText,
+        headers: Redacted.make(headers),
+        wireHash: wireRequestHash({
+          method: request.method,
+          url: url.href,
+          contentType: headers["content-type"],
+          bodyText,
+        }),
+        bodyHash: createHash("sha256").update(bodyText).digest("hex"),
+        bodyLength: Buffer.byteLength(bodyText, "utf8"),
+        contentType: headers["content-type"],
+      })
+      nativeObservations.add(observation)
+      if (boundary && requestIdentity) builtinObservations.set(observation, { boundary, request: requestIdentity })
+      yield* seal.seal(observation)
+      // A seal may suspend for durable authorization. Recheck after it, immediately before fetch.
+      if (boundary && !builtinCurrent(boundary)) return yield* Effect.die("Builtin HTTP configuration changed")
+      return yield* Effect.tryPromise({
+        try: () =>
+          fetch(url.href, {
+            method: request.method,
+            headers,
+            body: bodyText,
+            redirect: "manual",
+            signal,
+            ...(boundary ? { keepalive: false, tls: { rejectUnauthorized: true } } : {}),
+          }),
+        catch: (cause) =>
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request, cause }),
+          }),
+      }).pipe(
+        Effect.flatMap((response) =>
+          // Native diagnostics intentionally exclude response bodies and headers, which may echo credentials.
+          (response.status >= (boundary ? 300 : 400) && response.body
+            ? Effect.tryPromise({ try: () => response.body!.cancel(), catch: () => undefined }).pipe(
+                Effect.catch(() => Effect.void),
+              )
+            : Effect.void
+          ).pipe(Effect.as(HttpClientResponse.fromWeb(request, response))),
+        ),
+      )
+    }),
+  )
+  return Service.of({
+    execute: (request) =>
+      Effect.gen(function* () {
+        const context = yield* Effect.context<never>()
+        if (
+          Context.getOrUndefined(context, FetchHttpClient.RequestInit) !== undefined ||
+          Context.getOrUndefined(context, FetchHttpClient.Fetch) !== undefined ||
+          (boundary ? !builtinCurrent(boundary) : globalThis.fetch !== nativeFetch)
+        )
+          return yield* nativeRefusal("Native HTTP boundary does not allow Fetch or RequestInit overrides")
+        if ((yield* CurrentRetryLimit) !== 0 || (yield* CurrentRedirectPolicy) !== "manual")
+          return yield* nativeRefusal("Native HTTP boundary requires zero retries and manual redirects")
+        if (!(yield* CurrentRequestSeal)) return yield* nativeRefusal("Native HTTP request seal is unavailable")
+        if (request.body._tag !== "Uint8Array") return yield* nativeRefusal("Native HTTP requires a UTF-8 byte body")
+        const url = Option.getOrUndefined(HttpClientRequest.toUrl(request))
+        if (!url || !["http:", "https:"].includes(url.protocol))
+          return yield* nativeRefusal("Native HTTP requires a valid HTTP URL")
+        if (boundary && (url.username || url.password))
+          return yield* nativeRefusal("Builtin HTTP does not allow URL credentials")
+        url.hash = ""
+        // Copy before yielding: the caller may still own the original mutable typed array and headers.
+        const bytes = Uint8Array.from(request.body.body)
+        const suppliedHeaders = { ...request.headers }
+        const headers = yield* Effect.try({
+          // Apply the platform's name/value normalization before observing the application headers.
+          try: () =>
+            Object.freeze(Headers.remove(Headers.fromInput(new globalThis.Headers(suppliedHeaders)), "content-length")),
+          catch: () => nativeRefusal("Native HTTP application headers are invalid"),
+        })
+        const text = yield* Effect.try({
+          try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+          catch: () => nativeRefusal("Native HTTP body is not valid UTF-8"),
+        })
+        if (!Buffer.from(text, "utf8").equals(bytes))
+          return yield* nativeRefusal("Native HTTP body cannot round-trip as UTF-8")
+        const snapshot = HttpClientRequest.make(request.method)(url.href).pipe(
+          HttpClientRequest.bodyText(text, headers["content-type"]),
+          HttpClientRequest.setHeaders(headers),
+        )
+        const response = yield* http.execute(snapshot).pipe(
+          Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+          Effect.mapError(
+            (error) =>
+              new LLMError({
+                module: "RequestExecutor",
+                method: "execute",
+                reason: new TransportReason({ message: "Native HTTP transport failed", phase: transportPhase(error) }),
+              }),
+          ),
+        )
+        if (response.status < (boundary ? 300 : 400)) return response
+        return yield* new LLMError({
+          module: "RequestExecutor",
+          method: "execute",
+          reason: statusReason({
+            status: response.status,
+            message: `Native HTTP request failed with status ${response.status}`,
+            http: new HttpContext({
+              request: new HttpRequestDetails({ method: snapshot.method, url: redactUrl(snapshot.url), headers: {} }),
+              response: new HttpResponseDetails({ status: response.status, headers: {} }),
+            }),
+          }),
+        })
+      }),
+  })
+}
 
 export * as RequestExecutor from "./executor"

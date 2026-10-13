@@ -1,0 +1,184 @@
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration"
+
+export default {
+  id: "20261008221545_im_task_status_notice",
+  up(tx) {
+    return Effect.gen(function* () {
+      // This forward also captures the new browser file tables from the same schema snapshot.
+      // Both notice and grant records are immutable; delivery and transfer state has its own ledger.
+      yield* tx.run(`
+        CREATE TABLE \`browser_file_artifact\` (
+          \`artifact_id\` text PRIMARY KEY,
+          \`instance_id\` text NOT NULL,
+          \`grant_id\` text NOT NULL,
+          \`grant_hash\` text NOT NULL,
+          \`action_id\` text NOT NULL,
+          \`control_id\` text NOT NULL,
+          \`scope_hash\` text NOT NULL,
+          \`ordinal\` integer NOT NULL,
+          \`state\` text NOT NULL,
+          \`revision\` integer NOT NULL,
+          \`reserved_bytes\` integer NOT NULL,
+          \`record\` text NOT NULL,
+          \`record_hash\` text NOT NULL,
+          \`created_at\` integer NOT NULL,
+          \`updated_at\` integer NOT NULL,
+          \`released_at\` integer,
+          CONSTRAINT \`fk_browser_file_artifact_instance_id_browser_file_capacity_instance_id_fk\` FOREIGN KEY (\`instance_id\`) REFERENCES \`browser_file_capacity\`(\`instance_id\`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+          CONSTRAINT \`fk_browser_file_artifact_grant_id_browser_file_grant_grant_id_fk\` FOREIGN KEY (\`grant_id\`) REFERENCES \`browser_file_grant\`(\`grant_id\`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+          CONSTRAINT \`fk_browser_file_artifact_action_id_browser_action_action_id_fk\` FOREIGN KEY (\`action_id\`) REFERENCES \`browser_action\`(\`action_id\`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+          CONSTRAINT \`fk_browser_file_artifact_control_id_browser_control_control_id_fk\` FOREIGN KEY (\`control_id\`) REFERENCES \`browser_control\`(\`control_id\`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+          CONSTRAINT "browser_file_artifact_artifact_id_text_check" CHECK(typeof("artifact_id")='text' AND length(CAST("artifact_id" AS BLOB)) BETWEEN 1 AND 512 AND instr("artifact_id",char(0))=0),
+          CONSTRAINT "browser_file_artifact_instance_id_text_check" CHECK(typeof("instance_id")='text' AND length(CAST("instance_id" AS BLOB)) BETWEEN 1 AND 512 AND instr("instance_id",char(0))=0),
+          CONSTRAINT "browser_file_artifact_grant_id_text_check" CHECK(typeof("grant_id")='text' AND length(CAST("grant_id" AS BLOB)) BETWEEN 1 AND 512 AND instr("grant_id",char(0))=0),
+          CONSTRAINT "browser_file_artifact_action_id_text_check" CHECK(typeof("action_id")='text' AND length(CAST("action_id" AS BLOB)) BETWEEN 1 AND 512 AND instr("action_id",char(0))=0),
+          CONSTRAINT "browser_file_artifact_control_id_text_check" CHECK(typeof("control_id")='text' AND length(CAST("control_id" AS BLOB)) BETWEEN 1 AND 512 AND instr("control_id",char(0))=0),
+          CONSTRAINT "browser_file_artifact_grant_hash_digest_check" CHECK(typeof("grant_hash")='text' AND length(CAST("grant_hash" AS BLOB))=64 AND "grant_hash" NOT GLOB '*[^0-9a-f]*'),
+          CONSTRAINT "browser_file_artifact_scope_hash_digest_check" CHECK(typeof("scope_hash")='text' AND length(CAST("scope_hash" AS BLOB))=64 AND "scope_hash" NOT GLOB '*[^0-9a-f]*'),
+          CONSTRAINT "browser_file_artifact_record_hash_digest_check" CHECK(typeof("record_hash")='text' AND length(CAST("record_hash" AS BLOB))=64 AND "record_hash" NOT GLOB '*[^0-9a-f]*'),
+          CONSTRAINT "browser_file_artifact_revision_integer_check" CHECK(typeof("revision")='integer' AND "revision" BETWEEN 1 AND 9007199254740991),
+          CONSTRAINT "browser_file_artifact_created_at_integer_check" CHECK(typeof("created_at")='integer' AND "created_at" BETWEEN 1 AND 9007199254740991),
+          CONSTRAINT "browser_file_artifact_updated_at_integer_check" CHECK(typeof("updated_at")='integer' AND "updated_at" BETWEEN 1 AND 9007199254740991),
+          CONSTRAINT "browser_file_artifact_ordinal_check" CHECK(typeof("ordinal")='integer' AND "ordinal" BETWEEN 0 AND 3),
+          CONSTRAINT "browser_file_artifact_reserved_check" CHECK(typeof("reserved_bytes")='integer' AND "reserved_bytes" BETWEEN 0 AND 1073741824),
+          CONSTRAINT "browser_file_artifact_state_check" CHECK("state" IN ('reserved','staged','selected','published','refused','unknown')),
+          CONSTRAINT "browser_file_artifact_time_check" CHECK("updated_at">="created_at" AND ("released_at" IS NULL OR (typeof("released_at")='integer' AND "released_at" BETWEEN "created_at" AND "updated_at"))),
+          CONSTRAINT "browser_file_artifact_release_check" CHECK(("released_at" IS NULL AND "reserved_bytes">0) OR ("released_at" IS NOT NULL AND "state" IN ('selected','published','refused') AND "reserved_bytes"=0)),
+          CONSTRAINT "browser_file_artifact_record_check" CHECK(typeof("record")='text' AND length(CAST("record" AS BLOB)) BETWEEN 1 AND 8192 AND json_valid("record") AND json_type("record") IS 'object' AND json_type("record",'$.version') IS 'integer' AND json_extract("record",'$.version') IS 1),
+          CONSTRAINT "browser_file_artifact_artifact_id_mirror_check" CHECK(json_type("record",'$.artifactID') IS 'text' AND json_extract("record",'$.artifactID') IS "artifact_id"),
+          CONSTRAINT "browser_file_artifact_instance_id_mirror_check" CHECK(json_type("record",'$.instanceID') IS 'text' AND json_extract("record",'$.instanceID') IS "instance_id"),
+          CONSTRAINT "browser_file_artifact_grant_id_mirror_check" CHECK(json_type("record",'$.grantID') IS 'text' AND json_extract("record",'$.grantID') IS "grant_id"),
+          CONSTRAINT "browser_file_artifact_grant_hash_mirror_check" CHECK(json_type("record",'$.grantHash') IS 'text' AND json_extract("record",'$.grantHash') IS "grant_hash"),
+          CONSTRAINT "browser_file_artifact_action_id_mirror_check" CHECK(json_type("record",'$.actionID') IS 'text' AND json_extract("record",'$.actionID') IS "action_id"),
+          CONSTRAINT "browser_file_artifact_control_id_mirror_check" CHECK(json_type("record",'$.controlID') IS 'text' AND json_extract("record",'$.controlID') IS "control_id"),
+          CONSTRAINT "browser_file_artifact_scope_hash_mirror_check" CHECK(json_type("record",'$.scopeHash') IS 'text' AND json_extract("record",'$.scopeHash') IS "scope_hash"),
+          CONSTRAINT "browser_file_artifact_state_mirror_check" CHECK(json_type("record",'$.state') IS 'text' AND json_extract("record",'$.state') IS "state"),
+          CONSTRAINT "browser_file_artifact_ordinal_mirror_check" CHECK(json_type("record",'$.ordinal') IS 'integer' AND json_extract("record",'$.ordinal') IS "ordinal"),
+          CONSTRAINT "browser_file_artifact_revision_mirror_check" CHECK(json_type("record",'$.revision') IS 'integer' AND json_extract("record",'$.revision') IS "revision"),
+          CONSTRAINT "browser_file_artifact_reserved_bytes_mirror_check" CHECK(json_type("record",'$.reservedBytes') IS 'integer' AND json_extract("record",'$.reservedBytes') IS "reserved_bytes"),
+          CONSTRAINT "browser_file_artifact_created_at_mirror_check" CHECK(json_type("record",'$.createdAt') IS 'integer' AND json_extract("record",'$.createdAt') IS "created_at"),
+          CONSTRAINT "browser_file_artifact_updated_at_mirror_check" CHECK(json_type("record",'$.updatedAt') IS 'integer' AND json_extract("record",'$.updatedAt') IS "updated_at"),
+          CONSTRAINT "browser_file_artifact_release_mirror_check" CHECK(("released_at" IS NULL AND json_type("record",'$.releasedAt') IS 'null') OR ("released_at" IS NOT NULL AND json_type("record",'$.releasedAt') IS 'integer' AND json_extract("record",'$.releasedAt') IS "released_at"))
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`browser_file_capacity\` (
+          \`instance_id\` text PRIMARY KEY,
+          \`grant_count\` integer NOT NULL,
+          \`artifact_count\` integer NOT NULL,
+          \`reserved_bytes\` integer NOT NULL,
+          \`metadata_bytes\` integer NOT NULL,
+          \`revision\` integer NOT NULL,
+          \`updated_at\` integer NOT NULL,
+          CONSTRAINT "browser_file_capacity_instance_check" CHECK(typeof("instance_id")='text' AND length(CAST("instance_id" AS BLOB)) BETWEEN 1 AND 512 AND instr("instance_id",char(0))=0),
+          CONSTRAINT "browser_file_capacity_grant_count_integer_check" CHECK(typeof("grant_count")='integer' AND "grant_count" BETWEEN 0 AND 9007199254740991),
+          CONSTRAINT "browser_file_capacity_artifact_count_integer_check" CHECK(typeof("artifact_count")='integer' AND "artifact_count" BETWEEN 0 AND 9007199254740991),
+          CONSTRAINT "browser_file_capacity_reserved_bytes_integer_check" CHECK(typeof("reserved_bytes")='integer' AND "reserved_bytes" BETWEEN 0 AND 9007199254740991),
+          CONSTRAINT "browser_file_capacity_metadata_bytes_integer_check" CHECK(typeof("metadata_bytes")='integer' AND "metadata_bytes" BETWEEN 0 AND 9007199254740991),
+          CONSTRAINT "browser_file_capacity_revision_integer_check" CHECK(typeof("revision")='integer' AND "revision" BETWEEN 1 AND 9007199254740991),
+          CONSTRAINT "browser_file_capacity_updated_at_integer_check" CHECK(typeof("updated_at")='integer' AND "updated_at" BETWEEN 1 AND 9007199254740991),
+          CONSTRAINT "browser_file_capacity_bounds_check" CHECK("artifact_count"<=100000 AND "reserved_bytes"<=1073741824 AND "metadata_bytes"<=33554432 AND "reserved_bytes">="metadata_bytes")
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`browser_file_grant\` (
+          \`grant_id\` text PRIMARY KEY,
+          \`instance_id\` text NOT NULL,
+          \`control_id\` text NOT NULL,
+          \`request_id\` text NOT NULL,
+          \`command_hash\` text NOT NULL,
+          \`scope_hash\` text NOT NULL,
+          \`control_epoch\` integer NOT NULL,
+          \`policy_revision\` integer NOT NULL,
+          \`direction\` text NOT NULL,
+          \`expires_at\` integer NOT NULL,
+          \`record\` text NOT NULL,
+          \`record_hash\` text NOT NULL,
+          \`created_at\` integer NOT NULL,
+          CONSTRAINT \`fk_browser_file_grant_instance_id_browser_file_capacity_instance_id_fk\` FOREIGN KEY (\`instance_id\`) REFERENCES \`browser_file_capacity\`(\`instance_id\`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+          CONSTRAINT \`fk_browser_file_grant_control_id_browser_control_control_id_fk\` FOREIGN KEY (\`control_id\`) REFERENCES \`browser_control\`(\`control_id\`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+          CONSTRAINT "browser_file_grant_grant_id_text_check" CHECK(typeof("grant_id")='text' AND length(CAST("grant_id" AS BLOB)) BETWEEN 1 AND 512 AND instr("grant_id",char(0))=0),
+          CONSTRAINT "browser_file_grant_instance_id_text_check" CHECK(typeof("instance_id")='text' AND length(CAST("instance_id" AS BLOB)) BETWEEN 1 AND 512 AND instr("instance_id",char(0))=0),
+          CONSTRAINT "browser_file_grant_control_id_text_check" CHECK(typeof("control_id")='text' AND length(CAST("control_id" AS BLOB)) BETWEEN 1 AND 512 AND instr("control_id",char(0))=0),
+          CONSTRAINT "browser_file_grant_request_id_text_check" CHECK(typeof("request_id")='text' AND length(CAST("request_id" AS BLOB)) BETWEEN 1 AND 512 AND instr("request_id",char(0))=0),
+          CONSTRAINT "browser_file_grant_command_hash_digest_check" CHECK(typeof("command_hash")='text' AND length(CAST("command_hash" AS BLOB))=64 AND "command_hash" NOT GLOB '*[^0-9a-f]*'),
+          CONSTRAINT "browser_file_grant_scope_hash_digest_check" CHECK(typeof("scope_hash")='text' AND length(CAST("scope_hash" AS BLOB))=64 AND "scope_hash" NOT GLOB '*[^0-9a-f]*'),
+          CONSTRAINT "browser_file_grant_record_hash_digest_check" CHECK(typeof("record_hash")='text' AND length(CAST("record_hash" AS BLOB))=64 AND "record_hash" NOT GLOB '*[^0-9a-f]*'),
+          CONSTRAINT "browser_file_grant_control_epoch_integer_check" CHECK(typeof("control_epoch")='integer' AND "control_epoch" BETWEEN 1 AND 9007199254740991),
+          CONSTRAINT "browser_file_grant_policy_revision_integer_check" CHECK(typeof("policy_revision")='integer' AND "policy_revision" BETWEEN 1 AND 9007199254740991),
+          CONSTRAINT "browser_file_grant_expires_at_integer_check" CHECK(typeof("expires_at")='integer' AND "expires_at" BETWEEN 1 AND 9007199254740991),
+          CONSTRAINT "browser_file_grant_created_at_integer_check" CHECK(typeof("created_at")='integer' AND "created_at" BETWEEN 1 AND 9007199254740991),
+          CONSTRAINT "browser_file_grant_direction_check" CHECK("direction" IN ('upload','download')),
+          CONSTRAINT "browser_file_grant_time_check" CHECK("expires_at">"created_at"),
+          CONSTRAINT "browser_file_grant_record_check" CHECK(typeof("record")='text' AND length(CAST("record" AS BLOB)) BETWEEN 1 AND 8192 AND json_valid("record") AND json_type("record") IS 'object' AND json_type("record",'$.version') IS 'integer' AND json_extract("record",'$.version') IS 1),
+          CONSTRAINT "browser_file_grant_grant_id_mirror_check" CHECK(json_type("record",'$.grantID') IS 'text' AND json_extract("record",'$.grantID') IS "grant_id"),
+          CONSTRAINT "browser_file_grant_instance_id_mirror_check" CHECK(json_type("record",'$.instanceID') IS 'text' AND json_extract("record",'$.instanceID') IS "instance_id"),
+          CONSTRAINT "browser_file_grant_control_id_mirror_check" CHECK(json_type("record",'$.controlID') IS 'text' AND json_extract("record",'$.controlID') IS "control_id"),
+          CONSTRAINT "browser_file_grant_command_hash_mirror_check" CHECK(json_type("record",'$.commandHash') IS 'text' AND json_extract("record",'$.commandHash') IS "command_hash"),
+          CONSTRAINT "browser_file_grant_scope_hash_mirror_check" CHECK(json_type("record",'$.scopeHash') IS 'text' AND json_extract("record",'$.scopeHash') IS "scope_hash"),
+          CONSTRAINT "browser_file_grant_control_epoch_mirror_check" CHECK(json_type("record",'$.controlEpoch') IS 'integer' AND json_extract("record",'$.controlEpoch') IS "control_epoch"),
+          CONSTRAINT "browser_file_grant_policy_revision_mirror_check" CHECK(json_type("record",'$.policyRevision') IS 'integer' AND json_extract("record",'$.policyRevision') IS "policy_revision"),
+          CONSTRAINT "browser_file_grant_expires_at_mirror_check" CHECK(json_type("record",'$.expiresAt') IS 'integer' AND json_extract("record",'$.expiresAt') IS "expires_at"),
+          CONSTRAINT "browser_file_grant_created_at_mirror_check" CHECK(json_type("record",'$.createdAt') IS 'integer' AND json_extract("record",'$.createdAt') IS "created_at"),
+          CONSTRAINT "browser_file_grant_request_mirror_check" CHECK(json_type("record",'$.command.requestID') IS 'text' AND json_extract("record",'$.command.requestID') IS "request_id" AND json_type("record",'$.preview.direction') IS 'text' AND json_extract("record",'$.preview.direction') IS "direction")
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`im_task_status_notice\` (
+          \`notice_id\` text PRIMARY KEY,
+          \`instance_id\` text NOT NULL,
+          \`actor_id\` text NOT NULL,
+          \`request_id\` text NOT NULL,
+          \`request_revision\` integer NOT NULL,
+          \`request_hash\` text NOT NULL,
+          \`source_id\` text NOT NULL,
+          \`source_message_id\` text NOT NULL,
+          \`source_proof_hash\` text NOT NULL,
+          \`source_snapshot_hash\` text NOT NULL,
+          \`kind\` text NOT NULL,
+          \`occurrence_key\` text NOT NULL,
+          \`basis_hash\` text NOT NULL,
+          \`grant_id\` text,
+          \`grant_revision\` integer,
+          \`work_id\` text,
+          \`session_id\` text,
+          \`control_revision\` integer,
+          \`group_id\` text NOT NULL,
+          \`agent_id\` text NOT NULL,
+          \`outbox_id\` text NOT NULL,
+          \`delivery_message_id\` text NOT NULL,
+          \`record\` text NOT NULL,
+          \`record_hash\` text NOT NULL,
+          \`record_bytes\` integer NOT NULL,
+          \`created_at\` integer NOT NULL,
+          CONSTRAINT \`fk_im_task_status_notice_request_id_im_task_request_request_id_fk\` FOREIGN KEY (\`request_id\`) REFERENCES \`im_task_request\`(\`request_id\`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+          CONSTRAINT "im_task_notice_kind_check" CHECK("kind" IN ('cancel_requested','recovery_required','refused')),
+          CONSTRAINT "im_task_notice_record_check" CHECK(json_valid("record") AND typeof("record_bytes")='integer' AND "record_bytes" BETWEEN 2 AND 32768 AND "record_bytes"=length(CAST("record" AS BLOB))),
+          CONSTRAINT "im_task_notice_revision_check" CHECK("request_revision">0 AND "created_at">=0 AND ("grant_revision" IS NULL OR "grant_revision">0) AND ("control_revision" IS NULL OR "control_revision">0)),
+          CONSTRAINT "im_task_notice_refused_check" CHECK("kind"!='refused' OR ("grant_id" IS NULL AND "grant_revision" IS NULL AND "work_id" IS NULL AND "session_id" IS NULL AND "control_revision" IS NULL))
+        );
+      `)
+      yield* tx.run(`CREATE UNIQUE INDEX \`browser_file_artifact_action_ordinal_idx\` ON \`browser_file_artifact\` (\`action_id\`,\`ordinal\`);`)
+      yield* tx.run(`CREATE UNIQUE INDEX \`browser_file_artifact_grant_idx\` ON \`browser_file_artifact\` (\`grant_id\`);`)
+      yield* tx.run(`CREATE INDEX \`browser_file_artifact_control_idx\` ON \`browser_file_artifact\` (\`control_id\`,\`created_at\`,\`artifact_id\`);`)
+      yield* tx.run(`CREATE INDEX \`browser_file_artifact_custody_idx\` ON \`browser_file_artifact\` (\`instance_id\`,\`released_at\`,\`artifact_id\`);`)
+      yield* tx.run(`CREATE UNIQUE INDEX \`browser_file_grant_request_idx\` ON \`browser_file_grant\` (\`control_id\`,\`request_id\`);`)
+      yield* tx.run(`CREATE INDEX \`browser_file_grant_control_idx\` ON \`browser_file_grant\` (\`control_id\`,\`created_at\`,\`grant_id\`);`)
+      yield* tx.run(`CREATE UNIQUE INDEX \`im_task_notice_occurrence_idx\` ON \`im_task_status_notice\` (\`instance_id\`,\`request_id\`,\`occurrence_key\`);`)
+      yield* tx.run(`CREATE UNIQUE INDEX \`im_task_notice_refused_idx\` ON \`im_task_status_notice\` (\`request_id\`) WHERE "im_task_status_notice"."kind"='refused';`)
+      yield* tx.run(`CREATE UNIQUE INDEX \`im_task_notice_outbox_idx\` ON \`im_task_status_notice\` (\`outbox_id\`);`)
+      yield* tx.run(`CREATE UNIQUE INDEX \`im_task_notice_delivery_idx\` ON \`im_task_status_notice\` (\`delivery_message_id\`);`)
+      yield* tx.run(`CREATE INDEX \`im_task_notice_instance_idx\` ON \`im_task_status_notice\` (\`instance_id\`,\`created_at\`,\`notice_id\`);`)
+      yield* tx.run(`CREATE INDEX \`im_task_notice_request_idx\` ON \`im_task_status_notice\` (\`request_id\`,\`created_at\`,\`notice_id\`);`)
+      yield* tx.run(`CREATE TRIGGER im_task_status_notice_no_update BEFORE UPDATE ON im_task_status_notice
+        BEGIN SELECT RAISE(ABORT, 'IM task status notices are immutable'); END;`)
+      yield* tx.run(`CREATE TRIGGER im_task_status_notice_no_delete BEFORE DELETE ON im_task_status_notice
+        BEGIN SELECT RAISE(ABORT, 'IM task status notices are immutable'); END;`)
+      yield* tx.run(`CREATE TRIGGER browser_file_grant_no_update BEFORE UPDATE ON browser_file_grant
+        BEGIN SELECT RAISE(ABORT, 'Browser file grants are immutable'); END;`)
+      yield* tx.run(`CREATE TRIGGER browser_file_grant_no_delete BEFORE DELETE ON browser_file_grant
+        BEGIN SELECT RAISE(ABORT, 'Browser file grants are immutable'); END;`)
+    })
+  },
+} satisfies DatabaseMigration.Migration

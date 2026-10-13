@@ -1,6 +1,6 @@
 import { createSignal, createEffect, onCleanup } from "solid-js"
 import type { IMMessage } from "@/components/im/types"
-import type { IMClient } from "@/utils/im-client"
+import { mergeIMMessages, type IMClient } from "@/utils/im-client"
 
 // One live snapshot of a part of an in-flight agent turn (reasoning / assistant
 // text / tool activity). The client keeps a map keyed by `partID` and REPLACES
@@ -18,8 +18,10 @@ export interface AgentProgressPart {
 // WebSocket event types
 export type IMWebSocketEvent =
   | { type: "message_created"; data: IMMessage }
+  | { type: "reader_changed"; data: { groupID: string; displayEpoch: string } }
+  | { type: "reader_invalidated"; data: { groupID: string; displayEpoch: string; code: string } }
   | { type: "message_failed"; data: { clientMessageID?: string; code: string; message: string; retryable: boolean } }
-  | { type: "agent_status"; data: { messageID: string; agentID: string; status: string; error?: any } }
+  | { type: "agent_status"; data: { messageID: string; agentID: string; status: string; error?: unknown } }
   | { type: "agent_progress"; data: { messageID: string; agentID: string; parts: AgentProgressPart[] } }
   | { type: "typing"; data: { groupID: string; memberID: string; typing: boolean } }
   | { type: "read_receipt"; data: { groupID: string; memberID: string; readAt: number } }
@@ -39,7 +41,15 @@ export interface LocalMessage extends IMMessage {}
  * IM WebSocket hook for real-time communication with auto-reconnect.
  * Rewritten for SolidJS reactivity system.
  */
-export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
+export function useIMWebSocket(
+  client: IMClient,
+  groupID: () => string | null,
+  reader?: {
+    protected: () => boolean
+    changed: (epoch: string) => void
+    invalidated: (epoch?: string) => void
+  },
+) {
   const [ws, setWs] = createSignal<WebSocket | null>(null)
   const [connected, setConnected] = createSignal(false)
   const [reconnectAttempt, setReconnectAttempt] = createSignal(0)
@@ -53,10 +63,38 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
   // memberIDs currently typing (excluding self, resolved by the caller).
   const [typingMembers, setTypingMembers] = createSignal<Set<string>>(new Set())
   const typingTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const connection: { generation: number; disposed: boolean; cleanup?: () => void; retry?: ReturnType<typeof setTimeout> } = {
+    generation: 0,
+    disposed: false,
+  }
+  onCleanup(() => { connection.disposed = true })
+
+  const clear = () => {
+    setMessages([])
+    setAgentStatuses(new Map())
+    setAgentProgress(new Map())
+    setReadReceipts(new Map())
+    setTypingMembers(new Set<string>())
+    for (const timer of typingTimers.values()) clearTimeout(timer)
+    typingTimers.clear()
+  }
+  const invalidate = () => {
+    if (!reader?.protected()) return
+    clear()
+    reader.invalidated()
+  }
 
   const connect = () => {
+    if (connection.disposed) return
     const currentGroupID = groupID()
+    const scope = client.scope?.()
     if (!currentGroupID) return
+    const generation = ++connection.generation
+    connection.cleanup?.()
+    if (connection.retry) clearTimeout(connection.retry)
+    setConnected(false)
+    const current = () =>
+      generation === connection.generation && groupID() === currentGroupID && client.scope?.() === scope
 
     // Construct authenticated WebSocket URL (base URL + directory + auth_token).
     // Browsers can't set headers on WebSocket, so auth travels as a query param
@@ -64,40 +102,62 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
     // reads an `access_token` cookie instead, which we set here first.
     client.setWebSocketAuthCookie()
     const socket = new WebSocket(client.webSocketURL(currentGroupID))
+    const stable = { timer: undefined as ReturnType<typeof setTimeout> | undefined }
 
     socket.onopen = () => {
-      console.log("IM WebSocket connected")
+      if (!current()) return
       setConnected(true)
-      setReconnectAttempt(0)
+      if (stable.timer) clearTimeout(stable.timer)
+      // A short successful handshake must not restart a flapping connection's backoff.
+      stable.timer = setTimeout(() => {
+        if (current() && socket.readyState === WebSocket.OPEN) setReconnectAttempt(0)
+      }, 30_000)
     }
 
     socket.onclose = (event) => {
-      console.log("IM WebSocket disconnected", event.code, event.reason)
+      clearInterval(pingInterval)
+      if (stable.timer) clearTimeout(stable.timer)
+      if (!current()) return
       setConnected(false)
+      invalidate()
       setWs(null)
 
       // Auto-reconnect with exponential backoff
       if (!event.wasClean) {
         const delay = Math.min(1000 * Math.pow(2, reconnectAttempt()), 30000)
-        console.log(`Reconnecting in ${delay}ms...`)
-        setTimeout(() => {
+        connection.retry = setTimeout(() => {
+          if (!current()) return
           setReconnectAttempt((prev) => prev + 1)
           connect()
         }, delay)
       }
     }
 
-    socket.onerror = (error) => {
-      console.error("IM WebSocket error:", error)
+    socket.onerror = () => {
+      if (stable.timer) clearTimeout(stable.timer)
+      if (!current()) return
+      setConnected(false)
+      invalidate()
     }
 
     socket.onmessage = (event) => {
+      if (!current()) return
       try {
         const wsEvent = JSON.parse(event.data) as IMWebSocketEvent
 
         switch (wsEvent.type) {
+          case "reader_changed":
+            if (wsEvent.data.groupID === currentGroupID) reader?.changed(wsEvent.data.displayEpoch)
+            break
+          case "reader_invalidated":
+            if (wsEvent.data.groupID !== currentGroupID) return
+            clear()
+            reader?.invalidated(wsEvent.data.displayEpoch)
+            break
           case "message_created":
-            setMessages((prev) => [...prev, wsEvent.data])
+            if (reader?.protected()) return
+            if (wsEvent.data.groupID !== currentGroupID) return
+            setMessages((prev) => mergeIMMessages(prev, [wsEvent.data], "live"))
             break
 
           case "message_failed":
@@ -105,6 +165,7 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
             break
 
           case "agent_status":
+            if (reader?.protected()) return
             setAgentStatuses((prev) => {
               const next = new Map(prev)
               next.set(wsEvent.data.messageID, {
@@ -116,6 +177,7 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
             break
 
           case "agent_progress":
+            if (reader?.protected()) return
             // Merge the batch into this turn's parts: replace by partID (a part
             // may update many times), then re-sort by `order` so the reasoning
             // card renders in production order regardless of batch arrival.
@@ -164,6 +226,7 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
             break
 
           case "read_receipt":
+            if (reader?.protected()) return
             setReadReceipts((prev) => {
               const next = new Map(prev)
               next.set(wsEvent.data.memberID, wsEvent.data.readAt)
@@ -190,8 +253,13 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
     setWs(socket)
 
     // Cleanup function
-    return () => {
+    connection.cleanup = () => {
       clearInterval(pingInterval)
+      if (stable.timer) clearTimeout(stable.timer)
+      socket.onopen = null
+      socket.onclose = null
+      socket.onmessage = null
+      socket.onerror = null
       socket.close()
     }
   }
@@ -200,6 +268,7 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
   // Tracks groupID() so switching groups tears down the old socket and
   // reconnects to the new one. Realtime buffers are reset per group.
   createEffect(() => {
+    client.scope?.()
     const currentGroupID = groupID()
     if (!currentGroupID) return
 
@@ -211,12 +280,17 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
     for (const timer of typingTimers.values()) clearTimeout(timer)
     typingTimers.clear()
 
-    const cleanup = connect()
+    setReconnectAttempt(0)
+    connect()
 
     onCleanup(() => {
-      cleanup?.()
-      for (const timer of typingTimers.values()) clearTimeout(timer)
-      typingTimers.clear()
+      connection.generation++
+      connection.cleanup?.()
+      if (connection.retry) clearTimeout(connection.retry)
+      setConnected(false)
+      // Disposing this owner is not a server revocation of its successor.
+      clear()
+      setWs(null)
     })
   })
 
@@ -228,10 +302,7 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
   }
 
   const reconnect = () => {
-    const currentWs = ws()
-    if (currentWs) {
-      currentWs.close()
-    }
+    if (connection.disposed) return
     setReconnectAttempt(0)
     connect()
   }
@@ -245,5 +316,6 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
     typingMembers,
     send,
     reconnect,
+    clear,
   }
 }

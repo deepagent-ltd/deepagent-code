@@ -1,3 +1,5 @@
+import { createEventWorkOwner, DialogEventWork } from "@/components/dialog-event-work"
+import { createEventValidationOwner, DialogEventValidation } from "@/components/dialog-event-validation"
 import { useNavigate } from "@solidjs/router"
 import { useCommand, type CommandOption } from "@/context/command"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
@@ -9,10 +11,13 @@ import { useLocal } from "@/context/local"
 import { usePermission } from "@/context/permission"
 import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
+import { useServer } from "@/context/server"
+import { useServerSync } from "@/context/server-sync"
+import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
 import { useSync } from "@/context/sync"
 import { useTerminalHosts } from "@/context/terminal"
 import { showToast } from "@/utils/toast"
-import { findLast } from "@deepagent-code/core/util/array"
+import { displayMessages, messageBoundary } from "@/utils/message-display"
 import { createForkRequestRegistry, createSessionTabs } from "@/pages/session/helpers"
 import { extractPromptFromParts } from "@/utils/prompt"
 import { type Session, UserMessage } from "@deepagent-code/sdk"
@@ -21,7 +26,10 @@ import { errorMessage } from "@/pages/layout/helpers"
 import { useSettings } from "@/context/settings"
 import { formatTranscript, transcriptFilename } from "@deepagent-code/sdk/transcript"
 import { createPromptStash } from "@/pages/session/prompt-stash"
+import { DialogBrowserControl } from "@/components/dialog-browser-control"
 import { DialogPromptStash } from "@/components/dialog-prompt-stash"
+import { base64Encode } from "@deepagent-code/core/util/encode"
+import { sessionControls } from "@/utils/session-controls"
 
 export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
@@ -46,6 +54,11 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const permission = usePermission()
   const prompt = usePrompt()
   const sdk = useSDK()
+  const server = useServer()
+  const serverSync = useServerSync()
+  const settingsRead = { busy: false }
+  const validationOwner = createEventValidationOwner()
+  const eventWorkOwner = createEventWorkOwner()
   const sync = useSync()
   const settings = useSettings()
   const terminalHosts = useTerminalHosts()
@@ -60,6 +73,12 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     return sync.session.get(id)
   }
   const hasReview = () => !!params.id
+  const currentControls = () => sessionControls({
+    sessionID: params.id,
+    directory: sdk.directory,
+    session: info(),
+    goal: serverSync.data.session_goal[params.id ?? ""],
+  })
   const normalizeTab = (tab: string) => {
     if (!tab.startsWith("file://")) return tab
     return file.tab(tab)
@@ -96,11 +115,17 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     if (!id) return []
     return sync.data.message[id] ?? []
   }
-  const userMessages = () => messages().filter((m) => m.role === "user") as UserMessage[]
+  const userMessages = () =>
+    displayMessages(messages().filter((m): m is UserMessage => {
+      if (m.role !== "user") return false
+      const parts = sync.data.part[m.id] ?? []
+      // Revert publishes a synthetic user notice, which is not another prompt turn.
+      return parts.length === 0 || parts.some((part) => part.type !== "text" || !part.synthetic)
+    }))
   const visibleUserMessages = () => {
     const revert = info()?.revert?.messageID
     if (!revert) return userMessages()
-    return userMessages().filter((m) => m.id < revert)
+    return messageBoundary(userMessages(), revert)?.visible ?? []
   }
 
   const showAllFiles = () => {
@@ -138,7 +163,6 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const terminalCommand = withCategory(language.t("command.category.terminal"))
   const modelCommand = withCategory(language.t("command.category.model"))
   const mcpCommand = withCategory(language.t("command.category.mcp"))
-  const agentCommand = withCategory(language.t("command.category.agent"))
   const permissionsCommand = withCategory(language.t("command.category.permissions"))
 
   const isAutoAcceptActive = () => {
@@ -281,7 +305,13 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   }
 
   const chooseModel = () => {
+    if (currentControls() !== "editable") return
+    const captured = { sessionID: params.id, directory: sdk.directory, scope: sdk.scope, client: sdk.client }
     void import("@/components/dialog-select-model").then((x) => {
+      if (
+        currentControls() !== "editable" || params.id !== captured.sessionID ||
+        sdk.directory !== captured.directory || sdk.scope !== captured.scope || sdk.client !== captured.client
+      ) return
       dialog.show(() => <x.DialogSelectModel model={local.model} />)
     })
   }
@@ -314,13 +344,14 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     const sessionID = params.id
     if (!sessionID) return
 
+    const turns = userMessages()
+    const revert = info()?.revert?.messageID
+    const message = revert ? messageBoundary(turns, revert)?.visible.at(-1) : turns.at(-1)
+    if (!message) return
+
     if (sync.data.session_working(params.id ?? "")) {
       await sdk.client.session.abort({ sessionID }).catch(() => {})
     }
-
-    const revert = info()?.revert?.messageID
-    const message = findLast(userMessages(), (x) => !revert || x.id < revert)
-    if (!message) return
 
     await sdk.client.session.revert({ sessionID, messageID: message.id })
     const parts = sync.data.part[message.id]
@@ -329,8 +360,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       prompt.set(restored)
     }
 
-    const prev = findLast(userMessages(), (x) => x.id < message.id)
-    setActiveMessage(prev)
+    setActiveMessage(messageBoundary(turns, message.id)?.previous)
   }
 
   const redo = async () => {
@@ -340,18 +370,19 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     const revertMessageID = info()?.revert?.messageID
     if (!revertMessageID) return
 
-    const next = userMessages().find((x) => x.id > revertMessageID)
+    const turns = userMessages()
+    const boundary = messageBoundary(turns, revertMessageID)
+    if (!boundary) return
+    const next = boundary.next
     if (!next) {
       await sdk.client.session.unrevert({ sessionID })
       prompt.reset()
-      const last = findLast(userMessages(), (x) => x.id >= revertMessageID)
-      setActiveMessage(last)
+      setActiveMessage(turns.at(-1))
       return
     }
 
     await sdk.client.session.revert({ sessionID, messageID: next.id })
-    const prev = findLast(userMessages(), (x) => x.id < next.id)
-    setActiveMessage(prev)
+    setActiveMessage(boundary.message)
   }
 
   const compact = async () => {
@@ -457,7 +488,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   }
 
   const shareCmds = () => {
-    // Public sharing is deferred to 2.0.3; keep unshare for existing links.
+    // Public sharing remains disabled by default; keep unshare for existing links.
     return [
       sessionCommand({
         id: "session.unshare",
@@ -493,7 +524,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.session.redo"),
       description: language.t("command.session.redo.description"),
       slash: "redo",
-      disabled: !params.id || !info()?.revert?.messageID,
+      disabled: !params.id || !messageBoundary(userMessages(), info()?.revert?.messageID ?? ""),
       onSelect: redo,
     }),
     sessionCommand({
@@ -778,6 +809,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       description: language.t("command.model.choose.description"),
       keybind: "mod+'",
       slash: "model",
+      disabled: currentControls() !== "editable",
       onSelect: chooseModel,
     }),
     modelCommand({
@@ -785,11 +817,80 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.model.variant.cycle"),
       description: language.t("command.model.variant.cycle.description"),
       keybind: "shift+mod+d",
-      onSelect: () => local.model.variant.cycle(),
+      disabled: currentControls() !== "editable",
+      onSelect: () => {
+        if (currentControls() === "editable") local.model.variant.cycle()
+      },
     }),
   ]
 
   const mcpCmds = () => [
+    mcpCommand({
+      id: "event.tasks",
+      title: language.t("eventWork.title"),
+      description: language.t("eventWork.description"),
+      slash: "event-work",
+      disabled: !params.id,
+      onSelect: () => {
+        const sessionID = params.id
+        if (!sessionID) return
+        const directory = params.dir
+        const client = sdk.client
+        const scope = sdk.scope
+        const workspaceID = info()?.workspaceID ?? undefined
+        dialog.show(() => <DialogEventWork sessionID={sessionID} workspaceID={workspaceID}
+          active={() => eventWorkOwner() && server.scope() === scope && sdk.client === client &&
+            sdk.scope === scope && params.dir === directory && params.id === sessionID &&
+            (info()?.workspaceID ?? undefined) === workspaceID}
+          onOpenSession={(id, placementDirectory) => { dialog.close(); navigate(`/${base64Encode(placementDirectory)}/session/${id}`) }} />)
+      },
+    }),
+    mcpCommand({
+      id: "event.validation",
+      title: language.t("eventValidation.title"),
+      description: language.t("eventValidation.description"),
+      slash: "validate",
+      disabled: !params.id,
+      onSelect: () => {
+        const sessionID = params.id
+        const directory = params.dir
+        if (sessionID)
+          dialog.show(() => (
+            <DialogEventValidation
+              sessionID={sessionID}
+              onOpenSession={(id) => {
+                dialog.close()
+                navigate(`/${directory}/session/${id}`)
+              }}
+              active={() =>
+                validationOwner() && server.scope() === sdk.scope && params.dir === directory && params.id === sessionID
+              }
+            />
+          ))
+      },
+    }),
+    mcpCommand({
+      id: "browser.connect",
+      title: language.t("browser.control.title"),
+      description: language.t("browser.control.description"),
+      slash: "browser",
+      disabled: !params.id,
+      onSelect: () => {
+        const sessionID = params.id
+        if (!sessionID) return
+        const client = sdk.client
+        const scope = sdk.scope
+        const directory = params.dir
+        dialog.show(() => <DialogBrowserControl sessionID={sessionID} onUse={(controlID, script) => {
+          if (!validationOwner() || server.scope() !== scope || sdk.client !== client || sdk.scope !== scope || params.dir !== directory || params.id !== sessionID) return
+          const content = `\nbrowser controlID: ${controlID}` + (script
+            ? `\n${script.mode === "program" ? "Bounded browser program approved; use program with a fresh snapshot/frame and current AX refs bound to target names" : "Read-only page validation approved; use evaluate with a fresh snapshot and frame"}:\n${JSON.stringify(script)}` : "")
+          const start = prompt.current().reduce((end, part) => "end" in part ? Math.max(end, part.end) : end, 0)
+          prompt.set([...prompt.current(), { type: "text", content, start, end: start + content.length }], start + content.length)
+          actions.focusInput()
+        }} />)
+      },
+    }),
     mcpCommand({
       id: "mcp.toggle",
       title: language.t("command.mcp.toggle"),
@@ -797,24 +898,6 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       keybind: "mod+;",
       slash: "mcp",
       onSelect: chooseMcp,
-    }),
-  ]
-
-  const agentCmds = () => [
-    agentCommand({
-      id: "agent.cycle",
-      title: language.t("command.agent.cycle"),
-      description: language.t("command.agent.cycle.description"),
-      keybind: "mod+.",
-      slash: "agent",
-      onSelect: () => local.agent.move(1),
-    }),
-    agentCommand({
-      id: "agent.cycle.reverse",
-      title: language.t("command.agent.cycle.reverse"),
-      description: language.t("command.agent.cycle.reverse.description"),
-      keybind: "shift+mod+.",
-      onSelect: () => local.agent.move(-1),
     }),
   ]
 
@@ -831,6 +914,59 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   ]
 
   command.register("session", () => [
+    {
+      id: "settings.currentSession",
+      title: language.t("command.settings.open"),
+      hidden: true,
+      disabled: !params.id,
+      onSelect: async () => {
+        const sessionID = params.id
+        if (!sessionID || settingsRead.busy) return
+        settingsRead.busy = true
+        const directory = sdk.directory
+        const scope = sdk.scope
+        const client = sdk.client
+        const current = () =>
+          validationOwner() &&
+          params.id === sessionID &&
+          sdk.directory === directory &&
+          sdk.scope === scope &&
+          sdk.client === client &&
+          server.scope() === scope
+        try {
+          const { DialogSettings } = await import("@/components/settings-v2")
+          const results = await Promise.allSettled([
+            client.session.get({ sessionID }, { throwOnError: true }),
+            serverSync.goal.sync(directory, sessionID),
+          ])
+          if (!current()) return
+          const ordinary = results[0]
+          const editable = () => {
+            if (!current() || ordinary.status !== "fulfilled" || results[1].status !== "fulfilled") return false
+            const session = ordinary.value.data
+            if (session?.id !== sessionID || session.directory !== directory || session.ordinaryEligible !== true)
+              return false
+            const goal = serverSync.data.session_goal[sessionID]
+            return !goal || (!!goal.control && GoalClient.confirmedTerminal(goal.control))
+          }
+          dialog.show(() => (
+            <DialogSettings
+              mcp={{ directory, current }}
+              session={{
+                current,
+                editable,
+                mode: () => (current() ? local.agent.current()?.name : undefined),
+                select: (name) => {
+                  if (editable()) local.agent.set(name)
+                },
+              }}
+            />
+          ))
+        } finally {
+          settingsRead.busy = false
+        }
+      },
+    },
     ...sessionCmds(),
     ...shareCmds(),
     ...fileCmds(),
@@ -840,7 +976,6 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     ...messageCmds(),
     ...modelCmds(),
     ...mcpCmds(),
-    ...agentCmds(),
     ...permissionsCmds(),
   ])
 }

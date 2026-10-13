@@ -112,6 +112,11 @@ export class BinaryContent extends Schema.Class<BinaryContent>("FileSystem.Binar
 export const Content = Schema.Union([TextContent, BinaryContent]).pipe(Schema.toTaggedUnion("type"))
 export type Content = typeof Content.Type
 
+type ReadObservation = Readonly<{ canonical: string; mtimeMs: number; size: number }>
+const readObservations = new WeakMap<object, ReadObservation>()
+/** Internal read provenance; serialized metadata or copies of a read result cannot mint it. */
+export const readObservation = (content: Content | TextPage) => readObservations.get(content)
+
 export const TextPageInput = Schema.Struct({
   offset: PositiveInt.pipe(Schema.optional),
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_READ_LINES)).pipe(Schema.optional),
@@ -391,6 +396,19 @@ export const layer = Layer.effect(
           const info = yield* file.stat.pipe(Effect.orDie)
           if (info.type !== "File") return yield* Effect.die(new Error("Path is not a file"))
 
+          const finish = (output: Content | TextPage) => Effect.gen(function* () {
+            const after = yield* file.stat.pipe(Effect.option)
+            const named = yield* fs.stat(target.real).pipe(Effect.option)
+            if (Option.isNone(info.mtime) || Option.isNone(after) || Option.isNone(named) ||
+              Option.isNone(after.value.mtime) || Option.isNone(named.value.mtime)) return output
+            const mtimeMs = info.mtime.value.getTime()
+            if (after.value.type !== "File" || named.value.type !== "File" || info.size !== after.value.size ||
+              info.size !== named.value.size || mtimeMs !== after.value.mtime.value.getTime() ||
+              mtimeMs !== named.value.mtime.value.getTime()) return output
+            readObservations.set(output, Object.freeze({ canonical: target.real, mtimeMs, size: Number(info.size) }))
+            return output
+          })
+
           const first = Option.getOrElse(
             yield* file.readAlloc(Math.min(64 * 1024, Number(info.size) || READ_SAMPLE_BYTES)).pipe(Effect.orDie),
             () => new Uint8Array(),
@@ -435,7 +453,7 @@ export const layer = Layer.effect(
               text.push(yield* Effect.sync(() => decoder.decode(chunk.value, { stream: true })))
             }
             text.push(yield* Effect.sync(() => decoder.decode()))
-            return new TextContent({ type: "text", content: text.join(""), mime: FSUtil.mimeType(target.real) })
+            return yield* finish(new TextContent({ type: "text", content: text.join(""), mime: FSUtil.mimeType(target.real) }))
           }
 
           const offset = page.offset ?? 1
@@ -510,14 +528,14 @@ export const layer = Layer.effect(
           if (!found && offset !== 1) return yield* Effect.die(new Error(`Offset ${offset} is out of range`))
 
           const text = lines.join("\n")
-          return new TextPage({
+          return yield* finish(new TextPage({
             type: "text-page",
             content: text,
             mime: FSUtil.mimeType(target.real),
             offset,
             truncated,
             ...(next === undefined ? {} : { next }),
-          })
+          }))
         }),
       )
     })

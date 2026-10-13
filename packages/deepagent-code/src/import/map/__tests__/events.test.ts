@@ -22,8 +22,11 @@ const DEFINITIONS: Record<string, unknown> = {
   "session.next.prompted": SessionEvent.Prompted.data,
   "session.next.step.started": SessionEvent.Step.Started.data,
   "session.next.step.ended": SessionEvent.Step.Ended.data,
+  "session.next.text.started": SessionEvent.Text.Started.data,
   "session.next.text.ended": SessionEvent.Text.Ended.data,
+  "session.next.reasoning.started": SessionEvent.Reasoning.Started.data,
   "session.next.reasoning.ended": SessionEvent.Reasoning.Ended.data,
+  "session.next.tool.input.started": SessionEvent.Tool.Input.Started.data,
   "session.next.tool.called": SessionEvent.Tool.Called.data,
   "session.next.tool.success": SessionEvent.Tool.Success.data,
   "session.next.tool.failed": SessionEvent.Tool.Failed.data,
@@ -83,8 +86,11 @@ describe("import map/events", () => {
     expect(types.has("session.created.1")).toBe(true)
     expect(types.has("session.next.prompted.1")).toBe(true)
     expect(types.has("session.next.step.started.1")).toBe(true)
+    expect(types.has("session.next.text.started.1")).toBe(true)
     expect(types.has("session.next.text.ended.1")).toBe(true)
+    expect(types.has("session.next.reasoning.started.1")).toBe(true)
     expect(types.has("session.next.reasoning.ended.1")).toBe(true)
+    expect(types.has("session.next.tool.input.started.1")).toBe(true)
     expect(types.has("session.next.tool.called.1")).toBe(true)
     expect(types.has("session.next.tool.success.1")).toBe(true)
     expect(types.has("session.next.tool.failed.1")).toBe(true)

@@ -301,7 +301,7 @@ describe("acp permissions", () => {
         action: "edit",
         resources: ["/workspace/file.ts"],
         metadata: { filepath: "/workspace/file.ts", diff: "a" },
-        source: { callID: "call_v2" },
+        source: { type: "tool", callID: "call_v2" },
       },
     })
 

@@ -9,7 +9,7 @@ import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import type { Prompt } from "@deepagent-code/core/session/prompt"
 
-// v2w-j4 durable-only GitHub ingress (mirrors src/im/im-agent-execution.ts). The legacy GitHub Action
+// v2w-j4 durable-only GitHub ingress . The legacy GitHub Action
 // path (a FRESH V1 Session per run through Session.Service.create + one SessionPrompt.prompt per chat
 // turn) is deleted; this module is its durable V2-native replacement:
 //

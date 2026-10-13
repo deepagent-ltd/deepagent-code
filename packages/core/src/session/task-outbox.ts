@@ -1,10 +1,14 @@
 export * as TaskOutbox from "./task-outbox"
 
 import { and, asc, eq, gt, isNull, lte, or } from "drizzle-orm"
-import { Cause, Context, Effect, Layer, Schedule } from "effect"
+import { Cause, Context, Effect, Layer, Option, Schedule } from "effect"
 import { Database } from "../database/database"
 import { Identifier } from "../id/id"
 import { SessionV2 } from "../session"
+import { EventV2 } from "../event"
+import { SessionExecution } from "./execution"
+import { SessionInput } from "./input"
+import { TaskContinuation } from "./task-continuation"
 import { SessionV1 } from "../v1/session"
 import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
@@ -152,6 +156,8 @@ export const make = (options: Options = {}) =>
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const sessions = yield* SessionV2.Service
+    const events = Option.getOrUndefined(yield* Effect.serviceOption(EventV2.Service))
+    const execution = Option.getOrUndefined(yield* Effect.serviceOption(SessionExecution.Service))
     const scope = yield* Effect.scope
     const ownerToken = `core-v2-task-outbox:${Identifier.ascending("job")}`
     const leaseMs = options.leaseMs ?? 30_000
@@ -160,25 +166,35 @@ export const make = (options: Options = {}) =>
     let loopStarted = false
     yield* Effect.addFinalizer(() => Effect.sync(() => { closed = true }))
 
-    // Delivery = ONE durable session_input admission into the parent with the deterministic message
-    // id and the `queue` delivery mode (opens a future activity instead of steering). SessionV2.prompt
-    // schedules the advisory SessionExecution wake itself — the parent pickup rides the existing
-    // drain machinery, never a second path built here.
+    // A terminal text notification is a fact, not a permission to open a model activity.
+    // Only a wait registered by the original canonical task call can admit a continuation.
     const deliverOne = (item: Item) =>
       Effect.gen(function* () {
-        yield* sessions.prompt({
-          id: item.messageID,
-          sessionID: item.parentSessionID,
-          prompt: new Prompt({ text: notificationText(item) }),
-          delivery: "queue",
-        })
-        const delivered = yield* markDelivered(db, item, ownerToken)
-        // The admission is committed and exactly-once by the deterministic id; a lost lease only
-        // means a later claim re-observes the same input row before it can mark delivered.
-        if (!delivered)
-          yield* Effect.logWarning("TaskOutbox: delivery lost its lease after admission; a re-claim converges", {
-            id: item.id,
+        const expected = { sessionID: item.parentSessionID, messageID: item.messageID,
+          prompt: new Prompt({ text: notificationText(item) }), delivery: "queue" as const }
+        const prior = yield* SessionInput.find(db, item.messageID)
+        if (prior) {
+          if (!SessionInput.equivalent(prior, expected)) return yield* new TaskContinuation.Refused({
+            reason: "conflict", message: "Task continuation input conflicts with the original result",
           })
+          yield* markDelivered(db, item, ownerToken)
+          return
+        }
+        if (!events || !execution) return yield* new TaskContinuation.Refused({
+          reason: "unregistered", message: "Task continuation runtime authority is unavailable",
+        })
+        yield* sessions.requireWritable(item.parentSessionID)
+        yield* db.transaction((tx) => TaskContinuation.requireCurrent(tx, item.runID, item.messageID), { behavior: "immediate" })
+        const admitted = yield* SessionInput.admit(db, events, { id: item.messageID, sessionID: item.parentSessionID,
+            prompt: expected.prompt, delivery: "queue", commit: () => Effect.gen(function* () {
+              yield* TaskContinuation.requireCurrent(db, item.runID, item.messageID)
+              if (!(yield* markDelivered(db, item, ownerToken))) return yield* new TaskContinuation.Refused({
+                reason: "conflict", message: "Task continuation delivery lease changed",
+              })
+            }),
+          })
+        // The only execution effect occurs after the input, receipt and delivery commit.
+        yield* execution.wake(item.parentSessionID, admitted.admittedSeq)
       }).pipe(Effect.catchCause((cause) => onDeliveryFailure(item, cause)))
 
     const onDeliveryFailure = (item: Item, cause: Cause.Cause<unknown>) =>
@@ -188,7 +204,7 @@ export const make = (options: Options = {}) =>
         // A conflicting deterministic id or a vanished parent is permanent — dead-letter at once.
         // Everything else retries with backoff until the bounded attempts are exhausted.
         const fatal =
-          failure instanceof SessionV2.PromptConflictError || failure instanceof SessionV2.NotFoundError
+          failure instanceof TaskContinuation.Refused || failure instanceof SessionV2.PromptConflictError || failure instanceof SessionV2.NotFoundError
         if (fatal || item.attempts >= maxAttempts) {
           yield* markDead(db, item, ownerToken, reason)
           yield* Effect.logError("TaskOutbox: notification dead-lettered", { id: item.id, reason })
@@ -237,7 +253,7 @@ export const startedLayer = (options: Options = {}) =>
 
 // ── Row state transitions (lease-owner + attempts CAS) ────────────────────────────────────────
 
-const markDelivered = (db: DatabaseService, item: Item, ownerToken: string) => {
+const markDelivered = (db: Pick<DatabaseService, "update">, item: Item, ownerToken: string) => {
   const now = Date.now()
   return db
     .update(TaskNotificationOutboxTable)

@@ -147,12 +147,9 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
         .filter(Boolean),
     ),
   ),
-  // V3.9 §C: Expert Panel（会诊机制）— differentiated expert lenses answer one frozen high-risk
-  // question independently, aggregated by a deterministic non-LLM Arbiter. SHIPS ON by default (mode
-  // redesign: mature capabilities are always present, flags are only a kill-switch — mirrors Codex's
-  // stable-default features). Set DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL=false to disable. The
-  // Arbiter is a pure function; this flag only gates the session-driven Convener orchestration.
-  experimentalExpertPanel: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL"),
+  // Temporarily unavailable in 2.0.4. Old configuration cannot re-enable new panel work;
+  // already-running jobs retain their history and existing stop/result controls.
+  experimentalExpertPanel: Config.succeed(false),
   // V3.9 §B: Repo & Wiki（人向监督层）— the human-facing PROJECTION layer over the four graphs (not a
   // fifth store): render doc/code nodes as Markdown, full-text search, docs↔code cross-links, and a
   // per-session execution archive. Knowledge/Memory pages are governable (edit → new version + human
@@ -290,12 +287,8 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // §B: inbound file/attachment upload on the IM surface (im_attachments + local-disk storage). Enable
   // with DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED=true.
   v4FileUploadEnabled: bool("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
-  // §M: the Expert Panel AUTO-CONVENE consumer — auto-summons an Expert Panel for high-risk events
-  // (destructive migrations, security alerts, architecture changes) per PanelConvenePolicy, routing a
-  // needs_human verdict to the §D2 Approval Queue. PROMOTED ON by default (V4.0.4 3b): idempotency
-  // guard (causationID) + deterministic idempotencyKey prevent double-convening on re-delivery.
-  // Set DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE=false to disable automatic panel fan-out.
-  v4PanelAutoConvene: stableOn("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
+  // The disabled panel capability also prevents new event-driven panel admissions.
+  v4PanelAutoConvene: Config.succeed(false),
   // §L: the EVENT-DRIVEN execution archiver TRIGGER. PROMOTED ON by default (V4.0.4 3b): the
   // SessionCompletedPublisher fires at most once per 45-second debounce window per session, is
   // root-session-only, and is idempotent (idempotencyKey = "session-completed:<id>:<firetime>").

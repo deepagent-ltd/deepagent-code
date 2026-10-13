@@ -33,17 +33,34 @@ on:
           - mac
           - linux
           - windows
+      artifact_mode:
+        description: "Release packaging or isolated unsigned candidate artifacts"
+        required: false
+        default: "release"
+        type: choice
+        options:
+          - release
+          - test
 
 permissions:
   contents: write
   actions: write
 
 concurrency:
-  group: desktop-build-${{ github.ref }}
-  cancel-in-progress: true
+  group: desktop-build-${{ github.ref }}-${{ inputs.artifact_mode || 'release' }}
+  cancel-in-progress: ${{ inputs.artifact_mode != 'test' }}
 
 jobs:
+  test-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.artifact_mode == 'test'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/desktop-test-package.yml
+    with:
+      platforms: ${{ inputs.platforms || 'all' }}
+
   cleanup:
+    if: github.event_name != 'workflow_dispatch' || inputs.artifact_mode != 'test'
     runs-on: ubuntu-24.04
     steps:
       - name: Delete previous desktop artifacts
@@ -60,6 +77,7 @@ jobs:
   # Build the matrix from the `platforms` input. Job-level `if` cannot read the matrix
   # context, so the selection happens here and the build job consumes the JSON.
   setup:
+    if: github.event_name != 'workflow_dispatch' || inputs.artifact_mode != 'test'
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.gen.outputs.matrix }}
@@ -114,10 +132,37 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: ./.github/actions/setup-bun
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: ${{ matrix.target == 'darwin-arm64' && '1' || '' }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+
+      - name: Read the reviewed Desktop release version
+        id: release-version
+        shell: bash
+        run: |
+          dac_release_version=$(node -p 'require("./packages/desktop/package.json").version')
+          echo "version=$dac_release_version" >> "$GITHUB_OUTPUT"
+
+      - name: Download Electron runtime for macOS arm64
+        if: matrix.target == 'darwin-arm64'
+        working-directory: packages/desktop
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            echo "Electron download attempt $attempt/3"
+            if node node_modules/electron/install.js &&
+               node -e 'require("node:fs").accessSync(require("electron"))'; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Electron runtime download failed after 3 attempts; check access to Electron release assets"
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
 
       # Import the Developer ID cert only when the secret is configured; otherwise the
       # build proceeds unsigned (DEEPAGENT_CODE_ALLOW_UNSIGNED below).
@@ -139,36 +184,25 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
 
-      # bun run build invokes the package prebuild lifecycle before electron-vite.
-      - name: Build renderer
-        working-directory: packages/desktop
+      - name: Build, package and verify Desktop Native assets
+        uses: ./.github/actions/package-desktop
+        timeout-minutes: 90
+        with:
+          version: ${{ steps.release-version.outputs.version }}
+          channel: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
+          platform-flags: ${{ matrix.platform_flag }}
+          macos-signed: ${{ matrix.group == 'mac' && env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true' }}
         env:
-          DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
           NODE_OPTIONS: --max-old-space-size=4096
-        run: bun run build
-
-      - name: Package
-        working-directory: packages/desktop
-        timeout-minutes: 60
-        env:
-          DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
-          # Sign + notarize on macOS only when BOTH the signing cert and the Apple ID
-          # notarization secrets are present; otherwise build unsigned instead of failing.
-          DEEPAGENT_CODE_ALLOW_UNSIGNED: ${{ (matrix.group == 'mac' && env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true') && '0' || '1' }}
-          # Code-signing identity (Developer ID Application). The cert is imported into the
-          # keychain by the step above; CSC_NAME selects it by subject name.
-          CSC_NAME: ${{ secrets.APPLE_CSC_NAME }}
-          # Notarization via Apple ID (App Store Connect). electron-builder picks up these
-          # standard env vars; config.ts enables notarize when all three are set.
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Azure Trusted Signing (Windows). sign-windows.ps1 skips silently when
-          # these are unset, matching the opt-in unsigned behavior of the mac path.
+          # Preserve the existing opt-in certificate + Apple ID signing contract.
+          DEEPAGENT_CODE_ALLOW_UNSIGNED: ${{ ((matrix.group == 'mac' && env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true') || (matrix.group == 'win' && env.HAS_TRUSTED_SIGNING == 'true')) && '0' || '1' }}
+          CSC_NAME: ${{ matrix.group == 'mac' && secrets.APPLE_CSC_NAME || '' }}
+          APPLE_ID: ${{ matrix.group == 'mac' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.group == 'mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.group == 'mac' && secrets.APPLE_TEAM_ID || '' }}
           AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
           AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
-        run: npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts
 
       # Assert that packaging produced the supported x64 installer and, when
       # Trusted Signing ran, that its signature validates on Windows.

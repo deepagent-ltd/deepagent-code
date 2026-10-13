@@ -47,6 +47,11 @@ import {
 } from "@/session/diff-artifact-schema"
 
 const root = "/session"
+export const SessionReadInfo = Schema.Struct({
+  ...Session.Info.fields,
+  ordinaryEligible: Schema.Boolean,
+}).annotate({ identifier: "SessionReadInfo" })
+
 export const ListQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   scope: Schema.optional(Schema.Literals(["project"])),
@@ -523,7 +528,7 @@ export const SessionApi = HttpApi.make("session")
         HttpApiEndpoint.get("get", SessionPaths.get, {
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
-          success: described(Session.Info, "Get session"),
+          success: described(SessionReadInfo, "Get session"),
           error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
@@ -654,7 +659,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: [HttpApiSchema.NoContent, Session.CreateInput],
           success: described(Session.Info, "Successfully created session"),
-          error: HttpApiError.BadRequest,
+          error: [HttpApiError.BadRequest, ConflictError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.create",

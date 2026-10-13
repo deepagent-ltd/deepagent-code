@@ -1,11 +1,12 @@
 #!/usr/bin/env bun
 
-import { rm } from "fs/promises"
+import { mkdir, rename, rm } from "fs/promises"
 import path from "path"
 import { parseArgs } from "util"
 
 const root = path.resolve(import.meta.dir, "..")
-const file = path.join(root, "UPCOMING_CHANGELOG.md")
+const generated = path.join(root, "UPCOMING_CHANGELOG.md")
+const file = path.join(root, "docs/private-reports/upcoming-changelog.md")
 const { values, positionals } = parseArgs({
   args: Bun.argv.slice(2),
   options: {
@@ -27,14 +28,14 @@ if (values.help) {
   console.log(`
 Usage: bun script/changelog.ts [options]
 
-Generates UPCOMING_CHANGELOG.md by running the deepagent-code changelog command.
+Generates docs/private-reports/upcoming-changelog.md by running the deepagent-code changelog command.
 
 Options:
   -f, --from <version>   Starting version (default: latest non-draft GitHub release)
   -t, --to <ref>         Ending ref (default: HEAD)
       --variant <name>   Thinking variant for deepagent-code run (default: low)
       --quiet            Suppress deepagent-code command output unless it fails
-      --print            Print the generated UPCOMING_CHANGELOG.md after success
+      --print            Print the generated private changelog after success
   -h, --help             Show this help message
 
 Examples:
@@ -45,10 +46,11 @@ Examples:
   process.exit(0)
 }
 
+await rm(generated, { force: true })
 await rm(file, { force: true })
 
 const quiet = values.quiet
-const cmd = ["deepagent-code", "run"]
+const cmd = ["bun", "run", path.join(root, "packages/deepagent-code/src/index.ts"), "run"]
 cmd.push("--variant", values.variant)
 cmd.push("--command", "changelog", "--", ...args)
 
@@ -63,6 +65,10 @@ const [out, err] = quiet
   ? await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
   : ["", ""]
 const code = await proc.exited
+if (await Bun.file(generated).exists()) {
+  await mkdir(path.dirname(file), { recursive: true })
+  await rename(generated, file)
+}
 if (code === 0) {
   if (values.print) process.stdout.write(await Bun.file(file).text())
   process.exit(0)

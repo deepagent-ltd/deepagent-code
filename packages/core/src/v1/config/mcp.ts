@@ -16,6 +16,12 @@ export const RiskTier = Schema.Literals(["read_only", "write_guarded", "external
 })
 export type RiskTier = Schema.Schema.Type<typeof RiskTier>
 
+export const Protocol = Schema.Literals(["legacy", "auto", "2026-07-28"]).annotate({
+  description:
+    "MCP protocol negotiation. Defaults to legacy; auto explicitly probes; 2026-07-28 requires modern support without fallback.",
+})
+export type Protocol = Schema.Schema.Type<typeof Protocol>
+
 export const Local = Schema.Struct({
   type: Schema.Literal("local").annotate({ description: "Type of MCP server connection" }),
   command: Schema.mutable(Schema.Array(Schema.String)).annotate({
@@ -32,6 +38,7 @@ export const Local = Schema.Struct({
     description: "Timeout in ms for MCP server requests. Defaults to 5000 (5 seconds) if not specified.",
   }),
   riskTier: Schema.optional(RiskTier),
+  protocol: Schema.optional(Protocol),
 }).annotate({ identifier: "McpLocalConfig" })
 export type Local = Schema.Schema.Type<typeof Local>
 
@@ -42,13 +49,18 @@ export const OAuth = Schema.Struct({
   clientSecret: Schema.optional(Schema.String).annotate({
     description: "OAuth client secret (if required by the authorization server)",
   }),
+  expectedIssuer: Schema.optional(Schema.String.check(Schema.isMaxLength(8192))).annotate({
+    description:
+      "Exact OAuth authorization-server issuer for a pre-registered client. Required before sending a configured client secret; discovery cannot silently select another issuer.",
+  }),
   scope: Schema.optional(Schema.String).annotate({ description: "OAuth scopes to request during authorization" }),
   callbackPort: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))).annotate({
     description:
-      "Port for the local OAuth callback server (default: 19876). Shorthand for redirectUri when only the port needs changing. Ignored if redirectUri is set.",
+      "Exact port for the local OAuth callback server. Static client IDs default to 19876; a new dynamic registration without an explicit address uses an OS-assigned port. Existing registered clients reuse their verified URI. Ignored if redirectUri is set.",
   }),
   redirectUri: Schema.optional(Schema.String).annotate({
-    description: "OAuth redirect URI (default: http://127.0.0.1:19876/mcp/oauth/callback).",
+    description:
+      "Exact OAuth redirect URI. HTTP loopback addresses use an owned local listener; HTTPS or non-loopback addresses require explicit manual callback completion. Existing registrations are never silently moved to another URI.",
   }),
 }).annotate({ identifier: "McpOAuthConfig" })
 export type OAuth = Schema.Schema.Type<typeof OAuth>
@@ -70,6 +82,7 @@ export const Remote = Schema.Struct({
     description: "Timeout in ms for MCP server requests. Defaults to 5000 (5 seconds) if not specified.",
   }),
   riskTier: Schema.optional(RiskTier),
+  protocol: Schema.optional(Protocol),
 }).annotate({ identifier: "McpRemoteConfig" })
 export type Remote = Schema.Schema.Type<typeof Remote>
 

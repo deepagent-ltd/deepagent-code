@@ -55,7 +55,7 @@ function waitReady(input: { directory?: string; name?: string }) {
   })
 }
 
-function insertAccount() {
+function insertAccount(serverURL: string) {
   return Effect.acquireRelease(
     Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -64,7 +64,8 @@ function insertAccount() {
         .values({
           id: AccountV2.ID.make("account-test"),
           email: "test@example.com",
-          url: "https://console.example.com",
+          url: serverURL,
+          token_expiry: Date.now() + 3600000,
           access_token: AccountV2.AccessToken.make("access"),
           refresh_token: AccountV2.RefreshToken.make("refresh"),
           time_created: Date.now(),
@@ -221,7 +222,32 @@ describe("experimental HttpApi", () => {
     () =>
       Effect.gen(function* () {
         const tmp = yield* TestInstance
-        const accountID = yield* insertAccount()
+        const requests: string[] = []
+        const current = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            Bun.serve({
+              hostname: "127.0.0.1",
+              port: 0,
+              fetch: (request) => {
+                requests.push(new URL(request.url).pathname)
+                if (request.headers.get("authorization") !== "Bearer access") return new Response(null, { status: 401 })
+                if (new URL(request.url).pathname === "/api/user")
+                  return Response.json({ id: "account-test", email: "test@example.com" })
+                if (new URL(request.url).pathname === "/api/orgs")
+                  return Response.json([{ id: "org-test", name: "fixture org" }])
+                return new Response(null, { status: 404 })
+              },
+            }),
+          ),
+          (server) => Effect.promise(() => server.stop(true)),
+        )
+        const accountID = yield* insertAccount(current.url.origin)
+        const denied = yield* request(ExperimentalPaths.consoleSwitch, tmp.directory, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ accountID, orgID: "org-not-authorized" }),
+        })
+        expect(denied.status).toBe(400)
         const switched = yield* request(ExperimentalPaths.consoleSwitch, tmp.directory, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -230,6 +256,7 @@ describe("experimental HttpApi", () => {
 
         expect(switched.status).toBe(200)
         expect(yield* json(switched)).toBe(true)
+        expect(requests.filter((value) => value === "/api/orgs").length).toBeGreaterThanOrEqual(2)
       }),
     { config: { formatter: false, lsp: false } },
   )

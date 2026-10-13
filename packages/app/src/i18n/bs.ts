@@ -627,10 +627,12 @@ export const dict = {
   "settings.general.section.feed": "Feed",
   "settings.general.section.sharing": "Dijeljenje",
   "settings.general.row.shareUrl.title": "URL servera za dijeljenje",
-  "settings.general.row.shareUrl.description": "Osnovni URL servera koji se koristi pri dijeljenju sesija. Ostavite prazno za zadano.",
+  "settings.general.row.shareUrl.description":
+    "Osnovni URL servera koji se koristi pri dijeljenju sesija. Ostavite prazno za zadano.",
   "settings.general.row.shareUrl.placeholder": "https://opncd.ai",
   "settings.general.row.expertPanelDefault.title": "Zadano uključi ekspertni panel",
-  "settings.general.row.expertPanelDefault.description": "Pokreni nove razgovore s uključenim ekspertnim panelom, tako da njegovo dugme po potrebi pokreće pregled trenutnog konteksta.",
+  "settings.general.row.expertPanelDefault.description":
+    "Pokreni nove razgovore s uključenim ekspertnim panelom, tako da njegovo dugme po potrebi pokreće pregled trenutnog konteksta.",
   "settings.general.section.display": "Prikaz",
   "settings.general.section.power": "Napajanje",
 
@@ -784,24 +786,24 @@ export const dict = {
   "settings.models.title": "Modeli",
   "settings.models.description": "Postavke modela će se ovdje moći podešavati.",
 
-"settings.capabilities.title": "Capabilities",
-"settings.capabilities.catalogTitle": "Capability catalog",
-"settings.capabilities.receiptsTitle": "Load receipts",
-"settings.capabilities.snapshotTitle": "System context snapshot",
-"settings.capabilities.empty": "No capabilities in the catalog",
-"settings.capabilities.receiptsEmpty": "No load receipts recorded",
-"settings.capabilities.loadFailed": "Failed to load the capability catalog",
-"settings.capabilities.retry": "Retry",
-"settings.capabilities.receiptsState": "loaded",
-"settings.capabilities.snapshotUnavailable": "System context snapshot unavailable",
-"settings.capabilities.digest": "Catalog digest: {{digest}}",
-"settings.capabilities.l0lineCount": "L0 lines: {{count}}",
-"settings.capabilities.digestConsistent": "Digest consistent",
-"settings.capabilities.digestInconsistent": "Digest drift",
-"settings.capabilities.availability.stable": "Stable",
-"settings.capabilities.availability.maintenance_only": "Maintenance only",
-"settings.capabilities.availability.disabled": "Disabled",
-"settings.capabilities.availability.unavailable": "Unavailable",
+  "settings.capabilities.title": "Capabilities",
+  "settings.capabilities.catalogTitle": "Capability catalog",
+  "settings.capabilities.receiptsTitle": "Load receipts",
+  "settings.capabilities.snapshotTitle": "System context snapshot",
+  "settings.capabilities.empty": "No capabilities in the catalog",
+  "settings.capabilities.receiptsEmpty": "No load receipts recorded",
+  "settings.capabilities.loadFailed": "Failed to load the capability catalog",
+  "settings.capabilities.retry": "Retry",
+  "settings.capabilities.receiptsState": "loaded",
+  "settings.capabilities.snapshotUnavailable": "System context snapshot unavailable",
+  "settings.capabilities.digest": "Catalog digest: {{digest}}",
+  "settings.capabilities.l0lineCount": "L0 lines: {{count}}",
+  "settings.capabilities.digestConsistent": "Digest consistent",
+  "settings.capabilities.digestInconsistent": "Digest drift",
+  "settings.capabilities.availability.stable": "Stable",
+  "settings.capabilities.availability.maintenance_only": "Maintenance only",
+  "settings.capabilities.availability.disabled": "Disabled",
+  "settings.capabilities.availability.unavailable": "Unavailable",
   "settings.agents.title": "Agenti",
   "settings.agents.description": "Postavke agenata će se ovdje moći podešavati.",
   "settings.commands.title": "Komande",
@@ -977,11 +979,13 @@ export const dict = {
   "settings.import.preset.custom": "Custom",
   "settings.import.preset.deepagent": "DeepAgent Code (snimak)",
   "settings.import.snapshot.file": "Paket snimka",
-  "settings.import.snapshot.file.hint": "Odaberite izvezeni paket snimka sesije (.json). Bice uvezen kao nova nastavljiva sesija.",
+  "settings.import.snapshot.file.hint":
+    "Odaberite izvezeni paket snimka sesije (.json). Bice uvezen kao nova nastavljiva sesija.",
   "settings.import.snapshot.noFile": "Prvo odaberite datoteku paketa snimka",
   "settings.import.snapshot.done": "Snimak uvezen kao nova nastavljiva sesija",
   "settings.import.bundle.file": "Paket sesije",
-  "settings.import.bundle.file.hint": "Odaberite ZIP sesije (.zip) ili stariji snimak (.json). Uvoz je arhiva samo za čitanje.",
+  "settings.import.bundle.file.hint":
+    "Odaberite ZIP sesije (.zip) ili stariji snimak (.json). Uvoz je arhiva samo za čitanje.",
   "settings.import.bundle.done": "Sesija je uvezena kao arhiva samo za čitanje",
   "settings.import.bundle.link": "Link za dijeljenje",
   "settings.import.bundle.link.hint": "Zalijepite link za dijeljenje DeepAgent paketa umjesto odabira datoteke.",
@@ -1006,7 +1010,8 @@ export const dict = {
   "settings.about.product.title": "Produkt",
   "settings.about.product.description": "Naziv i verzija aplikacije.",
   "settings.about.attribution.title": "Zbudowane na deepagent-code",
-  "settings.about.attribution.description": "DeepAgent Code jest zbudowany na deepagent-code, używanym na licencji MIT.",
+  "settings.about.attribution.description":
+    "DeepAgent Code jest zbudowany na deepagent-code, używanym na licencji MIT.",
   "settings.about.license.title": "Licencja",
   "settings.about.help.title": "Pomoć",
   "settings.about.help.description": "Dokumentacija, vodiči i podrška.",
@@ -1021,7 +1026,8 @@ export const dict = {
   "settings.general.deepagent.mode.ultra": "ultra",
   "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra wymaga trybu scenariusza intelligence.",
   "settings.general.deepagent.subagentMode.title": "Subagent",
-  "settings.general.deepagent.subagentMode.description": "Choose the work intensity of subagents relative to the main agent.",
+  "settings.general.deepagent.subagentMode.description":
+    "Choose the work intensity of subagents relative to the main agent.",
   "settings.general.deepagent.subagentMode.inherit": "Inherit from parent",
   "settings.general.deepagent.subagentMode.downgrade": "One level lower",
   "settings.general.deepagent.prompt.title": "Tryb scenariusza",
@@ -1068,10 +1074,123 @@ export const dict = {
   "settings.general.row.pinchZoom.description":
     "Zezwól na powiększanie gestem szczypania na trackpadzie i Ctrl-przewijaniem",
   "settings.general.row.preventSleep.title": "Spriječi mirovanje sistema",
-  "settings.general.row.preventSleep.description": "Zadržava sistem budnim dok je aplikacija pokrenuta; ekran se i dalje može ugasiti",
+  "settings.general.row.preventSleep.description":
+    "Zadržava sistem budnim dok je aplikacija pokrenuta; ekran se i dalje može ugasiti",
   "settings.general.row.zoom.title": "Zoom level",
   "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Preuzimanje...",
   "settings.updates.action.installing": "Instaliranje...",
   "settings.providers.section.deepagentBackends": "DeepAgent model backendi",
+  "settings.import.job.switched":
+    "Veza je promijenjena. Ponovo otvorite postavke da učitate zadatke uvoza za ovu vezu.",
+  "settings.import.job.loadFailed": "Zadaci uvoza nisu osvježeni. Ranije učitani dokazi možda su zastarjeli.",
+  "settings.import.job.refresh": "Osvježi zadatke",
+  "settings.import.job.submitting": "Slanje…",
+  "settings.import.job.rejected":
+    "Server je odbio ovaj zahtjev. Provjerite izvor, odredište i potvrdu prije ponovnog pokušaja.",
+  "settings.import.job.cancelUnknown":
+    "Potvrda otkazivanja nije dostupna. Osvježite ovaj zadatak da provjerite njegovo stanje; upis možda još traje.",
+  "settings.import.job.request": "Potvrda zahtjeva",
+  "settings.import.job.requestUnknown":
+    "Odgovor je izgubljen. Ovaj zahtjev je možda već prihvaćen. Osvježite zadatke ili pokušajte ponovo s istim ID-om zahtjeva; ne pokrećite drugi uvoz.",
+  "settings.import.job.restoredUnknown":
+    "Prijem prethodnog zahtjeva nije potvrđen. Sačuvan je samo njegov ID zahtjeva. Potražite ga u historiji zadataka za koje imate ovlaštenje; ponovno otvaranje ne ponavlja uvoz.",
+  "settings.import.job.guardHint":
+    "Otpuštanje zaštite praćenja dopušta drugi uvoz. Time se izvorni zahtjev ne otkazuje niti se dokazuje da je zaustavljen.",
+  "settings.import.job.guardReleased":
+    "Zaštita praćenja je otpuštena. Izvorni zahtjev možda još traje; provjerite historiju uvoza prije pokretanja drugog.",
+  "settings.import.job.releaseGuard": "Otpusti zaštitu praćenja",
+  "settings.import.job.retryRequest": "Ponovi isti zahtjev",
+  "settings.import.job.history": "Zadaci uvoza",
+  "settings.import.job.historyHint":
+    "Odaberite postojeći zadatak da nastavite pratiti njegovo stanje. Otvaranje ili osvježavanje zadatka ne pokreće uvoz ponovo.",
+  "settings.import.job.loading": "Učitavanje zadataka…",
+  "settings.import.job.empty": "Još nema zadataka uvoza.",
+  "settings.import.job.more": "Učitaj starije zadatke",
+  "settings.import.job.identified": "Pronađene sesije",
+  "settings.import.job.imported": "Uvezene sesije",
+  "settings.import.job.backup": "Rezervna kopija",
+  "settings.import.job.backupPreview": "Nije potrebna za pregled",
+  "settings.import.job.backupVerified": "Server je provjerio kopiju prije upisa",
+  "settings.import.job.backupPending": "Još nema potvrde o provjerenoj rezervnoj kopiji",
+  "settings.import.job.targetCopy": "Nezavisna kopija",
+  "settings.import.job.targetLive": "Trenutna baza podataka",
+  "settings.import.job.targetPending": "Još nije potvrđeno",
+  "settings.import.job.copyComplete":
+    "Odabrani podaci su sačuvani u nezavisnoj kopiji. Ovaj server i dalje koristi izvornu bazu podataka i direktorije; uvezeni razgovori, memorija i vještine dostupni su na zabilježenom odredištu.",
+  "settings.import.job.details": "Tehnički detalji",
+  "settings.import.job.detailsHint":
+    "Identifikatori zadataka, putanje odredišta i potvrde provjere za dijagnostiku problema.",
+  "settings.import.job.copyDetails": "Kopiraj dijagnostičke detalje",
+  "settings.import.job.copied": "Dijagnostički detalji su kopirani.",
+  "settings.import.job.copyFailed": "Kopiranje nije dostupno. Odaberite i kopirajte detalje ispod.",
+  "settings.import.job.diagnosticText": "Dijagnostički detalji",
+  "settings.import.job.current": "Odabrani zadatak",
+  "settings.import.job.updated": "Ažurirano",
+  "settings.import.job.committed": "Trajno zapisane serije",
+  "settings.import.job.fileSets": "Objavljeni skupovi datoteka",
+  "settings.import.job.files": "Datoteke",
+  "settings.import.job.bytes": "Bajtovi",
+  "settings.import.job.failed": "Neuspjele serije",
+  "settings.import.job.activeBatch": "Nepotvrđena serija",
+  "settings.import.job.cancelPending":
+    "Otkazivanje je zatraženo. Čeka se da server potvrdi sigurnu tačku zaustavljanja; upis možda još traje.",
+  "settings.import.job.stopped": "Server je potvrdio da je uvoz zaustavljen.",
+  "settings.import.job.recovery":
+    "Ishod treba provjeriti. Sačuvajte dokaze o odredištu i rezervnoj kopiji ovog zadatka; osvježavanje neće ponoviti upise s nepoznatim ishodom.",
+  "settings.import.job.partial":
+    "Trajno zapisane serije ostaju na zabilježenom odredištu. Otkazivanje ili neuspjeh ih ne poništava.",
+  "settings.import.job.refreshOne": "Osvježi odabrani zadatak",
+  "settings.import.job.cancelSubmitting": "Slanje zahtjeva za otkazivanje…",
+  "settings.import.job.cancel": "Zatraži otkazivanje",
+  "settings.import.job.localLog":
+    "Samo lokalna opažanja; do 2.000 redova / 2 MiB. Ovo nije potpuni serverski revizijski dnevnik.",
+  "settings.import.job.exportLog": "Izvezi opažanja",
+  "settings.import.snapshot.boundary":
+    "ZIP i starije JSON datoteke uvoze se kao arhive samo za čitanje putem zasebne krajnje tačke. Oporavak i otkazivanje trajnih zadataka uvoza ne primjenjuju se na njih.",
+  "settings.import.snapshot.failed":
+    "Potvrda uvoza arhive nije dostupna. Provjerite stanje na serveru prije ponovnog pokušaja.",
+  "settings.import.job.state.preflight": "Provjera izvora i odredišta",
+  "settings.import.job.state.ready": "Spremno",
+  "settings.import.job.state.running": "Uvoz u toku",
+  "settings.import.job.state.cancel_requested": "Otkazivanje zatraženo",
+  "settings.import.job.state.completed": "Završeno",
+  "settings.import.job.state.failed": "Neuspjelo",
+  "settings.import.job.state.cancelled": "Otkazano prije trajnog zapisa bilo koje serije",
+  "settings.import.job.state.cancelled_partial": "Otkazano uz trajno zapisane serije",
+  "settings.import.job.state.recovery_required": "Ishod treba provjeriti",
+  "settings.import.snapshot.choose": "Odaberi datoteku",
+  "settings.import.fileCopyOnly":
+    "Memorija i vještine zahtijevaju izolovanu kopiju. Isključite te opsege prije odabira spajanja u trenutnu bazu.",
+  "settings.import.fileUnavailable":
+    "Ovaj server ne može potvrditi trajni uvoz memorije i vještina. Pregled je i dalje dostupan.",
+  "settings.import.merge": "Spoji u trenutnu bazu podataka",
+  "settings.import.merge.hint":
+    "Samo historija razgovora. Provjerena rezervna kopija baze podataka mora biti uspješno napravljena prije bilo kojeg upisa u trenutnu bazu.",
+  "settings.import.merge.confirm": "Potvrđujem upis uvezenih sesija u trenutnu bazu podataka ovog servera.",
+  "settings.import.mode.unavailable":
+    "Ovaj server ne podržava trajne zadatke uvoza. Ažurirajte server prije uvoza historije.",
+  "settings.import.target": "Stvarno odredište",
+  "settings.import.target.copy": "Zasebna kopija; trenutna serverska baza podataka nije zamijenjena.",
+  "settings.import.target.live": "Trenutna serverska baza podataka; provjerena rezervna kopija čuva se zasebno.",
+  "settings.import.target.dryRun":
+    "Samo pregled odredišta; nije napravljena ni odredišna baza podataka ni rezervna kopija.",
+
+  "settings.mcp.selectProject": "Select a project to manage its MCP servers and Apps.",
+  "settings.general.row.collaborationMode.title": "Default conversation mode",
+  "settings.general.row.collaborationMode.currentTitle": "Current conversation mode and new conversation default",
+  "settings.general.row.collaborationMode.currentDescription":
+    "Apply to subsequent messages in this conversation and set the default for new conversations. Running tasks stay as they are.",
+  "settings.general.row.collaborationMode.description":
+    "Choose Auto, Loop, or Design for new conversations. Existing conversation choices and running tasks stay as they are.",
+  "settings.im.title": "IM",
+  "settings.im.model.title": "Model used by my IM Agent",
+  "settings.im.model.description":
+    "Choose a locally configured model for private /dac commands. This setting does not change the default model for ordinary DAC sessions.",
+  "settings.im.model.select": "Choose an IM model",
+  "settings.im.model.empty": "No connected model is available. Configure a provider in Settings first.",
+  "settings.im.model.missing":
+    "The saved IM model is currently unavailable. Choose an available model before starting a command.",
+  "settings.im.model.saved": "IM model saved",
+  "settings.im.model.failed": "The IM model could not be saved. Your ordinary session model was not changed.",
 }

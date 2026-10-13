@@ -303,6 +303,8 @@ describe("SessionRunnerLLM recorded", () => {
         "session.next.step.started.1",
         "message.updated.1",
         "session.next.text.started.1",
+        // Text creation publishes the current assistant metadata before its first part.
+        "message.updated.1",
         "message.part.updated.1",
         "session.next.text.ended.1",
         "message.part.updated.1",

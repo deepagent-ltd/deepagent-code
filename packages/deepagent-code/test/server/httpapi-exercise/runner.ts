@@ -8,7 +8,7 @@ import type { Config } from "../../../src/config/config"
 import type { MessageV2 } from "../../../src/session/message-v2"
 import { MessageID, PartID } from "../../../src/session/schema"
 import { call, callAuthProbe, disposeApps } from "./backend"
-import { original } from "./environment"
+import { original, exerciseDatabasePath } from "./environment"
 import { runtime } from "./runtime"
 import type { ActiveScenario, Options, ProjectOptions, Result, Scenario, ScenarioContext, SeededContext } from "./types"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -22,9 +22,11 @@ export function runScenario(options: Options) {
         duration: options.scenarioTimeout,
         orElse: () => Effect.die(new Error(`scenario timed out after ${Duration.format(options.scenarioTimeout)}`)),
       }),
+      // Release the scenario's actual application/HTTP scopes before removing its fixture database.
+      Effect.scoped,
+      Effect.ensuring(options.mode !== "auth" && scenario.reset ? resetState : Effect.void),
       Effect.as({ status: "pass", scenario } as Result),
       Effect.catchCause((cause) => Effect.succeed({ status: "fail" as const, scenario, message: Cause.pretty(cause) })),
-      Effect.scoped,
     )
   }
 }
@@ -97,6 +99,17 @@ function withContext<A, E>(
         const modules = yield* Effect.promise(() => runtime())
         const scope = yield* Scope.Scope
         const app = yield* Layer.buildWithMemoMap(modules.AppLayer, modules.memoMap, scope)
+        if (scenario.reset) {
+          // This exact app context owns the instances. The global Promise bridge would lazily build
+          // a second AppRuntime/memoMap against the same file while this scope still owns its lock.
+          yield* Effect.addFinalizer(() =>
+            Effect.promise(disposeApps).pipe(
+              Effect.ensuring(
+                modules.InstanceStore.Service.use((store) => store.disposeAll()).pipe(Effect.provide(app)),
+              ),
+            ),
+          )
+        }
         yield* trace(options, scenario, `${label} runtime done`)
         const path = context.dir?.path
         const instance = path
@@ -198,7 +211,6 @@ function withContext<A, E>(
         return result
       }).pipe(Effect.ensuring(context.llm ? context.llm.reset : Effect.void)),
     ),
-    Effect.ensuring(scenario.reset ? resetState : Effect.void),
   )
 }
 
@@ -262,11 +274,23 @@ function fakeLlmConfig(url: string): Partial<ConfigV1.Info> {
 }
 
 const resetState = Effect.promise(async () => {
-  const modules = await runtime()
   Flag.DEEPAGENT_CODE_SERVER_PASSWORD = original.DEEPAGENT_CODE_SERVER_PASSWORD
   Flag.DEEPAGENT_CODE_SERVER_USERNAME = original.DEEPAGENT_CODE_SERVER_USERNAME
   await disposeApps()
-  await modules.disposeAllInstances()
-  await modules.resetDatabase()
-  await Bun.sleep(25)
+  if (exerciseDatabasePath === ":memory:") return
+  const { lstat, rm } = await import("node:fs/promises")
+  // Never delete a still-owned file, even if a prior setup/finalizer failed. Lock release belongs to
+  // the normal Database layer; this harness must neither unlink nor bypass its owner lock.
+  if (
+    await lstat(`${exerciseDatabasePath}.runtime.lock`).catch((error: unknown) => {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return undefined
+      throw error
+    })
+  )
+    throw new Error("HTTP exerciser cleanup retained a live database owner; fixture was not deleted")
+  await Promise.all(
+    [exerciseDatabasePath, `${exerciseDatabasePath}-wal`, `${exerciseDatabasePath}-shm`].map((file) =>
+      rm(file, { force: true }),
+    ),
+  )
 })

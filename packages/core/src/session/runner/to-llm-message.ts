@@ -117,6 +117,12 @@ const assistant = (message: SessionMessage.Assistant, model: Model) => {
     .map((item) => toolResult(item, sameModel ? (item.provider?.resultMetadata ?? item.provider?.metadata) : undefined))
     .filter((message) => message !== undefined)
     .map(Message.tool)
+  // A turn that failed (provider-error) or finished before producing any text/tool content still
+  // persists an assistant row (Step.Started folds an empty Assistant; Step.Failed only marks the
+  // error). Lowered verbatim, that row becomes `content: null` on OpenAI-family wires, which
+  // providers reject — and the rejection fails the next turn the same way, poisoning the session.
+  // The durable row keeps its audit/usage semantics; the model-facing history drops it.
+  if (content.length === 0 && results.length === 0) return []
   return [Message.make({ id: message.id, role: "assistant", content, metadata: message.metadata }), ...results]
 }
 

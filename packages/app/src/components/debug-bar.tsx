@@ -81,6 +81,7 @@ export function DebugBar() {
   const routing = useIsRouting()
   const [state, setState] = createStore({
     open: false,
+    visible: document.visibilityState === "visible",
     cls: undefined as number | undefined,
     delay: undefined as number | undefined,
     fps: undefined as number | undefined,
@@ -163,13 +164,18 @@ export function DebugBar() {
   })
 
   onMount(() => {
+    makeEventListener(document, "visibilitychange", () => setState("visible", document.visibilityState === "visible"))
+  })
+  createEffect(() => {
+    // A collapsed diagnostic must not keep collecting frames or browser samples.
+    if (!state.open || !state.visible) return
     const obs: PerformanceObserver[] = []
     const fps: Array<{ at: number; dur: number }> = []
     const long: Array<{ at: number; dur: number }> = []
     const seen = new Map<number | string, { at: number; delay: number; dur: number }>()
     let hasLong = false
-    let poll: number | undefined
     let raf = 0
+    let active = true
     let last = 0
     let snap = 0
 
@@ -219,26 +225,23 @@ export function DebugBar() {
       setState("heap", { limit: mem.jsHeapSizeLimit, used: mem.usedJSHeapSize })
     }
 
-    const reset = () => {
-      fps.length = 0
-      long.length = 0
-      seen.clear()
-      last = 0
-      snap = 0
-      batch(() => {
-        setState("fps", undefined)
-        setState("gap", undefined)
-        setState("jank", undefined)
-        setState("delay", undefined)
-        setState("inp", undefined)
-        if (hasLong) setState("long", { block: 0, count: 0, max: 0 })
-      })
-    }
+    setState({
+      cls: undefined,
+      delay: undefined,
+      fps: undefined,
+      gap: undefined,
+      heap: { limit: undefined, used: undefined },
+      inp: undefined,
+      jank: undefined,
+      long: { block: undefined, count: undefined, max: undefined },
+    })
 
     const watch = (type: string, init: Obs, fn: (entries: PerformanceEntry[]) => void) => {
       if (typeof PerformanceObserver === "undefined") return false
       if (!(PerformanceObserver.supportedEntryTypes ?? []).includes(type)) return false
-      const ob = new PerformanceObserver((list) => fn(list.getEntries()))
+      const ob = new PerformanceObserver((list) => {
+        if (active && document.visibilityState === "visible") fn(list.getEntries())
+      })
       try {
         ob.observe(init)
         obs.push(ob)
@@ -250,7 +253,7 @@ export function DebugBar() {
     }
 
     if (
-      watch("layout-shift", { buffered: true, type: "layout-shift" }, (entries) => {
+      watch("layout-shift", { type: "layout-shift" }, (entries) => {
         const add = entries.reduce((sum, entry) => {
           const item = entry as Shift
           if (item.hadRecentInput) return sum
@@ -264,7 +267,7 @@ export function DebugBar() {
     }
 
     if (
-      watch("longtask", { buffered: true, type: "longtask" }, (entries) => {
+      watch("longtask", { type: "longtask" }, (entries) => {
         const at = performance.now()
         long.push(...entries.map((entry) => ({ at: entry.startTime, dur: entry.duration })))
         syncLong(at)
@@ -274,7 +277,7 @@ export function DebugBar() {
       setState("long", { block: 0, count: 0, max: 0 })
     }
 
-    watch("event", { buffered: true, durationThreshold: 16, type: "event" }, (entries) => {
+    watch("event", { durationThreshold: 16, type: "event" }, (entries) => {
       for (const raw of entries) {
         const entry = raw as Evt
         if (entry.duration < 16) continue
@@ -297,68 +300,45 @@ export function DebugBar() {
     })
 
     const loop = (at: number) => {
-      if (document.visibilityState !== "visible") {
+      if (!active || document.visibilityState !== "visible") {
         raf = 0
         return
       }
-
       if (last === 0) {
         last = at
         raf = requestAnimationFrame(loop)
         return
       }
-
       fps.push({ at, dur: at - last })
       last = at
-
       if (at - snap >= 250) {
         snap = at
         syncFrame(at)
       }
-
       raf = requestAnimationFrame(loop)
-    }
-
-    const stop = () => {
-      if (raf !== 0) cancelAnimationFrame(raf)
-      raf = 0
-      if (poll === undefined) return
-      clearInterval(poll)
-      poll = undefined
-    }
-
-    const start = () => {
-      if (document.visibilityState !== "visible") return
-      if (poll === undefined) {
-        poll = window.setInterval(() => {
-          syncLong()
-          syncInp()
-          syncHeap()
-        }, 1000)
-      }
-      if (raf !== 0) return
-      raf = requestAnimationFrame(loop)
-    }
-
-    const vis = () => {
-      if (document.visibilityState !== "visible") {
-        stop()
-        return
-      }
-      reset()
-      start()
     }
 
     syncHeap()
-    start()
-    makeEventListener(document, "visibilitychange", vis)
-
+    const poll = window.setInterval(() => {
+      if (!active || document.visibilityState !== "visible") return
+      syncLong()
+      syncInp()
+      syncHeap()
+    }, 1000)
+    raf = requestAnimationFrame(loop)
     onCleanup(() => {
-      if (one !== 0) cancelAnimationFrame(one)
-      if (two !== 0) cancelAnimationFrame(two)
-      stop()
+      active = false
+      if (raf !== 0) cancelAnimationFrame(raf)
+      clearInterval(poll)
       for (const ob of obs) ob.disconnect()
+      fps.length = 0
+      long.length = 0
+      seen.clear()
     })
+  })
+  onCleanup(() => {
+    if (one !== 0) cancelAnimationFrame(one)
+    if (two !== 0) cancelAnimationFrame(two)
   })
 
   return (

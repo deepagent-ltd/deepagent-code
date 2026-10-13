@@ -20,6 +20,22 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  public-source-boundary:
+    name: public-source-boundary
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Verify public documents and complete history
+        run: bun script/check-public-source-boundary.ts --history
+
   test-fixture-gate:
     name: test-fixture-gate
     # QUAL-003: forbid test fixtures from bypassing the durable session state
@@ -112,7 +128,7 @@ jobs:
 
       - name: Run unit tests
         timeout-minutes: ${{ matrix.settings.timeout }}
-        run: bun turbo test:ci --log-order=stream --log-prefix=task
+        run: bun run test:ci --log-order=stream --log-prefix=task
         env:
           DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
@@ -125,7 +141,9 @@ jobs:
         if: always()
         uses: mikepenz/action-junit-report@bccf2e31636835cf0874589931c4116687171386 # v6.4.0
         with:
-          report_paths: packages/*/.artifacts/unit/junit.xml
+          report_paths: |
+            packages/*/.artifacts/unit/junit.xml
+            .artifacts/unit/junit.xml
           check_name: "unit results (${{ matrix.settings.name }})"
           detailed_summary: true
           include_time_in_summary: true
@@ -139,7 +157,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
-          path: packages/*/.artifacts/unit/junit.xml
+          path: |
+            packages/*/.artifacts/unit/junit.xml
+            .artifacts/unit/junit.xml
 
   desktop-smoke:
     name: desktop-smoke (macos)

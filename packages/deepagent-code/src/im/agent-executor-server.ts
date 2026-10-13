@@ -15,19 +15,8 @@ import { InstanceStore } from "@/project/instance-store"
 import { V2AgentRoster } from "@/session/v2-agent-roster"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 
-// V2 IM durable-only: the legacy `ServerAgentExecutor` (fresh V1 session per IM turn via
-// SessionPrompt.promptOrSteer, wired through core's `executeAgentMentions`) is DELETED — @mentions are
-// now admitted by the IM handler as durable SessionV2 work (src/im/im-agent-execution.ts) and the
-// terminal reply returns through the im_reply_outbox daemon. This module keeps only the production
-// AgentListProvider: mention resolution (and the v4 event runtime's registry lookups) still run
-// against the Location-scoped Core V2 roster.
-
-/**
- * Production AgentListProvider for IM @mention resolution.
- *
- * A bare daemon fiber has no InstanceRef. Directory-scoped lookup uses the event's directory;
- * an opaque workspace ID with no directory can only resolve workspace-independent built-ins.
- */
+/** The configured roster is shared by IM display and Event runtime selection.
+ * Listing an agent never grants another user permission to invoke it. */
 class ServerAgentListProvider implements AgentListProvider {
   constructor(
     private readonly agents: Agent.Interface,

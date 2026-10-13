@@ -822,7 +822,7 @@ describe("SessionV2.create", () => {
       const unavailable = (
         effect: Effect.Effect<
           void,
-          SessionV2.NotFoundError | SessionV2.LegacySessionRequiresAdoption | SessionV2.OperationUnavailableError
+          unknown
         >,
       ) =>
         effect.pipe(

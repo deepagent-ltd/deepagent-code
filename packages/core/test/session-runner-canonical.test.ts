@@ -871,3 +871,34 @@ it.effect("refuses new turns once the consecutive crash-resume budget is exhaust
     }
   }),
 )
+
+it.effect("binds continuations to the original activity and refuses settled or foreign activities without fallback admission", () =>
+  Effect.gen(function* () {
+    yield* seed
+    const database = yield* Database.Service
+    const context = yield* SessionContext.Service
+    const original = yield* SessionRunnerCanonical.admitSelection({
+      db: database.db, contexts: context, sessionID, agent: "build", location: { directory: "/project" },
+      promotedInputIds: ["msg_trigger"], system: { baseline: "baseline", revision: 0, baselineSeq: 1 },
+    })
+    const input = {
+      db: database.db, contexts: context, sessionID, agent: "build", location: { directory: "/project" },
+      promotedInputIds: [], fallbackUserInputId: "msg_trigger", system: { baseline: "baseline", revision: 0, baselineSeq: 1 },
+    }
+    const live = yield* SessionRunnerCanonical.admitSelection(input).pipe(
+      Effect.provideService(SessionRunnerCanonical.CurrentContinuationActivity, original.activityId),
+    )
+    expect(live.activityId).toBe(original.activityId)
+    yield* context.settleActivity({ activityId: original.activityId, state: "settled" })
+    const before = yield* database.db.select().from(SessionContextSelectionTable).all().pipe(Effect.orDie)
+    const settled = yield* SessionRunnerCanonical.admitSelection(input).pipe(
+      Effect.provideService(SessionRunnerCanonical.CurrentContinuationActivity, original.activityId), Effect.flip,
+    )
+    expect(settled).toMatchObject({ reason: "continuation_activity_obsolete" })
+    const foreign = yield* SessionRunnerCanonical.admitSelection(input).pipe(
+      Effect.provideService(SessionRunnerCanonical.CurrentContinuationActivity, "foreign-activity"), Effect.flip,
+    )
+    expect(foreign).toMatchObject({ reason: "continuation_activity_obsolete" })
+    expect(yield* database.db.select().from(SessionContextSelectionTable).all().pipe(Effect.orDie)).toEqual(before)
+  }),
+)

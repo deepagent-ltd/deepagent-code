@@ -13,11 +13,19 @@ import { Location } from "@deepagent-code/core/location"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { DateTime, Schema } from "effect"
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import { sql } from "drizzle-orm"
+import { Database } from "@deepagent-code/core/database/database"
+import { EventOutbox } from "@deepagent-code/core/deepagent/event-outbox"
+import { EventConsumer } from "@deepagent-code/core/deepagent/event-consumer"
+import { TuiEvent } from "../src/server/tui-event"
+import { SessionID } from "../src/session/schema"
 import { createRuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 
-// C5-12 — the flag-gated legacy double-write removal on the EventV2 → GlobalBus mirror. When the V2
-// admission path is ON (`isEventV2AdmissionEnabled`), the GlobalBus mirror + sync emission are SKIPPED
-// (the V2 admission consumer is the single writer); when OFF the existing mirror is unchanged.
+// Registered C5 events retain one durable writer. Unregistered UI events must
+// still reach the legacy egress while admission is ON.
 
 const MirrorEvent = EventV2.define({
   type: "test.mirror.event",
@@ -81,9 +89,9 @@ describe("C5-12 event-v2-bridge flag-gated GlobalBus mirror removal", () => {
     expect(count).toBeGreaterThan(0)
   })
 
-  test("flag ON: the GlobalBus mirror is SKIPPED (emit counter 0 — single writer)", async () => {
+  test("flag ON: an unregistered ephemeral event retains exactly one legacy egress", async () => {
     const count = await Effect.runPromise(mirrorCount(admissionOn))
-    expect(count).toBe(0)
+    expect(count).toBe(1)
   })
 
   test("native session.created.2 remains V2 durable authority but exposes the legacy client shape", () => {
@@ -269,4 +277,57 @@ describe("C5-12 event-v2-bridge flag-gated GlobalBus mirror removal", () => {
 
     expect(aggregates).toContain("legacy-aggregate")
   })
+})
+
+
+test("actual TUI ephemeral events egress once with zero outbox; registered sync remains single durable delivery", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-bridge-egress-"))
+  const Registered = EventV2.define({ type: "test.bridge.registered", sync: { version: 1, aggregate: "sessionID" }, schema: { sessionID: Schema.String } })
+  const registry = V2OutboxWriter.EVENT_V2_OUTBOX_REGISTRY.register({ ...V2OutboxWriter.EVENT_V2_OUTBOX_REGISTRY.lookup("session.created")!, eventType: Registered.type })
+  const seen: GlobalEvent[] = []
+  const listen = (event: GlobalEvent) => { seen.push(event) }
+  GlobalBus.on("event", listen)
+  try {
+    await Effect.runPromise(Effect.gen(function* () {
+      const context = yield* Layer.build(EventV2Bridge.layerWithRegistry(registry, admissionOn).pipe(
+        Layer.provideMerge(EventV2.layer), Layer.provideMerge(Database.layerFromPath(path.join(directory, "events.db")))))
+      const bridge = Context.get(context, EventV2Bridge.Service)
+      const db = Context.get(context, Database.Service).db
+      yield* bridge.publish(TuiEvent.PromptAppend, { text: "safe UI text" })
+      yield* bridge.publish(TuiEvent.CommandExecute, { command: "session.plan" })
+      yield* bridge.publish(TuiEvent.ToastShow, { message: "safe toast", variant: "info", duration: 1000 })
+      yield* bridge.publish(TuiEvent.SessionSelect, { sessionID: SessionID.make("ses_ui_egress") })
+      yield* Effect.sleep(Duration.millis(20))
+      expect(seen.map((item) => item.payload.type).filter((type) => type.startsWith("tui."))).toEqual([
+        "tui.prompt.append", "tui.command.execute", "tui.toast.show", "tui.session.select"])
+      expect(yield* db.all(sql`SELECT outbox_id FROM deepagent_event_outbox`)).toHaveLength(0)
+      yield* bridge.publish(VersionedAggregateV1, { legacyID: "unregistered-sync" })
+      yield* Effect.sleep(Duration.millis(20))
+      expect(seen.filter((item) => item.payload.type === VersionedAggregateV1.type)).toHaveLength(1)
+      expect(seen.filter((item) => item.payload.type === "sync" && item.payload.syncEvent.aggregateID === "unregistered-sync")).toHaveLength(1)
+      expect(yield* db.all(sql`SELECT outbox_id FROM deepagent_event_outbox`)).toHaveLength(0)
+      const now = Date.now()
+      yield* EventConsumer.register(db, { consumerKey: "bridge-observer", deliveryContractVersion: "1", now })
+      const event = yield* bridge.publish(Registered, { sessionID: "ses_registered_egress" })
+      yield* Effect.sleep(Duration.millis(20))
+      expect(seen.filter((item) => item.payload.type === Registered.type)).toHaveLength(0)
+      expect(seen.filter((item) => item.payload.type === "sync" && item.payload.syncEvent.aggregateID === "ses_registered_egress")).toHaveLength(0)
+      const row = yield* V2OutboxWriter.forEvent(db, event.id)
+      expect(row).toBeDefined()
+      if (!row) throw new Error("Missing durable outbox")
+      let dispatched = 0
+      const publish = () => EventOutbox.publish(db, { now: Date.now(), claimantId: "bridge-publisher", leaseMs: 10000, batchSize: 10, maxAttempts: 1,
+        dispatch: () => Effect.sync(() => { dispatched++ }) })
+      yield* publish()
+      yield* publish()
+      expect(dispatched).toBe(1)
+      yield* EventConsumer.schedule(db, { outboxId: row.outboxId, consumerKey: "bridge-observer", now: Date.now() })
+      const claim = { consumerKey: "bridge-observer", claimantId: "actual-consumer", now: Date.now(), leaseMs: 10000, limit: 10 }
+      const delivery = yield* EventConsumer.claimDue(db, claim)
+      expect(delivery.deliveries).toHaveLength(1)
+      expect(yield* EventConsumer.commitResult(db, { outboxId: row.outboxId, consumerKey: claim.consumerKey, claimToken: delivery.claimToken, now: Date.now() })).toBe(true)
+      expect((yield* EventConsumer.claimDue(db, claim)).deliveries).toHaveLength(0)
+      expect(yield* db.all(sql`SELECT outbox_id FROM deepagent_event_outbox`)).toHaveLength(1)
+    }).pipe(Effect.scoped))
+  } finally { GlobalBus.off("event", listen); await fs.rm(directory, { recursive: true, force: true }) }
 })

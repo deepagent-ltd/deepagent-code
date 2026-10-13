@@ -9,9 +9,11 @@ export function permissionRequestFromV2(properties: EventPermissionV2Asked["prop
     sessionID: properties.sessionID,
     permission: properties.action,
     patterns: properties.resources,
-    metadata: properties.metadata ?? {},
+    metadata: properties.source?.type === "mcp_app"
+      ? { ...(properties.metadata ?? {}), mcpApp: properties.source }
+      : properties.metadata ?? {},
     always: properties.save ?? [],
-    ...(properties.source
+    ...(properties.source?.type === "tool"
       ? {
           tool: {
             messageID: properties.source.messageID,

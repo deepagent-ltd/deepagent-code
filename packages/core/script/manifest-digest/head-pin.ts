@@ -6,17 +6,18 @@
  * never drift from what the gates enforce.
  *
  * The pin covers the ENTIRE generator input set (contract / migration-registry /
- * package-versions / runtime-flag-config — committed, git-tracked files only).
+ * package-versions / runtime-flag-config). The generator reads the current filesystem input
+ * set, including reviewed forward migrations in an uncommitted candidate.
  * Re-pin only together with an intentional input-set change: regenerate with
  * `bun run script/manifest-digest/generate-manifest.ts` and update both digests
  * here.
  *
- * V2.0.2 re-pin (2026-09-25): regenerate after aligning product package versions
- * and the four supported release targets.
+ * This v2.0.4 pin records the reviewed working-tree candidate. Final source closure must still
+ * freeze these exact inputs and compile the materialized tree; this pin is not release approval.
  */
 export const HeadPin = {
-  /** Commit whose tree the digests were pinned on. Informational; the digests are the gate. */
-  commit: "e18f3e91",
-  setTreeDigest: "280e5fc8fcbc01b87b461cd2ccfe94fe8eb3c35fc552e0aa55c2c0488e67c4e3",
-  overallDigest: "c4d1b7b729d1bc804e9319557b660ee295dfd04eb96ff268ca54fd4373b5096a",
+  /** Source commit used to prepare the pinned tree. Informational; the digests are the gate. */
+  commit: "23f225ccff4fb76554085c94a0545bf6bda7e6f2",
+  setTreeDigest: "468aacdf66cbb3da067588bb4073c6c1985977fa442b577b7086563a97e0ef2b",
+  overallDigest: "457439060614b930027c3b0982073dfca3783e5fc9cda799e3bf350717bd0e64",
 } as const

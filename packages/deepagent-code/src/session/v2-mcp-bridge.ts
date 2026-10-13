@@ -1,10 +1,18 @@
 export * as V2McpBridge from "./v2-mcp-bridge"
 
 import { asSchema, type FlexibleSchema, type ToolExecutionOptions } from "ai"
-import { Effect, Exit, Layer, Scope, Semaphore } from "effect"
+import { Effect, Exit, Layer, Option, Scope, Semaphore } from "effect"
+import { CallToolResultSchema } from "@modelcontextprotocol/core"
+import type { CallToolResult } from "@modelcontextprotocol/client"
 import { ToolFailure } from "@deepagent-code/llm"
+import { Location } from "@deepagent-code/core/location"
+import { PermissionV2 } from "@deepagent-code/core/permission"
+import { SessionStore } from "@deepagent-code/core/session/store"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { Tool } from "@deepagent-code/core/tool/tool"
+import { McpAppInvocation } from "@deepagent-code/core/session/mcp-app-invocation"
 import { MCP } from "@/mcp"
 import { InstanceRegistry } from "@/effect/instance-registry"
 import { InstanceRef } from "@/effect/instance-ref"
@@ -50,10 +58,18 @@ export const layer = Layer.effectDiscard(
           const semaphore = yield* Semaphore.make(1)
           let scope: Scope.Scope | undefined
           let disposed = false
+          let generation: { active: boolean } | undefined
+          const appScope = yield* Scope.make()
+          if (mcp.appResourceCapture) yield* McpAppInvocation.registerHost({ directory: AbsolutePath.make(context.directory) }, {
+            capture: (input) => mcp.appResourceCapture!(input).pipe(Effect.provideService(InstanceRef, context)),
+          }).pipe(Effect.provideService(Scope.Scope, appScope))
           const refresh = semaphore.withPermit(
             Effect.gen(function* () {
               if (disposed) return
+              if (generation) generation.active = false
               const tools = yield* mcp.tools().pipe(Effect.provideService(InstanceRef, context))
+              const current = { active: true }
+              generation = current
               const registered: Record<string, Tool.AnyTool> = {}
               for (const [key, item] of Object.entries(tools)) {
                 const provenance = ToolProvenance.get(item)
@@ -69,6 +85,11 @@ export const layer = Layer.effectDiscard(
                 // tool names carried by the client authority instead of parsing that key.
                 const name = `mcp__${sanitize(provenance.mcpServer)}__${sanitize(provenance.mcpToolName)}`
                 if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name)) continue
+                if (registered[name])
+                  return yield* new Tool.RegistrationError({
+                    name,
+                    message: "MCP tool names collide after sanitization",
+                  })
                 const schema = asSchema((item as { readonly inputSchema?: FlexibleSchema }).inputSchema) as {
                   readonly jsonSchema?: unknown
                 }
@@ -81,46 +102,91 @@ export const layer = Layer.effectDiscard(
                         ? (document as Record<string, unknown>)
                         : { type: "object", properties: {} },
                     execute: (input, callContext) =>
-                      Effect.callback<unknown, ToolFailure>((resume, signal) => {
-                        // The fiber signal IS the tool call's abortSignal: cancelling the settle
-                        // fiber (parent turn cancellation) aborts the in-flight MCP request, and
-                        // the callback suspends interruptibly so the settle result is discarded.
-                        execute(input, {
-                          toolCallId: callContext.toolCallID,
-                          messages: [],
-                          abortSignal: signal,
-                        })
-                          .then((value) => {
-                            if (typeof value === "object" && value !== null && "isError" in value && value.isError === true) {
-                              const content = "content" in value && Array.isArray(value.content) ? value.content : []
-                              const message = content
-                                .flatMap((item) =>
-                                  typeof item === "object" && item !== null && "text" in item && typeof item.text === "string"
-                                    ? [item.text]
-                                    : [],
-                                )
-                                .join("\n")
-                              resume(Effect.fail(new ToolFailure({ message: `MCP tool ${key} failed: ${message || "server returned isError"}` })))
-                              return
-                            }
-                            resume(Effect.succeed(value))
+                      Effect.gen(function* () {
+                        // Application registrations are process-wide; their captured transport
+                        // must never be borrowed by another Location or a stale approved call.
+                        const location = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
+                        const permission = Option.getOrUndefined(yield* Effect.serviceOption(PermissionV2.Service))
+                        const sessions = Option.getOrUndefined(yield* Effect.serviceOption(SessionStore.Service))
+                        if (!location || !permission || !sessions)
+                          return yield* new ToolFailure({
+                            message: "MCP execution requires V2 Location, Session and permission authority",
                           })
-                          .catch((cause) =>
-                            resume(
-                              Effect.fail(new ToolFailure({ message: `MCP tool ${key} failed: ${String(cause)}` })),
+                        const session = yield* sessions.get(callContext.sessionID)
+                        if (
+                          !session ||
+                          location.directory !== context.directory ||
+                          location.workspaceID !== undefined ||
+                          session.location.directory !== location.directory ||
+                          session.location.workspaceID !== undefined
+                        )
+                          return yield* new ToolFailure({
+                            message: "MCP tool belongs to a different or unsupported Session Location",
+                          })
+                        if (disposed || !current.active)
+                          return yield* new ToolFailure({ message: "MCP tool registration is no longer active" })
+                        yield* permission
+                          .assert({
+                            action: "mcp",
+                            resources: [`${provenance.mcpServer}:${provenance.mcpToolName}`],
+                            metadata: { server: provenance.mcpServer, tool: provenance.mcpToolName },
+                            source: {
+                              type: "tool",
+                              messageID: callContext.assistantMessageID,
+                              callID: callContext.toolCallID,
+                            },
+                            sessionID: callContext.sessionID,
+                            agent: callContext.agent,
+                          })
+                          .pipe(
+                            Effect.mapError(
+                              (error) =>
+                                PermissionV2.permissionToolFailure(error) ??
+                                new ToolFailure({ message: `MCP permission check failed: ${error.message}` }),
                             ),
                           )
+                        const latest = yield* sessions.get(callContext.sessionID)
+                        if (
+                          !latest ||
+                          latest.location.directory !== session.location.directory ||
+                          latest.location.workspaceID !== session.location.workspaceID
+                        )
+                          return yield* new ToolFailure({
+                            message: "MCP Session Location changed while awaiting permission",
+                          })
+                        if (disposed || !current.active)
+                          return yield* new ToolFailure({
+                            message:
+                              "MCP tool registration changed while awaiting permission; observe the new tool list",
+                          })
+                        const output = yield* Effect.callback<unknown, ToolFailure>((resume, signal) => {
+                          // The fiber signal IS the tool call's abortSignal: cancelling the settle
+                          // fiber (parent turn cancellation) aborts the in-flight MCP request, and
+                          // the callback suspends interruptibly so the settle result is discarded.
+                          execute(input, {
+                            toolCallId: callContext.toolCallID,
+                            messages: [],
+                            abortSignal: signal,
+                          })
+                            .then((value) => resume(Effect.succeed(value)))
+                            .catch((cause) =>
+                              resume(
+                                Effect.fail(
+                                  new ToolFailure({
+                                    message: `MCP tool ${key} failed: ${String(cause)}`,
+                                    ...(cause instanceof MCP.ToolBindingChangedError ||
+                                    cause instanceof MCP.ToolNotDispatchedError
+                                      ? {}
+                                      : { metadata: { effectOutcome: "unknown" } }),
+                                  }),
+                                ),
+                              ),
+                            )
+                        })
+                        return yield* validateResult(output, key)
                       }),
-                    toModelOutput: ({ output }) => {
-                      const content = (
-                        output as { content?: ReadonlyArray<{ type: string; text?: string }> } | undefined
-                      )?.content
-                      const text = content
-                        ?.filter((part) => part.type === "text")
-                        .map((part) => part.text ?? "")
-                        .join("\n")
-                      return [{ type: "text", text: text?.trim() ? text! : JSON.stringify(output) }]
-                    },
+                    toStructuredOutput: ({ output }) => retainedResult(output as CallToolResult),
+                    toModelOutput: ({ output }) => modelContent(output as CallToolResult),
                   }),
                   "mcp",
                 )
@@ -129,8 +195,15 @@ export const layer = Layer.effectDiscard(
               const previous = scope
               yield* Effect.uninterruptible(
                 Effect.gen(function* () {
-                  yield* applications.register(registered).pipe(
+                  yield* applications.register(registered, { directory: AbsolutePath.make(context.directory) }).pipe(
                     Effect.provideService(Scope.Scope, next),
+                    Effect.tap(() =>
+                      Effect.addFinalizer(() =>
+                        Effect.sync(() => {
+                          current.active = false
+                        }),
+                      ).pipe(Effect.provideService(Scope.Scope, next)),
+                    ),
                     Effect.onExit((exit) =>
                       Exit.isFailure(exit)
                         ? Effect.gen(function* () {
@@ -157,15 +230,15 @@ export const layer = Layer.effectDiscard(
               : Effect.void,
           )
           const stopWatching = mcp.watchConfig
-            ? yield* mcp.watchConfig().pipe(
-                Effect.provideService(InstanceRef, context),
-              )
+            ? yield* mcp.watchConfig().pipe(Effect.provideService(InstanceRef, context))
             : () => {}
           InstanceRegistry.registerInstanceStateDisposer(context, () =>
             Effect.runPromise(
               semaphore.withPermit(
                 Effect.gen(function* () {
                   disposed = true
+                  yield* Scope.close(appScope, Exit.void)
+                  if (generation) generation.active = false
                   stopWatching()
                   yield* unsubscribe
                   if (scope) yield* Scope.close(scope, Exit.void)
@@ -185,3 +258,119 @@ export const layer = Layer.effectDiscard(
     )
   }),
 )
+
+const maxImageBytes = 5 * 1024 * 1024
+const imageMimes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"])
+
+function validateResult(output: unknown, name: string) {
+  const parsed = CallToolResultSchema.safeParse(output)
+  if (!parsed.success)
+    return Effect.fail(
+      new ToolFailure({
+        message: `MCP tool ${name} returned an invalid protocol result`,
+        metadata: { effectOutcome: "unknown" },
+      }),
+    )
+  if (parsed.data.isError)
+    return Effect.fail(
+      new ToolFailure({
+        message: `MCP tool ${name} failed: ${
+          parsed.data.content
+            .flatMap((part) => (part.type === "text" ? [part.text] : []))
+            .join("\n")
+            .slice(0, 4096) || "server returned isError"
+        }`,
+      }),
+    )
+  const images = parsed.data.content.flatMap((part) => {
+    if (part.type === "image") return [{ data: part.data, mimeType: part.mimeType }]
+    if (part.type === "resource" && "blob" in part.resource && imageMimes.has(part.resource.mimeType ?? ""))
+      return [{ data: part.resource.blob, mimeType: part.resource.mimeType! }]
+    return []
+  })
+  // Bound producer capture before decoding. Registry still owns model-output retention.
+  if (
+    images.length > 8 ||
+    images.reduce((size, part) => size + part.data.length, 0) > Math.ceil(maxImageBytes / 3) * 4 ||
+    images.some(
+      (part) =>
+        !imageMimes.has(part.mimeType) ||
+        !part.data ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(part.data) ||
+        Buffer.from(part.data, "base64").toString("base64") !== part.data ||
+        !imageMatchesMime(part.data, part.mimeType),
+    ) ||
+    images.reduce((size, part) => size + Buffer.byteLength(part.data, "base64"), 0) > maxImageBytes
+  )
+    return Effect.fail(
+      new ToolFailure({
+        message: `MCP tool ${name} returned unsupported, invalid or oversized image content (5 MiB total, 8 images)`,
+        metadata: { effectOutcome: "unknown" },
+      }),
+    )
+  if (Buffer.byteLength(JSON.stringify(parsed.data.structuredContent ?? {})) > 256 * 1024)
+    return Effect.fail(
+      new ToolFailure({
+        message: `MCP tool ${name} returned oversized structured content (256 KiB)`,
+        metadata: { effectOutcome: "unknown" },
+      }),
+    )
+  return Effect.succeed(parsed.data)
+}
+
+function modelContent(output: CallToolResult): ReadonlyArray<Tool.Content> {
+  const content = output.content.map((part): Tool.Content => {
+    if (part.type === "text") return { type: "text", text: part.text }
+    if (part.type === "image") return { type: "file", data: part.data, mime: part.mimeType }
+    if (part.type === "resource" && "text" in part.resource) return { type: "text", text: part.resource.text }
+    if (part.type === "resource" && "blob" in part.resource && imageMimes.has(part.resource.mimeType ?? ""))
+      return { type: "file", data: part.resource.blob, mime: part.resource.mimeType! }
+    if (part.type === "resource_link") return { type: "text", text: JSON.stringify(part) }
+    return { type: "text", text: `[MCP ${part.type} content is not supported by this bridge]` }
+  })
+  if (output.structuredContent !== undefined) {
+    const text = JSON.stringify(output.structuredContent)
+    if (content.some((part) => part.type === "text" && part.text.trim() === text)) return content
+    return [...content, { type: "text", text }]
+  }
+  return content.length > 0 ? content : [{ type: "text", text: "{}" }]
+}
+
+function retainedResult(output: CallToolResult) {
+  return {
+    ...(output.structuredContent === undefined ? {} : { structuredContent: output.structuredContent }),
+    content: output.content.map((part) => {
+      if (part.type === "image")
+        return {
+          type: part.type,
+          mimeType: part.mimeType,
+          size: Buffer.byteLength(part.data, "base64"),
+          sha256: Hash.sha256(Buffer.from(part.data, "base64")),
+        }
+      if (part.type === "resource" && "blob" in part.resource)
+        return {
+          type: part.type,
+          uri: part.resource.uri,
+          mimeType: part.resource.mimeType,
+          size: Buffer.byteLength(part.resource.blob, "base64"),
+          sha256: Hash.sha256(Buffer.from(part.resource.blob, "base64")),
+        }
+      if (part.type === "audio") return { type: part.type, mimeType: part.mimeType, unsupported: true }
+      return part
+    }),
+  }
+}
+
+function imageMatchesMime(data: string, mime: string) {
+  const bytes = Buffer.from(data, "base64")
+  if (mime === "image/png")
+    return bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  if (mime === "image/jpeg") return bytes.length >= 4 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
+  if (mime === "image/gif") return bytes.length >= 10 && ["GIF87a", "GIF89a"].includes(bytes.toString("ascii", 0, 6))
+  return (
+    mime === "image/webp" &&
+    bytes.length >= 12 &&
+    bytes.toString("ascii", 0, 4) === "RIFF" &&
+    bytes.toString("ascii", 8, 12) === "WEBP"
+  )
+}

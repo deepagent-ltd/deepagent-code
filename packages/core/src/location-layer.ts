@@ -1,5 +1,7 @@
+import { WorkExecutionProfile } from "./session/work-execution-profile"
 import { Context, Effect, Layer, LayerMap } from "effect"
 import { Location } from "./location"
+import { BrowserHost } from "./browser/host"
 import { Policy } from "./policy"
 import { Config } from "./config"
 import { PluginV2 } from "./plugin"
@@ -42,7 +44,7 @@ import { SessionTodo } from "./session/todo"
 import { QuestionV2 } from "./question"
 import { ClientMiddlewareService, LLMClient } from "@deepagent-code/llm"
 import { AgentGateway } from "./agent-gateway"
-import { RequestExecutor } from "@deepagent-code/llm/route"
+import { RequestExecutor, type LLMClientService, type LLMClientShape } from "@deepagent-code/llm/route"
 import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SystemContextBuiltIns } from "./system-context/builtins"
@@ -63,6 +65,11 @@ import { FetchHttpClient } from "effect/unstable/http"
 const deepagentEnabledFromEnv = () => process.env.DEEPAGENT_ENABLED !== "false" && process.env.DEEPAGENT_ENABLED !== "0"
 
 export interface LocationRuntimeHostInterface {
+  /** Captured actual host client. RcMap merges caller context on acquisition, so a provided
+   * dependency alone would let an unrelated caller client replace the runner's factory. */
+  readonly client?: LLMClientShape
+  readonly browser?: BrowserHost.Interface
+  readonly work?: WorkExecutionProfile.Installed
   /** Supplies the host-owned query/runtime seams for one cached Location tree. The query-authority
    * store is part of the seam because the host-captured graph facades resolve session envelopes
    * from the store THEY were built with: a tree-private store would make every runner bind
@@ -74,7 +81,8 @@ export interface LocationRuntimeHostInterface {
     | ContextToolRuntime.Service
     | ContextQueryAuthorization.Service
     | ContextQueryAuthorization.Controller
-    | IMExternalDelivery.Service,
+    | IMExternalDelivery.Service
+    | Config.ApplicationLSP,
     never,
     AgentGateway.Runtime
   >
@@ -98,6 +106,7 @@ export const defaultLocationRuntimeHost = Layer.effect(
       layer: () =>
         Layer.mergeAll(
           Layer.succeed(ProductionV2Sources, {}),
+          Layer.succeed(Config.ApplicationLSP, { consumer: null }),
           ContextToolRuntime.unavailableLayer,
           // Bare-core fallback: one process-local authority store per keyed tree, matching the
           // pre-seam behavior where the tree self-provided `ContextQueryAuthorization.defaultLayer`.
@@ -118,6 +127,9 @@ export const locationServiceMapDependencies = <HE, HR, DE, DR, EE, ER, GE, GR>(
   database: Layer.Layer<Database.Service, DE, DR>,
   events: Layer.Layer<EventV2.Service, EE, ER>,
   gateway: Layer.Layer<AgentGateway.Runtime | ClientMiddlewareService, GE, GR>,
+  client: Layer.Layer<LLMClientService, never, ClientMiddlewareService> = LLMClient.managedLayer.pipe(
+    Layer.provide(RequestExecutor.defaultLayer),
+  ),
 ) => {
   const fs = FSUtil.defaultLayer
   const global = Global.defaultLayer
@@ -142,10 +154,7 @@ export const locationServiceMapDependencies = <HE, HR, DE, DR, EE, ER, GE, GR>(
     SessionStore.layer.pipe(Layer.provide(database)),
     PermissionSaved.layer.pipe(Layer.provide(database)),
     RepositoryCache.defaultLayer,
-    Layer.mergeAll(
-      gateway,
-      LLMClient.managedLayer.pipe(Layer.provide(gateway), Layer.provide(RequestExecutor.defaultLayer)),
-    ),
+    Layer.mergeAll(gateway, client.pipe(Layer.provide(gateway))),
     FetchHttpClient.layer,
     ToolOutputStore.defaultCleanupLayer,
     ApplicationTools.layer,
@@ -158,8 +167,24 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
   {
     lookup: (ref: Location.Ref) => {
       const location = Location.layer(ref)
-      const config = Config.locationLayer
+      const config = Layer.unwrap(Effect.gen(function* () {
+        const host = yield* LocationRuntimeHost
+        const inherited = host.work?.configuration ? yield* host.work.configuration(ref).pipe(Effect.orDie) : undefined
+        return inherited ? Config.inheritedLayer(inherited) : Config.locationLayer
+      }))
+      const references = ProjectReference.layer.pipe(Layer.provide(config))
+      const filesystem = Layer.unwrap(Effect.gen(function* () {
+        const { Ripgrep } = yield* Effect.promise(() => import("./filesystem/ripgrep"))
+        return FileSystem.layer.pipe(Layer.provide(Ripgrep.defaultLayer), Layer.provide(references))
+      }))
       const runtimeHost = Layer.unwrap(Effect.map(LocationRuntimeHost, (host) => host.layer(ref)))
+      const work = Layer.unwrap(Effect.map(LocationRuntimeHost, (host) => host.work ? WorkExecutionProfile.servicesLayer(host.work) : Layer.empty))
+      const browser = Layer.unwrap(Effect.map(LocationRuntimeHost, (host) => Layer.succeed(BrowserHost.Current, host.browser)))
+      const client = Layer.unwrap(
+        Effect.map(LocationRuntimeHost, (host) =>
+          host.client ? Layer.succeed(LLMClient.Service, host.client) : Layer.empty,
+        ),
+      )
       // Production System Context stack (design §7.3 L0): the host-local builtins +
       // ambient instructions, the stably-loaded `deepagent/capability-catalog`
       // source (so the boot catalog is part of every V2 session context), and the
@@ -174,13 +199,13 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         location,
         Policy.locationLayer,
         config,
-        ProjectReference.locationLayer,
+        references,
         PluginV2.locationLayer,
         Catalog.locationLayer,
         CommandV2.locationLayer,
         AgentV2.locationLayer,
-        FileSystem.locationLayer,
-        Watcher.locationLayer,
+        filesystem,
+        Watcher.layer.pipe(Layer.provide(config), Layer.provide(Git.defaultLayer)),
         Pty.locationLayer,
         SkillV2.locationLayer,
         systemContext,
@@ -194,7 +219,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
       )
       // Boot plugins receive the canonical Location registration capability. Construct the
       // registry first: placing PluginBoot in `base` would make this provide graph cyclic.
-      const pluginBoot = PluginBoot.locationLayer.pipe(Layer.provide(permissionsAndTools), Layer.provide(base))
+      const pluginBoot = PluginBoot.layer.pipe(Layer.provide(permissionsAndTools), Layer.provide(base))
       // The query-authority store is NOT self-provided here: the runner's session binds must land
       // in the store the host's graph facades resolve from, so it travels through the
       // LocationRuntimeHost seam (provided by `runtimeHost` below).
@@ -240,7 +265,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         model,
         runner,
         builtInTools,
-      ).pipe(Layer.provide(runtimeHost), Layer.fresh)
+      ).pipe(Layer.provideMerge(client), Layer.provide(browser), Layer.provide(runtimeHost), Layer.provideMerge(work), Layer.fresh)
     },
     idleTimeToLive: "60 minutes",
     dependencies: locationServiceMapDependencies(
@@ -254,4 +279,24 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
       }),
     ),
   },
-) {}
+) {
+  static override layerNoDeps = normalizeLocationMap(super.layerNoDeps)
+  static override layer = normalizeLocationMap(super.layer)
+}
+
+function normalizeLocationMap<E, R>(layer: Layer.Layer<LocationServiceMap, E, R>) {
+  return layer.pipe(
+    Layer.flatMap((context) => {
+      const locations = Context.get(context, LocationServiceMap)
+      // Effect hashes object structure: an omitted optional field and an explicit undefined
+      // otherwise create different trees. Copy at entry so caller mutation cannot alter a key.
+      const key = (ref: Location.Ref) => Object.freeze({ directory: ref.directory, workspaceID: ref.workspaceID })
+      return Layer.succeed(LocationServiceMap, {
+        ...locations,
+        get: (ref) => locations.get(key(ref)),
+        contextEffect: (ref) => locations.contextEffect(key(ref)),
+        invalidate: (ref) => locations.invalidate(key(ref)),
+      })
+    }),
+  )
+}

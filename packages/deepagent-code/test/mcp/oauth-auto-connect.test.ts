@@ -1,188 +1,94 @@
-import { afterAll, expect, mock, beforeEach } from "bun:test"
+import { expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { testEffect } from "../lib/effect"
-
-// Release the mock.module registrations below when this file finishes so
-// later files import the real MCP SDK modules.
-afterAll(() => {
-  mock.restore()
-})
-
-// Mock UnauthorizedError to match the SDK's class
-class MockUnauthorizedError extends Error {
-  constructor(message?: string) {
-    super(message ?? "Unauthorized")
-    this.name = "UnauthorizedError"
-  }
-}
-
-// Track what options were passed to each transport constructor
-const transportCalls: Array<{
-  type: "streamable" | "sse"
-  url: string
-  options: { authProvider?: unknown }
-}> = []
-
-// Controls whether the mock transport simulates a 401 that triggers the SDK
-// auth flow (which calls provider.state()) or a simple UnauthorizedError.
-let simulateAuthFlow = true
-let connectSucceedsImmediately = false
-let serverCapabilities: { tools?: object; resources?: object } = { tools: {} }
-let listToolsCalls = 0
-
-// Mock the transport constructors to simulate OAuth auto-auth on 401
-void mock.module("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: class MockStreamableHTTP {
-    authProvider:
-      | {
-          state?: () => Promise<string>
-          redirectToAuthorization?: (url: URL) => Promise<void>
-          saveCodeVerifier?: (v: string) => Promise<void>
-        }
-      | undefined
-    constructor(url: URL, options?: { authProvider?: unknown }) {
-      this.authProvider = options?.authProvider as typeof this.authProvider
-      transportCalls.push({
-        type: "streamable",
-        url: url.toString(),
-        options: options ?? {},
-      })
-    }
-    async start() {
-      if (connectSucceedsImmediately) return
-
-      // Simulate what the real SDK transport does on 401:
-      // It calls auth() which eventually calls provider.state(), then
-      // provider.redirectToAuthorization(), then throws UnauthorizedError.
-      if (simulateAuthFlow && this.authProvider) {
-        // The SDK calls provider.state() to get the OAuth state parameter
-        if (this.authProvider.state) {
-          await this.authProvider.state()
-        }
-        // The SDK calls saveCodeVerifier before redirecting
-        if (this.authProvider.saveCodeVerifier) {
-          await this.authProvider.saveCodeVerifier("test-verifier")
-        }
-        // The SDK calls redirectToAuthorization to redirect the user
-        if (this.authProvider.redirectToAuthorization) {
-          await this.authProvider.redirectToAuthorization(new URL("https://auth.example.com/authorize?state=test"))
-        }
-        throw new MockUnauthorizedError()
-      }
-      throw new MockUnauthorizedError()
-    }
-    async finishAuth(_code: string) {}
-  },
-}))
-
-void mock.module("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: class MockSSE {
-    constructor(url: URL, options?: { authProvider?: unknown }) {
-      transportCalls.push({
-        type: "sse",
-        url: url.toString(),
-        options: options ?? {},
-      })
-    }
-    async start() {
-      throw new Error("Mock SSE transport cannot connect")
-    }
-  },
-}))
-
-// Mock the MCP SDK Client
-void mock.module("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: class MockClient {
-    async connect(transport: { start: () => Promise<void> }) {
-      await transport.start()
-    }
-
-    setNotificationHandler() {}
-
-    getServerCapabilities() {
-      return serverCapabilities
-    }
-
-    async listTools() {
-      listToolsCalls++
-      return { tools: [{ name: "test_tool", inputSchema: { type: "object", properties: {} } }] }
-    }
-
-    async listResources() {
-      return { resources: [{ name: "docs", uri: "docs://readme" }] }
-    }
-
-    async close() {}
-  },
-}))
-
-// Mock UnauthorizedError in the auth module so instanceof checks work
-void mock.module("@modelcontextprotocol/sdk/client/auth.js", () => ({
-  UnauthorizedError: MockUnauthorizedError,
-}))
-
-beforeEach(() => {
-  transportCalls.length = 0
-  simulateAuthFlow = true
-  connectSucceedsImmediately = false
-  serverCapabilities = { tools: {} }
-  listToolsCalls = 0
-})
-
-// Import modules after mocking
-const { MCP } = await import("../../src/mcp/index")
-const { EventV2Bridge } = await import("../../src/event-v2-bridge")
-const { Config } = await import("../../src/config/config")
-const { McpAuth } = await import("../../src/mcp/auth")
-const { SecretStore } = await import("../../src/mcp/secret-store")
-const { McpOAuthProvider } = await import("../../src/mcp/oauth-provider")
-const { FSUtil } = await import("@deepagent-code/core/fs-util")
-const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
+import { oauthHttp } from "../fixture/mcp-oauth-http"
+import { MCP } from "../../src/mcp/index"
+import { McpAuth } from "../../src/mcp/auth"
+import { McpOAuthProvider } from "../../src/mcp/oauth-provider"
+import { Config } from "../../src/config/config"
+import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 
 const mcpTest = testEffect(
-  Layer.mergeAll(
-    MCP.layer.pipe(
-      Layer.provide(McpAuth.defaultLayer),
-      Layer.provide(SecretStore.testLayer()),
-      Layer.provideMerge(EventV2Bridge.defaultLayer),
-      Layer.provide(Config.defaultLayer),
-      Layer.provide(CrossSpawnSpawner.defaultLayer),
-      Layer.provide(FSUtil.defaultLayer),
-    ),
-    McpAuth.defaultLayer,
-  ),
+  Layer.mergeAll(MCP.defaultLayer, McpAuth.defaultLayer, Config.defaultLayer, CrossSpawnSpawner.defaultLayer),
 )
 
-const config = (name: string) => ({
-  mcp: {
-    [name]: {
-      type: "remote" as const,
-      url: "https://example.com/mcp",
-    },
-  },
-})
+mcpTest.instance(
+  "incomplete pre-registered secret configuration fails before HTTP or flow admission",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* oauthHttp
+      const mcp = yield* MCP.Service
+      const result = yield* mcp.add("missing-issuer", {
+        ...f.config,
+        oauth: { ...f.config.oauth, clientSecret: "synthetic-client-secret" },
+      })
+      expect(result.status).toMatchObject({
+        "missing-issuer": { status: "failed", error: expect.stringContaining("oauth.expectedIssuer") },
+      })
+      const failure = yield* mcp.startAuth("missing-issuer").pipe(Effect.flip)
+      expect(failure).toBeInstanceOf(MCP.OAuthFlowError)
+      expect(failure.message).toContain("oauth.expectedIssuer")
+      expect(f.requests).toEqual([])
+      expect(yield* McpAuth.use.get("missing-issuer")).toBeUndefined()
+    }),
+  { config: { mcp: {} } },
+)
 
 mcpTest.instance(
-  "first connect to OAuth server shows needs_auth instead of failed",
+  "a correctly pinned pre-registered secret completes the genuine SDK token exchange",
   () =>
-    MCP.Service.use((mcp) =>
-      Effect.gen(function* () {
-        const result = yield* mcp.add("test-oauth", {
-          type: "remote",
-          url: "https://example.com/mcp",
-        })
+    Effect.gen(function* () {
+      const f = yield* oauthHttp
+      const issuer = new URL(f.config.url).origin
+      const mcp = yield* MCP.Service
+      const result = yield* mcp.add("pinned-secret", {
+        ...f.config,
+        oauth: { ...f.config.oauth, clientSecret: "synthetic-client-secret", expectedIssuer: issuer },
+      })
+      expect(result.status).toMatchObject({ "pinned-secret": { status: "needs_auth" } })
+      const pending = yield* mcp.startAuth("pinned-secret")
+      f.control.open = true
+      expect((yield* mcp.finishAuth("pinned-secret", "synthetic-code", pending.oauthState, issuer)).status).toBe(
+        "connected",
+      )
+      expect(f.requests.filter((request) => request === "POST /token")).toHaveLength(1)
+      expect(yield* McpAuth.use.get("pinned-secret")).toBeUndefined()
+      expect(yield* mcp.getAuthStatus("pinned-secret")).toBe("authenticated")
+      expect(f.requests.filter((request) => request === "POST /register")).toEqual([])
+    }),
+  { config: { mcp: {} } },
+)
 
-        const serverStatus = result.status as Record<string, { status: string; error?: string }>
+mcpTest.instance(
+  "explicit issuer mismatch stops real discovery before DCR, authorization redirect or tokens",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* oauthHttp
+      const mcp = yield* MCP.Service
+      const result = yield* mcp.add("wrong-issuer", {
+        ...f.config,
+        oauth: { ...f.config.oauth, expectedIssuer: "https://other-issuer.invalid" },
+      })
+      expect(result.status).toMatchObject({ "wrong-issuer": { status: "failed" } })
+      expect(f.requests.some((request) => request.includes("well-known"))).toBe(true)
+      expect(f.requests.filter((request) => /\/(register|token|authorize)$/.test(request))).toEqual([])
+      expect((yield* McpAuth.use.get("wrong-issuer"))?.clientInfo).toBeUndefined()
+      expect((yield* McpAuth.use.get("wrong-issuer"))?.tokens).toBeUndefined()
+    }),
+  { config: { mcp: {} } },
+)
 
-        // The server should be detected as needing auth, NOT as failed.
-        // Before the fix, provider.state() would throw a plain Error
-        // ("No OAuth state saved for MCP server: test-oauth") which was
-        // not caught as UnauthorizedError, causing status to be "failed".
-        expect(serverStatus["test-oauth"]).toBeDefined()
-        expect(serverStatus["test-oauth"].status).toBe("needs_auth")
-      }),
-    ),
-  { config: config("test-oauth") },
+mcpTest.instance(
+  "first real SDK connect persists discovery and shows needs_auth",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* oauthHttp
+      const mcp = yield* MCP.Service
+      const result = yield* mcp.add("test-oauth", f.config)
+      expect(result.status).toMatchObject({ "test-oauth": { status: "needs_auth" } })
+      expect((yield* mcp.status())["test-oauth"]?.status).toBe("needs_auth")
+    }),
+  { config: { mcp: {} } },
 )
 
 mcpTest.instance("state() generates a new state when none is saved", () =>
@@ -232,51 +138,36 @@ mcpTest.instance("state() returns existing state when one is saved", () =>
 )
 
 mcpTest.instance(
-  "authenticate() stores a connected client when auth completes without redirect",
+  "authenticate() stores an actual connected client without redirect",
   () =>
-    MCP.Service.use((mcp) =>
-      Effect.gen(function* () {
-        const added = yield* mcp.add("test-oauth-connect", {
-          type: "remote",
-          url: "https://example.com/mcp",
-        })
-        const before = added.status as Record<string, { status: string; error?: string }>
-        expect(before["test-oauth-connect"]?.status).toBe("needs_auth")
-
-        simulateAuthFlow = false
-        connectSucceedsImmediately = true
-
-        const result = yield* mcp.authenticate("test-oauth-connect")
-        expect(result.status).toBe("connected")
-
-        const after = yield* mcp.status()
-        expect(after["test-oauth-connect"]?.status).toBe("connected")
-      }),
-    ),
-  { config: config("test-oauth-connect") },
+    Effect.gen(function* () {
+      const f = yield* oauthHttp
+      const mcp = yield* MCP.Service
+      expect((yield* mcp.add("test-oauth-connect", f.config)).status).toMatchObject({
+        "test-oauth-connect": { status: "needs_auth" },
+      })
+      f.control.open = true
+      expect((yield* mcp.authenticate("test-oauth-connect")).status).toBe("connected")
+      expect((yield* mcp.status())["test-oauth-connect"]?.status).toBe("connected")
+      expect(f.methods).toContain("initialize")
+    }),
+  { config: { mcp: {} } },
 )
 
 mcpTest.instance(
-  "authenticate() connects a resource-only server without listing tools",
+  "authenticate() connects an actual resource-only server without listing tools",
   () =>
-    MCP.Service.use((mcp) =>
-      Effect.gen(function* () {
-        const added = yield* mcp.add("test-oauth-resources", {
-          type: "remote",
-          url: "https://example.com/mcp",
-        })
-        const before = added.status as Record<string, { status: string }>
-        expect(before["test-oauth-resources"]?.status).toBe("needs_auth")
-
-        simulateAuthFlow = false
-        connectSucceedsImmediately = true
-        serverCapabilities = { resources: {} }
-
-        const result = yield* mcp.authenticate("test-oauth-resources")
-        expect(result.status).toBe("connected")
-        expect(listToolsCalls).toBe(0)
-        expect(Object.keys(yield* mcp.resources())).toEqual(["test-oauth-resources:docs"])
-      }),
-    ),
-  { config: config("test-oauth-resources") },
+    Effect.gen(function* () {
+      const f = yield* oauthHttp
+      const mcp = yield* MCP.Service
+      expect((yield* mcp.add("test-oauth-resources", f.config)).status).toMatchObject({
+        "test-oauth-resources": { status: "needs_auth" },
+      })
+      f.control.open = true
+      f.control.resourcesOnly = true
+      expect((yield* mcp.authenticate("test-oauth-resources")).status).toBe("connected")
+      expect(f.methods.filter((method) => method === "tools/list")).toHaveLength(0)
+      expect(Object.keys(yield* mcp.resources())).toEqual(["test-oauth-resources:docs"])
+    }),
+  { config: { mcp: {} } },
 )

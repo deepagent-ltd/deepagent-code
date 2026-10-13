@@ -1,14 +1,5 @@
 # Session bundle share host
 
-**2.0.2 release status:** public share creation, uploads, downloads and link
-imports are deferred to 2.0.3. The server and standalone host are closed by
-default even when a share URL and upload token are configured. Local ZIP export
-and read-only import remain available. Existing links may still be revoked.
-`DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING=1` is an explicit test/future-release
-opt-in and must not be set in a 2.0.2 deployment. The installation and public
-route instructions below are staging notes for a later release; do not execute
-them as part of 2.0.2 publication.
-
 The share host is a separate Bun executable deployed behind HTTPS. It accepts
 a session ZIP from the DeepAgent Code server, validates and re-sanitizes it,
 and issues a seven-day download link. The download secret is held in the URL

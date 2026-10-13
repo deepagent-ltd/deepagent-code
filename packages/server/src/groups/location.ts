@@ -1,6 +1,7 @@
 import { Location } from "@deepagent-code/core/location"
 import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { FileSystem } from "@deepagent-code/core/filesystem"
+import { FSUtil } from "@deepagent-code/core/fs-util"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { Effect, Layer, Schema } from "effect"
@@ -59,7 +60,7 @@ function ref(request: HttpServerRequest.HttpServerRequest): Location.Ref {
   const workspaceID = query.get("location[workspace]") || request.headers["x-deepagent-code-workspace"]
   return {
     directory: AbsolutePath.make(
-      query.get("location[directory]") || request.headers["x-deepagent-code-directory"] || process.cwd(),
+      FSUtil.resolve(query.get("location[directory]") || request.headers["x-deepagent-code-directory"] || process.cwd()),
     ),
     workspaceID: workspaceID ? WorkspaceV2.ID.make(workspaceID) : undefined,
   }

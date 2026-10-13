@@ -18,6 +18,7 @@ import type { Dimension, Requirement, Verdict } from "./types"
 import { DIMENSIONS } from "./types"
 import { AUTHORITY } from "./authority"
 import { DELEGATION_RULE_PACKS } from "./delegation"
+import { V203_HTTP_RULE_PACKS } from "./v203-http"
 
 export type VerdictRule = {
   readonly verdict: Exclude<Verdict, "unclassified">
@@ -190,6 +191,7 @@ export const RULE_PACKS: readonly RulePack[] = [
   // legacy/read_only providers below, and so build.ts pass-2 can resolve the inherited verdict.
   // ===========================================================================
   ...DELEGATION_RULE_PACKS,
+  ...V203_HTTP_RULE_PACKS,
 
   // ===========================================================================
   // NEW-P3-F: genuine reader/loader/schema/query/event/recovery entries whose OWN module IS their
@@ -828,54 +830,49 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
 
   // ---- im ----
-  // v2f-d IM durable-only migration: ServerAgentExecutor (fresh V1 session per turn through
-  // SessionPrompt.promptOrSteer) is deleted. createMessage now performs exactly ONE durable
-  // SessionV2 admission per @mention in-request (IMAgentExecution.admitMention on the
-  // SessionV2.Service captured by the handler group); the terminal reply returns through the
-  // im_reply_outbox daemon, never a fire-and-forget publish. adapter: IM wire-protocol
-  // translation over the durable V2 admission — the same adapter family the HTTP prompt
-  // handlers form (the app layer still translates the wire shape).
+  // Ordinary IM message writes carry no Session authority. Only the explicit
+  // private /dac endpoint adapts Session admission; parsed mentions stay data.
   {
     match: (id) => id === "http.instance.im.createMessage",
-    rules: all7(adapter([
+    rules: all7(readOnly([
       { kind: "productionProfile" },
-      body("IMAgentExecution.admitMention"),
-      { kind: "reach", pathSuffix: "packages/deepagent-code/src/im/im-agent-execution.ts" },
-      V2_SESSION_CORE,
-      V2_EXEC_LOCAL,
+      body("readRequest"),
+      body("broadcaster.broadcast"),
+      { kind: "reach", pathSuffix: "packages/core/src/im/repository.ts" },
+      notBody("IMAgentExecution.reconcileMentions"),
+      notBody("dac.submit"),
+      notBody("sessions.prompt"),
+      notBody("SessionV2.prompt"),
+      notBody("SessionExecution.wake"),
+      notBody("promptSvc.promptOrSteer"),
     ])),
   },
-  // v2f-d: the durable ADMISSION half of the IM migration (src/im/im-agent-execution.ts). One
-  // SessionV2 admission per mention with deterministic ids — the session id derived from
-  // (group, agent) so reuse ADOPTS the stable conversation session, the prompt message id from
-  // (message, agent) so a duplicate delivery reconciles as an exact retry — admitted as the
-  // durable session_input row itself; execution is decoupled (advisory wake under the runner).
-  // v2 on admission/execution: verified SessionV2.prompt admission chain plus the core session
-  // and local-execution authorities in the closure, and NO legacy prompt hop in the module's
-  // import closure (noReach). The remaining dimensions are read_only with the module's own
-  // admission surface as the genuine read fact.
+  // The explicit owner bridge uses the original Session writer and execution
+  // coordinator. It has no model loop, tool registry, or legacy prompt loop.
   {
-    match: (id) => id === "im.agent-execution",
+    match: (id) => id === "im.dac-session",
     rules: withReadOnlyRest(
       {
-        admission_owner: v2([
-          { kind: "reach", pathSuffix: "packages/deepagent-code/src/im/im-agent-execution.ts" },
+        admission_owner: adapter([
+          { kind: "reach", pathSuffix: "packages/core/src/im/dac-session.ts" },
           { kind: "reach", pathSuffix: AUTHORITY.V2_SESSION_INPUT },
-          call("SessionV2.ID.make", "packages/deepagent-code/src/im/im-agent-execution.ts"),
-          call("SessionMessage.ID.make", "packages/deepagent-code/src/im/im-agent-execution.ts"),
-          call("v2Session.prompt", "packages/deepagent-code/src/im/im-agent-execution.ts"),
+          call("sessions.create", "packages/core/src/im/dac-session.ts"),
+          call("sessions.requireWritable", "packages/core/src/im/dac-session.ts"),
+          call("sessions.prompt", "packages/core/src/im/dac-session.ts"),
           noReachPath(AUTHORITY.PROMPT_SURFACE),
         ]),
-        execution_owner: v2([
-          { kind: "reach", pathSuffix: "packages/deepagent-code/src/im/im-agent-execution.ts" },
+        execution_owner: adapter([
+          { kind: "reach", pathSuffix: "packages/core/src/im/dac-session.ts" },
           V2_SESSION_CORE,
           V2_EXEC_LOCAL,
-          call("v2Session.prompt", "packages/deepagent-code/src/im/im-agent-execution.ts"),
+          call("sessions.prompt", "packages/core/src/im/dac-session.ts"),
+          notBody("SessionRunner.Service"),
+          notBody("llm.stream"),
           noReachPath(AUTHORITY.PROMPT_SURFACE),
         ]),
       },
       [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
-      "packages/deepagent-code/src/im/im-agent-execution.ts",
+      "packages/core/src/im/dac-session.ts",
     ),
   },
   // v2f-d: the durable REPLY half (src/im/im-reply-outbox.ts). The terminal assistant reply of a
@@ -898,7 +895,8 @@ export const RULE_PACKS: readonly RulePack[] = [
           call("events.listen", "packages/deepagent-code/src/im/im-reply-outbox.ts"),
           call("claimDueReply", "packages/deepagent-code/src/im/im-reply-outbox.ts"),
           call("markDelivered", "packages/deepagent-code/src/im/im-reply-outbox.ts"),
-          call("db.insert", "packages/deepagent-code/src/im/im-reply-outbox.ts"),
+          call("tx.insert", "packages/deepagent-code/src/im/im-reply-outbox.ts"),
+          call("ReplyBodyRetirement.initialize", "packages/deepagent-code/src/im/im-reply-outbox.ts"),
         ]),
       },
       [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
@@ -1190,6 +1188,7 @@ export const RULE_PACKS: readonly RulePack[] = [
     match: (id) =>
       id === "composition.app-runtime-layers" ||
       id === "composition.dacode-cli-entry" ||
+      id === "composition.dacode-node-server" ||
       id === "composition.instance-httpapi-stack",
     rules: v2All7([
       { kind: "productionProfile" },
@@ -1263,14 +1262,34 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id === "task.goal-manager" ||
-      id === "task.goal-loop-wiring" ||
-      id === "panel.consult" ||
-      id === "panel.panelist-runner",
+      id === "task.goal-loop-wiring",
     rules: all7(adapter([
       { kind: "productionProfile" },
       V2_SESSION_CORE,
       V2_EXEC_LOCAL,
       call("makeTaskSubagentRunner", "packages/deepagent-code/src/session/goal-loop-wiring.ts"),
+    ])),
+  },
+  {
+    // Panel transforms prompts/opinions through the caller's injected turn port. The actual
+    // Session owner belongs to that caller; these pure adapters never construct a runner.
+    match: (id) => id === "panel.consult",
+    rules: all7(adapter([
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/agent/schema/panel.ts" },
+      { kind: "bodyChain", chain: "runPanel" },
+      notBody("SessionV2.prompt"), notBody("SessionExecution.wake"),
+      notBody("SessionRunner.Service"), notBody("SessionRunCoordinator.Service"),
+      notBody("llm.stream"),
+    ])),
+  },
+  {
+    match: (id) => id === "panel.panelist-runner",
+    rules: all7(adapter([
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/agent/schema/orchestration.ts" },
+      { kind: "bodyChain", chain: "runTurn" }, { kind: "bodyChain", chain: "ReviewResult.make" },
+      notBody("SessionV2.prompt"), notBody("SessionExecution.wake"),
+      notBody("SessionRunner.Service"), notBody("SessionRunCoordinator.Service"),
+      notBody("llm.stream"),
     ])),
   },
   {
@@ -1341,12 +1360,21 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id === "event.goal-tick-consumer" ||
-      id === "event.panel-convene-consumer" ||
-      id === "event.wiki-event-driven-archiver",
+      id === "event.panel-convene-consumer",
     rules: withReadOnlyRest(
       { event_producer_consumer: v2([V2_EVENT_BUS]) },
       EVENT_CONSUMER_READONLY,
       "packages/core/src/event.ts",
+    ),
+  },
+  {
+    // Wiki completion consumes the durable bus and projects the original session archive.
+    // Its reader is the archive module, not the unrelated Session EventV2 facade.
+    match: (id) => id === "event.wiki-event-driven-archiver",
+    rules: withReadOnlyRest(
+      { event_producer_consumer: v2([V2_EVENT_BUS]) },
+      EVENT_CONSUMER_READONLY,
+      "packages/deepagent-code/src/wiki/session-archive.ts",
     ),
   },
   {

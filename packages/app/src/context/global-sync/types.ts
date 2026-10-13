@@ -1,6 +1,6 @@
 import type {
   Agent,
-  Command,
+  CommandRead,
   Config,
   LspStatus,
   McpStatus,
@@ -97,12 +97,15 @@ export type SessionGoal = {
   ledger: { ticks: number; tokens: number; cost: number; wallclockMs: number }
   stallCount: number
   gaps: string[]
+  /** Only GET status / acknowledged controls carry lifecycle authority; old SSE is a hint. */
+  control?: import("@deepagent-code/core/deepagent/goal-client").GoalClient.Snapshot
+  eventHint?: number
 }
 
 export type State = {
   status: "loading" | "partial" | "complete"
   agent: Agent[]
-  command: Command[]
+  command: CommandRead[]
   project: string
   projectMeta: ProjectMeta | undefined
   icon: string | undefined

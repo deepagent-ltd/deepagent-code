@@ -87,6 +87,7 @@ export const layer = Layer.effectDiscard(
     const mutation = yield* LocationMutation.Service
     const files = yield* FileMutation.Service
     const fs = yield* FSUtil.Service
+    const storage = yield* SessionState.CurrentStorage
     const permission = yield* PermissionV2.Service
 
     yield* tools
@@ -193,7 +194,7 @@ export const layer = Layer.effectDiscard(
                 // leaf's freshness precondition sees this session as up to date on the file.
                 const after = yield* fs.stat(target.canonical).pipe(Effect.orElseSucceed(() => undefined))
                 if (after !== undefined)
-                  yield* Effect.sync(() => {
+                  yield* Effect.sync(() => storage.run(() => {
                     SessionState.observeFile(context.sessionID, target.canonical, {
                       mtimeMs: after.mtime.pipe(
                         Option.map((date) => date.getTime()),
@@ -201,7 +202,7 @@ export const layer = Layer.effectDiscard(
                       ),
                       size: Number(after.size),
                     })
-                  })
+                  }))
                 return { ...result, replacements: outcome.replacements } satisfies Output
               })
             },

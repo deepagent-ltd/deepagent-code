@@ -3,10 +3,7 @@ import path from "node:path"
 import { Effect } from "effect"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Database } from "@deepagent-code/core/database/database"
-import {
-  DurableKnowledgeStore,
-  projectIdForWorkspace,
-} from "@deepagent-code/core/deepagent/durable-knowledge-store"
+import { DurableKnowledgeStore, projectIdForWorkspace } from "@deepagent-code/core/deepagent/durable-knowledge-store"
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -21,6 +18,10 @@ import { tmpRoot } from "./fixture/tmpdir"
 // mocks) — a proposal stages as a review candidate that retrieval cannot see, the sensitivity scrub
 // and the per-session budget fail closed, the store's dedup-merge folds repeats, and both scopes
 // resolve (global direct; project through the session row's directory).
+
+import { runQuota } from "./fixture/tool-quota"
+
+const run = <A, E>(effect: Effect.Effect<A, E, Database.Service>) => runQuota(effect, SESSION)
 
 const SESSION = SessionV2.ID.make("ses_knowledge_propose")
 const AGENT = AgentV2.ID.make("build")
@@ -48,7 +49,7 @@ beforeEach(() => KnowledgeProposeTool.resetKnowledgeProposeState())
 
 describe("knowledge_propose (WS7)", () => {
   test("stages a global-scope proposal as a review candidate that retrieval cannot see", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const store = new DurableKnowledgeStore(path.join(tmpRoot(), "knowledge"))
         const tool = KnowledgeProposeTool.makeKnowledgeProposeTool({ globalStore: () => store })
@@ -88,7 +89,7 @@ describe("knowledge_propose (WS7)", () => {
     ))
 
   test("stages a project-scope proposal into the project-shared store resolved from the session row", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const directory = tmpRoot()
         const store = new DurableKnowledgeStore(path.join(tmpRoot(), "knowledge"))
@@ -110,6 +111,7 @@ describe("knowledge_propose (WS7)", () => {
             time_created: 1,
             time_updated: 1,
           })
+          .onConflictDoNothing()
           .run()
           .pipe(Effect.orDie)
         yield* database.db
@@ -122,6 +124,7 @@ describe("knowledge_propose (WS7)", () => {
             title: "knowledge propose",
             version: "test",
           })
+          .onConflictDoUpdate({ target: SessionTable.id, set: { directory } })
           .run()
           .pipe(Effect.orDie)
 
@@ -146,11 +149,11 @@ describe("knowledge_propose (WS7)", () => {
         expect(doc?.scope).toBe(`durable:project:${projectIdForWorkspace(directory)}`)
         // knowledge → medium risk.
         expect(doc?.tags).toContain("risk:medium")
-      }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+      }),
     ))
 
   test("merges a repeat proposal into the existing candidate instead of flooding the queue", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const store = new DurableKnowledgeStore(path.join(tmpRoot(), "knowledge"))
         const tool = KnowledgeProposeTool.makeKnowledgeProposeTool({ globalStore: () => store })
@@ -174,7 +177,7 @@ describe("knowledge_propose (WS7)", () => {
     ))
 
   test("rejects credential-shaped content before anything stages", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const store = new DurableKnowledgeStore(path.join(tmpRoot(), "knowledge"))
         const tool = KnowledgeProposeTool.makeKnowledgeProposeTool({ globalStore: () => store })
@@ -195,7 +198,7 @@ describe("knowledge_propose (WS7)", () => {
     ))
 
   test("stages at most 10 proposals per session, then fails closed", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const store = new DurableKnowledgeStore(path.join(tmpRoot(), "knowledge"))
         const tool = KnowledgeProposeTool.makeKnowledgeProposeTool({ globalStore: () => store })
@@ -234,7 +237,7 @@ describe("knowledge_propose (WS7)", () => {
     ))
 
   test("fails typed when the durable knowledge base is not configured", () =>
-    Effect.runPromise(
+    run(
       Effect.gen(function* () {
         const tool = KnowledgeProposeTool.makeKnowledgeProposeTool({ globalStore: () => null })
         const failure = yield* settle(

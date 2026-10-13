@@ -10,7 +10,7 @@ import type { Binding } from "@opentui/keymap"
 import { useTheme, selectedForeground } from "../context/theme"
 import { useTuiI18n } from "../context/i18n"
 import { entries, filter, flatMap, groupBy, pipe } from "remeda"
-import { batch, createEffect, createMemo, createSignal, For, Show, type JSX, on } from "solid-js"
+import { batch, children, createEffect, createMemo, createSignal, For, Show, type JSX, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTerminalDimensions } from "@opentui/solid"
 import * as fuzzysort from "fuzzysort"
@@ -82,6 +82,9 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   type FooterHint = NonNullable<DialogSelectProps<T>["footerHints"]>[number]
   type VisibleAction = (Action & { label: string }) | FooterHint
 
+  // A JSX prop getter constructs real renderables. Observe and mount the same footer,
+  // so its original destroySelf removes ScrollBox subscriptions on replacement.
+  const footer = children(() => props.footer)
   const dialog = useDialog()
   const i18n = useTuiI18n()
   const { theme } = useTheme()
@@ -117,7 +120,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   const actionBindings = useKeymapSelector((keymap) =>
     keymap.getCommandBindings({
       visibility: "registered",
-      commands: shownActions().map((item) => item.command),
+      commands: [...shownActions().map((item) => item.command), "dialog.select.submit"],
     }),
   )
 
@@ -133,21 +136,10 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   })
   const visibleActions = createMemo(() => [
     ...shownActions()
-      .map((item) => ({ ...item, label: actionLabels().get(item.command) ?? "" }))
-      .filter((item) => item.label),
+      .map((item) => ({ ...item, label: actionLabels().get(item.command) ??
+        ["tab", formatKeyBindings(actionBindings().get("dialog.select.submit"), tuiConfig)].filter(Boolean).join("/") })),
     ...(props.footerHints ?? []),
   ])
-  const actionItems = createMemo(() =>
-    visibleActions()
-      .filter(isActionItem)
-      .filter((item) => !isActionDisabled(item)),
-  )
-
-  createEffect(() => {
-    const index = focusedAction()
-    if (index !== undefined && index >= actionItems().length) setFocusedAction(undefined)
-  })
-
   const filtered = createMemo(() => {
     if (props.skipFilter || props.renderFilter === false) return props.options.filter((x) => x.disabled !== true)
     const needle = store.filter.toLowerCase()
@@ -210,6 +202,16 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   const height = createMemo(() => Math.min(rows(), Math.floor(dimensions().height / 2) - 6))
 
   const selected = createMemo(() => flat()[store.selected])
+
+  const actionItems = createMemo(() =>
+    visibleActions()
+      .filter(isActionItem)
+      .filter((item) => !isActionDisabled(item)),
+  )
+  createEffect(() => {
+    const index = focusedAction()
+    if (index !== undefined && index >= actionItems().length) setFocusedAction(undefined)
+  })
 
   createEffect(
     on([() => store.filter, () => props.current], ([filter, current]) => {
@@ -404,6 +406,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   })
 
   let scroll: ScrollBoxRenderable | undefined
+  onCleanup(() => { if (scroll && !scroll.isDestroyed) scroll.destroyRecursively() })
   const ref: DialogSelectRef<T> = {
     get filter() {
       return store.filter
@@ -637,13 +640,13 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           </scrollbox>
         </Show>
       </box>
-      <Show when={props.footer || visibleActions().length} fallback={<box flexShrink={0} />}>
-        <box paddingRight={2} paddingLeft={4} flexDirection="row" justifyContent="space-between" flexShrink={0}>
-          <box flexDirection="row" gap={2}>
-            {props.footer}
+      <Show when={footer() || visibleActions().length} fallback={<box flexShrink={0} />}>
+        <box paddingRight={2} paddingLeft={4} flexDirection="row" justifyContent="space-between" flexShrink={0} flexWrap="wrap">
+          <box flexDirection="row" gap={2} flexShrink={1} flexWrap="wrap">
+            {footer()}
             <For each={left()}>{(item) => <FooterAction item={item} />}</For>
           </box>
-          <box flexDirection="row" gap={2}>
+          <box flexDirection="row" gap={2} flexShrink={1} flexWrap="wrap">
             <For each={right()}>{(item) => <FooterAction item={item} />}</For>
           </box>
         </box>

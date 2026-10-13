@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/solid-query"
 import { useLanguage } from "@/context/language"
 import { useSync } from "@/context/sync"
 import { showToast } from "@/utils/toast"
+import { McpRecoveryRequiredError } from "./global-sync/mcp"
 
 const handleMcpError = (title: string) => (error: unknown) =>
   showToast({
@@ -17,6 +18,25 @@ export function useMcpToggle() {
 
   return useMutation(() => ({
     mutationFn: sync.mcp.toggle,
+    onError: (error) => {
+      if (error instanceof McpRecoveryRequiredError) {
+        showToast({
+          variant: "error",
+          title: language.t("common.requestFailed"),
+          description: language.t("mcp.connection.recoveryRequired"),
+        })
+        return
+      }
+      handleMcpError(language.t("common.requestFailed"))(error)
+    },
+  }))
+}
+
+export function useMcpRefresh() {
+  const sync = useSync()
+  const language = useLanguage()
+  return useMutation(() => ({
+    mutationFn: sync.mcp.refresh,
     onError: handleMcpError(language.t("common.requestFailed")),
   }))
 }

@@ -1,7 +1,7 @@
 import { projectLayer } from "./fixture/project-layer"
 import { afterAll, describe, expect } from "bun:test"
 import { and, count, eq } from "drizzle-orm"
-import { Effect, Exit, Layer } from "effect"
+import { Context, Effect, Exit, Layer } from "effect"
 import fs from "fs/promises"
 import { realpathSync } from "node:fs"
 import path from "path"
@@ -748,6 +748,36 @@ describe("event subtask TaskWorkspace receipts", () => {
       expect(worktreePaths(repo)).not.toContain(next.directory)
     }),
   )
+
+  for (const outcome of ["unknown", "foreign"] as const) {
+    it.effect(`private event parent ${outcome} refuses before fallback mkdir and durable admission`, () =>
+      Effect.gen(function* () {
+        const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), `event-parent-${outcome}`)))
+        const { db } = yield* services
+        const attempted: string[] = []
+        const port: Context.Service.Shape<typeof TaskWorkspace.EventGit> = {
+          run: (directory, args) => Effect.sync(() => {
+            const actual = gitIn(directory, [...args])
+            return { outcome: "known" as const, exitCode: actual.exitCode, stdout: actual.stdout.toString(), stderr: actual.stderr.toString() }
+          }),
+          prepareParent: (_repositoryRoot, parent) => Effect.sync(() => {
+            attempted.push(parent)
+            return { outcome: outcome === "unknown" ? "unknown" as const : "known" as const,
+              directory: outcome === "unknown" ? "" : path.join(parent, "foreign") }
+          }),
+          materialize: () => Effect.die(new Error("PARENT_REFUSAL_MUST_NOT_MATERIALIZE")),
+          settle: () => Effect.die(new Error("PARENT_REFUSAL_MUST_NOT_SETTLE")),
+        }
+        const prepared = yield* TaskWorkspace.prepareEvent(db, { eventID: `evt_parent_${outcome}`, taskID: "write", generation: 0,
+          parentDirectory: repo }).pipe(Effect.provideService(TaskWorkspace.EventGit, port), Effect.exit)
+        expect(prepared._tag).toBe("Failure")
+        expect(attempted).toHaveLength(1)
+        expect(yield* Effect.promise(() => fs.access(attempted[0]!).then(() => true, () => false))).toBe(false)
+        expect(yield* db.select().from(EventTaskWorkspaceTable).all()).toHaveLength(0)
+        expect(worktreePaths(repo)).toEqual([repo])
+      }),
+    )
+  }
 })
 
 const allowPermission = Layer.succeed(

@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src", "test/browser/fixture/native-client-window-child.ts"]
+}

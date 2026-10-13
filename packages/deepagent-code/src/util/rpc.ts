@@ -11,6 +11,7 @@ type ClientOptions = {
   timeoutMs?: number
   maxPending?: number
   maxListeners?: number
+  requireReady?: boolean
 }
 
 const REQUEST_TIMEOUT_MS = 30_000
@@ -50,6 +51,7 @@ export function listen(rpc: Definition) {
       postMessage(JSON.stringify({ type: "rpc.result", error: message(error), id: parsed.id }))
     }
   }
+  postMessage(JSON.stringify({ type: "rpc.ready" }))
 }
 
 export function emit(event: string, data: unknown) {
@@ -73,9 +75,22 @@ export function client<T extends Definition>(target: Endpoint, options: ClientOp
   let listenerCount = 0
   let id = 0
   let closed = false
+  let ready = !options.requireReady
+  const readiness = Promise.withResolvers<void>()
+  if (ready) readiness.resolve()
+  const readyTimer = ready
+    ? undefined
+    : setTimeout(() => close(new Error(`RPC worker ready timed out after ${timeoutMs}ms`)), timeoutMs)
+  readyTimer?.unref?.()
 
   const handle = (event: MessageEvent<unknown>) => {
     const parsed = decode(event.data)
+    if (parsed?.type === "rpc.ready" && !closed) {
+      ready = true
+      clearTimeout(readyTimer)
+      readiness.resolve()
+      return
+    }
     if (parsed?.type === "rpc.result" && typeof parsed.id === "number") {
       const entry = pending.get(parsed.id)
       if (!entry) return
@@ -98,6 +113,8 @@ export function client<T extends Definition>(target: Endpoint, options: ClientOp
   const close = (error: Error = new Error("RPC client closed")) => {
     if (closed) return
     closed = true
+    clearTimeout(readyTimer)
+    readiness.reject(error)
     if (target.onmessage === handle) target.onmessage = previous
     for (const entry of pending.values()) {
       clearTimeout(entry.timer)
@@ -109,8 +126,10 @@ export function client<T extends Definition>(target: Endpoint, options: ClientOp
   }
 
   return {
+    ready: readiness.promise,
     call<Method extends keyof T>(method: Method, input: Parameters<T[Method]>[0]): Promise<Awaited<ReturnType<T[Method]>>> {
       if (closed) return Promise.reject(new Error("RPC client closed"))
+      if (!ready) return Promise.reject(new Error("RPC worker is not ready"))
       if (pending.size >= maxPending) return Promise.reject(new Error(`RPC pending request limit exceeded (${maxPending})`))
 
       const requestId = id++
