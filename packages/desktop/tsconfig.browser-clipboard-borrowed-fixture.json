@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.browser-public-fixture.json",
+  "compilerOptions": { "types": ["bun", "node"] },
+  "include": [
+    "src/main/fixture/managed-browser-clipboard-borrowed.ts",
+    "src/main/managed-browser-clipboard-borrowed.test.ts",
+    "../deepagent-code/src/audio.d.ts"
+  ]
+}

@@ -56,19 +56,20 @@ export const layer = Layer.effectDiscard(
       const paths = Array.dedupe([FSUtil.resolve(join(global.config, "AGENTS.md")), ...discovered])
       const files = yield* Effect.forEach(
         paths,
-        (path) =>
-          fs
-            .readFileStringSafe(path)
-            .pipe(
-              Effect.map((content) =>
-                content === undefined ? undefined : new File({ path: AbsolutePath.make(path), content }),
-              ),
-            ),
+        Effect.fn(function* (path) {
+          const info = yield* fs
+            .stat(path)
+            .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)))
+          // Skip non-files, but preserve unavailable context when a discovered file disappears.
+          if (info !== undefined && info.type !== "File") return null
+          const content = yield* fs.readFileStringSafe(path)
+          return content === undefined ? undefined : new File({ path: AbsolutePath.make(path), content })
+        }),
         { concurrency: 8 },
       )
       if (files.some((file, index) => file === undefined && discovered.has(paths[index])))
         return SystemContext.unavailable
-      return files.filter((file): file is File => file !== undefined)
+      return files.filter((file): file is File => file !== undefined && file !== null)
     })
 
     yield* registry.register({

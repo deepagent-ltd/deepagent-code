@@ -114,6 +114,12 @@ export function RecoveryDock(props: {
     const sessionState = lifecycle?.snapshot().sessions.get(props.sessionId)
     return sessionState ? executionStatusOf(sessionState) : undefined
   }
+  const executionFailure = () => {
+    const current = executionStatus()
+    const last = lifecycle?.snapshot().sessions.get(props.sessionId)?.lastExecution
+    if (current?.kind !== "terminal" || current.state !== "failed" || last?.number !== current.number) return
+    return executionFailureKey(last.error)
+  }
   const show = () =>
     pending().length > 0 ||
     executionStatus() !== undefined ||
@@ -128,6 +134,14 @@ export function RecoveryDock(props: {
         <Show when={executionStatus() !== undefined}>
           <div class="rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-12-regular text-text-weak">
             {executionLabel(language, executionStatus()!)}
+            <Show when={executionFailure()}>
+              {(reason) => (
+                <div role="alert" class="mt-1 text-text-critical">
+                  <p>{language.t(reason())}</p>
+                  <p class="mt-1 text-text-weak">{language.t("recovery.execution.failureGuidance")}</p>
+                </div>
+              )}
+            </Show>
           </div>
         </Show>
         <Show when={state().loadStatus === "error"}>
@@ -315,4 +329,18 @@ function executionLabel(language: ReturnType<typeof useLanguage>, status: Execut
   if (status.state === "succeeded") return language.t("recovery.execution.succeeded", { number: status.number })
   if (status.state === "interrupted") return language.t("recovery.execution.interrupted", { number: status.number })
   return language.t("recovery.execution.failed", { number: status.number })
+}
+
+// Failed execution events can carry arbitrary provider/tool errors. Only these
+// original authority failures are safe to show without exposing their payload.
+function executionFailureKey(error: unknown) {
+  if (typeof error !== "object" || error === null || !("type" in error) || error.type !== "unknown" || !("message" in error))
+    return "recovery.execution.failureUnknown" as const
+  if (error.message === "Current installed Work source, route or native count authority is unavailable")
+    return "recovery.execution.failureAuthority" as const
+  if (error.message === "Bound work requires its restricted execution profile; ordinary Session execution is unavailable")
+    return "recovery.execution.failureProfile" as const
+  if (error.message === "Current Work placement authority is unavailable")
+    return "recovery.execution.failurePlacement" as const
+  return "recovery.execution.failureUnknown" as const
 }

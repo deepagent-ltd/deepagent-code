@@ -15,6 +15,7 @@ import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
+import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionMessageTable, SessionInputTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { V2StructuredOutputEvidenceTable } from "@deepagent-code/core/session/runner/v2-structured-output-evidence.sql"
@@ -46,7 +47,7 @@ afterAll(() => {
 
 // A test-set resume hook lets one case fabricate the child's final assistant turn inside the
 // executor drain; everything else keeps the no-op drain.
-let resumeHook: ((sessionID: SessionSchema.ID) => Effect.Effect<void>) | undefined
+let resumeHook: ((sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRunner.RunError>) | undefined
 afterEach(() => {
   resumeHook = undefined
 })
@@ -419,6 +420,134 @@ describe("task tool bounded result injection (WS4b-S3)", () => {
       expect(output.text).toBe("short answer")
     }),
   )
+})
+
+describe("UP-03 final assistant text", () => {
+  const cases = [
+    {
+      name: "multiple text blocks",
+      texts: ["first block", "", "   ", "second block"],
+      expected: "first block\n\nsecond block",
+      outcome: "completed",
+    },
+    { name: "a reasoning-only final assistant", texts: [], expected: "", outcome: "completed" },
+    { name: "an empty final assistant", texts: [], expected: "", outcome: "completed" },
+    { name: "a tool-only final assistant", texts: [], expected: "", outcome: "completed" },
+    {
+      name: "a failed final assistant",
+      texts: ["partial first", "partial second"],
+      expected: "partial first\n\npartial second",
+      outcome: "failed",
+    },
+    {
+      name: "an interrupted final assistant",
+      texts: ["partial first", "partial second"],
+      expected: "partial first\n\npartial second",
+      outcome: "interrupted",
+    },
+  ] as const
+  for (const input of cases) {
+    it.effect(`UP-03 retains ${input.name} without prior assistant text in fresh and resumed tasks`, () =>
+      Effect.gen(function* () {
+        const { db, sessions, registry } = yield* services
+        yield* registerAgents
+        const parent = yield* sessions.create({ location: { directory: AbsolutePath.make("/tmp") } })
+        let sequence = 0
+        resumeHook = (sessionID) =>
+          Effect.gen(function* () {
+            yield* insertMessage(db, sessionID, ++sequence, {
+              id: `msg_up03_old_${sequence}`,
+              type: "assistant",
+              agent: "explore",
+              model: { id: "m", providerID: "p" },
+              content: [{ type: "text", id: `part_old_${sequence}`, text: "old answer must not escape" }],
+              time: { created: sequence },
+            })
+            yield* insertMessage(db, sessionID, ++sequence, {
+              id: `msg_up03_final_${sequence}`,
+              type: "assistant",
+              agent: "explore",
+              model: { id: "m", providerID: "p" },
+              content:
+                input.name === "an empty final assistant"
+                  ? []
+                  : input.name === "a tool-only final assistant"
+                    ? [
+                        {
+                          type: "tool",
+                          id: `part_tool_${sequence}`,
+                          name: "read",
+                          state: { status: "pending", input: "{}" },
+                          time: { created: sequence },
+                        },
+                      ]
+                    : [
+                        { type: "reasoning", id: `part_reasoning_${sequence}`, text: "reasoning must not escape" },
+                        ...input.texts.map((text, index) => ({
+                          type: "text",
+                          id: `part_final_${sequence}_${index}`,
+                          text,
+                        })),
+                      ],
+              time: { created: sequence },
+            })
+            if (input.outcome === "failed")
+              return yield* new SessionRunner.StepLimitExceededError({ sessionID, limit: 1 })
+            if (input.outcome === "interrupted") return yield* Effect.interrupt
+          })
+        const launch = yield* settleTool(
+          registry,
+          taskCall(
+            {
+              description: "final blocks",
+              prompt: "answer",
+              subagent_type: "explore",
+            },
+            parent.id,
+          ),
+        )
+        const rows = yield* db
+          .select()
+          .from(TaskRunTable)
+          .where(eq(TaskRunTable.parent_session_id, parent.id))
+          .all()
+          .pipe(Effect.orDie)
+        expect(rows[0]?.output).toBe(input.outcome === "completed" ? input.expected : null)
+        expect(rows[0]?.state).toBe(input.outcome)
+        if (input.outcome === "interrupted") {
+          expect(launch.result.type).toBe("error")
+          expect(String(launch.result.value)).toContain("was interrupted")
+          expect(launch.output).toBeUndefined()
+          return
+        }
+        const fresh = outputOf(launch)
+        if (input.outcome === "completed") expect(fresh.text).toBe(input.expected)
+        if (input.outcome !== "completed") {
+          expect(fresh.text).toContain(input.expected)
+          expect(fresh.text).toContain("task ended before completion")
+        }
+        const resumed = outputOf(
+          yield* settleTool(
+            registry,
+            taskCall(
+              {
+                description: "follow up",
+                prompt: "continue",
+                subagent_type: "explore",
+                task_id: fresh.task_id,
+              },
+              parent.id,
+            ),
+          ),
+        )
+        if (input.outcome === "completed") expect(resumed.text).toBe(input.expected)
+        if (input.outcome !== "completed") {
+          expect(resumed.text).toContain(input.expected)
+          expect(resumed.text).toContain("task ended before completion")
+        }
+      }),
+    )
+  }
 })
 
 describe("task tool file_scope overlap warnings (WS4b-S4)", () => {

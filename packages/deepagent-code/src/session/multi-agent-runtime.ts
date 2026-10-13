@@ -21,6 +21,8 @@ import type { SubagentTurnRunner, SubagentTurnResult } from "./goal-loop-wiring"
 import type { EventDispatcher } from "./event-dispatcher"
 import { SYSTEM_PRINCIPAL } from "./event-dispatcher"
 import { isEventV2AdmissionEnabled } from "@deepagent-code/core/deepagent/event-admission"
+import { EventWorkRule } from "@deepagent-code/core/deepagent/event-work-rule"
+import { EventWorkDagRuntime } from "./event-work-dag-runtime"
 import type { RuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import { EventAdmissionWiring } from "@deepagent-code/core/deepagent/event-admission-wiring"
 import { SessionID } from "./schema"
@@ -46,6 +48,10 @@ const log = Log.create({ service: "multi-agent-runtime" })
 
 // The §C4 coordination event source — coordination events originate from the runtime ("system").
 const COORDINATION_SOURCE: DeepAgentEvent.EventSource = "system"
+
+/** Reviewed DAG node names repeat between receipts; their coordination effects do not. */
+export const coordinationKey = (event: DeepAgentEvent.Event, key: string) =>
+  event.type === EventWorkRule.EVENT_TYPE ? `coord_event:${event.id}:${key}` : key
 const GIT_REF_ARTIFACT_PREFIX = "git-ref:"
 
 const requiresWriteIsolation = (subtask: TaskPartitioner.Subtask): boolean => subtask.requiredAutonomy === "level_2"
@@ -107,6 +113,8 @@ export interface EventV2AdmissionBridge {
   }) => Effect.Effect<void, unknown>
   /** Registration-owned execution mode. An absent mode keeps the single-admission lane. */
   readonly executionFor?: (eventType: string) => "single" | "dag" | undefined
+  /** Formal mode comes from the original approved rule, rather than a routed type alone. */
+  readonly executionForRequest?: (request: EventDispatcher.DispatchRequest) => Effect.Effect<"single" | "dag", unknown>
   /** Validates ingress and records a durable C5 receipt without prompting the event parent. */
   readonly admitReceiptOnly?: (input: {
     readonly request: EventDispatcher.DispatchRequest
@@ -213,6 +221,8 @@ export interface LayerOptions {
   // provided, `dispatch` routes the event through the durable V2 admission path BEFORE the §C coordination
   // (design §8.7 — event turns go through SessionV2/SessionExecution). Omitted ⇒ inert; V4 unchanged.
   readonly eventV2Admission?: EventV2AdmissionBridge
+  /** Production-only durable controller/node port; absence is retained for pure scheduler tests. */
+  readonly eventWorkDag?: EventWorkDagRuntime.Port
 }
 
 export const parentSessionIDFor = (eventID: DeepAgentEvent.ID): SessionID =>
@@ -309,7 +319,7 @@ export const layerWith = (options: LayerOptions) =>
             ...(event.projectID != null ? { projectID: event.projectID } : {}),
             correlationID: event.correlationID ?? event.id, // chain coordination to the triggering event
             causationID: event.id,
-            idempotencyKey: key,
+            idempotencyKey: coordinationKey(event, key),
             priority: event.priority,
             payload,
           })
@@ -337,7 +347,7 @@ export const layerWith = (options: LayerOptions) =>
             ...(event.projectID != null ? { projectID: event.projectID } : {}),
             correlationID: event.correlationID ?? event.id,
             causationID: event.id,
-            idempotencyKey: `coord:${subtask.id}:needs_human`,
+            idempotencyKey: coordinationKey(event, `coord:${subtask.id}:needs_human`),
             priority: "high",
             payload: {
               taskID: subtask.id,
@@ -359,7 +369,8 @@ export const layerWith = (options: LayerOptions) =>
         Effect.gen(function* () {
           // stable ids keyed on event.id ⇒ re-dispatch (retry pump) mints the SAME subtask ids, so the
           // coordination idempotency keys + started-guard below dedupe duplicate execution.
-          const p = partition(event)
+          const approved = options.eventWorkDag ? yield* options.eventWorkDag.prepare(event) : undefined
+          const dagScheduling = options.dagCoordination || approved !== undefined
 
           // §E1 layer-agnostic: a registry-lookup FAILURE is transient and must NOT be silently read as
           // "no agents" (which would block+ack every subtask and lose the event). Fail the Effect so the
@@ -368,6 +379,7 @@ export const layerWith = (options: LayerOptions) =>
             workspaceID: event.workspaceID,
             userID: event.actorID ?? "system",
           })
+          const p = approved ? EventWorkDagRuntime.partitionFor(event, approved, agents) : partition(event)
           const promptPayload =
             event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
               ? Object.fromEntries(Object.entries(event.payload).filter(([key]) => key !== "directory"))
@@ -524,9 +536,35 @@ export const layerWith = (options: LayerOptions) =>
               // Durable execution state closes the crash window between committing a runner result and
               // publishing its coordination event. A completed row is authoritative; replay synthesizes
               // the idempotent event and restores the exact continuation without running the model again.
+              const formal = approved && options.eventWorkDag ? yield* options.eventWorkDag.readKnown(event.id, subtask.id) : undefined
+              if (formal) {
+                const artifacts = [`session:${formal.terminal.sessionID}`, `work:${formal.terminal.workID}`]
+                const succeeded = formal.terminal.outcome === "succeeded"
+                outcomes.push({ taskID: subtask.id, capability: subtask.capability,
+                  status: succeeded ? "completed" : "blocked", reason: succeeded ? "already_completed" : "event_node_failed" })
+                if (succeeded) {
+                  completed.add(subtask.id)
+                  completedTurns.set(subtask.id, { sessionID: formal.terminal.sessionID, artifacts,
+                    ...(formal.terminal.workspaceRef ? { continuationRef: formal.terminal.workspaceRef } : {}) })
+                }
+                yield* emit(event, succeeded ? { type: "agent.task.completed", taskID: subtask.id, artifacts }
+                  : { type: "agent.task.blocked", taskID: subtask.id, reason: "event_node_failed" }, `coord:${subtask.id}:${succeeded ? "completed" : "blocked"}`)
+                continue
+              }
+              if (approved && (approved.controller.state === "succeeded" || approved.controller.state === "failed")) {
+                outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "blocked", reason: "controller_terminal" })
+                continue
+              }
               const executionRecord = execution
                 ? yield* execution.get({ workspaceID: event.workspaceID, eventID: event.id, taskID: subtask.id })
                 : undefined
+              if (approved && executionRecord?.status === "completed") {
+                // A legacy scheduler receipt cannot replace this controller's exact Work proof.
+                outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "deferred", reason: "admission_recovery_required" })
+                retryable.add(subtask.id)
+                hasUnfinished = true
+                continue
+              }
               if (executionRecord?.status === "completed") {
                 outcomes.push({
                   taskID: subtask.id,
@@ -598,7 +636,7 @@ export const layerWith = (options: LayerOptions) =>
               // nacked → retried) as done and ack the retry away without ever redoing the work. Guarding on
               // `completed` means only genuinely-finished subtasks short-circuit; a failed one re-runs on
               // retry (the stable id keeps the started/completed idempotency keys stable across retries).
-              const priorCompletion = yield* bus
+              const priorCompletion = approved ? undefined : yield* bus
                 .recentByType({
                   type: "agent.task.completed",
                   workspaceID: event.workspaceID,
@@ -632,7 +670,8 @@ export const layerWith = (options: LayerOptions) =>
               }
 
               // §C2 binds the durable handoff assignment when present; otherwise registry order wins.
-              const capable = TaskPartitioner.capableAgents(subtask, agents)
+              const actor = approved?.controller.plan.nodes.find((node) => node.id === subtask.id)?.agentID
+              const capable = TaskPartitioner.capableAgents(subtask, agents).filter((agent) => actor === undefined || agent.name === actor)
               const agent = executionRecord?.assignedAgentID
                 ? capable.find((candidate) => candidate.id === executionRecord.assignedAgentID)
                 : capable[0]
@@ -773,10 +812,10 @@ export const layerWith = (options: LayerOptions) =>
                 agentID: agent.id,
                 files: subtask.fileScope,
                 symbols,
-                priority: options.dagCoordination ? (subtask.priority ?? event.priority) : event.priority,
-                ...(options.dagCoordination && subtask.diffSize != null ? { diffSize: subtask.diffSize } : {}),
+                priority: dagScheduling ? (subtask.priority ?? event.priority) : event.priority,
+                ...(dagScheduling && subtask.diffSize != null ? { diffSize: subtask.diffSize } : {}),
                 origin:
-                  options.dagCoordination && subtask.origin
+                  dagScheduling && subtask.origin
                     ? subtask.origin
                     : event.source === "im" || event.actorID != null
                       ? "human"
@@ -790,11 +829,11 @@ export const layerWith = (options: LayerOptions) =>
             // Gate first, then rank the eligible same-wave claims before acquiring any slot, lock or
             // durable execution lease. Otherwise a later higher-ranked claim cannot displace a turn
             // already admitted by partition order.
-            const ordered = options.dagCoordination
+            const ordered = dagScheduling
               ? ready.toSorted((a, b) => ConflictArbiter.compare(a.claim, b.claim))
               : ready
             const tied = new Set<string>()
-            if (options.dagCoordination) {
+            if (dagScheduling) {
               for (const [index, candidate] of ordered.entries()) {
                 for (const other of ordered.slice(index + 1)) {
                   if (!ConflictArbiter.conflicts(candidate.claim, other.claim)) continue
@@ -806,6 +845,12 @@ export const layerWith = (options: LayerOptions) =>
             }
 
             for (const { subtask, agent, capable, claim, executionRecord, dependencyRefs } of ordered) {
+              if (approved && running.length >= approved.controller.plan.maxConcurrent) {
+                outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "deferred", reason: "controller_capacity" })
+                retryable.add(subtask.id)
+                hasUnfinished = true
+                continue
+              }
               const ambiguous = ordered.some(
                 (candidate) =>
                   tied.has(candidate.subtask.id) &&
@@ -889,7 +934,7 @@ export const layerWith = (options: LayerOptions) =>
                     ? event.workspaceID
                     : undefined
               if (
-                options.dagCoordination &&
+                dagScheduling &&
                 requiresWriteIsolation(subtask) &&
                 (!eventDir || !path.isAbsolute(eventDir))
               ) {
@@ -1050,7 +1095,7 @@ export const layerWith = (options: LayerOptions) =>
                               `Event payload: ${JSON.stringify(promptPayload)}`,
                             ].join("\n\n"),
                             workspaceID: event.workspaceID,
-                            parentSessionID: parentSessionIDFor(event.id),
+                            parentSessionID: approved?.controller.rootSessionID ?? parentSessionIDFor(event.id),
                             eventID: event.id,
                             taskID: subtask.id,
                             generation: executionLease?.generation ?? 0,
@@ -1160,9 +1205,9 @@ export const layerWith = (options: LayerOptions) =>
 
               const reason = result.reason ?? "runner_failed"
               const permanent = reason === "isolation_unavailable" || reason === "isolation_preservation_failed" ||
-                reason === "admission_recovery_required"
+                reason === "admission_recovery_required" || Boolean(approved && (reason === "event_node_authority_changed" || reason === "event_node_failed"))
               if (execution && lease) {
-                const alternate = permanent ? undefined : capable.find((candidate) => candidate.id !== agent.id)
+                const alternate = permanent || approved ? undefined : capable.find((candidate) => candidate.id !== agent.id)
                 if (alternate) {
                   const handoffID = `${event.id}:${subtask.id}:${lease.generation}:${alternate.id}`
                   const pending = yield* execution.prepareHandoff({
@@ -1274,7 +1319,7 @@ export const layerWith = (options: LayerOptions) =>
               if ((dependedOn.has(subtask.id) && (!requiresWriteIsolation(subtask) || upstreamWrites.has(subtask.id))) || !completedTurn) return []
               return [{ task: subtask, ...completedTurn } satisfies CompletedTurn]
             })
-            yield* options.onEventCompleted({ event, parentSessionID: parentSessionIDFor(event.id), turns })
+            yield* options.onEventCompleted({ event, parentSessionID: approved ? SessionID.make(approved.controller.rootSessionID) : parentSessionIDFor(event.id), turns })
           }
 
           return { event, outcomes, hasUnfinished }
@@ -1323,10 +1368,13 @@ export const layerWith = (options: LayerOptions) =>
               `no eventV2Admission bridge is wired; refusing to dispatch event ${request.event.id} on the deleted legacy path`,
             ),
           )
-        if (!options.dagCoordination || options.eventV2Admission.executionFor?.(request.event.type) !== "dag")
-          return dispatchV2(request)
-        if (!runner) return Effect.fail(new Error("event DAG turn runner is unavailable"))
         return Effect.gen(function* () {
+          const mode = options.eventV2Admission!.executionForRequest
+            ? yield* options.eventV2Admission!.executionForRequest(request)
+            : options.eventV2Admission!.executionFor?.(request.event.type)
+          const reviewed = Boolean(options.eventWorkDag && request.event.type === EventWorkRule.EVENT_TYPE && mode === "dag")
+          if ((!options.dagCoordination && !reviewed) || mode !== "dag") return yield* dispatchV2(request)
+          if (!runner) return yield* Effect.fail(new Error("event DAG turn runner is unavailable"))
           yield* dispatchV2(request, true)
           const summary = yield* coordinate(request.event)
           if (summary.hasUnfinished) return yield* Effect.fail(new EventDAGUnfinishedError(request.event.id))

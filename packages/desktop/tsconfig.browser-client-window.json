@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "composite": false, "noEmit": true, "types": ["node", "bun"] },
+  "include": ["src/main/fixture/managed-browser-client-window.ts", "src/main/managed-browser-client-window.test.ts", "src/main/browser-client-model-context.test.ts"],
+  "exclude": []
+}

@@ -3,25 +3,36 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@deepagent-code/core/event"
+import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { SessionRuntimeStatusEvents } from "@/session/runtime-status-events"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed, disposeInstancesForDirectories } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { IM_PROTOCOL_VERSION } from "@deepagent-code/core/im/protocol"
 import * as Log from "@deepagent-code/core/util/log"
-import { Cause, Effect, Queue, Schema } from "effect"
+import { Cause, Effect, Layer, Queue, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { GlobalUpgradeInput, ImportRequestSchema } from "../groups/global"
-import { runImport } from "@/import"
+import {
+  GlobalUpgradeInput,
+  ImportRequestSchema,
+  ImportRequestError,
+  ImportBusyError,
+  ImportNotFoundError,
+} from "../groups/global"
+import { ImportJobs } from "@/import/job"
+import { ImportJobSchema } from "@deepagent-code/core/import-job/schema"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { Database } from "@deepagent-code/core/database/database"
 import { ProjectDirectoryTable, ProjectTable } from "@deepagent-code/core/project/sql"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { ProjectV2 } from "@deepagent-code/core/project"
-import { resolveDataPath } from "@deepagent-code/core/global-path"
 import { eq } from "drizzle-orm"
 
 const log = Log.create({ service: "server" })
@@ -44,7 +55,8 @@ function parseBody(body: string) {
   }
 }
 
-function eventResponse() {
+function eventResponse(source: EventV2.Interface, execution: SessionExecution.Interface, runtime: SessionRuntimeStatus.Interface) {
+  return Effect.gen(function* () {
   log.info("global event connected")
   const events = Stream.callback<GlobalBusEvent, Error>(
     (queue) => {
@@ -63,10 +75,21 @@ function eventResponse() {
     Stream.drop(1),
     Stream.map(() => ({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })),
   )
+  const statuses = (yield* SessionRuntimeStatusEvents.stream(source, execution, runtime)).pipe(
+    Stream.filter((event) => event.location !== undefined),
+    Stream.map((event) => ({
+      directory: event.location!.directory,
+      workspace: event.location!.workspaceID,
+      payload: { id: EventV2.ID.create(), type: "session.status", properties: event.properties },
+    })),
+  )
 
   return HttpServerResponse.stream(
     Stream.make({ payload: { id: EventV2.ID.create(), type: "server.connected", properties: {} } }).pipe(
-      Stream.concat(events.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }))),
+      Stream.concat(events.pipe(
+        Stream.merge(statuses, { haltStrategy: "left" }),
+        Stream.merge(heartbeat, { haltStrategy: "left" }),
+      )),
       Stream.map(eventData),
       Stream.pipeThroughChannel(Sse.encode()),
       Stream.encodeText,
@@ -81,6 +104,7 @@ function eventResponse() {
       },
     },
   )
+  })
 }
 
 export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handlers) =>
@@ -88,8 +112,13 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const config = yield* Config.Service
     const installation = yield* Installation.Service
     const bridge = yield* EffectBridge.make()
-    const { db } = yield* Database.Service
+    const database = yield* Database.Service
+    const db = database.db
+    const imports = yield* ImportJobs.make
     const flags = yield* RuntimeFlags.Service
+    const events = yield* EventV2Bridge.Service
+    const execution = yield* SessionExecution.Service
+    const runtime = yield* SessionRuntimeStatus.Service
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
       return { healthy: true as const, version: InstallationVersion, runtimeId }
@@ -104,6 +133,9 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
           im: true,
           sessions: true,
           pty: true,
+          importModes: true,
+          importJobs: true,
+          importFileJobs: true,
           workspaces: true,
           // V3.9 §C/§D: advertise the independently-gated experimental subsystems so the client can
           // gate their UI (panel button / goal mode) WITHOUT a proxy signal. Sourced from the same
@@ -122,7 +154,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     const event = Effect.fn("GlobalHttpApi.event")(function* () {
-      return eventResponse()
+      return yield* eventResponse(events, execution, runtime)
     })
 
     const configGet = Effect.fn("GlobalHttpApi.configGet")(function* () {
@@ -141,7 +173,11 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     const projects = Effect.fn("GlobalHttpApi.projects")(function* () {
-      const rows = yield* db.select({ id: ProjectTable.id, worktree: ProjectTable.worktree, name: ProjectTable.name }).from(ProjectTable).all().pipe(Effect.orDie)
+      const rows = yield* db
+        .select({ id: ProjectTable.id, worktree: ProjectTable.worktree, name: ProjectTable.name })
+        .from(ProjectTable)
+        .all()
+        .pipe(Effect.orDie)
       return rows.map((row) => ({ id: row.id, worktree: row.worktree, name: row.name ?? undefined }))
     })
 
@@ -249,7 +285,10 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       const body = yield* Effect.orDie(ctx.request.text)
       const json = parseBody(body)
       if (json === undefined) {
-        return HttpServerResponse.jsonUnsafe({ error: "Invalid request body: not valid JSON", body: body.slice(0, 200) }, { status: 400 })
+        return HttpServerResponse.jsonUnsafe(
+          { error: "Invalid request body: not valid JSON", body: body.slice(0, 200) },
+          { status: 400 },
+        )
       }
       const decoded = yield* Schema.decodeUnknownEffect(ImportRequestSchema)(json).pipe(
         Effect.map((payload) => ({ valid: true as const, payload, error: "" as string })),
@@ -262,52 +301,42 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
         ),
       )
       if (!decoded.valid || decoded.payload === null) {
-        return HttpServerResponse.jsonUnsafe({ error: "Invalid request body: schema decode failed", detail: decoded.error }, { status: 400 })
+        return HttpServerResponse.jsonUnsafe(
+          { error: "Invalid request body: schema decode failed", detail: decoded.error },
+          { status: 400 },
+        )
       }
-      const opts = decoded.payload
-      const queue = yield* Queue.dropping<unknown, Error | Cause.Done>(128)
-      // Hot-import: write into the SAME database + knowledge root this sidecar
-      // actually uses. `Database.path()` is channel-aware (dev vs prod use
-      // different `Global.Path.data` + a `deepagent-code-<channel>.db` file), so
-      // hardcoding a path would write to a DB the running app never reads — the
-      // root cause of "imported sessions invisible". Forcing live-write (not a
-      // snapshot copy) because a copy the app doesn't open defeats hot-import.
-      void runImport({
-        source: opts.source,
-        sourcePath: opts.sourcePath,
-        scopes: opts.scopes ? [...opts.scopes] : undefined,
-        dryRun: opts.dryRun ?? false,
-        copyLiveDb: false,
-        outputDbPath: Database.path(),
-        outputDataRoot: resolveDataPath(),
-        cwdFilter: opts.cwdFilter,
-        onProgress: (event) => {
-          if (Queue.offerUnsafe(queue, event)) return
-          Queue.failCauseUnsafe(queue, Cause.fail(new Error("Import progress consumer exceeded its 128-event buffer")))
-        },
-      })
-        .then((report) => {
-          Queue.offerUnsafe(queue, { phase: "done", report })
-        })
-        .catch((err: unknown) => {
-          Queue.offerUnsafe(queue, {
-            phase: "error",
-            message: err instanceof Error ? err.message : String(err),
-          })
-        })
+      const admitted = yield* imports.create({ ...decoded.payload, requestID: crypto.randomUUID() }).pipe(
+        Effect.map((job) => ({ ok: true as const, job })),
+        Effect.catch((error) => Effect.succeed({ ok: false as const, error })),
+      )
+      if (!admitted.ok) return HttpServerResponse.jsonUnsafe({ error: String(admitted.error) }, { status: 400 })
+      const observe = Stream.unfold({ revision: -1, prepared: false, finished: false }, (previous) =>
+        Effect.gen(function* () {
+          if (previous.finished) return undefined
+          const job = yield* imports.get(admitted.job.id)
+          const terminal = ImportJobSchema.terminal(job.state)
+          const events: unknown[] = previous.revision === -1 ? [{ phase: "job", jobID: job.id, job }] : []
+          if (!previous.prepared && job.target) events.push({ phase: "prepared", target: job.target })
+          if (previous.revision !== job.revision) events.push({ phase: "status", job })
+          if (terminal) {
+            if (job.state === "completed") events.push({ phase: "done", report: yield* imports.report(job.id) })
+            else
+              events.push({ phase: "error", jobID: job.id, job, message: job.error?.message ?? `Import ${job.state}` })
+          }
+          if (!terminal) yield* Effect.sleep("100 millis")
+          return [
+            events,
+            { revision: job.revision, prepared: previous.prepared || !!job.target, finished: terminal },
+          ] as const
+        }),
+      )
       return HttpServerResponse.stream(
-        Stream.fromQueue(queue).pipe(
-          Stream.takeUntil(
-            (event) =>
-              typeof event === "object" &&
-              event !== null &&
-              "phase" in event &&
-              (event.phase === "done" || event.phase === "error"),
-          ),
+        observe.pipe(
+          Stream.flatMap((events) => Stream.fromIterable(events)),
           Stream.map(eventData),
           Stream.pipeThroughChannel(Sse.encode()),
           Stream.encodeText,
-          Stream.ensuring(Queue.shutdown(queue)),
         ),
         {
           contentType: "text/event-stream",
@@ -331,5 +360,33 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handle("projectDelete", projectDelete)
       .handleRaw("upgrade", upgradeRaw)
       .handleRaw("import", importRaw)
+      .handle("importCreate", ({ payload }) =>
+        imports
+          .create(payload)
+          .pipe(
+            Effect.catch((error) =>
+              error instanceof ImportJobSchema.Error && error.code === "conflict"
+                ? new ImportBusyError({ error: error.message })
+                : new ImportRequestError({ error: String(error) }),
+            ),
+          ),
+      )
+      .handle("importList", ({ query }) =>
+        imports.list(query).pipe(Effect.mapError((error) => new ImportRequestError({ error: error.message }))),
+      )
+      .handle("importGet", ({ params }) =>
+        imports.get(params.jobID).pipe(Effect.mapError((error) => new ImportNotFoundError({ error: error.message }))),
+      )
+      .handle("importCancel", ({ params }) =>
+        imports
+          .cancel(params.jobID)
+          .pipe(
+            Effect.catch((error) =>
+              error instanceof ImportJobSchema.Error && error.code === "not_found"
+                ? new ImportNotFoundError({ error: error.message })
+                : new ImportRequestError({ error: String(error) }),
+            ),
+          ),
+      )
   }),
-)
+).pipe(Layer.provide(EffectFlock.defaultLayer))

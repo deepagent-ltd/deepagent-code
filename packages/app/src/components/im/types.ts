@@ -5,8 +5,34 @@
 // from the backend contract. `Trigger`, `AutonomyLevel` and `AgentLimits` are
 // the sub-schemas referenced by `AgentDescriptor`.
 export type { AgentDescriptor, AgentLimits, AutonomyLevel, Trigger } from "@deepagent-code/core/im/mention-parser"
+import type {
+  ImMessagesCreateResponse,
+  ImGroupsListResponse,
+  ImGroupsListPageResponse,
+  ImGroupsGetResponse,
+  ImMessagesListResponse,
+  ImFacadeStatusResponse,
+  ImMessagesMarkReadResponse,
+  ImMessagesMarkReadData,
+} from "@deepagent-code/sdk"
+import type { MediaIntent } from "@deepagent-code/core/im/media-intent"
+
+export type IMGroupPage = ImGroupsListPageResponse
+export type IMGroupDetail = ImGroupsGetResponse
+
+export type IMRemoteAttachment = NonNullable<ImMessagesCreateResponse["remoteAttachments"]>[number]
+
+export type IMTransport = ImMessagesCreateResponse["transport"]
+
+export type IMReaderGroup = NonNullable<ImGroupsListResponse[number]["reader"]>
+export type IMReaderPage = NonNullable<ImMessagesListResponse["reader"]>
+export type IMReaderStatus = NonNullable<ImFacadeStatusResponse["reader"]>
+export type IMReadResult = ImMessagesMarkReadResponse
+export type IMReadAction = Required<Pick<ImMessagesMarkReadData["body"], "actionID">> &
+  Pick<ImMessagesMarkReadData["body"], "reconcile" | "continue" | "cancel" | "newAction">
 
 export interface IMGroup {
+  reader?: IMReaderGroup
   id: string
   workspaceID: string
   projectID: string | null
@@ -22,10 +48,12 @@ export interface IMGroup {
 }
 
 export type MessageMetadata =
+  | (readonly { type: "attachment_ref"; attachmentID: string; batch: true }[] & { readonly type?: undefined })
   | { type: "attachment_ref"; attachmentID: string }
   | { type: "file_ref"; path: string; line?: number }
   | { type: "code_ref"; path?: string; startLine?: number; endLine?: number }
   | { type: "agent_run"; sessionID?: string; status: string }
+  | { type: "task_status_notice"; noticeID: string; requestID: string; kind: "cancel_requested" | "recovery_required" | "refused" }
   | { type: "debug"; info: string }
   | { type: "profile"; operation: string; duration: number }
   | { type: "error"; code: string; message: string }
@@ -44,6 +72,8 @@ export type MessageMetadata =
     }
 
 export interface IMMessage {
+  remoteAttachments?: IMRemoteAttachment[]
+  transport?: IMTransport
   id: string
   groupID: string
   senderID: string
@@ -60,18 +90,4 @@ export interface IMMessage {
 
 // V4.0 §B3 file attachments. Mirrors the server's `IMAttachmentResponse`
 // (packages/deepagent-code/src/server/routes/instance/httpapi/groups/im.ts).
-export interface IMAttachment {
-  id: string
-  workspaceID: string
-  projectID: string | null
-  groupID: string | null
-  messageID: string | null
-  uploadedBy: string
-  filename: string
-  mime: string
-  sizeBytes: number
-  checksum: string
-  createdAt: number
-  expiresAt: number
-  preview: boolean
-}
+export type IMAttachment = MediaIntent.Attachment

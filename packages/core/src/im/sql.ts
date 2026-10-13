@@ -35,7 +35,18 @@ export type FileRefMetadata = Schema.Schema.Type<typeof FileRefMetadata>
 export const AttachmentRefMetadata = Schema.Struct({
   type: Schema.Literal("attachment_ref"),
   attachmentID: Schema.String,
+  batch: Schema.optional(Schema.Literal(true)),
 })
+
+// The ordered array is an explicit batch identity, including a batch of one.
+// Legacy single attachment objects retain their original retry identity.
+export const AttachmentRefsMetadata = Schema.Array(AttachmentRefMetadata).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(4),
+  Schema.makeFilter((value) => value.every((item) => item.batch === true) &&
+    new Set(value.map((item) => item.attachmentID)).size === value.length),
+)
+export type AttachmentRefsMetadata = Schema.Schema.Type<typeof AttachmentRefsMetadata>
 
 export const CodeRefMetadata = Schema.Struct({
   type: Schema.Literal("code_ref"),
@@ -95,9 +106,18 @@ export const KernelSyncMetadata = Schema.Struct({
   liveEligible: Schema.Boolean,
 })
 
+// This is an indexed candidate for a verified fixed status notice, never execution authority.
+export const TaskStatusNoticeMetadata = Schema.Struct({
+  type: Schema.Literal("task_status_notice"),
+  noticeID: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+  requestID: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+  kind: Schema.Literals(["cancel_requested", "recovery_required", "refused"]),
+})
+
 export const MessageMetadata = Schema.Union([
   AttachmentRefMetadata,
   KernelSyncMetadata,
+  TaskStatusNoticeMetadata,
   FileRefMetadata,
   CodeRefMetadata,
   AgentRunMetadata,
@@ -107,6 +127,9 @@ export const MessageMetadata = Schema.Union([
   NoTriggerMentionMetadata,
 ]).pipe(Schema.toTaggedUnion("type"))
 export type MessageMetadata = Schema.Schema.Type<typeof MessageMetadata>
+
+export const MessageMetadataValue = Schema.Union([MessageMetadata, AttachmentRefsMetadata])
+export type MessageMetadataValue = Schema.Schema.Type<typeof MessageMetadataValue>
 
 // V3.8 schema: im_groups
 export const GroupTable = sqliteTable(
@@ -132,6 +155,7 @@ export const GroupTable = sqliteTable(
   },
   (table) => [
     index("im_groups_workspace_idx").on(table.workspace_id),
+    index("im_groups_page_idx").on(table.workspace_id, table.deleted_at, table.created_at, table.id),
     index("im_groups_project_idx").on(table.project_id),
     uniqueIndex("idx_im_groups_kernel_conv").on(table.kernel_conv_id),
   ],
@@ -171,7 +195,7 @@ export const MessageTable = sqliteTable(
     type: text().$type<MessageType>().notNull().$default(() => "text"),
     content: text().notNull(),
     mentions: text({ mode: "json" }).$type<string[]>(),
-    metadata: text({ mode: "json" }).$type<MessageMetadata>(),
+    metadata: text({ mode: "json" }).$type<MessageMetadataValue>(),
     reply_to_id: text().$type<IMID.MessageID>(),
     // V4.0 §B4 — the DeepAgent Event Bus event this message was produced from (agent replies / proactive
     // pushes carry it; user messages that publish im.message.created link back via it). NULL for legacy

@@ -15,6 +15,9 @@ type ThreadViewProps = {
   root: LocalMessage
   agents: AgentDescriptor[]
   mediaEnabled?: boolean
+  protected?: boolean
+  displayEpoch?: string
+  onReaderInvalidated?: () => void
   selfMemberIDs?: readonly string[]
   senderNames?: ReadonlyMap<string, string>
   drafts?: ReturnType<typeof createComposerDrafts>
@@ -42,18 +45,54 @@ function ThreadConversation(props: ThreadViewProps & { drafts: ReturnType<typeof
     loading: false,
     failedLoad: null as "initial" | "more" | null,
   })
-  const lifecycle = { disposed: false, active: false }
+  const lifecycle = {
+    disposed: false,
+    active: false,
+    generation: 0,
+    deadline: Infinity,
+    timer: undefined as ReturnType<typeof setTimeout> | undefined,
+  }
+  const invalidate = () => {
+    if (lifecycle.disposed || !props.protected) return
+    lifecycle.generation++
+    setState({ replies: [], cursor: null, hasMore: false, failedLoad: "initial" })
+    props.onReaderInvalidated?.()
+    props.onClose()
+  }
   onCleanup(() => {
     lifecycle.disposed = true
+    if (lifecycle.timer) clearTimeout(lifecycle.timer)
   })
 
   const load = async (append: boolean) => {
     if (lifecycle.active || lifecycle.disposed) return
     lifecycle.active = true
+    const generation = lifecycle.generation
+    const scope = client.scope()
+    const started = performance.now()
     setState({ loading: true, failedLoad: null })
     try {
       const page = await client.listThread(groupID, rootID, 50, append ? (state.cursor ?? undefined) : undefined)
-      if (lifecycle.disposed) return
+      if (lifecycle.disposed || generation !== lifecycle.generation || scope !== client.scope()) return
+      if (props.protected) {
+        const reader = page.reader
+        const remaining =
+          reader?.nextExpiryAt === null ? Infinity : (reader?.nextExpiryAt ?? 0) - (reader?.validatedServerNow ?? 0)
+        if (
+          !reader ||
+          (props.displayEpoch && reader.displayEpoch !== props.displayEpoch) ||
+          !Number.isSafeInteger(reader.validatedServerNow) ||
+          (reader.nextExpiryAt !== null && !Number.isSafeInteger(reader.nextExpiryAt)) ||
+          started + remaining <= performance.now()
+        ) {
+          invalidate()
+          return
+        }
+        lifecycle.deadline = Math.min(lifecycle.deadline, started + remaining)
+        if (lifecycle.timer) clearTimeout(lifecycle.timer)
+        if (Number.isFinite(lifecycle.deadline))
+          lifecycle.timer = setTimeout(invalidate, Math.max(0, lifecycle.deadline - performance.now()))
+      }
       // Keep HTTP send receipts received while this snapshot was in flight.
       setState("replies", (previous) =>
         Array.from(new Map([...page.messages, ...previous].map((reply) => [reply.id, reply])).values()).sort(
@@ -62,6 +101,7 @@ function ThreadConversation(props: ThreadViewProps & { drafts: ReturnType<typeof
       )
       setState({ cursor: page.nextCursor, hasMore: page.hasMore })
     } catch {
+      if (props.protected) invalidate()
       if (!lifecycle.disposed) setState("failedLoad", append ? "more" : "initial")
     } finally {
       lifecycle.active = false
@@ -69,12 +109,23 @@ function ThreadConversation(props: ThreadViewProps & { drafts: ReturnType<typeof
     }
   }
   createEffect(() => {
+    client.scope()
+    props.displayEpoch
+    lifecycle.generation++
     void load(false)
   })
+  const timer = setInterval(() => {
+    if (props.protected) void load(false)
+  }, 5000)
+  onCleanup(() => clearInterval(timer))
 
   const sendReply = async (content: string, clientRequestID: string) => {
     const created = await client.createMessage(groupID, { content, type: "text", replyToID: rootID, clientRequestID })
     if (lifecycle.disposed) return
+    if (props.protected) {
+      void load(false)
+      return
+    }
     setState("replies", (previous) =>
       [...previous.filter((reply) => reply.id !== created.id), created].sort(
         (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),

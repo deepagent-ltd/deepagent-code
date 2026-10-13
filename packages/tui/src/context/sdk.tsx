@@ -3,6 +3,9 @@ import type { GlobalEvent } from "@deepagent-code/sdk"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { createSimpleContext } from "./helper"
 import { batch, onCleanup, onMount } from "solid-js"
+import type { GoalPlanClient } from "@deepagent-code/core/deepagent/goal-plan-client"
+import type { McpOperatorClient } from "@deepagent-code/core/mcp/operator-client"
+import type { TaskHumanClient } from "@deepagent-code/core/session/task-human-client"
 
 export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
@@ -16,6 +19,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     fetch?: typeof fetch
     headers?: RequestInit["headers"]
     events?: EventSource
+    goalPlan?: GoalPlanClient.Transport
+    mcpOperator?: McpOperatorClient.Transport
+    taskControl?: TaskHumanClient.Transport
   }) => {
     const abort = new AbortController()
     let sse: AbortController | undefined
@@ -31,6 +37,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     let sdk = createSDK()
+    const goalInteractions = new Set<object>()
+    const mcpInteractions = new Set<object>()
+    const taskInteractions = new Set<object>()
 
     const handlers = new Set<(event: GlobalEvent) => void>()
     const emitter = {
@@ -136,6 +145,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       sse?.abort()
       if (timer) clearTimeout(timer)
       handlers.clear()
+      goalInteractions.clear()
+      mcpInteractions.clear()
+      taskInteractions.clear()
     })
 
     return {
@@ -151,6 +163,56 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       event: emitter,
       fetch: props.fetch ?? fetch,
       url: props.url,
+      goalPlan: props.goalPlan,
+      mcpOperator: props.mcpOperator,
+      taskControl: props.taskControl,
+      protectTaskControl() {
+        const interaction = {}
+        taskInteractions.add(interaction)
+        return () => {
+          const settled = props.taskControl?.whenSettled()
+          if (!settled) {
+            taskInteractions.delete(interaction)
+            return
+          }
+          void settled.then(() => taskInteractions.delete(interaction)).catch(() => undefined)
+        }
+      },
+      taskControlProtected: () => taskInteractions.size > 0,
+      protectMcp() {
+        const interaction = {}
+        mcpInteractions.add(interaction)
+        return () => {
+          const settled = props.mcpOperator?.whenSettled()
+          if (!settled) {
+            mcpInteractions.delete(interaction)
+            return
+          }
+          void settled.then(() => mcpInteractions.delete(interaction)).catch(() => undefined)
+        }
+      },
+      mcpProtected: () => mcpInteractions.size > 0,
+      get operator() {
+        const header = new Headers(props.headers).get("authorization")
+        if (!header?.startsWith("Basic ")) return "unauthenticated"
+        const value = Buffer.from(header.slice(6), "base64").toString("utf8")
+        return value.slice(0, value.indexOf(":")) || "unauthenticated"
+      },
+      protectGoalPlan() {
+        const interaction = {}
+        goalInteractions.add(interaction)
+        return () => {
+          const settled = props.goalPlan?.whenSettled?.()
+          if (!settled) {
+            goalInteractions.delete(interaction)
+            return
+          }
+          // An unknown parent response is not proof that the worker's permission
+          // wait or file checks have stopped. Retain the relay guard until finally.
+          void settled.then(() => goalInteractions.delete(interaction)).catch(() => undefined)
+        }
+      },
+      goalPlanProtected: () => goalInteractions.size > 0,
     }
   },
 })

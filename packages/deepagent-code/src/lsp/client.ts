@@ -1,4 +1,5 @@
 import path from "path"
+import { createHash, randomUUID } from "node:crypto"
 import { pathToFileURL, fileURLToPath } from "url"
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter } from "vscode-jsonrpc/node"
 import type { Diagnostic as VSCodeDiagnostic } from "vscode-languageserver-types"
@@ -27,6 +28,28 @@ const log = Log.create({ service: "lsp.client" })
 export type Info = NonNullable<Awaited<ReturnType<typeof create>>>
 
 export type Diagnostic = VSCodeDiagnostic
+
+const observationID: unique symbol = Symbol("LSP.CheckedObservation")
+export type CheckedObservation = { readonly [observationID]: true }
+export type CheckedView = Readonly<{
+  incarnation: string
+  directory: string
+  root: string
+  uri: string
+  serverID: string
+  documentVersion: number
+  contentHash: string
+  diagnosticsHash: string
+  count: number
+  maxSeverity: number | null
+  method: "versioned_push" | "document_pull"
+  requestID: string
+}>
+const observations = new WeakMap<CheckedObservation, { view: CheckedView; current: () => boolean }>()
+export function inspectChecked(receipt: CheckedObservation) {
+  const entry = observations.get(receipt)
+  return entry?.current() ? entry.view : undefined
+}
 
 export class InitializeError extends Schema.TaggedErrorClass<InitializeError>()("LSPInitializeError", {
   serverID: Schema.String,
@@ -148,6 +171,18 @@ export async function create(input: {
 
   // --- Connection state ---
 
+  const incarnation = randomUUID()
+  let closed = false
+  let observedSequence = 0
+  let generationSequence = 0
+  const generations = new Map<string, number>()
+  const checkedPushes = new Map<string, { sequence: number; version: number | undefined; items: Diagnostic[] }>()
+  const files: Record<string, { version: number; text: string }> = {}
+  connection.onClose(() => {
+    closed = true
+    generations.clear()
+    checkedPushes.clear()
+  })
   const pushDiagnostics = new Map<string, Diagnostic[]>()
   const pullDiagnostics = new Map<string, Diagnostic[]>()
   const published = new Map<string, { at: number; version?: number }>()
@@ -177,6 +212,12 @@ export async function create(input: {
       count: params.diagnostics.length,
       version: params.version,
     })
+    if (!closed && generations.has(filePath) && files[filePath])
+      checkedPushes.set(filePath, {
+        sequence: ++observedSequence,
+        version: Number.isSafeInteger(params.version) ? params.version : undefined,
+        items: params.diagnostics,
+      })
     published.set(filePath, {
       at: Date.now(),
       version: typeof params.version === "number" ? params.version : undefined,
@@ -284,8 +325,6 @@ export async function create(input: {
       settings: input.server.initialization,
     })
   }
-
-  const files: Record<string, { version: number; text: string }> = {}
 
   // --- Diagnostic helpers ---
 
@@ -562,7 +601,221 @@ export async function create(input: {
 
   // --- Public API ---
 
+  async function openDocument(request: { path: string }, supplied?: string, signal?: AbortSignal) {
+    request.path = Filesystem.normalizePath(
+      path.isAbsolute(request.path) ? request.path : path.resolve(input.directory, request.path),
+    )
+    if (closed) throw new Error("LSP document owner is closed")
+    if (!generations.has(request.path) && generations.size >= 4096)
+      throw new Error("LSP document observation capacity exceeded")
+    if (generationSequence >= Number.MAX_SAFE_INTEGER) throw new Error("LSP document generation capacity exceeded")
+    // Never reuse a generation after didClose: an old checked receipt must remain retired even
+    // when the same path, version and text are opened again on this connection.
+    const generation = ++generationSequence
+    generations.set(request.path, generation)
+    const requireCurrent = () => {
+      if (closed || generations.get(request.path) !== generation || signal?.aborted)
+        throw new Error("LSP document observation changed or cancelled")
+    }
+    const text = supplied ?? (await Filesystem.readText(request.path))
+    requireCurrent()
+    const extension = path.extname(request.path)
+    const languageId = LANGUAGE_EXTENSIONS[extension] ?? "plaintext"
+
+    const document = files[request.path]
+    if (document !== undefined) {
+      // Do not wipe diagnostics on didChange. Some servers (e.g. clangd) only
+      // re-emit diagnostics when the content actually changes, so clearing
+      // here would lose errors for no-op touchFile calls. Let the server's
+      // next push/pull overwrite naturally.
+      logger.info("workspace/didChangeWatchedFiles", request)
+      await connection.sendNotification("workspace/didChangeWatchedFiles", {
+        changes: [
+          {
+            uri: pathToFileURL(request.path).href,
+            type: FILE_CHANGE_CHANGED,
+          },
+        ],
+      })
+      requireCurrent()
+
+      const next = document.version + 1
+      files[request.path] = { version: next, text }
+      logger.info("textDocument/didChange", {
+        path: request.path,
+        version: next,
+      })
+      requireCurrent()
+      await connection.sendNotification("textDocument/didChange", {
+        textDocument: {
+          uri: pathToFileURL(request.path).href,
+          version: next,
+        },
+        contentChanges:
+          syncKind === TEXT_DOCUMENT_SYNC_INCREMENTAL
+            ? [
+                {
+                  range: {
+                    start: { line: 0, character: 0 },
+                    end: endPosition(document.text),
+                  },
+                  text,
+                },
+              ]
+            : [{ text }],
+      })
+      requireCurrent()
+      return next
+    }
+
+    logger.info("workspace/didChangeWatchedFiles", request)
+    await connection.sendNotification("workspace/didChangeWatchedFiles", {
+      changes: [
+        {
+          uri: pathToFileURL(request.path).href,
+          type: FILE_CHANGE_CREATED,
+        },
+      ],
+    })
+    requireCurrent()
+
+    logger.info("textDocument/didOpen", request)
+    pushDiagnostics.delete(request.path)
+    pullDiagnostics.delete(request.path)
+    requireCurrent()
+    await connection.sendNotification("textDocument/didOpen", {
+      textDocument: {
+        uri: pathToFileURL(request.path).href,
+        languageId,
+        version: 0,
+        text,
+      },
+    })
+    requireCurrent()
+    files[request.path] = { version: 0, text }
+    return 0
+  }
+
+  async function closeDocument(request: { path: string }) {
+    const file = Filesystem.normalizePath(
+      path.isAbsolute(request.path) ? request.path : path.resolve(input.directory, request.path),
+    )
+    if (!generations.has(file) && !files[file]) return
+    generations.delete(file)
+    checkedPushes.delete(file)
+    delete files[file]
+    if (!closed)
+      await connection.sendNotification("textDocument/didClose", { textDocument: { uri: pathToFileURL(file).href } })
+  }
+  const digest = (value: string) => createHash("sha256").update(value).digest("hex")
+  async function observeChecked(request: {
+    path: string
+    text: string
+    timeoutMs?: number
+    signal?: AbortSignal
+  }): Promise<CheckedObservation | undefined> {
+    const file = Filesystem.normalizePath(path.resolve(input.directory, request.path))
+    const timeout = request.timeoutMs ?? 3000
+    if (
+      closed ||
+      request.signal?.aborted ||
+      !Number.isSafeInteger(timeout) ||
+      timeout < 1 ||
+      timeout > 10000 ||
+      Buffer.byteLength(request.text) > 1048576
+    )
+      return
+    const after = observedSequence
+    const version = await openDocument({ path: file }, request.text, request.signal)
+    const generation = generations.get(file)
+    const current = () =>
+      !closed &&
+      !request.signal?.aborted &&
+      generations.get(file) === generation &&
+      files[file]?.version === version &&
+      files[file]?.text === request.text
+    if (!current()) return
+    const checked = (items: Diagnostic[], method: CheckedView["method"], requestID: string) => {
+      if (
+        !current() ||
+        !Array.isArray(items) ||
+        items.length > 1024 ||
+        items.some(
+          (item) =>
+            !item ||
+            typeof item.message !== "string" ||
+            (item.severity !== undefined &&
+              (!Number.isInteger(item.severity) || item.severity < 1 || item.severity > 4)),
+        )
+      )
+        return
+      const encoded = JSON.stringify(items)
+      if (Buffer.byteLength(encoded) > 262144) return
+      const receipt: CheckedObservation = Object.freeze({ [observationID]: true as const })
+      const view = Object.freeze({
+        incarnation,
+        directory: input.directory,
+        root: input.root,
+        uri: pathToFileURL(file).href,
+        serverID: input.serverID,
+        documentVersion: version,
+        contentHash: digest(request.text),
+        diagnosticsHash: digest(encoded),
+        count: items.length,
+        // Missing severities conservatively count as errors, never as clean.
+        maxSeverity: items.length ? Math.min(...items.map((item) => item.severity ?? 1)) : null,
+        method,
+        requestID,
+      })
+      if (Buffer.byteLength(JSON.stringify(view)) > 2048) return
+      observations.set(receipt, { current, view })
+      return receipt
+    }
+    if (initialized.capabilities?.diagnosticProvider) {
+      const requestID = randomUUID()
+      const report = await withTimeout(
+        connection.sendRequest<unknown>("textDocument/diagnostic", {
+          textDocument: { uri: pathToFileURL(file).href },
+        }),
+        timeout,
+      ).catch(() => undefined)
+      if (
+        !report ||
+        typeof report !== "object" ||
+        !("kind" in report) ||
+        report.kind !== "full" ||
+        !("items" in report) ||
+        !Array.isArray(report.items)
+      )
+        return
+      return checked(report.items, "document_pull", requestID)
+    }
+    return await new Promise<CheckedObservation | undefined>((resolve) => {
+      const finish = (value?: CheckedObservation) => {
+        clearTimeout(timer)
+        diagnosticListeners.delete(listener)
+        request.signal?.removeEventListener("abort", aborted)
+        resolve(value)
+      }
+      const inspect = () => {
+        const push = checkedPushes.get(file)
+        if (!current()) return finish()
+        if (push && push.sequence > after && push.version === version)
+          finish(checked(push.items, "versioned_push", `${incarnation}:${push.sequence}`))
+      }
+      const listener = (event: { path: string }) => {
+        if (event.path === file) inspect()
+      }
+      const aborted = () => finish()
+      const timer = setTimeout(() => finish(), timeout)
+      diagnosticListeners.add(listener)
+      request.signal?.addEventListener("abort", aborted, { once: true })
+      inspect()
+    })
+  }
+
   const result = {
+    observeChecked,
     root: input.root,
     get serverID() {
       return input.serverID
@@ -577,81 +830,8 @@ export async function create(input: {
       return initialized.capabilities
     },
     notify: {
-      async open(request: { path: string }) {
-        request.path = Filesystem.normalizePath(
-          path.isAbsolute(request.path) ? request.path : path.resolve(input.directory, request.path),
-        )
-        const text = await Filesystem.readText(request.path)
-        const extension = path.extname(request.path)
-        const languageId = LANGUAGE_EXTENSIONS[extension] ?? "plaintext"
-
-        const document = files[request.path]
-        if (document !== undefined) {
-          // Do not wipe diagnostics on didChange. Some servers (e.g. clangd) only
-          // re-emit diagnostics when the content actually changes, so clearing
-          // here would lose errors for no-op touchFile calls. Let the server's
-          // next push/pull overwrite naturally.
-          logger.info("workspace/didChangeWatchedFiles", request)
-          await connection.sendNotification("workspace/didChangeWatchedFiles", {
-            changes: [
-              {
-                uri: pathToFileURL(request.path).href,
-                type: FILE_CHANGE_CHANGED,
-              },
-            ],
-          })
-
-          const next = document.version + 1
-          files[request.path] = { version: next, text }
-          logger.info("textDocument/didChange", {
-            path: request.path,
-            version: next,
-          })
-          await connection.sendNotification("textDocument/didChange", {
-            textDocument: {
-              uri: pathToFileURL(request.path).href,
-              version: next,
-            },
-            contentChanges:
-              syncKind === TEXT_DOCUMENT_SYNC_INCREMENTAL
-                ? [
-                    {
-                      range: {
-                        start: { line: 0, character: 0 },
-                        end: endPosition(document.text),
-                      },
-                      text,
-                    },
-                  ]
-                : [{ text }],
-          })
-          return next
-        }
-
-        logger.info("workspace/didChangeWatchedFiles", request)
-        await connection.sendNotification("workspace/didChangeWatchedFiles", {
-          changes: [
-            {
-              uri: pathToFileURL(request.path).href,
-              type: FILE_CHANGE_CREATED,
-            },
-          ],
-        })
-
-        logger.info("textDocument/didOpen", request)
-        pushDiagnostics.delete(request.path)
-        pullDiagnostics.delete(request.path)
-        await connection.sendNotification("textDocument/didOpen", {
-          textDocument: {
-            uri: pathToFileURL(request.path).href,
-            languageId,
-            version: 0,
-            text,
-          },
-        })
-        files[request.path] = { version: 0, text }
-        return 0
-      },
+      open: (request: { path: string }) => openDocument(request),
+      close: closeDocument,
     },
     get diagnostics() {
       const result = new Map<string, Diagnostic[]>()
@@ -676,6 +856,9 @@ export async function create(input: {
       await waitForFullDiagnostics({ path: normalizedPath, version: request.version, after: request.after })
     },
     async shutdown() {
+      closed = true
+      generations.clear()
+      checkedPushes.clear()
       logger.info("shutting down")
       connection.end()
       connection.dispose()

@@ -1,132 +1,69 @@
-import { afterAll, describe, expect, mock, beforeEach } from "bun:test"
+import { expect } from "bun:test"
 import { Effect } from "effect"
 import { testEffect } from "../lib/effect"
+import { MCP } from "../../src/mcp/index"
 
-// Release the mock.module registrations below when this file finishes so
-// later files import the real MCP SDK modules.
-afterAll(() => {
-  mock.restore()
-})
-
-// Track what options were passed to each transport constructor
-const transportCalls: Array<{
-  type: "streamable" | "sse"
-  url: string
-  options: { authProvider?: unknown; requestInit?: RequestInit }
-}> = []
-
-// Mock the transport constructors to capture their arguments
-void mock.module("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: class MockStreamableHTTP {
-    constructor(url: URL, options?: { authProvider?: unknown; requestInit?: RequestInit }) {
-      transportCalls.push({
-        type: "streamable",
-        url: url.toString(),
-        options: options ?? {},
-      })
-    }
-    async start() {
-      throw new Error("Mock transport cannot connect")
-    }
-  },
-}))
-
-void mock.module("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: class MockSSE {
-    constructor(url: URL, options?: { authProvider?: unknown; requestInit?: RequestInit }) {
-      transportCalls.push({
-        type: "sse",
-        url: url.toString(),
-        options: options ?? {},
-      })
-    }
-    async start() {
-      throw new Error("Mock transport cannot connect")
-    }
-  },
-}))
-
-beforeEach(() => {
-  transportCalls.length = 0
-})
-
-// Import MCP after mocking
-const { MCP } = await import("../../src/mcp/index")
 const it = testEffect(MCP.defaultLayer)
-
-describe("mcp.headers", () => {
-  it.instance("headers are passed to transports when oauth is enabled (default)", () =>
-    Effect.gen(function* () {
-      const mcp = yield* MCP.Service
-      yield* mcp
-        .add("test-server", {
-          type: "remote",
-          url: "https://example.com/mcp",
-          headers: {
-            Authorization: "Bearer test-token",
-            "X-Custom-Header": "custom-value",
+const cases: { name: string; oauth?: false; headers?: Record<string, string> }[] = [
+  {
+    name: "OAuth enabled",
+    oauth: undefined,
+    headers: { Authorization: "Bearer synthetic-header", "X-Custom-Header": "custom-value" },
+  },
+  { name: "OAuth disabled", oauth: false as const, headers: { Authorization: "Bearer synthetic-header" } },
+  { name: "no configured headers", oauth: undefined, headers: undefined },
+]
+for (const input of cases)
+  it.instance(
+    `actual SDK preserves headers with ${input.name}`,
+    () =>
+      Effect.gen(function* () {
+        const requests: { method: string; pathname: string; authorization: string | null; custom: string | null }[] = []
+        const listener = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          async fetch(request) {
+            requests.push({
+              method: request.method,
+              pathname: new URL(request.url).pathname,
+              authorization: request.headers.get("authorization"),
+              custom: request.headers.get("x-custom-header"),
+            })
+            if (request.method === "GET") return new Response(null, { status: 405 })
+            if (request.method === "DELETE") return new Response(null, { status: 204 })
+            const body = (await request.json()) as { id?: number; method: string }
+            if (body.id === undefined) return new Response(null, { status: 202 })
+            return Response.json({
+              jsonrpc: "2.0",
+              id: body.id,
+              result:
+                body.method === "initialize"
+                  ? {
+                      protocolVersion: "2025-11-25",
+                      serverInfo: { name: "headers-fixture", version: "1" },
+                      capabilities: { tools: {} },
+                    }
+                  : { tools: [] },
+            })
           },
         })
-        .pipe(Effect.catch(() => Effect.void))
-
-      // Both transports should have been created with headers
-      expect(transportCalls.length).toBeGreaterThanOrEqual(1)
-
-      for (const call of transportCalls) {
-        expect(call.options.requestInit).toBeDefined()
-        expect(call.options.requestInit?.headers).toEqual({
-          Authorization: "Bearer test-token",
-          "X-Custom-Header": "custom-value",
-        })
-        // OAuth should be enabled by default, so authProvider should exist
-        expect(call.options.authProvider).toBeDefined()
-      }
-    }),
-  )
-
-  it.instance("headers are passed to transports when oauth is explicitly disabled", () =>
-    Effect.gen(function* () {
-      const mcp = yield* MCP.Service
-      yield* mcp
-        .add("test-server-no-oauth", {
+        yield* Effect.addFinalizer(() => Effect.promise(() => listener.stop(true)))
+        const mcp = yield* MCP.Service
+        yield* mcp.add("headers", {
           type: "remote",
-          url: "https://example.com/mcp",
-          oauth: false,
-          headers: {
-            Authorization: "Bearer test-token",
-          },
+          url: new URL("/mcp", listener.url).href,
+          oauth: input.oauth,
+          headers: input.headers,
         })
-        .pipe(Effect.catch(() => Effect.void))
-
-      expect(transportCalls.length).toBeGreaterThanOrEqual(1)
-
-      for (const call of transportCalls) {
-        expect(call.options.requestInit).toBeDefined()
-        expect(call.options.requestInit?.headers).toEqual({
-          Authorization: "Bearer test-token",
-        })
-        // OAuth is disabled, so no authProvider
-        expect(call.options.authProvider).toBeUndefined()
-      }
-    }),
+        expect((yield* mcp.status()).headers.status).toBe("connected")
+        expect(requests.length).toBeGreaterThan(0)
+        for (const request of requests) {
+          expect(request.pathname).toBe("/mcp")
+          expect(request.authorization).toBe(input.headers?.Authorization ?? null)
+          expect(request.custom).toBe(
+            input.headers && "X-Custom-Header" in input.headers ? (input.headers["X-Custom-Header"] ?? null) : null,
+          )
+        }
+      }),
+    { config: { mcp: {} } },
   )
-
-  it.instance("no requestInit when headers are not provided", () =>
-    Effect.gen(function* () {
-      const mcp = yield* MCP.Service
-      yield* mcp
-        .add("test-server-no-headers", {
-          type: "remote",
-          url: "https://example.com/mcp",
-        })
-        .pipe(Effect.catch(() => Effect.void))
-
-      expect(transportCalls.length).toBeGreaterThanOrEqual(1)
-
-      for (const call of transportCalls) {
-        // No headers means requestInit should be undefined
-        expect(call.options.requestInit).toBeUndefined()
-      }
-    }),
-  )
-})

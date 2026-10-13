@@ -1,15 +1,16 @@
 export * as KernelSdk from "./sdk"
 
-import { Context, Effect, Layer, Queue, Schedule, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Queue, Schedule, Schema, Semaphore, Stream } from "effect"
 import * as Log from "@deepagent-code/core/util/log"
 import type { KernelConfig } from "./config"
+import type { DeliveryReaderInfo, DeliveryChangesRequest, DeliveryChangesResult, DeliveryMessagesRequest, DeliveryMessagesResult, DeliveryProjectionRequest, DeliveryReadCutResult, DeliveryOutputProofRequest, DeliveryOutputProofResult, DeliveryMarkReadRequest, ProtectedMediaAttachment, ProtectedMediaCapabilities, ProtectedMediaTransferCapabilities, ProtectedMediaUploadProgress, ProtectedMediaBeginRequest, ProtectedMediaMetadata, ProtectedMediaObjectRequest, ProtectedMediaChunkRequest, ProtectedMediaRangeRequest, ProtectedCurrentLinkFacts } from "@deepagent-code/im-kernel-sdk"
 
 // jugglechat-websdk 的机械边界：浏览器 shim 装载、init/connect/disconnect、原生事件→队列、
 // sendMessage/getMessages 调用。本层不做任何业务归一化（那是 client.ts 的职责），也不直接
 // 被业务代码消费——唯一消费者是 KernelClient / IMKernelSync。
 
 // d.ts 未声明但协议原生支持的字段（UpMsg proto #11/#12，PoC §16 实测 websdk 透传稳定生效）。
-declare module "jugglechat-websdk" {
+declare module "@deepagent-code/im-kernel-sdk" {
   interface Message {
     /** 逐消息 TTL（毫秒）；服务端 destroy_time = send_time + lifeTime，到期 hismsgs 不可读。 */
     lifeTime?: number
@@ -36,14 +37,44 @@ export interface RawMessageReceived {
   readonly tag: "message_received"
   readonly payload: unknown
 }
-export type RawEvent = RawStateChanged | RawMessageReceived
+export interface RawProtectedLiveObserved {
+  readonly tag: "protected_live_observed"
+  readonly handle: object
+}
+export type RawEvent = RawStateChanged | RawMessageReceived | RawProtectedLiveObserved
 
 export interface OutboundTextMessage {
+  readonly messageID: string
+  readonly wireID: string
   readonly conversationType: number
   readonly conversationID: string
   readonly text: string
-  /** 逐消息 TTL 毫秒数（硬约束⑨：全部业务消息 72h = 259200000，由 KernelClient.sendText 注入）。 */
+  /** 本地准备时固定到期时间的剩余毫秒数，最多 72h，由 KernelClient.sendText 注入。 */
   readonly lifeTime: number
+  readonly expiresAt: number
+}
+export interface OutboundMediaMessage {
+  readonly messageID: string
+  readonly wireID: string
+  readonly conversationType: 1 | 2
+  readonly conversationID: string
+  readonly content: string
+  readonly attachments: readonly ProtectedMediaAttachment[]
+  readonly expiresAt: number
+}
+
+/** Internal typed transport. Every operation uses the SDK's captured Navigator
+ * and actual credential generation; descriptors do not grant read authority. */
+export interface Media {
+  readonly capabilities: () => Effect.Effect<ProtectedMediaCapabilities, KernelError>
+  readonly transferCapabilities?: () => Effect.Effect<ProtectedMediaTransferCapabilities, KernelError>
+  readonly uploadProgress?: (input: ProtectedMediaObjectRequest) => Effect.Effect<ProtectedMediaUploadProgress, KernelError>
+  readonly begin: (input: ProtectedMediaBeginRequest) => Effect.Effect<ProtectedMediaMetadata, KernelError>
+  readonly putChunk: (input: ProtectedMediaChunkRequest) => Effect.Effect<ProtectedMediaMetadata, KernelError>
+  readonly finalize: (input: ProtectedMediaObjectRequest) => Effect.Effect<ProtectedMediaMetadata, KernelError>
+  readonly status: (input: ProtectedMediaObjectRequest) => Effect.Effect<ProtectedMediaMetadata, KernelError>
+  readonly cancel: (input: ProtectedMediaObjectRequest) => Effect.Effect<ProtectedMediaMetadata, KernelError>
+  readonly readRange: (input: ProtectedMediaRangeRequest) => Effect.Effect<Uint8Array, KernelError>
 }
 
 export interface FetchHistoryInput {
@@ -65,13 +96,30 @@ export interface ConversationPage {
 
 export interface Interface {
   readonly rawEvents: Stream.Stream<RawEvent>
+  readonly captureCurrentLink?: () => object | undefined
+  readonly readCurrentLink?: (handle: object) => ProtectedCurrentLinkFacts | undefined
   readonly sendMessage: (input: OutboundTextMessage) => Effect.Effect<{ readonly messageID: string }, KernelError>
+  readonly sendMedia?: (input: OutboundMediaMessage) => Effect.Effect<{ readonly messageID: string }, KernelError>
+  readonly media?: Media
   readonly fetchHistory: (input: FetchHistoryInput) => Effect.Effect<HistoryPage, KernelError>
   readonly fetchConversations: (input: {
     readonly before: number
     readonly count: number
   }) => Effect.Effect<ConversationPage, KernelError>
   readonly disconnect: Effect.Effect<void>
+  readonly liveReadAvailable?: () => boolean
+  readonly receiverBaselineAvailable?: () => boolean
+  readonly readReceiverBaseline?: (baseline: object) => boolean
+  readonly getDeliveryReceiverBaseline?: (input: { subscriberID: string; scopeKey: string }) => Effect.Effect<object, KernelError>
+  readonly readLiveCut?: (cut: object) => boolean
+  readonly getDeliveryLiveCut?: (input: DeliveryProjectionRequest & { subscriberID: string }, baseline?: object) => Effect.Effect<object, KernelError>
+  readonly getDeliveryLiveMessages?: (input: DeliveryMessagesRequest, cut: object) => Effect.Effect<{ page: DeliveryMessagesResult; handles: object[] }, KernelError>
+  readonly getDeliveryReader: () => Effect.Effect<DeliveryReaderInfo, KernelError>
+  readonly getDeliveryChanges: (input: DeliveryChangesRequest) => Effect.Effect<DeliveryChangesResult, KernelError>
+  readonly getDeliveryMessages: (input: DeliveryMessagesRequest) => Effect.Effect<DeliveryMessagesResult, KernelError>
+  readonly getDeliveryReadCut: (input: DeliveryProjectionRequest) => Effect.Effect<DeliveryReadCutResult, KernelError>
+  readonly getDeliveryOutputProof?: (input: DeliveryOutputProofRequest) => Effect.Effect<DeliveryOutputProofResult, KernelError>
+  readonly markDeliveryRead: (input: DeliveryMarkReadRequest) => Effect.Effect<DeliveryReadCutResult, KernelError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/im/kernel/Sdk") {}
@@ -114,14 +162,19 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
       )
 
       const queue = yield* Queue.bounded<RawEvent>(2048)
+      const slots = yield* Semaphore.make(2)
+      const boundedRequest = <A>(operation: string, run: () => PromiseLike<A>) => slots.withPermits(1)(request(operation, run).pipe(Effect.uninterruptible))
       const offer = (event: RawEvent) => {
         if (!Queue.offerUnsafe(queue, event)) log.error("kernel event queue full; dropping event", { tag: event.tag })
       }
 
       // shims 必须先于 SDK bundle 求值（SDK 在 import 时捕获浏览器全局）。
       yield* Effect.promise(() => import("./shims"))
-      const JuggleIM = (yield* Effect.promise(() => import("jugglechat-websdk"))).default
-      const im = JuggleIM.init({ appkey: config.appkey, navList: [config.navigator], isSync: false })
+      const JuggleIM = (yield* Effect.promise(() => import("@deepagent-code/im-kernel-sdk"))).default
+      const im = JuggleIM.init({ appkey: config.appkey, navList: [config.navigator], isSync: false, protectedDeliveryReader: true, protectedMedia: config.protectedMedia === true })
+      const { KernelTaskLiveOrigin } = yield* Effect.promise(() => import("./task-live-origin"))
+      const releaseLiveObserver = KernelTaskLiveOrigin.subscribe(im, (handle) => offer({ tag: "protected_live_observed", handle }))
+      yield* Effect.addFinalizer(() => Effect.sync(releaseLiveObserver))
 
       im.on(JuggleIM.Event.STATE_CHANGED, (event: { state?: unknown; code?: unknown }) => {
         if (typeof event?.state !== "number") return
@@ -130,9 +183,6 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
           state: event.state,
           ...(typeof event.code === "number" ? { code: event.code } : {}),
         })
-      })
-      im.on(JuggleIM.Event.MESSAGE_RECEIVED, (payload: unknown) => {
-        offer({ tag: "message_received", payload })
       })
 
       const connect = request("connect", () => im.connect({ token: config.token })).pipe(
@@ -154,53 +204,65 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
 
       return Service.of({
         rawEvents: Stream.fromQueue(queue),
+        captureCurrentLink: () => im.captureProtectedCurrentLink(),
+        readCurrentLink: (handle) => im.readProtectedCurrentLink(handle),
         sendMessage: (input) =>
           Effect.gen(function* () {
             // d.ts 把 Message.conversationType 错标成枚举对象类型（协议实际是 number），且漏标
             // lifeTime（上方 module augmentation 已补类型）——边界处一次性收窄转换。
-            const ack = yield* request("sendMessage", () =>
-              im.sendMessage({
-                conversationType: input.conversationType,
+            const ack = yield* boundedRequest("sendMessage", () =>
+              im.sendProtectedMessage({
+                tid: input.messageID,
+                clientMsgId: input.wireID,
+                conversationType: input.conversationType as 1 | 2,
                 conversationId: input.conversationID,
-                name: JuggleIM.MessageType.TEXT,
+                name: "jg:text",
                 content: { content: input.text },
-                lifeTime: input.lifeTime,
-              } as unknown as Parameters<typeof im.sendMessage>[0]),
+                deliveryExpiresAt: input.expiresAt,
+              }),
             )
             const messageID = (ack as { messageId?: unknown }).messageId
             if (typeof messageID !== "string" || messageID.length === 0)
               return yield* new KernelError({ operation: "sendMessage", message: "kernel ack carried no messageId" })
             return { messageID }
           }),
-        fetchHistory: (input) =>
-          Effect.gen(function* () {
-            const result = yield* request("fetchHistory", () =>
-              im.getMessages({
-                conversationId: input.conversationID,
-                conversationType: input.conversationType,
-                time: input.after,
-                count: input.count,
-                order: JuggleIM.MessageOrder.FORWARD,
-              } as Parameters<typeof im.getMessages>[0]),
-            )
-            return {
-              messages: Array.isArray(result.messages) ? result.messages : [],
-              isFinished: result.isFinished === true,
-            }
-          }),
-        fetchConversations: (input) =>
-          request("fetchConversations", () =>
-            im.getConversations({ time: input.before, count: input.count, order: 0 }),
-          ).pipe(
-            Effect.map((page) => ({
-              isFinished: page.isFinished === true,
-              conversations: page.conversations.map((conversation) => ({
-                conversationType: conversation.conversationType,
-                conversationID: conversation.conversationId,
-                sortTime: conversation.sortTime ?? 0,
-              })),
-            })),
-          ),
+        sendMedia: (input) => boundedRequest("sendMedia", () => im.sendProtectedMedia({
+          tid: input.messageID, clientMsgId: input.wireID, name: "dac:media.v1", conversationType: input.conversationType,
+          conversationId: input.conversationID, content: { v: 1, content: input.content, attachments: input.attachments },
+          deliveryExpiresAt: input.expiresAt,
+        })).pipe(Effect.flatMap((ack) => typeof ack.messageId === "string" && ack.messageId.length > 0 ?
+          Effect.succeed({ messageID: ack.messageId }) : Effect.fail(new KernelError({ operation: "sendMedia", message: "kernel ack carried no messageId" })))),
+        media: {
+          capabilities: () => boundedRequest("media_capabilities", () => im.getProtectedMediaCapabilities()),
+          transferCapabilities: () => boundedRequest("media_transfer_capabilities", () => im.getProtectedMediaTransferCapabilities()),
+          uploadProgress: (input) => boundedRequest("media_upload_progress", () => im.getProtectedMediaUploadProgress(input)),
+          begin: (input) => boundedRequest("media_begin", () => im.beginProtectedMedia(input)),
+          putChunk: (input) => boundedRequest("media_chunk", () => im.putProtectedMediaChunk(input)),
+          finalize: (input) => boundedRequest("media_finalize", () => im.finalizeProtectedMedia(input)),
+          status: (input) => boundedRequest("media_status", () => im.getProtectedMedia(input)),
+          cancel: (input) => boundedRequest("media_cancel", () => im.cancelProtectedMedia(input)),
+          readRange: (input) => boundedRequest("media_range", () => im.readProtectedMediaRange(input)),
+        },
+        fetchHistory: () => Effect.fail(new KernelError({ operation: "fetchHistory", message: "Protected delivery reader is required" })),
+        fetchConversations: () => Effect.fail(new KernelError({ operation: "fetchConversations", message: "Protected delivery reader is required" })),
+        liveReadAvailable: () => im.isProtectedLiveReadAvailable(),
+        receiverBaselineAvailable: () => im.isProtectedReceiverBaselineAvailable(),
+        readReceiverBaseline: (baseline) => im.readProtectedReceiverBaseline(baseline) !== undefined,
+        getDeliveryReceiverBaseline: (input) => boundedRequest("getDeliveryReceiverBaseline", () => im.getDeliveryReceiverBaseline(input)),
+        readLiveCut: (cut) => im.readProtectedLiveCut(cut) !== undefined,
+        getDeliveryLiveCut: (input, baseline) => boundedRequest("getDeliveryLiveCut", () => im.getDeliveryLiveCut(input, baseline)),
+        getDeliveryLiveMessages: (input, cut) => boundedRequest("getDeliveryLiveMessages", () => im.getDeliveryLiveMessages(input, cut)).pipe(
+          Effect.flatMap((handle) => Effect.suspend(() => {
+            const original = KernelTaskLiveOrigin.capturePage(im, handle)
+            return original ? Effect.succeed(original) : Effect.fail(new KernelError({ operation: "getDeliveryLiveMessages", message: "Original live page unavailable" }))
+          })),
+        ),
+        getDeliveryReader: () => boundedRequest("getDeliveryReader", () => im.getDeliveryReader()),
+        getDeliveryChanges: (input) => boundedRequest("getDeliveryChanges", () => im.getDeliveryChanges(input)),
+        getDeliveryMessages: (input) => boundedRequest("getDeliveryMessages", () => im.getDeliveryMessages(input)),
+        getDeliveryReadCut: (input) => boundedRequest("getDeliveryReadCut", () => im.getDeliveryReadCut(input)),
+        getDeliveryOutputProof: (input) => boundedRequest("getDeliveryOutputProof", () => im.getDeliveryOutputProof(input)),
+        markDeliveryRead: (input) => boundedRequest("markDeliveryRead", () => im.markDeliveryRead(input)),
         disconnect: request("disconnect", () => im.disconnect()).pipe(Effect.ignore),
       })
     }),

@@ -36,7 +36,7 @@ import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect
 import { V2StructuredOutputEvidenceTable } from "@deepagent-code/core/session/runner/v2-structured-output-evidence.sql"
 import { V2TaskRunReceiptTable } from "@deepagent-code/core/session/runner/v2-task-run-receipt.sql"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
-import { SessionInputTable, SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { SessionInputTable, SessionTable, TaskNotificationOutboxTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { TaskRunDispatcher } from "@deepagent-code/core/session/task-run-dispatcher"
@@ -58,9 +58,10 @@ import { testEffect } from "../lib/effect"
 // V2-authority E2E for the V1-registry app TaskTool: every fresh launch rides the Core
 // TaskRunAuthority (ONE durable ledger row with execution_runtime='v2', ONE first session_input,
 // fenced terminal settle + compensation receipt), follow-up turns drive through the same V2
-// runtime, and background launches are drained by the process-global Core dispatcher with the
-// outbox delivering exactly one queue-mode input to the parent. The runner harness mirrors the
-// core task-run-dispatcher test (one fake text turn per drain).
+// runtime, and background launches are drained by the process-global Core dispatcher.
+// These direct registry calls have no canonical parent wait, so their terminal facts must
+// not admit a parent prompt. Registered continuation delivery is covered by the Core
+// task-run-dispatcher test (one fake text turn per drain).
 
 // Every provider turn returns prose embedding a JSON payload: schema-less launches surface the
 // prose, structured finalizers extract the payload via the shared extractor (a drain may issue
@@ -289,6 +290,8 @@ const sessions = SessionV2.layer.pipe(
 const taskRuntime = TaskRunDispatcher.runtimeLayer({ scanIntervalMs: 20 }).pipe(
   Layer.provide(database),
   Layer.provide(sessions),
+  Layer.provide(events),
+  Layer.provide(execution),
 )
 // App-side registry services the V1-facing TaskTool entry still requires (agent roster for the
 // policy gates, app config, runtime flags), pinned to the SAME in-memory database as the core
@@ -364,7 +367,7 @@ const pollUntil = <A>(effect: Effect.Effect<A>, check: (value: A) => boolean, at
             Effect.andThen(
               attempts > 1
                 ? pollUntil(effect, check, attempts - 1)
-                : Effect.die(new Error("poll exhausted")),
+                : Effect.die(new Error(`poll exhausted: ${JSON.stringify(value)}`)),
             ),
           ),
     ),
@@ -609,7 +612,7 @@ describe("tool.task V2 authority E2E", () => {
   )
 
   it.instance(
-    "background launch: dispatcher drains the run and the outbox delivers one queue input to the parent",
+    "background launch drains the run without admitting an unregistered parent continuation",
     () =>
       Effect.gen(function* () {
         yield* ensureProject
@@ -639,17 +642,21 @@ describe("tool.task V2 authority E2E", () => {
         expect(settled!.delivery_mode).toBe("background")
         expect(settled!.output).toContain("research result body")
 
-        // The outbox delivered exactly ONE queue-mode parent input with the deterministic id.
-        const delivered = yield* pollUntil(
+        // This direct registry call has no canonical parent task wait. Its terminal
+        // result remains a fact and cannot create a new parent model activity.
+        const notification = yield* pollUntil(
           db
             .select()
-            .from(SessionInputTable)
-            .where(and(eq(SessionInputTable.session_id, chat.id)))
-            .all()
+            .from(TaskNotificationOutboxTable)
+            .where(eq(TaskNotificationOutboxTable.run_id, settled!.run_id))
+            .get()
             .pipe(Effect.orDie),
-          (rows) => rows.some((row) => row.delivery === "queue"),
+          (row) => row?.status === "dead",
         )
-        expect(delivered.filter((row) => row.delivery === "queue")).toHaveLength(1)
+        expect(notification?.last_error).toContain("Task result continuation unregistered")
+        expect(
+          yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, chat.id)).all().pipe(Effect.orDie),
+        ).toHaveLength(0)
       }),
   )
 })

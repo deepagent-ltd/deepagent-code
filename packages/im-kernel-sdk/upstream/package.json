@@ -1,0 +1,61 @@
+{
+  "name": "webim-sdk",
+  "version": "1.9.17",
+  "description": "JuggleIM official Web SDK — high-performance, open-source real-time messaging. Chat, group, live chatroom, moments and RTC signaling over a custom Protobuf/WebSocket protocol. Auto-reconnect, offline messages, TypeScript-first.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "dist",
+    "src/index.d.ts",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "release": "npm run release:min && npm run release:es",
+    "release:dev": "rollup -c ./scripts/rollup.config.js --environment TAG:dev",
+    "release:min": "rollup -c ./scripts/rollup.config.js --environment TAG:min",
+    "release:es": "rollup -c ./scripts/rollup.config.js --environment TAG:es",
+    "release:es:min": "rollup -c ./scripts/rollup.config.js --environment TAG:es_min",
+    "publish": "npm run release:es:min && node ./scripts/prod.js && cd release && npm publish",
+    "zip": "node ./scripts/zip.js",
+    "update:version": "node ./scripts/update-version.js",
+    "build:pb": "npx pbjs -t json-module -w es6 -o ./src/socket/proto.js ./src/socket/connect.proto && node ./scripts/repair-pb.js"
+  },
+  "keywords": [
+    "im",
+    "sdk",
+    "instant-messaging",
+    "chat",
+    "chat-sdk",
+    "messaging",
+    "realtime",
+    "websocket",
+    "protobuf",
+    "juggleim",
+    "webim",
+    "live",
+    "chatroom",
+    "rtc",
+    "signaling"
+  ],
+  "author": "JuggleIM <support@juggle.im>",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/Juggleim/im-web-sdk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Juggleim/im-web-sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Juggleim/im-web-sdk/issues"
+  },
+  "devDependencies": {
+    "@rollup/plugin-json": "^6.0.1",
+    "dotenv": "^16.4.5",
+    "protobufjs-cli": "^1.1.3",
+    "rollup-plugin-babel": "^4.4.0",
+    "rollup-plugin-babel-minify": "^10.0.0"
+  },
+  "dependencies": {
+    "protobufjs": "^7.2.5"
+  }
+}

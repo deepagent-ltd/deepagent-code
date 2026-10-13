@@ -1,4 +1,6 @@
-import { createSignal, For, Show, type Component } from "solid-js"
+import { createEffect, onCleanup, untrack, For, Show, type Component } from "solid-js"
+import { createStore } from "solid-js/store"
+import { useLanguage } from "@/context/language"
 import { Button } from "@deepagent-code/ui/button"
 import { useIMClient } from "@/utils/im-client"
 import type { IMMessage } from "./types"
@@ -8,68 +10,162 @@ import type { IMMessage } from "./types"
 // hands the group + message id back to the panel so it can open the conversation.
 export const MessageSearch: Component<{
   onSelect?: (result: { groupID: string; messageID: string }) => void
+  localGroupIDs?: readonly string[]
+  displayEpoch?: string
+  invalidation?: number
 }> = (props) => {
   const client = useIMClient()
-  const [query, setQuery] = createSignal("")
-  const [results, setResults] = createSignal<IMMessage[]>([])
-  const [cursor, setCursor] = createSignal<string | null>(null)
-  const [hasMore, setHasMore] = createSignal(false)
-  const [loading, setLoading] = createSignal(false)
-  const [searched, setSearched] = createSignal(false)
-
+  const language = useLanguage()
+  const [state, setState] = createStore({
+    query: "",
+    results: [] as IMMessage[],
+    cursor: null as string | null,
+    hasMore: false,
+    loading: false,
+    searched: false,
+    partial: false,
+    unavailable: false,
+    failed: false,
+  })
+  const lifecycle = {
+    disposed: false,
+    generation: 0,
+    active: false,
+    deadline: Infinity,
+    timer: undefined as ReturnType<typeof setTimeout> | undefined,
+  }
+  const clearProtected = () => {
+    lifecycle.generation++
+    lifecycle.deadline = Infinity
+    if (lifecycle.timer) clearTimeout(lifecycle.timer)
+    setState({
+      results: state.results.filter((row) => props.localGroupIDs?.includes(row.groupID)),
+      cursor: null,
+      hasMore: false,
+      partial: state.searched || state.results.length > 0,
+      unavailable: true,
+    })
+  }
+  createEffect(() => {
+    client.scope()
+    props.displayEpoch
+    props.invalidation
+    untrack(clearProtected)
+  })
+  onCleanup(() => {
+    lifecycle.disposed = true
+    if (lifecycle.timer) clearTimeout(lifecycle.timer)
+  })
   const run = async (append: boolean) => {
-    const q = query().trim()
-    if (!q) return
-    setLoading(true)
+    const q = state.query.trim()
+    if (!q || lifecycle.active || lifecycle.disposed) return
+    lifecycle.active = true
+    const generation = lifecycle.generation
+    const scope = client.scope()
+    const started = performance.now()
+    setState({ loading: true, failed: false })
     try {
       const page = await client.searchMessages({
         q,
         limit: 30,
-        cursor: append ? cursor() ?? undefined : undefined,
+        cursor: append ? (state.cursor ?? undefined) : undefined,
       })
-      const incoming = page.messages ?? []
-      setResults((prev) => (append ? [...prev, ...incoming] : incoming))
-      setCursor(page.nextCursor)
-      setHasMore(page.hasMore)
-      setSearched(true)
-    } catch (error) {
-      console.error("Search failed:", error)
-      const { showToast } = await import("@/utils/toast")
-      showToast({
-        variant: "error",
-        title: "Search failed",
-        description: error instanceof Error ? error.message : String(error),
+      if (
+        lifecycle.disposed ||
+        generation !== lifecycle.generation ||
+        scope !== client.scope() ||
+        q !== state.query.trim()
+      )
+        return
+      if (page.reader) {
+        const remaining =
+          page.reader.nextExpiryAt === null ? Infinity : page.reader.nextExpiryAt - page.reader.validatedServerNow
+        if (
+          (props.displayEpoch && props.displayEpoch !== page.reader.displayEpoch) ||
+          !Number.isSafeInteger(page.reader.validatedServerNow) ||
+          (page.reader.nextExpiryAt !== null && !Number.isSafeInteger(page.reader.nextExpiryAt)) ||
+          started + remaining <= performance.now()
+        ) {
+          clearProtected()
+          return
+        }
+        lifecycle.deadline = Math.min(lifecycle.deadline, started + remaining)
+        if (lifecycle.timer) clearTimeout(lifecycle.timer)
+        if (Number.isFinite(lifecycle.deadline))
+          lifecycle.timer = setTimeout(clearProtected, Math.max(0, lifecycle.deadline - performance.now()))
+      }
+      setState({
+        results: append
+          ? Array.from(new Map([...state.results, ...page.messages].map((row) => [row.id, row])).values())
+          : page.messages,
+        cursor: page.nextCursor,
+        hasMore: page.hasMore,
+        searched: true,
+        unavailable: false,
+        partial: !!page.protectedUnavailable || page.reader?.state === "partial",
       })
+    } catch {
+      if (!lifecycle.disposed && generation === lifecycle.generation) {
+        clearProtected()
+        setState("failed", true)
+      }
     } finally {
-      setLoading(false)
+      lifecycle.active = false
+      if (!lifecycle.disposed) setState("loading", false)
     }
   }
+  const timer = setInterval(() => {
+    if (state.searched && state.query.trim()) void run(false)
+  }, 5000)
+  onCleanup(() => clearInterval(timer))
 
   return (
     <div class="flex flex-col gap-2 p-2">
       <div class="flex items-center gap-2">
         <input
           class="flex-1 min-w-0 rounded-md border border-border-weak-base bg-surface-base px-2 py-1 text-13-regular text-text-strong outline-none focus:ring-2 focus:ring-accent-base"
-          placeholder="Search messages…"
-          value={query()}
-          onInput={(e) => setQuery(e.currentTarget.value)}
+          placeholder={`${language.t("im.search.messages")}…`}
+          value={state.query}
+          onInput={(e) => {
+            lifecycle.generation++
+            setState({ query: e.currentTarget.value, results: [], searched: false, cursor: null, hasMore: false, failed: false })
+          }}
           onKeyDown={(e) => {
             e.stopPropagation()
             if (e.key === "Enter") void run(false)
           }}
         />
-        <Button variant="secondary" size="small" onClick={() => run(false)} disabled={!query().trim() || loading()}>
-          {loading() ? "…" : "Search"}
+        <Button
+          variant="secondary"
+          size="small"
+          onClick={() => run(false)}
+          disabled={!state.query.trim() || state.loading}
+        >
+          {state.loading ? language.t("common.loading.ellipsis") : language.t("common.search.placeholder")}
         </Button>
       </div>
 
-      <Show when={searched()}>
+      <Show when={state.partial}>
+        <p role="status" class="text-12-regular text-text-weak">
+          {language.t(state.unavailable ? "im.reader.unavailable" : "im.reader.partialResults")}
+        </p>
+      </Show>
+      <Show when={state.failed}>
+        <p role="alert" class="text-12-regular text-text-danger-base">
+          {language.t("im.search.failed")}
+        </p>
+      </Show>
+      <Show when={state.searched}>
         <Show
-          when={results().length > 0}
-          fallback={<div class="px-1 py-2 text-12-regular text-text-weak">No matching messages.</div>}
+          when={state.results.length > 0}
+          fallback={
+            <Show when={!state.failed}>
+              <div class="px-1 py-2 text-12-regular text-text-weak">{language.t("im.search.empty")}</div>
+            </Show>
+          }
         >
           <div class="flex flex-col gap-1">
-            <For each={results()}>
+            <For each={state.results}>
               {(msg) => (
                 <button
                   type="button"
@@ -83,10 +179,10 @@ export const MessageSearch: Component<{
                 </button>
               )}
             </For>
-            <Show when={hasMore()}>
+            <Show when={state.hasMore}>
               <div class="flex justify-center py-1">
-                <Button variant="ghost" size="small" onClick={() => run(true)} disabled={loading()}>
-                  {loading() ? "Loading…" : "Load more"}
+                <Button variant="ghost" size="small" onClick={() => run(true)} disabled={state.loading}>
+                  {state.loading ? `${language.t("common.loading")}…` : language.t("common.loadMore")}
                 </Button>
               </div>
             </Show>

@@ -113,7 +113,7 @@ function storage(workspaceID: string, attachmentID = "ima_fixture") {
 
 describe("IM media real loopback HTTP", () => {
   on.live(
-    "one list request cleans at most 32 expired records even with multiple live bound attachments",
+    "media GETs do not clean expired records; a later upload cleans at most 32",
     () =>
       Effect.gen(function* () {
         const { directory, group } = yield* seed
@@ -140,10 +140,22 @@ describe("IM media real loopback HTTP", () => {
         }))
         yield* db.insert(AttachmentTable).values(expired).run()
         yield* Effect.forEach(expired, (item) => Effect.promise(() => fs.writeFile(item.storage_path, "expired")))
+        const before = yield* db.select().from(AttachmentTable).all()
         const response = yield* requestInDirectory(`/api/v1/im/attachments?groupId=${group.id}`, directory).pipe(
           Effect.flatMap(json<Attachment[]>),
         )
         expect(response.map((item) => item.id).sort()).toEqual(live.sort())
+        for (const suffix of ["", "/content"]) {
+          expect(
+            (yield* requestInDirectory(`/api/v1/im/attachments/${expired[0].id}${suffix}`, directory)).status,
+          ).toBe(404)
+          expect((yield* requestInDirectory(`/api/v1/im/attachments/${live[0]}${suffix}`, directory)).status).toBe(200)
+        }
+        expect(yield* db.select().from(AttachmentTable).all()).toEqual(before)
+        expect(
+          (yield* Effect.promise(() => fs.readdir(baseDir))).filter((name) => name.startsWith("ima_expired_")),
+        ).toHaveLength(65)
+        yield* upload(directory, group.id).pipe(Effect.flatMap(json<Attachment>))
         const rows = yield* db.select().from(AttachmentTable).all()
         expect(rows.filter((item) => item.deleted_at !== null)).toHaveLength(32)
         expect(rows.filter((item) => item.id.startsWith("ima_expired_") && item.deleted_at === null)).toHaveLength(33)
@@ -178,7 +190,7 @@ describe("IM media real loopback HTTP", () => {
   )
 
   on.live(
-    "a real filesystem failure retains an unbound owner record that can be cleaned at TTL",
+    "an unsafe media root is refused before reserving an attachment and GET does not clean it",
     () =>
       Effect.gen(function* () {
         const { directory, group } = yield* seed
@@ -188,28 +200,23 @@ describe("IM media real loopback HTTP", () => {
           await fs.mkdir(path.dirname(baseDir), { recursive: true })
           await fs.writeFile(baseDir, "isolated directory obstruction")
         })
-        expect((yield* upload(directory, group.id)).status).toBe(500)
+        expect((yield* upload(directory, group.id)).status).toBe(404)
         const { db } = yield* Database.Service
         const rows = yield* db.select().from(AttachmentTable).all()
-        expect(rows).toHaveLength(1)
-        expect(rows[0].message_id).toBeNull()
-        expect(rows[0].deleted_at).toBeNull()
-        expect((yield* send(directory, group.id, rows[0].id)).status).toBe(404)
-        expect((yield* requestInDirectory(`/api/v1/im/attachments/${rows[0].id}/content`, directory)).status).toBe(404)
-        yield* Effect.promise(() => fs.rm(baseDir))
-        yield* db
-          .update(AttachmentTable)
-          .set({ created_at: Date.now() - AttachmentStorage.ttlMs() - 1000 })
-          .where(eq(AttachmentTable.id, rows[0].id))
-          .run()
+        expect(rows).toHaveLength(0)
         expect(
           yield* requestInDirectory(`/api/v1/im/attachments?groupId=${group.id}`, directory).pipe(
             Effect.flatMap(json<Attachment[]>),
           ),
         ).toEqual([])
-        expect(
-          (yield* db.select().from(AttachmentTable).where(eq(AttachmentTable.id, rows[0].id)).get())?.deleted_at,
-        ).not.toBeNull()
+        expect(yield* db.select().from(AttachmentTable).all()).toHaveLength(0)
+        expect(yield* Effect.promise(() => fs.readFile(baseDir, "utf8"))).toBe("isolated directory obstruction")
+        yield* Effect.promise(() => fs.rm(baseDir))
+        const attachment = yield* upload(directory, group.id).pipe(Effect.flatMap(json<Attachment>))
+        yield* send(directory, group.id, attachment.id).pipe(Effect.flatMap(json))
+        const response = yield* requestInDirectory(`/api/v1/im/attachments/${attachment.id}/content`, directory)
+        expect(response.status).toBe(200)
+        expect(new TextDecoder().decode(yield* response.arrayBuffer)).toBe("fixture content")
       }),
     20_000,
   )
@@ -397,29 +404,54 @@ describe("IM media real loopback HTTP", () => {
           .where(eq(AttachmentTable.id, AttachmentID.make(attachment.id)))
           .get()
         if (!row) return yield* Effect.die("Expected fixture attachment")
-        yield* Effect.promise(() => fs.writeFile(row.storage_path, "corrupted"))
+        const original = yield* Effect.promise(() => fs.readFile(row.storage_path))
+        const renamed = `${row.storage_path}.original`
+        yield* Effect.promise(() => fs.rename(row.storage_path, renamed))
+        yield* Effect.promise(() => fs.symlink(renamed, row.storage_path))
+        const refusedSymlink = yield* requestInDirectory(endpoint, directory)
+        expect(refusedSymlink.status).toBe(404)
+        expect(yield* refusedSymlink.json).toMatchObject({ name: "ATTACHMENT_UNAVAILABLE" })
+        yield* Effect.promise(() => fs.unlink(row.storage_path))
+        yield* Effect.promise(() => fs.rename(renamed, row.storage_path))
+        yield* Effect.promise(() => fs.truncate(row.storage_path, AttachmentStorage.maxAttachmentBytes() + 1))
         expect((yield* requestInDirectory(endpoint, directory)).status).toBe(404)
+        yield* Effect.promise(() => fs.writeFile(row.storage_path, original))
+        const restored = yield* requestInDirectory(endpoint, directory)
+        expect(restored.status).toBe(200)
+        expect(new Uint8Array(yield* restored.arrayBuffer)).toEqual(new Uint8Array(original))
+        expect(yield* db.select().from(AttachmentTable).where(eq(AttachmentTable.id, row.id)).get()).toEqual(row)
+        yield* Effect.promise(() => fs.writeFile(row.storage_path, Buffer.alloc(original.length, 0x78)))
+        const refusedChecksum = yield* requestInDirectory(endpoint, directory)
+        expect(refusedChecksum.status).toBe(404)
+        expect(yield* refusedChecksum.json).toMatchObject({ name: "ATTACHMENT_UNAVAILABLE" })
         yield* db
           .update(AttachmentTable)
           .set({ created_at: Date.now() - AttachmentStorage.ttlMs() - 1000 })
           .where(eq(AttachmentTable.id, row.id))
           .run()
         expect((yield* requestInDirectory(endpoint, directory)).status).toBe(404)
-        expect(yield* Effect.promise(() => Bun.file(row.storage_path).exists())).toBe(false)
+        expect(yield* Effect.promise(() => Bun.file(row.storage_path).exists())).toBe(true)
         expect(
           (yield* db.select().from(AttachmentTable).where(eq(AttachmentTable.id, row.id)).get())?.deleted_at,
-        ).not.toBeNull()
+        ).toBeNull()
         yield* db
           .update(GroupTable)
           .set({ kernel_conv_id: "k:2:isolated-never-contacted" })
           .where(eq(GroupTable.id, GroupID.make(group.id)))
           .run()
-        expect((yield* upload(directory, group.id)).status).toBe(400)
+        const beforeProtectedUpload = (yield* db.select({ id: AttachmentTable.id }).from(AttachmentTable).where(eq(AttachmentTable.group_id, GroupID.make(group.id))).all()).length
+        const deniedProtectedUpload = yield* upload(directory, group.id)
+        expect(deniedProtectedUpload.status).toBe(503)
+        expect(yield* deniedProtectedUpload.json).toMatchObject({ name: "IM_READER_UNAVAILABLE" })
+        expect((yield* db.select({ id: AttachmentTable.id }).from(AttachmentTable).where(eq(AttachmentTable.group_id, GroupID.make(group.id))).all()).length).toBe(beforeProtectedUpload)
         yield* db
           .delete(MemberTable)
           .where(eq(MemberTable.group_id, GroupID.make(group.id)))
           .run()
-        expect((yield* upload(directory, group.id)).status).toBe(404)
+        // A legacy protected mapping has no current SDK proof even after its
+        // local member rows disappear. Neither request may stage an attachment.
+        expect((yield* upload(directory, group.id)).status).toBe(503)
+        expect((yield* db.select({ id: AttachmentTable.id }).from(AttachmentTable).where(eq(AttachmentTable.group_id, GroupID.make(group.id))).all()).length).toBe(beforeProtectedUpload)
       }),
     20_000,
   )

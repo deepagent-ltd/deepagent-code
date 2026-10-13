@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src", "test/fixture/im-media-product.tsx", "test/fixture/im-reader-product.tsx", "test/fixture/im-media-batch-receiver.tsx", "test/fixture/im-media-batch-receiver-launch.ts", "test/cli/tui/im-media-receiver-menu.test.tsx"]
+}

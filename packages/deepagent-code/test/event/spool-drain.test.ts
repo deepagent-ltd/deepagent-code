@@ -8,6 +8,12 @@ import { DeepAgentEventAdmissionTable } from "@deepagent-code/core/deepagent/eve
 import { contentDigest } from "@deepagent-code/core/contract/digest"
 import { decodeEventWorkEnvelope, encodeEventWorkEnvelope, eventWorkEnvelopeDigest, type EventWorkEnvelope } from "@deepagent-code/core/contract/event-envelope"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { EventWorkSource } from "@deepagent-code/core/deepagent/event-work-source"
+import { EventWorkRule } from "@deepagent-code/core/deepagent/event-work-rule"
+import { EventWorkRuntime } from "../../src/session/event-work-admission"
+import { makeSessionV2Adapter } from "../../src/session/v2-admission-bridge"
+import { Location } from "@deepagent-code/core/location"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { createRuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import {
@@ -18,10 +24,10 @@ import {
   SPOOL_DRAIN_LEASE_MS,
 } from "../../src/session/v4-event-runtime"
 
-// W5 ③ — DLQ 可见化: the C5 spool drain (v4-event-runtime) is the production consumer of
-// `deepagent_event_spool`; a consumption failure must (a) nack (bounded retry → `dead` = the DLQ),
-// (b) write an `event_consumer_failure` receipt (durable, admin-queriable) and (c) log. A successful
-// drain commits the row `resolved` + the admission receipt `resolved`.
+// The spool consumer tests use its typed formal Work port plus the actual admission/receipt ledger.
+// This seam tests NACK, DLQ, receipt settlement and interruption, not installed source authorization.
+// Legacy envelopes must stay observable without reactivating their ordinary Session adapter;
+// installed EventWork/DAG authorization remains covered by the separate production qualification.
 
 type Db = Database.Interface["db"]
 const admissionOff = createRuntimeFeatureRegistry(undefined, {
@@ -33,7 +39,7 @@ const envelopeFor = (eventRef: string): EventWorkEnvelope =>
   decodeEventWorkEnvelope({
     schemaVersion: "event-work.v1",
     eventRef,
-    eventType: "w5.spool.test",
+    eventType: EventWorkRule.EVENT_TYPE,
     objective: "do the spooled work",
     payload: { contentType: "application/json", ref: eventRef, payloadHash: "0".repeat(64) },
     verifiedFacts: [],
@@ -68,7 +74,7 @@ const succeedingV2Session = (calls: { prompts: number; readonly withAnchor?: str
       Effect.sync(() => {
         calls.prompts++
         if (calls.withAnchor) calls.withAnchor.push(String(input.id))
-        return { id: SessionMessage.ID.make("msg_spool_admitted") }
+        return { id: input.id ?? SessionMessage.ID.make("msg_spool_admitted") }
       }),
   }) as unknown as SessionV2.Interface
 
@@ -84,6 +90,30 @@ const succeedingAnchorSession = (calls: Array<{ id: string }>): SessionV2.Interf
         return { id: SessionMessage.ID.make(id) }
       }),
   }) as unknown as SessionV2.Interface
+
+// Deliberately bounded consumer-port fixture: admission uses the real ledger and original adapter.
+// Source lookup/control are unavailable so this cannot stand in for production source qualification.
+const consumerPort = (db: Db, session: SessionV2.Interface): EventWorkRuntime.Port => ({
+  reconcile: Effect.void,
+  pendingDags: Effect.succeed([]),
+  lookup: () => Effect.fail(EventWorkSource.failure("EVENT_WORK_UNAVAILABLE")),
+  control: () => Effect.fail(EventWorkSource.failure("EVENT_WORK_UNAVAILABLE")),
+  admit: (eventID, replay) => Effect.gen(function* () {
+    if (!replay) return yield* Effect.fail(EventWorkSource.failure("EVENT_WORK_INVALID"))
+    expect(eventID).toBe(replay.envelope.eventRef.replace(/^event:\/\//, ""))
+    const result = yield* EventAdmission.admit(db, {
+      envelope: replay.envelope,
+      sessionID: replay.sessionID,
+      messageID: spoolAdmissionAnchor(replay.envelope.eventRef, replay.sessionID),
+      delivery: "queue",
+      resume: false,
+      adapter: makeSessionV2Adapter(session, () => Location.Ref.make({ directory: AbsolutePath.make("/tmp/w5-consumer") }), undefined),
+      now: 20_000,
+    })
+    if (result.kind === "disabled") return yield* Effect.fail(EventWorkSource.failure("EVENT_WORK_UNAVAILABLE"))
+    return { messageID: result.row.messageID ?? "" }
+  }),
+})
 
 const saved = process.env[EventAdmission.EVENT_V2_ADMISSION_ENV]
 
@@ -115,7 +145,17 @@ describe("W5 DLQ visibility — spool drain failure → event_consumer_failure r
         // (capacitated at SPOOL_NACK_BACKOFF_CAP_MS) before the row re-claims.
         let clock = 10
         for (let attempt = 1; attempt <= EventSpool.DEFAULT_MAX_ATTEMPTS + 1; attempt++) {
-          yield* spoolDrainPass({ db, v2Session: failingV2Session(recorded), now: () => clock })
+          const session = failingV2Session(recorded)
+          yield* spoolDrainPass({ db, v2Session: session, eventWork: consumerPort(db, session), now: () => clock })
+          const pending = yield* EventSpool.getByRef(db, envelope.eventRef)
+          if (pending?.status === "pending") {
+            const before = recorded.length
+            expect(pending.nextAttemptAt).toBe(clock + spoolNackBackoffMs(attempt))
+            yield* spoolDrainPass({ db, v2Session: session, eventWork: consumerPort(db, session),
+              now: () => clock + spoolNackBackoffMs(attempt) - 1 })
+            expect(recorded.length).toBe(before)
+            expect(yield* EventSpool.getByRef(db, envelope.eventRef)).toEqual(pending)
+          }
           clock += spoolNackBackoffMs(attempt) + 1000
         }
         const row = yield* EventSpool.getByRef(db, envelope.eventRef)
@@ -196,7 +236,8 @@ describe("W5 DLQ visibility — spool drain failure → event_consumer_failure r
         expect(seeded).toBe("failed")
         expect((yield* ConsumerReceipts.receiptFor(db, CONSUMER_FAILURE_KIND, envelope.eventRef))?.status).toBe("pending")
         const calls = { prompts: 0, withAnchor: [] as string[] }
-        yield* spoolDrainPass({ db, v2Session: succeedingV2Session(calls), now: () => 20_000 })
+        const session = succeedingV2Session(calls)
+        yield* spoolDrainPass({ db, v2Session: session, eventWork: consumerPort(db, session), now: () => 20_000 })
         const row = yield* EventSpool.getByRef(db, envelope.eventRef)
         expect(row?.status).toBe("resolved")
         // The consumption eventually succeeded — the stale failure receipt is gone.
@@ -212,25 +253,30 @@ describe("W5 DLQ visibility — spool drain failure → event_consumer_failure r
         const envelope = envelopeFor("event://w5-spool-ok")
         yield* EventSpool.enqueue(db, { envelope, sessionID: "ses_w5_ok", priority: "critical", now: 10 })
         const calls = { prompts: 0, withAnchor: [] as string[] }
-        yield* spoolDrainPass({ db, v2Session: succeedingV2Session(calls), now: () => 20_000 })
+        const session = succeedingV2Session(calls)
+        yield* spoolDrainPass({ db, v2Session: session, eventWork: consumerPort(db, session), now: () => 20_000 })
         const row = yield* EventSpool.getByRef(db, envelope.eventRef)
         expect(row?.status).toBe("resolved")
         // One durable SessionV2 admission with the deterministic anchor (dedupe for re-drain).
         expect(calls.prompts).toBe(1)
-        expect(calls.withAnchor[0]).toContain("msg_")
+        expect(calls.withAnchor[0]).toBe(`msg_${contentDigest(spoolAdmissionAnchor(envelope.eventRef, "ses_w5_ok")).slice(0, 40)}`)
         const admission = yield* EventAdmission.admissionFor(db, envelope.eventRef)
         expect(admission?.status).toBe("resolved")
+        expect(admission?.messageID).toBe(calls.withAnchor[0])
         // No failure receipt was written on the success path.
         const receipt = yield* ConsumerReceipts.receiptFor(db, CONSUMER_FAILURE_KIND, envelope.eventRef)
         expect(receipt).toBeUndefined()
+        yield* spoolDrainPass({ db, v2Session: session, eventWork: consumerPort(db, session), now: () => 30_000 })
+        expect(calls.prompts).toBe(1)
+        expect(yield* EventAdmission.admissionFor(db, envelope.eventRef)).toEqual(admission)
       }),
     )
   })
 
-  test("W5 F2 — a legacy `admitted` row re-drives anchored at the STORED message id (no second session_input)", async () => {
+  test("a legacy admitted row remains observable without reactivating its stored Session anchor", async () => {
     await runWithDb((db) =>
       Effect.gen(function* () {
-        const envelope = envelopeFor("event://w5-spool-legacy")
+        const envelope = decodeEventWorkEnvelope({ ...encodeEventWorkEnvelope(envelopeFor("event://w5-spool-legacy")), eventType: "w5.spool.test" })
         yield* EventSpool.enqueue(db, { envelope, sessionID: "ses_w5_legacy", priority: "high", now: 10 })
         // Simulate a pre-W5 admission: the legacy row carries the FIRST attempt's SessionV2 anchor and
         // the effect completed there (its message id is the reconciliation key).
@@ -251,24 +297,14 @@ describe("W5 DLQ visibility — spool drain failure → event_consumer_failure r
         const v2Session = succeedingAnchorSession(calls)
         yield* spoolDrainPass({ db, v2Session, now: () => 20_000 })
         const row = yield* EventSpool.getByRef(db, envelope.eventRef)
-        expect(row?.status).toBe("resolved")
-        // The drain re-anchored at the ROW's stored message id (not the spool lane anchor): the adapter's
-        // message id is the SessionV2 id derived from `anchor-legacy` — SessionV2 reconcile-dedupes the
-        // SAME session_input this legacy row was admitted under. A second session_input is never created.
-        const spoolAnchorID = `msg_${contentDigest(spoolAdmissionAnchor(envelope.eventRef, "ses_w5_legacy")).slice(0, 40)}`
-        const legacyAnchorID = `msg_${contentDigest("anchor-legacy").slice(0, 40)}`
-        expect(calls.length).toBe(1)
-        expect(calls[0].id).toBe(legacyAnchorID)
-        expect(calls[0].id).not.toBe(spoolAnchorID)
-        // The durable receipt keeps the legacy anchor chain: status flips `admitted` → `resolved`.
+        expect(row?.status).toBe("pending")
+        expect(row?.attempts).toBe(1)
+        expect(calls).toEqual([])
         const admission = yield* EventAdmission.admissionFor(db, envelope.eventRef)
-        expect(admission?.status).toBe("resolved")
-        // The stored receipt message id is the SessionV2 id of the re-driven (stored-anchored) input.
-        expect(admission?.messageID).toBe(legacyAnchorID)
-        // Re-drain (the receipt is `resolved`): the adapter is NOT re-driven (exact retry) — and the spool
-        // row is resolved, so the pass claims nothing. Still one durable session_input.
+        expect(admission).toMatchObject({ status: "admitted", messageID: "anchor-legacy" })
         yield* spoolDrainPass({ db, v2Session, now: () => 30_000 })
-        expect(calls.length).toBe(1)
+        expect(calls).toEqual([])
+        expect(yield* EventAdmission.admissionFor(db, envelope.eventRef)).toEqual(admission)
       }),
     )
   })
@@ -291,7 +327,7 @@ describe("W5 DLQ visibility — spool drain failure → event_consumer_failure r
               return { id: SessionMessage.ID.make("msg_hang") }
             }),
         } as unknown as SessionV2.Interface
-        const fiber = yield* spoolDrainPass({ db, v2Session: hangingV2Session, now: () => clock }).pipe(Effect.forkScoped)
+        const fiber = yield* spoolDrainPass({ db, v2Session: hangingV2Session, eventWork: consumerPort(db, hangingV2Session), now: () => clock }).pipe(Effect.forkScoped)
         yield* Deferred.await(started)
         yield* Fiber.interrupt(fiber)
         const exit = yield* Fiber.await(fiber)
@@ -308,7 +344,8 @@ describe("W5 DLQ visibility — spool drain failure → event_consumer_failure r
         clock += SPOOL_DRAIN_LEASE_MS + 1000
         yield* Deferred.succeed(release, void 0)
         const calls = { prompts: 0, withAnchor: [] as string[] }
-        yield* spoolDrainPass({ db, v2Session: succeedingV2Session(calls), now: () => clock })
+        const session = succeedingV2Session(calls)
+        yield* spoolDrainPass({ db, v2Session: session, eventWork: consumerPort(db, session), now: () => clock })
         const revived = yield* EventSpool.getByRef(db, envelope.eventRef)
         expect(revived?.status).toBe("resolved")
         expect(revived?.attempts).toBe(0)

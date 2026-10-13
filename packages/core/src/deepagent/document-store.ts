@@ -1,4 +1,17 @@
-import { mkdirSync, readdirSync, readFileSync, existsSync } from "node:fs"
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  existsSync,
+  opendirSync,
+  lstatSync,
+  fstatSync,
+  openSync,
+  readSync,
+  closeSync,
+  constants,
+} from "node:fs"
+import { Option, Schema } from "effect"
 import { createHash } from "node:crypto"
 import path from "node:path"
 import { writeFileExclusive, writeRecoverableFileExclusive } from "./atomic-write"
@@ -108,12 +121,7 @@ export type EvidenceStrength = "strong" | "medium" | "weak" | "none"
 // Phase 0 additions code_symbol/ledger/bridge are deliberately NOT here (roadmap C3, decision #4):
 // they are non-knowledge derived data (code entities, session state, cross-session handoff), so they
 // never require confidence and never pass the retrieve() whitelist (KNOWLEDGE_DOC_TYPES). Do not add.
-export const KNOWLEDGE_TYPES = readonlySet(new Set<DocType>([
-  "knowledge",
-  "strategy",
-  "methodology",
-  "memory",
-]))
+export const KNOWLEDGE_TYPES = readonlySet(new Set<DocType>(["knowledge", "strategy", "methodology", "memory"]))
 
 export type DocLink = { readonly rel: LinkRel; readonly to: string; readonly note?: string }
 export type Provenance = {
@@ -397,7 +405,14 @@ export class DocumentStore {
   constructor(
     private readonly root: string,
     shared = false,
+    private readonly exactIDs?: readonly string[],
+    private readonly allowAbsent = false,
   ) {
+    if (exactIDs) {
+      this.docs = new Map()
+      this.rebuildExact()
+      return
+    }
     mkdirSync(path.join(root, "docs"), { recursive: true })
     if (shared) {
       const key = path.resolve(root)
@@ -425,6 +440,23 @@ export class DocumentStore {
     this.rebuildIndex()
   }
 
+  /** C1 bounded projection handle. Does not populate or mutate the ordinary shared index. */
+  static openExact(root: string, ids: readonly string[]): DocumentStore {
+    if (ids.length === 0 || ids.length > 8 || new Set(ids).size !== ids.length) throw new DocumentInspectionError()
+    return new DocumentStore(root, false, Object.freeze([...ids]))
+  }
+
+  /** Same bounded inspection, but absent targets are explicit create candidates. Existing corrupt
+   * files, symlinks and conflicting versions are still failures; this handle grants no authority. */
+  static openExactForCreate(root: string, ids: readonly string[]): DocumentStore {
+    if (ids.length === 0 || ids.length > 8 || new Set(ids).size !== ids.length) throw new DocumentInspectionError()
+    return new DocumentStore(root, false, Object.freeze([...ids]), true)
+  }
+
+  static logicalID(type: DocType, domain: string | null, idSlug: string): string {
+    return domain ? `doc:${type}:${domain}:${slugify(idSlug)}` : `doc:${type}:${slugify(idSlug)}`
+  }
+
   // F30-1 Part 2: a SHARED handle over `root` — all shared handles for the same resolved root in this
   // process share ONE in-memory index, so writes through any handle are immediately visible through
   // the others. Use for coherent same-process authority (e.g. a long-lived driver handle that must see
@@ -449,6 +481,67 @@ export class DocumentStore {
     doc = { ...doc, hash: computeHash(doc) }
     this.persist(doc)
     return doc
+  }
+
+  /** Controller-only complete projection on an exact bounded handle. No ID allocation, root scan,
+   * metadata rebasing or retry of a conflicting writer. Forward links must belong to the same
+   * predeclared exact set; their bytes are committed by the surrounding business journal. */
+  projectExact(payload: unknown, expected: DocumentRevision | null): Doc {
+    if (!this.exactIDs || !payload || typeof payload !== "object" || Array.isArray(payload))
+      throw new DocumentInspectionError()
+    const id = Reflect.get(payload, "id")
+    const type = Reflect.get(payload, "type")
+    const version = Reflect.get(payload, "version")
+    if (
+      typeof id !== "string" ||
+      typeof type !== "string" ||
+      typeof version !== "number" ||
+      !this.exactIDs.includes(id) ||
+      !["plan", "run_context", "worklog", "diagnosis", "decision"].includes(type) ||
+      Reflect.has(payload, "hash")
+    )
+      throw new DocumentInspectionError()
+    const candidate = { ...payload, hash: `sha256:${createHash("sha256").update(canonical(payload)).digest("hex")}` }
+    if (
+      !exactDocument(candidate, id, type, version) ||
+      !candidate.scope.startsWith("run:") ||
+      candidate.superseded_by !== null ||
+      candidate.links.some((link) => !this.exactIDs!.includes(link.to)) ||
+      Buffer.byteLength(JSON.stringify(candidate)) > 1_048_576
+    )
+      throw new DocumentInspectionError()
+    this.rebuildExact()
+    const current = this.get(id)
+    if (current?.version === candidate.version && current.hash === candidate.hash) {
+      this.publishExact(current)
+      return current
+    }
+    if (expected === null) {
+      if (current || version !== 1) throw new DocumentInspectionError()
+    } else {
+      const previous = this.get(id, expected.version)
+      if (
+        expected.id !== id ||
+        !previous ||
+        previous.hash !== expected.hash ||
+        current?.version !== expected.version ||
+        current.hash !== expected.hash ||
+        version !== expected.version + 1
+      )
+        throw new DocumentInspectionError()
+    }
+    this.persist(candidate)
+    this.publishExact(candidate)
+    return candidate
+  }
+
+  // Repair only this committed fact in an already-live advisory cache; never scan or create a root.
+  private publishExact(doc: Doc): void {
+    const index = sharedIndexRegistry.get(path.resolve(this.root))?.deref()
+    if (!index) return
+    const versions = index.get(doc.id) ?? new Map<number, Doc>()
+    versions.set(doc.version, doc)
+    index.set(doc.id, versions)
   }
 
   upsert(input: CreateDocInput): Doc {
@@ -645,7 +738,8 @@ export class DocumentStore {
   // narrow entry separate from governance so callers cannot make arbitrary documents active.
   markProvisionalEnvironmentFact(id: string, expected: DocumentRevision): Doc {
     const cur = this.requireRevision(id, expected, "markProvisionalEnvironmentFact")
-    if (cur.type !== "environment_fact") throw new Error(`markProvisionalEnvironmentFact: not an environment_fact ${id}`)
+    if (cur.type !== "environment_fact")
+      throw new Error(`markProvisionalEnvironmentFact: not an environment_fact ${id}`)
     return this.appendOperationalStatus(id, "provisional", expected)
   }
 
@@ -814,6 +908,10 @@ export class DocumentStore {
   }
 
   rebuildIndex(): void {
+    if (this.exactIDs) {
+      this.rebuildExact()
+      return
+    }
     this.docs.clear()
     const docsDir = path.join(this.root, "docs")
     if (!existsSync(docsDir)) return
@@ -833,6 +931,105 @@ export class DocumentStore {
           console.warn(`deepagent document-store: skipping unreadable doc file ${path.join(typeDir, file)}`, error)
         }
       }
+    }
+  }
+
+  private rebuildExact(): void {
+    this.docs.clear()
+    const ids = this.exactIDs!
+    if (
+      ids.length === 0 ||
+      ids.length > 8 ||
+      new Set(ids).size !== ids.length ||
+      ids.some((id) => id.length > 512 || !/^doc:[a-z_]+:[a-zA-Z0-9_.:-]+$/.test(id))
+    )
+      throw new DocumentInspectionError()
+    const identity = (value: NonNullable<ReturnType<typeof lstatSync>>) =>
+      `${value.dev}:${value.ino}:${value.size}:${value.mtimeMs}:${value.ctimeMs}`
+    let entries = 0
+    let selected = 0
+    let bytes = 0
+    try {
+      const roots = [this.root, path.join(this.root, "docs")].flatMap((file) => {
+        const stat = lstatSync(file, { throwIfNoEntry: !this.allowAbsent })
+        return stat ? [{ file, stat }] : []
+      })
+      if (this.allowAbsent && roots.length === 0) {
+        let ancestor = path.dirname(path.resolve(this.root))
+        for (let depth = 0; depth < 256; depth++) {
+          const stat = lstatSync(ancestor, { throwIfNoEntry: false })
+          if (stat) {
+            roots.push({ file: ancestor, stat })
+            break
+          }
+          const parent = path.dirname(ancestor)
+          if (parent === ancestor || depth === 255) throw new DocumentInspectionError()
+          ancestor = parent
+        }
+      }
+      if (roots.some((item) => !item.stat.isDirectory() || item.stat.isSymbolicLink()))
+        throw new DocumentInspectionError()
+      for (const type of new Set(ids.map((id) => id.split(":")[1]))) {
+        const directory = path.join(this.root, "docs", type)
+        const before = lstatSync(directory, { throwIfNoEntry: !this.allowAbsent })
+        if (!before && this.allowAbsent) continue
+        if (!before) throw new DocumentInspectionError()
+        if (!before.isDirectory() || before.isSymbolicLink()) throw new DocumentInspectionError()
+        const stream = opendirSync(directory, { bufferSize: 1 })
+        try {
+          for (let entry = stream.readSync(); entry !== null; entry = stream.readSync()) {
+            if (++entries > 4096) throw new DocumentInspectionError()
+            const id = ids.find((id) => entry!.name.startsWith(`${idToFile(id)}@v`))
+            if (!id) continue
+            const suffix = entry.name.slice(`${idToFile(id)}@v`.length)
+            if (!/^[1-9][0-9]*\.json$/.test(suffix) || !entry.isFile() || entry.isSymbolicLink() || ++selected > 256)
+              throw new DocumentInspectionError()
+            const file = path.join(directory, entry.name)
+            const pathBefore = lstatSync(file)
+            if (!pathBefore.isFile() || pathBefore.isSymbolicLink() || pathBefore.size > 1048576)
+              throw new DocumentInspectionError()
+            const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW)
+            try {
+              const before = fstatSync(fd)
+              if (!before.isFile() || identity(before) !== identity(pathBefore) || (bytes += before.size) > 16777216)
+                throw new DocumentInspectionError()
+              const chunks: Buffer[] = []
+              let size = 0
+              for (;;) {
+                const block = Buffer.alloc(16384)
+                const read = readSync(fd, block, 0, block.length, null)
+                if (!read) break
+                size += read
+                if (size > before.size || size > 1048576) throw new DocumentInspectionError()
+                chunks.push(block.subarray(0, read))
+              }
+              const raw = Buffer.concat(chunks)
+              const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(raw)
+              const decoded = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text)
+              if (
+                !Buffer.from(text).equals(raw) ||
+                size !== before.size ||
+                identity(fstatSync(fd)) !== identity(before) ||
+                identity(lstatSync(file)) !== identity(before) ||
+                Option.isNone(decoded) ||
+                !exactDocument(decoded.value, id, type, Number(suffix.slice(0, -5)))
+              )
+                throw new DocumentInspectionError()
+              this.indexDoc(decoded.value)
+            } finally {
+              closeSync(fd)
+            }
+          }
+        } finally {
+          stream.closeSync()
+        }
+        if (identity(lstatSync(directory)) !== identity(before)) throw new DocumentInspectionError()
+      }
+      if (roots.some((item) => identity(lstatSync(item.file)) !== identity(item.stat)))
+        throw new DocumentInspectionError()
+      if (!this.allowAbsent && ids.some((id) => !this.docs.has(id))) throw new DocumentInspectionError()
+    } catch {
+      throw new DocumentInspectionError()
     }
   }
 
@@ -883,6 +1080,17 @@ export class DocumentStore {
   // is missing or corrupt (a torn concurrent write) — the caller treats an unreadable existing file
   // as a conflict, never as an idempotent match.
   private readVersionFile(file: string): Doc | null {
+    if (this.exactIDs) {
+      // A competing writer can create the next version after openExact captured its snapshot.
+      // Collision reconciliation must use the same bounded, no-symlink reader as initial loading.
+      this.rebuildExact()
+      for (const versions of this.docs.values()) {
+        for (const doc of versions.values()) {
+          if (path.join(this.root, "docs", doc.type, `${idToFile(doc.id)}@v${doc.version}.json`) === file) return doc
+        }
+      }
+      return null
+    }
     try {
       return JSON.parse(readFileSync(file, "utf8")) as Doc
     } catch {
@@ -938,8 +1146,7 @@ export class DocumentStore {
     return null
   }
   private allocateId(type: DocType, domain: string | null, idSlug: string | undefined, description: string): string {
-    const slug = slugify(idSlug ?? description)
-    const base = domain ? `doc:${type}:${domain}:${slug}` : `doc:${type}:${slug}`
+    const base = DocumentStore.logicalID(type, domain, idSlug ?? description)
     if (!this.docs.has(base)) return base
     for (let i = 2; ; i++) {
       const c = `${base}-${i}`
@@ -953,4 +1160,95 @@ export class DocumentStore {
   private assertLinkTargets(links: readonly DocLink[]): void {
     for (const l of links) if (!this.docs.has(l.to)) throw new Error(`link target does not exist: ${l.to} (INV-3)`)
   }
+}
+
+/** Deliberately redacted: paths, raw JSON and syscall causes stay out of public diagnostics. */
+export class DocumentInspectionError extends Error {
+  readonly code = "DOCUMENT_INSPECTION_UNAVAILABLE"
+  constructor() {
+    super("Exact document inspection is unavailable")
+  }
+}
+
+function exactDocument(value: unknown, id: string, type: string, version: number): value is Doc {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const data = value as Record<string, unknown>
+  if (
+    data.id !== id ||
+    data.type !== type ||
+    data.version !== version ||
+    !Number.isSafeInteger(version) ||
+    typeof data.scope !== "string" ||
+    typeof data.body !== "string" ||
+    typeof data.hash !== "string" ||
+    typeof data.description !== "string" ||
+    (data.domain !== null && typeof data.domain !== "string") ||
+    (data.superseded_by !== null && typeof data.superseded_by !== "string") ||
+    !["draft", "candidate", "active", "superseded", "rejected", "quarantined", "provisional"].includes(
+      String(data.status),
+    ) ||
+    !Array.isArray(data.tags) ||
+    data.tags.some((tag) => typeof tag !== "string") ||
+    !Array.isArray(data.links) ||
+    data.links.some(
+      (link) => !link || typeof link !== "object" || typeof link.to !== "string" || typeof link.rel !== "string",
+    ) ||
+    !data.provenance ||
+    typeof data.provenance !== "object" ||
+    !("source" in data.provenance) ||
+    !["model", "runner", "tool", "external_trace", "human"].includes(String(data.provenance.source))
+  )
+    return false
+  const keys = new Set([
+    "id",
+    "type",
+    "scope",
+    "status",
+    "version",
+    "superseded_by",
+    "hash",
+    "created_round",
+    "domain",
+    "tags",
+    "description",
+    "provenance",
+    "links",
+    "confidence",
+    "extensions",
+    "body",
+  ])
+  if (
+    Object.keys(data).some((key) => !keys.has(key)) ||
+    (data.created_round !== null && !Number.isSafeInteger(data.created_round)) ||
+    (data.extensions !== undefined &&
+      (!data.extensions || typeof data.extensions !== "object" || Array.isArray(data.extensions)))
+  )
+    return false
+  const provenance = data.provenance as Record<string, unknown>
+  if (provenance.run_ref !== undefined && provenance.run_ref !== null && typeof provenance.run_ref !== "string")
+    return false
+  if (
+    provenance.evidence_refs !== undefined &&
+    (!Array.isArray(provenance.evidence_refs) || provenance.evidence_refs.some((ref) => typeof ref !== "string"))
+  )
+    return false
+  if (data.confidence !== undefined) {
+    if (!data.confidence || typeof data.confidence !== "object" || Array.isArray(data.confidence)) return false
+    const confidence = data.confidence as Record<string, unknown>
+    if (
+      !["strong", "medium", "weak", "none"].includes(String(confidence.evidence_strength)) ||
+      !Number.isSafeInteger(confidence.support_count) ||
+      (confidence.last_validated_round !== undefined &&
+        confidence.last_validated_round !== null &&
+        !Number.isSafeInteger(confidence.last_validated_round))
+    )
+      return false
+  }
+  return (
+    data.hash ===
+    "sha256:" +
+      createHash("sha256")
+        .update(canonical(Object.fromEntries(Object.entries(data).filter(([key]) => key !== "hash"))))
+        .digest("hex")
+  )
 }

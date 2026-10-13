@@ -1,21 +1,18 @@
 import { randomUUID } from "node:crypto"
-import { mkdirSync, rmSync } from "node:fs"
 import * as http from "node:http"
 import { createServer } from "node:net"
-import { homedir, tmpdir } from "node:os"
+import { homedir } from "node:os"
 import { join } from "node:path"
 import { getCACertificates, setDefaultCACertificates } from "node:tls"
 import type { Event } from "electron"
 import { app, BrowserWindow } from "electron"
-import { resolveDataPath } from "@deepagent-code/core/global-path"
 import { migrateLegacyHomeIfNeeded } from "@deepagent-code/core/global-migrate"
 
-import { Deferred, Effect, Fiber } from "effect"
+import { Deferred, Effect, Exit, Fiber } from "effect"
 import contextMenu from "electron-context-menu"
 
 import type { ServerReadyData } from "../preload/types"
 import { checkAppExists, resolveAppPath } from "./apps"
-import { CHANNEL } from "./constants"
 import { registerIpcHandlers, sendDeepLinks, sendMenuCommand } from "./ipc"
 import { forwardInitializationFailure } from "./initialization"
 import { exportDebugLogs, initCrashReporter, initLogging, startNetLog, write as writeLog } from "./logging"
@@ -40,20 +37,10 @@ import {
   setIsQuitting,
 } from "./windows"
 import { initPowerSaveBlocker, stopPowerSaveBlocker } from "./power"
-import { desktopStoragePaths } from "./storage-path"
+import { initializeDesktopStartup, prepareDesktopStorage } from "./startup"
 import { createTray, destroyTray } from "./tray"
+import { bindDesktopShutdownSignals, createDesktopShutdown } from "./shutdown"
 
-const APP_NAMES: Record<string, string> = {
-  dev: "DeepAgent Code Dev",
-  beta: "DeepAgent Code Beta",
-  prod: "DeepAgent Code",
-}
-const APP_IDS: Record<string, string> = {
-  dev: "ai.deepagent-code.desktop.dev",
-  beta: "ai.deepagent-code.desktop.beta",
-  prod: "ai.deepagent-code.desktop",
-}
-const TEST_ONBOARDING = process.env.DEEPAGENT_CODE_TEST_ONBOARDING === "1"
 const jsCallStackFeature = "DocumentPolicyIncludeJSCallStacksInCrashReports"
 
 let logger: ReturnType<typeof initLogging>
@@ -77,12 +64,34 @@ function emitDeepLinks(urls: string[]) {
   if (mainWindow) sendDeepLinks(mainWindow, urls)
 }
 
-async function killSidecar() {
-  if (!server) return
-  const current = server
-  server = null
-  await current.stop()
-}
+const shutdown = createDesktopShutdown({
+  cancelBootstrap: () => Effect.runPromise(Fiber.interrupt(mainFiber)),
+  stop: async () => {
+    const current = server
+    if (!current) return
+    await current.stop()
+    if (server === current) server = null
+  },
+  quit: () => app.quit(),
+  relaunch: () => app.relaunch(),
+  exit: () => app.exit(0),
+  onError: (error) => writeLog("utility", "sidecar stop failed before application exit", { error }, "error"),
+})
+const killSidecar = shutdown.stop
+
+// Install terminal handlers before migration or any other asynchronous bootstrap.
+// Pending sidecar acquisition remains owned by shutdown until its listener adopts.
+app.on("before-quit", (event) => {
+  setIsQuitting(true)
+  shutdown.beforeQuit(event)
+})
+bindDesktopShutdownSignals(
+  (ready) => { app.once("ready", ready) },
+  () => {
+    setIsQuitting(true)
+    void shutdown.signal()
+  },
+)
 
 function ensureLoopbackNoProxy() {
   const loopback = ["127.0.0.1", "localhost", "::1"]
@@ -104,6 +113,11 @@ function ensureLoopbackNoProxy() {
   upsert("no_proxy")
 }
 
+const startup = initializeDesktopStartup(app)
+const dataRoot = startup.dataRoot
+const storage = startup.storage
+const pathsReady = Deferred.makeUnsafe<void, unknown>()
+
 const main = Effect.gen(function* () {
   contextMenu({ showSaveImageAs: true, showLookUpSelection: false, showSearchWithGoogle: false })
 
@@ -114,51 +128,19 @@ const main = Effect.gen(function* () {
 
   process.env.DEEPAGENT_CODE_DISABLE_EMBEDDED_WEB_UI = "true"
 
-  const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.deepagent-code.desktop.dev"
-  const onboardingTestRoot = ((): string | undefined => {
-    if (!TEST_ONBOARDING) return
-
-    const root = process.env.DEEPAGENT_CODE_TEST_ROOT ?? join(tmpdir(), `deepagent-code-onboarding-${randomUUID()}`)
-    if (!process.env.DEEPAGENT_CODE_TEST_ROOT) rmSync(root, { recursive: true, force: true })
-    process.env.DEEPAGENT_CODE_TEST_HOME = root
-    delete process.env.DEEPAGENT_CODE_HOME
-    process.env.DEEPAGENT_CODE_DB ??= ":memory:"
-    return root
-  })()
-  if (!onboardingTestRoot) delete process.env.DEEPAGENT_CODE_TEST_HOME
-  // D-W1 one-shot migration must run BEFORE the mkdir block below scaffolds the data home:
-  // creating it first flips the migration's freshness check into a permanent skip and strands a
-  // preview-era ~/.deepagent/code (no-op off win32 / under the test-home boundary).
+  // The migration owns the original data. Its existing scaffold merge may replace desktop/,
+  // so recreate the same paths before releasing Electron's pre-ready ESM gate.
   const legacyMigration = yield* Effect.promise(() => migrateLegacyHomeIfNeeded(process.env))
   if (legacyMigration && (!legacyMigration.migrated || legacyMigration.error))
     console.warn("[global-migrate]", JSON.stringify(legacyMigration))
-  const dataRoot = resolveDataPath(process.env)
-  const storage = desktopStoragePaths(dataRoot, appId)
-  ;[
-    dataRoot,
-    join(dataRoot, "tmp"),
-    storage.root,
-    storage.session,
-    storage.cache,
-    storage.updater,
-    storage.logs,
-    storage.tmp,
-  ].forEach((dir) => mkdirSync(dir, { recursive: true }))
-  app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "DeepAgent Code Dev")
-  app.setAppUserModelId(appId)
-  app.setPath("userData", storage.root)
-  app.setPath("sessionData", storage.session)
-  app.setPath("cache", storage.cache)
-  app.setPath("logs", storage.logs)
-  app.setPath("temp", storage.tmp)
+  prepareDesktopStorage({ app, dataRoot, appID: startup.appID, name: startup.name })
+  yield* Deferred.succeed(pathsReady, undefined)
   logger = initLogging()
   initCrashReporter()
 
   const relaunch = () => {
-    void killSidecar().finally(() => {
-      app.relaunch()
-      app.exit(0)
-    })
+    setIsQuitting(true)
+    void shutdown.relaunch()
   }
 
   try {
@@ -170,7 +152,7 @@ const main = Effect.gen(function* () {
   logger.log("app starting", {
     version: app.getVersion(),
     packaged: app.isPackaged,
-    onboardingTest: Boolean(onboardingTestRoot),
+    onboardingTest: Boolean(startup.onboardingTestRoot),
   })
 
   ensureLoopbackNoProxy()
@@ -212,11 +194,6 @@ const main = Effect.gen(function* () {
     emitDeepLinks([url])
   })
 
-  app.on("before-quit", () => {
-    setIsQuitting(true)
-    void killSidecar()
-  })
-
   app.on("will-quit", () => {
     void killSidecar()
     stopPowerSaveBlocker()
@@ -243,12 +220,6 @@ const main = Effect.gen(function* () {
   setRelaunchHandler(() => {
     relaunch()
   })
-
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => {
-      void killSidecar().finally(() => app.exit(0))
-    })
-  }
 
   const serverReady = Deferred.makeUnsafe<ServerReadyData, unknown>()
 
@@ -347,7 +318,9 @@ const main = Effect.gen(function* () {
   })
   const hostname = "127.0.0.1"
   const url = `http://${hostname}:${port}`
-  const password = randomUUID()
+  // An explicitly configured local credential also allows offline operator approval
+  // to bind to this sidecar. Unconfigured desktop launches retain fresh credentials.
+  const password = process.env.DEEPAGENT_CODE_SERVER_PASSWORD || randomUUID()
 
   const loadingTask = yield* Effect.gen(function* () {
     logger.log("sidecar connection started", { url })
@@ -357,19 +330,23 @@ const main = Effect.gen(function* () {
 
     logger.log("spawning sidecar", { url })
     const connection = yield* Effect.promise(() =>
-      startPrimarySidecar({
-        hostname,
-        port,
-        password,
-        spawnLocalServer,
-        onStdout: (message) => writeLog("server", "stdout", { message }),
-        onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
-        onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
+      shutdown.start(async () => {
+        const connection = await startPrimarySidecar({
+          hostname,
+          port,
+          password,
+          spawnLocalServer,
+          onStdout: (message) => writeLog("server", "stdout", { message }),
+          onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
+          onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
+        })
+        server = connection.listener
+        return connection
       }),
     ).pipe(
       Effect.tapError((error) => Effect.sync(() => logger.error("primary sidecar startup failed", error))),
     )
-    server = connection.listener
+    if (shutdown.closing) return
 
     // startPrimarySidecar only resolves after the sidecar's API health check
     // passed, so the credentials handed to the renderer are verified — never a
@@ -382,4 +359,9 @@ const main = Effect.gen(function* () {
   yield* Fiber.await(loadingTask)
 })
 
-Effect.runFork(main)
+const mainFiber = Effect.runFork(main.pipe(Effect.onExit((exit) =>
+  Exit.isFailure(exit) ? Deferred.failCause(pathsReady, exit.cause) : Effect.void,
+)))
+// Electron must await the asynchronous migration before initializing its native session prefs.
+const completion = await Effect.runPromiseExit(Deferred.await(pathsReady))
+if (Exit.isFailure(completion) && !shutdown.closing) Effect.runSync(Effect.failCause(completion.cause))

@@ -9,6 +9,7 @@ import { KernelSdk } from "@/im/kernel/sdk"
 import { IMKernelSync } from "@/im/kernel/sync"
 import type { KernelConfig } from "@/im/kernel/config"
 import { pollWithTimeout, testEffect } from "../lib/effect"
+import { InstanceRegistry } from "@/effect/instance-registry"
 
 // B2 全员群 provision：带门面身份的 config ⇒ 引擎启动时把组织全员群（k:2:org7）幂等镜像到本地
 // 群表（creator 坐本地操作者身份，facade uuid 坐成员），此后 org 群入站消息落库广播——B1 的
@@ -51,6 +52,12 @@ const fakeClient = Layer.unwrap(
         sendText: () => Effect.succeed({ messageID: "km_ack_1" }),
         fetchHistory: () => Effect.succeed({ messages: [], isFinished: true, latestTime: 0 }),
         fetchConversations: () => Effect.succeed({ conversations: [], isFinished: true }),
+
+        getDeliveryReader: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryReader", message: "Protected reader unavailable in legacy fixture" })),
+        getDeliveryChanges: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryChanges", message: "Protected reader unavailable in legacy fixture" })),
+        getDeliveryMessages: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryMessages", message: "Protected reader unavailable in legacy fixture" })),
+        getDeliveryReadCut: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryReadCut", message: "Protected reader unavailable in legacy fixture" })),
+        markDeliveryRead: () => Effect.fail(new KernelSdk.KernelError({ operation: "markDeliveryRead", message: "Protected reader unavailable in legacy fixture" })),
         disconnect: Effect.void,
       }),
     )
@@ -69,7 +76,8 @@ const syncLayer = IMKernelSync.layer(config, {
       member_uuids: ["uuid-alice", "uuid-bob"],
       org_id: 7,
     }),
-}).pipe(Layer.provide(repo), Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)), Layer.provide(fakeClient))
+}).pipe(Layer.provide(database),
+  Layer.provide(InstanceRegistry.layer), Layer.provide(repo), Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)), Layer.provide(fakeClient))
 
 const it = testEffect(Layer.mergeAll(database, repo, syncLayer))
 

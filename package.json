@@ -131,7 +131,6 @@
     "protobufjs",
     "tree-sitter",
     "tree-sitter-bash",
-    "tree-sitter-powershell",
     "web-tree-sitter",
     "electron"
   ],
@@ -153,6 +152,7 @@
     "gcp-metadata@8.1.2": "patches/gcp-metadata@8.1.2.patch",
     "pacote@21.5.0": "patches/pacote@21.5.0.patch",
     "@ai-sdk/google@3.0.73": "patches/@ai-sdk%2Fgoogle@3.0.73.patch",
-    "jugglechat-websdk@1.9.17": "patches/jugglechat-websdk@1.9.17.patch"
+    "jugglechat-websdk@1.9.17": "patches/jugglechat-websdk@1.9.17.patch",
+    "multipasta@0.2.7": "patches/multipasta@0.2.7.patch"
   }
 }

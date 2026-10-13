@@ -26,7 +26,12 @@ import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MultiAgentRuntime } from "./multi-agent-runtime"
 import { makeEventTurnRunnerV2 } from "./event-turn-runner"
-import { makeV2AdmissionBridge, makeSessionV2Adapter } from "./v2-admission-bridge"
+import { makeV2AdmissionBridge } from "./v2-admission-bridge"
+import { EventWorkDagRuntime } from "./event-work-dag-runtime"
+import { EventWorkRuntime } from "./event-work-admission"
+import { EventWorkRule } from "@deepagent-code/core/deepagent/event-work-rule"
+import { EventWorkSource } from "@deepagent-code/core/deepagent/event-work-source"
+import type { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { EventDispatcher, DISPATCH_GROUP } from "./event-dispatcher"
 import { AgentHandoffConsumer, HANDOFF_GROUP } from "./agent-handoff-consumer"
 import { HandoffAdmission } from "@deepagent-code/core/deepagent/handoff-admission"
@@ -48,6 +53,7 @@ import { SupervisorNotifier, NOTIFY_GROUP } from "./supervisor-notifier"
 // V4.1 §N — the event-driven goal-tick consumer + its production cold-reconstruction port.
 import { GoalTickConsumer, TICK_GROUP } from "./goal-tick-consumer"
 import { GoalTickPort } from "./goal-tick-port"
+import { GoalOwnedLoop } from "./goal-owned-loop"
 import { goalStoreRoot } from "./goal-manager"
 import { SessionRevert } from "./revert"
 import { SessionSteer } from "./steer"
@@ -241,7 +247,9 @@ const runtimeLayer = Layer.unwrap(
     const db = (yield* Database.Service).db
     const v2Session = yield* SessionV2.Service
     const flags = yield* RuntimeFlags.Service
-    const eventV2Admission = makeV2AdmissionBridge({ db, v2Session })
+    const eventWork = yield* EventWorkRuntime.make
+    const eventWorkDag = yield* EventWorkDagRuntime.make
+    const eventV2Admission = makeV2AdmissionBridge({ db, v2Session, eventWork, eventWorkDag })
     // §E2 — cap concurrent agent execution per workspace (default 5).
     // §E1 — wire the four-layer gate to real, fail-closed resolvers:
     //   L1 (event_source)  — per-EVENT: the event's workspace trusted-source set (system events must
@@ -255,7 +263,8 @@ const runtimeLayer = Layer.unwrap(
       execution,
       fileLock,
       dagCoordination: flags.v4DagCoordination,
-      runner: makeEventTurnRunnerV2({ sessions: v2Session, instanceStore, db }),
+      runner: makeEventTurnRunnerV2({ sessions: v2Session, instanceStore, db, eventWorkDag }),
+      eventWorkDag,
       // C5-12 — the production seam: when the V2 admission flag is ON the runtime uses this bridge.
       eventV2Admission,
       onEventCompleted: makeV4PRCollaboration({ sessions, instanceStore, git, queue, bus, approvalQueue }),
@@ -685,7 +694,9 @@ const goalTickConsumerLayer = Layer.unwrap(
     // LEGACY-EXECUTION-ZERO: the V2 session authority + snapshot drive cold tick reconstruction.
     const v2Session = yield* SessionV2.Service
     const snapshot = yield* Snapshot.Service
+    const ownedContext = yield* Effect.context<Effect.Services<ReturnType<typeof GoalOwnedLoop.run>>>()
     const runTick = GoalTickPort.makeGoalTickPort({
+      runOwned: (input) => GoalOwnedLoop.run(input).pipe(Effect.provideContext(ownedContext), Effect.orDie),
       sessions,
       agents,
       revert,
@@ -774,6 +785,8 @@ export const CONSUMER_FAILURE_KIND = "event_consumer_failure"
 export const spoolDrainPass = (input: {
   readonly db: Database.Interface["db"]
   readonly v2Session?: SessionV2.Interface
+  readonly eventWork?: EventWorkRuntime.Port
+  readonly dispatchDag?: (event: DeepAgentEvent.Event) => Effect.Effect<void, unknown>
   readonly now?: () => number
   readonly runtimeFeatures?: EventAdmission.RuntimeFeatureRegistry
 }): Effect.Effect<void> =>
@@ -781,6 +794,13 @@ export const spoolDrainPass = (input: {
     const at = input.now?.() ?? Date.now()
     const v2Session = input.v2Session
     if (!v2Session || !EventAdmission.isEventV2AdmissionEnabled(input.runtimeFeatures)) return
+    if (input.eventWork) yield* input.eventWork.reconcile
+    if (input.eventWork && input.dispatchDag) {
+      const pending = yield* input.eventWork.pendingDags
+      for (const event of pending) yield* input.dispatchDag(event).pipe(Effect.catchCause((cause) =>
+        Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.logWarning("Reviewed event DAG remains unsettled", {
+          eventID: event.id, code: "EVENT_DAG_UNAVAILABLE" })))
+    }
     // A crash can land a fenced dead nack before its admin receipt. Repair a bounded batch from
     // the spool authority on every pass; already recorded rows are excluded by the scan.
     const missing = yield* ConsumerReceipts.deadSpoolWithoutReceipt(input.db, CONSUMER_FAILURE_KIND, SPOOL_DRAIN_BATCH)
@@ -793,20 +813,16 @@ export const spoolDrainPass = (input: {
       limit: SPOOL_DRAIN_BATCH,
     })
     for (const row of claimed.rows) {
-      const workspaceId = row.envelope.actorAndScope.workspaceId
       // W5 F2 — a re-drive anchors the admission at the row's STORED message id (when the receipt was
       // previously written by any lane) so SessionV2 reconcile-dedupes against the FIRST admission;
       // the deterministic spool anchor is only the first-attempt fallback.
-      const priorAdmission = yield* EventAdmission.admissionFor(input.db, row.eventRef)
-      const anchor = priorAdmission?.messageID ?? spoolAdmissionAnchor(row.eventRef, row.sessionID)
-      const outcome = yield* EventAdmission.admit(input.db, {
-        envelope: row.envelope,
-        sessionID: row.sessionID,
-        messageID: anchor,
-        adapter: makeSessionV2Adapter(v2Session, spoolLocationFor, workspaceId),
-        now: at,
-        ...(input.runtimeFeatures ? { runtimeFeatures: input.runtimeFeatures } : {}),
-      }).pipe(Effect.exit)
+      const outcome = yield* (row.envelope.eventType === EventWorkRule.EVENT_TYPE
+        ? input.eventWork ? input.eventWork.admit(row.envelope.eventRef.replace(/^event:\/\//, ""), { envelope: row.envelope, sessionID: row.sessionID })
+          : Effect.fail(EventWorkSource.failure("EVENT_WORK_AUTH_REQUIRED"))
+        : Effect.fail(EventWorkSource.failure("EVENT_WORK_LEGACY"))).pipe(Effect.exit)
+      // Historical records remain visible; absence of a formal source/controller grant
+      // cannot re-enable the old ordinary adapter during spool replay.
+
       // An INTERRUPTION is not a failure: re-raise it and leave the claimed row for lease revival.
       if (outcome._tag === "Failure" && Cause.hasInterrupts(outcome.cause)) {
         return yield* Effect.interrupt
@@ -853,10 +869,8 @@ export const spoolDrainPass = (input: {
     // W5 F5 — interruption must NOT be swallowed: the daemon's dispose interrupts this pass and the
     // interruption has to stop the `repeat` loop (a swallowed interrupt would keep the daemon alive).
     // A real failure is logged and the pass completes (the repeat loop retries on its cadence).
-    Effect.catchCauseIf(
-      (cause) => !Cause.hasInterrupts(cause),
-      (cause) => Effect.sync(() => log.error("spool drain pass failed", { cause: Cause.pretty(cause) })),
-    ),
+    Effect.catchCause((cause) => Cause.hasInterrupts(cause) ? Effect.interrupt
+      : Effect.sync(() => log.error("spool drain pass failed", { code: "EVENT_CONSUMPTION_UNAVAILABLE" }))),
   )
 
 const spoolDrainLayer = Layer.effectDiscard(
@@ -865,7 +879,10 @@ const spoolDrainLayer = Layer.effectDiscard(
     if (!flags.v4MultiAgentRuntime) return
     const { db } = yield* Database.Service
     const v2Session = yield* SessionV2.Service
-    yield* spoolDrainPass({ db, v2Session })
+    const eventWork = yield* EventWorkRuntime.make
+    const runtime = yield* MultiAgentRuntime.Service
+    yield* spoolDrainPass({ db, v2Session, eventWork,
+      dispatchDag: (event) => runtime.dispatch({ event, priority: event.priority, targets: [] }) })
       .pipe(Effect.repeat(Schedule.spaced(Duration.millis(SPOOL_DRAIN_INTERVAL_MS))), Effect.forkScoped)
       .pipe(Effect.asVoid)
   }),

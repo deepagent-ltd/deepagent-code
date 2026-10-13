@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import path from "path"
 import nodeFs from "fs"
 import { Process } from "@/util/process"
@@ -10,6 +10,9 @@ import * as Log from "@deepagent-code/core/util/log"
 import { buffer } from "node:stream/consumers"
 import { dpapiCodec } from "#dpapi"
 import type { Codec } from "./dpapi"
+import { ConfigFileWrite } from "@/config/file-write"
+import { SecretRefScope } from "./secret-ref-scope"
+import { McpAuthStore } from "./auth-store"
 
 const log = Log.create({ service: "mcp.secret" })
 
@@ -32,14 +35,14 @@ const log = Log.create({ service: "mcp.secret" })
  * under the data dir + an explicit warning — it NEVER silently writes secrets into the
  * project config repo.
  *
-   * HONESTY about backends:
-   *  - macOS Keychain: REAL, via the `security` subprocess.
-   *  - Linux libsecret: REAL, via the `secret-tool` subprocess (G35-1).
-   *  - Windows DPAPI: REAL, via the `#dpapi` codec — crypt32.dll through bun:ffi on the
-   *    CLI, powershell.exe .NET ProtectedData on the node sidecar (W-b / W-01). Not yet
-   *    verified on a physical Windows machine (no machine in the dev environment); that
-   *    validation is on the W-d Windows acceptance list.
-   */
+ * HONESTY about backends:
+ *  - macOS Keychain: REAL, via the `security` subprocess.
+ *  - Linux libsecret: REAL, via the `secret-tool` subprocess (G35-1).
+ *  - Windows DPAPI: REAL, via the `#dpapi` codec — crypt32.dll through bun:ffi on the
+ *    CLI, powershell.exe .NET ProtectedData on the node sidecar (W-b / W-01). Not yet
+ *    verified on a physical Windows machine (no machine in the dev environment); that
+ *    validation is on the W-d Windows acceptance list.
+ */
 export namespace SecretStore {
   // ════════════════════════════════════════════════════════════════════════════
   // ${VAR} env expansion (Step 1) — PURE, no I/O, no service needed.
@@ -55,6 +58,7 @@ export namespace SecretStore {
   export const containsEnvRef = (s: string): boolean => ENV_REF_TEST.test(s)
   /** True if the string is a keychain handle reference (`secret://<account>`). */
   export const isHandle = (s: string): boolean => s.startsWith(HANDLE_PREFIX)
+  export const isScoped = (s: string): boolean => (isHandle(s) ? handleAccount(s) : s).startsWith(SecretRefScope.ACCOUNT_PREFIX)
   /** Build a handle reference for an account name. */
   export const makeHandle = (account: string): string => HANDLE_PREFIX + account
   /** Extract the account name from a handle reference. */
@@ -102,6 +106,8 @@ export namespace SecretStore {
     readonly put: (account: string, secret: string) => Promise<void>
     readonly get: (account: string) => Promise<string | undefined>
     readonly remove: (account: string) => Promise<void>
+    /** Strict custody check for a new scoped reference; legacy APIs retain their platform semantics. */
+    readonly validateScoped?: () => Promise<void>
   }
 
   /** In-memory backend — TEST ONLY. Never persists; isolated per instance. */
@@ -116,6 +122,14 @@ export namespace SecretStore {
     }
   }
 
+  export class FileError extends Schema.TaggedErrorClass<FileError>()("McpSecretFileError", {
+    reason: Schema.Literals(["invalid", "io"]),
+  }) {
+    override get message() {
+      return `MCP secret file ${this.reason}`
+    }
+  }
+
   /**
    * Fail-safe FILE backend (the fallback when no OS keyring is available). Stores secrets
    * in a single `chmod 0600` JSON file UNDER THE DATA DIR — never inside the project config
@@ -125,38 +139,51 @@ export namespace SecretStore {
   export const fileBackend = (filePath: string = defaultFilePath()): Backend => {
     const fs = nodeFs
     const readAll = (): Record<string, string> => {
-      try {
-        const text = fs.readFileSync(filePath, "utf8")
-        const parsed = JSON.parse(text)
-        return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {}
-      } catch {
-        return {}
-      }
+      const bytes = (() => {
+        try {
+          return fs.readFileSync(filePath)
+        } catch (error) {
+          // A damaged or unreadable store must never become an empty replacement.
+          if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
+            return undefined
+          throw new FileError({ reason: "io" })
+        }
+      })()
+      if (bytes === undefined) return {}
+      const text = (() => {
+        try {
+          return new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+        } catch {
+          throw new FileError({ reason: "invalid" })
+        }
+      })()
+      const parsed = Option.flatMap(
+        Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text),
+        Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.String)),
+      )
+      if (Option.isNone(parsed)) throw new FileError({ reason: "invalid" })
+      return parsed.value
     }
-    const writeAll = (data: Record<string, string>) => {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true })
-      // Write then chmod 0600 (owner read/write only).
-      fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { mode: 0o600 })
-      try {
-        fs.chmodSync(filePath, 0o600)
-      } catch {
-        /* best-effort on platforms without POSIX modes */
-      }
-    }
+    const write = (change: (data: Record<string, string>) => Record<string, string> | undefined) =>
+      ConfigFileWrite.run(ConfigFileWrite.edit(filePath, (current) => {
+        if (process.platform !== "win32" && current.stamp && (current.stamp.mode & 0o077) !== 0) throw new FileError({ reason: "io" })
+        const data = readAll()
+        const next = change(data)
+        return { text: next === undefined ? undefined : JSON.stringify(next, null, 2), value: undefined }
+      })).catch((error: unknown) => { throw error instanceof FileError ? error : new FileError({ reason: error instanceof ConfigFileWrite.Error && error.reason === "invalid" ? "invalid" : "io" }) })
     return {
       id: "file",
       available: async () => true,
-      put: async (account, secret) => {
+      put: (account, secret) => write((data) => ({ ...data, [account]: secret })),
+      get: async (account) => {
         const data = readAll()
-        data[account] = secret
-        writeAll(data)
+        return Object.hasOwn(data, account) ? data[account] : undefined
       },
-      get: async (account) => readAll()[account],
-      remove: async (account) => {
-        const data = readAll()
-        delete data[account]
-        writeAll(data)
-      },
+      remove: (account) => write((data) => {
+        if (!Object.hasOwn(data, account)) return undefined
+        return Object.fromEntries(Object.entries(data).filter(([key]) => key !== account))
+      }),
+      validateScoped: async () => { await McpAuthStore.read(filePath) },
     }
   }
 
@@ -248,18 +275,16 @@ export namespace SecretStore {
       }
     },
     get: async (account) => {
-      const res = await Process.run(
-        ["secret-tool", "lookup", "service", KEYCHAIN_SERVICE, "account", account],
-        { nothrow: true },
-      )
+      const res = await Process.run(["secret-tool", "lookup", "service", KEYCHAIN_SERVICE, "account", account], {
+        nothrow: true,
+      })
       if (res.code !== 0) return undefined
       return res.stdout.toString()
     },
     remove: async (account) => {
-      await Process.run(
-        ["secret-tool", "clear", "service", KEYCHAIN_SERVICE, "account", account],
-        { nothrow: true },
-      ).catch(() => {})
+      await Process.run(["secret-tool", "clear", "service", KEYCHAIN_SERVICE, "account", account], {
+        nothrow: true,
+      }).catch(() => {})
     },
   })
 
@@ -340,6 +365,8 @@ export namespace SecretStore {
     readonly backendId: string
     /** True when the active backend is the fail-safe file fallback (a degraded posture). */
     readonly isFallback: boolean
+    readonly putScoped: (permit: SecretRefScope.Permit, value: string) => Effect.Effect<void, FileError | SecretRefScope.Error>
+    readonly resolveScoped: (permit: SecretRefScope.Permit) => Effect.Effect<string | undefined, FileError | SecretRefScope.Error>
   }
 
   export class Service extends Context.Service<Service, Interface>()("@deepagent-code/McpSecretStore") {}
@@ -348,21 +375,29 @@ export namespace SecretStore {
   export const make = (backend: Backend): Interface => ({
     backendId: backend.id,
     isFallback: backend.id === "file",
-    put: (account, secret) =>
+    put: (account, secret) => isScoped(account) ? Effect.die(new SecretRefScope.Error({ reason: "unavailable" })) :
       Effect.tryPromise({
         try: () => backend.put(account, secret).then(() => makeHandle(account)),
         catch: (e) => (e instanceof Error ? e : new Error(String(e))),
       }).pipe(Effect.orDie),
-    resolve: (handle) =>
+    resolve: (handle) => isScoped(handle) ? Effect.die(new SecretRefScope.Error({ reason: "unavailable" })) :
       Effect.tryPromise({
         try: () => backend.get(isHandle(handle) ? handleAccount(handle) : handle),
         catch: (e) => (e instanceof Error ? e : new Error(String(e))),
-      }).pipe(Effect.catch(() => Effect.succeed(undefined))),
-    remove: (account) =>
+      }).pipe(Effect.catch((error) => (error instanceof FileError ? Effect.die(error) : Effect.succeed(undefined)))),
+    remove: (account) => isScoped(account) ? Effect.die(new SecretRefScope.Error({ reason: "unavailable" })) :
       Effect.tryPromise({
         try: () => backend.remove(isHandle(account) ? handleAccount(account) : account),
         catch: (e) => (e instanceof Error ? e : new Error(String(e))),
-      }).pipe(Effect.catch(() => Effect.void)),
+      }).pipe(Effect.catch((error) => (error instanceof FileError ? Effect.die(error) : Effect.void))),
+    putScoped: (permit, value) => Effect.tryPromise({
+      try: async () => { const account = SecretRefScope.account(permit); await backend.validateScoped?.(); SecretRefScope.account(permit); await backend.put(account, value); SecretRefScope.account(permit) },
+      catch: (error) => error instanceof FileError || error instanceof SecretRefScope.Error ? error : new FileError({ reason: "io" }),
+    }),
+    resolveScoped: (permit) => Effect.tryPromise({
+      try: async () => { const account = SecretRefScope.account(permit); await backend.validateScoped?.(); SecretRefScope.account(permit); const value = await backend.get(account); SecretRefScope.account(permit); return value },
+      catch: (error) => error instanceof FileError || error instanceof SecretRefScope.Error ? error : new FileError({ reason: "io" }),
+    }),
   })
 
   /** Default layer: select a real backend at build time (fail-safe to the 0600 file). */

@@ -1,0 +1,1 @@
+CREATE INDEX `im_groups_page_idx` ON `im_groups` (`workspace_id`,`deleted_at`,`created_at`,`id`);

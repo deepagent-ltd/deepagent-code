@@ -9,11 +9,12 @@ import { KernelSdk } from "@/im/kernel/sdk"
 import { IMKernelSync } from "@/im/kernel/sync"
 import type { KernelConfig } from "@/im/kernel/config"
 import { pollWithTimeout, testEffect } from "../lib/effect"
+import { InstanceRegistry } from "@/effect/instance-registry"
 
 // IMKernelSync over a real in-memory database + real IMRepository, with a fake KernelClient
 // (PubSub-driven inbound, recordable sendText) and a recording broadcaster. Covers the B1 contract:
 // inbound dedup → local write → broadcast → cursor advance; outbound local row → kernel (72h TTL is
-// the client's concern) → ack write-back; pending drain with in-memory attempt cap; catch-up on
+// the client's concern) → ack write-back; durable dispatch consumption without unknown replay; catch-up on
 // reconnect. The real SDK never loads here.
 
 const config: KernelConfig.Info = {
@@ -21,6 +22,7 @@ const config: KernelConfig.Info = {
   navigator: "http://127.0.0.1:9",
   token: "test-token",
   userID: "alice",
+  identity: { uuid: "alice", orgID: 1, name: "alice", orgAllGroupID: "org1" },
 }
 
 let clientState: SubscriptionRef.SubscriptionRef<KernelClient.ConnectionState>
@@ -63,6 +65,9 @@ const fakeClient = Layer.unwrap(
             if (historyFailure(input))
               return KernelSdk.request("fetchHistory", () => Promise.reject(new Error("test link down")))
             const remaining = historyMessages
+              .filter((message) =>
+                message.conversationType === input.conversationType && message.conversationID === input.conversationID,
+              )
               .filter((message) => message.msgTime > input.after)
               .sort((a, b) => a.msgTime - b.msgTime)
             const messages = remaining.slice(0, input.count)
@@ -73,6 +78,12 @@ const fakeClient = Layer.unwrap(
             })
           }),
         fetchConversations: () => Effect.succeed({ conversations: [], isFinished: true }),
+
+        getDeliveryReader: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryReader", message: "Protected reader unavailable in legacy fixture" })),
+        getDeliveryChanges: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryChanges", message: "Protected reader unavailable in legacy fixture" })),
+        getDeliveryMessages: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryMessages", message: "Protected reader unavailable in legacy fixture" })),
+        getDeliveryReadCut: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryReadCut", message: "Protected reader unavailable in legacy fixture" })),
+        markDeliveryRead: () => Effect.fail(new KernelSdk.KernelError({ operation: "markDeliveryRead", message: "Protected reader unavailable in legacy fixture" })),
         disconnect: Effect.void,
       }),
     )
@@ -81,8 +92,20 @@ const fakeClient = Layer.unwrap(
 
 const database = Database.layerFromPath(":memory:")
 const repo = IMRepositoryLive.pipe(Layer.provide(database))
-const syncLayer = IMKernelSync.layer(config).pipe(
+const syncOptions = {
+  workspaceID: "ws",
+  inspectConversation: (input: { conversationType: 1 | 2; conversationID: string }) => Effect.succeed({
+    conversation_type: input.conversationType,
+    conversation_id: input.conversationID,
+    org_id: 1,
+    name: "bound",
+    member_uuids: ["alice", "bob"],
+  }),
+}
+const syncLayer = IMKernelSync.layer(config, syncOptions).pipe(
   Layer.provide(repo),
+  Layer.provide(database),
+  Layer.provide(InstanceRegistry.layer),
   Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)),
   Layer.provide(fakeClient),
 )
@@ -267,14 +290,18 @@ describe("IMKernelSync durable history pagination", () => {
       historyFailure = () => false
       // Rebuild the engine against the same durable repository: no in-memory pagination state survives.
       const restarted = yield* Layer.build(
-        IMKernelSync.layer(config).pipe(
+        IMKernelSync.layer(config, syncOptions).pipe(
           Layer.provide(Layer.succeed(IMRepository, repoSvc)),
+          Layer.provide(database),
+  Layer.provide(InstanceRegistry.layer),
           Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)),
           Layer.provide(fakeClient),
         ),
       )
       yield* Context.get(restarted, IMKernelSync.Service).catchUp
-      expect(historyRequests[0].after).toBe(checkpoint!.lastSyncTime)
+      expect(
+        historyRequests.find((request) => request.conversationType === 1 && request.conversationID === "bob")?.after,
+      ).toBe(checkpoint!.lastSyncTime)
       expect((yield* repoSvc.listMessages({ groupID: group.id, limit: 500 })).messages).toHaveLength(226)
       expect((yield* SubscriptionRef.get(Context.get(restarted, IMKernelSync.Service).recovery)).status).toBe("ready")
     }),
@@ -305,7 +332,7 @@ describe("IMKernelSync outbound", () => {
     Effect.gen(function* () {
       const group = yield* seedBoundGroup()
       const repoSvc = yield* IMRepository
-      const message = yield* repoSvc.createMessage({
+      const message = yield* (yield* IMKernelSync.Service).createMessage({
         groupID: group.id,
         senderID: "alice",
         senderType: "user",
@@ -317,6 +344,7 @@ describe("IMKernelSync outbound", () => {
 
   it.live("send → kernel ack writes kernel_msg_id back onto the local row", () =>
     Effect.gen(function* () {
+      yield* SubscriptionRef.set(clientState, "connected")
       const { group, message } = yield* seedPendingMessage("hi bob")
       const sync = yield* IMKernelSync.Service
       yield* sync.send({ groupID: group.id, messageID: message.id, content: "hi bob" })
@@ -330,7 +358,8 @@ describe("IMKernelSync outbound", () => {
         "kernel ack never written back",
       )
       expect(row.kernelMsgID).toBe("km_ack_1")
-      expect(sentTexts).toEqual([{ conversationType: 1, conversationID: "bob", text: "hi bob" }])
+      expect(sentTexts).toHaveLength(1)
+      expect(sentTexts[0]).toMatchObject({ conversationType: 1, conversationID: "bob", text: "hi bob", messageID: message.id })
     }),
   )
 
@@ -358,13 +387,14 @@ describe("IMKernelSync outbound", () => {
     }),
   )
 
-  it.live("a failed send stays pending and drainPending redelivers once the link recovers", () =>
+  it.live("a dispatched failure is unknown and reconnection never redelivers it", () =>
     Effect.gen(function* () {
       sendBehavior = (input) =>
         Effect.suspend(() => {
           sentTexts.push(input)
           return KernelSdk.request("sendMessage", () => Promise.reject({ code: 503, msg: "link down" }))
         })
+      yield* SubscriptionRef.set(clientState, "connected")
       const { group, message } = yield* seedPendingMessage("offline hello")
       const sync = yield* IMKernelSync.Service
       yield* sync.send({ groupID: group.id, messageID: message.id, content: "offline hello" })
@@ -383,19 +413,14 @@ describe("IMKernelSync outbound", () => {
           return { messageID: "km_ack_recovered" }
         })
       yield* SubscriptionRef.set(clientState, "connected")
-      const row = yield* pollWithTimeout(
-        Effect.gen(function* () {
-          const current = yield* repoSvc.getMessage(message.id)
-          return current?.kernelMsgID ? current : undefined
-        }),
-        "pending message never redelivered",
-      )
-      expect(row.kernelMsgID).toBe("km_ack_recovered")
-      expect(sentTexts).toHaveLength(2)
+      yield* sync.drainPending
+      expect((yield* repoSvc.getMessage(message.id))?.kernelMsgID).toBeNull()
+      expect((yield* sync.deliveryStatus(message.id)).state).toBe("unknown")
+      expect(sentTexts).toHaveLength(1)
     }),
   )
 
-  it.live("the in-memory attempt cap dead-letters a persistently failing send", () =>
+  it.live("durable dispatched consumption allows only one attempt across repeated drains", () =>
     Effect.gen(function* () {
       // Connect first so the state-change drain fires on an empty pending list; every attempt
       // below then comes from an explicit drainPending pass.
@@ -411,13 +436,13 @@ describe("IMKernelSync outbound", () => {
       for (let pass = 0; pass < 12; pass++) {
         yield* sync.drainPending
       }
-      // 8 = SEND_MAX_ATTEMPTS: attempts 9+ are skipped without touching the kernel.
-      expect(sentTexts).toHaveLength(8)
+      // A failed first dispatch remains unknown; subsequent drains never touch the kernel.
+      expect(sentTexts).toHaveLength(1)
       const repoSvc = yield* IMRepository
       expect((yield* repoSvc.getMessage(message.id))?.kernelMsgID).toBeNull()
 
       yield* sync.drainPending
-      expect(sentTexts).toHaveLength(8)
+      expect(sentTexts).toHaveLength(1)
     }),
   )
 })

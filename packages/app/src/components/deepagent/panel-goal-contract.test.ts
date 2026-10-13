@@ -17,7 +17,13 @@ import {
 // routes (NOT the generated SDK). These lock the exact method/url/body so a backend rename of
 // /deepagent/panel/* or /deepagent/goal/* breaks CI here instead of shipping a dead UI. Mirrors the
 // backend group schemas in server/routes/instance/httpapi/groups/deepagent.ts.
-type Recorded = { method: string; url: string; body?: unknown; headers?: Record<string, string> }
+type Recorded = {
+  throwOnError?: boolean
+  method: string
+  url: string
+  body?: unknown
+  headers?: Record<string, string>
+}
 
 function client(calls: Recorded[], data: unknown) {
   return {
@@ -90,42 +96,57 @@ describe("Expert Panel route contract (§C)", () => {
 })
 
 describe("Goal Loop route contract (§D)", () => {
-  test("startGoal POSTs /deepagent/goal/start and returns the snapshot", async () => {
+  const snap = {
+    goalId: "goal_1",
+    planDocId: "plan_1",
+    phase: "running",
+    running: true,
+    revision: 1,
+    requestedPhase: "running" as const,
+    preparation: "ready" as const,
+    inFlight: false,
+    recoveryRequired: false,
+    wakeState: "pending" as const,
+    replayed: false,
+  }
+  test("startGoal sends a stable request identity and returns the full control snapshot", async () => {
     const calls: Recorded[] = []
-    const snap = { goalId: "goal_1", planDocId: "plan_1", phase: "running", running: true }
-    const result = await startGoal(client(calls, snap), { sessionID: "ses_1" })
+    const result = await startGoal(client(calls, snap), { sessionID: "ses_1", requestID: "request_1" })
     expect(calls).toEqual([
-      { method: "POST", url: "/deepagent/goal/start", body: { sessionID: "ses_1" }, headers: JSON_HEADERS },
+      {
+        method: "POST",
+        url: "/deepagent/goal/start",
+        body: { sessionID: "ses_1", requestID: "request_1" },
+        headers: JSON_HEADERS,
+        throwOnError: false,
+      },
     ])
     expect(result).toEqual(snap)
   })
 
-  test("pause/resume/stop POST the matching lifecycle route with { sessionID }", async () => {
+  test("pause/resume/stop target the captured Goal revision and request", async () => {
     for (const [fn, action] of [
       [pauseGoal, "pause"],
       [resumeGoal, "resume"],
       [stopGoal, "stop"],
     ] as const) {
       const calls: Recorded[] = []
-      const ok = await fn(client(calls, { ok: true }), "ses_1")
+      const input = { sessionID: "ses_1", goalId: "goal_1", expectedRevision: 1, requestID: "request_control" }
+      expect(await fn(client(calls, snap), input)).toEqual(snap)
       expect(calls).toEqual([
-        { method: "POST", url: `/deepagent/goal/${action}`, body: { sessionID: "ses_1" }, headers: JSON_HEADERS },
+        { method: "POST", url: `/deepagent/goal/${action}`, body: input, headers: JSON_HEADERS, throwOnError: false },
       ])
-      expect(ok).toBe(true)
     }
   })
 
-  test("goalStatus GETs /deepagent/goal/status with the sessionID query and unwraps goal", async () => {
+  test("goalStatus unwraps the authoritative snapshot", async () => {
     const calls: Recorded[] = []
-    const snap = { goalId: "goal_1", planDocId: "plan_1", phase: "paused", running: false }
-    const result = await goalStatus(client(calls, { goal: snap }), "ses 1")
-    expect(calls).toEqual([{ method: "GET", url: "/deepagent/goal/status?sessionID=ses%201" }])
-    expect(result).toEqual(snap)
+    expect(await goalStatus(client(calls, { goal: snap }), "ses 1")).toEqual(snap)
+    expect(calls).toEqual([{ method: "GET", url: "/deepagent/goal/status?sessionID=ses%201", throwOnError: false }])
   })
 
   test("goalStatus tolerates a null goal", async () => {
-    const calls: Recorded[] = []
-    expect(await goalStatus(client(calls, { goal: null }), "ses_1")).toBeNull()
+    expect(await goalStatus(client([], { goal: null }), "ses_1")).toBeNull()
   })
 
   test("editPlanGoal POSTs the strict durable admission envelope and returns its receipt", async () => {

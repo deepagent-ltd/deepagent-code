@@ -13,7 +13,10 @@ const client = vi.hoisted(() => ({
   createMessage: vi.fn(),
 }))
 const socket = vi.hoisted(() => ({ connected: (): boolean => false, connect: (_value: boolean) => {} }))
-vi.mock("@/utils/im-client", () => ({ useIMClient: () => client }))
+vi.mock("@/utils/im-client", async (original) => ({
+  ...(await original<typeof import("@/utils/im-client")>()),
+  useIMClient: () => client,
+}))
 vi.mock("@/hooks/use-im-websocket", () => ({
   useIMWebSocket: () => ({
     connected: () => socket.connected(),
@@ -170,7 +173,7 @@ describe("IM text conversations", () => {
     await screen.findByText("message 75")
     await screen.findByText("message 2")
     expect(screen.getAllByRole("article")).toHaveLength(152)
-    expect(client.listMessages).toHaveBeenCalledWith("group-1", 50, "2")
+    expect(client.listMessages).toHaveBeenCalledWith("group-1", 50, "2", expect.any(AbortSignal))
   })
 
   it("queues a connection refresh that arrives while the initial snapshot is pending", async () => {

@@ -109,7 +109,10 @@ if (typeof globals.XMLHttpRequest === "undefined") {
           try {
             this.onreadystatechange?.()
           } catch (callbackError) {
-            console.error("[kernel-shims] SDK onreadystatechange threw:", (callbackError as Error)?.message ?? callbackError)
+            console.error(
+              "[kernel-shims] SDK onreadystatechange threw:",
+              (callbackError as Error)?.message ?? callbackError,
+            )
           }
         } catch (error) {
           // 隔离 SDK 侧 handler 缺陷（getNavis 读 t.result，浏览器里网络错误 Event 同样没有该字段）。
@@ -168,7 +171,12 @@ if (typeof globals.location === "undefined") globals.location = { protocol: "htt
 try {
   const nav = (globalThis as { navigator?: { appVersion?: string } }).navigator
   if (typeof nav !== "undefined" && nav.appVersion === undefined) {
-    Object.defineProperty(nav, "appVersion", { value: `Bun/${Bun.version}`, configurable: true })
+    const version = process.versions.bun
+      ? `Bun/${process.versions.bun}`
+      : process.versions.electron
+        ? `Electron/${process.versions.electron} Node/${process.versions.node}`
+        : `Node/${process.versions.node}`
+    Object.defineProperty(nav, "appVersion", { value: version, configurable: true })
   }
 } catch {
   // 非致命：最坏情况 x-device header 里是 "undefined"

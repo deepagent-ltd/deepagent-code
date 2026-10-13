@@ -14,7 +14,8 @@ export class ExchangeError extends Schema.TaggedErrorClass<ExchangeError>()("IMK
   code: Schema.String,
   message: Schema.String,
   status: Schema.optional(Schema.Number),
-  /** 5xx / 传输层失败 ⇒ 可重试；4xx 业务拒绝 ⇒ 重试无意义。 */
+  retryAfterMs: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }))),
+  /** 5xx / 传输层失败用原重试计划；429 由门面按 retryAfterMs 单独等待。 */
   retryable: Schema.Boolean,
 }) {}
 
@@ -116,16 +117,52 @@ const call = <A>(
         status: response.status,
         retryable: response.status >= 500,
       })
+    // Platform rate middleware intentionally returns an empty 429 body. It is
+    // a known refusal, not a malformed success envelope or permission to retry
+    // through the ordinary one-second transport retry schedule.
+    if (response.status === 429) {
+      const hint = response.headers["retry-after"]?.trim()
+      const seconds = hint && /^\d{1,16}$/.test(hint) ? Number(hint) : undefined
+      const date =
+        hint && /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(hint)
+          ? Date.parse(hint)
+          : undefined
+      const delay =
+        seconds !== undefined
+          ? Math.min(seconds * 1000, Number.MAX_SAFE_INTEGER)
+          : date !== undefined && Number.isFinite(date)
+            ? Math.max(0, date - Date.now())
+            : undefined
+      return yield* new ExchangeError({
+        code: "im_unavailable",
+        status: 429,
+        message: "The IM facade is temporarily rate limited. Retry after the server wait window.",
+        retryable: false,
+        ...(delay !== undefined && Number.isSafeInteger(delay) ? { retryAfterMs: delay } : {}),
+      })
+    }
+    const authenticationRejected = response.status === 401 || response.status === 403
+    const keyRejected = () => new ExchangeError({
+      code: "im_key_invalid",
+      message: "The configured IM key is invalid or no longer active.",
+      status: response.status,
+      retryable: false,
+    })
     const envelope = yield* HttpClientResponse.schemaBodyJson(Envelope)(response).pipe(
-      Effect.mapError((error) => invalid(error.message)),
+      Effect.mapError((error) => authenticationRejected ? keyRejected() : invalid(error.message)),
     )
-    if (!envelope.success)
+    if (!envelope.success) {
+      // TokenAuth middleware rejects before the facade controller and returns
+      // {error}, or an envelope without its business code. Never echo that text.
+      if (authenticationRejected && !envelope.code?.startsWith("im_")) return yield* keyRejected()
       return yield* new ExchangeError({
         code: envelope.code ?? "http_error",
         message: envelope.message ?? `facade ${path} rejected the request (HTTP ${response.status})`,
         status: response.status,
         retryable: response.status >= 500,
       })
+    }
+    if (authenticationRejected) return yield* keyRejected()
     if (envelope.data === undefined) return yield* invalid("success envelope without data")
     const decoded = decode(envelope.data)
     if (Option.isNone(decoded)) return yield* invalid("data does not match the payload contract")
@@ -153,7 +190,7 @@ const post = <A>(input: ExchangeInput, path: string, body: unknown, decode: (dat
 
 /** 已认领 key → 内核连接坐标（幂等：每次调用都刷新内核 token 并自愈全员群成员关系）。 */
 export const exchange = (input: ExchangeInput) =>
-  post(input, "/api/im/exchange", {}, Schema.decodeUnknownOption(ExchangePayload))
+  post(input, "/api/im/login", {}, Schema.decodeUnknownOption(ExchangePayload))
 
 /** 认领：把 IM 身份（name，org 内唯一）绑定到 key 并返回内核连接坐标。同 key 重认领幂等。 */
 export const claim = (input: ExchangeInput & { readonly name: string }) =>

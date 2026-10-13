@@ -48,4 +48,24 @@ describe("electron-builder Windows packaging config", () => {
     }
     delete process.env.DEEPAGENT_CODE_CHANNEL
   })
+
+  test("Linux channels resolve a safe real executable for the offline installation contract", async () => {
+    const previous = process.env.DEEPAGENT_CODE_CHANNEL
+    try {
+      for (const [channel, executable] of [["dev", "deepagent-code-dev"], ["beta", "deepagent-code-beta"], ["prod", "deepagent-code"]]) {
+        process.env.DEEPAGENT_CODE_CHANNEL = channel
+        const module = await import(`../../electron-builder.config.ts?linux=${channel}`)
+        const { LinuxPackager, Packager } = await import("electron-builder")
+        const info = new Packager({ projectDir: new URL("../..", import.meta.url).pathname, config: module.default })
+        await info.validateConfig()
+        const packager = new LinuxPackager(info)
+        expect(packager.executableName).toBe(executable)
+        expect(packager.executableName).toMatch(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)
+        expect(module.default.linux?.target).toEqual(["deb"])
+      }
+    } finally {
+      if (previous === undefined) delete process.env.DEEPAGENT_CODE_CHANNEL
+      if (previous !== undefined) process.env.DEEPAGENT_CODE_CHANNEL = previous
+    }
+  })
 })

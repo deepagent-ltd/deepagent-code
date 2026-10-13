@@ -11,7 +11,7 @@ import { useSDK } from "./sdk"
 import { useSync } from "./sync"
 import { useServerSDK } from "./server-sdk"
 import { ScopedKey, type ServerScope } from "@/utils/server-scope"
-import { isSelectableCollaborationMode } from "@/utils/collaboration-mode"
+import { configuredCollaborationMode, isSelectableCollaborationMode } from "@/utils/collaboration-mode"
 
 export type ModelKey = { providerID: string; modelID: string; variant?: string }
 
@@ -91,7 +91,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         variant?: string | null
       }
     }>({
-      current: list()[0]?.name,
+      current: undefined,
       draft: undefined,
       last: undefined,
     })
@@ -122,7 +122,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         return
       }
       if (items.some((item) => item.name === store.current)) return
-      setStore("current", items[0]?.name)
+      if (store.current !== undefined) setStore("current", undefined)
     })
 
     const scope = createMemo<State | undefined>(() => {
@@ -178,10 +178,18 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
     const fallback = createMemo<ModelKey | undefined>(() => configuredModel() ?? recentModel() ?? defaultModel())
 
+    const controlledSession = () => {
+      const session = id() ? sync.session.get(id()!) : undefined
+      if (session?.directory === sdk.directory && "ordinaryEligible" in session && session.ordinaryEligible === false)
+        return session
+    }
+
     const agent = {
       list,
       current() {
-        return pickAgent(scope()?.agent ?? store.current)
+        const session = controlledSession()
+        if (session) return session.agent ? pickAgent(session.agent) : undefined
+        return pickAgent(scope()?.agent ?? store.current ?? configuredCollaborationMode(sync.data.config.default_agent))
       },
       set(name: string | undefined) {
         const item = pickAgent(name)
@@ -229,8 +237,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     }
 
     const current = () => {
+      const session = controlledSession()
+      if (session) return session.model ? models.find({ providerID: session.model.providerID, modelID: session.model.id }) : undefined
       const item = firstModel(
         () => scope()?.model,
+        () => {
+          const session = id() ? sync.session.get(id()!) : undefined
+          if (session?.directory !== sdk.directory || !session.model) return
+          return { providerID: session.model.providerID, modelID: session.model.id }
+        },
         () => agent.current()?.model,
         fallback,
       )
@@ -248,7 +263,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       })
     }
 
-    const selected = () => scope()?.variant
+    const selected = () => controlledSession() ? undefined : scope()?.variant
 
     const snapshot = () => {
       const model = current()
@@ -297,6 +312,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         model.set({ providerID: entry.provider.id, modelID: entry.id })
       },
       set(item: ModelKey | undefined, options?: { recent?: boolean }) {
+        if (controlledSession()) return
         batch(() => {
           setStore("last", {
             type: "model",
@@ -321,6 +337,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         configured,
         selected,
         current() {
+          if (controlledSession()) return
           const resolved = resolveModelVariant({
             variants: this.list(),
             selected: this.selected(),
@@ -338,6 +355,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           return Object.keys(item.variants)
         },
         set(value: string | undefined) {
+          if (controlledSession()) return
           batch(() => {
             const model = current()
             setStore("last", {

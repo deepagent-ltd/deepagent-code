@@ -2,6 +2,9 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
 import { EventV2 } from "@deepagent-code/core/event"
+import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
+import { SessionRuntimeStatusEvents } from "@/session/runtime-status-events"
 import * as Log from "@deepagent-code/core/util/log"
 import { Cause, Effect, Queue } from "effect"
 import * as Stream from "effect/Stream"
@@ -25,7 +28,7 @@ function eventID() {
   return EventV2.ID.create()
 }
 
-function eventResponse(events: EventV2.Interface) {
+function eventResponse(events: EventV2.Interface, execution: SessionExecution.Interface, runtime: SessionRuntimeStatus.Interface) {
   return Effect.gen(function* () {
     const instance = yield* InstanceState.context
     const workspaceID = yield* InstanceState.workspaceID
@@ -46,6 +49,13 @@ function eventResponse(events: EventV2.Interface) {
     yield* Effect.addFinalizer(() => unsubscribe)
     const stream = Stream.fromQueue(queue).pipe(
       Stream.map((event) => ({ id: event.id, type: event.type, properties: event.data })),
+    )
+    // Preserve raw fact order. This separate read-only stream waits for real owner cleanup,
+    // so a terminal event emitted before claim release cannot announce a false idle state.
+    const statuses = (yield* SessionRuntimeStatusEvents.stream(events, execution, runtime)).pipe(
+      Stream.filter((event) => event.location?.directory === instance.directory &&
+        (event.location.workspaceID === undefined || event.location.workspaceID === workspaceID)),
+      Stream.map((event) => ({ id: eventID(), type: "session.status", properties: event.properties })),
     )
     const disposed = Stream.callback<{ id: string; type: string; properties: unknown }>(
       (queue) => {
@@ -68,6 +78,7 @@ function eventResponse(events: EventV2.Interface) {
       { bufferSize: 1, strategy: "dropping" },
     )
     const output = stream.pipe(
+      Stream.merge(statuses, { haltStrategy: "left" }),
       Stream.merge(disposed, { haltStrategy: "left" }),
       Stream.takeUntil((event) => event.type === "server.instance.disposed"),
     )
@@ -100,10 +111,12 @@ function eventResponse(events: EventV2.Interface) {
 export const eventHandlers = HttpApiBuilder.group(EventApi, "event", (handlers) =>
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const execution = yield* SessionExecution.Service
+    const runtime = yield* SessionRuntimeStatus.Service
     return handlers.handleRaw(
       "subscribe",
       Effect.fn("EventHttpApi.subscribe")(function* () {
-        return yield* eventResponse(events)
+        return yield* eventResponse(events, execution, runtime)
       }),
     )
   }),

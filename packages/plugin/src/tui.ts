@@ -442,6 +442,8 @@ export type TuiSidebarMcpItem = {
   name: string
   status: McpStatus["status"]
   error?: string
+  authStatus?: Extract<McpStatus, { status: "disconnected" }>["authStatus"]
+  reason?: Extract<McpStatus, { status: "disconnected" }>["reason"]
 }
 
 export type TuiSidebarLspItem = Pick<LspStatus, "id" | "root" | "status">

@@ -197,7 +197,9 @@ export const layer = Layer.effectContext(
   Effect.gen(function* () {
     const flags = yield* RuntimeFlags.Service
     const runtime = yield* AgentGateway.Runtime
-    return Context.make(SessionRunner.CurrentToolSettleGate, (input) => decide(flags, runtime, input))
+    return Context.make(SessionRunner.CurrentToolSettleGate, (input) => decide(flags, runtime, input)).pipe(
+      Context.add(AgentGateway.DeepAgentSessionState.CurrentStorage, { run: runtime.withStorage }),
+    )
   }),
 )
 

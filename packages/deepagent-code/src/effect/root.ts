@@ -1,4 +1,4 @@
-import { Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { LLMClient, RequestExecutor } from "@deepagent-code/llm/route"
 import { Database } from "@deepagent-code/core/database/database"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
@@ -18,12 +18,49 @@ import { TaskWorktreeReclamation } from "@/effect/task-worktree-reclamation"
 import { productionSourcesLayer } from "@/context-federation/production-sources"
 import { EventV2Bridge } from "@/event-v2-bridge"
 
+/** Shared by both production roots. Settings and Work use the same original
+ * Native capture; their factories complete before merged consumers are built. */
+export const windowsStorageLayer = Layer.effectContext(Effect.gen(function* () {
+  if (process.platform !== "win32") return Context.empty()
+  const { NativeInstallation } = yield* Effect.promise(() => import("@/installation/native-installation"))
+  const { NativeWindowsBootstrap } = yield* Effect.promise(() => import("@/installation/windows-native-bootstrap"))
+  const { WindowsSettingsStorage } = yield* Effect.promise(() => import("@/installation/windows-settings-storage"))
+  const { NativeWindowsWorkFactory } = yield* Effect.promise(() => import("@/installation/windows-work-factory"))
+  const { WindowsWorkCommandRuntime } = yield* Effect.promise(() => import("@/installation/windows-work-command-runtime"))
+  const { Global } = yield* Effect.promise(() => import("@deepagent-code/core/global"))
+  if (!(yield* NativeWindowsBootstrap.Registered)) return Context.empty()
+  const bootstrap = yield* NativeWindowsBootstrap.make(yield* NativeInstallation.current())
+  const native = Context.make(NativeWindowsBootstrap.Service, bootstrap)
+  const settings = yield* Layer.build(WindowsSettingsStorage.layer.pipe(
+    Layer.provide(Layer.succeed(NativeWindowsBootstrap.Service, bootstrap))))
+  const work = yield* Layer.build(NativeWindowsWorkFactory.layer.pipe(
+    Layer.provide(Layer.succeed(NativeWindowsBootstrap.Service, bootstrap))))
+  const images = yield* Layer.build(NativeWindowsWorkFactory.imageRegistry.pipe(Layer.provide(Layer.succeedContext(work))))
+  const workspace = yield* Layer.build(WindowsWorkCommandRuntime.layer.pipe(
+    Layer.provide(Layer.succeedContext(work)), Layer.provide(Global.defaultLayer)))
+  const ports = Context.merge(work, workspace)
+  const custody = yield* Effect.gen(function* () {
+    if (!Context.get(work, NativeWindowsWorkFactory.Service).commandAvailable) return Context.empty()
+    const { WindowsWorkCommandCustody } = yield* Effect.promise(() => import("@/installation/windows-work-command-custody"))
+    // This Layer identity is memoized by the production Root's original map.
+    // Custody shares that database and the exact captured Native ports.
+    return yield* Layer.build(WindowsWorkCommandCustody.layer.pipe(
+      Layer.provide(Layer.succeedContext(ports)), Layer.provide(Database.defaultLayer)))
+  })
+  return Context.merge(Context.merge(native, settings), Context.merge(ports, Context.merge(images, custody)))
+}))
+
 // Both production roots must use these exact Layer objects. Effect memoizes by Layer identity,
 // including the ApplicationTools instance captured by the V2 Location map and its bridges.
 export const layer = V2RunnerFrame.sessionRuntimeLayer
 export const applicationToolsLayer = ApplicationTools.layer
 export const gatewayClientLayer = LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))
-export const taskDispatcherLayer = TaskRunDispatcher.runtimeLayer()
+export const taskDispatcherLayer = TaskRunDispatcher.runtimeLayer().pipe(
+  // Capture the same durable input/event runtime in both production roots. Optional outbox
+  // continuation services must be available while the dispatcher layer is constructed.
+  Layer.provide(layer),
+  Layer.provide(EventV2Bridge.defaultLayer),
+)
 export const ownerSeedLayer = V2OwnerSeed.layer({
   env: process.env,
   appRoot: V2OwnerSeed.defaultOwnerAuthorizationAppRoot(),

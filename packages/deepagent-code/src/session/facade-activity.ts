@@ -9,7 +9,7 @@
  *   task  → the ONE durable V2 owner: TaskRunAuthority.submit (delivery_mode=background); the
  *           process-global TaskRunDispatcher claims + drains the run and the settle transaction
  *           enqueues the outbox notification that wakes the parent.
- *   goal  → GoalManager.start / pause / resume / stop; steer via the goal_steer channel.
+ *   goal  → GoalManager.start; steer via goal_steer. Lifecycle control requires the explicit Goal API.
  *   panel → PanelConsult.consultPanel wrapped in a BackgroundJob owned by THIS service.
  *
  * Every start first writes a `session_facade_activity` row (state=active). The partial unique
@@ -549,6 +549,7 @@ export const build: Effect.Effect<
   // ── subkind delegation: goal ──────────────────────────────────────────────────────────────
 
   const startGoal = (
+    row: FacadeRow,
     input: FacadeStartInput,
     budget: FacadeBudget,
   ): Effect.Effect<Record<string, string>, FacadeError> =>
@@ -560,6 +561,7 @@ export const build: Effect.Effect<
       const snapshot = yield* goals
         .start({
           sessionID: input.sessionID,
+          requestID: `facade-goal:${row.activity_id}`,
           objective: input.objective,
           limits: {
             maxTicks: budget.maxTicks,
@@ -628,6 +630,10 @@ export const build: Effect.Effect<
   // ── public ports ──────────────────────────────────────────────────────────────────────────
 
   const start: Interface["start"] = Effect.fn("FacadeActivity.start")(function* (input) {
+    if (input.subkind === "panel" && !flags.experimentalExpertPanel)
+      return yield* Effect.fail(
+        new FacadeActivityRunnerUnavailable({ subkind: "panel", reason: "expert panel is disabled" }),
+      )
     const objective = input.objective.trim()
     if (!objective) return yield* Effect.fail(new FacadeActivityInvalidInput({ reason: "objective must be non-empty" }))
     const budget = clampFacadeBudget(input.budget)
@@ -649,7 +655,7 @@ export const build: Effect.Effect<
     const delegation: Effect.Effect<Record<string, string>, FacadeError> = input.subkind === "task"
       ? startTask({ ...row, spawn_tool_call_id: spawnToolCallID }, input)
       : input.subkind === "goal"
-        ? startGoal(input, budget)
+        ? startGoal(row, input, budget)
         : startPanel(row, input)
     return yield* delegation.pipe(
       Effect.map((ref) => ({ activityID, subkind: input.subkind, budget, ref })),
@@ -684,6 +690,7 @@ export const build: Effect.Effect<
           ? yield* goals.status(current.parent_session_id).pipe(Effect.catchCause(() => Effect.succeed(null)))
           : null
         if (snapshot) {
+          ref.control = "unavailable_via_facade_use_goal_panel"
           ref.goalID = snapshot.goalId
           ref.phase = snapshot.phase
         }
@@ -801,59 +808,32 @@ export const build: Effect.Effect<
         return yield* Effect.fail(
           new FacadeActivityRunnerUnavailable({ subkind: "goal", reason: "GoalManager service unavailable" }),
         )
-      if (input.action === "pause") {
-        const applied = yield* goals.pause(input.sessionID)
-        outcome = {
-          applied,
+      if (input.action !== "steer")
+        return yield* new FacadeActivityUnsupportedControl({
           subkind: "goal",
-          action: "pause",
-          detail: applied ? "goal paused" : "no running goal to pause",
-        }
-      } else if (input.action === "resume") {
-        const applied = yield* goals.resume(input.sessionID)
-        outcome = {
-          applied,
-          subkind: "goal",
-          action: "resume",
-          detail: applied ? "goal resumed" : "no paused goal to resume",
-        }
-      } else if (input.action === "stop") {
-        const applied = yield* goals.stop(input.sessionID)
-        outcome = {
-          applied,
-          subkind: "goal",
-          action: "stop",
-          detail: applied ? "goal stop requested" : "no active goal to stop",
-        }
-      } else if (input.action === "steer") {
-        const text = input.message?.trim()
-        if (!text)
-          return yield* Effect.fail(new FacadeActivityInvalidInput({ reason: "steer requires a non-empty message" }))
-        if (!steerBuffer)
-          return yield* Effect.fail(
-            new FacadeActivityRunnerUnavailable({ subkind: "goal", reason: "steer buffer unavailable" }),
-          )
-        const admitted = yield* steerBuffer
-          .admit({
-            sessionID: SessionID.make(input.sessionID),
-            prompt: Prompt.make({ text }),
-            delivery: GoalDriver.GOAL_STEER_DELIVERY,
-          })
-          .pipe(
-            Effect.mapError(
-              (error) => new FacadeActivityInvalidInput({ reason: `steer admission refused: ${error._tag}` }),
-            ),
-          )
-        outcome = { applied: true, subkind: "goal", action: "steer", detail: `steer admitted as ${admitted.id}` }
-      } else {
+          action: input.action,
+          reason:
+            "Use the Goal panel/API with goalId, expectedRevision and requestID; this Session-only facade cannot target durable Goal control",
+        })
+      const text = input.message?.trim()
+      if (!text)
+        return yield* Effect.fail(new FacadeActivityInvalidInput({ reason: "steer requires a non-empty message" }))
+      if (!steerBuffer)
         return yield* Effect.fail(
-          new FacadeActivityUnsupportedControl({
-            subkind: "goal",
-            action: input.action,
-            reason: "goal supports pause/resume/stop/steer",
-          }),
+          new FacadeActivityRunnerUnavailable({ subkind: "goal", reason: "steer buffer unavailable" }),
         )
-      }
+      const admitted = yield* steerBuffer
+        .admit({
+          sessionID: SessionID.make(input.sessionID),
+          prompt: Prompt.make({ text }),
+          delivery: GoalDriver.GOAL_STEER_DELIVERY,
+        })
+        .pipe(
+          Effect.mapError(
+            (error) => new FacadeActivityInvalidInput({ reason: `steer admission refused: ${error._tag}` }),
+          ),
+        )
+      outcome = { applied: true, subkind: "goal", action: "steer", detail: `steer admitted as ${admitted.id}` }
     } else if (input.subkind === "task") {
       // Honest control-plane gap: the durable task surface only offers close (best-effort for
       // active runs, immediate for queued/admitted). pause/resume/steer are NOT fabricated —

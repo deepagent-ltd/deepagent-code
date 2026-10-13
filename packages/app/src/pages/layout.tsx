@@ -1350,10 +1350,19 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
   }
 
   function openSettings() {
+    const selected = command.options.find((option) => option.id === "settings.currentSession" && !option.disabled)
+    if (params.id && selected) {
+      selected.onSelect?.()
+      return
+    }
     const run = ++dialogRun
+    const captured = { directory: currentDir(), scope: server.scope() }
     void import("@/components/settings-v2").then((x) => {
       if (dialogDead || dialogRun !== run) return
-      dialog.show(() => <x.DialogSettings />)
+      dialog.show(() => <x.DialogSettings mcp={{
+        directory: captured.directory,
+        current: () => !dialogDead && server.scope() === captured.scope && currentDir() === captured.directory,
+      }} />)
     })
   }
 

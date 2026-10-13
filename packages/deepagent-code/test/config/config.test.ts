@@ -1,6 +1,7 @@
 import { test, expect, describe, afterEach, beforeEach, spyOn } from "bun:test"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
-import { Deferred, Effect, Exit, Layer, Option } from "effect"
+import { Cause, Deferred, Effect, Exit, Layer, Option } from "effect"
+import { InvalidError } from "@deepagent-code/core/v1/config/error"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { Config, normalizeLoadedConfig } from "@/config/config"
@@ -558,6 +559,9 @@ it.instance("handles file inclusion with replacement tokens", () =>
 
 const accountTokenIt = configIt({
   account: Layer.mock(Account.Service)({
+    source: () => Effect.succeed({
+      id: "account-1", url: "https://control.example.com", orgID: "org-1", generation: "fixture-generation", selectionRevision: 1,
+    }),
     active: () =>
       Effect.succeed(
         Option.some({
@@ -685,7 +689,12 @@ it.effect("consolidates legacy global config files into config.jsonc and removes
     // Plugins in one legacy file, model in another — the exact split that confused users.
     yield* FSUtil.use.writeWithDirs(
       path.join(globalDir, "config.json"),
-      JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json", model: "kept/model" }),
+      JSON.stringify({
+        $schema: "https://ai.deepagent.ltd/config.schema.json",
+        model: "kept/model",
+        providers: { native: { name: "Kept native" } },
+        permissions: [{ action: "bash", resource: "*", effect: "deny" }],
+      }),
     )
     yield* FSUtil.use.writeWithDirs(
       path.join(globalDir, "deepagent-code.json"),
@@ -706,6 +715,10 @@ it.effect("consolidates legacy global config files into config.jsonc and removes
           expect(existsSync(path.join(globalDir, "config.json"))).toBe(false)
           expect(existsSync(path.join(globalDir, "deepagent-code.json"))).toBe(false)
           expect(existsSync(path.join(globalDir, "config.jsonc"))).toBe(true)
+          expect(ConfigParse.jsonc(yield* FSUtil.use.readFileString(path.join(globalDir, "config.jsonc")), "test")).toMatchObject({
+            providers: { native: { name: "Kept native" } },
+            permissions: [{ action: "bash", resource: "*", effect: "deny" }],
+          })
         }),
       ),
     )
@@ -2348,3 +2361,47 @@ test("config loader strips the Core V2 providers key instead of failing the load
   // The raw schema still rejects the key — only the loader strips it, so a typo'd key keeps failing.
   expect(() => ConfigParse.schema(ConfigV1.Info, file, "test")).toThrow()
 })
+
+
+it.instance("loads mixed native providers and permissions without changing the legacy consumer or file", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const file = path.join(test.directory, "deepagent-code.json")
+    const text = JSON.stringify(
+      schemaConfig({
+        provider: { legacy: { name: "Legacy provider" } },
+        permission: { bash: "deny" },
+        providers: { native: { name: "Native provider", models: {} } },
+        permissions: [{ action: "bash", resource: "git status", effect: "allow" }],
+      }),
+    )
+    yield* FSUtil.use.writeWithDirs(file, text)
+    const config = yield* Config.use.get()
+    expect(config.provider?.legacy.name).toBe("Legacy provider")
+    expect(config.permission).toEqual({ bash: "deny" })
+    expect(Object.hasOwn(config, "providers")).toBe(false)
+    expect(Object.hasOwn(config, "permissions")).toBe(false)
+    expect(yield* FSUtil.use.readFileString(file)).toBe(text)
+  }),
+)
+
+for (const native of [
+  { permissions: [{ action: "bash", resource: "*", effect: "ALLOW" }] },
+  { permissions: [{ action: "bash", resource: "*", effect: "allow", typo: true }] },
+  { providers: { bad: { api: { type: "unknown" } } } },
+  { providers: { bad: { modelz: {} } } },
+]) {
+  it.instance(`rejects invalid native config through the real legacy loader: ${JSON.stringify(native)}`, () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const file = path.join(test.directory, "deepagent-code.json")
+      const text = JSON.stringify(schemaConfig({ permission: { bash: "deny" }, ...native }))
+      yield* FSUtil.use.writeWithDirs(file, text)
+      const result = yield* Config.use.get().pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) expect(InvalidError.isInstance(Cause.squash(result.cause))).toBe(true)
+      expect(yield* FSUtil.use.readFileString(file)).toBe(text)
+    }),
+  )
+}
+

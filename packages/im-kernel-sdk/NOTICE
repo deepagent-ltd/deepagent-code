@@ -1,0 +1,18 @@
+This package derives from JuggleIM im-web-sdk, commit
+f69cbe450fc79fceac7ae24a54baee57f9b1a5c3 (version 1.9.17).
+https://github.com/Juggleim/im-web-sdk
+
+The upstream LICENSE and package metadata specify Apache-2.0. The upstream
+Rollup script and generated artifact contain a MIT banner. Those original
+notices are retained, without changing or resolving their differing wording.
+The original source, build scripts, package metadata, lockfile and LICENSE
+are available in upstream/; LICENSE is also included at package root.
+
+DeepAgent Code modifications add durable delivery receipts, bounded protected
+reader queries, exact decimal int64 decoding, immutable protected reader mode,
+and typed error handling. Protected mode suppresses legacy body-bearing APIs
+and notifications. It does not grant authority to execute agent tasks.
+
+The runtime is built from the readable source. Its bytes and declaration hash
+are pinned in build-manifest.json. The original banner year is fixed at 2026
+only during reproducible builds; the product runtime clock is unchanged.

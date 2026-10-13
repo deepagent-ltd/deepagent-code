@@ -12,8 +12,10 @@ export * as DatabasePreflight from "./preflight"
 // query_only-fenced exemption from design §10.6's "migration/backup/recovery
 // 连接不得使用 NORMAL" rule.
 
-import { Database as BunDatabase } from "#sqlite-native"
-import { promises as fs } from "fs"
+import { Database, openImmutableReadOnly } from "#sqlite-native"
+import { Effect, Result, Schema } from "effect"
+import { pathToFileURL } from "node:url"
+import fs from "node:fs/promises"
 import path from "path"
 import { DatabaseMigrationLease } from "./migration-lease"
 import { contentDigest } from "../contract/digest"
@@ -133,13 +135,13 @@ export interface PreflightProbes {
 const SQLITE_HEADER_MAGIC = "SQLite format 3\x00"
 const HEADER_MAGIC_BYTES = Uint8Array.from([0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00])
 
-const readConnection = (filename: string): BunDatabase | null => {
+const readConnection = (filename: string, immutable = false): Database | null => {
   // Physical read-only is part of the preflight authority boundary. If a WAL database cannot be
   // inspected without creating SHM or otherwise opening writable, the preflight must fail closed;
   // silently upgrading this connection to read-write would mutate the store before compatibility
   // and process ownership have been established.
   try {
-    const db = new BunDatabase(filename, { readonly: true, create: false })
+    const db = immutable ? openImmutableReadOnly(filename) : new Database(filename, { readonly: true, create: false })
     db.run("PRAGMA query_only = ON")
     return db
   } catch {
@@ -147,8 +149,8 @@ const readConnection = (filename: string): BunDatabase | null => {
   }
 }
 
-const inspectReadOnly = <T>(filename: string, inspect: (db: BunDatabase) => T): T | null => {
-  const db = readConnection(filename)
+const inspectReadOnly = <T>(filename: string, inspect: (db: Database) => T, immutable = false): T | null => {
+  const db = readConnection(filename, immutable)
   if (!db) return null
   try {
     return inspect(db)
@@ -161,126 +163,135 @@ const inspectReadOnly = <T>(filename: string, inspect: (db: BunDatabase) => T): 
   }
 }
 
-const defaultProbes: PreflightProbes = {
-  async stat(filename) {
-    try {
-      const stat = await fs.stat(filename)
-      return { size: stat.size, mode: stat.mode }
-    } catch {
-      return null
-    }
-  },
-  async readHeader(filename) {
-    const stat = await fs.stat(filename).catch(() => null)
-    if (!stat || stat.size === 0) return null
-    // Read only the magic + page-size bytes. Node's fs.readFile rejects files
-    // larger than 2 GiB (ERR_FS_FILE_TOO_LARGE), which made the desktop
-    // node-sidecar preflight flag a >2 GiB store as "not a SQLite database".
-    const handle = await fs.open(filename, "r").catch(() => null)
-    if (!handle) return { headerValid: false, pageSize: 0 }
-    try {
-      const buffer = Buffer.alloc(18)
-      const { bytesRead } = await handle.read(buffer, 0, 18, 0)
-      if (bytesRead < 16) return { headerValid: false, pageSize: 0 }
-      const headerValid = buffer.subarray(0, 16).equals(HEADER_MAGIC_BYTES)
-      const raw = buffer[16]! | (buffer[17]! << 8)
-      const pageSize = raw === 1 ? 65536 : raw
-      return { headerValid, pageSize }
-    } catch {
-      return { headerValid: false, pageSize: 0 }
-    } finally {
-      await handle.close()
-    }
-  },
-  async readJournalMode(filename) {
-    return inspectReadOnly(filename, (db) => {
-      const journal = db.query("PRAGMA journal_mode").get() as { journal_mode?: string } | undefined
-      const count = db.query("PRAGMA page_count").get() as { page_count?: number } | undefined
-      return { journalMode: journal?.journal_mode ?? null, pageCount: count?.page_count ?? 0 }
-    })
-  },
-  async readJournalRows(filename) {
-    return inspectReadOnly(filename, (db) => {
-      const exists = db
-        .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration'")
-        .get() as { name?: string } | undefined
-      if (!exists) return []
-      return db.query("SELECT * FROM migration").all() as unknown as JournalRow[]
-    })
-  },
-  async readCapabilities(filename) {
-    return inspectReadOnly(filename, (db) => {
-      const exists = db
-        .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'database_capability'")
-        .get() as { name?: string } | undefined
-      if (!exists) return []
-      return db
-        .query("SELECT capability, minimum_reader_protocol, minimum_writer_protocol FROM database_capability")
-        .all() as unknown as CapabilityRow[]
-    })
-  },
-  async readUpgradeRuns(filename) {
-    return inspectReadOnly(filename, (db) => {
-      const exists = db
-        .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'database_upgrade_run'")
-        .get() as { name?: string } | undefined
-      if (!exists) return []
-      return db.query("SELECT run_id, state FROM database_upgrade_run").all() as unknown as UpgradeRunRow[]
-    })
-  },
-  async readMigrationReceipts(filename) {
-    return inspectReadOnly(filename, (db) => {
-      const exists = db
-        .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'database_migration_receipt'")
-        .get() as { name?: string } | undefined
-      if (!exists) return []
-      return db
-        .query(
-          "SELECT receipt_id, migration_id, content_hash, ordinal, run_id, build_identity, package_version, body_hash, result FROM database_migration_receipt",
-        )
-        .all() as unknown as MigrationReceiptIdentityRow[]
-    })
-  },
-  async walShm(filename) {
-    const wal = await fs.stat(filename + "-wal").catch(() => null)
-    const shm = await fs.stat(filename + "-shm").catch(() => null)
-    return {
-      walExists: wal !== null,
-      walSize: wal?.size ?? 0,
-      shmExists: shm !== null,
-      shmSize: shm?.size ?? 0,
-    }
-  },
-  async freeSpace(filename) {
-    try {
-      const statfs = await fs.statfs(filename)
-      return Number(statfs.bsize) * Number(statfs.bavail)
-    } catch {
-      return Number.MAX_SAFE_INTEGER
-    }
-  },
-  async localFilesystem(filename) {
-    try {
-      const statfs = await fs.statfs(filename)
-      const type = (statfs as unknown as { f_type?: number }).f_type ?? 0
-      const remoteTypes = new Set([0x6969, 0x517b, 0xff534d42, 0x65735546])
-      return !remoteTypes.has(type)
-    } catch {
-      return true
-    }
-  },
-  async activeProcess(filename) {
-    const lockDir = `${filename}.runtime.lock`
-    const active = await DatabaseMigrationLease.processLockActive(lockDir, { staleMs: 15_000 })
-    if (active) {
-      // "Someone holds the database" is undiagnosable without the holder's identity — surface
-      // the lock metadata (pid/hostname/created) so the culprit process is immediately findable.
-      const meta = await fs.readFile(path.join(lockDir, "meta.json"), "utf8").catch(() => undefined)
-      if (meta) console.error("[preflight] database runtime lock held:", meta.trim())
-    }
-    return active
-  },
+const probesForReadOnly = (closed?: { filename: string; assertCurrent: () => Promise<void> }): PreflightProbes => {
+  const inspect = <T>(filename: string, use: (db: Database) => T) => inspectReadOnly(filename, use, closed !== undefined)
+  return {
+    async stat(filename) {
+      try {
+        const stat = await fs.stat(filename)
+        return { size: stat.size, mode: stat.mode }
+      } catch {
+        return null
+      }
+    },
+    async readHeader(filename) {
+      const stat = await fs.stat(filename).catch(() => null)
+      if (!stat || stat.size === 0) return null
+      // Read only the magic + page-size bytes. Node's fs.readFile rejects files
+      // larger than 2 GiB (ERR_FS_FILE_TOO_LARGE), which made the desktop
+      // node-sidecar preflight flag a >2 GiB store as "not a SQLite database".
+      const handle = await fs.open(filename, "r").catch(() => null)
+      if (!handle) return { headerValid: false, pageSize: 0 }
+      try {
+        const buffer = Buffer.alloc(18)
+        const { bytesRead } = await handle.read(buffer, 0, 18, 0)
+        if (bytesRead < 16) return { headerValid: false, pageSize: 0 }
+        const headerValid = buffer.subarray(0, 16).equals(HEADER_MAGIC_BYTES)
+        const raw = buffer[16]! | (buffer[17]! << 8)
+        const pageSize = raw === 1 ? 65536 : raw
+        return { headerValid, pageSize }
+      } catch {
+        return { headerValid: false, pageSize: 0 }
+      } finally {
+        await handle.close()
+      }
+    },
+    async readJournalMode(filename) {
+      return inspect(filename, (db) => {
+        const journal = db.query("PRAGMA journal_mode").get() as { journal_mode?: string } | undefined
+        const count = db.query("PRAGMA page_count").get() as { page_count?: number } | undefined
+        return { journalMode: journal?.journal_mode ?? null, pageCount: count?.page_count ?? 0 }
+      })
+    },
+    async readJournalRows(filename) {
+      return inspect(filename, (db) => {
+        const exists = db
+          .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration'")
+          .get() as { name?: string } | undefined
+        if (!exists) return []
+        return db.query("SELECT * FROM migration").all() as unknown as JournalRow[]
+      })
+    },
+    async readCapabilities(filename) {
+      return inspect(filename, (db) => {
+        const exists = db
+          .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'database_capability'")
+          .get() as { name?: string } | undefined
+        if (!exists) return []
+        return db
+          .query("SELECT capability, minimum_reader_protocol, minimum_writer_protocol FROM database_capability")
+          .all() as unknown as CapabilityRow[]
+      })
+    },
+    async readUpgradeRuns(filename) {
+      return inspect(filename, (db) => {
+        const exists = db
+          .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'database_upgrade_run'")
+          .get() as { name?: string } | undefined
+        if (!exists) return []
+        return db.query("SELECT run_id, state FROM database_upgrade_run").all() as unknown as UpgradeRunRow[]
+      })
+    },
+    async readMigrationReceipts(filename) {
+      return inspect(filename, (db) => {
+        const exists = db
+          .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'database_migration_receipt'")
+          .get() as { name?: string } | undefined
+        if (!exists) return []
+        return db
+          .query(
+            "SELECT receipt_id, migration_id, content_hash, ordinal, run_id, build_identity, package_version, body_hash, result FROM database_migration_receipt",
+          )
+          .all() as unknown as MigrationReceiptIdentityRow[]
+      })
+    },
+    async walShm(filename) {
+      const wal = await fs.stat(filename + "-wal").catch(() => null)
+      const shm = await fs.stat(filename + "-shm").catch(() => null)
+      return {
+        walExists: wal !== null,
+        walSize: wal?.size ?? 0,
+        shmExists: shm !== null,
+        shmSize: shm?.size ?? 0,
+      }
+    },
+    async freeSpace(filename) {
+      try {
+        const statfs = await fs.statfs(filename)
+        return Number(statfs.bsize) * Number(statfs.bavail)
+      } catch {
+        return Number.MAX_SAFE_INTEGER
+      }
+    },
+    async localFilesystem(filename) {
+      try {
+        const statfs = await fs.statfs(filename)
+        const type = (statfs as unknown as { f_type?: number }).f_type ?? 0
+        const remoteTypes = new Set([0x6969, 0x517b, 0xff534d42, 0x65735546])
+        return !remoteTypes.has(type)
+      } catch {
+        return true
+      }
+    },
+    async activeProcess(filename) {
+      if (closed && filename === closed.filename) {
+        await closed.assertCurrent()
+        return false // This exact live lease is ours; other owners remain a blocker.
+      }
+      const lockDir = `${filename}.runtime.lock`
+      const active = await DatabaseMigrationLease.processLockActive(lockDir, { staleMs: 15_000 })
+      if (active) {
+        // "Someone holds the database" is undiagnosable without the holder's identity — surface
+        // the lock metadata (pid/hostname/created) so the culprit process is immediately findable.
+        const meta = await fs.readFile(path.join(lockDir, "meta.json"), "utf8").catch(() => undefined)
+        if (meta) console.error("[preflight] database runtime lock held:", meta.trim())
+      }
+      return active
+    },
+  }
 }
+
+const defaultProbes = probesForReadOnly()
 
 const gatherObservations = async (
   options: PreflightOptions,
@@ -485,10 +496,114 @@ export const analyzePreflight = (
   return { ok: false, observations, issues }
 }
 
-export const preflight = async (
-  options: PreflightOptions,
-  probes?: PreflightProbes,
-): Promise<PreflightResult> => {
-  const observations = await gatherObservations(options, probes ?? defaultProbes)
-  return analyzePreflight(options, observations)
+const closedFileStamp = async (filename: string) => {
+  const entry = await fs.lstat(filename, { bigint: true })
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1n || entry.size === 0n)
+    throw new Error("closed_readonly_unavailable")
+  const handle = await fs.open(filename, "r")
+  try {
+    const opened = await handle.stat({ bigint: true })
+    if (opened.dev !== entry.dev || opened.ino !== entry.ino) throw new Error("closed_readonly_unavailable")
+    const header = Buffer.alloc(100)
+    const read = await handle.read(header, 0, header.length, 0)
+    if (
+      read.bytesRead !== 100 ||
+      !header.subarray(0, 16).equals(Buffer.from(SQLITE_HEADER_MAGIC)) ||
+      header[18] !== 2 ||
+      header[19] !== 2
+    )
+      throw new Error("closed_readonly_unavailable")
+    for (const suffix of ["-wal", "-shm"]) {
+      const companion = await fs.lstat(filename + suffix).catch((error: unknown) => {
+        if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return undefined
+        throw error
+      })
+      if (companion) throw new Error("closed_readonly_unavailable")
+    }
+    return [
+      entry.dev,
+      entry.ino,
+      entry.size,
+      entry.mode,
+      entry.uid,
+      entry.gid,
+      entry.mtimeNs,
+      entry.ctimeNs,
+      header.toString("hex"),
+    ]
+  } finally {
+    await handle.close()
+  }
 }
+
+const ownerMetadata = Schema.fromJsonString(Schema.Struct({ token: Schema.String, pid: Schema.Int }))
+
+/** Keep the entire closed-WAL compatibility/inventory observation under the existing owner lock.
+ * The URI never opens writable; active WAL keeps the ordinary read path, including its owner gate. */
+export const withReadOnlyPreflight = async <A,>(
+  options: PreflightOptions,
+  use: (result: PreflightResult, readonlyFilename: string) => Promise<A> | A,
+  unavailable: (result: PreflightResult) => Promise<A> | A,
+  probes?: PreflightProbes,
+): Promise<A> => {
+  const observations = await gatherObservations(options, probes ?? defaultProbes)
+  const original = analyzePreflight(options, observations)
+  if (
+    probes ||
+    observations.dbReadable ||
+    !observations.exists ||
+    observations.size === 0 ||
+    !observations.sqliteHeaderValid ||
+    !observations.localFilesystem ||
+    observations.walExists ||
+    observations.shmExists ||
+    observations.activeProcess
+  )
+    return use(original, options.filename)
+  const before = await closedFileStamp(options.filename).catch(() => undefined)
+  if (!before) return unavailable(original)
+  const obtained = await Effect.runPromise(
+    Effect.result(
+      DatabaseMigrationLease.acquireProcessLock(`${options.filename}.runtime.lock`, {
+        staleMs: 15_000,
+        timeoutMs: 0,
+      }),
+    ),
+  )
+  if (Result.isFailure(obtained)) return unavailable(original)
+  const lock = obtained.success
+  try {
+    const assertCurrent = async () => {
+      const actual = await closedFileStamp(options.filename)
+      if (!actual.every((value, index) => value === before[index])) throw new Error("closed_readonly_unavailable")
+      const owner = Schema.decodeUnknownSync(ownerMetadata)(await fs.readFile(path.join(lock.dir, "meta.json"), "utf8"))
+      if (owner.token !== lock.token || owner.pid !== process.pid) throw new Error("closed_readonly_unavailable")
+    }
+    const guarded = await assertCurrent()
+      .then(() => true)
+      .catch(() => false)
+    if (!guarded) return unavailable(original)
+    const current = await gatherObservations(options, probesForReadOnly({ filename: options.filename, assertCurrent }))
+      .then((value) => analyzePreflight(options, value))
+      .catch(() => undefined)
+    if (!current) return unavailable(original)
+    const uri = pathToFileURL(options.filename)
+    uri.searchParams.set("mode", "ro")
+    uri.searchParams.set("immutable", "1")
+    const result = await use(current, uri.href)
+    const unchanged = await assertCurrent()
+      .then(() => true)
+      .catch(() => false)
+    return unchanged ? result : unavailable(original)
+  } finally {
+    await Effect.runPromise(lock.release)
+  }
+}
+
+export const preflight = async (options: PreflightOptions, probes?: PreflightProbes): Promise<PreflightResult> =>
+  withReadOnlyPreflight(
+    options,
+    (result) => result,
+    (result) => result,
+    probes,
+  )

@@ -36,9 +36,9 @@ function init() {
   const lock = { value: false }
 
   onCleanup(() => {
-    if (timer.current === undefined) return
-    clearTimeout(timer.current)
+    if (timer.current !== undefined) clearTimeout(timer.current)
     timer.current = undefined
+    stack().forEach((item) => item.dispose())
   })
 
   const close = (id?: string) => {
@@ -68,6 +68,13 @@ function init() {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
+      // An expanded control in the current dialog may consume Escape locally.
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-dialog-escape-boundary]") &&
+        event.target.closest("[data-dialog-id]")?.getAttribute("data-dialog-id") === stack().at(-1)?.id
+      )
+        return
       close()
       event.preventDefault()
       event.stopPropagation()
@@ -106,6 +113,7 @@ function init() {
               />
               <div
                 data-dialog-layer={layer}
+                data-dialog-id={id}
                 style={{
                   position: "fixed",
                   inset: "0",
@@ -211,11 +219,12 @@ export function useDialog() {
       return ctx.active()
     },
     show(element: DialogElement, onClose?: () => void) {
-      const base = ctx.stack().at(-1)?.owner ?? owner
+      // Exiting dialogs can belong to a different provider scope than this caller.
+      const base = ctx.active()?.owner ?? owner
       return startTransition(() => ctx.show(element, base, onClose))
     },
     push(element: DialogElement, onClose?: () => void) {
-      const base = ctx.stack().at(-1)?.owner ?? owner
+      const base = ctx.active()?.owner ?? owner
       return startTransition(() => ctx.push(element, base, onClose))
     },
     close() {

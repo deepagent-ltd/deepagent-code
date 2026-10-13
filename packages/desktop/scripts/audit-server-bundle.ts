@@ -11,7 +11,12 @@ const server = Bun.file(path.join(chunks, "node.js"))
 const sourceMap = Bun.file(path.join(chunks, "node.js.map"))
 const files = await readdir(chunks)
 
-assert.match(sidecar, /import\(["']\.\/chunks\/node\.js["']\)/, "sidecar must load the external server bundle")
+assert.match(sidecar, /const serverURL = new URL\(["']\.\/chunks\/node\.js["'], import\.meta\.url\)/,
+  "sidecar must derive the external server entry from its own installed module")
+assert.match(sidecar, /serverURL\.pathname = serverURL\.pathname\.replace\(["']\/app\.asar\/["'], ["']\/app\.asar\.unpacked\/["']\)/,
+  "sidecar must use the physical unpacked server entry")
+assert.match(sidecar, /const serverModulePromise = receiveWindowsNativeSidecar\(parentPort\)\.then\(async \(preloaded\) => \{\s*const server = await import\(\s*(?:\/\*[^*]*\*\/\s*)?serverURL\.href\s*\);\s*if \(preloaded\) await server\.NativeWindowsBootstrap\.installFixedEntry\(\);\s*return server;\s*\}\)/,
+  "sidecar must import the fixed physical entry without transforming its bytes")
 assert.equal(await server.exists(), true, "external server bundle is missing")
 assert.equal(await sourceMap.exists(), true, "external server source map is missing")
 assert.deepEqual(

@@ -1,3 +1,5 @@
+import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
+import { createGoalCommands } from "./goal-command"
 import {
   BoxRenderable,
   RGBA,
@@ -147,6 +149,7 @@ function formatEditorContext(selection: EditorSelection) {
   return `<system-reminder>${ranges.join("\n")} This may or may not be relevant to the current task.</system-reminder>\n`
 }
 
+const goalCommands = createGoalCommands()
 let stashed: { prompt: PromptInfo; cursor: number } | undefined
 
 export function Prompt(props: PromptProps) {
@@ -161,10 +164,11 @@ export function Prompt(props: PromptProps) {
   const terminalEnvironment = useTuiTerminalEnvironment()
   const clipboard = useClipboard()
   const sdk = useSDK()
-  // V3.9 §C/§D: raw-path request escape hatch for the /panel and /goal slash commands. These routes
-  // (/deepagent/panel/*, /deepagent/goal/*) are served by path and are NOT in the typed generated SDK,
-  // so we reach the low-level HTTP client (sdk.client.client) that exposes request(). Cast is scoped
-  // to this helper.
+  let goalDisposed = false
+  onCleanup(() => {
+    goalDisposed = true
+  })
+  // The existing Panel command uses raw requests. Goal controls use the shared, target-bound client.
   const rawRequest = <T,>(options: { method: string; url: string; body?: unknown; headers?: Record<string, string> }) =>
     (sdk.client as unknown as { client: { request<D>(o: typeof options): Promise<{ data?: D }> } }).client.request<T>(
       options,
@@ -719,55 +723,50 @@ export function Prompt(props: PromptProps) {
         run: async () => {
           const sessionID = props.sessionID
           if (!sessionID) return
-          // `/goal <objective>` — the text after the command word is the objective. When present it
-          // seeds a plan server-side (used when the session has no plan yet); otherwise the goal loop
-          // drives the session's existing plan.
-          const objective = store.prompt.input.replace(/^\/goal\b\s*/, "").trim()
-          // W2-1 — control subcommands mirror the app's goal-status-bar controls (pause/resume/stop
-          // ride POST /deepagent/goal/{action}); they act on the session's RUNNING goal.
-          const control = ["pause", "resume", "stop"].includes(objective) ? objective : undefined
-          if (control) {
-            try {
-              await rawRequest<{ ok: boolean }>({
-                method: "POST",
-                url: `/deepagent/goal/${control}`,
-                body: { sessionID },
-                headers: { "Content-Type": "application/json" },
-              })
-              toast.show({ variant: "success", message: `Goal ${control}d`, duration: 3000 })
-            } catch (error) {
-              toast.show({
-                variant: "warning",
-                message: error instanceof Error ? error.message : `Could not ${control} the goal`,
-                duration: 4000,
-              })
-            }
-            dialog.clear()
-            return
-          }
+          const client = sdk.client
+          const scope = { server: sdk.url, directory: project.instance.path().directory, sessionID }
+          const text = store.prompt.input
+          const command = text.replace(/^\/goal\b\s*/, "").trim()
+          const current = () =>
+            !goalDisposed &&
+            props.sessionID === sessionID &&
+            sdk.client === client &&
+            sdk.url === scope.server &&
+            project.instance.path().directory === scope.directory
           try {
-            const res = await rawRequest<{ goalId: string; phase: string }>({
-              method: "POST",
-              url: "/deepagent/goal/start",
-              body: { sessionID, ...(objective ? { objective } : {}) },
-              headers: { "Content-Type": "application/json" },
+            const { snapshot } = await goalCommands.run({
+              client: client as unknown as GoalClient.Client,
+              scope,
+              command,
+              current,
             })
-            // Clear the composer once the objective has been consumed by the goal.
-            if (objective) {
+            if (!current()) return
+            const observed = sync.data.session_goal[sessionID]
+            if (observed && observed.goalId !== snapshot.goalId) {
+              await sync.goal.sync(sessionID).catch(() => undefined)
+              return
+            }
+            if (!observed || GoalClient.accepts(observed.control, snapshot)) sync.goal.set(sessionID, snapshot)
+            // A late acknowledgement cannot consume text typed after this command was submitted.
+            if (store.prompt.input === text) {
               input.setText("")
               setStore("prompt", { input: "", parts: [] })
             }
-            toast.show({
-              variant: "success",
-              message: res.data ? `Goal started (${res.data.phase})` : "Goal started",
-              duration: 4000,
-            })
-          } catch {
+            toast.show({ variant: "success", message: i18n.t("tui.goal.control.accepted"), duration: 4000 })
+            dialog.clear()
+          } catch (error) {
+            if (!current()) return
             toast.show({
               variant: "warning",
-              message: i18n.t("tui.prompt.startGoalFailed"),
-              duration: 4000,
+              message:
+                error instanceof GoalClient.RequestError && error.unknownOutcome
+                  ? `${i18n.t("tui.goal.control.unknown")} /goal retry`
+                  : error instanceof Error
+                    ? error.message
+                    : i18n.t("tui.goal.control.failed"),
+              duration: 6000,
             })
+            await sync.goal.sync(sessionID).catch(() => undefined)
           }
         },
       },

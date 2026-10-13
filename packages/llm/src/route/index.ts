@@ -1,4 +1,6 @@
 export { Route, LLMClient } from "./client"
+export { BuiltinNode } from "./builtin-node"
+export { VendorContextBound } from "./vendor-context-bound"
 export type {
   Route as RouteShape,
   RouteModelInput,

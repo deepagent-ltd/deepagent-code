@@ -64,18 +64,21 @@ import {
   shouldFocusTerminalOnKeyDown,
 } from "@/pages/session/helpers"
 import { MessageTimeline } from "@/pages/session/message-timeline"
+import { SessionHistoryLoadState } from "@/pages/session/history-load-state"
 import { type DiffStyle, SessionReviewTab, type SessionReviewTabProps } from "@/pages/session/review-tab"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { useServer } from "@/context/server"
 import { syncSessionModel } from "@/pages/session/session-model-helpers"
 import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { SessionMobileTabs } from "@/pages/session/session-mobile-tabs"
+import { SessionMcpAppInvocations } from "@/pages/session/mcp-app-invocations"
 import { TerminalPanel } from "@/pages/session/terminal-panel"
 import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
 import { Identifier } from "@/utils/id"
 import { diffs as list } from "@/utils/diffs"
 import { messageOrderKey } from "@/utils/message-order"
+import { displayMessages, messageBoundary } from "@/utils/message-display"
 import { Persist, persisted } from "@/utils/persist"
 import { extractPromptFromParts } from "@/utils/prompt"
 import { same } from "@/utils/same"
@@ -379,7 +382,11 @@ export default function Page() {
     return sync.session.history.loading(id)
   })
   const userMessages = createMemo(
-    () => messages().filter((m) => m.role === "user") as UserMessage[],
+    () => displayMessages(messages().filter((m): m is UserMessage => {
+      if (m.role !== "user") return false
+      const parts = sync.data.part[m.id] ?? []
+      return parts.length === 0 || parts.some((part) => part.type !== "text" || !part.synthetic)
+    })),
     emptyUserMessages,
     { equals: same },
   )
@@ -387,23 +394,14 @@ export default function Page() {
     () => {
       const revert = revertMessageID()
       if (!revert) return userMessages()
-      // provider lifecycle root cause B: the revert boundary is the TARGET message's time, not its ID —
-      // ID lexicographic order flips across the 6-byte ID time wrap. If the target is not in the
-      // loaded window, degrade to the legacy ID boundary instead of guessing a time.
-      const target = messages().find((m) => m.id === revert)
-      if (target) {
-        const bound = messageOrderKey(target)
-        return userMessages().filter((m) => messageOrderKey(m) < bound)
-      }
-      return userMessages().filter((m) => m.id < revert)
+      return messageBoundary(userMessages(), revert)?.visible ?? emptyUserMessages
     },
     emptyUserMessages,
     {
       equals: same,
     },
   )
-  // The timeline arrays are maintained in (time, id) chronological order, so the last element is
-  // the latest message even when its wrapped `msg_00...` ID sorts before older `msg_ff...` IDs.
+  // The view follows canonical promotion order, with the existing legacy fallback.
   const lastUserMessage = createMemo(() => visibleUserMessages().at(-1))
 
   createEffect(() => {
@@ -692,9 +690,9 @@ export default function Page() {
 
   const hasScrollGesture = () => Date.now() - ui.scrollGesture < scrollGestureWindowMs
 
-  const [sessionSync] = createResource(
+  const [sessionSync, sessionSyncActions] = createResource(
     () => [sdk.directory, params.id] as const,
-    ([directory, id]) => {
+    ([directory, id], info) => {
       if (refreshFrame !== undefined) cancelAnimationFrame(refreshFrame)
       if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
       refreshFrame = undefined
@@ -721,7 +719,7 @@ export default function Page() {
         }, 0)
       })
 
-      return sync.session.sync(id)
+      return sync.session.sync(id, info.refetching ? { force: true } : undefined)
     },
   )
 
@@ -1609,6 +1607,7 @@ export default function Page() {
 
   const revertMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; messageID: string }) => {
+      if (input.sessionID !== params.id || !messageBoundary(userMessages(), input.messageID)) return
       const value = draft(input.messageID)
       await cancelFollowup(input.sessionID)
         .then(() => promptInputControl?.cancelPending() ?? Promise.resolve())
@@ -1630,7 +1629,9 @@ export default function Page() {
       const sessionID = params.id
       if (!sessionID) return
 
-      const next = userMessages().find((item) => item.id > id)
+      const boundary = messageBoundary(userMessages(), id)
+      if (!boundary) return
+      const next = boundary.next
 
       const request = () =>
         !next
@@ -1672,8 +1673,7 @@ export default function Page() {
   const rolled = createMemo(() => {
     const id = revertMessageID()
     if (!id) return []
-    return userMessages()
-      .filter((item) => item.id >= id)
+    return (messageBoundary(userMessages(), id)?.rolled ?? emptyUserMessages)
       .map((item) => ({ id: item.id, text: line(item.id) }))
   })
 
@@ -1829,9 +1829,9 @@ export default function Page() {
 
   return (
     <SessionLifecycle>
-      <div class="workbench-session relative size-full overflow-hidden flex flex-col">
-        {sessionSync() ?? ""}
+      <div class="workbench-session relative size-full overflow-hidden flex flex-col" data-session-id={params.id}>
         <SessionHeader />
+        <Show when={params.id}>{(sessionID) => <SessionMcpAppInvocations sessionID={sessionID()} />}</Show>
       <div class="workbench-split flex-1 min-h-0 flex flex-col md:flex-row">
         <Show when={!isDesktop()}>
           <SessionMobileTabs
@@ -1873,7 +1873,10 @@ export default function Page() {
                 </div>
               </Match>
               <Match when={params.id}>
-                <Show when={messagesReady()}>
+                <Show when={messagesReady()} fallback={
+                  <SessionHistoryLoadState error={sessionSync.error} loading={sessionSync.loading}
+                    retry={() => void sessionSyncActions.refetch()} />
+                }>
                   <MessageTimeline
                     actions={actions}
                     scroll={ui.scroll}

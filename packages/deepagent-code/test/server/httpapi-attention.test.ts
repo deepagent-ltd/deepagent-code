@@ -28,6 +28,7 @@ import {
 } from "../../../core/test/fixture/attention"
 import { testEffect } from "../lib/effect"
 import { withTimeout } from "../../src/util/timeout"
+import { challenge } from "../../../core/test/fixture/attention-permission"
 
 const Api = HttpApi.make("server").add(AttentionGroup).middleware(Authorization).middleware(SchemaErrorMiddleware)
 const authorization = ServerAuth.header({ username: "operator", password: "test-secret" })!
@@ -246,6 +247,54 @@ it.live("the generated SDK preserves real nullable values and changes only the v
     expect((yield* changes(database))!.value - before!.value).toBe(1)
     const fresh = yield* Effect.promise(() => client.v2.attention.list({ view: "unseen" }, { throwOnError: true }))
     expect(fresh.data).toMatchObject({ data: [], unseenCount: 0 })
+  }),
+)
+
+it.live("serves current no-progress action references through the real HTTP handler and generated SDK", () =>
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const source = yield* challenge(database, "http-approval", { project: "project-b", leaseMs: 2000 })
+    const client = createDeepAgentCodeClient({
+      baseUrl: HttpServer.formatAddress((yield* HttpServer.HttpServer).address),
+      headers: { authorization },
+      directory: "/tmp/unrelated-project",
+    })
+    const before = yield* changes(database)
+    const page = yield* Effect.promise(() => client.v2.attention.list({ kind: "no_progress" }, { throwOnError: true }))
+    expect(page.data.unseenCount).toBe(1)
+    const item = page.data.data[0]!
+    expect(item).toMatchObject({
+      id: `approval:${source.requestID}`,
+      state: "needs_human",
+      allowedActions: ["continue_once", "terminate"],
+      source: { activityID: source.activityID, permissionRequestID: source.requestID },
+      session: { projectID: "project-b", workspaceID: null },
+      seenAt: null,
+    })
+    expect(item.source.expiresAt).toBeGreaterThan(page.data.asOf)
+    const detail = yield* Effect.promise(() => client.v2.attention.get({ itemID: item.id }, { throwOnError: true }))
+    expect(detail.data.data).toMatchObject({
+      id: item.id,
+      revision: item.revision,
+      source: item.source,
+      allowedActions: item.allowedActions,
+      seenAt: null,
+    })
+    expect(yield* changes(database)).toEqual(before)
+    expect((yield* get(`/api/attention/${encodeURIComponent(item.id)}?workspace=wrk_wrong`)).status).toBe(400)
+    const receipt = yield* Effect.promise(() =>
+      client.v2.attention.seen({ itemID: item.id, revision: item.revision }, { throwOnError: true }),
+    )
+    expect(receipt.data.data).toMatchObject({
+      seen: true,
+      revision: item.revision,
+      allowedActions: item.allowedActions,
+    })
+    expect((yield* changes(database))!.value - before!.value).toBe(1)
+    yield* Effect.sleep("2100 millis")
+    expect((yield* get(`/api/attention/${encodeURIComponent(item.id)}`)).status).toBe(404)
+    expect((yield* list("/api/attention?kind=no_progress")).data).toEqual([])
+    expect((yield* changes(database))!.value - before!.value).toBe(1)
   }),
 )
 

@@ -11,7 +11,11 @@ interface MessageListProps {
   agentProgress: Map<string, AgentProgressPart[]>
   // §B3 thread — when provided, each message shows a "Reply in thread" affordance.
   onOpenThread?: (message: LocalMessage) => void
+  onOpenTaskResult?: (message: LocalMessage) => void
+  onOpenConversationSession?: (message: LocalMessage) => void
+  onUseDac?: (message: LocalMessage) => void
   mediaEnabled?: boolean
+  protected?: boolean
   selfMemberIDs?: readonly string[]
   senderNames?: ReadonlyMap<string, string>
   onLoadOlder?: () => void
@@ -107,11 +111,15 @@ export function MessageList(props: MessageListProps) {
           {(message) => (
             <div data-im-message={message.id}>
               <MessageItem
+                protected={props.protected}
                 mediaEnabled={props.mediaEnabled}
                 message={message}
                 agentStatus={props.agentStatuses.get(message.id)}
                 agentProgress={props.agentProgress.get(message.id)}
                 onOpenThread={props.onOpenThread}
+                onOpenTaskResult={props.onOpenTaskResult}
+                onOpenConversationSession={props.onOpenConversationSession}
+                onUseDac={props.onUseDac}
                 selfMemberIDs={props.selfMemberIDs}
                 senderNames={props.senderNames}
               />

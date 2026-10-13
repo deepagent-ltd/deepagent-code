@@ -24,6 +24,7 @@ import { SessionProviderRecoveryDock } from "@/pages/session/composer/session-pr
 import { useServer } from "@/context/server"
 import { RecoveryDock } from "@/recovery/RecoveryDock"
 import { createMaintenanceClientForServer } from "@/maintenance/maintenance-client-server"
+import { SessionBlockedStop } from "./session-blocked-stop"
 
 export function SessionComposerRegion(props: {
   state: SessionComposerState
@@ -188,6 +189,10 @@ export function SessionComposerRegion(props: {
           "md:max-w-200 md:mx-auto 2xl:max-w-[1000px]": props.centered,
         }}
       >
+        <Show when={route.params.id}>
+          <GoalStatusBar sessionID={route.params.id!} />
+        </Show>
+
         <Show when={props.state.questionRequest()} keyed>
           {(request) => (
             <div>
@@ -209,6 +214,10 @@ export function SessionComposerRegion(props: {
               />
             </div>
           )}
+        </Show>
+
+        <Show when={!child() && props.state.blocked() && sync.data.session_working(route.params.id ?? "")}>
+          <SessionBlockedStop sessionID={route.params.id!} onAbort={props.followup?.onAbort} />
         </Show>
 
         <Show when={route.params.id}>
@@ -303,7 +312,6 @@ export function SessionComposerRegion(props: {
               }}
             >
               <Show when={route.params.id}>
-                <GoalStatusBar sessionID={route.params.id!} />
                 <GoalStartButton sessionID={route.params.id!} />
               </Show>
               <SessionExecutionHint status={executionStatus()} />

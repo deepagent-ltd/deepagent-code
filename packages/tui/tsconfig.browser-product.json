@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src", "test/fixture/browser-unavailable-product.tsx", "test/fixture/browser-canonical-pty.ts", "test/fixture/browser-canonical-cli-trace.ts", "test/fixture/browser-canonical-jsx-probe.tsx", "test/fixture/browser-canonical-viewport.ts", "../app/test/fixture/browser-client-window-descriptor.ts"]
+}

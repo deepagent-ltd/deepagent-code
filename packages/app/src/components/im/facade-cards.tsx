@@ -2,16 +2,12 @@ import { createSignal, Show, type Component } from "solid-js"
 import { Button } from "@deepagent-code/ui/button"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { InlineInput } from "@deepagent-code/ui/inline-input"
-import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { useIMClient, type IMFacadeStatus } from "@/utils/im-client"
 import { facadeFailureText, type FacadeFailureLike } from "./facade-errors"
 import { submitFacadeName } from "@/pages/session/im-panel-helpers"
-import { RebindDialog } from "./facade-dialogs"
 
-// B2 门面三态卡片：claim_required（认领引导）/ blocked（逐码错误 + 重试 + 找回入口）/ active 顶部
-// 身份卡（名字 + uuid 短码 + 内核连接态 + rename 入口 + rebind 入口）。流程逻辑全部落在
-// im-panel-helpers 的纯函数里（可单测），这里只做接线与呈现。
+// Missing activation opens the explicit settings flow; connection recovery never purchases activation.
 
 const inputClass =
   "w-full rounded-md border border-border-weak-base bg-surface-panel px-2 py-1 text-13-regular outline-none"
@@ -25,65 +21,29 @@ const FailureText: Component<{ failure: FacadeFailureLike }> = (props) => {
   )
 }
 
-/** claim_required：名字输入 + 规则提示 + 客户端预校验 + 逐码错误 + 重名重试。 */
-export const ClaimCard: Component<{ onClaimed: () => void }> = (props) => {
+export const ActivationCard: Component<{ onActivate: () => void }> = (props) => {
   const language = useLanguage()
-  const client = useIMClient()
-  const [name, setName] = createSignal("")
-  const [busy, setBusy] = createSignal(false)
-  const [failure, setFailure] = createSignal<FacadeFailureLike | null>(null)
-
-  const submit = async () => {
-    if (busy()) return
-    setBusy(true)
-    setFailure(null)
-    const result = await submitFacadeName(name(), (n) => client.facadeClaim(n))
-    setBusy(false)
-    if ("skipped" in result) return
-    if ("errorCode" in result) {
-      setFailure(result)
-      return
-    }
-    props.onClaimed()
-  }
-
   return (
     <div class="m-3 flex flex-col gap-2 rounded-md border border-border-weaker-base bg-surface-raised-base p-3">
-      <div class="text-13-medium text-text-strong">{language.t("im.facade.claim.title")}</div>
-      <div class="text-12-regular text-text-weak">{language.t("im.facade.claim.description")}</div>
-      <InlineInput
-        ref={(el: HTMLInputElement) => queueMicrotask(() => el.isConnected && el.focus())}
-        class={inputClass}
-        value={name()}
-        placeholder={language.t("im.facade.claim.name.placeholder")}
-        aria-label={language.t("im.facade.claim.name.placeholder")}
-        aria-invalid={!!failure()}
-        disabled={busy()}
-        onInput={(event) => setName(event.currentTarget.value)}
-        onKeyDown={(event) => {
-          event.stopPropagation()
-          if (event.isComposing || event.keyCode === 229) return
-          if (event.key === "Enter") void submit()
-        }}
-      />
-      <div class="text-11-regular text-text-weak">{language.t("im.facade.name.rule")}</div>
-      <Show when={failure()}>{(f) => <FailureText failure={f()} />}</Show>
+      <div class="text-13-medium text-text-strong">{language.t("im.activation.title")}</div>
+      <div class="text-12-regular text-text-weak">{language.t("im.activation.required")}</div>
       <div>
-        <Button variant="primary" size="small" disabled={busy() || !name().trim()} onClick={() => void submit()}>
-          {language.t("im.facade.claim.submit")}
+        <Button variant="primary" size="small" onClick={props.onActivate}>
+          {language.t("im.activation.openSettings")}
         </Button>
       </div>
     </div>
   )
 }
 
-// Self-service rebind authenticates the existing active key. Revoked identities require console inheritance.
+// Revoked identities require console inheritance rather than another activation purchase.
 const CONSOLE_RECOVERY_CODES = new Set(["im_key_invalid", "im_identity_disabled", "im_source_identity_missing"])
 
-/** blocked：逐码文案 + 重试（retryExchange）+ 可找回码的 rebind 入口。 */
-export const BlockedCard: Component<{ blocked: { code: string; message: string }; onRecovered: () => void }> = (
-  props,
-) => {
+export const BlockedCard: Component<{
+  blocked: { code: string; message: string }
+  onRecovered: () => void
+  onActivate: () => void
+}> = (props) => {
   const language = useLanguage()
   const client = useIMClient()
   const [busy, setBusy] = createSignal(false)
@@ -106,19 +66,24 @@ export const BlockedCard: Component<{ blocked: { code: string; message: string }
   }
 
   return (
-    <div class="m-3 flex flex-col gap-2 rounded-md border border-border-weaker-base bg-surface-raised-base p-3">
-      <div class="text-13-medium text-text-strong">{language.t("im.facade.blocked.title")}</div>
-      <FailureText failure={{ errorCode: props.blocked.code, errorMessage: props.blocked.message }} />
-      <Show when={failure()}>{(f) => <FailureText failure={f()} />}</Show>
-      <Show when={CONSOLE_RECOVERY_CODES.has(props.blocked.code)}>
-        <p class="text-12-regular text-text-weak">{language.t("im.facade.blocked.recovery")}</p>
-      </Show>
-      <div class="flex items-center gap-2">
-        <Button variant="primary" size="small" disabled={busy()} onClick={() => void retry()}>
-          {busy() ? language.t("im.facade.retrying") : language.t("im.facade.retry")}
-        </Button>
+    <Show
+      when={props.blocked.code !== "im_activation_required"}
+      fallback={<ActivationCard onActivate={props.onActivate} />}
+    >
+      <div class="m-3 flex flex-col gap-2 rounded-md border border-border-weaker-base bg-surface-raised-base p-3">
+        <div class="text-13-medium text-text-strong">{language.t("im.facade.blocked.title")}</div>
+        <FailureText failure={{ errorCode: props.blocked.code, errorMessage: props.blocked.message }} />
+        <Show when={failure()}>{(f) => <FailureText failure={f()} />}</Show>
+        <Show when={CONSOLE_RECOVERY_CODES.has(props.blocked.code)}>
+          <p class="text-12-regular text-text-weak">{language.t("im.facade.blocked.recovery")}</p>
+        </Show>
+        <div class="flex items-center gap-2">
+          <Button variant="primary" size="small" disabled={busy()} onClick={() => void retry()}>
+            {busy() ? language.t("im.facade.retrying") : language.t("im.facade.retry")}
+          </Button>
+        </div>
       </div>
-    </div>
+    </Show>
   )
 }
 
@@ -136,11 +101,10 @@ const KERNEL_COLORS = {
   failed: "var(--icon-critical-base, #f85149)",
 } as const
 
-/** active 顶部身份卡：name + uuid 短码 + 内核连接点 + rename（铅笔 inline 编辑）+ rebind 入口。 */
+/** Active identity: name, uuid, connection state and rename. */
 export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => void }> = (props) => {
   const language = useLanguage()
   const client = useIMClient()
-  const dialog = useDialog()
   const [editing, setEditing] = createSignal<string | null>(null)
   const [busy, setBusy] = createSignal(false)
   const [failure, setFailure] = createSignal<FacadeFailureLike | null>(null)
@@ -217,14 +181,6 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
             />
           </Show>
         </div>
-        <button
-          type="button"
-          class="text-11-regular text-text-weak hover:text-text-base shrink-0"
-          disabled={busy()}
-          onClick={() => dialog.show(() => <RebindDialog onRebound={props.onChanged} />)}
-        >
-          {language.t("im.facade.identity.rebind")}
-        </button>
       </div>
       <Show when={editing() !== null}>
         <div class="flex gap-2">
@@ -279,13 +235,11 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
               props.status.recovery?.status === "failed" ? "im.facade.recovery.failed" : "im.facade.recovery.pending",
             )}
           </p>
-          <Show when={props.status.recovery?.status === "failed"}>
-            <Button variant="secondary" size="small" disabled={busy()} onClick={() => void retryRecovery()}>
-              {language.t("im.facade.retry")}
-            </Button>
-          </Show>
         </div>
       </Show>
+      <Button variant="secondary" size="small" disabled={busy()} onClick={() => void retryRecovery()}>
+        {language.t("im.facade.retry")}
+      </Button>
       <Show when={failure()}>{(f) => <FailureText failure={f()} />}</Show>
     </div>
   )

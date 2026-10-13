@@ -1,4 +1,99 @@
 export const dict = {
+  "settings.import.job.switched":
+    "A conexão mudou. Reabra as configurações para carregar as importações desta conexão.",
+  "settings.import.job.loadFailed":
+    "Não foi possível atualizar as importações. As informações carregadas podem estar desatualizadas.",
+  "settings.import.job.refresh": "Atualizar importações",
+  "settings.import.job.submitting": "Enviando…",
+  "settings.import.job.rejected":
+    "O servidor rejeitou a solicitação. Revise a origem, o destino e a confirmação antes de tentar novamente.",
+  "settings.import.job.cancelUnknown":
+    "Comprovante de cancelamento indisponível. Atualize esta importação para confirmar o estado; ela ainda pode estar gravando.",
+  "settings.import.job.request": "Comprovante da solicitação",
+  "settings.import.job.requestUnknown":
+    "A resposta foi perdida. A solicitação pode já ter sido aceita. Atualize as importações ou tente novamente com o mesmo ID de solicitação; não crie outra importação.",
+  "settings.import.job.restoredUnknown":
+    "Uma solicitação anterior não tem comprovante confirmado. Apenas o ID foi salvo. Atualize o histórico autorizado para encontrá-la; reabrir a janela não repete a importação.",
+  "settings.import.job.guardHint":
+    "Liberar esta proteção de acompanhamento permite outra importação. Isso não cancela a solicitação original nem comprova que ela parou.",
+  "settings.import.job.guardReleased":
+    "Proteção de acompanhamento liberada. A solicitação original ainda pode estar em execução; confira o histórico antes de iniciar outra importação.",
+  "settings.import.job.releaseGuard": "Liberar proteção de acompanhamento",
+  "settings.import.job.retryRequest": "Repetir a mesma solicitação",
+  "settings.import.job.history": "Importações",
+  "settings.import.job.historyHint":
+    "Selecione uma importação existente para continuar acompanhando. Abri-la ou atualizá-la não reinicia a importação.",
+  "settings.import.job.loading": "Carregando importações…",
+  "settings.import.job.empty": "Ainda não há importações.",
+  "settings.import.job.more": "Carregar importações anteriores",
+  "settings.import.job.identified": "Sessões encontradas",
+  "settings.import.job.imported": "Sessões importadas",
+  "settings.import.job.backup": "Backup",
+  "settings.import.job.backupPreview": "Desnecessário para uma prévia",
+  "settings.import.job.backupVerified": "Verificado pelo servidor antes da gravação",
+  "settings.import.job.backupPending": "Ainda não há comprovante de backup verificado",
+  "settings.import.job.targetCopy": "Cópia independente",
+  "settings.import.job.targetLive": "Banco de dados atual",
+  "settings.import.job.targetPending": "Ainda não confirmado",
+  "settings.import.job.copyComplete":
+    "Os dados selecionados foram salvos em uma cópia independente. Este servidor continua usando o banco de dados e os diretórios originais; conversas, memória e habilidades importadas estão no destino registrado.",
+  "settings.import.job.details": "Detalhes técnicos",
+  "settings.import.job.detailsHint":
+    "Identificadores das importações, caminhos de destino e comprovantes de verificação para diagnóstico.",
+  "settings.import.job.copyDetails": "Copiar detalhes de diagnóstico",
+  "settings.import.job.copied": "Detalhes de diagnóstico copiados.",
+  "settings.import.job.copyFailed": "Cópia indisponível. Selecione e copie os detalhes abaixo.",
+  "settings.import.job.diagnosticText": "Detalhes de diagnóstico",
+  "settings.import.job.current": "Importação selecionada",
+  "settings.import.job.updated": "Atualização",
+  "settings.import.job.committed": "Lotes confirmados",
+  "settings.import.job.fileSets": "Conjuntos de arquivos publicados",
+  "settings.import.job.files": "Arquivos",
+  "settings.import.job.bytes": "Bytes",
+  "settings.import.job.failed": "Lotes com falha",
+  "settings.import.job.activeBatch": "Lote não confirmado",
+  "settings.import.job.cancelPending":
+    "Cancelamento solicitado. Aguardando o servidor confirmar um ponto de parada seguro; as gravações ainda podem estar em andamento.",
+  "settings.import.job.stopped": "O servidor confirmou que a importação parou.",
+  "settings.import.job.recovery":
+    "O resultado precisa ser revisado. Preserve as evidências do destino e do backup; atualizar não repete gravações com resultado desconhecido.",
+  "settings.import.job.partial":
+    "Os lotes confirmados permanecem no destino registrado. Cancelamento ou falha não desfaz esses lotes.",
+  "settings.import.job.refreshOne": "Atualizar importação selecionada",
+  "settings.import.job.cancelSubmitting": "Solicitando cancelamento…",
+  "settings.import.job.cancel": "Solicitar cancelamento",
+  "settings.import.job.localLog":
+    "Somente observações locais; até 2.000 linhas / 2 MiB. Não é um registro completo de auditoria do servidor.",
+  "settings.import.job.exportLog": "Exportar observações",
+  "settings.import.snapshot.boundary":
+    "Arquivos ZIP e JSON antigos são importados como arquivos de consulta, somente leitura, por outra entrada. A recuperação e o cancelamento de importações persistentes não se aplicam.",
+  "settings.import.snapshot.failed":
+    "Comprovante de importação do arquivo indisponível. Confira o servidor antes de tentar novamente.",
+  "settings.import.job.state.preflight": "Verificando origem e destino",
+  "settings.import.job.state.ready": "Pronto",
+  "settings.import.job.state.running": "Importando",
+  "settings.import.job.state.cancel_requested": "Cancelamento solicitado",
+  "settings.import.job.state.completed": "Concluído",
+  "settings.import.job.state.failed": "Falhou",
+  "settings.import.job.state.cancelled": "Cancelado antes de confirmar qualquer lote",
+  "settings.import.job.state.cancelled_partial": "Cancelado com lotes confirmados",
+  "settings.import.job.state.recovery_required": "Resultado precisa de revisão",
+  "settings.import.snapshot.choose": "Escolher arquivo",
+  "settings.import.fileCopyOnly":
+    "Memória e habilidades exigem uma cópia isolada. Desmarque essas opções antes de escolher a mesclagem com o banco atual.",
+  "settings.import.fileUnavailable":
+    "Este servidor não pode confirmar importações persistentes de memória e habilidades. A prévia continua disponível.",
+  "settings.import.merge": "Mesclar com o banco de dados atual",
+  "settings.import.merge.hint":
+    "Somente histórico de conversas. Um backup verificado deve ser concluído antes de qualquer gravação no banco atual.",
+  "settings.import.merge.confirm": "Confirmo a gravação das sessões importadas no banco de dados atual deste servidor.",
+  "settings.import.mode.unavailable":
+    "Este servidor não oferece suporte a importações persistentes. Atualize o servidor antes de importar o histórico.",
+  "settings.import.target": "Destino real",
+  "settings.import.target.copy": "Cópia separada; o banco de dados atual do servidor não foi substituído.",
+  "settings.import.target.live": "Banco de dados atual do servidor; o backup verificado é mantido separadamente.",
+  "settings.import.target.dryRun":
+    "Destino exibido apenas para prévia; nenhum banco de dados de destino ou backup foi criado.",
   "command.category.suggested": "Sugerido",
   "command.category.view": "Visualizar",
   "command.category.project": "Projeto",
@@ -562,10 +657,12 @@ export const dict = {
   "settings.general.section.feed": "Feed",
   "settings.general.section.sharing": "Compartilhamento",
   "settings.general.row.shareUrl.title": "URL do servidor de compartilhamento",
-  "settings.general.row.shareUrl.description": "URL base do servidor usado ao compartilhar sessões. Deixe em branco para usar o padrão.",
+  "settings.general.row.shareUrl.description":
+    "URL base do servidor usado ao compartilhar sessões. Deixe em branco para usar o padrão.",
   "settings.general.row.shareUrl.placeholder": "https://opncd.ai",
   "settings.general.row.expertPanelDefault.title": "Ativar painel de especialistas por padrão",
-  "settings.general.row.expertPanelDefault.description": "Iniciar novas conversas com o painel de especialistas ativado, para que seu botão inicie uma revisão do contexto atual sob demanda.",
+  "settings.general.row.expertPanelDefault.description":
+    "Iniciar novas conversas com o painel de especialistas ativado, para que seu botão inicie uma revisão do contexto atual sob demanda.",
   "settings.general.section.display": "Tela",
   "settings.general.section.power": "Energia",
   "settings.general.row.language.title": "Idioma",
@@ -712,24 +809,24 @@ export const dict = {
   "settings.models.title": "Modelos",
   "settings.models.description": "Configurações de modelos estarão disponíveis aqui.",
 
-"settings.capabilities.title": "Capabilities",
-"settings.capabilities.catalogTitle": "Capability catalog",
-"settings.capabilities.receiptsTitle": "Load receipts",
-"settings.capabilities.snapshotTitle": "System context snapshot",
-"settings.capabilities.empty": "No capabilities in the catalog",
-"settings.capabilities.receiptsEmpty": "No load receipts recorded",
-"settings.capabilities.loadFailed": "Failed to load the capability catalog",
-"settings.capabilities.retry": "Retry",
-"settings.capabilities.receiptsState": "loaded",
-"settings.capabilities.snapshotUnavailable": "System context snapshot unavailable",
-"settings.capabilities.digest": "Catalog digest: {{digest}}",
-"settings.capabilities.l0lineCount": "L0 lines: {{count}}",
-"settings.capabilities.digestConsistent": "Digest consistent",
-"settings.capabilities.digestInconsistent": "Digest drift",
-"settings.capabilities.availability.stable": "Stable",
-"settings.capabilities.availability.maintenance_only": "Maintenance only",
-"settings.capabilities.availability.disabled": "Disabled",
-"settings.capabilities.availability.unavailable": "Unavailable",
+  "settings.capabilities.title": "Capabilities",
+  "settings.capabilities.catalogTitle": "Capability catalog",
+  "settings.capabilities.receiptsTitle": "Load receipts",
+  "settings.capabilities.snapshotTitle": "System context snapshot",
+  "settings.capabilities.empty": "No capabilities in the catalog",
+  "settings.capabilities.receiptsEmpty": "No load receipts recorded",
+  "settings.capabilities.loadFailed": "Failed to load the capability catalog",
+  "settings.capabilities.retry": "Retry",
+  "settings.capabilities.receiptsState": "loaded",
+  "settings.capabilities.snapshotUnavailable": "System context snapshot unavailable",
+  "settings.capabilities.digest": "Catalog digest: {{digest}}",
+  "settings.capabilities.l0lineCount": "L0 lines: {{count}}",
+  "settings.capabilities.digestConsistent": "Digest consistent",
+  "settings.capabilities.digestInconsistent": "Digest drift",
+  "settings.capabilities.availability.stable": "Stable",
+  "settings.capabilities.availability.maintenance_only": "Maintenance only",
+  "settings.capabilities.availability.disabled": "Disabled",
+  "settings.capabilities.availability.unavailable": "Unavailable",
   "settings.agents.title": "Agentes",
   "settings.agents.description": "Configurações de agentes estarão disponíveis aqui.",
   "settings.commands.title": "Comandos",
@@ -900,14 +997,17 @@ export const dict = {
   "settings.import.preset.custom": "Custom",
   "settings.import.preset.deepagent": "DeepAgent Code (snapshot)",
   "settings.import.snapshot.file": "Pacote de snapshot",
-  "settings.import.snapshot.file.hint": "Escolha um pacote de snapshot de sessao exportado (.json). Ele sera importado como uma nova sessao continuavel.",
+  "settings.import.snapshot.file.hint":
+    "Escolha um pacote de snapshot de sessao exportado (.json). Ele sera importado como uma nova sessao continuavel.",
   "settings.import.snapshot.noFile": "Escolha primeiro um arquivo de pacote de snapshot",
   "settings.import.snapshot.done": "Snapshot importado como uma nova sessao continuavel",
   "settings.import.bundle.file": "Pacote da sessão",
-  "settings.import.bundle.file.hint": "Escolha um ZIP da sessão (.zip) ou um snapshot antigo (.json). A importação será um arquivo somente leitura.",
+  "settings.import.bundle.file.hint":
+    "Escolha um ZIP da sessão (.zip) ou um snapshot antigo (.json). A importação será um arquivo somente leitura.",
   "settings.import.bundle.done": "Sessão importada como arquivo somente leitura",
   "settings.import.bundle.link": "Link de compartilhamento",
-  "settings.import.bundle.link.hint": "Cole um link de compartilhamento de pacote DeepAgent em vez de escolher um arquivo.",
+  "settings.import.bundle.link.hint":
+    "Cole um link de compartilhamento de pacote DeepAgent em vez de escolher um arquivo.",
   "settings.import.customPath": "Path",
   "settings.import.customPath.hint": "Absolute path to the agent data directory.",
   "settings.import.scope": "What to import",
@@ -944,7 +1044,8 @@ export const dict = {
   "settings.general.deepagent.mode.ultra": "ultra",
   "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra requiere el modo de escenario intelligence.",
   "settings.general.deepagent.subagentMode.title": "Subagent",
-  "settings.general.deepagent.subagentMode.description": "Choose the work intensity of subagents relative to the main agent.",
+  "settings.general.deepagent.subagentMode.description":
+    "Choose the work intensity of subagents relative to the main agent.",
   "settings.general.deepagent.subagentMode.inherit": "Inherit from parent",
   "settings.general.deepagent.subagentMode.downgrade": "One level lower",
   "settings.general.deepagent.prompt.title": "Modo de cenário",
@@ -995,10 +1096,28 @@ export const dict = {
   "settings.general.row.pinchZoom.description":
     "Permitir gestos de pellizco en trackpad y Ctrl-desplazamiento para ampliar",
   "settings.general.row.preventSleep.title": "Impedir suspensão do sistema",
-  "settings.general.row.preventSleep.description": "Manter o sistema ativo enquanto o app está em execução; a tela ainda pode desligar",
+  "settings.general.row.preventSleep.description":
+    "Manter o sistema ativo enquanto o app está em execução; a tela ainda pode desligar",
   "settings.general.row.zoom.title": "Zoom level",
   "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Baixando...",
   "settings.updates.action.installing": "Instalando...",
   "settings.providers.section.deepagentBackends": "Backends de modelos DeepAgent",
+  "settings.mcp.selectProject": "Select a project to manage its MCP servers and Apps.",
+  "settings.general.row.collaborationMode.title": "Default conversation mode",
+  "settings.general.row.collaborationMode.currentTitle": "Current conversation mode and new conversation default",
+  "settings.general.row.collaborationMode.currentDescription":
+    "Apply to subsequent messages in this conversation and set the default for new conversations. Running tasks stay as they are.",
+  "settings.general.row.collaborationMode.description":
+    "Choose Auto, Loop, or Design for new conversations. Existing conversation choices and running tasks stay as they are.",
+  "settings.im.title": "IM",
+  "settings.im.model.title": "Model used by my IM Agent",
+  "settings.im.model.description":
+    "Choose a locally configured model for private /dac commands. This setting does not change the default model for ordinary DAC sessions.",
+  "settings.im.model.select": "Choose an IM model",
+  "settings.im.model.empty": "No connected model is available. Configure a provider in Settings first.",
+  "settings.im.model.missing":
+    "The saved IM model is currently unavailable. Choose an available model before starting a command.",
+  "settings.im.model.saved": "IM model saved",
+  "settings.im.model.failed": "The IM model could not be saved. Your ordinary session model was not changed.",
 }

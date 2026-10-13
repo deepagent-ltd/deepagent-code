@@ -1,6 +1,6 @@
 import { Popover as Kobalte } from "@kobalte/core/popover"
 import fuzzysort from "fuzzysort"
-import { Component, ComponentProps, createMemo, For, JSX, Show, ValidComponent } from "solid-js"
+import { Component, ComponentProps, createEffect, createMemo, For, JSX, Show, ValidComponent } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLocal } from "@/context/local"
 import { useServerSync } from "@/context/server-sync"
@@ -382,7 +382,7 @@ export function ModelSelectorPopover(props: {
 
 const effortOrder = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
 
-export function ComposerModelSelector(props: { model: ModelState; style?: JSX.CSSProperties; onClose?: () => void }) {
+export function ComposerModelSelector(props: { model: ModelState; disabled?: boolean; style?: JSX.CSSProperties; onClose?: () => void }) {
   const language = useLanguage()
   const dialog = useDialog()
   const serverSync = useServerSync()
@@ -422,6 +422,9 @@ export function ComposerModelSelector(props: { model: ModelState; style?: JSX.CS
     setStore("dismiss", dismiss)
     setStore("open", false)
   }
+  createEffect(() => {
+    if (props.disabled) setStore("open", false)
+  })
   const handleManage = () => {
     close("manage")
     void import("./dialog-manage-models").then((x) => dialog.show(() => <x.DialogManageModels />))
@@ -435,6 +438,7 @@ export function ComposerModelSelector(props: { model: ModelState; style?: JSX.CS
     <Kobalte
       open={store.open}
       onOpenChange={(open) => {
+        if (props.disabled) return
         if (open) {
           setStore("dismiss", null)
           setStore("view", props.model.current() ? "effort" : "models")
@@ -449,6 +453,7 @@ export function ComposerModelSelector(props: { model: ModelState; style?: JSX.CS
       <Kobalte.Trigger
         as={Button}
         data-action="prompt-model"
+        disabled={props.disabled}
         variant="ghost"
         size="normal"
         class="min-w-0 max-w-[260px] justify-start gap-1.5 rounded-full px-2.5 text-13-regular text-text-base"

@@ -5,6 +5,15 @@ import fs, { readFileSync } from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
+import { createPublicKey } from "node:crypto"
+import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
+import { NativeInstallationSchema } from "../src/installation/native-installation.schema"
+import { buildWorkFileHelper } from "./build-work-file-helper"
+import { buildWorkStorageCleanup } from "./build-work-storage-cleanup"
+import { buildWorkProcessSupervisor } from "./build-work-process-supervisor"
+import { prepareBuildOutput } from "./build-output"
+import { captureNativeRuntimeInventory, requireNativeRuntimeCoverage } from "./native-runtime-inventory"
+import { signNativeNodeAssets } from "./sign-native-assets"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -35,6 +44,40 @@ function releaseOwnerPublicKeyDefine(): Record<string, string> {
   return { DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: JSON.stringify(pem) }
 }
 
+async function nativeRuntimeDefines(
+  target: string,
+  output: string,
+  assets: readonly { path: string; bytes: number; sha256: string }[],
+) {
+  const raw = process.env.DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY?.trim()
+  if (!raw) return
+  const pem = raw.includes("-----BEGIN") ? raw : readFileSync(raw, "utf8")
+  if (
+    !pem.includes("-----BEGIN PUBLIC KEY-----") ||
+    pem.includes("PRIVATE KEY") ||
+    createPublicKey(pem).asymmetricKeyType !== "ed25519"
+  )
+    throw new Error("native runtime release pin must be an Ed25519 public key")
+  if (!sourceCommit) throw new Error("native runtime inventory requires the actual source commit")
+  const inventory = await captureNativeRuntimeInventory({ repository, target, sourceCommit, assets })
+  const text = CanonicalJson.stringify(inventory.components)
+  if (
+    Buffer.byteLength(text) > NativeInstallationSchema.COMPONENTS_LIMIT ||
+    inventory.components.components.length > 4096
+  )
+    throw new Error("native runtime component inventory exceeds its runtime bound")
+  // A signer signs the final executable and this public inventory AFTER compilation. No private
+  // key or signed authority is fabricated by the build script or shipped inside the executable.
+  await fs.promises.writeFile(`${output}.native-components.json`, text)
+  return {
+    inventory,
+    defines: {
+      DEEPAGENT_CODE_NATIVE_RUNTIME_PUBLIC_KEY: JSON.stringify(pem),
+      DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST: JSON.stringify(text),
+    },
+  }
+}
+
 import { Script } from "@deepagent-code/script"
 import pkg from "../package.json"
 
@@ -48,16 +91,17 @@ const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
 const plugin = createSolidTransformPlugin()
 const skipEmbedWebUi = process.argv.includes("--skip-embed-web-ui")
+const output = await prepareBuildOutput(dir, process.argv)
+if (output.previous) console.log(`Previous build retained at ${output.previous}`)
 
 const createEmbeddedWebUIBundle = async () => {
   console.log(`Building Web UI to embed in the binary`)
   const appDir = path.join(import.meta.dirname, "../../app")
-  const dist = path.join(appDir, "dist")
+  const dist = path.join(output.output, "embedded-web-ui")
   // Start from an empty dist so the embedded file map contains exactly what this build produced —
   // a failed or interrupted previous build would otherwise leave stale hashed chunks next to the
   // fresh ones and both would ship inside the binary.
-  await fs.promises.rm(dist, { recursive: true, force: true })
-  await $`DEEPAGENT_CODE_CHANNEL=${Script.channel} bun run --cwd ${appDir} build`
+  await $`DEEPAGENT_CODE_CHANNEL=${Script.channel} bun run --cwd ${appDir} build --outDir ${dist}`
   const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: dist })))
     .map((file) => file.replaceAll("\\", "/"))
     .filter((file) => !file.endsWith(".map"))
@@ -135,33 +179,32 @@ const allTargets: {
 // natively removes that entire risk class instead of per-host triage).
 const excludeWin32 = process.argv.includes("--exclude-win32")
 
-const targets = (singleFlag
-  ? allTargets.filter((item) => {
-      if (
-        archFlag
-          ? item.arch !== archFlag || item.abi !== undefined || item.avx2 === false
-          : item.os !== process.platform || item.arch !== process.arch
-      ) {
-        return false
-      }
+const targets = (
+  singleFlag
+    ? allTargets.filter((item) => {
+        if (
+          archFlag
+            ? item.arch !== archFlag || item.abi !== undefined || item.avx2 === false
+            : item.os !== process.platform || item.arch !== process.arch
+        ) {
+          return false
+        }
 
-      // When building for the current platform, prefer a single native binary by default.
-      // Baseline binaries require additional Bun artifacts and can be flaky to download.
-      if (item.avx2 === false) {
-        return baselineFlag
-      }
+        // When building for the current platform, prefer a single native binary by default.
+        // Baseline binaries require additional Bun artifacts and can be flaky to download.
+        if (item.avx2 === false) {
+          return baselineFlag
+        }
 
-      // also skip abi-specific builds for the same reason
-      if (item.abi !== undefined) {
-        return false
-      }
+        // also skip abi-specific builds for the same reason
+        if (item.abi !== undefined) {
+          return false
+        }
 
-      return true
-    })
-  : allTargets
+        return true
+      })
+    : allTargets
 ).filter((item) => !excludeWin32 || item.os !== "win32")
-
-await $`rm -rf dist`
 
 const binaries: Record<string, string> = {}
 if (!skipInstall) {
@@ -190,7 +233,7 @@ for (const item of targets) {
     .filter(Boolean)
     .join("-")
   console.log(`building ${name}`)
-  await $`mkdir -p dist/${name}/bin`
+  await fs.promises.mkdir(path.join(output.output, name, "bin"), { recursive: true })
 
   const localPath = path.resolve(dir, "node_modules/@opentui/core/parser.worker.js")
   const rootPath = path.resolve(dir, "../../node_modules/@opentui/core/parser.worker.js")
@@ -200,11 +243,50 @@ for (const item of targets) {
   // Use platform-specific bunfs root path based on target OS
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
   const workerRelativePath = path.relative(dir, parserWorker).replaceAll("\\", "/")
+  const destination = path.join(output.output, name, "bin")
+  const nativeWindowsRuntime = item.os === "win32" && process.platform === "win32" && item.arch === process.arch &&
+    !!process.env.DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY?.trim()
+  if (item.os === "win32" && !nativeWindowsRuntime)
+    throw new Error("Windows compiled CLI requires a native target build and the internal Ed25519 publisher pin")
+  const workFileHelper = await buildWorkFileHelper({ ...item, destination })
+  const workStorageCleanup = await buildWorkStorageCleanup({ ...item, destination })
+  const nativeMacRuntime = item.os === "darwin" && (item.arch === "arm64" || item.arch === "x64") &&
+    process.platform === "darwin" && process.arch === item.arch
+  if (nativeMacRuntime) {
+    // Managed commands use this fixed interpreter rather than the compiled CLI or PATH.
+    const runtime = await fs.promises.readFile(await fs.promises.realpath(process.execPath))
+    if (runtime.length > 268_435_456) throw new Error("Installed command runtime exceeds its bound")
+    await fs.promises.writeFile(path.join(destination, "bun-command-runtime"), runtime, { flag: "wx", mode: 0o755 })
+  }
+  const nativeLinuxRuntime = item.os === "linux" && process.platform === "linux" && item.arch === process.arch && item.abi !== "musl"
+  const windowsAssets = nativeWindowsRuntime ? await (async () => {
+    const { buildWindowsNativeBootstrap } = await import("./build-windows-native-bootstrap")
+    const raw = process.env.DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY!.trim()
+    const staging = await fs.promises.mkdtemp(path.join(output.output, ".windows-cli-assets-"))
+    try {
+      const built = await buildWindowsNativeBootstrap({ repository, staging,
+        publicKey: raw.includes("-----BEGIN") ? raw : await fs.promises.readFile(raw, "utf8") })
+      await Promise.all(["native-image-factory.node", "deepagent-work-process-supervisor.exe", "bun-command-runtime.exe",
+        "ed25519-dalek.LICENSE", "curve25519-dalek.LICENSE"].map((filename) =>
+        fs.promises.copyFile(path.join(staging, filename), path.join(destination, filename))))
+      return [built, ...built.assets, ...built.licenses.filter((entry) => !entry.path.endsWith("/NOTICE"))]
+    } finally { await fs.promises.rm(staging, { recursive: true, force: true }) }
+  })() : []
+  const assets = nativeMacRuntime
+    ? await signNativeNodeAssets(destination)
+    : nativeLinuxRuntime ? [workFileHelper, workStorageCleanup, ...await buildWorkProcessSupervisor({ ...item, destination })]
+    : [workFileHelper, workStorageCleanup, ...windowsAssets]
+  if (!nativeMacRuntime && !nativeLinuxRuntime && !nativeWindowsRuntime) console.log(`Managed command runtime unavailable for ${item.os}-${item.arch}`)
+  const native = await nativeRuntimeDefines(
+    `${item.os}-${item.arch}`,
+    path.join(destination, `deepagent-code${item.os === "win32" ? ".exe" : ""}`),
+    assets,
+  )
 
   const build = await Bun.build({
     conditions: ["node"],
     tsconfig: "./tsconfig.json",
-    plugins: [plugin],
+    plugins: [...(native ? [native.inventory.plugin] : []), plugin],
     external: ["node-gyp"],
     format: "esm",
     minify: process.env.DEEPAGENT_BUILD_NO_MINIFY === "1" ? false : true,
@@ -216,13 +298,13 @@ for (const item of targets) {
       autoloadTsconfig: true,
       autoloadPackageJson: true,
       target: name.replace(pkg.name, "bun") as any,
-      outfile: `dist/${name}/bin/deepagent-code`,
+      outfile: path.join(destination, "deepagent-code"),
       execArgv: [`--user-agent=deepagent-code/${Script.version}`, "--use-system-ca", "--"],
       windows: {},
     },
     files: embeddedFileMap ? { "deepagent-code-web-ui.gen.ts": embeddedFileMap } : {},
     entrypoints: [
-      "./src/index.ts",
+      item.os === "win32" ? "./src/windows-cli.ts" : "./src/index.ts",
       parserWorker,
       workerPath,
       ...(embeddedFileMap ? ["deepagent-code-web-ui.gen.ts"] : []),
@@ -234,6 +316,7 @@ for (const item of targets) {
       // (dev/local builds) the runtime resolves the empty pin and dev builds self-bootstrap
       // through V2OwnerDevMint.
       ...(releaseOwnerPublicKeyDefine() as Record<string, string>),
+      ...(native?.defines ?? {}),
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
       DEEPAGENT_CODE_WORKER_PATH: workerPath,
       DEEPAGENT_CODE_CHANNEL: `'${Script.channel}'`,
@@ -246,8 +329,15 @@ for (const item of targets) {
     const diagnostics = build.logs.map((log) => log.message).join("\n")
     throw new Error(`build failed for ${name}${diagnostics ? `:\n${diagnostics}` : ""}`)
   }
+  if (native) {
+    await requireNativeRuntimeCoverage({ repository, source: native.inventory.source, loaded: native.inventory.loaded })
+    console.log("Native runtime compiler source coverage", {
+      captured: native.inventory.source.length,
+      loaded: native.inventory.loaded.size,
+    })
+  }
 
-  const binaryPath = `dist/${name}/bin/deepagent-code${item.os === "win32" ? ".exe" : ""}`
+  const binaryPath = path.join(destination, `deepagent-code${item.os === "win32" ? ".exe" : ""}`)
   if (!(await Bun.file(binaryPath).exists())) {
     const diagnostics = build.logs.map((log) => log.message).join("\n")
     throw new Error(
@@ -256,7 +346,7 @@ for (const item of targets) {
   }
 
   // Smoke test: only run if binary is for current platform
-  if (item.os === process.platform && item.arch === process.arch && !item.abi) {
+  if (item.os === process.platform && item.arch === process.arch && !item.abi && !nativeWindowsRuntime) {
     console.log(`Running smoke test: ${binaryPath} --version`)
     try {
       const versionOutput = await $`${binaryPath} --version`.text()
@@ -266,10 +356,11 @@ for (const item of targets) {
       process.exit(1)
     }
   }
+  if (nativeWindowsRuntime) console.log("Windows CLI startup check follows the internal artifact and preloader seal")
 
-  await $`rm -rf ./dist/${name}/bin/tui`
+  await fs.promises.rm(path.join(destination, "tui"), { recursive: true, force: true })
   const binarySha256 = new Bun.CryptoHasher("sha256").update(await Bun.file(binaryPath).bytes()).digest("hex")
-  await Bun.file(`dist/${name}/package.json`).write(
+  await Bun.file(path.join(output.output, name, "package.json")).write(
     JSON.stringify(
       {
         name,
@@ -297,15 +388,16 @@ const ownerAuthorizationFile = process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZ
 if (ownerAuthorizationFile) {
   const row = await Bun.file(ownerAuthorizationFile).bytes()
   if (row.byteLength === 0) throw new Error("release owner authorization file is empty")
-  for (const name of Object.keys(binaries)) await Bun.write(`dist/${name}/bin/owner-authorization.json`, row)
+  for (const name of Object.keys(binaries))
+    await Bun.write(path.join(output.output, name, "bin/owner-authorization.json"), row)
 }
 
 if (Script.release) {
   for (const key of Object.keys(binaries)) {
     if (key.includes("linux")) {
-      await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
+      await $`tar -czf ../../${key}.tar.gz *`.cwd(path.join(output.output, key, "bin"))
     } else {
-      await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
+      await $`zip -r ../../${key}.zip *`.cwd(path.join(output.output, key, "bin"))
     }
   }
   // Release archives are uploaded by the workflow only after the RI-51 gate.

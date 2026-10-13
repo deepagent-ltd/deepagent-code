@@ -622,10 +622,12 @@ export const dict = {
   "settings.general.section.feed": "Feed",
   "settings.general.section.sharing": "Deling",
   "settings.general.row.shareUrl.title": "Delings-server-URL",
-  "settings.general.row.shareUrl.description": "Basis-URL for serveren, der bruges ved deling af sessioner. Lad stå tomt for standard.",
+  "settings.general.row.shareUrl.description":
+    "Basis-URL for serveren, der bruges ved deling af sessioner. Lad stå tomt for standard.",
   "settings.general.row.shareUrl.placeholder": "https://opncd.ai",
   "settings.general.row.expertPanelDefault.title": "Aktivér ekspertpanel som standard",
-  "settings.general.row.expertPanelDefault.description": "Start nye samtaler med ekspertpanelet aktiveret, så knappen kan gennemgå den aktuelle kontekst efter behov.",
+  "settings.general.row.expertPanelDefault.description":
+    "Start nye samtaler med ekspertpanelet aktiveret, så knappen kan gennemgå den aktuelle kontekst efter behov.",
   "settings.general.section.display": "Skærm",
   "settings.general.section.power": "Strøm",
 
@@ -777,24 +779,24 @@ export const dict = {
   "settings.models.title": "Modeller",
   "settings.models.description": "Modelindstillinger vil kunne konfigureres her.",
 
-"settings.capabilities.title": "Capabilities",
-"settings.capabilities.catalogTitle": "Capability catalog",
-"settings.capabilities.receiptsTitle": "Load receipts",
-"settings.capabilities.snapshotTitle": "System context snapshot",
-"settings.capabilities.empty": "No capabilities in the catalog",
-"settings.capabilities.receiptsEmpty": "No load receipts recorded",
-"settings.capabilities.loadFailed": "Failed to load the capability catalog",
-"settings.capabilities.retry": "Retry",
-"settings.capabilities.receiptsState": "loaded",
-"settings.capabilities.snapshotUnavailable": "System context snapshot unavailable",
-"settings.capabilities.digest": "Catalog digest: {{digest}}",
-"settings.capabilities.l0lineCount": "L0 lines: {{count}}",
-"settings.capabilities.digestConsistent": "Digest consistent",
-"settings.capabilities.digestInconsistent": "Digest drift",
-"settings.capabilities.availability.stable": "Stable",
-"settings.capabilities.availability.maintenance_only": "Maintenance only",
-"settings.capabilities.availability.disabled": "Disabled",
-"settings.capabilities.availability.unavailable": "Unavailable",
+  "settings.capabilities.title": "Capabilities",
+  "settings.capabilities.catalogTitle": "Capability catalog",
+  "settings.capabilities.receiptsTitle": "Load receipts",
+  "settings.capabilities.snapshotTitle": "System context snapshot",
+  "settings.capabilities.empty": "No capabilities in the catalog",
+  "settings.capabilities.receiptsEmpty": "No load receipts recorded",
+  "settings.capabilities.loadFailed": "Failed to load the capability catalog",
+  "settings.capabilities.retry": "Retry",
+  "settings.capabilities.receiptsState": "loaded",
+  "settings.capabilities.snapshotUnavailable": "System context snapshot unavailable",
+  "settings.capabilities.digest": "Catalog digest: {{digest}}",
+  "settings.capabilities.l0lineCount": "L0 lines: {{count}}",
+  "settings.capabilities.digestConsistent": "Digest consistent",
+  "settings.capabilities.digestInconsistent": "Digest drift",
+  "settings.capabilities.availability.stable": "Stable",
+  "settings.capabilities.availability.maintenance_only": "Maintenance only",
+  "settings.capabilities.availability.disabled": "Disabled",
+  "settings.capabilities.availability.unavailable": "Unavailable",
   "settings.agents.title": "Agenter",
   "settings.agents.description": "Agentindstillinger vil kunne konfigureres her.",
   "settings.commands.title": "Kommandoer",
@@ -970,11 +972,13 @@ export const dict = {
   "settings.import.preset.custom": "Custom",
   "settings.import.preset.deepagent": "DeepAgent Code (snapshot)",
   "settings.import.snapshot.file": "Snapshot-bundle",
-  "settings.import.snapshot.file.hint": "Vaelg en eksporteret sessions-snapshot-bundle (.json). Den importeres som en ny fortsaetbar session.",
+  "settings.import.snapshot.file.hint":
+    "Vaelg en eksporteret sessions-snapshot-bundle (.json). Den importeres som en ny fortsaetbar session.",
   "settings.import.snapshot.noFile": "Vaelg foerst en snapshot-bundle-fil",
   "settings.import.snapshot.done": "Snapshot importeret som en ny fortsaetbar session",
   "settings.import.bundle.file": "Sessionspakke",
-  "settings.import.bundle.file.hint": "Vælg en sessions-ZIP (.zip) eller et ældre snapshot (.json). Importen er et skrivebeskyttet arkiv.",
+  "settings.import.bundle.file.hint":
+    "Vælg en sessions-ZIP (.zip) eller et ældre snapshot (.json). Importen er et skrivebeskyttet arkiv.",
   "settings.import.bundle.done": "Sessionen er importeret som et skrivebeskyttet arkiv",
   "settings.import.bundle.link": "Delingslink",
   "settings.import.bundle.link.hint": "Indsæt et delingslink til en DeepAgent-pakke i stedet for at vælge en fil.",
@@ -1014,7 +1018,8 @@ export const dict = {
   "settings.general.deepagent.mode.ultra": "ultra",
   "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra kræver intelligence-scenarietilstand.",
   "settings.general.deepagent.subagentMode.title": "Subagent",
-  "settings.general.deepagent.subagentMode.description": "Choose the work intensity of subagents relative to the main agent.",
+  "settings.general.deepagent.subagentMode.description":
+    "Choose the work intensity of subagents relative to the main agent.",
   "settings.general.deepagent.subagentMode.inherit": "Inherit from parent",
   "settings.general.deepagent.subagentMode.downgrade": "One level lower",
   "settings.general.deepagent.prompt.title": "Scenarietilstand",
@@ -1063,4 +1068,117 @@ export const dict = {
   "settings.updates.action.downloading": "Downloader...",
   "settings.updates.action.installing": "Installerer...",
   "settings.providers.section.deepagentBackends": "DeepAgent-modelbackends",
+  "settings.import.job.switched":
+    "Forbindelsen er ændret. Åbn indstillingerne igen for at indlæse importjob for denne forbindelse.",
+  "settings.import.job.loadFailed":
+    "Importjob kunne ikke opdateres. Tidligere indlæste oplysninger kan være forældede.",
+  "settings.import.job.refresh": "Opdater job",
+  "settings.import.job.submitting": "Indsender…",
+  "settings.import.job.rejected":
+    "Serveren afviste denne anmodning. Gennemgå kilde, mål og bekræftelse, før du prøver igen.",
+  "settings.import.job.cancelUnknown":
+    "Kvittering for annulleringen er ikke tilgængelig. Opdater dette job for at bekræfte dets tilstand; det kan stadig være i gang med at skrive.",
+  "settings.import.job.request": "Kvittering for anmodning",
+  "settings.import.job.requestUnknown":
+    "Svaret gik tabt. Denne anmodning kan allerede være accepteret. Opdater jobbene, eller prøv igen med samme anmodnings-id; opret ikke en anden import.",
+  "settings.import.job.restoredUnknown":
+    "En tidligere anmodning har ingen bekræftet kvittering. Kun dens anmodnings-id blev gemt. Find den i den jobhistorik, du har adgang til; genåbning forsøger ikke importen igen.",
+  "settings.import.job.guardHint":
+    "Frigivelse af denne overvågningsbeskyttelse tillader en anden import. Den annullerer ikke den oprindelige anmodning og beviser ikke, at den er stoppet.",
+  "settings.import.job.guardReleased":
+    "Overvågningsbeskyttelsen er frigivet. Den oprindelige anmodning kan stadig køre; tjek importhistorikken, før du starter en anden.",
+  "settings.import.job.releaseGuard": "Frigiv overvågningsbeskyttelse",
+  "settings.import.job.retryRequest": "Prøv samme anmodning igen",
+  "settings.import.job.history": "Importjob",
+  "settings.import.job.historyHint":
+    "Vælg et eksisterende job for at fortsætte med at følge det. Åbning eller opdatering af et job genstarter ikke importen.",
+  "settings.import.job.loading": "Indlæser job…",
+  "settings.import.job.empty": "Ingen importjob endnu.",
+  "settings.import.job.more": "Indlæs ældre job",
+  "settings.import.job.identified": "Fundne sessioner",
+  "settings.import.job.imported": "Importerede sessioner",
+  "settings.import.job.backup": "Sikkerhedskopi",
+  "settings.import.job.backupPreview": "Ikke nødvendig for en forhåndsvisning",
+  "settings.import.job.backupVerified": "Verificeret af serveren før skrivning",
+  "settings.import.job.backupPending": "Endnu ingen kvittering for en verificeret sikkerhedskopi",
+  "settings.import.job.targetCopy": "Uafhængig kopi",
+  "settings.import.job.targetLive": "Nuværende database",
+  "settings.import.job.targetPending": "Endnu ikke bekræftet",
+  "settings.import.job.copyComplete":
+    "De valgte data blev gemt i en uafhængig kopi. Denne server bruger stadig sin oprindelige database og sine oprindelige mapper; importerede samtaler, hukommelse og færdigheder er tilgængelige i det registrerede mål.",
+  "settings.import.job.details": "Tekniske oplysninger",
+  "settings.import.job.detailsHint": "Jobidentifikatorer, målstier og verifikationskvitteringer til fejlfinding.",
+  "settings.import.job.copyDetails": "Kopiér diagnosticeringsoplysninger",
+  "settings.import.job.copied": "Diagnosticeringsoplysninger kopieret.",
+  "settings.import.job.copyFailed": "Kopiering er ikke tilgængelig. Markér og kopiér oplysningerne nedenfor.",
+  "settings.import.job.diagnosticText": "Diagnosticeringsoplysninger",
+  "settings.import.job.current": "Valgt job",
+  "settings.import.job.updated": "Opdateret",
+  "settings.import.job.committed": "Permanent gemte partier",
+  "settings.import.job.fileSets": "Publicerede filsæt",
+  "settings.import.job.files": "Filer",
+  "settings.import.job.bytes": "Byte",
+  "settings.import.job.failed": "Mislykkede partier",
+  "settings.import.job.activeBatch": "Ikke-bekræftet parti",
+  "settings.import.job.cancelPending":
+    "Annullering er anmodet. Venter på, at serveren bekræfter et sikkert stoppunkt; skrivninger kan stadig være i gang.",
+  "settings.import.job.stopped": "Serveren har bekræftet, at importen er stoppet.",
+  "settings.import.job.recovery":
+    "Resultatet skal gennemgås. Bevar dokumentationen for dette jobs mål og sikkerhedskopi; opdatering gentager ikke skrivninger med ukendt resultat.",
+  "settings.import.job.partial":
+    "Permanent gemte partier forbliver i det registrerede mål. Annullering eller fejl ruller dem ikke tilbage.",
+  "settings.import.job.refreshOne": "Opdater valgt job",
+  "settings.import.job.cancelSubmitting": "Anmoder om annullering…",
+  "settings.import.job.cancel": "Anmod om annullering",
+  "settings.import.job.localLog":
+    "Kun lokale observationer; op til 2.000 linjer / 2 MiB. Dette er ikke en fuldstændig revisionslog fra serveren.",
+  "settings.import.job.exportLog": "Eksportér observationer",
+  "settings.import.snapshot.boundary":
+    "ZIP-filer og ældre JSON-filer importeres som skrivebeskyttede arkiver via et separat endepunkt. Gendannelse og annullering af varige importjob gælder ikke.",
+  "settings.import.snapshot.failed":
+    "Kvittering for arkivimport er ikke tilgængelig. Kontrollér serveren, før du prøver igen.",
+  "settings.import.job.state.preflight": "Kontrollerer kilde og mål",
+  "settings.import.job.state.ready": "Klar",
+  "settings.import.job.state.running": "Importerer",
+  "settings.import.job.state.cancel_requested": "Annullering anmodet",
+  "settings.import.job.state.completed": "Fuldført",
+  "settings.import.job.state.failed": "Mislykket",
+  "settings.import.job.state.cancelled": "Annulleret før noget parti blev permanent gemt",
+  "settings.import.job.state.cancelled_partial": "Annulleret med permanent gemte partier",
+  "settings.import.job.state.recovery_required": "Resultatet skal gennemgås",
+  "settings.import.snapshot.choose": "Vælg fil",
+  "settings.import.fileCopyOnly":
+    "Hukommelse og færdigheder kræver en isoleret kopi. Fjern markeringen af disse områder, før du vælger sammenfletning i den nuværende database.",
+  "settings.import.fileUnavailable":
+    "Denne server kan ikke bekræfte varig import af hukommelse og færdigheder. Forhåndsvisning er stadig tilgængelig.",
+  "settings.import.merge": "Flet ind i nuværende database",
+  "settings.import.merge.hint":
+    "Kun samtalehistorik. En verificeret sikkerhedskopi af databasen skal oprettes, før der skrives til den nuværende database.",
+  "settings.import.merge.confirm":
+    "Jeg bekræfter, at importerede sessioner må skrives til denne servers nuværende database.",
+  "settings.import.mode.unavailable":
+    "Denne server understøtter ikke varige importjob. Opdater serveren, før du importerer historik.",
+  "settings.import.target": "Faktisk mål",
+  "settings.import.target.copy": "Separat kopi; den nuværende serverdatabase blev ikke erstattet.",
+  "settings.import.target.live": "Nuværende serverdatabase; den verificerede sikkerhedskopi bevares separat.",
+  "settings.import.target.dryRun":
+    "Kun forhåndsvisning af målet; der blev hverken oprettet en måldatabase eller en sikkerhedskopi.",
+
+  "settings.mcp.selectProject": "Select a project to manage its MCP servers and Apps.",
+  "settings.general.row.collaborationMode.title": "Default conversation mode",
+  "settings.general.row.collaborationMode.currentTitle": "Current conversation mode and new conversation default",
+  "settings.general.row.collaborationMode.currentDescription":
+    "Apply to subsequent messages in this conversation and set the default for new conversations. Running tasks stay as they are.",
+  "settings.general.row.collaborationMode.description":
+    "Choose Auto, Loop, or Design for new conversations. Existing conversation choices and running tasks stay as they are.",
+  "settings.im.title": "IM",
+  "settings.im.model.title": "Model used by my IM Agent",
+  "settings.im.model.description":
+    "Choose a locally configured model for private /dac commands. This setting does not change the default model for ordinary DAC sessions.",
+  "settings.im.model.select": "Choose an IM model",
+  "settings.im.model.empty": "No connected model is available. Configure a provider in Settings first.",
+  "settings.im.model.missing":
+    "The saved IM model is currently unavailable. Choose an available model before starting a command.",
+  "settings.im.model.saved": "IM model saved",
+  "settings.im.model.failed": "The IM model could not be saved. Your ordinary session model was not changed.",
 }

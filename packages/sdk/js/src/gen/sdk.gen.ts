@@ -22,6 +22,22 @@ import type {
   AuthSetErrors,
   AuthSetResponses,
   BackupGovernInput,
+  BrowserActionErrors,
+  BrowserActionResponses,
+  BrowserCancelErrors,
+  BrowserCancelResponses,
+  BrowserCreateErrors,
+  BrowserCreateResponses,
+  BrowserFilesApproveErrors,
+  BrowserFilesApproveResponses,
+  BrowserFilesListErrors,
+  BrowserFilesListResponses,
+  BrowserFilesPreviewErrors,
+  BrowserFilesPreviewResponses,
+  BrowserFilesStatusErrors,
+  BrowserFilesStatusResponses,
+  BrowserGetErrors,
+  BrowserGetResponses,
   CapabilityCatalogErrors,
   CapabilityCatalogResponses,
   CapabilityLoadReceiptsErrors,
@@ -82,6 +98,16 @@ import type {
   DeepagentGoalEditPlanResponses,
   DeepagentGoalPauseErrors,
   DeepagentGoalPauseResponses,
+  DeepagentGoalPlanRebaseApplyErrors,
+  DeepagentGoalPlanRebaseApplyResponses,
+  DeepagentGoalPlanRebaseBeginErrors,
+  DeepagentGoalPlanRebaseBeginResponses,
+  DeepagentGoalPlanRebaseCancelErrors,
+  DeepagentGoalPlanRebaseCancelResponses,
+  DeepagentGoalPlanRebaseGetErrors,
+  DeepagentGoalPlanRebaseGetResponses,
+  DeepagentGoalPlanRebaseReconcileErrors,
+  DeepagentGoalPlanRebaseReconcileResponses,
   DeepagentGoalResumeErrors,
   DeepagentGoalResumeResponses,
   DeepagentGoalStartableErrors,
@@ -139,12 +165,46 @@ import type {
   DeepagentWikiSearchErrors,
   DeepagentWikiSearchResponses,
   DiskReclaimInput,
+  EventInvestigationCandidatesErrors,
+  EventInvestigationCandidatesResponses,
+  EventInvestigationCaptureErrors,
+  EventInvestigationCaptureResponses,
+  EventInvestigationControlErrors,
+  EventInvestigationControlResponses,
+  EventInvestigationReportsErrors,
+  EventInvestigationReportsResponses,
   EventSubscribeResponse,
   EventSubscribeResponses,
   EventTuiCommandExecute,
   EventTuiPromptAppend,
   EventTuiSessionSelect,
   EventTuiToastShow,
+  EventValidationCandidatesErrors,
+  EventValidationCandidatesResponses,
+  EventValidationCaptureErrors,
+  EventValidationCaptureResponses,
+  EventValidationConfigureCapturedErrors,
+  EventValidationConfigureCapturedResponses,
+  EventValidationConfigureErrors,
+  EventValidationConfigureResponses,
+  EventValidationControlErrors,
+  EventValidationControlResponses,
+  EventValidationRulesErrors,
+  EventValidationRulesResponses,
+  EventValidationRunsErrors,
+  EventValidationRunsResponses,
+  EventWorkCandidatesErrors,
+  EventWorkCandidatesResponses,
+  EventWorkRootControlErrors,
+  EventWorkRootControlResponses,
+  EventWorkRootsErrors,
+  EventWorkRootsResponses,
+  EventWorkRuleControlErrors,
+  EventWorkRuleControlResponses,
+  EventWorkRulesErrors,
+  EventWorkRulesResponses,
+  EventWorkSessionErrors,
+  EventWorkSessionResponses,
   EvidenceExportInput,
   ExperimentalConsoleGetErrors,
   ExperimentalConsoleGetResponses,
@@ -235,7 +295,16 @@ import type {
   GlobalEventResponses,
   GlobalHealthErrors,
   GlobalHealthResponses,
+  GlobalImportCancelErrors,
+  GlobalImportCancelResponses,
+  GlobalImportCreateErrors,
+  GlobalImportCreateResponses,
   GlobalImportErrors,
+  GlobalImportGetErrors,
+  GlobalImportGetResponses,
+  GlobalImportListErrors,
+  GlobalImportListResponses,
+  GlobalImportResponse,
   GlobalImportResponses,
   GlobalProjectDeleteErrors,
   GlobalProjectDeleteResponses,
@@ -243,6 +312,14 @@ import type {
   GlobalProjectsResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
+  ImActivateErrors,
+  ImActivateResponses,
+  ImActivationPendingErrors,
+  ImActivationPendingResponses,
+  ImActivationQuoteErrors,
+  ImActivationQuoteResponses,
+  ImActivationStatusErrors,
+  ImActivationStatusResponses,
   ImAgentsListErrors,
   ImAgentsListResponses,
   ImAttachmentsDownloadErrors,
@@ -251,8 +328,20 @@ import type {
   ImAttachmentsGetResponses,
   ImAttachmentsListErrors,
   ImAttachmentsListResponses,
+  ImAttachmentsRemoteDownloadErrors,
+  ImAttachmentsRemoteDownloadResponses,
+  ImAttachmentsRemoteGetErrors,
+  ImAttachmentsRemoteGetResponses,
   ImAttachmentsUploadErrors,
   ImAttachmentsUploadResponses,
+  ImDacBindingErrors,
+  ImDacBindingResponses,
+  ImDacCommandErrors,
+  ImDacCommandResponses,
+  ImDacReplyRetryErrors,
+  ImDacReplyRetryResponses,
+  ImDacSubmitErrors,
+  ImDacSubmitResponses,
   ImFacadeClaimErrors,
   ImFacadeClaimResponses,
   ImFacadeDirectErrors,
@@ -273,8 +362,14 @@ import type {
   ImFacadeStatusResponses,
   ImGroupsCreateErrors,
   ImGroupsCreateResponses,
+  ImGroupsGetErrors,
+  ImGroupsGetResponses,
   ImGroupsListErrors,
+  ImGroupsListPageErrors,
+  ImGroupsListPageResponses,
   ImGroupsListResponses,
+  ImGroupsRefreshErrors,
+  ImGroupsRefreshResponses,
   ImMessagesCreateErrors,
   ImMessagesCreateResponses,
   ImMessagesGetErrors,
@@ -283,10 +378,22 @@ import type {
   ImMessagesListResponses,
   ImMessagesMarkReadErrors,
   ImMessagesMarkReadResponses,
+  ImMessagesRemoteTaskLocatorErrors,
+  ImMessagesRemoteTaskLocatorResponses,
   ImMessagesSearchErrors,
   ImMessagesSearchResponses,
+  ImMessagesTaskResultErrors,
+  ImMessagesTaskResultResponses,
+  ImMessagesTaskStatusErrors,
+  ImMessagesTaskStatusResponses,
   ImMessagesThreadErrors,
   ImMessagesThreadResponses,
+  ImportJobRequest,
+  ImportRequest,
+  ImTasksRemoteResultErrors,
+  ImTasksRemoteResultResponses,
+  ImTasksRemoteStatusErrors,
+  ImTasksRemoteStatusResponses,
   ImWebsocketConnectResponses,
   InstanceDisposeErrors,
   InstanceDisposeResponses,
@@ -352,6 +459,24 @@ import type {
   MaintenanceUpgradeStatusResponses,
   McpAddErrors,
   McpAddResponses,
+  McpAppCheckErrors,
+  McpAppCheckResponses,
+  McpAppCloseErrors,
+  McpAppCloseResponses,
+  McpAppInvocationListErrors,
+  McpAppInvocationListResponses,
+  McpAppInvocationResultErrors,
+  McpAppInvocationResultResponses,
+  McpAppInvocationStatusErrors,
+  McpAppInvocationStatusResponses,
+  McpAppInvokeErrors,
+  McpAppInvokeResponses,
+  McpAppOpenErrors,
+  McpAppOpenResponses,
+  McpAppsErrors,
+  McpAppsResponses,
+  McpAppViewToolsErrors,
+  McpAppViewToolsResponses,
   McpAuthAuthenticateErrors,
   McpAuthAuthenticateResponses,
   McpAuthCallbackErrors,
@@ -360,16 +485,32 @@ import type {
   McpAuthRemoveResponses,
   McpAuthStartErrors,
   McpAuthStartResponses,
+  McpBindingPreviewErrors,
+  McpBindingPreviewResponses,
+  McpBindingRepairErrors,
+  McpBindingRepairResponses,
   McpCatalogEnableErrors,
   McpCatalogEnableResponses,
   McpCatalogErrors,
   McpCatalogResponses,
   McpConnectErrors,
   McpConnectResponses,
+  McpCredentialsCommitErrors,
+  McpCredentialsCommitResponses,
+  McpCredentialsInitializeErrors,
+  McpCredentialsInitializeResponses,
+  McpCredentialsPreviewErrors,
+  McpCredentialsPreviewResponses,
+  McpCredentialsReconcileErrors,
+  McpCredentialsReconcileResponses,
+  McpCredentialsStatusErrors,
+  McpCredentialsStatusResponses,
   McpDisconnectErrors,
   McpDisconnectResponses,
   McpLocalConfig,
   McpRemoteConfig,
+  McpRemoveConfigErrors,
+  McpRemoveConfigResponses,
   McpStatusErrors,
   McpStatusResponses,
   MdExportInput,
@@ -584,6 +725,7 @@ import type {
   SyncStartResponses,
   SystemContextSnapshotErrors,
   SystemContextSnapshotResponses,
+  TaskHumanControlInput,
   TextPartInput,
   ToolIdsErrors,
   ToolIdsResponses,
@@ -622,6 +764,8 @@ import type {
   V2AttentionListResponses,
   V2AttentionSeenErrors,
   V2AttentionSeenResponses,
+  V2AttentionTaskControlErrors,
+  V2AttentionTaskControlResponses,
   V2CommandListErrors,
   V2CommandListResponses,
   V2EventSubscribeErrors,
@@ -698,6 +842,12 @@ import type {
   WebhookMonitorResponses,
   WebhookPrErrors,
   WebhookPrResponses,
+  WorkRecoveryCleanupKnownErrors,
+  WorkRecoveryCleanupKnownResponses,
+  WorkRecoveryRecoverKnownErrors,
+  WorkRecoveryRecoverKnownResponses,
+  WorkRecoveryResumeRecoveredErrors,
+  WorkRecoveryResumeRecoveredResponses,
   WorkspaceConfigExternalChannelsGetErrors,
   WorkspaceConfigExternalChannelsGetResponses,
   WorkspaceConfigExternalChannelsPutErrors,
@@ -1642,6 +1792,126 @@ export class Experimental extends HeyApiClient {
   }
 }
 
+export class WorkRecovery extends HeyApiClient {
+  public recoverKnown<ThrowOnError extends boolean = false>(
+    parameters: {
+      workID: string
+      sessionID: string
+      requestID: string
+      expectedClaimToken: number
+      expectedControlRevision: number
+      action?: "recover_only" | "recover_and_resume"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workID" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedClaimToken" },
+            { in: "body", key: "expectedControlRevision" },
+            { in: "body", key: "action" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      WorkRecoveryRecoverKnownResponses,
+      WorkRecoveryRecoverKnownErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/im/work/{workID}/recover-known",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public resumeRecovered<ThrowOnError extends boolean = false>(
+    parameters: {
+      workID: string
+      recoveryID: string
+      requestID: string
+      expectedControlRevision: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workID" },
+            { in: "body", key: "recoveryID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedControlRevision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      WorkRecoveryResumeRecoveredResponses,
+      WorkRecoveryResumeRecoveredErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/im/work/{workID}/resume-recovered",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public cleanupKnown<ThrowOnError extends boolean = false>(
+    parameters: {
+      recoveryID: string
+      admissionID: string
+      requestID: string
+      expectedCustodyRevision: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "recoveryID" },
+            { in: "body", key: "admissionID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedCustodyRevision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      WorkRecoveryCleanupKnownResponses,
+      WorkRecoveryCleanupKnownErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/im/work/cleanup-known",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Config extends HeyApiClient {
   /**
    * Get global configuration
@@ -1756,12 +2026,108 @@ export class Global extends HeyApiClient {
   /**
    * Import history from Codex / Claude Code
    *
-   * Hot-import chat history, memory, and skills from a Codex or Claude Code installation. The body is an ImportRequest JSON object; progress is streamed back as server-sent events (text/event-stream), one JSON ImportProgress object per event, ending with a `done` event carrying the ImportReport.
+   * Import Codex or Claude history into a new isolated copy by default. Explicit live merge requires confirmation and currently supports sessions only. A verified consistent backup precedes writes. SSE starts with a prepared target receipt and ends with done (including the same target) or error. Disconnecting stops observation, not the import.
    */
-  public import<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
-    return (options?.client ?? this.client).post<GlobalImportResponses, GlobalImportErrors, ThrowOnError>({
+  public import<ThrowOnError extends boolean = false>(
+    parameters?: {
+      importRequest?: ImportRequest
+    },
+    options?: Options<never, ThrowOnError, GlobalImportResponse>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "importRequest", map: "body" }] }])
+    return (options?.client ?? this.client).sse.post<GlobalImportResponses, GlobalImportErrors, ThrowOnError>({
       url: "/global/import",
       ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Observe durable import jobs without executing work
+   */
+  public importList<ThrowOnError extends boolean = false>(
+    parameters?: {
+      cursor?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<GlobalImportListResponses, GlobalImportListErrors, ThrowOnError>({
+      url: "/global/import/jobs",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create or locate an exact durable import request
+   */
+  public importCreate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      importJobRequest?: ImportJobRequest
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "importJobRequest", map: "body" }] }])
+    return (options?.client ?? this.client).post<GlobalImportCreateResponses, GlobalImportCreateErrors, ThrowOnError>({
+      url: "/global/import/jobs",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Observe an import and its destination receipts
+   */
+  public importGet<ThrowOnError extends boolean = false>(
+    parameters: {
+      jobID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "jobID" }] }])
+    return (options?.client ?? this.client).get<GlobalImportGetResponses, GlobalImportGetErrors, ThrowOnError>({
+      url: "/global/import/jobs/{jobID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Request a safe import stop; acceptance is not confirmation
+   */
+  public importCancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      jobID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "jobID" }] }])
+    return (options?.client ?? this.client).post<GlobalImportCancelResponses, GlobalImportCancelErrors, ThrowOnError>({
+      url: "/global/import/jobs/{jobID}/cancel",
+      ...options,
+      ...params,
     })
   }
 
@@ -1803,6 +2169,832 @@ export class Global extends HeyApiClient {
   private _config?: Config
   get config(): Config {
     return (this._config ??= new Config({ client: this.client }))
+  }
+}
+
+export class Browser extends HeyApiClient {
+  public create<ThrowOnError extends boolean = false>(
+    parameters: {
+      body:
+        | {
+            requestID: string
+            sessionID: string
+            origin: string
+            expiresAt: number
+            profile: "managed-loopback-preview-v1"
+          }
+        | {
+            requestID: string
+            sessionID: string
+            origin: string
+            expiresAt: number
+            profile: "managed-loopback-interaction-v1"
+            postPaths: Array<string>
+            scriptGrants?: Array<{
+              scriptHash: string
+              argsHash: string
+              readOnly: true
+            }>
+            programGrants?: Array<{
+              scriptHash: string
+              argsHash: string
+              operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+              maxSteps: number
+            }>
+            clipboardPolicy?: {
+              read: boolean
+              write: boolean
+            }
+          }
+        | {
+            requestID: string
+            sessionID: string
+            origin: string
+            expiresAt: number
+            profile: "managed-loopback-exchange-v1"
+            postPaths: Array<string>
+            filePolicy: {
+              upload: boolean
+              download: boolean
+            }
+          }
+        | {
+            requestID: string
+            sessionID: string
+            origin: string
+            expiresAt: number
+            profile: "managed-public-readonly-v1"
+            approvedOrigins: Array<string>
+            resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+          }
+        | {
+            requestID: string
+            sessionID: string
+            origin: string
+            expiresAt: number
+            profile: "managed-public-interaction-v1"
+            approvedOrigins: Array<string>
+            resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+            pageMode: "static" | "dynamic"
+            postTargets: Array<{
+              origin: string
+              path: string
+            }>
+          }
+        | {
+            requestID: string
+            sessionID: string
+            origin: string
+            expiresAt: number
+            profile: "managed-public-api-v1"
+            approvedOrigins: Array<string>
+            resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+            pageMode: "static" | "dynamic"
+            apiPostTargets: Array<{
+              url: string
+              contentTypes: Array<"application/json" | "application/x-www-form-urlencoded" | "text/plain">
+              maxBodyBytes: number
+            }>
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "body", map: "body" }] }])
+    return (options?.client ?? this.client).post<BrowserCreateResponses, BrowserCreateErrors, ThrowOnError>({
+      url: "/api/v1/browser/controls",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      controlID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "controlID" }] }])
+    return (options?.client ?? this.client).get<BrowserGetResponses, BrowserGetErrors, ThrowOnError>({
+      url: "/api/v1/browser/controls/{controlID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  public cancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      controlID: string
+      requestID: string
+      expectedRevision: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "controlID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedRevision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserCancelResponses, BrowserCancelErrors, ThrowOnError>({
+      url: "/api/v1/browser/controls/{controlID}/cancel",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public action<ThrowOnError extends boolean = false>(
+    parameters: {
+      actionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "actionID" }] }])
+    return (options?.client ?? this.client).get<BrowserActionResponses, BrowserActionErrors, ThrowOnError>({
+      url: "/api/v1/browser/actions/{actionID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  public filesPreview<ThrowOnError extends boolean = false>(
+    parameters: {
+      controlID: string
+      body:
+        | {
+            direction: "upload"
+            relative: string
+            targetPath: string
+          }
+        | {
+            direction: "download"
+            relative: string
+            targetURL: string
+            maxBytes: number
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "controlID" },
+            { key: "body", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserFilesPreviewResponses, BrowserFilesPreviewErrors, ThrowOnError>(
+      {
+        url: "/api/v1/browser/controls/{controlID}/files/preview",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  public filesApprove<ThrowOnError extends boolean = false>(
+    parameters: {
+      controlID: string
+      requestID: string
+      previewID: string
+      expectedControlRevision: number
+      expiresAt: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "controlID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "previewID" },
+            { in: "body", key: "expectedControlRevision" },
+            { in: "body", key: "expiresAt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserFilesApproveResponses, BrowserFilesApproveErrors, ThrowOnError>(
+      {
+        url: "/api/v1/browser/controls/{controlID}/files/approve",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  public filesStatus<ThrowOnError extends boolean = false>(
+    parameters: {
+      controlID: string
+      requestID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "controlID" },
+            { in: "path", key: "requestID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<BrowserFilesStatusResponses, BrowserFilesStatusErrors, ThrowOnError>({
+      url: "/api/v1/browser/controls/{controlID}/files/requests/{requestID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  public filesList<ThrowOnError extends boolean = false>(
+    parameters: {
+      controlID: string
+      cursor?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "controlID" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<BrowserFilesListResponses, BrowserFilesListErrors, ThrowOnError>({
+      url: "/api/v1/browser/controls/{controlID}/files",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class EventValidation extends HeyApiClient {
+  public candidates<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "sessionID" }] }])
+    return (options?.client ?? this.client).post<
+      EventValidationCandidatesResponses,
+      EventValidationCandidatesErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/event-validation/candidates",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public capture<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      targetID: string
+      recipeID: string
+      parameters: Array<{
+        key: string
+        value: string
+      }>
+      watch: Array<string>
+      maxRuns: number
+      expiresAt: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "targetID" },
+            { in: "body", key: "recipeID" },
+            { in: "body", key: "parameters" },
+            { in: "body", key: "watch" },
+            { in: "body", key: "maxRuns" },
+            { in: "body", key: "expiresAt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      EventValidationCaptureResponses,
+      EventValidationCaptureErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/event-validation/capture",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public configureCaptured<ThrowOnError extends boolean = false>(
+    parameters: {
+      captureID: string
+      ruleID: string
+      requestID: string
+      expectedRevision: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "captureID" },
+            { in: "body", key: "ruleID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedRevision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      EventValidationConfigureCapturedResponses,
+      EventValidationConfigureCapturedErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/event-validation/rules/configure-captured",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public rules<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      EventValidationRulesResponses,
+      EventValidationRulesErrors,
+      ThrowOnError
+    >({ url: "/api/v1/event-validation/rules", ...options })
+  }
+
+  public runs<ThrowOnError extends boolean = false>(
+    parameters: {
+      ruleID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "ruleID" }] }])
+    return (options?.client ?? this.client).get<EventValidationRunsResponses, EventValidationRunsErrors, ThrowOnError>({
+      url: "/api/v1/event-validation/rules/{ruleID}/runs",
+      ...options,
+      ...params,
+    })
+  }
+
+  public configure<ThrowOnError extends boolean = false>(
+    parameters: {
+      ruleID: string
+      requestID: string
+      expectedRevision: number
+      configuration: {
+        profile: "project_validation_v1"
+        scope: {
+          instanceID: string
+          workspaceID: string | null
+          securityNamespaceID: string
+          namespaceBindingHash: string
+          locationKey: string
+          projectScopeKey: string
+          projectID: string
+          canonicalRoot: string
+          rootIdentity: {
+            kind: "posix"
+            device: string
+            inode: string
+          }
+        }
+        kind: "test" | "build"
+        recipe:
+          | {
+              schemaVersion: "work-command-recipe.v1"
+              logicalID: string
+              revision: number
+              executable: {
+                assetPath: string
+                sha256: string
+                bytes: number
+                platform: "darwin-arm64"
+                identity: {
+                  kind: "posix"
+                  device: string
+                  inode: string
+                }
+              }
+              argv: Array<
+                | {
+                    kind: "literal"
+                    value: string
+                  }
+                | {
+                    kind: "parameter"
+                    parameter: string
+                  }
+              >
+              parameters: Array<{
+                key: string
+                choices: Array<string>
+              }>
+              cwd: string | null
+              inputs: Array<string>
+              outputs: Array<string>
+              environment: Array<{
+                name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+                value: string
+              }>
+              workspace: "private_explicit_files.v1"
+              sandbox: {
+                id: "darwin-single-process-workspace-v1"
+                revision: 1
+                network: "deny"
+                processes: 1
+                openFiles: 64
+                maxInputFiles: 256
+                maxInputFileBytes: 16777216
+                maxInputBytes: 67108864
+                maxDepth: 16
+                maxOutputFiles: 32
+                maxOutputFileBytes: 1048576
+                maxOutputBytes: 33554432
+              }
+              timeoutMs: number
+              stdoutBytes: number
+              stderrBytes: number
+            }
+          | {
+              schemaVersion: "work-command-recipe.mac-x64.v1"
+              logicalID: string
+              revision: number
+              executable: {
+                assetPath: "packages/work-file-helper/bin/darwin-x64/bun-command-runtime"
+                sha256: string
+                bytes: number
+                platform: "darwin-x64"
+                identity: {
+                  kind: "posix"
+                  device: string
+                  inode: string
+                }
+              }
+              argv: Array<
+                | {
+                    kind: "literal"
+                    value: string
+                  }
+                | {
+                    kind: "parameter"
+                    parameter: string
+                  }
+              >
+              parameters: Array<{
+                key: string
+                choices: Array<string>
+              }>
+              cwd: string | null
+              inputs: Array<string>
+              outputs: Array<string>
+              environment: Array<{
+                name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+                value: string
+              }>
+              workspace: "private_explicit_files.v1"
+              sandbox: {
+                id: "darwin-single-process-workspace-v1"
+                revision: 1
+                network: "deny"
+                processes: 1
+                openFiles: 64
+                maxInputFiles: 256
+                maxInputFileBytes: 16777216
+                maxInputBytes: 67108864
+                maxDepth: 16
+                maxOutputFiles: 32
+                maxOutputFileBytes: 1048576
+                maxOutputBytes: 33554432
+              }
+              timeoutMs: number
+              stdoutBytes: number
+              stderrBytes: number
+            }
+          | {
+              schemaVersion: "work-command-recipe.v2"
+              logicalID: string
+              revision: number
+              executable: {
+                assetPath: string
+                sha256: string
+                bytes: number
+                platform: "linux-x64" | "linux-arm64"
+                identity: {
+                  kind: "posix"
+                  device: string
+                  inode: string
+                }
+              }
+              argv: Array<
+                | {
+                    kind: "literal"
+                    value: string
+                  }
+                | {
+                    kind: "parameter"
+                    parameter: string
+                  }
+              >
+              parameters: Array<{
+                key: string
+                choices: Array<string>
+              }>
+              cwd: string | null
+              inputs: Array<string>
+              outputs: Array<string>
+              environment: Array<{
+                name: "CI" | "LANG" | "LC_ALL" | "TZ" | "NO_COLOR" | "FORCE_COLOR" | "SOURCE_DATE_EPOCH"
+                value: string
+              }>
+              workspace: "private_explicit_files.v1"
+              sandbox: {
+                revision: 1
+                network: "deny"
+                filesystem: "explicit_snapshot_closure"
+                payloadProcesses: 1
+                payloadThreadsMax: 64
+                supervisorProcessesMax: 2
+                openFiles: 64
+                stopProof: "root_exit_stream_eof_tree_empty"
+                id: "linux-cgroup2-single-payload-v1"
+                threadsEnforcement: "cgroup_pids"
+                cpu: {
+                  quotaMicros: number
+                  periodMicros: number
+                  totalWatchdogMicros: number
+                  pollMs: number
+                }
+                memory: {
+                  maxBytes: number
+                  swapMaxBytes: 0
+                }
+                tasksMax: 66
+              }
+              timeoutMs: number
+              stdoutBytes: number
+              stderrBytes: number
+            }
+        parameters: Array<{
+          key: string
+          value: string
+        }>
+        helperHash: string
+        watch: Array<string>
+        recipient: "local_status"
+        maxRuns: number
+        expiresAt: number
+        investigation: "disabled"
+        autoFix: false
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "ruleID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedRevision" },
+            { in: "body", key: "configuration" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      EventValidationConfigureResponses,
+      EventValidationConfigureErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/event-validation/rules/configure",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public control<ThrowOnError extends boolean = false>(
+    parameters: {
+      ruleID: string
+      requestID: string
+      expectedRevision: number
+      action: "enable" | "pause" | "revoke" | "verify" | "cancel"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "ruleID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedRevision" },
+            { in: "body", key: "action" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      EventValidationControlResponses,
+      EventValidationControlErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/event-validation/rules/{ruleID}/control",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class EventInvestigation extends HeyApiClient {
+  public candidates<ThrowOnError extends boolean = false>(
+    parameters: {
+      ruleID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "ruleID" }] }])
+    return (options?.client ?? this.client).get<
+      EventInvestigationCandidatesResponses,
+      EventInvestigationCandidatesErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/event-investigation/rules/{ruleID}/candidates",
+      ...options,
+      ...params,
+    })
+  }
+
+  public reports<ThrowOnError extends boolean = false>(
+    parameters: {
+      ruleID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "ruleID" }] }])
+    return (options?.client ?? this.client).get<
+      EventInvestigationReportsResponses,
+      EventInvestigationReportsErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/event-investigation/rules/{ruleID}/reports",
+      ...options,
+      ...params,
+    })
+  }
+
+  public capture<ThrowOnError extends boolean = false>(
+    parameters: {
+      ruleID: string
+      targetID: string
+      expiresAt: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "ruleID" },
+            { in: "body", key: "targetID" },
+            { in: "body", key: "expiresAt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      EventInvestigationCaptureResponses,
+      EventInvestigationCaptureErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/event-investigation/capture",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public control<ThrowOnError extends boolean = false>(
+    parameters: {
+      ruleID: string
+      requestID: string
+      operation: "enable" | "disable"
+      expectedEpoch: number
+      expectedOperatorRevision: number
+      targetID: string | null
+      expiresAt: number | null
+      captureID: string | null
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "ruleID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "operation" },
+            { in: "body", key: "expectedEpoch" },
+            { in: "body", key: "expectedOperatorRevision" },
+            { in: "body", key: "targetID" },
+            { in: "body", key: "expiresAt" },
+            { in: "body", key: "captureID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      EventInvestigationControlResponses,
+      EventInvestigationControlErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/event-investigation/control",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 }
 
@@ -3870,13 +5062,14 @@ export class Goal extends HeyApiClient {
   /**
    * Start a Goal Loop from the session's plan
    *
-   * V3.9 §D: materialize the session plan into the graded doc and drive the autonomous loop as a resident background task. Gated by the goal-loop flag.
+   * Commit a stable Goal preparation and activation receipt, then enqueue a durable event wake. Requires an idempotent requestID and enabled event Goal control; resident Goals require explicit reconciliation.
    */
   public start<ThrowOnError extends boolean = false>(
     parameters: {
       directory?: string
       workspace?: string
       sessionID: string
+      requestID: string
       objective?: string
       criteria?: Array<{
         kind: "tests_pass" | "no_diagnostics" | "reviewer_clean" | "panel_approves" | "plan_complete"
@@ -3902,6 +5095,7 @@ export class Goal extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "sessionID" },
+            { in: "body", key: "requestID" },
             { in: "body", key: "objective" },
             { in: "body", key: "criteria" },
             { in: "body", key: "limits" },
@@ -4336,6 +5530,9 @@ export class Deepagent extends HeyApiClient {
       directory?: string
       workspace?: string
       sessionID: string
+      goalId: string
+      expectedRevision: number
+      requestID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4347,6 +5544,9 @@ export class Deepagent extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "sessionID" },
+            { in: "body", key: "goalId" },
+            { in: "body", key: "expectedRevision" },
+            { in: "body", key: "requestID" },
           ],
         },
       ],
@@ -4368,6 +5568,9 @@ export class Deepagent extends HeyApiClient {
       directory?: string
       workspace?: string
       sessionID: string
+      goalId: string
+      expectedRevision: number
+      requestID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4379,6 +5582,9 @@ export class Deepagent extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "sessionID" },
+            { in: "body", key: "goalId" },
+            { in: "body", key: "expectedRevision" },
+            { in: "body", key: "requestID" },
           ],
         },
       ],
@@ -4402,6 +5608,9 @@ export class Deepagent extends HeyApiClient {
       directory?: string
       workspace?: string
       sessionID: string
+      goalId: string
+      expectedRevision: number
+      requestID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4413,12 +5622,267 @@ export class Deepagent extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "sessionID" },
+            { in: "body", key: "goalId" },
+            { in: "body", key: "expectedRevision" },
+            { in: "body", key: "requestID" },
           ],
         },
       ],
     )
     return (options?.client ?? this.client).post<DeepagentGoalStopResponses, DeepagentGoalStopErrors, ThrowOnError>({
       url: "/deepagent/goal/stop",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public goalPlanRebaseBegin<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+      goalID: string
+      expectedControlRevision: number
+      requestID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "goalID" },
+            { in: "body", key: "expectedControlRevision" },
+            { in: "body", key: "requestID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentGoalPlanRebaseBeginResponses,
+      DeepagentGoalPlanRebaseBeginErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/goal/plan-rebase/begin",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public goalPlanRebaseApply<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+      goalID: string
+      editID: string
+      requestID: string
+      expectedEditRevision: number
+      expectedControlRevision: number
+      expectedPlanRevision: number
+      expectedDocVersion: number
+      expectedDocHash: string
+      candidate: {
+        steps: Array<{
+          step_id: string
+          title: string
+          status: "pending" | "active" | "done" | "cancelled" | "blocked"
+          acceptance?: string | null
+          assigned_agent?: string | null
+          evidence?: Array<string>
+          note?: string | null
+        }>
+        activeStepID: string | null
+        dispositions: Array<{
+          stepID: string
+          reason: string
+        }>
+      }
+      reason: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "goalID" },
+            { in: "body", key: "editID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedEditRevision" },
+            { in: "body", key: "expectedControlRevision" },
+            { in: "body", key: "expectedPlanRevision" },
+            { in: "body", key: "expectedDocVersion" },
+            { in: "body", key: "expectedDocHash" },
+            { in: "body", key: "candidate" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentGoalPlanRebaseApplyResponses,
+      DeepagentGoalPlanRebaseApplyErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/goal/plan-rebase/apply",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public goalPlanRebaseCancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+      goalID: string
+      editID: string
+      requestID: string
+      expectedEditRevision: number
+      expectedControlRevision: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "goalID" },
+            { in: "body", key: "editID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedEditRevision" },
+            { in: "body", key: "expectedControlRevision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentGoalPlanRebaseCancelResponses,
+      DeepagentGoalPlanRebaseCancelErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/goal/plan-rebase/cancel",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public goalPlanRebaseGet<ThrowOnError extends boolean = false>(
+    parameters: {
+      editID: string
+      directory?: string
+      workspace?: string
+      sessionID: string
+      goalID: string
+      requestID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "editID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+            { in: "query", key: "goalID" },
+            { in: "query", key: "requestID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      DeepagentGoalPlanRebaseGetResponses,
+      DeepagentGoalPlanRebaseGetErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/goal/plan-rebase/{editID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  public goalPlanRebaseReconcile<ThrowOnError extends boolean = false>(
+    parameters: {
+      path_editID: string
+      directory?: string
+      workspace?: string
+      sessionID: string
+      goalID: string
+      body_editID: string
+      requestID: string
+      expectedEditRevision: number
+      expectedControlRevision: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            {
+              in: "path",
+              key: "path_editID",
+              map: "editID",
+            },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "goalID" },
+            {
+              in: "body",
+              key: "body_editID",
+              map: "editID",
+            },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedEditRevision" },
+            { in: "body", key: "expectedControlRevision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentGoalPlanRebaseReconcileResponses,
+      DeepagentGoalPlanRebaseReconcileErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/goal/plan-rebase/{editID}/reconcile",
       ...options,
       ...params,
       headers: {
@@ -6029,6 +7493,100 @@ export class Lsp extends HeyApiClient {
 
 export class Groups extends HeyApiClient {
   /**
+   * List an ordinary or protected IM group page
+   */
+  public listPage<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      lane: "ordinary" | "protected"
+      limit?: string
+      cursor?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "lane" },
+            { in: "query", key: "limit" },
+            { in: "query", key: "cursor" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImGroupsListPageResponses, ImGroupsListPageErrors, ThrowOnError>({
+      url: "/api/v1/im/groups/page",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get the current IM group
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImGroupsGetResponses, ImGroupsGetErrors, ThrowOnError>({
+      url: "/api/v1/im/groups/{groupId}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Refresh one current protected IM group name
+   */
+  public refresh<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImGroupsRefreshResponses, ImGroupsRefreshErrors, ThrowOnError>({
+      url: "/api/v1/im/groups/{groupId}/refresh",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * List IM groups
    *
    * List all IM groups in the workspace.
@@ -6153,6 +7711,7 @@ export class Messages extends HeyApiClient {
       directory?: string
       workspace?: string
       attachmentID?: string
+      attachmentIDs?: Array<string>
       clientRequestID?: string
       senderType: "user" | "agent" | "system"
       type: "text" | "code" | "file" | "agent_status" | "system"
@@ -6162,10 +7721,17 @@ export class Messages extends HeyApiClient {
         | {
             type: "attachment_ref"
             attachmentID: string
+            batch?: true
           }
         | {
             type: "kernel_sync"
             liveEligible: boolean
+          }
+        | {
+            type: "task_status_notice"
+            noticeID: string
+            requestID: string
+            kind: "cancel_requested" | "recovery_required" | "refused"
           }
         | {
             type: "file_ref"
@@ -6222,6 +7788,7 @@ export class Messages extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "attachmentID" },
+            { in: "body", key: "attachmentIDs" },
             { in: "body", key: "clientRequestID" },
             { in: "body", key: "senderType" },
             { in: "body", key: "type" },
@@ -6256,6 +7823,11 @@ export class Messages extends HeyApiClient {
       directory?: string
       workspace?: string
       readAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      actionID?: string
+      reconcile?: boolean
+      continue?: boolean
+      cancel?: boolean
+      newAction?: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6268,10 +7840,16 @@ export class Messages extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "readAt" },
+            { in: "body", key: "actionID" },
+            { in: "body", key: "reconcile" },
+            { in: "body", key: "continue" },
+            { in: "body", key: "cancel" },
+            { in: "body", key: "newAction" },
           ],
         },
       ],
     )
+    params.body ??= {}
     return (options?.client ?? this.client).post<ImMessagesMarkReadResponses, ImMessagesMarkReadErrors, ThrowOnError>({
       url: "/api/v1/im/groups/{groupId}/read",
       ...options,
@@ -6311,6 +7889,114 @@ export class Messages extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<ImMessagesGetResponses, ImMessagesGetErrors, ThrowOnError>({
       url: "/api/v1/im/messages/{messageId}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Locate a task result
+   *
+   * Read the original task location after verifying message visibility and durable result identity. Does not resume execution.
+   */
+  public taskResult<ThrowOnError extends boolean = false>(
+    parameters: {
+      messageId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "messageId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ImMessagesTaskResultResponses,
+      ImMessagesTaskResultErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/im/messages/{messageId}/task-result",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read a verified task status notice
+   *
+   * Locate the original fixed notice and read its current owned task state without executing or retrying work.
+   */
+  public taskStatus<ThrowOnError extends boolean = false>(
+    parameters: {
+      messageId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "messageId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ImMessagesTaskStatusResponses,
+      ImMessagesTaskStatusErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/im/messages/{messageId}/task-status",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read the verified native result tuple
+   *
+   * Read a current visible message's native identity as a lookup candidate. Does not select a remote URL or authorize execution.
+   */
+  public remoteTaskLocator<ThrowOnError extends boolean = false>(
+    parameters: {
+      messageId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "messageId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ImMessagesRemoteTaskLocatorResponses,
+      ImMessagesRemoteTaskLocatorErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/im/messages/{messageId}/remote-task-locator",
       ...options,
       ...params,
     })
@@ -6425,6 +8111,184 @@ export class Agents extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<ImAgentsListResponses, ImAgentsListErrors, ThrowOnError>({
       url: "/api/v1/im/agents",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Tasks extends HeyApiClient {
+  /**
+   * Locate a result on this authenticated instance
+   *
+   * Verify the original acknowledged delivery, owned task and current visibility on the caller-selected instance. Read-only; does not resume execution.
+   */
+  public remoteResult<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      tuple: {
+        version: 1
+        realm: string
+        appkey: string
+        orgID: string
+        kernelMessageID: string
+        senderID: string
+        receiverID: string
+        conversationType: 1 | 2
+        conversationID: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "tuple" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImTasksRemoteResultResponses, ImTasksRemoteResultErrors, ThrowOnError>(
+      {
+        url: "/api/v1/im/tasks/remote-result",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Read a current task status on this authenticated instance
+   *
+   * Verify the original acknowledged notice and current task management and message visibility on the caller-selected instance. Does not execute, renew or retry work.
+   */
+  public remoteStatus<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      tuple: {
+        version: 1
+        realm: string
+        appkey: string
+        orgID: string
+        kernelMessageID: string
+        senderID: string
+        receiverID: string
+        conversationType: 1 | 2
+        conversationID: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "tuple" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImTasksRemoteStatusResponses, ImTasksRemoteStatusErrors, ThrowOnError>(
+      {
+        url: "/api/v1/im/tasks/remote-status",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+}
+
+export class Remote extends HeyApiClient {
+  /**
+   * Read current protected message attachment metadata
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      messageId: string
+      attachmentId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "path", key: "messageId" },
+            { in: "path", key: "attachmentId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ImAttachmentsRemoteGetResponses,
+      ImAttachmentsRemoteGetErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/im/groups/{groupId}/messages/{messageId}/attachments/{attachmentId}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Stream current authorized protected attachment bytes
+   */
+  public download<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      messageId: string
+      attachmentId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "path", key: "messageId" },
+            { in: "path", key: "attachmentId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ImAttachmentsRemoteDownloadResponses,
+      ImAttachmentsRemoteDownloadErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/im/groups/{groupId}/messages/{messageId}/attachments/{attachmentId}/content",
       ...options,
       ...params,
     })
@@ -6574,6 +8438,11 @@ export class Attachments extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _remote?: Remote
+  get remote(): Remote {
+    return (this._remote ??= new Remote({ client: this.client }))
   }
 }
 
@@ -6947,6 +8816,274 @@ export class Websocket extends HeyApiClient {
 }
 
 export class Im extends HeyApiClient {
+  /**
+   * Get explicit IM activation terms without spending credit
+   */
+  public activationQuote<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImActivationQuoteResponses, ImActivationQuoteErrors, ThrowOnError>({
+      url: "/api/v1/im/activation/quote",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read an unfinished IM activation without another purchase
+   */
+  public activationPending<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImActivationPendingResponses, ImActivationPendingErrors, ThrowOnError>({
+      url: "/api/v1/im/activation",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Explicitly redeem an IM code or spend one credit to activate IM
+   */
+  public activate<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      transactionID: string
+      name: string
+      method: "api_key" | "activation_code"
+      credential: string
+      quoteID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "transactionID" },
+            { in: "body", key: "name" },
+            { in: "body", key: "method" },
+            { in: "body", key: "credential" },
+            { in: "body", key: "quoteID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImActivateResponses, ImActivateErrors, ThrowOnError>({
+      url: "/api/v1/im/activation",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Recover the original IM activation receipt
+   */
+  public activationStatus<ThrowOnError extends boolean = false>(
+    parameters: {
+      transactionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "transactionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImActivationStatusResponses, ImActivationStatusErrors, ThrowOnError>({
+      url: "/api/v1/im/activation/{transactionID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read the owner's ordinary DAC Session binding
+   */
+  public dacBinding<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImDacBindingResponses, ImDacBindingErrors, ThrowOnError>({
+      url: "/api/v1/im/groups/{groupId}/dac",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Admit one private /dac command into an ordinary Session
+   */
+  public dacSubmit<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      directory?: string
+      workspace?: string
+      commandID: string
+      text: string
+      delivery: "queue" | "steer"
+      referenceMessageIDs?: Array<string>
+      newSession?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "commandID" },
+            { in: "body", key: "text" },
+            { in: "body", key: "delivery" },
+            { in: "body", key: "referenceMessageIDs" },
+            { in: "body", key: "newSession" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImDacSubmitResponses, ImDacSubmitErrors, ThrowOnError>({
+      url: "/api/v1/im/groups/{groupId}/dac/commands",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read durable command admission and final reply status
+   */
+  public dacCommand<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      commandID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "path", key: "commandID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImDacCommandResponses, ImDacCommandErrors, ThrowOnError>({
+      url: "/api/v1/im/groups/{groupId}/dac/commands/{commandID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Explicitly retry a known failed final reply without running the Session again
+   */
+  public dacReplyRetry<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      commandID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "path", key: "commandID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImDacReplyRetryResponses, ImDacReplyRetryErrors, ThrowOnError>({
+      url: "/api/v1/im/groups/{groupId}/dac/commands/{commandID}/reply/retry",
+      ...options,
+      ...params,
+    })
+  }
+
   private _groups?: Groups
   get groups(): Groups {
     return (this._groups ??= new Groups({ client: this.client }))
@@ -6962,6 +9099,11 @@ export class Im extends HeyApiClient {
     return (this._agents ??= new Agents({ client: this.client }))
   }
 
+  private _tasks?: Tasks
+  get tasks(): Tasks {
+    return (this._tasks ??= new Tasks({ client: this.client }))
+  }
+
   private _attachments?: Attachments
   get attachments(): Attachments {
     return (this._attachments ??= new Attachments({ client: this.client }))
@@ -6975,6 +9117,246 @@ export class Im extends HeyApiClient {
   private _websocket?: Websocket
   get websocket(): Websocket {
     return (this._websocket ??= new Websocket({ client: this.client }))
+  }
+}
+
+export class EventWork extends HeyApiClient {
+  public candidates<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sourceSessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sourceSessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<EventWorkCandidatesResponses, EventWorkCandidatesErrors, ThrowOnError>(
+      {
+        url: "/api/v1/event-work/candidates",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  public rules<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sourceSessionID: string
+      limit?: number
+      after?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sourceSessionID" },
+            { in: "body", key: "limit" },
+            { in: "body", key: "after" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<EventWorkRulesResponses, EventWorkRulesErrors, ThrowOnError>({
+      url: "/api/v1/event-work/rules",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public roots<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sourceSessionID: string
+      limit?: number
+      after?: string
+      ruleID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sourceSessionID" },
+            { in: "body", key: "limit" },
+            { in: "body", key: "after" },
+            { in: "body", key: "ruleID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<EventWorkRootsResponses, EventWorkRootsErrors, ThrowOnError>({
+      url: "/api/v1/event-work/roots",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public ruleControl<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sourceSessionID: string
+      ruleID: string
+      requestID: string
+      expectedRevision: number
+      action: "create" | "enable" | "pause" | "revoke"
+      originID?: string
+      instruction?: string
+      expiresAt?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sourceSessionID" },
+            { in: "body", key: "ruleID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedRevision" },
+            { in: "body", key: "action" },
+            { in: "body", key: "originID" },
+            { in: "body", key: "instruction" },
+            { in: "body", key: "expiresAt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      EventWorkRuleControlResponses,
+      EventWorkRuleControlErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/event-work/rules/control",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public rootControl<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sourceSessionID: string
+      rootID: string
+      requestID: string
+      expectedRevision: number
+      action: "cancel"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sourceSessionID" },
+            { in: "body", key: "rootID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedRevision" },
+            { in: "body", key: "action" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      EventWorkRootControlResponses,
+      EventWorkRootControlErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/event-work/roots/control",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public session<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sourceSessionID: string
+      rootID: string
+      nodeID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sourceSessionID" },
+            { in: "body", key: "rootID" },
+            { in: "body", key: "nodeID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<EventWorkSessionResponses, EventWorkSessionErrors, ThrowOnError>({
+      url: "/api/v1/event-work/session",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 }
 
@@ -7517,6 +9899,260 @@ export class SystemContext extends HeyApiClient {
   }
 }
 
+export class Credentials extends HeyApiClient {
+  /**
+   * Explicit scoped MCP credentialsInitialize
+   */
+  public initialize<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      McpCredentialsInitializeResponses,
+      McpCredentialsInitializeErrors,
+      ThrowOnError
+    >({
+      url: "/mcp/{name}/credentials/initialize",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Explicit scoped MCP credentialsPreview
+   */
+  public preview<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      McpCredentialsPreviewResponses,
+      McpCredentialsPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/mcp/{name}/credentials/preview",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Explicit scoped MCP credentialsCommit
+   */
+  public commit<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      directory?: string
+      workspace?: string
+      previewID: string
+      requestID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "previewID" },
+            { in: "body", key: "requestID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      McpCredentialsCommitResponses,
+      McpCredentialsCommitErrors,
+      ThrowOnError
+    >({
+      url: "/mcp/{name}/credentials/commit",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Explicit scoped MCP credentialsStatus
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      requestID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "path", key: "requestID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      McpCredentialsStatusResponses,
+      McpCredentialsStatusErrors,
+      ThrowOnError
+    >({
+      url: "/mcp/{name}/credentials/{requestID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Explicit scoped MCP credentialsReconcile
+   */
+  public reconcile<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      requestID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "path", key: "requestID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      McpCredentialsReconcileResponses,
+      McpCredentialsReconcileErrors,
+      ThrowOnError
+    >({
+      url: "/mcp/{name}/credentials/{requestID}/reconcile",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Binding extends HeyApiClient {
+  /**
+   * Explicit scoped MCP bindingPreview
+   */
+  public preview<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<McpBindingPreviewResponses, McpBindingPreviewErrors, ThrowOnError>({
+      url: "/mcp/{name}/binding/preview",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Explicit scoped MCP bindingRepair
+   */
+  public repair<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      directory?: string
+      workspace?: string
+      previewID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "previewID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<McpBindingRepairResponses, McpBindingRepairErrors, ThrowOnError>({
+      url: "/mcp/{name}/binding/repair",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Auth2 extends HeyApiClient {
   /**
    * Remove MCP OAuth
@@ -7585,7 +10221,7 @@ export class Auth2 extends HeyApiClient {
   /**
    * Complete MCP OAuth
    *
-   * Complete OAuth authentication for a Model Context Protocol (MCP) server using the authorization code.
+   * Complete OAuth using the authorization code and the exact oauthState returned by auth.start and the authorization response iss when supplied or required by its metadata. Missing state is rejected with 400; stale or mismatched state is rejected with 409 without consuming the current flow. Restart authentication when upgrading a code-only client.
    */
   public callback<ThrowOnError extends boolean = false>(
     parameters: {
@@ -7593,6 +10229,8 @@ export class Auth2 extends HeyApiClient {
       directory?: string
       workspace?: string
       code: string
+      oauthState: string
+      iss?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -7605,6 +10243,8 @@ export class Auth2 extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "code" },
+            { in: "body", key: "oauthState" },
+            { in: "body", key: "iss" },
           ],
         },
       ],
@@ -7657,6 +10297,358 @@ export class Auth2 extends HeyApiClient {
 }
 
 export class Mcp extends HeyApiClient {
+  /**
+   * List current MCP App descriptors. Does not read remote UI resources.
+   */
+  public apps<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<McpAppsResponses, McpAppsErrors, ThrowOnError>({
+      url: "/mcp/apps",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read one explicitly approved UI resource from its current server/tool snapshot. Does not authorize tool execution.
+   */
+  public appOpen<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      server: string
+      tool: string
+      generation: string
+      resourceUri: string
+      consent: true
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "server" },
+            { in: "body", key: "tool" },
+            { in: "body", key: "generation" },
+            { in: "body", key: "resourceUri" },
+            { in: "body", key: "consent" },
+            { in: "body", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<McpAppOpenResponses, McpAppOpenErrors, ThrowOnError>({
+      url: "/mcp/apps/open",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Check that an open MCP App still belongs to the current connection, source and tool snapshot.
+   */
+  public appCheck<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      viewID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "viewID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<McpAppCheckResponses, McpAppCheckErrors, ThrowOnError>({
+      url: "/mcp/apps/check",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Invalidate an MCP App view. Does not perform any remote operation.
+   */
+  public appClose<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      viewID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "viewID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<McpAppCloseResponses, McpAppCloseErrors, ThrowOnError>({
+      url: "/mcp/apps/close",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Durably admit one exact tool invocation from the current Session-bound MCP App. Execution uses the original Session runner and permission flow.
+   */
+  public appInvoke<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+      viewID: string
+      rpcID: string | number
+      name: string
+      arguments: {
+        [key: string]: unknown
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "viewID" },
+            { in: "body", key: "rpcID" },
+            { in: "body", key: "name" },
+            { in: "body", key: "arguments" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<McpAppInvokeResponses, McpAppInvokeErrors, ThrowOnError>({
+      url: "/mcp/apps/invoke",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read only the exact App-visible tools from the current view's original server connection and Session.
+   */
+  public appViewTools<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      viewID: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "viewID" },
+            { in: "body", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<McpAppViewToolsResponses, McpAppViewToolsErrors, ThrowOnError>({
+      url: "/mcp/apps/tools",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read an admitted MCP App invocation without executing or retrying it.
+   */
+  public appInvocationStatus<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+      invocationID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "invocationID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      McpAppInvocationStatusResponses,
+      McpAppInvocationStatusErrors,
+      ThrowOnError
+    >({
+      url: "/mcp/apps/invocations/status",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read the exact original tool result only for its current bound MCP App view.
+   */
+  public appInvocationResult<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+      invocationID: string
+      viewID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "invocationID" },
+            { in: "body", key: "viewID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      McpAppInvocationResultResponses,
+      McpAppInvocationResultErrors,
+      ThrowOnError
+    >({
+      url: "/mcp/apps/invocations/result",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read Session MCP App invocation status, excluding raw private App result metadata.
+   */
+  public appInvocationList<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+      after?: number
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "after" },
+            { in: "body", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      McpAppInvocationListResponses,
+      McpAppInvocationListErrors,
+      ThrowOnError
+    >({
+      url: "/mcp/apps/invocations/list",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
   /**
    * Get MCP status
    *
@@ -7723,6 +10715,38 @@ export class Mcp extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Remove one writable global MCP configuration
+   *
+   * Disconnect the original scoped server and delete only its declarative global JSONC key. Other source layers and shared credentials are retained; surviving or changed sources refuse success.
+   */
+  public removeConfig<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<McpRemoveConfigResponses, McpRemoveConfigErrors, ThrowOnError>({
+      url: "/mcp/{name}/config",
+      ...options,
+      ...params,
     })
   }
 
@@ -7859,6 +10883,16 @@ export class Mcp extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _credentials?: Credentials
+  get credentials(): Credentials {
+    return (this._credentials ??= new Credentials({ client: this.client }))
+  }
+
+  private _binding?: Binding
+  get binding(): Binding {
+    return (this._binding ??= new Binding({ client: this.client }))
   }
 
   private _auth?: Auth2
@@ -12008,6 +15042,7 @@ export class Session3 extends HeyApiClient {
         },
       ],
     )
+    params.body ??= {}
     return (options?.client ?? this.client).post<V2SessionCreateResponses, V2SessionCreateErrors, ThrowOnError>({
       url: "/api/session",
       ...options,
@@ -12587,6 +15622,45 @@ export class Question3 extends HeyApiClient {
 
 export class Attention extends HeyApiClient {
   /**
+   * Control an original ordinary Task through authenticated human authority
+   */
+  public taskControl<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspace?: string
+      directory?: string
+      taskHumanControlInput: TaskHumanControlInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "workspace" },
+            { in: "query", key: "directory" },
+            { key: "taskHumanControlInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2AttentionTaskControlResponses,
+      V2AttentionTaskControlErrors,
+      ThrowOnError
+    >({
+      url: "/api/attention/task/control",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Read local attention capability
    */
   public capability<ThrowOnError extends boolean = false>(
@@ -12626,7 +15700,7 @@ export class Attention extends HeyApiClient {
       workspace?: string
       directory?: string
       project?: string
-      kind?: "activity_failed" | "execution_recovery"
+      kind?: "activity_failed" | "execution_recovery" | "no_progress" | "task" | "goal"
       view?: "all" | "unseen"
       cursor?: string
       limit?: string
@@ -12809,9 +15883,29 @@ export class DeepAgentCodeClient extends HeyApiClient {
     return (this._experimental ??= new Experimental({ client: this.client }))
   }
 
+  private _workRecovery?: WorkRecovery
+  get workRecovery(): WorkRecovery {
+    return (this._workRecovery ??= new WorkRecovery({ client: this.client }))
+  }
+
   private _global?: Global
   get global(): Global {
     return (this._global ??= new Global({ client: this.client }))
+  }
+
+  private _browser?: Browser
+  get browser(): Browser {
+    return (this._browser ??= new Browser({ client: this.client }))
+  }
+
+  private _eventValidation?: EventValidation
+  get eventValidation(): EventValidation {
+    return (this._eventValidation ??= new EventValidation({ client: this.client }))
+  }
+
+  private _eventInvestigation?: EventInvestigation
+  get eventInvestigation(): EventInvestigation {
+    return (this._eventInvestigation ??= new EventInvestigation({ client: this.client }))
   }
 
   private _gateway?: Gateway
@@ -12892,6 +15986,11 @@ export class DeepAgentCodeClient extends HeyApiClient {
   private _im?: Im
   get im(): Im {
     return (this._im ??= new Im({ client: this.client }))
+  }
+
+  private _eventWork?: EventWork
+  get eventWork(): EventWork {
+    return (this._eventWork ??= new EventWork({ client: this.client }))
   }
 
   private _instance?: Instance

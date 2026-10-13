@@ -9,13 +9,18 @@ import type { LocalMessage } from "@/hooks/use-im-websocket"
 import { dict } from "@/i18n/en"
 
 const client = vi.hoisted(() => ({
+  scope: vi.fn(),
   listMessages: vi.fn(),
   listThread: vi.fn(),
   listAgents: vi.fn(),
   markRead: vi.fn(),
   createMessage: vi.fn(),
 }))
-vi.mock("@/utils/im-client", () => ({ useIMClient: () => client }))
+vi.mock("@/utils/im-client", async (original) => ({
+  ...(await original<typeof import("@/utils/im-client")>()),
+  useIMClient: () => client,
+  createIMClient: () => client,
+}))
 vi.mock("@/hooks/use-im-websocket", () => ({
   useIMWebSocket: () => ({
     connected: () => false,
@@ -54,8 +59,15 @@ const page = (messages: LocalMessage[], nextCursor: string | null = null) => ({
   hasMore: !!nextCursor,
 })
 
-beforeEach(() => {
+beforeEach(async () => {
   Object.values(client).forEach((fn) => fn.mockReset())
+  const { createIMClient } = await vi.importActual<typeof import("@/utils/im-client")>("@/utils/im-client")
+  const actual = createIMClient(() => ({
+    url: "http://fixture.test",
+    directory: "/private/fixture",
+    password: "fixture",
+  }))
+  client.scope.mockImplementation(actual.scope)
   client.listMessages.mockResolvedValue(page([]))
   client.listThread.mockResolvedValue(page([]))
   client.listAgents.mockResolvedValue([])

@@ -4,11 +4,14 @@ import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { useSync } from "../context/sync"
 import { For, Match, Switch, Show, createMemo } from "solid-js"
+import { useTuiI18n } from "../context/i18n"
+import { mcpConnectionMessage } from "../util/mcp-status"
 
 export type DialogStatusProps = {}
 
 export function DialogStatus() {
   const sync = useSync()
+  const i18n = useTuiI18n()
   const { theme } = useTheme()
   const dialog = useDialog()
 
@@ -62,6 +65,7 @@ export function DialogStatus() {
                     fg: (
                       {
                         connected: theme.success,
+                        disconnected: theme.warning,
                         failed: theme.error,
                         disabled: theme.textMuted,
                         needs_auth: theme.warning,
@@ -78,7 +82,11 @@ export function DialogStatus() {
                     <Switch fallback={item.status}>
                       <Match when={item.status === "connected"}>Connected</Match>
                       <Match when={item.status === "failed" && item}>{(val) => val().error}</Match>
-                      <Match when={item.status === "disabled"}>Disabled in configuration</Match>
+                      <Match when={item.status === "disabled"}>{i18n.t("tui.mcp.status.disabled")}</Match>
+                      <Match when={item.status === "disconnected"}>
+                        {i18n.t("tui.mcp.status.disconnected")}
+                        <Show when={mcpConnectionMessage(item)}>{(key) => ` · ${i18n.t(key())}`}</Show>
+                      </Match>
                       <Match when={(item.status as string) === "needs_auth"}>
                         Needs authentication (run: deepagent-code mcp auth {key})
                       </Match>

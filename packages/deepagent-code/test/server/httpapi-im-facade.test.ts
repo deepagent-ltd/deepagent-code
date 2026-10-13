@@ -19,18 +19,18 @@ import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import Http from "node:http"
 import { Workspace } from "../../src/control-plane/workspace"
 import { InstanceBootstrap } from "../../src/project/bootstrap"
-import { InstanceBootstrap as InstanceBootstrapService } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
 import { Project } from "../../src/project/project"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { Session } from "@/session/session"
 import { Database } from "@deepagent-code/core/database/database"
-import * as Log from "@deepagent-code/core/util/log"
+import { init } from "@deepagent-code/core/util/log"
+import { sql } from "drizzle-orm"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
-void Log.init({ print: false })
+void init({ print: false })
 
 // ── 假门面（new-api /api/im/*）─────────────────────────────────────────────────
 
@@ -53,6 +53,7 @@ const payload = (name = "alice", uuid = "uuid-alice") => ({
 type FacadeMode = "active" | "unclaimed" | "name_taken"
 let facadeMode: FacadeMode = "active"
 let lastClaimBody: unknown
+let platformMutations = 0
 
 const facadeBehavior = (req: { method: string; pathname: string; query: URLSearchParams; body?: unknown }): FacadeReply => {
   if (req.pathname === "/api/im/exchange") {
@@ -70,10 +71,11 @@ const facadeBehavior = (req: { method: string; pathname: string; query: URLSearc
     return fail("im_not_found", "no such name in org", 404)
   }
   if (req.pathname === "/api/im/groups") {
+    platformMutations++
     const body = req.body as { name: string; member_names: string[] }
     return ok({ group_id: "kg1", name: body.name, member_uuids: body.member_names.map((n) => `uuid-${n}`) })
   }
-  if (req.pathname === "/api/im/groups/invite") return ok({})
+  if (req.pathname === "/api/im/groups/invite") { platformMutations++; return ok({}) }
   return fail("http_error", `unexpected ${req.pathname}`, 500)
 }
 
@@ -123,7 +125,7 @@ const workspaceLayer = Workspace.defaultLayer.pipe(
 )
 const instanceStoreLayer = InstanceStore.defaultLayer.pipe(
   Layer.provide(
-    Layer.succeed(InstanceBootstrapService.Service, InstanceBootstrapService.Service.of({ run: Effect.void })),
+    Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void })),
   ),
 )
 const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
@@ -227,7 +229,7 @@ describe("IM B2 facade HttpApi", () => {
       facadeMode = "unclaimed"
     })
 
-    it.live("boot 409 lands claim_required; claim normalizes the name and activates", () =>
+    it.live("boot 409 lands claim_required; claim normalizes the name while the unreachable reader remains unavailable", () =>
       Effect.gen(function* () {
         const directory = yield* tmpdirScoped({ git: true })
         const q = `directory=${encodeURIComponent(directory)}`
@@ -252,10 +254,7 @@ describe("IM B2 facade HttpApi", () => {
         expect(identity).toEqual({ uuid: "uuid-bob", name: "bob", orgID: 7, orgAllGroupID: "org7" })
         expect(lastClaimBody).toEqual({ name: "bob" })
 
-        const active = yield* requestJson<StatusBody>(`/api/v1/im/status?${q}`)
-        expect(active.facade).toBe("active")
-        expect(active.identity?.name).toBe("bob")
-        expect(active.keyOrigin).toBe("env")
+        expect(yield* requestRaw(`/api/v1/im/status?${q}`)).toMatchObject({ status: 503, body: { name: "IM_READER_UNAVAILABLE", data: { code: "reader_unavailable", operation: "current" } } })
       }),
     )
 
@@ -273,16 +272,15 @@ describe("IM B2 facade HttpApi", () => {
   describe("active identity", () => {
     beforeEach(() => {
       facadeMode = "active"
+      platformMutations = 0
     })
 
-    it.live("boot exchange activates; resolve hits the directory with a normalized name", () =>
+    it.live("boot exchange permits directory resolve with a normalized name while the unreachable reader fails current status", () =>
       Effect.gen(function* () {
         const directory = yield* tmpdirScoped({ git: true })
         const q = `directory=${encodeURIComponent(directory)}`
 
-        const status = yield* requestJson<StatusBody>(`/api/v1/im/status?${q}`)
-        expect(status.facade).toBe("active")
-        expect(status.identity?.name).toBe("alice")
+        expect(yield* requestRaw(`/api/v1/im/status?${q}`)).toMatchObject({ status: 503, body: { name: "IM_READER_UNAVAILABLE", data: { code: "reader_unavailable", operation: "current" } } })
 
         const resolved = yield* requestJson<{ uuid: string; name: string }>(
           `/api/v1/im/facade/resolve?${q}&name=${encodeURIComponent(" Ｂｏｂ ")}`,
@@ -295,33 +293,22 @@ describe("IM B2 facade HttpApi", () => {
       }),
     )
 
-    it.live("openDirect binds k:1:<uuid>; facade groups mirror locally with k:2: and accept invites", () =>
+    it.live("an unreachable protected reader rejects direct, group and invite before platform mutation or local projection", () =>
       Effect.gen(function* () {
-        const directory = yield* tmpdirScoped({ git: true })
+        const directory = yield* tmpdirScoped({ git: false })
         const q = `directory=${encodeURIComponent(directory)}`
-
-        const direct = yield* requestJson<{ id: string; type: string; kernelConvID: string | null }>(
-          `/api/v1/im/facade/direct?${q}`,
-          post({ name: "bob" }),
-        )
-        expect(direct.type).toBe("direct")
-        expect(direct.kernelConvID).toBe("k:1:uuid-bob")
-
-        const created = yield* requestJson<{ id: string; name: string; kernelConvID: string | null }>(
-          `/api/v1/im/facade/groups?${q}`,
-          post({ name: "设计群", memberNames: ["bob"] }),
-        )
-        expect(created.name).toBe("设计群")
-        expect(created.kernelConvID).toBe("k:2:kg1")
-
-        const invited = yield* requestRaw(`/api/v1/im/facade/groups/${created.id}/invite?${q}`, post({ name: "bob" }))
-        expect(invited.status).toBe(200)
-        expect(invited.body).toEqual({ ok: true })
-
-        // 群列表把绑定透出（GUI 徽标的数据源）；本地镜像对 server 操作者可见。
-        const groups = yield* requestJson<Array<{ id: string; kernelConvID: string | null }>>(`/api/v1/im/groups?${q}`)
-        expect(groups.find((g) => g.id === created.id)?.kernelConvID).toBe("k:2:kg1")
-        expect(groups.find((g) => g.id === direct.id)?.kernelConvID).toBe("k:1:uuid-bob")
+        for (const [path, body] of [
+          ["/api/v1/im/facade/direct", { name: "bob" }],
+          ["/api/v1/im/facade/groups", { name: "设计群", memberNames: ["bob"] }],
+          ["/api/v1/im/facade/groups/no-protected-group/invite", { name: "bob" }],
+        ] as const) {
+          expect(yield* requestRaw(`${path}?${q}`, post(body))).toMatchObject({ status: 502, body: { name: "IM_FACADE_UNAVAILABLE", data: { code: "im_unavailable" } } })
+        }
+        expect(platformMutations).toBe(0)
+        const db = (yield* Database.Service).db
+        expect((yield* db.get<{ count: number }>(sql`SELECT count(*) AS count FROM im_groups WHERE kernel_conv_id IS NOT NULL`))?.count).toBe(0)
+        expect((yield* db.get<{ count: number }>(sql`SELECT count(*) AS count FROM im_kernel_reader_message`))?.count).toBe(0)
+        expect((yield* db.get<{ count: number }>(sql`SELECT count(*) AS count FROM im_kernel_reader_read_intent`))?.count).toBe(0)
       }),
     )
 

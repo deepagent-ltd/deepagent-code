@@ -9,6 +9,7 @@ import "@/server/event"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { described } from "./metadata"
+import { ImportJobSchema } from "@deepagent-code/core/import-job/schema"
 
 const GlobalHealth = Schema.Struct({
   healthy: Schema.Literal(true),
@@ -32,6 +33,9 @@ const GlobalCapabilities = Schema.Struct({
     im: Schema.Boolean,
     sessions: Schema.Boolean,
     pty: Schema.Boolean,
+    importModes: Schema.optional(Schema.Boolean),
+    importJobs: Schema.optional(Schema.Boolean),
+    importFileJobs: Schema.optional(Schema.Boolean),
     workspaces: Schema.Boolean,
     // V3.9 §C/§D — independently-gated experimental subsystems the client gates UI on.
     expertPanel: Schema.Boolean,
@@ -100,8 +104,25 @@ export const ImportRequestSchema = Schema.Struct({
   scopes: Schema.optional(Schema.Array(Schema.Literals(["session", "memory", "skill"]))),
   dryRun: Schema.optional(Schema.Boolean),
   copyLiveDb: Schema.optional(Schema.Boolean),
+  mode: Schema.optional(Schema.Literals(["copy_to_new_db", "merge_into_live"])),
+  confirmLiveMerge: Schema.optional(Schema.Boolean),
   cwdFilter: Schema.optional(Schema.String),
 }).annotate({ identifier: "ImportRequest" })
+
+export class ImportRequestError extends Schema.ErrorClass<ImportRequestError>("ImportRequestError")(
+  { error: Schema.String, detail: Schema.optional(Schema.String), body: Schema.optional(Schema.String) },
+  { httpApiStatus: 400 },
+) {}
+
+export class ImportBusyError extends Schema.ErrorClass<ImportBusyError>("ImportBusyError")(
+  { error: Schema.String },
+  { httpApiStatus: 409 },
+) {}
+
+export class ImportNotFoundError extends Schema.ErrorClass<ImportNotFoundError>("ImportNotFoundError")(
+  { error: Schema.String },
+  { httpApiStatus: 404 },
+) {}
 
 export const ProjectListItemSchema = Schema.Struct({
   id: Schema.String,
@@ -204,14 +225,55 @@ export const GlobalApi = HttpApi.make("global").add(
         }),
       ),
       HttpApiEndpoint.post("import", GlobalPaths.import, {
-        success: Schema.String,
-        error: HttpApiError.BadRequest,
+        payload: ImportRequestSchema,
+        success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+        error: [ImportRequestError, ImportBusyError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "global.import",
           summary: "Import history from Codex / Claude Code",
           description:
-            "Hot-import chat history, memory, and skills from a Codex or Claude Code installation. The body is an ImportRequest JSON object; progress is streamed back as server-sent events (text/event-stream), one JSON ImportProgress object per event, ending with a `done` event carrying the ImportReport.",
+            "Import Codex or Claude history into a new isolated copy by default. Explicit live merge requires confirmation and currently supports sessions only. A verified consistent backup precedes writes. SSE starts with a prepared target receipt and ends with done (including the same target) or error. Disconnecting stops observation, not the import.",
+        }),
+      ),
+      HttpApiEndpoint.post("importCreate", "/global/import/jobs", {
+        payload: ImportJobSchema.Request,
+        success: ImportJobSchema.Info,
+        error: [ImportRequestError, ImportBusyError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.importCreate",
+          summary: "Create or locate an exact durable import request",
+        }),
+      ),
+      HttpApiEndpoint.get("importList", "/global/import/jobs", {
+        query: { cursor: Schema.optional(Schema.String), limit: Schema.optional(Schema.NumberFromString) },
+        success: ImportJobSchema.Page,
+        error: ImportRequestError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.importList",
+          summary: "Observe durable import jobs without executing work",
+        }),
+      ),
+      HttpApiEndpoint.get("importGet", "/global/import/jobs/:jobID", {
+        params: { jobID: Schema.String },
+        success: ImportJobSchema.Info,
+        error: ImportNotFoundError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.importGet",
+          summary: "Observe an import and its destination receipts",
+        }),
+      ),
+      HttpApiEndpoint.post("importCancel", "/global/import/jobs/:jobID/cancel", {
+        params: { jobID: Schema.String },
+        success: ImportJobSchema.Info,
+        error: [ImportNotFoundError, ImportRequestError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.importCancel",
+          summary: "Request a safe import stop; acceptance is not confirmation",
         }),
       ),
       HttpApiEndpoint.get("projects", GlobalPaths.projects, {

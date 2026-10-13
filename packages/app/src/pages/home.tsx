@@ -3,6 +3,7 @@ import { Button } from "@deepagent-code/ui/button"
 import { Logo } from "@deepagent-code/ui/logo"
 import { useNavigate } from "@solidjs/router"
 import { base64Encode } from "@deepagent-code/core/util/encode"
+import { ID } from "@deepagent-code/core/project/id"
 import { Icon } from "@deepagent-code/ui/icon"
 import { usePlatform } from "@/context/platform"
 import { DateTime } from "luxon"
@@ -28,7 +29,7 @@ export default function Home() {
   const homedir = createMemo(() => sync.data.path.home)
   const recent = createMemo(() => {
     return sync.data.project
-      .slice()
+      .filter((project) => project.id !== ID.global)
       .sort((a, b) => (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created))
       .slice(0, 5)
   })
@@ -129,7 +130,7 @@ export default function Home() {
           {server.name}
         </Button>
         <Switch>
-          <Match when={sync.data.project.length > 0}>
+          <Match when={recent().length > 0}>
             <div class="mt-20 w-full flex flex-col gap-4">
               <div class="flex gap-2 items-center justify-between pl-3">
                 <div class="text-14-medium text-text-strong">{language.t("home.recentProjects")}</div>

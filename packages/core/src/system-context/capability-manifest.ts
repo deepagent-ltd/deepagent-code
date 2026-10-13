@@ -212,8 +212,8 @@ export interface CapabilityInventory {
  * Product tool inventory: exactly the shipped Location-scoped built-in tool set
  * (`BuiltInTools.builtinToolNames` — the potential set `locationLayer` registers).
  * The two graph tools (`code_intel`, `context_query`) are additionally gated at
- * runtime by the `context_query_tools_v2` flag and `ContextToolRuntime` availability,
- * so a host without the graph runtime offers the remaining 14; they stay in the
+ * runtime by the `context_query_tools_v2` flag and `ContextToolRuntime` availability.
+ * Browser tools additionally require the Location's BrowserHost; these tools stay in the
  * inventory because the inventory names what the product ships, not what one host
  * enables. A build gate (`assertInventoryCoversBuiltinTools` in the test suite and
  * `script/assert-capability-inventory.ts`) pins this set to the registry exactly,
@@ -230,6 +230,8 @@ export const DeepAgentCodeToolInventory: CapabilityInventory = {
     "apply_patch",
     "apply_patch_chunk",
     "bash",
+    "managed_command",
+    "browser",
     "websearch",
     "webfetch",
     "question",

@@ -2,6 +2,7 @@ import { CLIENT_ERROR_CODES, FACADE_ERROR_CODES } from "@deepagent-code/core/im/
 import type { TuiI18nKey } from "../i18n/en"
 import type { TuiI18n } from "../context/i18n"
 import { IMRequestError } from "./im-client"
+import { MediaPublicationError } from "./im-media"
 
 export const IM_ERROR_KEYS = {
   im_unavailable: "tui.im.facade.error.im_unavailable",
@@ -29,7 +30,19 @@ export const IM_ERROR_KEYS = {
 >
 
 export function imErrorText(error: unknown, i18n: TuiI18n) {
+  if (error instanceof MediaPublicationError) return i18n.t("tui.im.media.publicationUnknown")
   const code = error instanceof IMRequestError ? error.code : "unknown"
+  if (code.startsWith("reader_") || code === "IM_READER_UNAVAILABLE") return i18n.t("tui.im.reader.unavailable")
   if (code === "key_file") return i18n.t("tui.im.keyFileError")
+  if (code === "im_model_unavailable") return i18n.t("tui.im.model.unavailable")
+  if (code === "im_activation_missing") return i18n.t("tui.im.activation.missing")
+  if (code === "im_activation_expired") return i18n.t("tui.im.activation.expired")
+  if (code === "im_activation_unavailable") return i18n.t("tui.im.activation.unavailable")
+  if (code === "dac_local_only") return i18n.t("tui.im.dac.localOnly")
+  if (code === "dac_scope_changed" || code === "binding_unavailable" || code === "reference_unavailable")
+    return i18n.t("tui.im.dac.unavailable")
+  if (code === "command_conflict") return i18n.t("tui.im.dac.unknown")
+  if (code === "task_session_unavailable" || code === "task_scope_changed")
+    return i18n.t("tui.im.taskSession.unavailable")
   return i18n.t((IM_ERROR_KEYS as Record<string, TuiI18nKey>)[code] ?? "tui.im.facade.error.unknown")
 }

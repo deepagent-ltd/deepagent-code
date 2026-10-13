@@ -117,6 +117,9 @@ export interface Interface {
    * fires. Subscription lifetime is tied to the per-instance state scope.
    */
   readonly init: () => Effect.Effect<void>
+  readonly observeDirectory: (
+    directory: string,
+  ) => Effect.Effect<{ directory: string; worktree: string; project?: Info }>
   readonly fromDirectory: (directory: string) => Effect.Effect<{ project: Info; sandbox: string }>
   readonly discover: (input: Info) => Effect.Effect<void>
   readonly list: () => Effect.Effect<Info[]>
@@ -262,6 +265,17 @@ export const layer = Layer.effect(
         )
     })
 
+    const observeDirectory = Effect.fn("Project.observeDirectory")(function* (input: string) {
+      const directory = yield* fs.realPath(input).pipe(Effect.orDie)
+      const actual = yield* projectV2.resolve(AbsolutePath.make(directory))
+      const row = yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, actual.id)).get().pipe(Effect.orDie)
+      return {
+        directory,
+        worktree: actual.vcs ? actual.directory : directory,
+        project: row ? fromRow(row) : undefined,
+      }
+    })
+
     const fromDirectory = Effect.fn("Project.fromDirectory")(function* (directory: string) {
       log.info("fromDirectory", { directory })
 
@@ -291,7 +305,9 @@ export const layer = Layer.effect(
       // fails. Adopt the freshly-opened, existing directory instead so opening a
       // live clone actually switches to it.
       const storedWorktreeAlive =
-        projectID === ProjectV2.ID.global ? true : yield* fs.exists(existing.worktree).pipe(Effect.orElseSucceed(() => true))
+        projectID === ProjectV2.ID.global
+          ? true
+          : yield* fs.exists(existing.worktree).pipe(Effect.orElseSucceed(() => true))
       const resolvedWorktree =
         projectID === ProjectV2.ID.global ? worktree : storedWorktreeAlive ? existing.worktree : data.directory
 
@@ -512,6 +528,7 @@ export const layer = Layer.effect(
 
     return Service.of({
       init,
+      observeDirectory,
       fromDirectory,
       discover,
       list,

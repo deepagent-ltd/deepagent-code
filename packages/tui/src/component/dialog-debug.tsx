@@ -7,8 +7,6 @@ import { useTuiI18n } from "../context/i18n"
 import { useToast } from "../ui/toast"
 import { errorMessage } from "../util/error"
 
-type DebugSession = { id: string; adapterId: string; status: string; threadId?: string; stoppedReason?: string }
-
 // W4-4b — the TUI debug (DAP) face: session registry with per-session stack inspection. Live
 // stepping/variables ride the same SDK surface; the SSE event stream subscription stays GUI-side
 // (single-subscription semantics), the TUI refreshes on demand.
@@ -20,7 +18,7 @@ export function DialogDebug() {
 
   const [sessions, { refetch }] = createResource(async () => {
     const result = await sdk.client.debug.sessions().catch(() => undefined)
-    return ((result?.data ?? []) as DebugSession[]) ?? []
+    return result?.data?.sessions ?? []
   })
 
   const showStack = async (sessionId: string) => {

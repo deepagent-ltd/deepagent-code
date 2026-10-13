@@ -3,6 +3,7 @@ import { Cause, Effect, Exit, Layer } from "effect"
 import type { MCP as MCPNS } from "../../src/mcp/index"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 import { V2McpBridge } from "@/session/v2-mcp-bridge"
 import { InstanceRegistry } from "@/effect/instance-registry"
 import { InstanceRef } from "@/effect/instance-ref"
@@ -84,6 +85,8 @@ class MockStdioTransport {
   async close() {
     transportCloseCount++
   }
+
+  async send() {}
 }
 
 class MockStreamableHTTP {
@@ -97,6 +100,8 @@ class MockStreamableHTTP {
     transportCloseCount++
   }
   async finishAuth() {}
+
+  async send() {}
 }
 
 class MockSSE {
@@ -109,88 +114,96 @@ class MockSSE {
   async close() {
     transportCloseCount++
   }
+
+  async send() {}
 }
 
-void mock.module("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+void mock.module("@modelcontextprotocol/client/stdio", () => ({
   StdioClientTransport: MockStdioTransport,
 }))
 
-void mock.module("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: MockStreamableHTTP,
-}))
+const actualSdk = { ...(await import("@modelcontextprotocol/client")) }
 
-void mock.module("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: MockSSE,
-}))
+void mock.module("@modelcontextprotocol/client", () =>
+  Object.assign(
+    {},
+    actualSdk,
+    (() => ({
+      StreamableHTTPClientTransport: MockStreamableHTTP,
+    }))(),
+    (() => ({
+      SSEClientTransport: MockSSE,
+    }))(),
+    (() => ({
+      UnauthorizedError: class extends Error {
+        constructor() {
+          super("Unauthorized")
+        }
+      },
+    }))(),
+    (() => ({
+      Client: class MockClient {
+        _state!: MockClientState
+        transport: any
 
-void mock.module("@modelcontextprotocol/sdk/client/auth.js", () => ({
-  UnauthorizedError: class extends Error {
-    constructor() {
-      super("Unauthorized")
-    }
-  },
-}))
+        constructor(_opts: any) {
+          clientCreateCount++
+        }
+
+        async connect(transport: { start: () => Promise<void> }) {
+          this.transport = transport
+          await transport.start()
+          // After successful connect, bind to the last-created client name
+          this._state = getOrCreateClientState(lastCreatedClientName)
+        }
+
+        setNotificationHandler(schema: unknown, handler: (...args: any[]) => any) {
+          this._state?.notificationHandlers.set(schema, handler)
+        }
+
+        getServerCapabilities() {
+          return this._state?.capabilities
+        }
+
+        async listTools() {
+          if (this._state) this._state.listToolsCalls++
+          if (this._state?.listToolsShouldFail) {
+            throw new Error(this._state.listToolsError)
+          }
+          return { tools: this._state?.tools ?? [] }
+        }
+
+        async request(request: { method: string }, schema: { parse: (value: unknown) => unknown }) {
+          if (this._state) this._state.requestCalls++
+          if (request.method === "tools/list") return schema.parse({ tools: this._state?.tools ?? [] })
+          throw new Error(`unsupported request: ${request.method}`)
+        }
+
+        async listPrompts() {
+          if (this._state) this._state.listPromptsCalls++
+          if (this._state?.listPromptsShouldFail) {
+            throw new Error("listPrompts failed")
+          }
+          return { prompts: this._state?.prompts ?? [] }
+        }
+
+        async listResources() {
+          if (this._state) this._state.listResourcesCalls++
+          if (this._state?.listResourcesShouldFail) {
+            throw new Error("listResources failed")
+          }
+          return { resources: this._state?.resources ?? [] }
+        }
+
+        async close() {
+          if (this._state) this._state.closed = true
+        }
+      },
+    }))(),
+  ),
+)
 
 // Mock Client that delegates to per-name MockClientState
-void mock.module("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: class MockClient {
-    _state!: MockClientState
-    transport: any
-
-    constructor(_opts: any) {
-      clientCreateCount++
-    }
-
-    async connect(transport: { start: () => Promise<void> }) {
-      this.transport = transport
-      await transport.start()
-      // After successful connect, bind to the last-created client name
-      this._state = getOrCreateClientState(lastCreatedClientName)
-    }
-
-    setNotificationHandler(schema: unknown, handler: (...args: any[]) => any) {
-      this._state?.notificationHandlers.set(schema, handler)
-    }
-
-    getServerCapabilities() {
-      return this._state?.capabilities
-    }
-
-    async listTools() {
-      if (this._state) this._state.listToolsCalls++
-      if (this._state?.listToolsShouldFail) {
-        throw new Error(this._state.listToolsError)
-      }
-      return { tools: this._state?.tools ?? [] }
-    }
-
-    async request(request: { method: string }, schema: { parse: (value: unknown) => unknown }) {
-      if (this._state) this._state.requestCalls++
-      if (request.method === "tools/list") return schema.parse({ tools: this._state?.tools ?? [] })
-      throw new Error(`unsupported request: ${request.method}`)
-    }
-
-    async listPrompts() {
-      if (this._state) this._state.listPromptsCalls++
-      if (this._state?.listPromptsShouldFail) {
-        throw new Error("listPrompts failed")
-      }
-      return { prompts: this._state?.prompts ?? [] }
-    }
-
-    async listResources() {
-      if (this._state) this._state.listResourcesCalls++
-      if (this._state?.listResourcesShouldFail) {
-        throw new Error("listResources failed")
-      }
-      return { resources: this._state?.resources ?? [] }
-    }
-
-    async close() {
-      if (this._state) this._state.closed = true
-    }
-  },
-}))
 
 beforeEach(() => {
   clientStates.clear()
@@ -339,25 +352,37 @@ withV2Tools.instance(
         { name: "echo", description: "echo", inputSchema: { type: "object", properties: {} } },
       ]
       yield* InstanceRegistry.initializeInstance(context)
-      expect(applications.entries().has("mcp__live-server__echo")).toBe(false)
+      expect(
+        applications.entries({ directory: AbsolutePath.make(context.directory) }).has("mcp__live-server__echo"),
+      ).toBe(false)
       yield* mcp.add("live-server", { type: "local", command: ["echo", "test"] })
-      expect(applications.entries().has("mcp__live-server__echo")).toBe(true)
+      expect(
+        applications.entries({ directory: AbsolutePath.make(context.directory) }).has("mcp__live-server__echo"),
+      ).toBe(true)
       yield* mcp.disconnect("live-server")
-      expect(applications.entries().has("mcp__live-server__echo")).toBe(false)
+      expect(
+        applications.entries({ directory: AbsolutePath.make(context.directory) }).has("mcp__live-server__echo"),
+      ).toBe(false)
       yield* mcp.connect("live-server")
-      expect(applications.entries().has("mcp__live-server__echo")).toBe(true)
+      expect(
+        applications.entries({ directory: AbsolutePath.make(context.directory) }).has("mcp__live-server__echo"),
+      ).toBe(true)
       connectShouldFail = true
       yield* mcp.connect("live-server")
-      expect(applications.entries().has("mcp__live-server__echo")).toBe(false)
+      expect(
+        applications.entries({ directory: AbsolutePath.make(context.directory) }).has("mcp__live-server__echo"),
+      ).toBe(false)
       connectShouldFail = false
       yield* mcp.connect("live-server")
-      expect(applications.entries().has("mcp__live-server__echo")).toBe(true)
+      expect(
+        applications.entries({ directory: AbsolutePath.make(context.directory) }).has("mcp__live-server__echo"),
+      ).toBe(true)
     }),
   { config: { mcp: {} } },
 )
 
 withV2Tools.instance(
-  "external config edits add and remove MCP tools without reloading the instance",
+  "external config edits require an explicit connection and remove old MCP tools without reloading",
   () =>
     Effect.gen(function* () {
       const context = yield* InstanceRef
@@ -376,11 +401,22 @@ withV2Tools.instance(
       const waitFor = (present: boolean) =>
         Effect.promise(async () => {
           for (let i = 0; i < 100; i++) {
-            if (applications.entries().has("mcp__config-server__echo") === present) return
+            if (
+              applications
+                .entries({ directory: AbsolutePath.make(context.directory) })
+                .has("mcp__config-server__echo") === present
+            )
+              return
             await Bun.sleep(20)
           }
           throw new Error(`MCP tool did not become ${present ? "present" : "absent"}`)
         })
+      yield* mcp.reconcileConfig!()
+      expect(
+        applications.entries({ directory: AbsolutePath.make(context.directory) }).has("mcp__config-server__echo"),
+      ).toBe(false)
+      expect((yield* mcp.status())["config-server"]).toMatchObject({ status: "disconnected", reason: "scope_changed" })
+      yield* mcp.connect("config-server")
       yield* waitFor(true)
       const tool = Object.values(yield* mcp.tools())[0]
       expect(tool && ToolProvenance.get(tool)?.configSource).toBe(file)
@@ -742,8 +778,9 @@ it.instance(
         expect(statusName(result.status, "resource-only-server")).toBe("connected")
         expect(serverState.listToolsCalls).toBe(0)
         expect(Object.keys(yield* mcp.tools())).toHaveLength(0)
+        expect(serverState.listResourcesCalls).toBe(1) // Explicit connect captured readonly display metadata.
         expect(Object.keys(yield* mcp.resources())).toEqual(["resource-only-server:docs"])
-        expect(serverState.listResourcesCalls).toBe(1)
+        expect(serverState.listResourcesCalls).toBe(2) // This API explicitly queries the live server.
         expect(serverState.listPromptsCalls).toBe(0)
       }),
     ),
@@ -768,8 +805,9 @@ it.instance(
         expect(statusName(result.status, "prompt-only-server")).toBe("connected")
         expect(serverState.listToolsCalls).toBe(0)
         expect(Object.keys(yield* mcp.tools())).toHaveLength(0)
+        expect(serverState.listPromptsCalls).toBe(1) // Explicit connect captured readonly display metadata.
         expect(Object.keys(yield* mcp.prompts())).toEqual(["prompt-only-server:review"])
-        expect(serverState.listPromptsCalls).toBe(1)
+        expect(serverState.listPromptsCalls).toBe(2) // This API explicitly queries the live server.
         expect(serverState.listResourcesCalls).toBe(0)
       }),
     ),

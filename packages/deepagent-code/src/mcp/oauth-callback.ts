@@ -1,18 +1,18 @@
 import { createConnection } from "net"
+import { lookup } from "node:dns/promises"
+import { McpOAuthState } from "./oauth-state"
 import { createServer } from "http"
 import * as Log from "@deepagent-code/core/util/log"
-import { OAUTH_CALLBACK_PORT, OAUTH_CALLBACK_PATH, parseRedirectUri } from "./oauth-provider"
+import { OAUTH_CALLBACK_PORT, OAUTH_CALLBACK_PATH } from "./oauth-provider"
 
 const log = Log.create({ service: "mcp.oauth-callback" })
 
-let currentPort = OAUTH_CALLBACK_PORT
-let currentPath = OAUTH_CALLBACK_PATH
 let operation = Promise.resolve()
 
 const HTML_SUCCESS = `<!DOCTYPE html>
 <html>
 <head>
-  <title>DeepAgent Code - Authorization Successful</title>
+  <title>DeepAgent Code - Authorization Response Received</title>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #1a1a2e; color: #eee; }
     .container { text-align: center; padding: 2rem; }
@@ -22,8 +22,8 @@ const HTML_SUCCESS = `<!DOCTYPE html>
 </head>
 <body>
   <div class="container">
-    <h1>Authorization Successful</h1>
-    <p>You can close this window and return to DeepAgent Code.</p>
+    <h1>Authorization Response Received</h1>
+    <p>Return to DeepAgent Code to check the final authentication status.</p>
   </div>
   <script>setTimeout(() => window.close(), 2000);</script>
 </body>
@@ -51,216 +51,297 @@ const HTML_ERROR = (error: string) => `<!DOCTYPE html>
 </html>`
 
 interface PendingAuth {
-  resolve: (code: string) => void
+  state: string
+  promise: Promise<URLSearchParams>
+  resolve: (params: URLSearchParams) => void
   reject: (error: Error) => void
-  timeout: ReturnType<typeof setTimeout>
+  validate?: (params: URLSearchParams) => Promise<void>
 }
-
-let server: ReturnType<typeof createServer> | undefined
-const pendingAuths = new Map<string, PendingAuth>()
-// Reverse index: mcpName → oauthState, so cancelPending(mcpName) can
-// find the right entry in pendingAuths (which is keyed by oauthState).
-const mcpNameToState = new Map<string, string>()
-
-const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+interface Listener {
+  key: string
+  server: ReturnType<typeof createServer>
+  owners: Set<Owned>
+}
+interface Owned {
+  uri: string
+  automatic: boolean
+  closed: boolean
+  expiresAt: number
+  timer?: ReturnType<typeof setTimeout>
+  servers: Listener[]
+  pending?: PendingAuth
+  closing?: Promise<void>
+}
+export interface Lease {
+  readonly redirectUri: string
+  readonly automatic: boolean
+  readonly waitForResponse: (
+    state: string,
+    validate?: (params: URLSearchParams) => Promise<void>,
+  ) => Promise<URLSearchParams>
+  readonly cancel: () => void
+  readonly close: () => Promise<void>
+}
+const listeners = new Map<string, Listener>()
+const owners = new Set<Owned>()
+const pending = new Map<string, Owned>()
+const CALLBACK_TIMEOUT_MS = 300000
 const MAX_PENDING_AUTHS = 64
+const compatibility = { lease: undefined as Lease | undefined, names: new Map<string, string>() }
 
-function cleanupStateIndex(oauthState: string) {
-  for (const [name, state] of mcpNameToState) {
-    if (state === oauthState) {
-      mcpNameToState.delete(name)
-      break
+/** A lease owns only its sockets and exact waiter. It never reconfigures another flow's listener. */
+export function acquire(redirectUri?: string): Promise<Lease> {
+  return serialize(async () => {
+    if (owners.size >= MAX_PENDING_AUTHS) throw new Error("Too many pending OAuth callbacks")
+    const parsed = redirectUri ? McpOAuthState.callbackUri(redirectUri) : undefined
+    if (parsed?.port === "0") throw new Error("An explicit OAuth callback port must be positive")
+    const automatic =
+      !parsed || (parsed.protocol === "http:" && ["127.0.0.1", "[::1]", "localhost"].includes(parsed.hostname))
+    const addresses = !automatic
+      ? []
+      : !parsed || parsed.hostname === "127.0.0.1"
+        ? ["127.0.0.1"]
+        : parsed.hostname === "[::1]"
+          ? ["::1"]
+          : [...new Set((await lookup("localhost", { all: true, verbatim: true })).map((value) => value.address))]
+    if (automatic && (!addresses.length || addresses.some((address) => address !== "127.0.0.1" && address !== "::1")))
+      throw new Error("OAuth localhost resolution is not exclusively loopback")
+    const owned: Owned = {
+      uri: redirectUri ?? "",
+      automatic,
+      closed: false,
+      expiresAt: Date.now() + CALLBACK_TIMEOUT_MS,
+      servers: [],
     }
-  }
-}
-
-function handleRequest(
-  req: import("http").IncomingMessage,
-  res: import("http").ServerResponse,
-  port: number,
-  callbackPath: string,
-) {
-  const url = new URL(req.url || "/", `http://localhost:${port}`)
-
-  if (url.pathname !== callbackPath) {
-    res.writeHead(404)
-    res.end("Not found")
-    return
-  }
-
-  const code = url.searchParams.get("code")
-  const state = url.searchParams.get("state")
-  const error = url.searchParams.get("error")
-  const errorDescription = url.searchParams.get("error_description")
-
-  log.info("received oauth callback", { hasCode: !!code, hasState: !!state, hasError: !!error })
-
-  // Enforce state parameter presence
-  if (!state) {
-    const errorMsg = "Missing required state parameter - potential CSRF attack"
-    log.error("oauth callback missing state parameter", { path: url.pathname })
-    res.writeHead(400, { "Content-Type": "text/html" })
-    res.end(HTML_ERROR(errorMsg))
-    return
-  }
-
-  if (error) {
-    const errorMsg = errorDescription || error
-    if (pendingAuths.has(state)) {
-      const pending = pendingAuths.get(state)!
-      clearTimeout(pending.timeout)
-      pendingAuths.delete(state)
-      cleanupStateIndex(state)
-      pending.reject(new Error(errorMsg))
-    }
-    res.writeHead(200, { "Content-Type": "text/html" })
-    res.end(HTML_ERROR(errorMsg))
-    return
-  }
-
-  if (!code) {
-    res.writeHead(400, { "Content-Type": "text/html" })
-    res.end(HTML_ERROR("No authorization code provided"))
-    return
-  }
-
-  // Validate state parameter
-  if (!pendingAuths.has(state)) {
-    const errorMsg = "Invalid or expired state parameter - potential CSRF attack"
-    log.error("oauth callback with invalid or expired state")
-    res.writeHead(400, { "Content-Type": "text/html" })
-    res.end(HTML_ERROR(errorMsg))
-    return
-  }
-
-  const pending = pendingAuths.get(state)!
-
-  clearTimeout(pending.timeout)
-  pendingAuths.delete(state)
-  cleanupStateIndex(state)
-  pending.resolve(code)
-
-  res.writeHead(200, { "Content-Type": "text/html" })
-  res.end(HTML_SUCCESS)
-}
-
-export function ensureRunning(redirectUri?: string): Promise<void> {
-  return serialize(() => ensureRunningSerial(redirectUri))
-}
-
-async function ensureRunningSerial(redirectUri?: string) {
-  const { port, path } = parseRedirectUri(redirectUri)
-
-  if (server && (currentPort !== port || currentPath !== path)) {
-    log.info("stopping oauth callback server to reconfigure", { oldPort: currentPort, newPort: port })
-    await stopSerial()
-  }
-
-  if (server) return
-
-  const next = createServer((request, response) => handleRequest(request, response, port, path))
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error) => {
-      next.removeListener("listening", onListening)
-      reject(error)
-    }
-    const onListening = () => {
-      next.removeListener("error", onError)
-      resolve()
-    }
-    next.once("error", onError)
-    next.once("listening", onListening)
-    next.listen(port, "127.0.0.1")
-  })
-  next.on("error", (error) => log.warn("oauth callback server error", { error }))
-  currentPort = port
-  currentPath = path
-  server = next
-  log.info("oauth callback server started", { port, path })
-}
-
-export function waitForCallback(oauthState: string, mcpName?: string): Promise<string> {
-  if (pendingAuths.has(oauthState)) return Promise.reject(new Error("OAuth state is already pending"))
-  if (mcpName && mcpNameToState.has(mcpName)) return Promise.reject(new Error("MCP OAuth is already pending"))
-  if (pendingAuths.size >= MAX_PENDING_AUTHS) return Promise.reject(new Error("Too many pending OAuth callbacks"))
-  if (mcpName) mcpNameToState.set(mcpName, oauthState)
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      if (pendingAuths.has(oauthState)) {
-        pendingAuths.delete(oauthState)
-        if (mcpName) mcpNameToState.delete(mcpName)
-        reject(new Error("OAuth callback timeout - authorization took too long"))
+    owners.add(owned)
+    try {
+      for (const address of addresses) {
+        const port = parsed ? Number(parsed.port || 80) : 0
+        const key = `${address}:${port}`
+        const existing = port ? listeners.get(key) : undefined
+        if (existing) {
+          existing.owners.add(owned)
+          owned.servers.push(existing)
+          continue
+        }
+        if (listeners.size >= 128) throw new Error("Too many OAuth callback sockets")
+        const server = createServer({ maxHeaderSize: 16384 }, (request, response) => {
+          void handleRequest(request, response).catch(() => {
+            if (!response.headersSent) response.writeHead(400, { "Cache-Control": "no-store" })
+            if (!response.writableEnded) response.end("Invalid authorization response")
+          })
+        })
+        server.headersTimeout = 5000
+        server.requestTimeout = 5000
+        server.keepAliveTimeout = 1000
+        server.maxConnections = 64
+        await new Promise<void>((resolve, reject) => {
+          server.once("error", reject)
+          server.listen(port, address, () => {
+            server.removeListener("error", reject)
+            resolve()
+          })
+        }).catch((error) => {
+          server.close()
+          throw error
+        })
+        server.on("error", () => log.warn("OAuth callback listener failed"))
+        const actual = server.address()
+        if (!actual || typeof actual === "string") {
+          server.close()
+          throw new Error("OAuth callback socket is unavailable")
+        }
+        const listener = { key: `${address}:${actual.port}`, server, owners: new Set([owned]) }
+        listeners.set(listener.key, listener)
+        owned.servers.push(listener)
+        if (!redirectUri) owned.uri = `http://127.0.0.1:${actual.port}${OAUTH_CALLBACK_PATH}`
       }
-    }, CALLBACK_TIMEOUT_MS)
-
-    pendingAuths.set(oauthState, { resolve, reject, timeout })
+      owned.timer = setTimeout(() => {
+        void closeOwned(owned)
+      }, CALLBACK_TIMEOUT_MS)
+      owned.timer.unref?.()
+      return Object.freeze({
+        redirectUri: owned.uri,
+        automatic: owned.automatic,
+        waitForResponse: (state: string, validate?: PendingAuth["validate"]) => waitOwned(owned, state, validate),
+        cancel: () => cancelOwned(owned),
+        close: () => serialize(() => closeOwned(owned)),
+      })
+    } catch (error) {
+      await closeOwned(owned)
+      throw error
+    }
   })
 }
 
-export function cancelPending(mcpName: string): void {
-  // Look up the oauthState for this mcpName via the reverse index
-  const oauthState = mcpNameToState.get(mcpName)
-  const key = oauthState ?? mcpName
-  const pending = pendingAuths.get(key)
-  if (pending) {
-    clearTimeout(pending.timeout)
-    pendingAuths.delete(key)
-    mcpNameToState.delete(mcpName)
-    pending.reject(new Error("Authorization cancelled"))
-  }
+function waitOwned(owned: Owned, state: string, validate?: PendingAuth["validate"]): Promise<URLSearchParams> {
+  if (owned.closed || Date.now() >= owned.expiresAt) return Promise.reject(new Error("OAuth callback lease expired"))
+  if (!state || Buffer.byteLength(state, "utf8") > 256) return Promise.reject(new Error("Invalid OAuth state"))
+  if (owned.pending)
+    return owned.pending.state === state
+      ? owned.pending.promise
+      : Promise.reject(new Error("OAuth state is already pending"))
+  if (pending.has(state)) return Promise.reject(new Error("OAuth state is already pending"))
+  const result = Promise.withResolvers<URLSearchParams>()
+  void result.promise.catch(() => {})
+  owned.pending = { state, ...result, validate }
+  pending.set(state, owned)
+  return result.promise
 }
 
-export async function isPortInUse(port: number = OAUTH_CALLBACK_PORT): Promise<boolean> {
-  return new Promise((resolve) => {
+async function handleRequest(req: import("http").IncomingMessage, res: import("http").ServerResponse) {
+  const reject = (message: string) => {
+    res.writeHead(400, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
+    res.end(HTML_ERROR(message))
+  }
+  if (req.method !== "GET" || Buffer.byteLength(req.url ?? "", "utf8") > 16384)
+    return reject("Invalid authorization response")
+  const url = new URL(req.url ?? "/", "http://localhost")
+  if (["code", "state", "iss", "error", "error_description"].some((key) => url.searchParams.getAll(key).length > 1))
+    return reject("Duplicate authorization response parameter")
+  if (
+    [...url.searchParams].some(
+      ([key, value]) =>
+        Buffer.byteLength(value, "utf8") >
+          (key === "state" ? 256 : key === "error" ? 128 : key === "error_description" ? 1024 : 8192) ||
+        /[\u0000-\u001f\u007f]/.test(value),
+    )
+  )
+    return reject("Invalid authorization response parameter")
+  const state = url.searchParams.get("state")
+  const owned = state ? pending.get(state) : undefined
+  const waiter = owned?.pending
+  if (!owned || !waiter || owned.closed || Date.now() >= owned.expiresAt)
+    return reject("Invalid or expired state parameter")
+  const expected = new URL(owned.uri)
+  if (
+    !owned.automatic ||
+    req.headers.host !== expected.host ||
+    url.pathname !== expected.pathname ||
+    !owned.servers.some(
+      (listener) =>
+        listener.server.address() &&
+        req.socket.localPort === (listener.server.address() as import("net").AddressInfo).port,
+    ) ||
+    [...new Set(expected.searchParams.keys())].some(
+      (key) =>
+        JSON.stringify(expected.searchParams.getAll(key).sort()) !==
+        JSON.stringify(url.searchParams.getAll(key).sort()),
+    )
+  )
+    return reject("Authorization callback address does not match the current flow")
+  const code = url.searchParams.get("code")
+  const error = url.searchParams.get("error")
+  if ((!code && !error) || (code && error) || url.searchParams.get("iss") === "")
+    return reject("Invalid authorization response")
+  const params = new URLSearchParams(url.searchParams)
+  try {
+    await waiter.validate?.(params)
+  } catch {
+    return reject("Authorization response does not match the current flow")
+  }
+  if (pending.get(waiter.state) !== owned || owned.pending !== waiter || owned.closed || Date.now() >= owned.expiresAt)
+    return reject("Invalid or expired state parameter")
+  pending.delete(waiter.state)
+  if (error) waiter.reject(new Error("Authorization was declined by the authorization server"))
+  else waiter.resolve(params)
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
+  res.end(error ? HTML_ERROR("Authorization was declined. Return to DeepAgent Code.") : HTML_SUCCESS)
+}
+
+function cancelOwned(owned: Owned) {
+  const waiter = owned.pending
+  owned.pending = undefined
+  if (!waiter) return
+  if (pending.get(waiter.state) === owned) pending.delete(waiter.state)
+  waiter.reject(new Error("Authorization cancelled"))
+}
+function closeOwned(owned: Owned): Promise<void> {
+  if (owned.closing) return owned.closing
+  owned.closed = true
+  clearTimeout(owned.timer)
+  cancelOwned(owned)
+  owners.delete(owned)
+  owned.closing = Promise.all(
+    owned.servers.map(async (listener) => {
+      listener.owners.delete(owned)
+      if (listener.owners.size) return
+      if (listeners.get(listener.key) === listener) listeners.delete(listener.key)
+      listener.server.closeAllConnections()
+      await new Promise<void>((resolve) => listener.server.close(() => resolve()))
+    }),
+  ).then(() => {})
+  return owned.closing
+}
+
+// Compatibility helpers for old callers/tests. Production uses the exact lease returned by acquire.
+export async function ensureRunning(uri?: string) {
+  const value = uri ?? `http://127.0.0.1:${OAUTH_CALLBACK_PORT}${OAUTH_CALLBACK_PATH}`
+  if (compatibility.lease?.redirectUri === value) return
+  const next = await acquire(value)
+  await compatibility.lease?.close()
+  compatibility.lease = next
+}
+export function waitForResponse(state: string, name?: string, validate?: PendingAuth["validate"]) {
+  if (pending.has(state)) return Promise.reject(new Error("OAuth state is already pending"))
+  if (name && compatibility.names.has(name)) return Promise.reject(new Error("MCP OAuth is already pending"))
+  if (name) compatibility.names.set(name, state)
+  return (
+    compatibility.lease
+      ? compatibility.lease.waitForResponse(state, validate)
+      : Promise.reject(new Error("OAuth callback listener is unavailable"))
+  ).finally(() => {
+    if (name && compatibility.names.get(name) === state) compatibility.names.delete(name)
+  })
+}
+export function waitForCallback(state: string, name?: string) {
+  return waitForResponse(state, name).then((params) => params.get("code")!)
+}
+export function cancelPending(name: string) {
+  const state = compatibility.names.get(name) ?? name
+  const owned = pending.get(state)
+  if (owned) cancelOwned(owned)
+  compatibility.names.delete(name)
+}
+export async function isPortInUse(port = OAUTH_CALLBACK_PORT) {
+  return new Promise<boolean>((resolve) => {
     const socket = createConnection(port, "127.0.0.1")
     socket.on("connect", () => {
       socket.destroy()
       resolve(true)
     })
-    socket.on("error", () => {
-      resolve(false)
-    })
+    socket.on("error", () => resolve(false))
   })
 }
-
-export function stop(): Promise<void> {
-  return serialize(stopSerial)
+export function stop() {
+  return serialize(async () => {
+    await Promise.all([...owners].map(closeOwned))
+    compatibility.lease = undefined
+    compatibility.names.clear()
+  })
 }
-
-async function stopSerial() {
-  if (server) {
-    const current = server
-    server = undefined
-    await new Promise<void>((resolve, reject) => current.close((error) => (error ? reject(error) : resolve())))
-    log.info("oauth callback server stopped")
-  }
-
-  for (const [_name, pending] of pendingAuths) {
-    clearTimeout(pending.timeout)
-    pending.reject(new Error("OAuth callback server stopped"))
-  }
-  pendingAuths.clear()
-  mcpNameToState.clear()
+export function isRunning() {
+  return listeners.size > 0
 }
-
-function serialize(task: () => Promise<void>) {
+function serialize<T>(task: () => Promise<T>): Promise<T> {
   const result = operation.then(task, task)
-  operation = result.catch(() => {})
+  operation = result.then(
+    () => {},
+    () => {},
+  )
   return result
 }
-
-export function isRunning(): boolean {
-  return server !== undefined
-}
-
 function escapeHtml(value: string) {
-  return value.replace(/[&<>"']/g, (character) => {
-    if (character === "&") return "&amp;"
-    if (character === "<") return "&lt;"
-    if (character === ">") return "&gt;"
-    if (character === '"') return "&quot;"
-    return "&#39;"
-  })
+  return value.replace(/[&<>"']/g, (character) =>
+    character === "&"
+      ? "&amp;"
+      : character === "<"
+        ? "&lt;"
+        : character === ">"
+          ? "&gt;"
+          : character === '"'
+            ? "&quot;"
+            : "&#39;",
+  )
 }
-
 export * as McpOAuthCallback from "./oauth-callback"

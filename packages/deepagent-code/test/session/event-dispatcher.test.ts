@@ -158,6 +158,23 @@ describe("EventDispatcher", () => {
   )
 })
 
+describe("personal IM Event retirement", () => {
+  const it = testEffect(makeLayer(undefined, wildcardAgentList))
+  it.effect("drops IM messages before wildcard routing and permanently acknowledges them", () => Effect.gen(function* () {
+    resetRecorder()
+    setNow(1000)
+    const bus = yield* DeepAgentEventBus.Service
+    const dispatcher = yield* EventDispatcher.Service
+    const event = yield* bus.publish(input({ type: "im.message.created", source: "im", idempotencyKey: "im-personal-retired",
+      payload: { mentions: ["OmniAgent"], groupID: "conversation", messageID: "message" } }))
+    expect(yield* dispatcher.handle(event)).toEqual({ type: "dropped", reason: "operational" })
+    expect(recorded).toHaveLength(0)
+    expect(yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).toHaveLength(0)
+    const drops = yield* (yield* Database.Service).db.select().from(DeepAgentEventDropTable).all().pipe(Effect.orDie)
+    expect(drops.map((drop) => drop.reason)).toContain("im_personal_command_only")
+  }))
+})
+
 describe("EventDispatcher durable schedule publication", () => {
   const it = testEffect(makeLayer())
 

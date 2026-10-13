@@ -1,4 +1,5 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sql } from "drizzle-orm"
 import { MessageTable } from "./sql"
 
 // Only verified live delivery or a local authenticated send can create an intent. History writes
@@ -31,3 +32,13 @@ export const IMMentionIntentTable = sqliteTable(
     index("im_mention_intent_pending").on(table.origin, table.status, table.receiver_id, table.updated_at),
   ],
 )
+
+/** Mirrors KernelReader.accounting: UTF-8 string bytes, eight bytes per number,
+ * and one fixed record overhead. Aggregation never materializes prompt bodies. */
+export const IMMentionIntentBytes = sql<number>`1024 + 16
+  + CASE WHEN ${IMMentionIntentTable.conversation_type} IS NULL THEN 0 ELSE 8 END
+  + ${sql.join([IMMentionIntentTable.id, IMMentionIntentTable.message_id, IMMentionIntentTable.agent_name,
+    IMMentionIntentTable.directory, IMMentionIntentTable.workspace_id, IMMentionIntentTable.user_id,
+    IMMentionIntentTable.origin, IMMentionIntentTable.receiver_id, IMMentionIntentTable.conversation_id,
+    IMMentionIntentTable.resolved_agent, IMMentionIntentTable.session_id, IMMentionIntentTable.input_id,
+    IMMentionIntentTable.status, IMMentionIntentTable.last_error].map((column) => sql`coalesce(length(CAST(${column} AS BLOB)),0)`), sql` + `)}`

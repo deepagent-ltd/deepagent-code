@@ -1,7 +1,14 @@
 import { describe, expect } from "bun:test"
 import { Effect, Fiber, Layer, Random, Ref } from "effect"
 import * as TestClock from "effect/testing/TestClock"
-import { Headers, HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import {
+  FetchHttpClient,
+  Headers,
+  HttpClient,
+  HttpClientError,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/unstable/http"
 import { LLM, LLMError } from "../src"
 import { LLMClient, RequestExecutor } from "../src/route"
 import * as OpenAIChat from "../src/protocols/openai-chat"
@@ -121,6 +128,39 @@ const expectLLMError = (error: unknown) => {
 const errorHttp = (error: LLMError) => ("http" in error.reason ? error.reason.http : undefined)
 
 describe("RequestExecutor", () => {
+  it.effect("seals the effective method and URL including structured query parameters before dispatch", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      const sealed = HttpClientRequest.post("https://provider.test/v1/chat").pipe(
+        HttpClientRequest.setUrlParam("api-version", "2026-07-28"),
+        HttpClientRequest.bodyText('{"model":"test"}', "application/json"),
+      )
+      yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        yield* executor.execute(sealed)
+        expect(yield* Ref.get(attempts)).toBe(1)
+      }).pipe(
+        Effect.provideService(RequestExecutor.CurrentRequestSeal, {
+          seal: (input) =>
+            Effect.sync(() => {
+              expect(input.method).toBe("POST")
+              expect(input.url).toBe("https://provider.test/v1/chat?api-version=2026-07-28")
+              expect(input.bodyText).toBe('{"model":"test"}')
+              expect(input.wireHash).toBe(
+                RequestExecutor.wireRequestHash({
+                  method: "POST",
+                  url: "https://provider.test/v1/chat?api-version=2026-07-28",
+                  contentType: "application/json",
+                  bodyText: '{"model":"test"}',
+                }),
+              )
+            }),
+        }),
+        Effect.provide(countedResponsesLayer(attempts, [new Response("ok")])),
+      )
+    }),
+  )
+
   it.effect("does not start HTTP transport when the durable request seal fails", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0)
@@ -142,6 +182,123 @@ describe("RequestExecutor", () => {
         Effect.provide(countedResponsesLayer(attempts, [new Response("must not be consumed")])),
       )
     }),
+  )
+
+  it.live("manual redirect policy keeps a real HTTP request at its sealed endpoint", () =>
+    Effect.gen(function* () {
+      const hits = { origin: 0, destination: 0, safeHeader: "" }
+      const destination = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: () => {
+          hits.destination += 1
+          return new Response("destination")
+        },
+      })
+      const origin = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: (request) => {
+          hits.origin += 1
+          hits.safeHeader = request.headers.get("x-safe") ?? ""
+          return new Response("redirect", { status: 307, headers: { location: destination.url.href } })
+        },
+      })
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(async () => {
+          await origin.stop(true)
+          await destination.stop(true)
+        }),
+      )
+      const request = HttpClientRequest.post(origin.url.href).pipe(HttpClientRequest.bodyText("audit", "text/plain"))
+      yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        expect((yield* executor.execute(request)).status).toBe(200)
+        expect(hits.destination).toBe(1)
+        const response = yield* executor.execute(request).pipe(
+          Effect.provideService(RequestExecutor.CurrentRedirectPolicy, "manual"),
+          Effect.provideService(RequestExecutor.CurrentRequestSeal, {
+            seal: (input) =>
+              Effect.sync(() => {
+                expect(input.url).toBe(origin.url.href)
+                expect(input.method).toBe("POST")
+              }),
+          }),
+        )
+        expect(response.status).toBe(307)
+        expect(hits.origin).toBe(2)
+        expect(hits.destination).toBe(1)
+        expect(hits.safeHeader).toBe("preserved")
+      }).pipe(
+        Effect.provideService(FetchHttpClient.RequestInit, { headers: { "x-safe": "preserved" } }),
+        Effect.provide(RequestExecutor.defaultLayer),
+      )
+    }),
+  )
+
+  it.live(
+    "seals the final encoded body after protocol lowering and refuses a cap-changing HTTP overlay before dispatch",
+    () =>
+      Effect.gen(function* () {
+        const hits: string[] = []
+        const provider = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch: async (request) => {
+            hits.push(await request.text())
+            return new Response(
+              sseRaw(
+                `data: ${JSON.stringify(deltaChunk({ role: "assistant", content: "audited response" }))}`,
+                `data: ${JSON.stringify(deltaChunk({}, "stop"))}`,
+                "data: [DONE]",
+              ),
+              { headers: { "content-type": "text/event-stream" } },
+            )
+          },
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => provider.stop(true)))
+        const sealed: string[] = []
+        const model = OpenAIChat.route
+          .with({ endpoint: { baseURL: provider.url.href.slice(0, -1) } })
+          .model({ id: "audited-model" })
+        yield* Effect.gen(function* () {
+          const base = LLM.request({
+            model,
+            system: "Fixed instructions",
+            prompt: "Audited text",
+            generation: { maxTokens: 16 },
+          })
+          const response = yield* LLMClient.generate(base)
+          expect(
+            response.events.some((event) => event.type === "text-delta" && event.text === "audited response"),
+          ).toBe(true)
+          expect(hits).toHaveLength(1)
+          expect(sealed[0]).toBe(hits[0])
+          const blocked = yield* LLMClient.generate(
+            LLM.updateRequest(base, { http: { body: { max_tokens: 64 } } }),
+          ).pipe(Effect.exit)
+          expect(blocked._tag).toBe("Failure")
+          expect(hits).toHaveLength(1)
+          expect(sealed).toHaveLength(2)
+          expect(JSON.parse(sealed[1]!).max_tokens).toBe(64)
+        }).pipe(
+          Effect.provideService(RequestExecutor.CurrentRetryLimit, 0),
+          Effect.provideService(RequestExecutor.CurrentRedirectPolicy, "manual"),
+          Effect.provideService(RequestExecutor.CurrentRequestSeal, {
+            seal: (input) =>
+              Effect.gen(function* () {
+                if (input.bodyText === undefined) return yield* Effect.die("Final encoded body is unavailable")
+                sealed.push(input.bodyText)
+                expect(input.bodyHash).toBe(new Bun.CryptoHasher("sha256").update(input.bodyText).digest("hex"))
+                expect(input.bodyLength).toBe(Buffer.byteLength(input.bodyText, "utf8"))
+                const body: unknown = JSON.parse(input.bodyText)
+                if (typeof body !== "object" || body === null || !("max_tokens" in body) || body.max_tokens !== 16)
+                  return yield* Effect.die("Final body exceeds the audited completion cap")
+              }),
+          }),
+          Effect.provide(LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))),
+        )
+      }),
   )
 
   it.effect("classifies context overflow responses", () =>
@@ -557,9 +714,7 @@ describe("RequestExecutor", () => {
         expect(error.retryable).toBe(true)
         // 1 initial attempt + 2 transport-budget retries.
         expect(yield* Ref.get(attempts)).toBe(3)
-      }).pipe(
-        Effect.provide(scriptedOutcomesLayer(attempts, [{ kind: "transport", cause: connectRefusedCause }])),
-      )
+      }).pipe(Effect.provide(scriptedOutcomesLayer(attempts, [{ kind: "transport", cause: connectRefusedCause }])))
     }),
   )
 
@@ -574,9 +729,7 @@ describe("RequestExecutor", () => {
         expect(error.reason).toMatchObject({ _tag: "Transport", phase: "post-dispatch" })
         expect(error.retryable).toBe(false)
         expect(yield* Ref.get(attempts)).toBe(1)
-      }).pipe(
-        Effect.provide(scriptedOutcomesLayer(attempts, [{ kind: "transport", cause: connectionResetCause }])),
-      )
+      }).pipe(Effect.provide(scriptedOutcomesLayer(attempts, [{ kind: "transport", cause: connectionResetCause }])))
     }),
   )
 
@@ -592,9 +745,7 @@ describe("RequestExecutor", () => {
         expect(error.retryable).toBe(false)
         expect(yield* Ref.get(attempts)).toBe(1)
       }).pipe(
-        Effect.provide(
-          scriptedOutcomesLayer(attempts, [{ kind: "transport", cause: new TypeError("terminated") }]),
-        ),
+        Effect.provide(scriptedOutcomesLayer(attempts, [{ kind: "transport", cause: new TypeError("terminated") }])),
       )
     }),
   )

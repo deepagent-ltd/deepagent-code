@@ -1,8 +1,11 @@
+import type { GoalChildSchema } from "../../deepagent/goal-child.schema"
 export * as SessionRunner from "./index"
 export * as SessionProviderRecovery from "./recovery"
 export * as SessionProviderRecoveryStore from "./recovery-store"
 export * as SessionProviderRecoveryDurable from "./recovery-durable-store"
 
+import type { McpAppInvocationSchema } from "../mcp-app-invocation.schema"
+import type { WorkAuthoritySchema } from "../work-authority.schema"
 import type { LLMError } from "@deepagent-code/llm"
 import { Context, Effect, Schema } from "effect"
 import { SessionSchema } from "../schema"
@@ -114,7 +117,12 @@ export class ContextBudgetHardGateError extends Schema.TaggedErrorClass<ContextB
   "SessionRunner.ContextBudgetHardGateError",
   { sessionID: SessionSchema.ID, estimatedTokens: Schema.Int, effectiveHardGate: Schema.Int, reason: Schema.String },
 ) {
-  constructor(props: { readonly sessionID: SessionSchema.ID; readonly estimatedTokens: number; readonly effectiveHardGate: number; readonly reason: string }) {
+  constructor(props: {
+    readonly sessionID: SessionSchema.ID
+    readonly estimatedTokens: number
+    readonly effectiveHardGate: number
+    readonly reason: string
+  }) {
     super(props)
     this.message = `context_budget_hard_gate: ${props.reason} (${props.estimatedTokens} >= ${props.effectiveHardGate})`
   }
@@ -133,6 +141,9 @@ export class ExecutionRecoveryRequiredError extends Schema.TaggedErrorClass<Exec
 }
 
 export type RunError =
+  | McpAppInvocationSchema.Error
+  | GoalChildSchema.Error
+  | WorkAuthoritySchema.Error
   | LLMError
   | SessionRunnerModel.Error
   | MessageDecodeError
@@ -143,6 +154,7 @@ export type RunError =
   | ExecutionRecoveryRequiredError
   | SystemContext.InitializationBlocked
   | SessionContextEpoch.AgentReplacementBlocked
+  | SessionContextEpoch.AgentSelectionUnstable
   | ToolOutputStore.Error
   | V2ProviderTurnError
   | RecoveryRequiredError
@@ -155,6 +167,8 @@ export interface Interface {
   readonly run: (input: {
     readonly sessionID: SessionSchema.ID
     readonly force?: boolean
+    /** Continue only this active activity; never replay its final response. */
+    readonly activityID?: string
   }) => Effect.Effect<void, RunError>
 }
 

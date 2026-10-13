@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { sql } from "drizzle-orm"
 import { Cause, Deferred, Effect, Fiber, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { GoalTickConsumer } from "../../src/session/goal-tick-consumer"
@@ -45,7 +46,14 @@ const makeLayer = (opts: {
 }
 
 const seq0Command = (
-  over?: Partial<{ sessionID: string; goalId: string; planDocId: string; seq: number; workspaceID: string }>,
+  over?: Partial<{
+    sessionID: string
+    goalId: string
+    planDocId: string
+    seq: number
+    workspaceID: string
+    revision: number
+  }>,
 ) => ({
   sessionID: "s1",
   goalId: "g1",
@@ -212,6 +220,20 @@ describe("GoalTickConsumer — flag OFF drives nothing", () => {
           executed++
           return { progress: "continue", nextSeq: 1, nextExpectedPlanVersion: 1 } as StubResult
         }),
+    }),
+  )
+
+  it.effect("flag OFF keeps a managed Goal obligation pending without execution", () =>
+    Effect.gen(function* () {
+      const consumer = yield* GoalTickConsumer.Service
+      const cmd = yield* publishTick(seq0Command({ goalId: "managed-off", revision: 1 }))
+      yield* consumer.handle(cmd)
+      expect(executed).toBe(0)
+      const db = (yield* Database.Service).db
+      const row = yield* db
+        .get(sql`SELECT status, attempts, next_attempt_at FROM deepagent_event_delivery WHERE event_id=${cmd.id}`)
+        .pipe(Effect.orDie)
+      expect(row).toEqual({ status: "pending", attempts: 0, next_attempt_at: now() + 30000 })
     }),
   )
 

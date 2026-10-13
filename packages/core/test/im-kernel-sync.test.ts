@@ -7,6 +7,7 @@ import { Effect, Layer } from "effect"
 import type * as Scope from "effect/Scope"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { IMRepository, IMRepositoryLive } from "../src/im/repository"
+import { KernelDelivery } from "../src/im/kernel-delivery"
 import { Database } from "../src/database/database"
 
 // JuggleIM B1 kernel-sync persistence: im_messages.kernel_msg_id (dedup identity), im_groups
@@ -136,7 +137,10 @@ describe("IMRepository kernel sync (B1)", () => {
         const bound = yield* repo.getGroupByKernelConvID("k:2:grp_42")
         expect(bound?.id).toBe(group.id)
         expect(bound?.kernelConvID).toBe("k:2:grp_42")
-        expect((yield* repo.getGroup({ groupID: group.id, userID: "user_local" }))?.kernelConvID).toBe("k:2:grp_42")
+        // A legacy binding has no authenticated reader projection; storage identity alone
+        // cannot make a remote conversation visible through the user-facing repository.
+        expect(yield* repo.getGroup({ groupID: group.id, userID: "user_local" }).pipe(Effect.flip))
+          .toMatchObject({ code: "reader_legacy_unverified" })
 
         yield* repo.bindKernelConversation({ groupID: group.id, kernelConvID: null })
         expect(yield* repo.getGroupByKernelConvID("k:2:grp_42")).toBeUndefined()
@@ -212,29 +216,34 @@ describe("IMRepository kernel sync (B1)", () => {
         expect(message.kernelMsgID).toBe(null)
 
         expect(yield* repo.setMessageKernelMsgID({ messageID: message.id, kernelMsgID: "kmsg_200" })).toBe(true)
-        expect((yield* repo.getMessage(message.id))?.kernelMsgID).toBe("kmsg_200")
+        expect((yield* repo.getMessageByKernelMsgID("kmsg_200"))?.id).toBe(message.id)
+        expect(yield* repo.getMessage(message.id).pipe(Effect.flip)).toMatchObject({ code: "reader_legacy_unverified" })
         // Already acked: a second write (echo/redrive) is a no-op.
         expect(yield* repo.setMessageKernelMsgID({ messageID: message.id, kernelMsgID: "kmsg_201" })).toBe(false)
-        expect((yield* repo.getMessage(message.id))?.kernelMsgID).toBe("kmsg_200")
+        expect((yield* repo.getMessageByKernelMsgID("kmsg_200"))?.id).toBe(message.id)
+        expect(yield* repo.getMessageByKernelMsgID("kmsg_201")).toBeUndefined()
         expect(yield* repo.setMessageKernelMsgID({ messageID: "imm_missing", kernelMsgID: "kmsg_x" })).toBe(false)
       }),
     )
   })
 
-  test("listPendingKernelMessages is the pending-send worklist (kernel-bound, unacked, user/agent text)", async () => {
+  test("listPendingKernelMessages requires a current prepared receipt, excluding raw unacked rows", async () => {
     await run(
       Effect.gen(function* () {
         const bound = yield* makeGroup("bound")
         const unbound = yield* makeGroup("unbound")
         const repo = yield* IMRepository
         yield* repo.bindKernelConversation({ groupID: bound.id, kernelConvID: "k:2:grp_pending" })
+        const runtime = KernelDelivery.runtime({ realm: "http://127.0.0.1:9/", appkey: "fixture", orgID: 1,
+          senderID: "user_local", credentialFingerprint: "a".repeat(64) })
+        const now = Date.now()
 
-        const pendingUser = yield* repo.createMessage({
-          groupID: bound.id, senderID: "user_local", senderType: "user", type: "text", content: "u1", createdAt: 2,
-        })
-        const pendingAgent = yield* repo.createMessage({
-          groupID: bound.id, senderID: "auto", senderType: "agent", type: "text", content: "a1", createdAt: 1,
-        })
+        const pendingUser = yield* KernelDelivery.withCreation(runtime, bound.id, repo.createMessage({
+          groupID: bound.id, senderID: "user_local", senderType: "user", type: "text", content: "u1", createdAt: now,
+        }))
+        const pendingAgent = yield* KernelDelivery.withCreation(runtime, bound.id, repo.createMessage({
+          groupID: bound.id, senderID: "auto", senderType: "agent", type: "text", content: "a1", createdAt: now - 1,
+        }))
         // Excluded: already-acked rows, inbound rows (kernel id set), non-text, system rows, unbound groups.
         yield* repo.createMessage({
           groupID: bound.id, senderID: "user_local", senderType: "user", type: "text", content: "acked",
@@ -250,7 +259,8 @@ describe("IMRepository kernel sync (B1)", () => {
           groupID: unbound.id, senderID: "user_local", senderType: "user", type: "text", content: "local only", createdAt: 6,
         })
 
-        const pending = yield* repo.listPendingKernelMessages({ limit: 50 })
+        expect(yield* repo.listPendingKernelMessages({ limit: 50 })).toEqual([])
+        const pending = yield* repo.listPendingKernelMessages({ limit: 50, runtime })
         expect(pending.map((row) => row.message.id)).toEqual([pendingAgent.id, pendingUser.id])
         expect(pending.map((row) => row.kernelConvID)).toEqual(["k:2:grp_pending", "k:2:grp_pending"])
 

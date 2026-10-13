@@ -1,0 +1,46 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "node_modules/.ts-dist-browser-public-fixture",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
+    "paths": {
+      "@/*": [
+        "../deepagent-code/src/*"
+      ]
+    }
+  },
+  "references": [],
+  "include": [
+    "src/main/fixture/managed-browser-public.ts",
+    "src/main/fixture/managed-browser-files.ts",
+    "src/main/fixture/managed-browser-files-main.ts",
+    "src/main/managed-browser-files.test.ts",
+    "src/main/fixture/managed-browser-clipboard.ts",
+    "src/main/fixture/managed-browser-clipboard-main.ts",
+    "src/main/managed-browser-clipboard.test.ts",
+    "src/main/fixture/managed-browser-program-canonical.ts",
+    "src/main/managed-browser-program-canonical.test.ts",
+    "src/main/fixture/managed-browser-api-post.ts",
+    "src/main/managed-browser-api-post.test.ts",
+    "src/main/fixture/managed-browser-api-post-canonical.ts",
+    "src/main/managed-browser-api-post-canonical.test.ts",
+    "src/main/fixture/managed-browser-clipboard-confirmation.ts",
+    "src/main/managed-browser-clipboard-confirmation.test.ts",
+    "src/main/fixture/managed-browser-clipboard-physical.ts",
+    "src/main/fixture/managed-browser-clipboard-physical-child.ts",
+    "src/main/managed-browser-clipboard-physical.test.ts",
+    "src/main/fixture/managed-browser-input-race.ts",
+    "src/main/managed-browser-input-race.test.ts",
+    "src/main/fixture/managed-browser-clipboard-policy.ts",
+    "src/main/managed-browser-clipboard-policy.test.ts",
+    "src/main/fixture/managed-browser-clipboard-frames.ts",
+    "src/main/managed-browser-clipboard-frames.test.ts",
+    "src/main/fixture/managed-browser-input-main.ts",
+    "src/main/managed-browser-input-main.test.ts",
+    "../deepagent-code/src/audio.d.ts"
+  ],
+  "exclude": []
+}

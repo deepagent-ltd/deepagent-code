@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
 import { Dialog } from "@kobalte/core/dialog"
+import { createSignal } from "solid-js"
 import userEvent from "@testing-library/user-event"
-import { ClaimCard, BlockedCard, IdentityCard } from "@/components/im/facade-cards"
-import { RebindDialog, KernelGroupDialog } from "@/components/im/facade-dialogs"
+import { ActivationCard, BlockedCard, IdentityCard } from "@/components/im/facade-cards"
+import { KernelGroupDialog } from "@/components/im/facade-dialogs"
 import { dict } from "@/i18n/en"
 
 const client = vi.hoisted(() => ({
@@ -16,7 +17,10 @@ const client = vi.hoisted(() => ({
 }))
 const dialog = vi.hoisted(() => ({ close: vi.fn(), show: vi.fn() }))
 
-vi.mock("@/utils/im-client", () => ({ useIMClient: () => client }))
+vi.mock("@/utils/im-client", async (original) => ({
+  ...(await original<typeof import("@/utils/im-client")>()),
+  useIMClient: () => client,
+}))
 vi.mock("@/context/language", () => ({
   useLanguage: () => ({
     t: (key: keyof typeof dict, values?: Record<string, string>) =>
@@ -33,47 +37,36 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe("IM identity components", () => {
-  it("keeps an IME confirmation local and only submits after composition ends", async () => {
-    const done = vi.fn()
-    client.facadeClaim.mockResolvedValue({})
-    render(() => <ClaimCard onClaimed={done} />)
-    const input = screen.getByPlaceholderText(dict["im.facade.claim.name.placeholder"])
-    fireEvent.input(input, { target: { value: "张三" } })
-    fireEvent.keyDown(input, { key: "Enter", isComposing: true, keyCode: 229 })
+  it("opens explicit activation settings without an unpaid claim or credential input", () => {
+    const activate = vi.fn()
+    render(() => <ActivationCard onActivate={activate} />)
+    expect(screen.queryByRole("textbox")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: dict["im.activation.openSettings"] }))
+    expect(activate).toHaveBeenCalledTimes(1)
     expect(client.facadeClaim).not.toHaveBeenCalled()
-    fireEvent.keyDown(input, { key: "Enter" })
-    await waitFor(() => expect(done).toHaveBeenCalledTimes(1))
-    expect(client.facadeClaim).toHaveBeenCalledWith("张三")
+    expect(client.facadeRebind).not.toHaveBeenCalled()
+    expect(client.facadeRetry).not.toHaveBeenCalled()
   })
 
-  it("admits one claim while pending and preserves the name on a recoverable error", async () => {
-    const pending = Promise.withResolvers<unknown>()
-    client.facadeClaim.mockReturnValue(pending.promise)
-    const done = vi.fn()
-    render(() => <ClaimCard onClaimed={done} />)
-    const input = screen.getByPlaceholderText(dict["im.facade.claim.name.placeholder"])
-    fireEvent.input(input, { target: { value: "alice" } })
-    fireEvent.keyDown(input, { key: "Enter" })
-    fireEvent.keyDown(input, { key: "Enter" })
-    expect(client.facadeClaim).toHaveBeenCalledTimes(1)
-    pending.reject({ code: "im_name_taken", message: "internal details" })
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain(dict["im.facade.error.im_name_taken"]))
-    expect((input as HTMLInputElement).value).toBe("alice")
-    expect(done).not.toHaveBeenCalled()
-    client.facadeClaim.mockResolvedValue({})
-    fireEvent.input(input, { target: { value: "alice2" } })
-    fireEvent.click(screen.getByRole("button", { name: dict["im.facade.claim.submit"] }))
-    await waitFor(() => expect(done).toHaveBeenCalledTimes(1))
-  })
-
-  it("rejects invalid names without calling the platform", async () => {
-    render(() => <ClaimCard onClaimed={vi.fn()} />)
-    fireEvent.input(screen.getByPlaceholderText(dict["im.facade.claim.name.placeholder"]), {
-      target: { value: "alice@example" },
-    })
-    fireEvent.click(screen.getByRole("button", { name: dict["im.facade.claim.submit"] }))
-    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy())
+  it("routes activation-required to settings instead of retrying or showing upstream details", () => {
+    const activate = vi.fn()
+    const recovered = vi.fn()
+    render(() => (
+      <BlockedCard
+        blocked={{ code: "im_activation_required", message: "private upstream detail" }}
+        onRecovered={recovered}
+        onActivate={activate}
+      />
+    ))
+    expect(screen.getByText(dict["im.activation.required"])).toBeTruthy()
+    expect(screen.queryByRole("button", { name: dict["im.facade.retry"] })).toBeNull()
+    expect(screen.queryByText("private upstream detail")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: dict["im.activation.openSettings"] }))
+    expect(activate).toHaveBeenCalledTimes(1)
+    expect(recovered).not.toHaveBeenCalled()
+    expect(client.facadeRetry).not.toHaveBeenCalled()
     expect(client.facadeClaim).not.toHaveBeenCalled()
+    expect(client.facadeRebind).not.toHaveBeenCalled()
   })
 
   it("retries a blocked connection once and preserves the error until recovery", async () => {
@@ -81,7 +74,11 @@ describe("IM identity components", () => {
     client.facadeRetry.mockReturnValue(pending.promise)
     const recovered = vi.fn()
     render(() => (
-      <BlockedCard blocked={{ code: "im_kernel_error", message: "private upstream detail" }} onRecovered={recovered} />
+      <BlockedCard
+        blocked={{ code: "im_kernel_error", message: "private upstream detail" }}
+        onRecovered={recovered}
+        onActivate={vi.fn()}
+      />
     ))
     fireEvent.click(screen.getByRole("button", { name: dict["im.facade.retry"] }))
     expect(screen.getByRole("button", { name: dict["im.facade.retrying"] }).hasAttribute("disabled")).toBe(true)
@@ -89,6 +86,47 @@ describe("IM identity components", () => {
     await waitFor(() => expect(recovered).toHaveBeenCalledTimes(1))
     expect(client.facadeRetry).toHaveBeenCalledTimes(1)
     expect(screen.queryByText("private upstream detail")).toBeNull()
+  })
+
+  it("keeps active connection retry reachable without a selected conversation and submits once while busy", async () => {
+    const [recovery, setRecovery] = createSignal<{ status: "pending" | "ready" | "failed" } | undefined>({ status: "pending" })
+    const pending = Promise.withResolvers<unknown>()
+    client.facadeRetry.mockReturnValue(pending.promise)
+    const changed = vi.fn()
+    render(() => (
+      <IdentityCard
+        status={{
+          facade: "active",
+          identity: { uuid: "abcdef123456", name: "alice", orgID: 2, orgAllGroupID: "org2" },
+          blocked: null,
+          kernel: "connected",
+          keyOrigin: "stored",
+          recovery: recovery(),
+        }}
+        onChanged={changed}
+      />
+    ))
+    expect(screen.getByText(dict["im.facade.recovery.pending"])).toBeTruthy()
+    expect(screen.getAllByRole("button", { name: dict["im.facade.retry"] })).toHaveLength(1)
+    setRecovery({ status: "ready" })
+    expect(screen.queryByText(dict["im.facade.recovery.pending"])).toBeNull()
+    expect(screen.getAllByRole("button", { name: dict["im.facade.retry"] })).toHaveLength(1)
+    setRecovery({ status: "failed" })
+    expect(screen.getByText(dict["im.facade.recovery.failed"])).toBeTruthy()
+    expect(screen.getAllByRole("button", { name: dict["im.facade.retry"] })).toHaveLength(1)
+    setRecovery(undefined)
+    const retry = screen.getByRole("button", { name: dict["im.facade.retry"] })
+    expect(screen.queryByText(dict["im.facade.recovery.failed"])).toBeNull()
+    fireEvent.click(retry)
+    expect(retry.hasAttribute("disabled")).toBe(true)
+    fireEvent.click(retry)
+    expect(client.facadeRetry).toHaveBeenCalledTimes(1)
+    expect(changed).not.toHaveBeenCalled()
+    pending.resolve({})
+    await waitFor(() => expect(changed).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false))
+    expect(client.facadeClaim).not.toHaveBeenCalled()
+    expect(client.facadeRebind).not.toHaveBeenCalled()
   })
 
   it("renames through the active identity card and lets Escape cancel without a request", async () => {
@@ -107,6 +145,7 @@ describe("IM identity components", () => {
         onChanged={changed}
       />
     ))
+    expect(screen.queryByRole("button", { name: dict["im.facade.identity.rebind"] })).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: dict["im.facade.identity.rename"] }))
     fireEvent.keyDown(screen.getByPlaceholderText(dict["im.facade.identity.rename.placeholder"]), { key: "Escape" })
     expect(client.facadeRename).not.toHaveBeenCalled()
@@ -120,32 +159,19 @@ describe("IM identity components", () => {
   })
 
   it("directs a revoked identity to console inheritance instead of an unauthenticated rebind", () => {
-    render(() => <BlockedCard blocked={{ code: "im_key_invalid", message: "expired" }} onRecovered={vi.fn()} />)
+    render(() => (
+      <BlockedCard
+        blocked={{ code: "im_key_invalid", message: "expired" }}
+        onRecovered={vi.fn()}
+        onActivate={vi.fn()}
+      />
+    ))
     expect(screen.getByText(dict["im.facade.blocked.recovery"])).toBeTruthy()
     expect(screen.queryByRole("button", { name: dict["im.facade.identity.rebind"] })).toBeNull()
   })
 })
 
 describe("IM facade dialogs", () => {
-  it("masks a new key and never renders it from a server error", async () => {
-    const secret = "sk-component-test-secret"
-    client.facadeRebind.mockRejectedValue(Object.assign(new Error(secret), { code: "im_key_invalid" }))
-    render(() => (
-      <Dialog open>
-        <RebindDialog onRebound={vi.fn()} />
-      </Dialog>
-    ))
-    const input = screen.getByPlaceholderText(dict["im.facade.rebind.placeholder"])
-    expect((input as HTMLInputElement).type).toBe("password")
-    fireEvent.input(input, { target: { value: secret } })
-    fireEvent.keyDown(input, { key: "Enter", isComposing: true })
-    expect(client.facadeRebind).not.toHaveBeenCalled()
-    fireEvent.keyDown(input, { key: "Enter" })
-    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy())
-    expect(document.body.textContent).not.toContain(secret)
-    expect(dialog.close).not.toHaveBeenCalled()
-  })
-
   it("resolves and deduplicates members before creating a group", async () => {
     client.facadeResolve.mockResolvedValue({ uuid: "bob-uuid", name: "bob" })
     client.facadeCreateGroup.mockResolvedValue({ id: "group-1", name: "team" })

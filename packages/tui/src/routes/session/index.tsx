@@ -1,3 +1,7 @@
+import { createEventWorkOwner, DialogEventWork } from "../../component/dialog-event-work"
+import { createEventValidationOwner, DialogEventValidation } from "../../component/dialog-event-validation"
+import { DialogBrowserControl } from "../../component/dialog-browser-control"
+import { openGoalPlan } from "../../component/dialog-goal-plan"
 import {
   batch,
   createContext,
@@ -68,7 +72,9 @@ import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
 import { useEpilogue } from "../../context/epilogue"
 import { normalizePath } from "../../util/path"
+import { sessionMessageView, pendingAssistantIndex, sessionMessageBoundary } from "../../util/session-message-view"
 import { PermissionPrompt } from "./permission"
+import { SessionMcpAppInvocations } from "./mcp-app-invocations"
 import { QuestionPrompt } from "./question"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import * as Model from "../../util/model"
@@ -187,7 +193,10 @@ export function Session() {
   }
   const pluginRuntime = usePluginRuntime()
   const route = useRouteData("session")
-  const { navigate } = useRoute()
+  const validationOwner = createEventValidationOwner()
+  const eventWorkOwner = createEventWorkOwner()
+  const navigation = useRoute()
+  const { navigate } = navigation
   const sync = useSync()
   const event = useEvent()
   const project = useProject()
@@ -209,7 +218,8 @@ export function Session() {
       .filter((x) => x.parentID === parentID || x.id === parentID)
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
-  const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
+  const messages = createMemo(() => sessionMessageView(sync.data.message[route.sessionID] ?? []))
+  const messageBoundary = createMemo(() => sessionMessageBoundary(messages(), session()?.revert?.messageID))
   const foregroundTasks = createMemo(() =>
     messages().flatMap((message) =>
       (sync.data.part[message.id] ?? []).filter(
@@ -228,6 +238,14 @@ export function Session() {
           .filter((message) => message.role === "user")
           .map((message) => message.id),
       ),
+  )
+  const userTurns = createMemo(() =>
+    messages().filter((message): message is UserMessage => {
+      if (message.role !== "user") return false
+      const parts = sync.data.part[message.id] ?? []
+      // Revert notices are user-shaped synthetic messages, not turn anchors.
+      return parts.length === 0 || parts.some((part) => part.type !== "text" || !part.synthetic)
+    }),
   )
   const permissions = createMemo(() => {
     if (session()?.parentID) return []
@@ -266,11 +284,7 @@ export function Session() {
   const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
 
-  const pending = createMemo(() => {
-    const completed = messages().findLast((x) => x.role === "assistant" && x.time.completed)?.id
-    return messages().findLast((x) => x.role === "assistant" && !x.time.completed && (!completed || x.id > completed))
-      ?.id
-  })
+  const pending = createMemo(() => pendingAssistantIndex(messages()))
 
   const lastAssistant = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant")
@@ -305,6 +319,7 @@ export function Session() {
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const toast = useToast()
   const sdk = useSDK()
+  const goalPaths = useTuiPaths()
   const rawRequest = <T,>(options: { method: string; url: string; body?: unknown; headers?: Record<string, string> }) =>
     (sdk.client as unknown as { client: { request<D>(o: typeof options): Promise<{ data?: D }> } }).client.request<T>(
       options,
@@ -465,8 +480,7 @@ export function Session() {
     })
     const status = sync.data.session_status[sessionID]
     if (status?.type === "retry") void DialogAlert.show(dialog, "Retry Error", status.message)
-    if (status?.type === "recovery_required")
-      void DialogAlert.show(dialog, "Recovery Required", status.message)
+    if (status?.type === "recovery_required") void DialogAlert.show(dialog, "Recovery Required", status.message)
   }
 
   function moveFirstChild() {
@@ -494,6 +508,17 @@ export function Session() {
   }
 
   const sessionCommandList = createMemo(() => [
+    ...(navigation.canReturnToIM()
+      ? [
+          {
+            title: i18n.t("tui.im.taskResult.return"),
+            value: "session.im.return",
+            category: i18n.t("tui.category.session"),
+            slash: { name: "im-return" },
+            run: () => navigation.returnToIM(),
+          },
+        ]
+      : []),
     {
       title: i18n.t("tui.session.rename"),
       value: "session.rename",
@@ -625,7 +650,9 @@ export function Session() {
         // W2-3 — GET /deepagent/queue is served by path and not in the generated SDK; rawRequest
         // reaches it the same way the /goal commands do. Read is non-consuming: promotion happens
         // at the next activity boundary, so the dialog is view-only.
-        const result = await rawRequest<{ items: { id: string; admittedSeq: number; text: string; timeCreated: number }[] }>({
+        const result = await rawRequest<{
+          items: { id: string; admittedSeq: number; text: string; timeCreated: number }[]
+        }>({
           method: "GET",
           url: `/deepagent/queue?sessionID=${encodeURIComponent(sessionID)}`,
         }).catch(() => undefined)
@@ -654,6 +681,77 @@ export function Session() {
       },
     },
     {
+      title: i18n.t("tui.eventWork.title"),
+      desc: i18n.t("tui.eventWork.description"),
+      value: "session.event-work",
+      category: i18n.t("tui.category.session"),
+      slash: { name: "event-work" },
+      run: () => {
+        const sessionID = route.sessionID
+        if (!sessionID) return
+        const client = sdk.client
+        const directory = project.instance.directory()
+        const workspaceID = project.workspace.current()
+        dialog.replace(() => <DialogEventWork sessionID={sessionID}
+          active={() => eventWorkOwner() && sdk.client === client && route.type === "session" &&
+            route.sessionID === sessionID && project.instance.directory() === directory &&
+            project.workspace.current() === workspaceID}
+          onOpenSession={(id) => { dialog.clear(); navigate({ type: "session", sessionID: id }) }} />)
+      },
+    },
+    {
+      title: i18n.t("tui.eventValidation.title"),
+      desc: i18n.t("tui.eventValidation.description"),
+      value: "session.validation",
+      category: i18n.t("tui.category.session"),
+      slash: { name: "validate" },
+      run: () => {
+        const sessionID = route.sessionID
+        if (sessionID)
+          dialog.replace(() => (
+            <DialogEventValidation
+              sessionID={sessionID}
+              active={() => validationOwner() && route.type === "session" && route.sessionID === sessionID}
+              onOpenSession={(id) => {
+                dialog.clear()
+                navigate({ type: "session", sessionID: id })
+              }}
+            />
+          ))
+      },
+    },
+    {
+      title: i18n.t("tui.browser.control.title"),
+      desc: i18n.t("tui.browser.control.description"),
+      value: "session.browser",
+      category: i18n.t("tui.category.session"),
+      slash: { name: "browser" },
+      run: () => {
+        const sessionID = route.sessionID
+        if (!sessionID) return
+        const client = sdk.client
+        const directory = project.instance.directory()
+        const workspace = project.workspace.current()
+        dialog.replace(() => (
+          <DialogBrowserControl
+            sessionID={sessionID}
+            onUse={(controlID, script) => {
+              if (!validationOwner() || sdk.client !== client || route.type !== "session" || route.sessionID !== sessionID ||
+                project.instance.directory() !== directory || project.workspace.current() !== workspace) return
+              const input = promptRef.current
+              if (!input) return
+              input.set({
+                ...input.current,
+                input: `${input.current.input}\nbrowser controlID: ${controlID}${script
+                  ? `\n${script.mode === "program" ? "Bounded browser program approved; use program with a fresh snapshot/frame and current AX refs bound to target names" : "Read-only page validation approved; use evaluate with a fresh snapshot and frame"}:\n${JSON.stringify(script)}` : ""}`.trimStart(),
+              })
+              input.focus()
+            }}
+          />
+        ))
+      },
+    },
+    {
       title: i18n.t("tui.session.showPlan"),
       desc: i18n.t("tui.session.showPlanDesc"),
       value: "session.plan",
@@ -664,94 +762,18 @@ export function Session() {
       run: async () => {
         const sessionID = route.sessionID
         if (!sessionID) return
-        // W2-2 — plan view + edit. The read path has no legacy guard (DeepAgentPlanStore); edits ride
-        // the same /deepagent/goal/edit-plan admission the app's plan editor uses.
-        const planResponse = await sdk.client.session
-          .plan({ sessionID })
-          .then((x) => x.data)
-          .catch(() => undefined)
-        const result = planResponse?.plan
-        if (!result) {
-          toast.show({
-            variant: "warning",
-            message: i18n.t("tui.session.noPlanYet"),
-            duration: 4000,
-          })
-          dialog.clear()
-          return
-        }
-        const choice = await new Promise<string | null>((resolve) => {
-          dialog.replace(
-            () => (
-              <DialogSelect
-                title={`Plan — ${result.goal}`}
-                skipFilter={true}
-                options={[
-                  {
-                    title: i18n.t("tui.session.editPlan"),
-                    value: "plan.edit",
-                    description: "rewrite goal and steps",
-                  },
-                  ...result.steps.map((step, index) => ({
-                    title: `${index + 1}. ${step.title}`,
-                    description: step.status,
-                    value: `step:${index}`,
-                  })),
-                ]}
-                onSelect={(option) => resolve(option.value)}
-              />
-            ),
-            () => resolve(null),
-          )
+        const client = sdk.client
+        const directory = project.instance.path().directory
+        await openGoalPlan({
+          sdk,
+          sessionID,
+          directory,
+          stateDirectory: goalPaths.state,
+          dialog,
+          current: () =>
+            route.sessionID === sessionID && sdk.client === client && project.instance.path().directory === directory,
+          text: (key) => i18n.t(`tui.goal.plan.${key}` as Parameters<typeof i18n.t>[0]),
         })
-        if (choice !== "plan.edit") {
-          dialog.clear()
-          return
-        }
-        // Edit flow: multiline input "goal\nstep 1\nstep 2…" → edit-plan admission (replan).
-        const edited = await DialogPrompt.show(dialog, "Edit plan — one goal line, then one step per line", {
-          value: [result.goal, ...result.steps.map((s) => s.title)].join("\n"),
-        })
-        if (edited === null) {
-          dialog.clear()
-          return
-        }
-        const [goalLine, ...stepLinesIn] = edited.split("\n").map((l) => l.trim()).filter(Boolean)
-        if (!goalLine || stepLinesIn.length === 0) {
-          toast.show({ variant: "warning", message: i18n.t("tui.session.editPlanNeedsGoalAndSteps"), duration: 4000 })
-          dialog.clear()
-          return
-        }
-        try {
-          await rawRequest({
-            method: "POST",
-            url: "/deepagent/goal/edit-plan",
-            body: {
-              sessionID,
-              request_id: `tui-plan-edit-${Date.now()}`,
-              plan_write: {
-                operation: "replan",
-                expected_plan_id: result.plan_id,
-                expected_version: Number(planResponse?.plan_version ?? 0),
-                replan_reason: "tui plan editor",
-                goal: goalLine,
-                steps: stepLinesIn.map((title, index) => ({
-                  title,
-                  status: index === 0 ? "active" : "pending",
-                })),
-              },
-            },
-            headers: { "Content-Type": "application/json" },
-          })
-          toast.show({ variant: "success", message: i18n.t("tui.session.planUpdated"), duration: 3000 })
-        } catch (error) {
-          toast.show({
-            variant: "error",
-            message: error instanceof Error ? error.message : "Plan edit was rejected",
-            duration: 5000,
-          })
-        }
-        dialog.clear()
       },
     },
     {
@@ -773,11 +795,14 @@ export function Session() {
           return
         }
         void sdk.client.session
-          .summarize({
-            sessionID: route.sessionID,
-            modelID: selectedModel.modelID,
-            providerID: selectedModel.providerID,
-          }, { throwOnError: true })
+          .summarize(
+            {
+              sessionID: route.sessionID,
+              modelID: selectedModel.modelID,
+              providerID: selectedModel.providerID,
+            },
+            { throwOnError: true },
+          )
           .then(() => toast.show({ message: i18n.t("tui.session.compacted"), variant: "success" }))
           .catch((error) => {
             // V2-only profile refuses manual compaction with a typed 503 whose message carries
@@ -801,10 +826,7 @@ export function Session() {
       },
       run: async () => {
         await sdk.client.session
-          .unshare(
-            { sessionID: route.sessionID },
-            { throwOnError: true },
-          )
+          .unshare({ sessionID: route.sessionID }, { throwOnError: true })
           .then(() => toast.show({ message: i18n.t("tui.session.unshared"), variant: "success" }))
           .catch((error) => {
             toast.show({
@@ -826,8 +848,7 @@ export function Session() {
         const status = sync.data.session_status?.[route.sessionID]
         if (status?.type === "busy" || status?.type === "retry")
           await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
-        const revert = session()?.revert?.messageID
-        const message = messages().findLast((x) => (!revert || x.id < revert) && x.role === "user")
+        const message = userTurns().findLast((x) => messageBoundary().before(x.id))
         if (!message) return
         void sdk.client.session
           .revert({
@@ -865,7 +886,7 @@ export function Session() {
         dialog.clear()
         const messageID = session()?.revert?.messageID
         if (!messageID) return
-        const message = messages().find((x) => x.role === "user" && x.id > messageID)
+        const message = userTurns().find((x) => messageBoundary().after(x.id))
         if (!message) {
           void sdk.client.session.unrevert({
             sessionID: route.sessionID,
@@ -1106,9 +1127,8 @@ export function Session() {
       value: "messages.copy",
       category: i18n.t("tui.category.session"),
       run: () => {
-        const revertID = session()?.revert?.messageID
         const lastAssistantMessage = messages().findLast(
-          (msg) => msg.role === "assistant" && (!revertID || msg.id < revertID),
+          (msg) => msg.role === "assistant" && messageBoundary().before(msg.id),
         )
         if (!lastAssistantMessage) {
           toast.show({ message: i18n.t("tui.session.noAssistantMessages"), variant: "error" })
@@ -1360,7 +1380,7 @@ export function Session() {
   const revertRevertedMessages = createMemo(() => {
     const messageID = revertMessageID()
     if (!messageID) return []
-    return messages().filter((x) => x.id >= messageID && x.role === "user")
+    return messages().filter((x) => messageBoundary().atOrAfter(x.id) && x.role === "user")
   })
 
   const revert = createMemo(() => {
@@ -1401,6 +1421,11 @@ export function Session() {
       >
         <box flexDirection="row" flexGrow={1} minHeight={0}>
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
+            <Show when={navigation.canReturnToIM()}>
+              <text fg={theme.primary} onMouseUp={() => navigation.returnToIM()}>
+                {i18n.t("tui.im.taskResult.return")} (/im-return)
+              </text>
+            </Show>
             <Show when={session()}>
               <scrollbox
                 ref={(r) => (scroll = r)}
@@ -1484,7 +1509,7 @@ export function Session() {
                           )
                         })()}
                       </Match>
-                      <Match when={revert()?.messageID && message.id >= revert()!.messageID}>
+                      <Match when={revert()?.messageID && messageBoundary().atOrAfter(message.id)}>
                         <></>
                       </Match>
                       <Match when={message.role === "user"}>
@@ -1502,7 +1527,7 @@ export function Session() {
                           }}
                           message={message as UserMessage}
                           parts={sync.data.part[message.id] ?? []}
-                          pending={pending()}
+                          queued={pending() !== undefined && index() > pending()!}
                         />
                       </Match>
                       <Match when={message.role === "assistant"}>
@@ -1517,6 +1542,7 @@ export function Session() {
                 </For>
               </scrollbox>
               <box flexShrink={0}>
+                <SessionMcpAppInvocations sessionID={route.sessionID} />
                 <Show when={permissions().length > 0}>
                   <PermissionPrompt
                     request={permissions()[0]}
@@ -1599,7 +1625,7 @@ function UserMessage(props: {
   parts: Part[]
   onMouseUp: () => void
   index: number
-  pending?: string
+  queued?: boolean
 }) {
   const ctx = use()
   const local = useLocal()
@@ -1617,7 +1643,7 @@ function UserMessage(props: {
   const files = createMemo(() => props.parts.flatMap((x) => (x.type === "file" ? [x] : [])))
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
-  const queued = createMemo(() => props.pending && props.message.id > props.pending)
+  const queued = () => props.queued
   const color = createMemo(() => local.agent.color(props.message.agent))
   const queuedFg = createMemo(() => selectedForeground(theme, color()))
   const metadataVisible = createMemo(() => queued() || ctx.showTimestamps())

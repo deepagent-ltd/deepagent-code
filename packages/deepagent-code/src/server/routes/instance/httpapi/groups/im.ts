@@ -2,8 +2,14 @@ import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { Multipart } from "effect/unstable/http"
 import { AttachmentStorage } from "@deepagent-code/core/im/attachment-storage"
+import { MediaBatch } from "@deepagent-code/core/im/media-batch"
 import { MessageMetadata } from "@deepagent-code/core/im/sql"
 import { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
+import { KernelReaderSchema } from "@deepagent-code/core/im/kernel-reader.schema"
+import { IMRemoteTaskResult } from "@/im/remote-task-result"
+import { IMTaskStatusLocator } from "@/im/task-status-locator"
+import { IMRemoteTaskStatus } from "@/im/remote-task-status"
+import { IMGroup, MessagePage } from "@deepagent-code/core/im/repository"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import {
@@ -12,8 +18,15 @@ import {
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
 import { described } from "./metadata"
+import { IMDacSessionSchema } from "@deepagent-code/core/im/dac-session.schema"
+import { IMActivationSchema } from "@deepagent-code/core/im/activation.schema"
 
 const root = "/api/v1/im"
+
+export class IMDacCommandError extends Schema.ErrorClass<IMDacCommandError>("IMDacCommandError")({
+  name: Schema.Literal("IM_DAC_COMMAND_REJECTED"),
+  data: Schema.Struct({ code: Schema.String, admitted: Schema.optional(Schema.Literal(false)) }),
+}, { httpApiStatus: 409 }) {}
 
 // Error classes
 export class IMGroupNotFoundError extends Schema.ErrorClass<IMGroupNotFoundError>("IMGroupNotFoundError")(
@@ -103,9 +116,45 @@ export class IMInternalServerError extends Schema.ErrorClass<IMInternalServerErr
   },
   { httpApiStatus: 500 },
 ) {}
+export class IMReaderUnavailableError extends Schema.ErrorClass<IMReaderUnavailableError>("IMReaderUnavailableError")({ name: Schema.Literal("IM_READER_UNAVAILABLE"), data: Schema.Struct({ code: KernelReaderSchema.Code, operation: Schema.String, wireCode: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 65535 }))), message: Schema.String }) }, { httpApiStatus: 503 }) {}
+
+export class IMTaskResultUnavailableError extends Schema.ErrorClass<IMTaskResultUnavailableError>("IMTaskResultUnavailableError")({
+  name: Schema.Literal("IM_TASK_RESULT_UNAVAILABLE"),
+  data: Schema.Struct({ code: Schema.Literal("result_unavailable"), message: Schema.String }),
+}, { httpApiStatus: 503 }) {}
+
+const ResultIdentity = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512))
+const resultFields = { version: Schema.Literal(1), messageID: ResultIdentity, groupID: ResultIdentity }
+export const IMTaskResultResponse = Schema.Union([
+  Schema.Struct({
+    ...resultFields,
+    state: Schema.Literal("available"),
+    placement: Schema.Struct({
+      instanceID: ResultIdentity,
+      securityNamespaceID: ResultIdentity,
+      projectID: ResultIdentity,
+      directory: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+      workspaceID: Schema.NullOr(ResultIdentity),
+      sessionID: ResultIdentity,
+    }),
+    attempt: Schema.Struct({
+      requestID: ResultIdentity,
+      workID: ResultIdentity,
+      inputID: ResultIdentity,
+      ordinal: Schema.Literal(1),
+      outcome: Schema.Literals(["succeeded", "failed"]),
+    }),
+  }),
+  Schema.Struct({
+    ...resultFields,
+    state: Schema.Literal("unavailable"),
+    code: Schema.Literals(["not_task_result", "remote_result_unlinked", "result_changed", "placement_unavailable"]),
+  }),
+])
 
 // Request/Response schemas
 export const IMGroupResponse = Schema.Struct({
+  reader: IMGroup.fields.reader,
   id: Schema.String,
   workspaceID: Schema.String,
   projectID: Schema.NullOr(Schema.String),
@@ -114,8 +163,8 @@ export const IMGroupResponse = Schema.Struct({
   createdBy: Schema.String,
   // B2：k:<type>:<id> 内核会话绑定（1=私聊 2=内核群）；GUI 用它区分全员群/内核群/纯本地群。
   kernelConvID: Schema.NullOr(Schema.String),
-  createdAt: Schema.Number,
-  updatedAt: Schema.Number,
+  createdAt: KernelReaderSchema.Time,
+  updatedAt: KernelReaderSchema.Time,
 })
 
 export const CreateGroupPayload = Schema.Struct({
@@ -134,7 +183,18 @@ export const CreateGroupPayload = Schema.Struct({
   ),
 })
 
+export const ListGroupPageQuery = Schema.Struct({ ...WorkspaceRoutingQueryFields, lane: Schema.Literals(["ordinary", "protected"]), limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 32 }))), cursor: Schema.optional(KernelReaderSchema.text(2048)) })
+export const GroupPageResponse = Schema.Struct({ version: Schema.Literal(1), lane: Schema.Literals(["ordinary", "protected"]), groups: Schema.Array(IMGroupResponse), hasMore: Schema.Boolean, nextCursor: Schema.NullOr(Schema.String), reader: Schema.optional(KernelReaderSchema.GroupPageReader) })
+export const GroupDetailResponse = Schema.Struct({ version: Schema.Literal(1), group: IMGroupResponse, reader: Schema.optional(KernelReaderSchema.GroupPageReader) })
+
 export const IMMessageResponse = Schema.Struct({
+  remoteAttachments: Schema.optional(Schema.Array(KernelReaderSchema.RemoteAttachment)),
+  transport: Schema.optional(
+    Schema.Struct({
+      state: Schema.Literals(["prepared", "acknowledged", "unknown"]),
+      reason: Schema.optional(Schema.String),
+    }),
+  ),
   id: Schema.String,
   groupID: Schema.String,
   senderID: Schema.String,
@@ -149,6 +209,8 @@ export const IMMessageResponse = Schema.Struct({
 })
 
 export const MessagePageResponse = Schema.Struct({
+  reader: MessagePage.fields.reader,
+  protectedUnavailable: MessagePage.fields.protectedUnavailable,
   messages: Schema.Array(IMMessageResponse),
   nextCursor: Schema.NullOr(Schema.String),
   hasMore: Schema.Boolean,
@@ -156,6 +218,11 @@ export const MessagePageResponse = Schema.Struct({
 
 export const CreateMessagePayload = Schema.Struct({
   attachmentID: Schema.optional(Schema.String),
+  attachmentIDs: Schema.optional(Schema.Array(Schema.String.check(
+    Schema.isMinLength(1), Schema.isMaxLength(512),
+    Schema.makeFilter((value) => !value.includes("\u0000") && Buffer.byteLength(value) <= 512),
+  )).check(Schema.isMinLength(1), Schema.isMaxLength(4),
+    Schema.makeFilter((value) => new Set(value).size === value.length))),
   clientRequestID: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128))),
   senderType: Schema.Literals(["user", "agent", "system"]),
   type: Schema.Literals(["text", "code", "file", "agent_status", "system"]),
@@ -163,11 +230,20 @@ export const CreateMessagePayload = Schema.Struct({
   mentions: Schema.optional(Schema.Array(Schema.String)),
   metadata: Schema.optional(MessageMetadata),
   replyToID: Schema.optional(Schema.String),
-})
+}).check(Schema.makeFilter((value) =>
+  !(value.attachmentID !== undefined && value.attachmentIDs !== undefined) &&
+  (value.attachmentIDs === undefined || value.type === "file" && value.clientRequestID !== undefined),
+))
 
 export const MarkReadPayload = Schema.Struct({
   readAt: Schema.optional(Schema.Number),
-})
+  actionID: Schema.optional(Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/))),
+  reconcile: Schema.optional(Schema.Boolean),
+  continue: Schema.optional(Schema.Boolean),
+  cancel: Schema.optional(Schema.Boolean),
+  newAction: Schema.optional(Schema.Boolean),
+}).check(Schema.makeFilter((value) => [value.reconcile, value.continue, value.cancel, value.newAction].filter(Boolean).length <= 1 && (!(value.reconcile || value.continue || value.cancel || value.newAction) || value.actionID !== undefined)))
+export const MarkReadResponse = Schema.Struct({ ok: Schema.Boolean, reader: Schema.optional(Schema.Struct({ actionID: Schema.String, state: Schema.Literals(["confirmed", "partial", "unknown", "cancelled"]), targetAdmitted: Schema.String, readOrdinal: Schema.String, liveUnread: Schema.String })) })
 
 // HTTP wire shape for an agent descriptor. Converged onto the canonical
 // `AgentDescriptor` schema (V3.8.1 §C.3 / conflict C6) so the new optional
@@ -341,6 +417,8 @@ export const IMIdentityResponse = Schema.Struct({
 })
 
 export const IMStatusResponse = Schema.Struct({
+  media: Schema.optional(MediaBatch.Policy),
+  reader: Schema.optional(Schema.Struct({ state: Schema.Literals(["idle", "syncing", "ready", "partial", "unavailable"]), code: Schema.optional(KernelReaderSchema.Code), displayEpoch: Schema.String, legacyMirrorUnavailable: Schema.Boolean })),
   facade: Schema.Literals(["disabled", "claim_required", "blocked", "active"]),
   identity: Schema.NullOr(IMIdentityResponse),
   blocked: Schema.NullOr(Schema.Struct({ code: Schema.String, message: Schema.String })),
@@ -375,7 +453,17 @@ export const IMResolveQuery = Schema.Struct({
 
 // Paths
 export const IMPaths = {
+  activation: `${root}/activation`,
+  activationQuote: `${root}/activation/quote`,
+  activationStatus: `${root}/activation/:transactionID`,
+  dacBinding: `${root}/groups/:groupId/dac`,
+  dacSubmit: `${root}/groups/:groupId/dac/commands`,
+  dacCommand: `${root}/groups/:groupId/dac/commands/:commandID`,
+  dacReplyRetry: `${root}/groups/:groupId/dac/commands/:commandID/reply/retry`,
   groups: `${root}/groups`,
+  groupPage: `${root}/groups/page`,
+  group: `${root}/groups/:groupId`,
+  groupRefresh: `${root}/groups/:groupId/refresh`,
   createGroup: `${root}/groups`,
   messages: `${root}/groups/:groupId/messages`,
   createMessage: `${root}/groups/:groupId/messages`,
@@ -403,10 +491,63 @@ export const IMApi = HttpApi.make("im")
   .add(
     HttpApiGroup.make("im")
       .add(
+        HttpApiEndpoint.get("activationQuote", IMPaths.activationQuote, {
+          query: WorkspaceRoutingQuery, success: IMActivationSchema.Quote,
+          error: [IMFacadeBadRequestError, IMFacadeConflictError, IMFacadeUnavailableError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.activationQuote", summary: "Get explicit IM activation terms without spending credit" })),
+        HttpApiEndpoint.get("activationPending", IMPaths.activation, {
+          query: WorkspaceRoutingQuery, success: IMActivationSchema.Pending,
+          error: [IMFacadeBadRequestError, IMFacadeConflictError, IMFacadeUnavailableError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.activationPending", summary: "Read an unfinished IM activation without another purchase" })),
+        HttpApiEndpoint.get("activationStatus", IMPaths.activationStatus, {
+          params: { transactionID: IMActivationSchema.Transaction.fields.transactionID }, query: WorkspaceRoutingQuery,
+          success: IMActivationSchema.Transaction, error: [IMFacadeBadRequestError, IMFacadeConflictError, IMFacadeUnavailableError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.activationStatus", summary: "Recover the original IM activation receipt" })),
+        HttpApiEndpoint.post("activate", IMPaths.activation, {
+          query: WorkspaceRoutingQuery, payload: IMActivationSchema.Submit, success: IMActivationSchema.Transaction,
+          error: [IMFacadeBadRequestError, IMFacadeConflictError, IMFacadeUnavailableError, HttpApiError.BadRequest],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.activate", summary: "Explicitly redeem an IM code or spend one credit to activate IM" })),
+        HttpApiEndpoint.get("dacBinding", IMPaths.dacBinding, {
+          params: { groupId: Schema.String }, query: WorkspaceRoutingQuery,
+          success: IMDacSessionSchema.BindingResponse,
+          error: [IMReaderUnavailableError, IMGroupNotFoundError, IMDacCommandError, IMInternalServerError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.dacBinding", summary: "Read the owner's ordinary DAC Session binding" })),
+        HttpApiEndpoint.post("dacSubmit", IMPaths.dacSubmit, {
+          params: { groupId: Schema.String }, query: WorkspaceRoutingQuery, payload: IMDacSessionSchema.Submit,
+          success: IMDacSessionSchema.CommandResponse,
+          error: [IMReaderUnavailableError, IMGroupNotFoundError, IMDacCommandError, IMInternalServerError, HttpApiError.BadRequest],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.dacSubmit", summary: "Admit one private /dac command into an ordinary Session" })),
+        HttpApiEndpoint.get("dacCommand", IMPaths.dacCommand, {
+          params: { groupId: Schema.String, commandID: Schema.String }, query: WorkspaceRoutingQuery,
+          success: IMDacSessionSchema.CommandResponse,
+          error: [IMReaderUnavailableError, IMGroupNotFoundError, IMDacCommandError, IMInternalServerError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.dacCommand", summary: "Read durable command admission and final reply status" })),
+        HttpApiEndpoint.post("dacReplyRetry", IMPaths.dacReplyRetry, {
+          params: { groupId: Schema.String, commandID: Schema.String }, query: WorkspaceRoutingQuery,
+          success: IMDacSessionSchema.CommandResponse,
+          error: [IMReaderUnavailableError, IMGroupNotFoundError, IMDacCommandError, IMInternalServerError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.dacReplyRetry", summary: "Explicitly retry a known failed final reply without running the Session again" })),
+        HttpApiEndpoint.get("listGroupPage", IMPaths.groupPage, {
+          query: ListGroupPageQuery,
+          success: described(GroupPageResponse, "Bounded IM group page"),
+          error: [IMReaderUnavailableError, IMValidationFailedError, HttpApiError.BadRequest, IMInternalServerError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.groups.listPage", summary: "List an ordinary or protected IM group page" })),
+        HttpApiEndpoint.get("getGroup", IMPaths.group, {
+          params: { groupId: Schema.String },
+          query: WorkspaceRoutingQuery,
+          success: described(GroupDetailResponse, "Current IM group"),
+          error: [IMReaderUnavailableError, IMGroupNotFoundError, IMInternalServerError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.groups.get", summary: "Get the current IM group" })),
+        HttpApiEndpoint.post("refreshGroup", IMPaths.groupRefresh, {
+          params: { groupId: KernelReaderSchema.text(512) },
+          query: WorkspaceRoutingQuery,
+          success: described(GroupDetailResponse, "Current IM group after authenticated metadata refresh"),
+          error: [IMReaderUnavailableError, IMGroupNotFoundError, IMInternalServerError, HttpApiError.BadRequest],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.groups.refresh", summary: "Refresh one current protected IM group name" })),
         HttpApiEndpoint.get("listGroups", IMPaths.groups, {
           query: WorkspaceRoutingQuery,
           success: described(Schema.Array(IMGroupResponse), "IM groups"),
-          error: IMInternalServerError,
+          error: [IMReaderUnavailableError, IMInternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.groups.list",
@@ -418,7 +559,7 @@ export const IMApi = HttpApi.make("im")
           query: WorkspaceRoutingQuery,
           payload: CreateGroupPayload,
           success: described(IMGroupResponse, "Created IM group"),
-          error: [IMValidationFailedError, HttpApiError.BadRequest, IMInternalServerError],
+          error: [IMReaderUnavailableError, IMValidationFailedError, HttpApiError.BadRequest, IMInternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.groups.create",
@@ -430,7 +571,7 @@ export const IMApi = HttpApi.make("im")
           params: { groupId: Schema.String },
           query: ListMessagesQuery,
           success: described(MessagePageResponse, "IM messages"),
-          error: [IMGroupNotFoundError, IMPermissionDeniedError, IMInternalServerError],
+          error: [IMReaderUnavailableError, IMGroupNotFoundError, IMPermissionDeniedError, IMInternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.messages.list",
@@ -443,7 +584,7 @@ export const IMApi = HttpApi.make("im")
           query: WorkspaceRoutingQuery,
           payload: CreateMessagePayload,
           success: described(IMMessageResponse, "Created message"),
-          error: [
+          error: [IMReaderUnavailableError,
             IMGroupNotFoundError,
             IMFileUploadDisabledError,
             IMAttachmentNotFoundError,
@@ -466,8 +607,8 @@ export const IMApi = HttpApi.make("im")
           params: { groupId: Schema.String },
           query: WorkspaceRoutingQuery,
           payload: MarkReadPayload,
-          success: described(Schema.Struct({ ok: Schema.Boolean }), "Mark as read"),
-          error: [IMGroupNotFoundError, IMPermissionDeniedError, IMInternalServerError],
+          success: described(MarkReadResponse, "Mark as read"),
+          error: [IMReaderUnavailableError, IMGroupNotFoundError, IMPermissionDeniedError, IMInternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.messages.markRead",
@@ -478,7 +619,7 @@ export const IMApi = HttpApi.make("im")
         HttpApiEndpoint.get("listAgents", IMPaths.agents, {
           query: WorkspaceRoutingQuery,
           success: described(Schema.Array(AgentDescriptorResponse), "Available agents"),
-          error: IMInternalServerError,
+          error: [IMReaderUnavailableError, IMInternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.agents.list",
@@ -490,7 +631,7 @@ export const IMApi = HttpApi.make("im")
           params: { messageId: Schema.String },
           query: WorkspaceRoutingQuery,
           success: described(IMMessageResponse, "IM message"),
-          error: [IMMessageNotFoundError, IMPermissionDeniedError, IMInternalServerError],
+          error: [IMReaderUnavailableError, IMMessageNotFoundError, IMPermissionDeniedError, IMInternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.messages.get",
@@ -498,12 +639,60 @@ export const IMApi = HttpApi.make("im")
             description: "Get a single message by ID.",
           }),
         ),
+        HttpApiEndpoint.get("getTaskResult", `${IMPaths.message}/task-result`, {
+          params: { messageId: ResultIdentity },
+          query: WorkspaceRoutingQuery,
+          success: described(IMTaskResultResponse, "Verified task result location"),
+          error: [IMReaderUnavailableError, IMMessageNotFoundError, IMTaskResultUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "im.messages.taskResult",
+            summary: "Locate a task result",
+            description: "Read the original task location after verifying message visibility and durable result identity. Does not resume execution.",
+          }),
+        ),
+        HttpApiEndpoint.get("getTaskStatus", `${IMPaths.message}/task-status`, {
+          params: { messageId: ResultIdentity }, query: WorkspaceRoutingQuery,
+          success: IMTaskStatusLocator.Result,
+          error: [IMReaderUnavailableError, IMMessageNotFoundError, IMTaskResultUnavailableError],
+        }).annotateMerge(OpenApi.annotations({
+          identifier: "im.messages.taskStatus", summary: "Read a verified task status notice",
+          description: "Locate the original fixed notice and read its current owned task state without executing or retrying work.",
+        })),
+        HttpApiEndpoint.get("getRemoteTaskLocator", `${IMPaths.message}/remote-task-locator`, {
+          params: { messageId: ResultIdentity },
+          query: WorkspaceRoutingQuery,
+          success: IMRemoteTaskResult.Locator,
+          error: [IMReaderUnavailableError, IMMessageNotFoundError, IMTaskResultUnavailableError],
+        }).annotateMerge(OpenApi.annotations({
+          identifier: "im.messages.remoteTaskLocator",
+          summary: "Read the verified native result tuple",
+          description: "Read a current visible message's native identity as a lookup candidate. Does not select a remote URL or authorize execution.",
+        })),
+        HttpApiEndpoint.post("lookupRemoteTaskResult", `${root}/tasks/remote-result`, {
+          query: WorkspaceRoutingQuery,
+          payload: Schema.Struct({ tuple: IMRemoteTaskResult.Tuple }),
+          success: IMRemoteTaskResult.Lookup,
+          error: [IMReaderUnavailableError, IMMessageNotFoundError, IMTaskResultUnavailableError],
+        }).annotateMerge(OpenApi.annotations({
+          identifier: "im.tasks.remoteResult",
+          summary: "Locate a result on this authenticated instance",
+          description: "Verify the original acknowledged delivery, owned task and current visibility on the caller-selected instance. Read-only; does not resume execution.",
+        })),
+        HttpApiEndpoint.post("lookupRemoteTaskStatus", `${root}/tasks/remote-status`, {
+          query: WorkspaceRoutingQuery, payload: Schema.Struct({ tuple: IMRemoteTaskResult.Tuple }),
+          success: IMRemoteTaskStatus.Lookup,
+          error: [IMReaderUnavailableError, IMMessageNotFoundError, IMTaskResultUnavailableError],
+        }).annotateMerge(OpenApi.annotations({
+          identifier: "im.tasks.remoteStatus", summary: "Read a current task status on this authenticated instance",
+          description: "Verify the original acknowledged notice and current task management and message visibility on the caller-selected instance. Does not execute, renew or retry work.",
+        })),
         // §B3 Thread — list the replies to a parent message, ASC chronological, keyset paginated.
         HttpApiEndpoint.get("listThread", IMPaths.thread, {
           params: { groupId: Schema.String, messageId: Schema.String },
           query: ThreadQuery,
           success: described(MessagePageResponse, "Thread messages"),
-          error: [IMThreadDisabledError, IMGroupNotFoundError, IMPermissionDeniedError, IMInternalServerError],
+          error: [IMReaderUnavailableError, IMThreadDisabledError, IMGroupNotFoundError, IMPermissionDeniedError, IMInternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.messages.thread",
@@ -515,7 +704,7 @@ export const IMApi = HttpApi.make("im")
         HttpApiEndpoint.get("search", IMPaths.search, {
           query: SearchQuery,
           success: described(MessagePageResponse, "Search results"),
-          error: [IMValidationFailedError, IMInternalServerError],
+          error: [IMReaderUnavailableError, IMValidationFailedError, IMInternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.messages.search",
@@ -529,7 +718,7 @@ export const IMApi = HttpApi.make("im")
           query: WorkspaceRoutingQuery,
           payload: UploadAttachmentPayload,
           success: described(IMAttachmentResponse, "Uploaded attachment"),
-          error: [
+          error: [IMReaderUnavailableError,
             IMFileUploadDisabledError,
             IMAttachmentNotFoundError,
             IMFileTooLargeError,
@@ -551,7 +740,7 @@ export const IMApi = HttpApi.make("im")
         HttpApiEndpoint.get("listAttachments", IMPaths.listAttachments, {
           query: ListAttachmentsQuery,
           success: described(Schema.Array(IMAttachmentResponse), "Attachments"),
-          error: [IMFileUploadDisabledError, IMGroupNotFoundError, IMValidationFailedError, IMAttachmentNotFoundError, IMInternalServerError],
+          error: [IMReaderUnavailableError, IMFileUploadDisabledError, IMGroupNotFoundError, IMValidationFailedError, IMAttachmentNotFoundError, IMInternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.attachments.list",
@@ -563,21 +752,33 @@ export const IMApi = HttpApi.make("im")
           params: { attachmentId: Schema.String },
           query: WorkspaceRoutingQuery,
           success: IMAttachmentResponse,
-          error: [IMFileUploadDisabledError, IMGroupNotFoundError, IMAttachmentNotFoundError, IMValidationFailedError, IMInternalServerError],
+          error: [IMReaderUnavailableError, IMFileUploadDisabledError, IMGroupNotFoundError, IMAttachmentNotFoundError, IMValidationFailedError, IMInternalServerError],
         }).annotateMerge(OpenApi.annotations({ identifier: "im.attachments.get", summary: "Read an authorized local attachment" })),
         HttpApiEndpoint.get("downloadAttachment", `${root}/attachments/:attachmentId/content`, {
           params: { attachmentId: Schema.String },
           query: WorkspaceRoutingQuery,
           success: Schema.Uint8Array.pipe(HttpApiSchema.asUint8Array()),
-          error: [IMFileUploadDisabledError, IMGroupNotFoundError, IMAttachmentNotFoundError, IMValidationFailedError, IMInternalServerError],
+          error: [IMReaderUnavailableError, IMFileUploadDisabledError, IMGroupNotFoundError, IMAttachmentNotFoundError, IMValidationFailedError, IMInternalServerError],
         }).annotateMerge(OpenApi.annotations({ identifier: "im.attachments.download", summary: "Download authorized local attachment bytes" })),
+        HttpApiEndpoint.get("getRemoteAttachment", `${root}/groups/:groupId/messages/:messageId/attachments/:attachmentId`, {
+          params: { groupId: Schema.String, messageId: Schema.String, attachmentId: KernelReaderSchema.Hash },
+          query: WorkspaceRoutingQuery,
+          success: KernelReaderSchema.RemoteAttachment,
+          error: [IMReaderUnavailableError, IMFileUploadDisabledError, IMAttachmentNotFoundError, IMValidationFailedError, IMInternalServerError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.attachments.remote.get", summary: "Read current protected message attachment metadata" })),
+        HttpApiEndpoint.get("downloadRemoteAttachment", `${root}/groups/:groupId/messages/:messageId/attachments/:attachmentId/content`, {
+          params: { groupId: Schema.String, messageId: Schema.String, attachmentId: KernelReaderSchema.Hash },
+          query: WorkspaceRoutingQuery,
+          success: Schema.Uint8Array.pipe(HttpApiSchema.asUint8Array()),
+          error: [IMReaderUnavailableError, IMFileUploadDisabledError, IMAttachmentNotFoundError, IMValidationFailedError, IMInternalServerError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.attachments.remote.download", summary: "Stream current authorized protected attachment bytes" })),
         // ── B2 门面端点 ─────────────────────────────────────────────────────────────
         // 状态快照永远可用（facade 缺席 ⇒ disabled 快照而非错误）；门面操作在 facade 缺席时
         // 由 handler 侧合成 im_unavailable (IMFacadeUnavailableError)。
         HttpApiEndpoint.get("facadeStatus", IMPaths.status, {
           query: WorkspaceRoutingQuery,
           success: described(IMStatusResponse, "IM facade status"),
-          error: IMInternalServerError,
+          error: [IMReaderUnavailableError, IMInternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.facade.status",
@@ -677,7 +878,7 @@ export const IMApi = HttpApi.make("im")
           query: WorkspaceRoutingQuery,
           payload: IMNamePayload,
           success: described(Schema.Struct({ ok: Schema.Boolean }), "Invite result"),
-          error: [...IMFacadeEndpointErrors, IMGroupNotFoundError],
+          error: [IMReaderUnavailableError, ...IMFacadeEndpointErrors, IMGroupNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.facade.groups.invite",

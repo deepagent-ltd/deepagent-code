@@ -1,3 +1,5 @@
+import { McpReadModel } from "@/mcp/read-model"
+import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
 import { BackgroundJob } from "@/background/job"
@@ -11,7 +13,7 @@ import type { SessionID } from "@/session/schema"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Worktree } from "@/worktree"
-import { Effect, Option } from "effect"
+import { Effect, Layer, Option } from "effect"
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
@@ -25,6 +27,7 @@ function mapWorktreeError<A, R>(self: Effect.Effect<A, Worktree.Error, R>) {
 
 export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "experimental", (handlers) =>
   Effect.gen(function* () {
+    const reads = yield* McpReadModel.Service
     const account = yield* Account.Service
     const agents = yield* Agent.Service
     const config = yield* Config.Service
@@ -206,7 +209,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     })
 
     const resource = Effect.fn("ExperimentalHttpApi.resource")(function* () {
-      return yield* mcp.resources()
+      return yield* reads.resources(yield* WorkspaceRouteContext)
     })
 
     return handlers
@@ -228,4 +231,4 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("sessionBackground", sessionBackground)
       .handle("resource", resource)
   }),
-)
+).pipe(Layer.provide(McpReadModel.layer))

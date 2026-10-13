@@ -38,6 +38,13 @@ export const Info = Schema.Struct({
   hints: Schema.Array(Schema.String),
 }).annotate({ identifier: "Command" })
 
+export const ReadInfo = Schema.Struct({
+  ...Info.fields,
+  template: Schema.optional(Schema.Unknown),
+  availability: Schema.optional(Schema.Literals(["available", "connect_required", "unavailable"])),
+}).annotate({ identifier: "CommandRead" })
+export type ReadInfo = typeof ReadInfo.Type
+
 export type Info = Omit<Schema.Schema.Type<typeof Info>, "template"> & { template: Promise<string> | string }
 
 export function hints(template: string) {
@@ -55,9 +62,16 @@ export const Default = {
   REVIEW: "review",
 } as const
 
+type AwaitedMetadata = Effect.Success<ReturnType<NonNullable<MCP.Interface["observedMetadata"]>>>["prompts"]
+
 export interface Interface {
   readonly get: (name: string) => Effect.Effect<Info | undefined>
   readonly list: () => Effect.Effect<Info[]>
+  readonly readonlyList: (
+    snapshot: Config.ReadSnapshot,
+    prompts: AwaitedMetadata,
+    observed?: InstanceContext,
+  ) => Effect.Effect<ReadInfo[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/Command") {}
@@ -168,7 +182,66 @@ export const layer = Layer.effect(
       return Object.values(s.commands)
     })
 
-    return Service.of({ get, list })
+    const readonlyList = Effect.fn("Command.readonlyList")(function* (
+      snapshot: Config.ReadSnapshot,
+      prompts: AwaitedMetadata,
+      observed?: InstanceContext,
+    ) {
+      const result: Record<string, ReadInfo> = {
+        [Default.INIT]: {
+          name: Default.INIT,
+          description: "guided AGENTS.md setup",
+          source: "command",
+          template: PROMPT_INITIALIZE.replace("${path}", snapshot.worktree),
+          hints: hints(PROMPT_INITIALIZE),
+          availability: "available",
+        },
+        [Default.REVIEW]: {
+          name: Default.REVIEW,
+          description: "review changes [commit|branch|pr], defaults to uncommitted",
+          source: "command",
+          template: PROMPT_REVIEW.replace("${path}", snapshot.worktree),
+          hints: hints(PROMPT_REVIEW),
+          subtask: true,
+          availability: "available",
+        },
+      }
+      for (const [name, value] of Object.entries(snapshot.config.command ?? {}))
+        result[name] = {
+          name,
+          agent: value.agent,
+          model: value.model,
+          description: value.description,
+          source: "command",
+          template: value.template,
+          subtask: value.subtask,
+          hints: hints(value.template),
+          availability: "available",
+        }
+      // Prompt display never evaluates the execution Info.template getter/Promise.
+      for (const [name, value] of Object.entries(prompts))
+        result[name] = {
+          name,
+          source: "mcp",
+          description: value.description,
+          hints: value.arguments?.map((_, index) => `$${index + 1}`) ?? [],
+          availability: "available",
+        }
+      if (!skill.readonlyAt) return yield* Effect.die(new Error("Readonly skill observation unavailable"))
+      for (const value of yield* skill.readonlyAt(snapshot, observed))
+        if (!result[value.name])
+          result[value.name] = {
+            name: value.name,
+            source: "skill",
+            description: value.description,
+            template: value.content,
+            hints: [],
+            availability: "available",
+          }
+      return Object.values(result)
+    })
+
+    return Service.of({ get, list, readonlyList })
   }),
 )
 

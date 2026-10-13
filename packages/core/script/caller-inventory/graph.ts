@@ -90,9 +90,20 @@ export function edges(file: string): readonly ImportEdge[] {
     out.push({ target, line })
   }
   for (const st of sf.statements) {
-    if (!ts.isImportDeclaration(st)) continue
-    const spec = st.moduleSpecifier.getText(sf).slice(1, -1)
-    recordEdge(spec, sf.getLineAndCharacterOfPosition(st.getStart()).line + 1)
+    if (ts.isImportDeclaration(st)) {
+      const clause = st.importClause
+      if (clause?.isTypeOnly || (clause && !clause.name && clause.namedBindings &&
+        ts.isNamedImports(clause.namedBindings) && clause.namedBindings.elements.length > 0 &&
+        clause.namedBindings.elements.every((binding) => binding.isTypeOnly))) continue
+      recordEdge(st.moduleSpecifier.getText(sf).slice(1, -1), sf.getLineAndCharacterOfPosition(st.getStart()).line + 1)
+    }
+    // Re-exporting a runtime binding loads its module just like an import. In particular, the
+    // physical Desktop Node entry exports the original Server instead of importing it locally.
+    if (ts.isExportDeclaration(st) && st.moduleSpecifier) {
+      if (st.isTypeOnly || (st.exportClause && ts.isNamedExports(st.exportClause) &&
+        st.exportClause.elements.length > 0 && st.exportClause.elements.every((binding) => binding.isTypeOnly))) continue
+      recordEdge(st.moduleSpecifier.getText(sf).slice(1, -1), sf.getLineAndCharacterOfPosition(st.getStart()).line + 1)
+    }
   }
   // Dynamic import() edges are REAL runtime imports (e.g. the lildax CLI lazily loads command
   // handlers and their authority-bearing modules). Ignoring them makes the reach closure
@@ -271,7 +282,7 @@ function commandObjectRunBodies(
 }
 
 export function bodyScopes(sites: readonly HandlerSite[]): BodyScope {
-  const usable = sites.filter((site) => site.group !== undefined || site.commandObject !== undefined)
+  const usable = sites.filter((site) => site.group !== undefined || site.commandObject !== undefined || site.bodyDecl !== undefined)
   const key = usable.map((site) => `${site.repoFile}:${site.line}:${site.bodyDecl ?? ""}`).join("\u0001")
   const cached = bodyScopeCache.get(key)
   if (cached) return cached
@@ -295,6 +306,10 @@ export function bodyScopes(sites: readonly HandlerSite[]): BodyScope {
       }
     }
     for (const site of sitesInFile.sort((a, b) => a.line - b.line)) {
+      if (site.group === undefined && site.commandObject === undefined && site.bodyDecl) {
+        for (const node of declarationNodes(mod, site.bodyDecl)) enqueue(node)
+        continue
+      }
       if (site.commandObject !== undefined) {
         // Yargs-style registration: `.command(XxxCommand)` — the run body is the `run` member of
         // the same-file command object literal. Resolved here so CLI entries earn body proofs.
@@ -311,7 +326,8 @@ export function bodyScopes(sites: readonly HandlerSite[]): BodyScope {
       }
       enqueue(target)
     }
-    // Bounded expansion of same-file callees referenced as bare identifiers in call position.
+    // Expand invoked helpers and actually yielded same-file Effect values. Merely declaring an
+    // authentication Effect in the module must never prove that a handler executes it.
     let processed = 0
     while (queue.length > 0 && processed < 24) {
       const node = queue.shift()
@@ -321,6 +337,20 @@ export function bodyScopes(sites: readonly HandlerSite[]): BodyScope {
       const callees: string[] = []
       const collectCallees = (inner: ts.Node): void => {
         if (ts.isCallExpression(inner) && ts.isIdentifier(inner.expression)) callees.push(inner.expression.text)
+        if (ts.isYieldExpression(inner) && inner.expression) {
+          const yielded = inner.expression
+          const name = ts.isIdentifier(yielded) ? yielded.text
+            : ts.isCallExpression(yielded) && ts.isPropertyAccessExpression(yielded.expression) &&
+              yielded.expression.name.text === "pipe" && ts.isIdentifier(yielded.expression.expression)
+              ? yielded.expression.expression.text : undefined
+          if (name) {
+            for (const candidate of declarationNodes(mod, name)) {
+              if (ts.isCallExpression(candidate) && ts.isPropertyAccessExpression(candidate.expression) &&
+                ts.isIdentifier(candidate.expression.expression) && candidate.expression.expression.text === "Effect")
+                enqueue(candidate)
+            }
+          }
+        }
         ts.forEachChild(inner, collectCallees)
       }
       collectCallees(node)
@@ -447,19 +477,31 @@ function delegationSpawnHit(entryFile: string, extraRoots: readonly string[], ta
     const mod = parseModule(file)
     const sf = mod.sourceFile
     let found: VerifiedHit | undefined
-    // Collect string fragments a spawn/fork argument could resolve to (string literal directly, or
-    // the string literals inside a const initializer like join(dirname(...), "sidecar.js")).
-    const stringFragments = (expr: ts.Expression): string[] => {
-      const out: string[] = []
-      const collect = (node: ts.Node): void => {
-        if (ts.isStringLiteralLike(node)) out.push(node.text)
-        ts.forEachChild(node, collect)
-      }
-      collect(expr)
+    // Follow only actual URL/path construction and same-file const bindings. An unused string
+    // elsewhere in the module or inside an arbitrary function argument cannot bind a receiver.
+    const stringFragments = (expr: ts.Expression, depth = 0, seen = new Set<string>()): string[] => {
+      if (depth > 8) return []
+      if (ts.isStringLiteralLike(expr)) return [expr.text]
       if (ts.isIdentifier(expr)) {
-        for (const decl of declarationNodes(mod, expr.text)) collect(decl)
+        if (seen.has(expr.text)) return []
+        const next = new Set([...seen, expr.text])
+        return declarationNodes(mod, expr.text).flatMap((decl) =>
+          ts.isVariableDeclaration(decl.parent) && ts.isVariableDeclarationList(decl.parent.parent) &&
+          (decl.parent.parent.flags & ts.NodeFlags.Const) !== 0 && ts.isExpression(decl)
+            ? stringFragments(decl, depth + 1, next) : [])
       }
-      return out
+      if (ts.isPropertyAccessExpression(expr) && ["href", "pathname"].includes(expr.name.text))
+        return stringFragments(expr.expression, depth + 1, seen)
+      if (ts.isNewExpression(expr) && ts.isIdentifier(expr.expression) && expr.expression.text === "URL")
+        return expr.arguments?.[0] ? stringFragments(expr.arguments[0], depth + 1, seen) : []
+      if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression)) {
+        const specifier = mod.imports.get(expr.expression.text)?.specifier
+        if (expr.expression.text === "fileURLToPath" && specifier === "node:url")
+          return expr.arguments[0] ? stringFragments(expr.arguments[0], depth + 1, seen) : []
+        if (["join", "resolve"].includes(expr.expression.text) && specifier === "node:path")
+          return expr.arguments.flatMap((argument) => stringFragments(argument, depth + 1, seen))
+      }
+      return []
     }
     const visit = (node: ts.Node): void => {
       if (found) return
@@ -467,9 +509,8 @@ function delegationSpawnHit(entryFile: string, extraRoots: readonly string[], ta
         const callee = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text
           : ts.isIdentifier(node.expression) ? node.expression.text : undefined
         if (
-          ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-          ts.isStringLiteralLike(node.arguments[0]) &&
-          DELEGATION_SPAWN_BINDINGS[node.arguments[0].text] === targetId
+          node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0] &&
+          stringFragments(node.arguments[0]).some((fragment) => DELEGATION_SPAWN_BINDINGS[fragment] === targetId)
         ) {
           found = { marker: `delegates:${targetId}`, file, line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1 }
           return

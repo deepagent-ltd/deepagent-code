@@ -358,6 +358,7 @@ export type ToolPart = Omit<Types.DeepMutable<Schema.Schema.Type<typeof ToolPart
 const messageBase = {
   id: MessageID,
   sessionID: partBase.sessionID,
+  canonicalSeq: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER))),
 }
 
 const FileDiff = Schema.Struct({
@@ -737,6 +738,16 @@ export const Event = {
       sessionID: SessionSchema.ID,
       part: Part,
       time: Schema.Finite,
+    },
+  }),
+  PartDelta: EventV2.define({
+    type: "message.part.delta",
+    schema: {
+      sessionID: SessionSchema.ID,
+      messageID: MessageID,
+      partID: PartID,
+      field: Schema.String,
+      delta: Schema.String,
     },
   }),
   PartRemoved: EventV2.define({

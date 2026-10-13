@@ -7,10 +7,10 @@ import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { useIMClient } from "@/utils/im-client"
 import { facadeFailureText, type FacadeFailureLike } from "./facade-errors"
-import { submitFacadeGroupCreate, submitFacadeName, submitFacadeRebind } from "@/pages/session/im-panel-helpers"
+import { submitFacadeGroupCreate, submitFacadeName } from "@/pages/session/im-panel-helpers"
 import type { IMGroup } from "./types"
 
-// B2 门面对话框：rebind（换 key 找回）与内核建群（群名 + 成员名 chips，逐个 resolve 验证）。
+// Kernel group dialog: resolve each member name before explicit group creation.
 // 流程逻辑在 im-panel-helpers 纯函数里，这里只做对话框接线。
 
 const inputClass =
@@ -22,62 +22,6 @@ const DialogFailure: Component<{ failure: FacadeFailureLike }> = (props) => {
     <div role="alert">
       <div class="text-12-regular text-text-critical">{facadeFailureText(language.t, props.failure)}</div>
     </div>
-  )
-}
-
-/** 换 key 找回：输入新 sk- key → 门面 rebind → 成功后 onRebound（父级刷新状态/群列表）。 */
-export const RebindDialog: Component<{ onRebound: () => void }> = (props) => {
-  const language = useLanguage()
-  const client = useIMClient()
-  const dialog = useDialog()
-  const [key, setKey] = createSignal("")
-  const [busy, setBusy] = createSignal(false)
-  const [failure, setFailure] = createSignal<FacadeFailureLike | null>(null)
-
-  const submit = async () => {
-    if (busy()) return
-    setBusy(true)
-    setFailure(null)
-    const result = await submitFacadeRebind(key(), (k) => client.facadeRebind(k))
-    setBusy(false)
-    if ("skipped" in result) return
-    if ("errorCode" in result) {
-      setFailure(result)
-      return
-    }
-    dialog.close()
-    props.onRebound()
-  }
-
-  return (
-    <Dialog title={language.t("im.facade.rebind.title")} description={language.t("im.facade.rebind.description")}>
-      <div class="flex flex-col gap-2">
-        <InlineInput
-          autofocus
-          type="password"
-          autocomplete="off"
-          spellcheck={false}
-          class={inputClass}
-          value={key()}
-          placeholder={language.t("im.facade.rebind.placeholder")}
-          aria-label={language.t("im.facade.rebind.title")}
-          aria-invalid={!!failure()}
-          disabled={busy()}
-          onInput={(event) => setKey(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            event.stopPropagation()
-            if (event.isComposing || event.keyCode === 229) return
-            if (event.key === "Enter") void submit()
-          }}
-        />
-        <Show when={failure()}>{(f) => <DialogFailure failure={f()} />}</Show>
-        <div>
-          <Button variant="primary" size="small" disabled={busy() || !key().trim()} onClick={() => void submit()}>
-            {language.t("im.facade.rebind.submit")}
-          </Button>
-        </div>
-      </div>
-    </Dialog>
   )
 }
 

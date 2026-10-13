@@ -1,9 +1,31 @@
 export * as PermissionV2 from "./permission"
 
 import { ToolFailure } from "@deepagent-code/llm"
-import { Context, Deferred, Duration, Effect as EffectRuntime, Layer, Ref, Schedule, Schema, Semaphore } from "effect"
-import { and, eq, isNull } from "drizzle-orm"
+import {
+  Cause,
+  Context,
+  Deferred,
+  Duration,
+  Effect as EffectRuntime,
+  Layer,
+  Ref,
+  Schedule,
+  Schema,
+  Semaphore,
+  type Scope,
+} from "effect"
+import { and, eq, isNull, sql } from "drizzle-orm"
 import { Database } from "./database/database"
+import { GoalChildSchema } from "./deepagent/goal-child.schema"
+import { GoalChildUnitTable } from "./deepagent/goal-child.sql"
+import { GoalControl } from "./deepagent/goal-control"
+import { DeepAgentPlanStore } from "./deepagent/plan-store"
+import { DocumentStore } from "./deepagent/document-store"
+import { GoalChildExecution } from "./deepagent/goal-child-execution"
+import { WorkToolPolicy } from "./session/work-tool-policy"
+import { WorkAuthority } from "./session/work-authority"
+import { GoalChild } from "./deepagent/goal-child"
+import { GoalChildPolicy } from "./deepagent/goal-child-policy"
 import { DeepAgentActivityAuthority } from "./deepagent/activity-authority"
 import { SessionActivityPermissionRequestTable } from "./deepagent/activity-authority.sql"
 import { makeLocationNode } from "./effect/app-node"
@@ -13,11 +35,16 @@ import { AgentV2 } from "./agent"
 import { SessionNotFound } from "./session/error"
 import { SessionSchema } from "./session/schema"
 import { SessionStore } from "./session/store"
+import { SessionTable } from "./session/sql"
 import { withStatics } from "./schema"
 import { Identifier } from "./util/identifier"
 import { Wildcard } from "./util/wildcard"
 import { PermissionSchema } from "./permission/schema"
 import { PermissionSaved } from "./permission/saved"
+import { PermissionSavedEpochTable } from "./permission/sql"
+import { CanonicalJson } from "./util/canonical-json"
+import { McpAppInvocationSchema } from "./session/mcp-app-invocation.schema"
+import { Hash } from "./util/hash"
 
 export { Effect, Rule, Ruleset } from "./permission/schema"
 type Effect = PermissionSchema.Effect
@@ -37,6 +64,7 @@ export const Source = Schema.Union([
     messageID: Schema.String,
     callID: Schema.String,
   }),
+  McpAppInvocationSchema.PermissionSource,
 ]).annotate({ identifier: "PermissionV2.Source" })
 export type Source = typeof Source.Type
 
@@ -173,11 +201,55 @@ export function isActionWhollyDenied(action: string, ...rulesets: Ruleset[]): bo
   })
 }
 
+declare const ActionPermitType: unique symbol
+export type ActionPermit = { readonly [ActionPermitType]: true }
+
+declare const FileActionsType: unique symbol
+export type FileActions = { readonly [FileActionsType]: true }
+type ActionPair = { readonly permit: ActionPermit; readonly input: AssertInput }
+type FileActionsView = { readonly sessionID: SessionSchema.ID; readonly projectID: string;
+  readonly directory: Location.Interface["directory"]; readonly workspaceID: Location.Interface["workspaceID"];
+  readonly permissionRaw: string | null; readonly savedEpoch: number }
+const fileActions = new WeakMap<FileActions, { view: FileActionsView; current: () => boolean }>()
+declare const AppActionType: unique symbol
+export type AppAction = { readonly [AppActionType]: true }
+const appActions = new WeakMap<AppAction, { readonly check: EffectRuntime.Effect<void, Error | SessionNotFound.Error>; readonly current: () => boolean;
+  readonly receipt: typeof McpAppInvocationSchema.PermissionReceipt.Type }>()
+export function appActionCurrent(token: AppAction) { return appActions.get(token)?.current() === true }
+export function appActionReceipt(token: AppAction) { const saved = appActions.get(token); return saved?.current() ? saved.receipt : undefined }
+/** The caller's short transaction consumes only original permits, SQL and current objects. */
+export const consumeAppAction = (token: AppAction) => EffectRuntime.suspend(() => {
+  const saved = appActions.get(token)
+  return saved?.current() ? saved.check : EffectRuntime.fail(new DeniedError({ rules: [] }))
+})
+/** A view exists only while both original permits, their service and the captured Agent are live. */
+export function fileActionsView(token: FileActions): FileActionsView | undefined {
+  const saved = fileActions.get(token)
+  return saved?.current() ? saved.view : undefined
+}
+
 export interface Interface {
   /** Tool-only service fixtures may omit this; the V2 no-progress runner then fails closed. */
   readonly currentNoProgressOwnerID?: () => EffectRuntime.Effect<string>
   readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionNotFound.Error | CapacityError>
   readonly assert: (input: AssertInput) => EffectRuntime.Effect<void, Error | SessionNotFound.Error>
+  /** Internal multi-step leaf capability. Once approval stays scoped to the exact source,
+   * action and resources; every physical boundary must check it again without asking anew. */
+  readonly authorizeAction?: (input: AssertInput) => EffectRuntime.Effect<ActionPermit, Error | SessionNotFound.Error, Scope.Scope>
+  readonly checkAction?: (permit: ActionPermit, input: AssertInput) => EffectRuntime.Effect<void, Error | SessionNotFound.Error>
+  readonly captureAppAction?: (permit: ActionPermit, input: AssertInput) => EffectRuntime.Effect<AppAction, Error | SessionNotFound.Error, Scope.Scope>
+  /** Internal ordinary-file optimization. Call in the same short DB transaction as the
+   * canonical frame/control capture. Missing support retains the complete current check. */
+  readonly captureFileActions?: (browser: ActionPair, file: ActionPair) =>
+    EffectRuntime.Effect<FileActions | undefined, Error | SessionNotFound.Error>
+  /** Internal native preparation only. It cannot be addressed by HTTP/tool payloads. */
+  readonly prepareGoalScratch?: (input: {
+    unitID: string
+    policy: GoalChildPolicy.Snapshot
+  }) => EffectRuntime.Effect<
+    NonNullable<GoalChildSchema.InputReceipt["scratch"]>,
+    Error | SessionNotFound.Error | GoalChildSchema.Error
+  >
   readonly reply: (input: ReplyInput) => EffectRuntime.Effect<void, NotFoundError>
   readonly get: (id: ID) => EffectRuntime.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionSchema.ID) => EffectRuntime.Effect<ReadonlyArray<Request>>
@@ -204,29 +276,34 @@ export const layer = Layer.effect(
     const noProgressOwner = yield* Ref.make(`v2-no-progress:${Identifier.ascending()}`)
     const withNoProgressOwner = Semaphore.makeUnsafe(1).withPermit
     const pending = new Map<ID, Pending>()
-    const recoverPermissions = withNoProgressOwner(EffectRuntime.gen(function* () {
-      const ownerID = yield* Ref.get(noProgressOwner)
-      yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID, leaseMs: 30_000 }).pipe(
-        EffectRuntime.catchTag("ActivityAuthority.ConflictError", () =>
-          EffectRuntime.gen(function* () {
-            // An expired owner cannot regain its fence. Rotate to a fresh identity, which
-            // atomically quarantines its started effects and settles its pending requests.
-            const nextOwnerID = `v2-no-progress:${Identifier.ascending()}`
-            yield* DeepAgentActivityAuthority.rotatePermissionOwner({
-              previousOwnerID: ownerID,
-              ownerID: nextOwnerID,
-              leaseMs: 30_000,
-            })
-            yield* Ref.set(noProgressOwner, nextOwnerID)
-          }),
-        ),
-      )
-      const recoveryOwnerID = yield* Ref.get(noProgressOwner)
-      // An abandoned external effect must be quarantined before its permission is settled;
-      // recovery otherwise crosses the activity terminal fence and can leave the ask stranded.
-      yield* DeepAgentActivityAuthority.recoverPermissionEffects(recoveryOwnerID)
-      yield* DeepAgentActivityAuthority.recoverPendingPermissions(recoveryOwnerID)
-    })).pipe(EffectRuntime.provideService(Database.Service, database))
+    const actionPermits = new WeakMap<ActionPermit, { input: string; rules: string; savedEpoch: number }>()
+    const actionLifetime = { active: true }
+    yield* EffectRuntime.addFinalizer(() => EffectRuntime.sync(() => { actionLifetime.active = false }))
+    const recoverPermissions = withNoProgressOwner(
+      EffectRuntime.gen(function* () {
+        const ownerID = yield* Ref.get(noProgressOwner)
+        yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID, leaseMs: 30_000 }).pipe(
+          EffectRuntime.catchTag("ActivityAuthority.ConflictError", () =>
+            EffectRuntime.gen(function* () {
+              // An expired owner cannot regain its fence. Rotate to a fresh identity, which
+              // atomically quarantines its started effects and settles its pending requests.
+              const nextOwnerID = `v2-no-progress:${Identifier.ascending()}`
+              yield* DeepAgentActivityAuthority.rotatePermissionOwner({
+                previousOwnerID: ownerID,
+                ownerID: nextOwnerID,
+                leaseMs: 30_000,
+              })
+              yield* Ref.set(noProgressOwner, nextOwnerID)
+            }),
+          ),
+        )
+        const recoveryOwnerID = yield* Ref.get(noProgressOwner)
+        // An abandoned external effect must be quarantined before its permission is settled;
+        // recovery otherwise crosses the activity terminal fence and can leave the ask stranded.
+        yield* DeepAgentActivityAuthority.recoverPermissionEffects(recoveryOwnerID)
+        yield* DeepAgentActivityAuthority.recoverPendingPermissions(recoveryOwnerID)
+      }),
+    ).pipe(EffectRuntime.provideService(Database.Service, database))
     yield* recoverPermissions.pipe(EffectRuntime.orDie)
     yield* recoverPermissions.pipe(
       EffectRuntime.catchCause((cause) => EffectRuntime.logError("V2 no-progress owner heartbeat failed", { cause })),
@@ -259,6 +336,28 @@ export const layer = Layer.effect(
       const session = yield* sessions.get(sessionID)
       if (!session) return yield* new SessionNotFound.Error({ sessionID })
       const agent = yield* agents.resolve(agentID ?? session.agent)
+      const managed = yield* GoalChild.owner(database.db, sessionID).pipe(EffectRuntime.orDie)
+      if (managed?.binding.version === 2 || managed?.binding.version === 3) {
+        const policy = yield* GoalChildPolicy.requireCurrent(database.db, managed.binding).pipe(EffectRuntime.orDie)
+        if (!policy || agent?.id !== managed.binding.agent) return [missingAgentPermissions] as const
+        // Each complete ordered ruleset stays independent. A capability never overrides parent deny.
+        const finalizer = managed.binding.version === 3 && managed.inputs.at(-1)?.stage.startsWith("finalizer.")
+        const role: Ruleset = finalizer
+          ? [{ action: "*", resource: "*", effect: "deny" }]
+          : [
+              { action: "plan", resource: "*", effect: "deny" },
+              ...(policy.role.planWriteOwnGoal
+                ? [{ action: "plan", resource: policy.planResource, effect: "allow" } as const]
+                : []),
+            ]
+        return [
+          agent.permissions,
+          session.permissions,
+          policy.parentAgentPermissions,
+          policy.parentSessionPermissions,
+          role,
+        ] as const
+      }
       return [agent?.permissions ?? missingAgentPermissions, session.permissions] as const
     })
 
@@ -327,9 +426,10 @@ export const layer = Layer.effect(
       return { id: value.id, effect: result.effect }
     })
 
-    const assert = EffectRuntime.fn("PermissionV2.assert")((input: AssertInput) =>
+    const assertCurrent = <E>(input: AssertInput, currentGuard: EffectRuntime.Effect<void, E>) =>
       EffectRuntime.uninterruptibleMask((restore) =>
         EffectRuntime.gen(function* () {
+          yield* currentGuard
           const result = yield* evaluateInput(input)
           if (result.effect === "deny") {
             return yield* new DeniedError({
@@ -338,16 +438,211 @@ export const layer = Layer.effect(
           }
           if (result.effect === "allow") return
           const item = yield* create(request(input), input.agent)
-          return yield* restore(Deferred.await(item.deferred)).pipe(
+          yield* restore(Deferred.await(item.deferred)).pipe(
+            EffectRuntime.onInterrupt(() => EffectRuntime.gen(function* () {
+              if (pending.get(item.request.id) !== item) return
+              pending.delete(item.request.id)
+              // This is the original wait being cancelled, not a user approval or effect grant.
+              yield* events.publish(Event.Replied, {
+                sessionID: item.request.sessionID,
+                requestID: item.request.id,
+                reply: "reject",
+              }).pipe(EffectRuntime.catchCause((cause) => EffectRuntime.logError(
+                "Permission cancellation projection failed", { cause },
+              )))
+            })),
             EffectRuntime.ensuring(
               EffectRuntime.sync(() => {
-                pending.delete(item.request.id)
+                if (pending.get(item.request.id) === item) pending.delete(item.request.id)
               }),
             ),
           )
+          yield* currentGuard
+          // Approval applies to this request, not a later hard-denied policy.
+          const current = yield* evaluateInput(input)
+          if (current.effect === "deny") return yield* new DeniedError({ rules: current.rules })
         }),
+      )
+
+    const assert = EffectRuntime.fn("PermissionV2.assert")((input: AssertInput) =>
+      assertCurrent(
+        input,
+        GoalChildExecution.requireExecution(database.db, input.sessionID).pipe(
+          EffectRuntime.andThen(() => WorkToolPolicy.requireCurrent(database.db, input.sessionID, { action: input.action, resources: input.resources })),
+          EffectRuntime.orDie,
+          EffectRuntime.asVoid,
+        ),
       ),
     )
+    const authorizeAction = EffectRuntime.fn("PermissionV2.authorizeAction")(function* (input: AssertInput) {
+      if (!actionLifetime.active) return yield* new DeniedError({ rules: [] })
+      const frozen = structuredClone(input)
+      yield* assert(frozen)
+      const current = yield* evaluateInput(frozen)
+      if (current.effect === "deny") return yield* new DeniedError({ rules: current.rules })
+      const savedEpoch = (yield* saved.epoch(location.project.id)).epoch
+      return yield* EffectRuntime.acquireRelease(
+        EffectRuntime.sync(() => {
+          const permit = Object.freeze({}) as ActionPermit
+          actionPermits.set(permit, { input: CanonicalJson.stringify(frozen), rules: CanonicalJson.stringify(current.rules), savedEpoch })
+          return permit
+        }),
+        (permit) => EffectRuntime.sync(() => { actionPermits.delete(permit) }),
+      )
+    })
+    const checkAction = EffectRuntime.fn("PermissionV2.checkAction")(function* (permit: ActionPermit, input: AssertInput) {
+      const prior = actionPermits.get(permit)
+      if (!actionLifetime.active || !prior || prior.input !== CanonicalJson.stringify(input)) return yield* new DeniedError({ rules: [] })
+      yield* GoalChildExecution.requireExecution(database.db, input.sessionID).pipe(EffectRuntime.orDie)
+      yield* WorkToolPolicy.requireCurrent(database.db, input.sessionID, { action: input.action, resources: input.resources }).pipe(EffectRuntime.orDie)
+      const current = yield* evaluateInput(input)
+      if (current.effect === "deny" || prior.rules !== CanonicalJson.stringify(current.rules) ||
+        prior.savedEpoch !== (yield* saved.epoch(location.project.id)).epoch)
+        return yield* new DeniedError({ rules: current.rules })
+    })
+    const captureAppAction = EffectRuntime.fn("PermissionV2.captureAppAction")(function* (permit: ActionPermit, input: AssertInput) {
+      if (input.source?.type !== "mcp_app" || input.action !== "mcp" || input.resources.length !== 1 ||
+        input.resources[0] !== `${input.source.server}:${input.source.tool}` || !agents.snapshot)
+        return yield* new DeniedError({ rules: [] })
+      const frozen = structuredClone(input)
+      const snapshot = yield* agents.snapshot(input.agent).pipe(EffectRuntime.mapError(() => new DeniedError({ rules: [] })))
+      yield* checkAction(permit, frozen)
+      if ((yield* WorkAuthority.lookupSession(database.db, input.sessionID).pipe(EffectRuntime.orDie)).kind !== "ordinary" ||
+        (yield* GoalChild.owner(database.db, input.sessionID).pipe(EffectRuntime.orDie))) return yield* new DeniedError({ rules: [] })
+      const prior = actionPermits.get(permit)
+      const raw = yield* database.db.select({ permission: sql<string | null>`${SessionTable.permission}`, epoch: SessionTable.mutation_epoch,
+        agent: SessionTable.agent, savedEpoch: PermissionSavedEpochTable.epoch }).from(SessionTable)
+        .innerJoin(PermissionSavedEpochTable, eq(PermissionSavedEpochTable.project_id, SessionTable.project_id))
+        .where(eq(SessionTable.id, input.sessionID)).get().pipe(EffectRuntime.orDie)
+      if (!raw || !prior || raw.savedEpoch !== prior.savedEpoch || !AgentV2.snapshotView(snapshot)) return yield* new DeniedError({ rules: [] })
+      const current = () => actionLifetime.active && actionPermits.get(permit) === prior && prior.input === CanonicalJson.stringify(frozen) && AgentV2.snapshotView(snapshot) !== undefined
+      const check = EffectRuntime.gen(function* () {
+        if (!current()) return yield* new DeniedError({ rules: [] })
+        yield* GoalChildExecution.requireExecution(database.db, frozen.sessionID).pipe(EffectRuntime.orDie)
+        yield* WorkToolPolicy.requireCurrent(database.db, frozen.sessionID, { action: frozen.action, resources: frozen.resources }).pipe(EffectRuntime.orDie)
+        const found = yield* database.db.select({ id: SessionTable.id }).from(SessionTable)
+          .innerJoin(PermissionSavedEpochTable, eq(PermissionSavedEpochTable.project_id, SessionTable.project_id))
+          .where(and(eq(SessionTable.id, frozen.sessionID), eq(SessionTable.project_id, location.project.id), eq(SessionTable.directory, location.directory),
+            isNull(SessionTable.workspace_id), eq(SessionTable.v2_authority, true), isNull(SessionTable.time_archived),
+            eq(SessionTable.mutation_epoch, raw.epoch), sql`${SessionTable.agent} IS ${raw.agent}`, sql`${SessionTable.permission} IS ${raw.permission}`,
+            eq(PermissionSavedEpochTable.epoch, raw.savedEpoch))).get().pipe(EffectRuntime.orDie)
+        if (!found || !current()) return yield* new DeniedError({ rules: [] })
+      })
+      return yield* EffectRuntime.acquireRelease(EffectRuntime.sync(() => {
+        const token = Object.freeze({}) as AppAction
+        const view = AgentV2.snapshotView(snapshot)!
+        appActions.set(token, { current, check, receipt: Object.freeze({ version: 1, source: structuredClone(input.source) as typeof McpAppInvocationSchema.PermissionSource.Type,
+          sessionPermissionHash: Hash.sha256(raw.permission ?? "null"), savedEpoch: raw.savedEpoch,
+          agentInstanceID: view.instanceID, agentGeneration: view.generation,
+          agentPermissionsHash: Hash.sha256(CanonicalJson.stringify(view.info.permissions)) }) })
+        return token
+      }), (token) => EffectRuntime.sync(() => { appActions.delete(token) }))
+    })
+    const captureFileActions = EffectRuntime.fn("PermissionV2.captureFileActions")(function* (browser: ActionPair, file: ActionPair) {
+      if (browser.input.action !== "browser" || file.input.action !== "browser-file" ||
+        CanonicalJson.stringify({ ...file.input, action: "browser" }) !== CanonicalJson.stringify(browser.input))
+        return yield* new DeniedError({ rules: [] })
+      const snapshot = agents.snapshot
+        ? yield* agents.snapshot(browser.input.agent).pipe(EffectRuntime.catchTag("AgentV2.NotFoundError", () => EffectRuntime.succeed(undefined)))
+        : undefined
+      yield* checkAction(browser.permit, browser.input)
+      yield* checkAction(file.permit, file.input)
+      // Managed/ancestor classification remains current at every leaf. Its owned witnesses
+      // and parent policy are deliberately not reduced to this ordinary-file snapshot.
+      if (!snapshot || (yield* GoalChild.owner(database.db, browser.input.sessionID).pipe(EffectRuntime.orDie)) ||
+        (yield* WorkAuthority.lookupSession(database.db, browser.input.sessionID).pipe(EffectRuntime.orDie)).kind !== "ordinary") return undefined
+      const browserPrior = actionPermits.get(browser.permit)
+      const filePrior = actionPermits.get(file.permit)
+      const raw = yield* database.db.select({ permissionRaw: sql<string | null>`${SessionTable.permission}`,
+        savedEpoch: PermissionSavedEpochTable.epoch }).from(SessionTable)
+        .innerJoin(PermissionSavedEpochTable, eq(PermissionSavedEpochTable.project_id, SessionTable.project_id))
+        .where(eq(SessionTable.id, browser.input.sessionID)).get().pipe(EffectRuntime.orDie)
+      if (!raw || !browserPrior || !filePrior || browserPrior.savedEpoch !== raw.savedEpoch || filePrior.savedEpoch !== raw.savedEpoch ||
+        !AgentV2.snapshotView(snapshot)) return yield* new DeniedError({ rules: [] })
+      const token = Object.freeze({}) as FileActions
+      fileActions.set(token, { view: Object.freeze({ sessionID: browser.input.sessionID, projectID: location.project.id,
+        directory: location.directory, workspaceID: location.workspaceID,
+        permissionRaw: raw.permissionRaw, savedEpoch: raw.savedEpoch }), current: () =>
+          actionLifetime.active && actionPermits.get(browser.permit) === browserPrior && actionPermits.get(file.permit) === filePrior &&
+          browserPrior.input === CanonicalJson.stringify(browser.input) && filePrior.input === CanonicalJson.stringify(file.input) &&
+          AgentV2.snapshotView(snapshot) !== undefined })
+      return token
+    })
+    const prepareGoalScratch = EffectRuntime.fn("PermissionV2.prepareGoalScratch")(function* (input: {
+      unitID: string
+      policy: GoalChildPolicy.Snapshot
+    }) {
+      const current = GoalChildPolicy.requirePreparation(database.db, input.unitID, input.policy)
+      const before = yield* current
+      const request = {
+        sessionID: SessionSchema.ID.make(before.row.child_session_id),
+        agent: AgentV2.ID.make(before.row.binding.agent),
+        action: "plan",
+        resources: [before.scratch.documentID],
+        save: [before.scratch.documentID],
+      }
+      yield* assertCurrent(request, current.pipe(EffectRuntime.asVoid))
+      return yield* database.db
+        .transaction(
+          (tx) =>
+            EffectRuntime.gen(function* () {
+              const source = yield* GoalChildPolicy.requirePreparation(tx, input.unitID, input.policy)
+              const observed = yield* EffectRuntime.try({
+                try: () =>
+                  DocumentStore.openExactForCreate(DeepAgentPlanStore.planStoreRoot(source.row.child_session_id), [
+                    source.scratch.documentID,
+                  ]).projectExact(source.payload, null),
+                catch: () =>
+                  new GoalChildSchema.Error({
+                    code: "GOAL_CHILD_CONFLICT",
+                    message: "Scratch file has different or unconfirmed complete bytes",
+                  }),
+              })
+              const receipt = {
+                payloadHash: source.scratch.payloadHash,
+                version: observed.version,
+                hash: observed.hash.slice(7),
+              }
+              if (source.input.scratch) {
+                if (GoalControl.fingerprint(source.input.scratch) !== GoalControl.fingerprint(receipt))
+                  return yield* new GoalChildSchema.Error({
+                    code: "GOAL_CHILD_CONFLICT",
+                    message: "Scratch confirmation changed",
+                  })
+                return receipt
+              }
+              const changed = yield* tx
+                .update(GoalChildUnitTable)
+                .set({
+                  inputs: source.row.inputs.map((item) =>
+                    item.inputID === source.input.inputID ? { ...item, scratch: receipt } : item,
+                  ),
+                  updated_at: Date.now(),
+                })
+                .where(eq(GoalChildUnitTable.unit_id, input.unitID))
+                .returning({ id: GoalChildUnitTable.unit_id })
+                .all()
+                .pipe(EffectRuntime.orDie)
+              if (changed.length !== 1)
+                return yield* new GoalChildSchema.Error({
+                  code: "GOAL_CHILD_CONFLICT",
+                  message: "Scratch confirmation lost its exact child",
+                })
+              return receipt
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(
+          EffectRuntime.mapError((error) =>
+            error instanceof GoalChildSchema.Error
+              ? error
+              : new GoalChildSchema.Error({
+                  code: "GOAL_CHILD_UNAVAILABLE",
+                  message: "Scratch confirmation could not be committed",
+                }),
+          ),
+        )
+    })
 
     const reply = EffectRuntime.fn("PermissionV2.reply")((input: ReplyInput) =>
       EffectRuntime.uninterruptible(
@@ -405,6 +700,19 @@ export const layer = Layer.effect(
             )
             return
           }
+          if (input.reply !== "reject") {
+            const managed = yield* GoalChild.owner(database.db, existing.request.sessionID).pipe(EffectRuntime.orDie)
+            if (managed?.binding.version === 2 || managed?.binding.version === 3) {
+              const current = yield* configured(existing.request.sessionID, existing.agent).pipe(EffectRuntime.exit)
+              if (current._tag === "Failure" && Cause.hasInterrupts(current.cause))
+                return yield* EffectRuntime.failCause(current.cause).pipe(EffectRuntime.orDie)
+              if (current._tag === "Failure" || denied(existing.request, current.value)) {
+                yield* Deferred.fail(existing.deferred, new RejectedError())
+                pending.delete(input.requestID)
+                return yield* new NotFoundError({ requestID: input.requestID })
+              }
+            }
+          }
           yield* events.publish(Event.Replied, {
             sessionID: existing.request.sessionID,
             requestID: existing.request.id,
@@ -444,13 +752,33 @@ export const layer = Layer.effect(
           const rememberedRules = yield* savedRules()
           for (const [id, item] of pending) {
             const input = { ...item.request }
+            const managed = yield* GoalChild.owner(database.db, item.request.sessionID).pipe(EffectRuntime.orDie)
             const rulesets = yield* configured(item.request.sessionID, item.agent).pipe(
-              EffectRuntime.catchTag("Session.NotFoundError", () => EffectRuntime.succeed(undefined)),
+              managed?.binding.version === 2 || managed?.binding.version === 3
+                ? EffectRuntime.catchCause((cause) =>
+                    Cause.hasInterrupts(cause)
+                      ? EffectRuntime.failCause(cause).pipe(EffectRuntime.orDie)
+                      : EffectRuntime.succeed(undefined),
+                  )
+                : EffectRuntime.catchTag("Session.NotFoundError", () => EffectRuntime.succeed(undefined)),
             )
-            if (!rulesets) continue
-            if (denied(input, rulesets)) continue
+            if (!rulesets || denied(input, rulesets)) continue
+            if (managed?.binding.version === 2 || managed?.binding.version === 3) {
+              if (
+                !item.request.resources.every((resource) => {
+                  const current = configuredEffect(item.request.action, resource, rulesets)
+                  return (
+                    current === "allow" ||
+                    (current === "ask" && evaluate(item.request.action, resource, rememberedRules).effect === "allow")
+                  )
+                })
+              )
+                continue
+            }
             const effective = [...rulesets.flat(), ...rememberedRules]
             if (
+              managed?.binding.version !== 2 &&
+              managed?.binding.version !== 3 &&
               !item.request.resources.every(
                 (resource) => evaluate(item.request.action, resource, effective).effect === "allow",
               )
@@ -536,7 +864,17 @@ export const layer = Layer.effect(
 
     return Service.of({
       currentNoProgressOwnerID: () => withNoProgressOwner(Ref.get(noProgressOwner)),
-      ask, assert, reply, get, forSession, list,
+      ask,
+      assert,
+      authorizeAction,
+      checkAction,
+      captureAppAction,
+      captureFileActions,
+      prepareGoalScratch,
+      reply,
+      get,
+      forSession,
+      list,
     })
   }),
 )

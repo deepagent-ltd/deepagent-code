@@ -1,78 +1,209 @@
 import { expect, test } from "bun:test"
-import { setTimeout as sleep } from "node:timers/promises"
-import { Effect, Layer } from "effect"
-import { FSUtil } from "@deepagent-code/core/fs-util"
-import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
-import { McpAuth } from "../../src/mcp/auth"
+import fs from "node:fs/promises"
+import path from "node:path"
+import os from "node:os"
 
-function authFile() {
-  let raw = ""
-  let activeWrites = 0
-  let sawOverlap = false
-
-  const layer = Layer.effect(
-    FSUtil.Service,
-    Effect.gen(function* () {
-      const fs = yield* FSUtil.Service
-
-      return FSUtil.Service.of({
-        ...fs,
-        readJson: (file) =>
-          file.endsWith("mcp-auth.json")
-            ? Effect.try({
-                try: () => {
-                  if (!raw) throw new Error("mcp-auth.json missing")
-                  return JSON.parse(raw)
-                },
-                catch: (cause) => new FSUtil.FileSystemError({ method: "readJson", cause }),
-              })
-            : fs.readJson(file),
-        writeJson: (file, value, mode) =>
-          file.endsWith("mcp-auth.json")
-            ? Effect.promise(async () => {
-                activeWrites++
-                sawOverlap = sawOverlap || activeWrites > 1
-                raw = ""
-                await sleep(10)
-                const next = JSON.stringify(value, null, 2)
-                raw = sawOverlap ? `${next}\n}` : next
-                activeWrites--
-              })
-            : fs.writeJson(file, value, mode),
-      })
-    }),
-  ).pipe(Layer.provide(FSUtil.defaultLayer))
-
-  return { layer, raw: () => raw }
-}
-
-function authService(layer: Layer.Layer<FSUtil.Service>) {
-  return McpAuth.Service.use((auth) => Effect.succeed(auth)).pipe(
-    Effect.provide(McpAuth.layer.pipe(Layer.provide(EffectFlock.defaultLayer), Layer.provide(layer))),
+test("explicit zero OAuth lifetime stays expired in the actual persistent provider", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-mcp-auth-expiry-"))
+  await Promise.all(["home", "tmp"].map((name) => fs.mkdir(path.join(root, name))))
+  const child = Bun.spawn(
+    [process.execPath, "run", path.join(import.meta.dir, "../fixture/mcp-auth-store.ts"), "expiry"],
+    {
+      cwd: path.resolve(import.meta.dir, "../.."),
+      env: {
+        PATH: process.env.PATH,
+        HOME: path.join(root, "home"),
+        TMPDIR: path.join(root, "tmp"),
+        DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
+        DAC_MCP_AUTH_STORE_ROOT: root,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
   )
-}
+  const timer = setTimeout(() => child.kill(), 10_000)
+  try {
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    await fs.writeFile(path.join(root, "process.log"), stdout + stderr)
+    console.info("MCP_AUTH_EXPIRY_EVIDENCE", root)
+    expect({ code, diagnostic: code === 0 ? "ok" : stdout + stderr }).toEqual({ code: 0, diagnostic: "ok" })
+    expect(await Bun.file(path.join(root, "expiry.json")).json()).toEqual({
+      epochExpired: true,
+      epochRemaining: 0,
+      deadlinePresent: true,
+      deadlineInSaveWindow: true,
+      immediateRemaining: 0,
+    })
+  } finally {
+    clearTimeout(timer)
+    child.kill()
+  }
+}, 15_000)
 
-test("serializes concurrent auth file updates across service instances", async () => {
-  const file = authFile()
+test("actual MCP credential file rejects damage and commits concurrent updates durably", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-mcp-auth-store-"))
+  await Promise.all(["home", "tmp"].map((name) => fs.mkdir(path.join(root, name))))
+  const child = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "../fixture/mcp-auth-store.ts")], {
+    cwd: path.resolve(import.meta.dir, "../.."),
+    env: {
+      PATH: process.env.PATH,
+      HOME: path.join(root, "home"),
+      TMPDIR: path.join(root, "tmp"),
+      DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
+      DAC_MCP_AUTH_STORE_ROOT: root,
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const deadline = setTimeout(() => child.kill(), 20_000)
+  try {
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    await fs.writeFile(path.join(root, "process.log"), stdout + stderr)
+    console.info("MCP_AUTH_STORE_EVIDENCE", root)
+    expect({ code, diagnostic: code === 0 ? "ok" : stdout + stderr }).toEqual({ code: 0, diagnostic: "ok" })
+    const result = await Bun.file(path.join(root, "result.json")).json()
+    expect(result.corruptionRejected).toBe(true)
+    expect(result.concurrentFields).toBe(true)
+    expect(result.originalPreserved).toBe(true)
+    expect(result.oversizeRejected).toBe(true)
+    expect(result.multibyteRejected).toBe(true)
+    expect(result.symlinkRejected).toBe(true)
+    expect(result.fileMode).toBe(0o600)
+    expect(result.actualHttpRequests).toBe(0)
+  } finally {
+    clearTimeout(deadline)
+    child.kill()
+  }
+}, 25_000)
 
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const first = yield* authService(file.layer)
-      const second = yield* authService(file.layer)
+test("real independent processes preserve concurrent fields and cold SIGKILL publication windows", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-mcp-auth-cold-"))
+  await Promise.all(["home", "tmp"].map((name) => fs.mkdir(path.join(root, name))))
+  const spawn = (mode: string, expected?: string, directory = root) =>
+    Bun.spawn(
+      [
+        process.execPath,
+        "run",
+        path.join(import.meta.dir, "../fixture/mcp-auth-store.ts"),
+        mode,
+        ...(expected ? [expected] : []),
+      ],
+      {
+        cwd: path.resolve(import.meta.dir, "../.."),
+        env: {
+          PATH: process.env.PATH,
+          HOME: path.join(directory, "home"),
+          TMPDIR: path.join(directory, "tmp"),
+          DEEPAGENT_CODE_TEST_HOME: path.join(directory, "home"),
+          DAC_MCP_AUTH_STORE_ROOT: directory,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    )
+  const run = async (mode: string, expected?: string, directory = root) => {
+    const child = spawn(mode, expected, directory)
+    const timer = setTimeout(() => child.kill(), 10_000)
+    try {
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ])
+      await fs.writeFile(path.join(directory, `${mode}-${expected ?? ""}.log`), stdout + stderr)
+      expect({ code, diagnostic: code === 0 ? "ok" : stdout + stderr }).toEqual({ code: 0, diagnostic: "ok" })
+    } finally {
+      clearTimeout(timer)
+      child.kill()
+    }
+  }
+  await run("setup")
+  await Promise.all([run("update_tokens"), run("update_client")])
+  await run("read_concurrent")
+  const windows: { stage: string; code: number; expected: string }[] = []
+  for (const stage of ["before_rename", "after_rename", "after_sync"]) {
+    const directory = path.join(root, stage)
+    await Promise.all(["home", "tmp"].map((name) => fs.mkdir(path.join(directory, name), { recursive: true })))
+    await run("setup", undefined, directory)
+    const child = spawn(stage, undefined, directory)
+    const timer = setTimeout(() => child.kill(), 10_000)
+    try {
+      const ready = path.join(directory, "ready.json")
+      const deadline = Date.now() + 9000
+      while (!(await Bun.file(ready).exists()) && Date.now() < deadline) await Bun.sleep(20)
+      expect(await Bun.file(ready).exists()).toBe(true)
+      expect((await Bun.file(ready).json()).pid).toBe(child.pid)
+      child.kill("SIGKILL")
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ])
+      await fs.writeFile(path.join(directory, `${stage}.log`), stdout + stderr)
+      expect(code).not.toBe(0)
+      const expected = stage === "before_rename" ? "old" : "new"
+      await run("read", expected, directory)
+      windows.push({ stage, code, expected })
+    } finally {
+      clearTimeout(timer)
+      child.kill()
+    }
+  }
+  await Bun.write(path.join(root, "windows.json"), JSON.stringify(windows))
+  console.info("MCP_AUTH_COLD_EVIDENCE", root)
+}, 45_000)
 
-      yield* Effect.all(
-        [
-          first.updateTokens("posthog", { accessToken: "access-token" }, "https://mcp.posthog.com/mcp"),
-          second.updateClientInfo("posthog", { clientId: "client-id" }, "https://mcp.posthog.com/mcp"),
-        ],
-        { concurrency: "unbounded" },
-      )
-
-      const entry = yield* first.get("posthog")
-      expect(entry?.tokens?.accessToken).toBe("access-token")
-      expect(entry?.clientInfo?.clientId).toBe("client-id")
-      expect(entry?.serverUrl).toBe("https://mcp.posthog.com/mcp")
-      expect(() => JSON.parse(file.raw())).not.toThrow()
-    }),
-  )
-})
+test("issuer discovery and generation survive an actual cold credential-store reopen", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-mcp-issuer-store-"))
+  await Promise.all(["home", "tmp"].map((name) => fs.mkdir(path.join(root, name))))
+  for (const mode of ["issuer", "issuer_cold"]) {
+    const child = Bun.spawn(
+      [process.execPath, "run", path.join(import.meta.dir, "../fixture/mcp-auth-store.ts"), mode],
+      {
+        cwd: path.resolve(import.meta.dir, "../.."),
+        env: {
+          PATH: process.env.PATH,
+          HOME: path.join(root, "home"),
+          TMPDIR: path.join(root, "tmp"),
+          DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
+          DAC_MCP_AUTH_STORE_ROOT: root,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    )
+    const timer = setTimeout(() => child.kill(), 10_000)
+    try {
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ])
+      await fs.writeFile(path.join(root, `${mode}.log`), stdout + stderr)
+      expect({ code, diagnostic: code === 0 ? "ok" : stdout + stderr }).toEqual({ code: 0, diagnostic: "ok" })
+    } finally {
+      clearTimeout(timer)
+      child.kill()
+    }
+  }
+  expect(await Bun.file(path.join(root, "issuer.json")).json()).toEqual({
+    legacyReadOnly: true,
+    durableGeneration: true,
+    wrongIssuerRejected: true,
+    resourceReset: true,
+  })
+  expect(await Bun.file(path.join(root, "issuer-cold.json")).json()).toEqual({
+    coldDiscovery: true,
+    issuerBound: true,
+    wrongIssuerRejected: true,
+  })
+  console.info("MCP_ISSUER_STORE_EVIDENCE", root)
+}, 25_000)

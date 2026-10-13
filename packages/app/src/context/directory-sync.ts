@@ -12,13 +12,7 @@ import {
 import type { Message, Part } from "@deepagent-code/sdk/client"
 import { SESSION_CACHE_LIMIT, dropSessionCaches, pickSessionCacheEvictions } from "./global-sync/session-cache"
 import { diffs as list, message as clean } from "@/utils/diffs"
-import {
-  compareMessages,
-  compareParts,
-  findMessageIndex,
-  locateMessage,
-  locatePart,
-} from "@/utils/message-order"
+import { compareMessages, compareParts, findMessageIndex, locateMessage, locatePart } from "@/utils/message-order"
 import { createServerSdkContext, useServerSDK } from "./server-sdk"
 import { type createServerSyncContextInner } from "./server-sync"
 import { promptAdmissionClientMessageID } from "./global-sync/prompt-admission"
@@ -426,7 +420,12 @@ export const createDirSyncContext = (
   // snapshot through the same row shape the timeline consumes (snapshotRows from
   // v2-session-projector) instead of showing an empty transcript. First page only: paging
   // stays on the wire path, which the egress keeps filled.
-  const fetchMessagesV2Fallback = async (input: { client: typeof client; sessionID: string; directory: string; root: string }) => {
+  const fetchMessagesV2Fallback = async (input: {
+    client: typeof client
+    sessionID: string
+    directory: string
+    root: string
+  }) => {
     const v2 = await retry(() => input.client.v2.session.messages({ sessionID: input.sessionID, limit: 100 }))
     const rows = snapshotRows({
       sessionID: input.sessionID,
@@ -667,7 +666,9 @@ export const createDirSyncContext = (
             }
           }
 
-          const hasSession = Binary.search(store.session, sessionID, (s) => s.id).found
+          const matched = Binary.search(store.session, sessionID, (s) => s.id)
+          const session = matched.found ? store.session[matched.index] : undefined
+          const hasSession = !!session && "ordinaryEligible" in session && typeof session.ordinaryEligible === "boolean"
           const cachedMessages = store.message[sessionID]
           const cached = cachedMessages !== undefined && meta.limit[key] !== undefined
           if (cached && hasSession && !opts?.force && cachedMessages.length > 0) {
@@ -796,6 +797,7 @@ export const createDirSyncContext = (
       },
     },
     mcp: {
+      refresh: () => serverSync.mcp.refresh(directory),
       toggle: (name: string) => serverSync.mcp.toggle(directory, name),
       add: (input: Parameters<typeof serverSync.mcp.add>[1]) => serverSync.mcp.add(directory, input),
       update: (input: Parameters<typeof serverSync.mcp.update>[1]) => serverSync.mcp.update(directory, input),
@@ -815,8 +817,6 @@ export const createDirSyncContext = (
       console.error("Failed to reload session after an activity progress conflict", error)
     })
   }
-  serverSync.registerSessionReloader?.(directory, (sessionID) =>
-    result.session.sync(sessionID, { force: true }),
-  )
+  serverSync.registerSessionReloader?.(directory, (sessionID) => result.session.sync(sessionID, { force: true }))
   return result
 }

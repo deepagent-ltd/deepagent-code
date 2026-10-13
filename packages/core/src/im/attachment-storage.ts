@@ -1,5 +1,6 @@
 import nodePath from "node:path"
 import { createHash } from "node:crypto"
+import { AttachmentPreview } from "./attachment-preview"
 
 export * as AttachmentStorage from "./attachment-storage"
 
@@ -13,10 +14,15 @@ export * as AttachmentStorage from "./attachment-storage"
  * multipart parser has persisted the bytes to a temp file.
  */
 
-// 50MB default cap, overridable via IM_MAX_ATTACHMENT_BYTES.
+export const hardMaxBytes = AttachmentPreview.maxBytes
+export const capacityBytes = 1024 * 1024 * 1024
+export const maxRecords = 100_000
+export const recordOverheadBytes = 8192
+
+// A deployment may shrink the common cap, never enlarge it beyond the wire contract.
 export const maxAttachmentBytes = (): number => {
-  const parsed = parseInt(process.env.IM_MAX_ATTACHMENT_BYTES || "", 10)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 50 * 1024 * 1024
+  const parsed = Number(process.env.IM_MAX_ATTACHMENT_BYTES)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, hardMaxBytes) : hardMaxBytes
 }
 
 // Generous but explicit mime allow-list. Extend via IM_ATTACHMENT_EXTRA_MIME (comma-separated).
@@ -151,9 +157,9 @@ export const validateUpload = (input: {
   if (!isAllowedMime(declared, input.allow ?? allowedMimeSet())) {
     return { ok: false, error: "unsupported_media_type", mime: declared }
   }
-  const maxBytes = input.maxBytes ?? maxAttachmentBytes()
-  if (input.bytes.byteLength > maxBytes) {
-    return { ok: false, error: "file_too_large", maxBytes }
+  const maxBytes = Math.min(input.maxBytes ?? maxAttachmentBytes(), maxAttachmentBytes())
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || input.bytes.byteLength > maxBytes) {
+    return { ok: false, error: "file_too_large", maxBytes: Number.isSafeInteger(maxBytes) && maxBytes >= 0 ? maxBytes : maxAttachmentBytes() }
   }
   const raster = previewMime(input.bytes)
   if (isPreviewMime(declared) && !raster) return { ok: false, error: "unsupported_media_type", mime: declared }

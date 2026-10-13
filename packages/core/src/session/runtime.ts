@@ -1,6 +1,6 @@
 export * as SessionRuntime from "./runtime"
 
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { LocationServiceMap } from "../location-layer"
@@ -11,6 +11,7 @@ import { SessionExecutionLocal } from "./execution/local"
 import { SessionRestart } from "./execution/restart"
 import { SessionProjector } from "./projector"
 import { SessionRuntimeStatus } from "./runtime-status"
+import { WorkExecutionProfile } from "./work-execution-profile"
 import { SessionStore } from "./store"
 
 /**
@@ -20,6 +21,8 @@ import { SessionStore } from "./store"
  */
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
+    const installed = yield* Effect.serviceOption(WorkExecutionProfile.Services)
+    const work = Option.isSome(installed) ? WorkExecutionProfile.servicesLayer(installed.value) : Layer.empty
     const database = yield* Database.Service
     const events = yield* EventV2.Service
     const locations = yield* LocationServiceMap
@@ -50,6 +53,7 @@ export const layer = Layer.unwrap(
     const statusLayer = SessionRuntimeStatus.layer.pipe(
       Layer.provide(executionLayer),
       Layer.provide(restartLayer),
+      Layer.provide(databaseLayer),
     )
     const sessionLayer = SessionV2.layer.pipe(
       Layer.provide(executionLayer),
@@ -60,7 +64,7 @@ export const layer = Layer.unwrap(
       Layer.provide(projectLayer),
       Layer.orDie,
     )
-    return Layer.mergeAll(sessionLayer, executionLayer, restartLayer, statusLayer, storeLayer, projectorLayer)
+    return Layer.mergeAll(sessionLayer, executionLayer, restartLayer, statusLayer, storeLayer, projectorLayer).pipe(Layer.provideMerge(work))
   }),
 )
 

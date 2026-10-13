@@ -1,5 +1,6 @@
 import { Select as Kobalte } from "@kobalte/core/select"
-import { Show, createMemo, onCleanup, splitProps, type ComponentProps, type JSX } from "solid-js"
+import { Show, createEffect, createMemo, onCleanup, onMount, splitProps, type ComponentProps, type JSX } from "solid-js"
+import { createStore } from "solid-js/store"
 import "./select-v2.css"
 
 function groupOptions<T>(options: T[], groupBy?: (x: T) => string): { category: string; options: T[] }[] {
@@ -90,6 +91,42 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
 
   const inline = () => (local.appearance ?? "base") === "inline"
 
+  let trigger: HTMLElement | undefined
+  const [menu, setMenu] = createStore({
+    open: props.open ?? props.defaultOpen ?? false,
+    mount: undefined as HTMLElement | undefined,
+  })
+  // A body portal is outside a modal's accessible subtree. Resolve from this
+  // trigger so nested dialogs keep their own menu and focus boundary.
+  const mount = () => trigger?.closest<HTMLElement>('[role="dialog"], [role="alertdialog"]') ?? undefined
+  onMount(() => setMenu("mount", mount()))
+  createEffect(() => {
+    if (!(others.open ?? menu.open) || !menu.mount || !trigger) return
+    const viewport = scrollViewport(trigger, menu.mount)
+    const dimensions = { width: viewport.clientWidth, height: viewport.clientHeight }
+    const observer = new ResizeObserver(() => {
+      if (!(others.open ?? menu.open) || !trigger?.isConnected || !viewport.isConnected) return
+      if (dimensions.width === viewport.clientWidth && dimensions.height === viewport.clientHeight) return
+      dimensions.width = viewport.clientWidth
+      dimensions.height = viewport.clientHeight
+      const anchor = trigger?.getBoundingClientRect()
+      const clip = viewport.getBoundingClientRect()
+      if (
+        !anchor ||
+        (anchor.top >= clip.top &&
+          anchor.bottom <= clip.bottom &&
+          anchor.left >= clip.left &&
+          anchor.right <= clip.right)
+      )
+        return
+      // Reflow can move a focused menu's trigger out of its scrolled dialog.
+      // Keep the anchor visible on resize, without fighting ordinary scrolling.
+      trigger?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" })
+    })
+    observer.observe(viewport)
+    onCleanup(() => observer.disconnect())
+  })
+
   const state: { key?: string; cleanup?: void | (() => void) } = {}
 
   const stop = () => {
@@ -168,12 +205,15 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
         stop()
       }}
       onOpenChange={(open) => {
+        setMenu({ open, mount: open ? mount() : menu.mount })
         local.onOpenChange?.(open)
         if (!open) stop()
       }}
     >
       <Kobalte.Trigger
         as="div"
+        ref={(element) => (trigger = element)}
+        data-dialog-escape-boundary={(others.open ?? menu.open) ? "" : undefined}
         data-component="select-v2"
         data-appearance={local.appearance ?? "base"}
         data-invalid={local.invalid ? "" : undefined}
@@ -198,11 +238,18 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
           <ChevronDown />
         </span>
       </Kobalte.Trigger>
-      <Kobalte.Portal>
-        <Kobalte.Content data-component="menu-v2-content" data-slot="select-v2-content">
+      <Kobalte.Portal mount={menu.mount}>
+        <Kobalte.Content data-component="menu-v2-content" data-slot="select-v2-content" data-dialog-escape-boundary>
           <Kobalte.Listbox data-slot="select-v2-listbox" />
         </Kobalte.Content>
       </Kobalte.Portal>
     </Kobalte>
   )
+}
+
+function scrollViewport(trigger: HTMLElement, dialog: HTMLElement) {
+  for (let parent = trigger.parentElement; parent; parent = parent.parentElement) {
+    if (parent === dialog || /auto|scroll/.test(getComputedStyle(parent).overflowY)) return parent
+  }
+  return dialog
 }

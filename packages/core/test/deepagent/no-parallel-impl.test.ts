@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { readFileSync, readdirSync } from "node:fs"
 import path from "node:path"
+import { GoalPlanClient } from "../../src/deepagent/goal-plan-client"
 
 // [v3-2-architecture-relayer] guardrail: after the control plane moved into core, modules under
 // core/src/deepagent must REUSE core facilities instead of re-implementing parallel wheels. This
@@ -42,13 +43,59 @@ describe("no parallel implementations in core/src/deepagent", () => {
     expect(offenders).toEqual([])
   })
 
-  test("no global crypto.randomUUID without an explicit import (P1-1)", () => {
+  test("backend UUIDs have an explicit node import (P1-1)", () => {
     // Relying on the runtime global `crypto` is fragile; randomUUID must be imported from
     // node:crypto. Catch a bare `crypto.randomUUID(` in any file that does not import crypto.
     const offenders = sourceFiles()
-      .filter(({ text }) => /\bcrypto\.randomUUID\s*\(/.test(text) && !/from\s+"node:crypto"/.test(text))
+      .filter(
+        ({ file, text }) =>
+          file !== "goal-plan-client.ts" &&
+          /\bcrypto\.randomUUID\s*\(/.test(text) &&
+          !/from\s+"node:crypto"/.test(text),
+      )
       .map(({ file }) => file)
     expect(offenders).toEqual([])
+  })
+
+  test("the App plan client builds for browsers and produces observations without authority", async () => {
+    const client = path.join(deepagentDir, "goal-plan-client.ts")
+    const text = readFileSync(client, "utf8")
+    expect(
+      readFileSync(path.join(deepagentDir, "../../../app/src/components/deepagent/goal-plan-edit-dialog.tsx"), "utf8"),
+    ).toContain('import { GoalPlanClient } from "@deepagent-code/core/deepagent/goal-plan-client"')
+    expect([...text.matchAll(/^import\s+(?!type\b).+$/gm)]).toEqual([])
+    expect(text).not.toMatch(/(?:from\s+["']node:|(?<!globalThis\.)\bcrypto\.)/)
+    const build = await Bun.build({ entrypoints: [client], target: "browser" })
+    expect(build.success).toBe(true)
+    expect(build.logs).toEqual([])
+    const draft: GoalPlanClient.Draft = await GoalPlanClient.create(
+      {
+        server: "server",
+        url: "http://127.0.0.1:4000",
+        directory: "/project",
+        operator: "operator",
+        sessionID: "session",
+        goalID: "goal",
+      },
+      7,
+    )
+    expect(Object.keys(draft).sort()).toEqual([
+      "begin",
+      "editID",
+      "id",
+      "phase",
+      "revision",
+      "scope",
+      "updatedAt",
+      "version",
+    ])
+    expect(draft.begin).toEqual({
+      sessionID: "session",
+      goalID: "goal",
+      expectedControlRevision: 7,
+      requestID: draft.begin.requestID,
+    })
+    expect(draft.phase).toBe("draft")
   })
 
   test("durable knowledge has a single body — no parallel memory-store / project-memory store (P0-S)", () => {

@@ -779,6 +779,14 @@ export const layer = Layer.effect(
     const ensureV2Session = Effect.fn("SessionPrompt.ensureV2Session")(function* (sessionID: SessionID) {
       yield* coreV2Session.requireWritable(SessionV2.ID.make(sessionID)).pipe(
         Effect.catchTags({
+          "GoalChild.Error": (error) => Effect.fail(new SessionPromptIntent.Conflict({ intentID: sessionID, reason: `${error.code}: ${error.message}` })),
+          "WorkAuthority.Error": (error) =>
+            Effect.fail(
+              new SessionPromptIntent.Conflict({
+                intentID: sessionID,
+                reason: `${error.code}: ${error.message}`,
+              }),
+            ),
           "Session.LegacySessionRequiresAdoption": () =>
             refuseLegacyExecution({
               sessionID,

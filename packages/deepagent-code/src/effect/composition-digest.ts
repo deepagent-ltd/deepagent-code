@@ -190,12 +190,13 @@ export const current = Effect.gen(function* () {
   const instances = yield* InstanceStore.Service
   // Tool registration is instance-scoped; the root's canonical instance is the production workspace
   // (`process.cwd()`, the same directory both roots hand to `productionSourcesLayer`).
+  const location = { directory: AbsolutePath.make(process.cwd()) }
   const ids = (yield* instances.provide({ directory: process.cwd() }, tools.ids())).toSorted()
-  const applicationIDs = [...applications.entries().keys()].toSorted()
+  const applicationIDs = [...applications.entries(location).keys()].toSorted()
   const rejected = CustomToolRejections.count(applications)
   const coreRegistry = yield* Effect.promise(() => import("@deepagent-code/core/tool/registry"))
   const materialization = yield* coreRegistry.ToolRegistry.Service.use((registry) => registry.materialize()).pipe(
-    Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(process.cwd()) })),
+    Effect.provide(LocationServiceMap.get(location)),
   )
   const registeredIDs = [...materialization.registeredIDs].toSorted()
   const files = yield* database.db.all<{ name: string; file: string }>("PRAGMA database_list").pipe(Effect.orDie)

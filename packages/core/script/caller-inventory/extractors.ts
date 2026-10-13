@@ -467,6 +467,8 @@ type FixedEntry = {
   readonly fileFromRoot: string
   /** AST anchor: preferred top-level declaration name, else property chain, else identifier ref. */
   readonly declare?: string
+  /** Explicit function body for entries whose authority belongs to this function only. */
+  readonly body?: string
   readonly chain?: string
   readonly identifier?: string
 }
@@ -480,6 +482,14 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     name: "dacode cli main",
     fileFromRoot: "packages/deepagent-code/src/index.ts",
     identifier: "hideBin",
+  },
+  {
+    id: "composition.dacode-node-server",
+    surface: "composition",
+    kind: "process-entry",
+    name: "dacode physical node server",
+    fileFromRoot: "packages/deepagent-code/src/node.ts",
+    chain: "NativeBootstrap.install",
   },
   {
     id: "composition.lildax-runtime",
@@ -553,7 +563,7 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     kind: "electron-main",
     name: "electron app main",
     fileFromRoot: "packages/desktop/src/main/index.ts",
-    chain: "app.setName",
+    declare: "main",
   },
   {
     id: "desktop.spawn-local-server",
@@ -570,6 +580,7 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     name: "checkHealth",
     fileFromRoot: "packages/desktop/src/main/server.ts",
     declare: "checkHealth",
+    body: "checkHealth",
   },
   {
     id: "desktop.sidecar-server-listen",
@@ -606,17 +617,21 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     identifier: "makeAuthoritativeManifest",
   },
 
-  // IM (surface 6): durable V2 admission + reply-outbox daemon + the mention-list provider face.
-  // v2f-d IM durable-only migration: the legacy executor/reply-sink/progress-stream server modules
-  // (fresh V1 session per turn through SessionPrompt.promptOrSteer) are DELETED; @mentions are
-  // admitted as durable SessionV2 work and the terminal reply returns through im_reply_outbox.
-  // v2f-i residual sweep: core's agent-orchestrator.ts (production-dead since v2f-d — unit tests
-  // only) is deleted too, so it no longer has an inventory entry.
+  // IM: explicit owner /dac admission, durable replies, the retired mention
+  // facade, and the catalog provider. A received mention has no execution role.
+  {
+    id: "im.dac-session",
+    surface: "im",
+    kind: "ordinary-session-adapter",
+    name: "Owner IM /dac ordinary Session admission",
+    fileFromRoot: "packages/core/src/im/dac-session.ts",
+    declare: "make",
+  },
   {
     id: "im.agent-execution",
     surface: "im",
-    kind: "durable-agent-admission",
-    name: "IM mention durable admission",
+    kind: "retired-admission-facade",
+    name: "Retired IM mention admission",
     fileFromRoot: "packages/deepagent-code/src/im/im-agent-execution.ts",
     declare: "admitMention",
   },
@@ -762,6 +777,7 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     name: "consultPanel",
     fileFromRoot: "packages/deepagent-code/src/panel/consult.ts",
     declare: "consultPanel",
+    body: "consultPanel",
   },
   {
     id: "panel.panelist-runner",
@@ -769,6 +785,8 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     kind: "panel-engine",
     name: "PanelistRunner",
     fileFromRoot: "packages/deepagent-code/src/panel/panelist-runner.ts",
+    declare: "buildPanelistRunner",
+    body: "buildPanelistRunner",
   },
   {
     id: "background.job",
@@ -923,7 +941,7 @@ function fixedSurface(): EntryWithHandlers[] {
             repoFile: fixed.fileFromRoot,
             line,
           },
-          handlers: [],
+          handlers: fixed.body ? [{ name: fixed.name, repoFile: fixed.fileFromRoot, line, bodyDecl: fixed.body }] : [],
         }
       }
     } catch {

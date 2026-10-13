@@ -2,7 +2,8 @@ import { describe, expect } from "bun:test"
 import { mkdtempSync } from "node:fs"
 import os from "node:os"
 import { Effect, Layer } from "effect"
-import { eq } from "drizzle-orm"
+import { LocalOperatorSchema } from "@deepagent-code/core/im/local-operator.schema"
+import { InstanceRegistry } from "@/effect/instance-registry"
 import { Database } from "@deepagent-code/core/database/database"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Git } from "@deepagent-code/core/git"
@@ -12,15 +13,12 @@ import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionStore } from "@deepagent-code/core/session/store"
-import { SessionInputTable } from "@deepagent-code/core/session/sql"
+import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { IMAgentExecution } from "@/im/im-agent-execution"
 import { testEffect } from "../lib/effect"
 
-// V2 IM durable-only — the admission half (src/im/im-agent-execution.ts). The durable execution
-// record for a mention IS the `session_input` row: keyed by the deterministic prompt message id for
-// (IM message, agent), so a duplicate delivery of the same mention reconciles as a SessionV2 exact
-// retry (ONE row, never two) and a conflicting prompt under the same id fails typed. Session
-// identity is stable per (group, agent): follow-up mentions adopt the same session.
+// Automatic mention admission is retired. Command deduplication, conflict and
+// Session reuse are tested through the real IMDacSession bridge instead.
 
 const root = mkdtempSync(`${os.tmpdir()}/im-agent-execution-`)
 const database = Database.layerFromPath(":memory:")
@@ -29,6 +27,7 @@ const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provi
 const store = SessionStore.layer.pipe(Layer.provide(database))
 const projects = ProjectV2.layer.pipe(
   Layer.provide(database),
+  Layer.provide(InstanceRegistry.layer),
   Layer.provide(FSUtil.defaultLayer),
   Layer.provide(Git.defaultLayer),
 )
@@ -40,70 +39,63 @@ const v2Session = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(projects),
+  Layer.provide(InstanceRegistry.layer),
   Layer.orDie,
 )
-const it = testEffect(Layer.mergeAll(database, events, projector, store, projects, v2Session))
+const it = testEffect(Layer.mergeAll(database, events, projector, store, projects, v2Session, IMRepositoryLive.pipe(Layer.provide(database))))
 
-const mention = {
-  groupID: "grp_im_test",
-  messageID: "im_msg_1",
-  agent: "auto",
-  senderID: "user-1",
-  content: "@auto please answer",
-  directory: root,
-}
+const prepare = Effect.gen(function* () {
+  const repo = yield* IMRepository
+  const group = yield* repo.createGroup({ workspaceID: root, type: "project", name: "test", createdBy: "user-1" })
+  const create = (clientRequestID: string) => repo.createMessage({ groupID: group.id, senderID: "user-1", senderType: "user", type: "text", content: "@auto @general please answer", clientRequestID, mentionIntent: { names: ["auto", "general"], directory: root, workspaceID: root, userID: "user-1", origin: "local" } })
+  const first = yield* create(crypto.randomUUID())
+  const next = yield* create(crypto.randomUUID())
+  return { mention: { groupID: group.id, messageID: first.id, agent: "auto", senderID: "user-1", content: first.content, directory: root }, nextID: next.id }
+})
 
-const inputRowCount = (sessionID: SessionV2.ID) =>
-  Effect.gen(function* () {
-    const { db } = yield* Database.Service
-    return (yield* db.select({ id: SessionInputTable.id }).from(SessionInputTable).where(eq(SessionInputTable.session_id, sessionID)).all().pipe(Effect.orDie)).length
-  })
+const executionRows = Effect.gen(function* () {
+  const db = (yield* Database.Service).db
+  return yield* db.all<{ sessions: number; inputs: number; receipts: number; outbox: number }>(
+    "SELECT (SELECT count(*) FROM session) sessions,(SELECT count(*) FROM session_input) inputs,(SELECT count(*) FROM session_v2_provider_turn_receipt) receipts,(SELECT count(*) FROM im_reply_outbox) outbox",
+  ).pipe(Effect.orDie)
+})
 
-describe("IMAgentExecution.admitMention (durable admission)", () => {
-  it.effect("a duplicate mention delivery reconciles as an exact retry — exactly one session_input", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const first = yield* IMAgentExecution.admitMention(session, mention)
-      const duplicate = yield* IMAgentExecution.admitMention(session, mention)
+describe("IMAgentExecution retired mention admission", () => {
+  it.effect("duplicate direct calls remain typed refusals without an input or wake", () => Effect.gen(function* () {
+    const session = yield* SessionV2.Service
+    const prepared = yield* prepare
+    const before = yield* executionRows
+    for (const input of [prepared.mention, prepared.mention]) {
+      const refusal = yield* IMAgentExecution.admitMention(session, input).pipe(Effect.flip)
+      expect(refusal).toBeInstanceOf(LocalOperatorSchema.Error)
+      if (refusal instanceof LocalOperatorSchema.Error) expect(refusal.code).toBe("LOCAL_TASK_EXECUTION_UNAVAILABLE")
+    }
+    expect(yield* executionRows).toEqual(before)
+    expect(before).toEqual([{ sessions: 0, inputs: 0, receipts: 0, outbox: 0 }])
+  }))
 
-      // Same session, same admitted row — the second call is an exact-retry no-op.
-      expect(duplicate.sessionID).toBe(first.sessionID)
-      expect(duplicate.admitted.id).toBe(first.admitted.id)
-      expect(duplicate.admitted.admittedSeq).toBe(first.admitted.admittedSeq)
-      expect(yield* inputRowCount(first.sessionID)).toBe(1)
-      expect(first.sessionID.startsWith("ses_im_")).toBe(true)
-    }),
-  )
+  it.effect("changed mention content cannot create a first admission or revive exact retry", () => Effect.gen(function* () {
+    const session = yield* SessionV2.Service
+    const prepared = yield* prepare
+    const before = yield* executionRows
+    for (const input of [prepared.mention, { ...prepared.mention, content: "@auto different content" }]) {
+      const refusal = yield* IMAgentExecution.admitMention(session, input).pipe(Effect.flip)
+      expect(refusal).toBeInstanceOf(LocalOperatorSchema.Error)
+      if (refusal instanceof LocalOperatorSchema.Error) expect(refusal.code).toBe("LOCAL_TASK_EXECUTION_UNAVAILABLE")
+    }
+    expect(yield* executionRows).toEqual(before)
+  }))
 
-  it.effect("a conflicting prompt under the same mention id fails typed instead of mutating the work", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      yield* IMAgentExecution.admitMention(session, mention)
-      const conflict = yield* Effect.flip(
-        IMAgentExecution.admitMention(session, { ...mention, content: "@auto DIFFERENT content" }),
-      )
-      expect(conflict).toBeInstanceOf(SessionV2.PromptConflictError)
-      // The original admission is untouched.
-      expect(yield* inputRowCount(IMAgentExecution.imSessionIDFor(mention.groupID, mention.agent))).toBe(1)
-    }),
-  )
-
-  it.effect("follow-up mentions adopt the stable (group, agent) session; a different agent gets its own", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const first = yield* IMAgentExecution.admitMention(session, mention)
-      const followUp = yield* IMAgentExecution.admitMention(session, { ...mention, messageID: "im_msg_2" })
-      const otherAgent = yield* IMAgentExecution.admitMention(session, { ...mention, messageID: "im_msg_2", agent: "general" })
-
-      // Same (group, agent) lane: one session, two durable inputs (steer coalescing is downstream).
-      expect(followUp.sessionID).toBe(first.sessionID)
-      expect(yield* inputRowCount(first.sessionID)).toBe(2)
-      // A different mentioned agent is a different conversation lane.
-      expect(otherAgent.sessionID).not.toBe(first.sessionID)
-
-      // The session carries the IM binding the reply collector reads back.
-      const info = yield* session.get(first.sessionID)
-      expect(IMAgentExecution.imSessionMetadata(info)).toEqual({ groupID: mention.groupID, agent: mention.agent })
-    }),
-  )
+  it.effect("follow-up and other-agent mentions cannot select or create an execution Session", () => Effect.gen(function* () {
+    const session = yield* SessionV2.Service
+    const prepared = yield* prepare
+    const before = yield* executionRows
+    for (const input of [prepared.mention, { ...prepared.mention, messageID: prepared.nextID },
+      { ...prepared.mention, messageID: prepared.nextID, agent: "general" }]) {
+      const refusal = yield* IMAgentExecution.admitMention(session, input).pipe(Effect.flip)
+      expect(refusal).toBeInstanceOf(LocalOperatorSchema.Error)
+      if (refusal instanceof LocalOperatorSchema.Error) expect(refusal.code).toBe("LOCAL_TASK_EXECUTION_UNAVAILABLE")
+    }
+    expect(yield* executionRows).toEqual(before)
+  }))
 })

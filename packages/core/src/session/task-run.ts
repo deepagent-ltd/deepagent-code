@@ -20,6 +20,13 @@ import { V2StructuredOutputEvidenceTable } from "./runner/v2-structured-output-e
 import { TaskWorkspace } from "./task-workspace"
 import { V2TaskRunReceiptTable } from "./runner/v2-task-run-receipt.sql"
 import { V2TaskRunReceipt } from "./runner/v2-task-run-receipt"
+import { SessionRunner } from "./runner"
+import { TaskContinuation } from "./task-continuation"
+import { WorkChildAuthority } from "./work-child-authority"
+import { WorkAuthority } from "./work-authority"
+import { WorkSessionGuard } from "./work-session-guard"
+import { ModelV2 } from "../model"
+import { ProviderV2 } from "../provider"
 
 type DatabaseService = Database.Interface["db"]
 type Transaction = Parameters<Parameters<DatabaseService["transaction"]>[0]>[0]
@@ -44,6 +51,7 @@ export type ExecutionSpec = {
   readonly workspace?: { readonly mode: "worktree" }
   /** Declared file scope (globs/prefixes) for overlap warnings; omitted means undisclosed. */
   readonly fileScope?: readonly string[]
+  readonly continuation?: TaskContinuation.Record
 }
 
 export type SubmitSpec = {
@@ -158,7 +166,6 @@ export function deterministicChildMessageID(input: {
  */
 export const admitRun = Effect.fn("TaskRunAuthority.admitRun")(function* (db: DatabaseService, spec: SubmitSpec) {
   const key = admissionKey(spec)
-  const requestHash = Hash.sha256(canonicalJson(requestFingerprint(spec)))
   const childSessionID = deterministicChildSessionID(spec)
   return yield* db.transaction(
     (tx) =>
@@ -171,12 +178,20 @@ export const admitRun = Effect.fn("TaskRunAuthority.admitRun")(function* (db: Da
           .get()
           .pipe(Effect.orDie)
         if (existing) {
-          if (existing.admission.request_hash !== requestHash)
+          const continuation = existing.run.execution_spec?.continuation
+          if (continuation !== undefined && !TaskContinuation.decode(continuation))
+            return yield* new AdmissionConflict({ reason: "request" })
+          if (existing.admission.request_hash !== Hash.sha256(canonicalJson(requestFingerprint(spec, TaskContinuation.decode(continuation)))))
             return yield* new AdmissionConflict({ reason: "request" })
           if (existing.run.child_session_id !== childSessionID)
             return yield* new AdmissionConflict({ reason: "child" })
           return { run: fromRow(existing.run), exactRetry: true } satisfies Admission
         }
+
+        const continuation = yield* TaskContinuation.capture(tx, spec).pipe(
+          Effect.mapError(() => new AdmissionConflict({ reason: "request" })),
+        )
+        const requestHash = Hash.sha256(canonicalJson(requestFingerprint(spec, continuation)))
 
         // Lineage depth: a parent session that is itself a task child carries its run's depth.
         const parentRun = yield* tx
@@ -194,6 +209,9 @@ export const admitRun = Effect.fn("TaskRunAuthority.admitRun")(function* (db: Da
 
         const now = Date.now()
         const runID = Identifier.ascending("job")
+        yield* WorkChildAuthority.deriveInTransaction(tx, spec, { runID,
+          childSessionID, childInputID: deterministicChildMessageID(spec) }).pipe(
+          Effect.mapError(() => new AdmissionConflict({ reason: "request" })))
         // Workspace intent freezes at admission. Isolated (worktree) runs provision their
         // workspace AFTER this commit (TaskWorkspace.prepare) and hold preflight_state='pending'
         // as the child-start fence; shared runs are live-ready immediately (legacy behavior).
@@ -231,7 +249,7 @@ export const admitRun = Effect.fn("TaskRunAuthority.admitRun")(function* (db: Da
             workspace_operation_key: childSessionID,
             workspace_preflight_state: isolated ? "pending" : "ready",
             input_state: "pending",
-            execution_spec: executionSpec(spec),
+            execution_spec: executionSpec(spec, continuation),
             time_created: now,
             time_updated: now,
           })
@@ -286,14 +304,20 @@ export const ensureChildSession = Effect.fn("TaskRunAuthority.ensureChildSession
       runID: run.runID,
       fallback: spec.child.location,
     })
+    const bound = yield* WorkAuthority.lookupSession(db, run.childSessionID)
+    const work = bound.kind === "bound" ? yield* WorkAuthority.requireAdmission(db, { workID: bound.work.work_id }) : undefined
     yield* sessions.create({
       id: run.childSessionID,
       parentID: spec.parentSessionID,
       agent: AgentV2.ID.make(spec.agent),
       title: spec.child.title,
       location,
-      permissions: spec.child.permissions,
-    })
+      permissions: work ? [] : spec.child.permissions,
+      ...(work ? { model: ModelV2.Ref.make({ id: ModelV2.ID.make(work.binding.provider.modelID),
+        providerID: ProviderV2.ID.make(work.binding.provider.providerID) }) } : {}),
+    }).pipe(Effect.provideService(WorkSessionGuard.CurrentAdmission, work ? {
+      workID: work.work_id, bindingHash: work.binding_hash,
+    } : undefined))
     return run.childSessionID
   },
 )
@@ -312,12 +336,19 @@ export const admitChildInput = Effect.fn("TaskRunAuthority.admitChildInput")(fun
   prompt: Prompt,
 ) {
   yield* TaskWorkspace.requireAdmissible(db, run.runID)
+  const bound = yield* WorkAuthority.lookupSession(db, run.childSessionID)
+  const work = bound.kind === "bound" ? bound.work : undefined
   yield* SessionInput.admit(db, events, {
     id: run.childMessageID,
     sessionID: run.childSessionID,
     prompt,
-    delivery: "steer",
-    commit: () => casInputReady(db, run),
+    delivery: work ? "queue" : "steer",
+    commit: (seq) => Effect.gen(function* () {
+      if (work) yield* db.transaction((tx) => WorkAuthority.bindInputInTransaction(tx, { workID: work.work_id,
+        sessionID: run.childSessionID, inputID: run.childMessageID, promptHash: Hash.sha256(prompt.text),
+        admittedSeq: seq, expectedRevision: work.control_revision }), { behavior: "immediate" })
+      yield* casInputReady(db, run)
+    }),
   })
   // The early-return path (input row already projected, e.g. replayed from the serialized event
   // log by another ingress) never runs the commit hook — repair the CAS idempotently.
@@ -862,6 +893,10 @@ export class RecoveryNotRequired extends Data.TaggedError("TaskRunAuthority.Reco
   readonly actualState: RunState | "absent"
 }> {}
 
+export class RecoveryCustodyRequired extends Data.TaggedError("TaskRunAuthority.RecoveryCustodyRequired")<{
+  readonly runID: string
+}> {}
+
 // Every terminal settlement path records the durable outcome inside its own settlement
 // transaction. Terminal-only; the raw `error` state folds into `failed` while staying pinned
 // inside the outcome hash.
@@ -914,143 +949,205 @@ export const requestClose = Effect.fn("TaskRunAuthority.requestClose")(function*
   db: DatabaseService,
   input: { readonly rootRunID: string; readonly reason: string; readonly now?: number },
 ) {
-  const now = input.now ?? Date.now()
+  const interruptions = new Set<SessionSchema.ID>()
   return yield* Effect.uninterruptible(
-    db.transaction(
-      (tx) =>
-        Effect.gen(function* () {
-          // Iterative BFS to collect all runs in the subtree (depth is bounded by MAX_SUBAGENT_DEPTH).
-          const visited = new Set<string>([input.rootRunID])
-          const queue = [input.rootRunID]
-          while (queue.length > 0) {
-            const batch = queue.splice(0)
-            const children = yield* tx
-              .select({ run_id: TaskRunTable.run_id })
-              .from(TaskRunTable)
-              .where(inArray(TaskRunTable.parent_run_id, batch))
-              .all()
-              .pipe(Effect.orDie)
-            for (const child of children) {
-              if (!visited.has(child.run_id)) {
-                visited.add(child.run_id)
-                queue.push(child.run_id)
-              }
-            }
-          }
-
-          const columns = {
-            run_id: TaskRunTable.run_id,
-            parent_session_id: TaskRunTable.parent_session_id,
-            child_session_id: TaskRunTable.child_session_id,
-            generation: TaskRunTable.generation,
-            state: TaskRunTable.state,
-            control_state: TaskRunTable.control_state,
-            version: TaskRunTable.version,
-          } as const
-          const rows = yield* tx
-            .select(columns)
-            .from(TaskRunTable)
-            .where(inArray(TaskRunTable.run_id, [...visited]))
-            .all()
-            .pipe(Effect.orDie)
-
-          // Also find same-child higher-generation queued continuations.
-          const sessionIDs = [...new Set(rows.map((row) => row.child_session_id))]
-          const continuations = yield* tx
-            .select(columns)
-            .from(TaskRunTable)
-            .where(
-              and(
-                inArray(TaskRunTable.child_session_id, sessionIDs),
-                inArray(TaskRunTable.state, ["admitted", "queued"]),
-              ),
-            )
-            .all()
-            .pipe(Effect.orDie)
-          for (const continuation of continuations) {
-            if (!visited.has(continuation.run_id)) rows.push(continuation)
-          }
-
-          const changed: Array<{ runID: string; oldState: RunState; newState: RunState }> = []
-          const immediateTerminal: readonly RunState[] = ["admitted", "queued", "recovery_required"]
-          const activeStates: readonly RunState[] = ["provisioning", "running", "researching", "finalizing"]
-
-          for (const row of rows) {
-            if (row.control_state === "closed") continue
-            const oldState = row.state
-
-            if (immediateTerminal.includes(oldState)) {
-              const updated = yield* tx
-                .update(TaskRunTable)
-                .set({
-                  control_state: "closed",
-                  state: "closed",
-                  phase: "settled",
-                  close_requested_at: now,
-                  close_reason: input.reason,
-                  version: row.version + 1,
-                  time_updated: now,
-                  time_settled: now,
-                })
-                .where(and(eq(TaskRunTable.run_id, row.run_id), eq(TaskRunTable.version, row.version)))
-                .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
-                .get()
-                .pipe(Effect.orDie)
-              if (updated) {
-                yield* appendEvent(tx, { ...row, run_id: updated.run_id, version: updated.version }, "run_closed", oldState, "closed", input.reason, now)
-                yield* recordTerminalReceiptInTransaction(tx, {
-                  run: row,
-                  state: "closed",
-                  reason: input.reason,
-                  ownerToken: CONTROL_PLANE_OWNER,
-                  now,
-                })
-                changed.push({ runID: row.run_id, oldState, newState: "closed" })
-              }
-              continue
-            }
-            if (activeStates.includes(oldState)) {
-              // Mark close intent; the authority executor settles when its drain finishes.
-              const updated = yield* tx
-                .update(TaskRunTable)
-                .set({
-                  control_state: "close_requested",
-                  close_requested_at: now,
-                  close_reason: input.reason,
-                  version: row.version + 1,
-                  time_updated: now,
-                })
-                .where(
-                  and(
-                    eq(TaskRunTable.run_id, row.run_id),
-                    eq(TaskRunTable.version, row.version),
-                    ne(TaskRunTable.control_state, "closed"),
-                  ),
-                )
-                .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
-                .get()
-                .pipe(Effect.orDie)
-              if (updated) {
-                yield* appendEvent(
-                  tx,
-                  { ...row, run_id: updated.run_id, version: updated.version },
-                  "close_requested",
-                  oldState,
-                  oldState,
-                  input.reason,
-                  now,
-                )
-                changed.push({ runID: row.run_id, oldState, newState: oldState })
-              }
-            }
-          }
-
-          return changed as ReadonlyArray<{ runID: string; oldState: RunState; newState: RunState }>
-        }),
-      { behavior: "immediate" },
-    ),
+    db
+      .transaction((tx) => requestCloseInTransaction(tx, input, interruptions), { behavior: "immediate" })
+      .pipe(Effect.tap(() => interruptClosedSessions(interruptions))),
   )
 })
+
+/** Internal reducer seam: callers must own the original IMMEDIATE transaction and interrupt
+ * only after that transaction commits. The durable close/unknown custody rules stay here. */
+export const requestCloseInTransaction = Effect.fn("TaskRunAuthority.requestCloseInTransaction")(function* (
+  tx: Transaction,
+  input: { readonly rootRunID: string; readonly reason: string; readonly now?: number },
+  interruptions: Set<SessionSchema.ID>,
+) {
+  const now = input.now ?? Date.now()
+  // Iterative BFS to collect all runs in the subtree (depth is bounded by MAX_SUBAGENT_DEPTH).
+  const visited = new Set<string>([input.rootRunID])
+  const queue = [input.rootRunID]
+  while (queue.length > 0) {
+    const batch = queue.splice(0)
+    const children = yield* tx
+      .select({ run_id: TaskRunTable.run_id })
+      .from(TaskRunTable)
+      .where(inArray(TaskRunTable.parent_run_id, batch))
+      .all()
+      .pipe(Effect.orDie)
+    for (const child of children) {
+      if (!visited.has(child.run_id)) {
+        visited.add(child.run_id)
+        queue.push(child.run_id)
+      }
+    }
+  }
+
+  const columns = {
+    run_id: TaskRunTable.run_id,
+    parent_session_id: TaskRunTable.parent_session_id,
+    child_session_id: TaskRunTable.child_session_id,
+    generation: TaskRunTable.generation,
+    state: TaskRunTable.state,
+    control_state: TaskRunTable.control_state,
+    version: TaskRunTable.version,
+    execution_runtime: TaskRunTable.execution_runtime,
+    phase: TaskRunTable.phase,
+    input_state: TaskRunTable.input_state,
+    execution_started_at: TaskRunTable.execution_started_at,
+    execution_owner: TaskRunTable.execution_owner,
+  } as const
+  const rows = yield* tx
+    .select(columns)
+    .from(TaskRunTable)
+    .where(inArray(TaskRunTable.run_id, [...visited]))
+    .all()
+    .pipe(Effect.orDie)
+
+  // Also find same-child higher-generation queued continuations.
+  const sessionIDs = [...new Set(rows.map((row) => row.child_session_id))]
+  const continuations = yield* tx
+    .select(columns)
+    .from(TaskRunTable)
+    .where(and(inArray(TaskRunTable.child_session_id, sessionIDs), inArray(TaskRunTable.state, ["admitted", "queued"])))
+    .all()
+    .pipe(Effect.orDie)
+  for (const continuation of continuations) {
+    if (!visited.has(continuation.run_id)) rows.push(continuation)
+  }
+
+  const changed: Array<{ runID: string; oldState: RunState; newState: RunState }> = []
+  const immediateTerminal: readonly RunState[] = ["admitted", "queued", "recovery_required"]
+  const activeStates: readonly RunState[] = ["provisioning", "running", "researching", "finalizing"]
+
+  for (const row of rows) {
+    if (row.control_state === "closed") continue
+    const oldState = row.state
+
+    if (immediateTerminal.includes(oldState)) {
+      if (
+        row.execution_runtime === "v2" &&
+        (row.execution_owner !== null ||
+          (yield* unresolvedExecution(
+            tx,
+            SessionSchema.ID.make(row.child_session_id),
+            row.phase === "admission" && row.input_state === "pending" && row.execution_started_at === null,
+          )))
+      ) {
+        const requested = yield* tx
+          .update(TaskRunTable)
+          .set({
+            control_state: "close_requested",
+            close_requested_at: now,
+            close_reason: input.reason,
+            version: row.version + 1,
+            time_updated: now,
+          })
+          .where(and(eq(TaskRunTable.run_id, row.run_id), eq(TaskRunTable.version, row.version)))
+          .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+          .get()
+          .pipe(Effect.orDie)
+        if (requested) {
+          yield* appendEvent(
+            tx,
+            { ...row, version: requested.version },
+            "close_requested",
+            oldState,
+            oldState,
+            input.reason,
+            now,
+          )
+          interruptions.add(SessionSchema.ID.make(row.child_session_id))
+          changed.push({ runID: row.run_id, oldState, newState: oldState })
+        }
+        continue
+      }
+      const updated = yield* tx
+        .update(TaskRunTable)
+        .set({
+          control_state: "closed",
+          state: "closed",
+          phase: "settled",
+          close_requested_at: now,
+          close_reason: input.reason,
+          version: row.version + 1,
+          time_updated: now,
+          time_settled: now,
+        })
+        .where(and(eq(TaskRunTable.run_id, row.run_id), eq(TaskRunTable.version, row.version)))
+        .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+        .get()
+        .pipe(Effect.orDie)
+      if (updated) {
+        yield* appendEvent(
+          tx,
+          { ...row, run_id: updated.run_id, version: updated.version },
+          "run_closed",
+          oldState,
+          "closed",
+          input.reason,
+          now,
+        )
+        yield* recordTerminalReceiptInTransaction(tx, {
+          run: row,
+          state: "closed",
+          reason: input.reason,
+          ownerToken: CONTROL_PLANE_OWNER,
+          now,
+        })
+        changed.push({ runID: row.run_id, oldState, newState: "closed" })
+      }
+      continue
+    }
+    if (activeStates.includes(oldState)) {
+      // Mark close intent; the authority executor settles when its drain finishes.
+      const updated = yield* tx
+        .update(TaskRunTable)
+        .set({
+          control_state: "close_requested",
+          close_requested_at: now,
+          close_reason: input.reason,
+          version: row.version + 1,
+          time_updated: now,
+        })
+        .where(
+          and(
+            eq(TaskRunTable.run_id, row.run_id),
+            eq(TaskRunTable.version, row.version),
+            ne(TaskRunTable.control_state, "closed"),
+          ),
+        )
+        .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+        .get()
+        .pipe(Effect.orDie)
+      if (updated) {
+        yield* appendEvent(
+          tx,
+          { ...row, run_id: updated.run_id, version: updated.version },
+          "close_requested",
+          oldState,
+          oldState,
+          input.reason,
+          now,
+        )
+        interruptions.add(SessionSchema.ID.make(row.child_session_id))
+        changed.push({ runID: row.run_id, oldState, newState: oldState })
+      }
+    }
+  }
+
+  return changed as ReadonlyArray<{ runID: string; oldState: RunState; newState: RunState }>
+})
+
+export const interruptClosedSessions = (interruptions: ReadonlySet<SessionSchema.ID>) =>
+  Effect.gen(function* () {
+    if (!interruptions.size) return
+    const { SessionExecution } = yield* Effect.promise(() => import("./execution"))
+    const execution = yield* Effect.serviceOption(SessionExecution.Service)
+    if (Option.isNone(execution)) return
+    yield* Effect.forEach(interruptions, (sessionID) => execution.value.interrupt(sessionID), { discard: true })
+  })
 
 /**
  * Close a task run by child session ID (task_close semantics): validates the run belongs to the
@@ -1088,7 +1185,11 @@ export const closeTask = Effect.fn("TaskRunAuthority.closeTask")(function* (
 
   if (!run) return { closed: false, reason: "no_open_run" } as const
 
-  yield* requestClose(db, { rootRunID: run.run_id, reason: input.reason, ...(input.now === undefined ? {} : { now: input.now }) })
+  yield* requestClose(db, {
+    rootRunID: run.run_id,
+    reason: input.reason,
+    ...(input.now === undefined ? {} : { now: input.now }),
+  })
   return { closed: true, runID: run.run_id } as const
 })
 
@@ -1096,161 +1197,200 @@ export const closeTask = Effect.fn("TaskRunAuthority.closeTask")(function* (
  * Resolve a recovery_required run via explicit host/user action (task_recovery semantics). The
  * only two valid resolutions are "failed" and "closed"; the old run is never resumed. All
  * descendants close in the SAME IMMEDIATE transaction so a crash between the root settlement and
- * the descendant close is impossible.
+ * the descendant close is impossible. Unresolved execution or ownership refuses the entire settlement.
  */
 export const resolveRecovery = Effect.fn("TaskRunAuthority.resolveRecovery")(function* (
   db: DatabaseService,
-  input: { readonly runID: string; readonly resolution: "failed" | "closed"; readonly reason: string; readonly now?: number },
+  input: {
+    readonly runID: string
+    readonly resolution: "failed" | "closed"
+    readonly reason: string
+    readonly now?: number
+  },
+) {
+  return yield* Effect.uninterruptible(
+    db.transaction((tx) => resolveRecoveryInTransaction(tx, input), { behavior: "immediate" }),
+  )
+})
+
+/** Shares the original reducer with receipt-backed human commands; no independent settlement. */
+export const resolveRecoveryInTransaction = Effect.fn("TaskRunAuthority.resolveRecoveryInTransaction")(function* (
+  tx: Transaction,
+  input: {
+    readonly runID: string
+    readonly resolution: "failed" | "closed"
+    readonly reason: string
+    readonly now?: number
+  },
 ) {
   const now = input.now ?? Date.now()
-  return yield* Effect.uninterruptible(
-    db.transaction(
-      (tx) =>
-        Effect.gen(function* () {
-          const current = yield* tx
-            .select()
-            .from(TaskRunTable)
-            .where(eq(TaskRunTable.run_id, input.runID))
-            .get()
-            .pipe(Effect.orDie)
-          if (!current || current.state !== "recovery_required")
-            return yield* new RecoveryNotRequired({ runID: input.runID, actualState: current?.state ?? "absent" })
-
-          const updated = yield* tx
-            .update(TaskRunTable)
-            .set({
-              state: input.resolution,
-              phase: "settled",
-              control_state: "closed",
-              close_requested_at: now,
-              close_reason: input.reason,
-              execution_owner: null,
-              lease_expires_at: null,
-              version: current.version + 1,
-              time_updated: now,
-              time_settled: now,
-            })
-            .where(and(eq(TaskRunTable.run_id, input.runID), eq(TaskRunTable.version, current.version)))
-            .returning()
-            .get()
-            .pipe(Effect.orDie)
-          if (!updated) return yield* Effect.die(`resolveRecovery CAS lost for run ${input.runID} — concurrent mutation won the version race`)
-
-          yield* appendEvent(tx, updated, "recovery_resolved", "recovery_required", input.resolution, input.reason, now)
-          yield* recordTerminalReceiptInTransaction(tx, {
-            run: updated,
-            state: input.resolution,
-            reason: input.reason,
-            ownerToken: CONTROL_PLANE_OWNER,
-            now,
-          })
-
-          // Close descendants (and later same-child generations) in the same transaction.
-          const closeReason = `parent_resolved:${input.reason}`
-          const visited = new Set<string>([updated.run_id])
-          const bfsQueue = [updated.run_id]
-          const laterGenerations = yield* tx
-            .select({ run_id: TaskRunTable.run_id })
-            .from(TaskRunTable)
-            .where(
-              and(
-                eq(TaskRunTable.child_session_id, current.child_session_id),
-                gt(TaskRunTable.generation, current.generation),
-              ),
-            )
-            .all()
-            .pipe(Effect.orDie)
-          for (const later of laterGenerations) {
-            visited.add(later.run_id)
-            bfsQueue.push(later.run_id)
-          }
-          while (bfsQueue.length > 0) {
-            const batch = bfsQueue.splice(0)
-            const children = yield* tx
-              .select({ run_id: TaskRunTable.run_id })
-              .from(TaskRunTable)
-              .where(inArray(TaskRunTable.parent_run_id, batch))
-              .all()
-              .pipe(Effect.orDie)
-            for (const child of children) {
-              if (!visited.has(child.run_id)) {
-                visited.add(child.run_id)
-                bfsQueue.push(child.run_id)
-              }
-            }
-          }
-          const descendantIDs = [...visited].filter((id) => id !== updated.run_id)
-          if (descendantIDs.length > 0) {
-            const descendants = yield* tx
-              .select({
-                run_id: TaskRunTable.run_id,
-                parent_session_id: TaskRunTable.parent_session_id,
-                child_session_id: TaskRunTable.child_session_id,
-                generation: TaskRunTable.generation,
-                state: TaskRunTable.state,
-                control_state: TaskRunTable.control_state,
-                version: TaskRunTable.version,
-              })
-              .from(TaskRunTable)
-              .where(inArray(TaskRunTable.run_id, descendantIDs))
-              .all()
-              .pipe(Effect.orDie)
-            const closable: readonly RunState[] = [
-              "admitted",
-              "queued",
-              "provisioning",
-              "running",
-              "researching",
-              "finalizing",
-              "recovery_required",
-            ]
-            for (const descendant of descendants) {
-              if (descendant.control_state === "closed") continue
-              if (!closable.includes(descendant.state)) continue
-              const closed = yield* tx
-                .update(TaskRunTable)
-                .set({
-                  state: "closed",
-                  phase: "settled",
-                  control_state: "closed",
-                  close_requested_at: now,
-                  close_reason: closeReason,
-                  execution_owner: null,
-                  lease_expires_at: null,
-                  version: descendant.version + 1,
-                  time_updated: now,
-                  time_settled: now,
-                })
-                .where(and(eq(TaskRunTable.run_id, descendant.run_id), eq(TaskRunTable.version, descendant.version)))
-                .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
-                .get()
-                .pipe(Effect.orDie)
-              if (closed) {
-                yield* appendEvent(
-                  tx,
-                  { ...descendant, run_id: closed.run_id, version: closed.version },
-                  "run_closed",
-                  descendant.state,
-                  "closed",
-                  closeReason,
-                  now,
-                )
-                yield* recordTerminalReceiptInTransaction(tx, {
-                  run: descendant,
-                  state: "closed",
-                  reason: closeReason,
-                  ownerToken: CONTROL_PLANE_OWNER,
-                  now,
-                })
-              }
-            }
-          }
-
-          return fromRow(updated)
-        }),
-      { behavior: "immediate" },
-    ),
+  const current = yield* tx
+    .select()
+    .from(TaskRunTable)
+    .where(eq(TaskRunTable.run_id, input.runID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!current || current.state !== "recovery_required")
+    return yield* new RecoveryNotRequired({ runID: input.runID, actualState: current?.state ?? "absent" })
+  if (
+    current.execution_runtime === "v2" &&
+    (current.execution_owner !== null ||
+      (yield* unresolvedExecution(
+        tx,
+        SessionSchema.ID.make(current.child_session_id),
+        current.phase === "admission" && current.input_state === "pending" && current.execution_started_at === null,
+      )))
   )
+    return yield* new RecoveryCustodyRequired({ runID: current.run_id })
+
+  const updated = yield* tx
+    .update(TaskRunTable)
+    .set({
+      state: input.resolution,
+      phase: "settled",
+      control_state: "closed",
+      close_requested_at: now,
+      close_reason: input.reason,
+      execution_owner: null,
+      lease_expires_at: null,
+      version: current.version + 1,
+      time_updated: now,
+      time_settled: now,
+    })
+    .where(and(eq(TaskRunTable.run_id, input.runID), eq(TaskRunTable.version, current.version)))
+    .returning()
+    .get()
+    .pipe(Effect.orDie)
+  if (!updated)
+    return yield* Effect.die(
+      `resolveRecovery CAS lost for run ${input.runID} — concurrent mutation won the version race`,
+    )
+
+  yield* appendEvent(tx, updated, "recovery_resolved", "recovery_required", input.resolution, input.reason, now)
+  yield* recordTerminalReceiptInTransaction(tx, {
+    run: updated,
+    state: input.resolution,
+    reason: input.reason,
+    ownerToken: CONTROL_PLANE_OWNER,
+    now,
+  })
+
+  // Close descendants (and later same-child generations) in the same transaction.
+  const closeReason = `parent_resolved:${input.reason}`
+  const visited = new Set<string>([updated.run_id])
+  const bfsQueue = [updated.run_id]
+  const laterGenerations = yield* tx
+    .select({ run_id: TaskRunTable.run_id })
+    .from(TaskRunTable)
+    .where(
+      and(eq(TaskRunTable.child_session_id, current.child_session_id), gt(TaskRunTable.generation, current.generation)),
+    )
+    .all()
+    .pipe(Effect.orDie)
+  for (const later of laterGenerations) {
+    visited.add(later.run_id)
+    bfsQueue.push(later.run_id)
+  }
+  while (bfsQueue.length > 0) {
+    const batch = bfsQueue.splice(0)
+    const children = yield* tx
+      .select({ run_id: TaskRunTable.run_id })
+      .from(TaskRunTable)
+      .where(inArray(TaskRunTable.parent_run_id, batch))
+      .all()
+      .pipe(Effect.orDie)
+    for (const child of children) {
+      if (!visited.has(child.run_id)) {
+        visited.add(child.run_id)
+        bfsQueue.push(child.run_id)
+      }
+    }
+  }
+  const descendantIDs = [...visited].filter((id) => id !== updated.run_id)
+  if (descendantIDs.length > 0) {
+    const descendants = yield* tx
+      .select({
+        run_id: TaskRunTable.run_id,
+        parent_session_id: TaskRunTable.parent_session_id,
+        child_session_id: TaskRunTable.child_session_id,
+        generation: TaskRunTable.generation,
+        state: TaskRunTable.state,
+        control_state: TaskRunTable.control_state,
+        version: TaskRunTable.version,
+        execution_runtime: TaskRunTable.execution_runtime,
+        phase: TaskRunTable.phase,
+        input_state: TaskRunTable.input_state,
+        execution_started_at: TaskRunTable.execution_started_at,
+        execution_owner: TaskRunTable.execution_owner,
+      })
+      .from(TaskRunTable)
+      .where(inArray(TaskRunTable.run_id, descendantIDs))
+      .all()
+      .pipe(Effect.orDie)
+    const closable: readonly RunState[] = [
+      "admitted",
+      "queued",
+      "provisioning",
+      "running",
+      "researching",
+      "finalizing",
+      "recovery_required",
+    ]
+    for (const descendant of descendants) {
+      if (descendant.control_state === "closed") continue
+      if (!closable.includes(descendant.state)) continue
+      if (
+        descendant.execution_runtime === "v2" &&
+        (descendant.execution_owner !== null ||
+          (yield* unresolvedExecution(
+            tx,
+            SessionSchema.ID.make(descendant.child_session_id),
+            descendant.phase === "admission" &&
+              descendant.input_state === "pending" &&
+              descendant.execution_started_at === null,
+          )))
+      )
+        return yield* new RecoveryCustodyRequired({ runID: descendant.run_id })
+      const closed = yield* tx
+        .update(TaskRunTable)
+        .set({
+          state: "closed",
+          phase: "settled",
+          control_state: "closed",
+          close_requested_at: now,
+          close_reason: closeReason,
+          execution_owner: null,
+          lease_expires_at: null,
+          version: descendant.version + 1,
+          time_updated: now,
+          time_settled: now,
+        })
+        .where(and(eq(TaskRunTable.run_id, descendant.run_id), eq(TaskRunTable.version, descendant.version)))
+        .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+        .get()
+        .pipe(Effect.orDie)
+      if (closed) {
+        yield* appendEvent(
+          tx,
+          { ...descendant, run_id: closed.run_id, version: closed.version },
+          "run_closed",
+          descendant.state,
+          "closed",
+          closeReason,
+          now,
+        )
+        yield* recordTerminalReceiptInTransaction(tx, {
+          run: descendant,
+          state: "closed",
+          reason: closeReason,
+          ownerToken: CONTROL_PLANE_OWNER,
+          now,
+        })
+      }
+    }
+  }
+
+  return fromRow(updated)
 })
 
 // ── Executor: claim → resume → join → settle ──────────────────────────────────────────────────
@@ -1270,13 +1410,15 @@ export const execute = Effect.fn("TaskRunAuthority.execute")(function* (input: {
   // to a recovering owner is the fence doing its job, not an error.
   return yield* drainAndSettle(input, claimed, ownerToken).pipe(
     Effect.onInterrupt(() =>
-      settle(input.db, {
-        runID: input.run.runID,
-        ownerToken,
-        claimGeneration: claimed.claimGeneration,
-        state: "interrupted",
-        reason: "parent_interrupted",
-        error: { code: "interrupted", message: "The parent turn interrupted the subagent." },
+      Effect.gen(function* () {
+        if (yield* unresolvedExecution(input.db, input.run.childSessionID)) {
+          yield* quarantineExecution(input.db, { runID: input.run.runID, ownerToken,
+            claimGeneration: claimed.claimGeneration, message: "The interrupted child retains unresolved execution effects." })
+          return
+        }
+        yield* settle(input.db, { runID: input.run.runID, ownerToken, claimGeneration: claimed.claimGeneration,
+          state: "interrupted", reason: "parent_interrupted",
+          error: { code: "interrupted", message: "The parent turn interrupted the subagent." } })
       }).pipe(Effect.ignore),
     ),
   )
@@ -1295,9 +1437,15 @@ const drainAndSettle = (
 ) =>
   Effect.gen(function* () {
     const work = Effect.gen(function* () {
-      const drain = yield* input.sessions
-        .resume(input.run.childSessionID)
-        .pipe(Effect.exit, Effect.timeoutOption(input.timeoutMs))
+      const found = yield* WorkAuthority.lookupSession(input.db, input.run.childSessionID)
+      const resume = found.kind === "bound" && found.work.parent_work_id
+        ? Effect.gen(function* () {
+            const { SessionV2 } = yield* Effect.promise(() => import("../session"))
+            yield* SessionV2.resumeTaskChild(input.sessions, { sessionID: input.run.childSessionID, runID: input.run.runID,
+              ownerToken, claimGeneration: claimed.claimGeneration })
+          }).pipe(Effect.tapCause((cause) => Effect.logError("Derived child resume refused", Cause.pretty(cause))))
+        : input.sessions.resume(input.run.childSessionID)
+      const drain = yield* resume.pipe(Effect.exit, Effect.timeoutOption(input.timeoutMs))
       const transcript = yield* input.sessions
         .messages({ sessionID: input.run.childSessionID, order: "asc" })
         .pipe(Effect.orDie)
@@ -1308,8 +1456,11 @@ const drainAndSettle = (
         return { outcome: "timeout" as const, research, rawResultMessageID }
       }
       if (Exit.isSuccess(drain.value)) return { outcome: "completed" as const, research, rawResultMessageID }
-      if (Cause.hasInterruptsOnly(drain.value.cause)) return { outcome: "interrupted" as const, research, rawResultMessageID }
+      if (Cause.hasInterruptsOnly(drain.value.cause))
+        return { outcome: "interrupted" as const, research, rawResultMessageID }
       const failure = Option.getOrUndefined(Cause.findErrorOption(drain.value.cause))
+      if (failure instanceof SessionRunner.ExecutionRecoveryRequiredError)
+        return { outcome: "recovery_required" as const, research, failureMessage: failureMessage(failure) }
       return { outcome: "failed" as const, research, rawResultMessageID, failureMessage: failureMessage(failure) }
     }).pipe(Effect.onInterrupt(() => input.sessions.interrupt(input.run.childSessionID).pipe(Effect.ignore)))
 
@@ -1348,6 +1499,20 @@ const drainAndSettle = (
         ),
       ),
     )
+
+    if (result.outcome === "recovery_required" || (yield* unresolvedExecution(input.db, input.run.childSessionID))) {
+      const message = result.outcome === "recovery_required" ? result.failureMessage :
+        "The child retains unresolved provider, tool effects, or an execution claim; automatic replay is unavailable."
+      yield* quarantineExecution(input.db, {
+        runID: input.run.runID,
+        ownerToken,
+        claimGeneration: claimed.claimGeneration,
+        message,
+      })
+      // An unresolved child is not terminal. Its original workspace receipt/ready marker
+      // stays intact; release and terminal-only retain would misclassify its physical custody.
+      return { outcome: "recovery_required" as const, research: result.research, failureMessage: message }
+    }
 
     if (result.outcome === "completed") {
       yield* settle(input.db, {
@@ -1401,6 +1566,119 @@ const drainAndSettle = (
       failureMessage: result.failureMessage,
     } as const
   })
+
+// Only the child Session is inspected. A parent's live delegation admission or another
+// background child's work is not evidence that this drained child has an unknown effect.
+const unresolvedExecution = Effect.fn("TaskRunAuthority.unresolvedExecution")(function* (
+  db: Pick<DatabaseService, "all">,
+  childSessionID: SessionSchema.ID,
+  allowMissingBeforeDispatch = false,
+) {
+  const [facts] = yield* db
+    .all<{
+      sessions: number
+      claim: number | null
+      effects: number
+      providers: number
+      attempts: number
+      child_unknown: number
+    }>(
+      sql`SELECT
+    (SELECT count(*) FROM session s WHERE s.id=${childSessionID}) AS sessions,
+    (SELECT s.execution_claim_token FROM session s WHERE s.id=${childSessionID}) AS claim,
+    (SELECT count(*) FROM session_v2_tool_effect_admission a
+      LEFT JOIN session_v2_tool_effect e ON e.receipt_id=a.receipt_id AND e.tool_call_id=a.tool_call_id
+      WHERE a.session_id=${childSessionID} AND e.effect_id IS NULL) AS effects,
+    (SELECT count(*) FROM session_v2_provider_turn_receipt p WHERE p.session_id=${childSessionID}
+      AND p.state IN ('preparing','dispatching','streaming','indeterminate_after_crash')) AS providers,
+    (SELECT count(*) FROM session_provider_attempt a WHERE a.session_id=${childSessionID}
+      AND a.state IN ('prepared','dispatching','streaming','indeterminate_after_crash')) AS attempts,
+    (SELECT count(*) FROM work_execution w WHERE w.session_id=${childSessionID} AND w.parent_work_id IS NOT NULL
+      AND w.outcome IN ('pending','unknown')) AS child_unknown
+    `,
+    )
+    .pipe(Effect.orDie)
+  return (
+    !facts ||
+    (facts.sessions === 0 && !allowMissingBeforeDispatch) ||
+    facts.claim !== null ||
+    facts.effects !== 0 ||
+    facts.providers !== 0 ||
+    facts.attempts !== 0 ||
+    facts.child_unknown !== 0
+  )
+})
+
+const quarantineExecution = Effect.fn("TaskRunAuthority.quarantineExecution")(function* (
+  db: DatabaseService,
+  input: {
+    readonly runID: string
+    readonly ownerToken: string
+    readonly claimGeneration: number
+    readonly message: string
+  },
+) {
+  return yield* Effect.uninterruptible(
+    db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const now = Date.now()
+          const current = yield* tx
+            .select()
+            .from(TaskRunTable)
+            .where(eq(TaskRunTable.run_id, input.runID))
+            .get()
+            .pipe(Effect.orDie)
+          if (
+            !current ||
+            current.execution_runtime !== "v2" ||
+            current.state !== "running" ||
+            current.execution_owner !== input.ownerToken ||
+            current.claim_generation !== input.claimGeneration ||
+            current.lease_expires_at === null ||
+            current.lease_expires_at <= now
+          )
+            return yield* new ClaimLost({ runID: input.runID, reason: "recovery_fence_lost" })
+          const row = yield* tx
+            .update(TaskRunTable)
+            .set({
+              state: "recovery_required",
+              phase: "research",
+              reason: "child_execution_recovery_required",
+              error: { code: "execution_recovery_required", message: input.message },
+              execution_owner: null,
+              lease_expires_at: null,
+              time_updated: now,
+              version: current.version + 1,
+            })
+            .where(
+              and(
+                eq(TaskRunTable.run_id, current.run_id),
+                eq(TaskRunTable.version, current.version),
+                eq(TaskRunTable.state, "running"),
+                eq(TaskRunTable.execution_owner, input.ownerToken),
+                eq(TaskRunTable.claim_generation, input.claimGeneration),
+                gt(TaskRunTable.lease_expires_at, now),
+              ),
+            )
+            .returning()
+            .get()
+            .pipe(Effect.orDie)
+          if (!row) return yield* new ClaimLost({ runID: input.runID, reason: "recovery_fence_lost" })
+          yield* appendEvent(
+            tx,
+            row,
+            "recovery_required",
+            current.state,
+            row.state,
+            "child_execution_recovery_required",
+            now,
+          )
+        }),
+      { behavior: "immediate" },
+    ),
+  )
+})
 
 // ── Reads ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -1498,16 +1776,17 @@ const appendEvent = (
     .run()
     .pipe(Effect.orDie)
 
-const executionSpec = (spec: SubmitSpec): ExecutionSpec => ({
+const executionSpec = (spec: SubmitSpec, continuation?: TaskContinuation.Record): ExecutionSpec => ({
   runtime: "core_v2",
   agent: spec.agent,
   ...(spec.outputSchema === undefined ? {} : { outputSchema: spec.outputSchema }),
   permissions: spec.child.permissions,
   ...(spec.child.workspace === undefined ? {} : { workspace: spec.child.workspace }),
   ...(spec.fileScope === undefined ? {} : { fileScope: spec.fileScope }),
+  ...(continuation === undefined ? {} : { continuation }),
 })
 
-const requestFingerprint = (spec: SubmitSpec) => ({
+const requestFingerprint = (spec: SubmitSpec, continuation?: TaskContinuation.Record) => ({
   prompt: Schema.encodeSync(Prompt)(spec.prompt),
   agent: spec.agent,
   outputSchema: spec.outputSchema ?? null,
@@ -1515,6 +1794,7 @@ const requestFingerprint = (spec: SubmitSpec) => ({
   permissions: spec.child.permissions,
   workspace: spec.child.workspace ?? null,
   fileScope: spec.fileScope ?? null,
+  ...(continuation === undefined ? {} : { continuation }),
 })
 
 const outcomeHash = (input: SettleInput) =>
@@ -1534,10 +1814,11 @@ const lastAssistantMessageID = (messages: readonly SessionMessage.Message[]) =>
 
 const lastAssistantText = (messages: readonly SessionMessage.Message[]) =>
   messages
-    .filter((message): message is SessionMessage.Assistant => message.type === "assistant")
-    .flatMap((message) => message.content)
-    .filter((part): part is SessionMessage.AssistantText => part.type === "text")
-    .at(-1)?.text ?? ""
+    .findLast((message): message is SessionMessage.Assistant => message.type === "assistant")
+    ?.content.filter((part): part is SessionMessage.AssistantText => part.type === "text")
+    .map((part) => part.text)
+    .filter((text) => text.trim().length > 0)
+    .join("\n\n") ?? ""
 
 const failureMessage = (failure: unknown) => {
   const message = failure instanceof Error && failure.message.trim() ? failure.message : String(failure ?? "unknown")

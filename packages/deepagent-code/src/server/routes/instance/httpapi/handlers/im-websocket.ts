@@ -1,4 +1,4 @@
-import { Deferred, Effect, Option, Queue, Schema, Stream } from "effect"
+import { Deferred, Effect, Option, Queue, Ref, Schema, Stream } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
@@ -10,6 +10,8 @@ import { IMWebSocketApi } from "../groups/im-websocket"
 import { getWorkspaceContext } from "../utils/workspace-context"
 import { boundedPositiveInteger } from "./im-config"
 import { CorsConfig, isAllowedRequestOrigin } from "@/server/cors"
+import { IMFacade } from "@/im/facade"
+import { KernelReaderSchema } from "@deepagent-code/core/im/kernel-reader.schema"
 
 // WebSocket configuration - can be overridden by environment variables
 const HEARTBEAT_INTERVAL = boundedPositiveInteger(process.env.IM_WEBSOCKET_HEARTBEAT_INTERVAL, 30_000, 300_000)
@@ -28,20 +30,33 @@ export const imWebSocketHandlers = () =>
       const repo = yield* IMRepository
       const broadcaster = yield* IMBroadcasterService
       const cors = yield* CorsConfig
+      const facade = Option.getOrUndefined(yield* Effect.serviceOption(IMFacade.Service))
 
       return handlers.handleRaw(
         "connect",
         (ctx: { params: { groupId: string }; request: HttpServerRequest.HttpServerRequest }) =>
           Effect.gen(function* () {
-            const { workspaceID, userID } = yield* getWorkspaceContext()
+            const context = yield* getWorkspaceContext()
+            const workspaceID = context.workspaceID
+            const userID = context.userID
             const groupId = ctx.params.groupId
 
             if (!isAllowedRequestOrigin(ctx.request.headers.origin, ctx.request.headers.host, cors)) {
               return HttpServerResponse.text("Forbidden origin", { status: 403 })
             }
 
-            // Check if user has access to the group
-            const group = yield* repo.getGroup({ groupID: groupId, userID })
+            // A WebSocket keeps its original owner through every frame. A new
+            // credential generation or instance cannot lend it a replacement reader.
+            const acquired = facade && Option.isSome(yield* Ref.get(facade.engine))
+              ? yield* facade.acquireReader(context).pipe(Effect.catch((error) => Effect.succeed(error)))
+              : undefined
+            if (acquired instanceof KernelReaderSchema.Error) {
+              return HttpServerResponse.text(acquired.code, { status: acquired.code === "reader_capacity" ? 429 : 503 })
+            }
+            const currentFrame = <A, E, R>(effect: Effect.Effect<A, E, R>) => acquired
+              ? acquired.assertCurrent.pipe(Effect.andThen(acquired.reader.withOutput({ workspaceID, userID, groupIDs: [groupId] }, effect)))
+              : effect
+            const group = yield* currentFrame(repo.getGroup({ groupID: groupId, workspaceID, userID })).pipe(Effect.orElseSucceed(() => undefined))
             if (!group) {
               return HttpServerResponse.text("Group not found or access denied", { status: 404 })
             }
@@ -128,8 +143,27 @@ export const imWebSocketHandlers = () =>
               return HttpServerResponse.empty()
             }
 
+            if (group.reader && acquired) {
+              const release = acquired.reader.watchGroup(groupId)
+              yield* Effect.addFinalizer(() => Effect.sync(release))
+            }
+
             yield* Stream.fromQueue(outgoing).pipe(
-              Stream.runForEach((event) => write(JSON.stringify(event))),
+              Stream.runForEach((event) => {
+                if (event.type === "reader_invalidated") return write(JSON.stringify(event)).pipe(
+                  Effect.ensuring(Effect.sync(() => close(1008, "Remote conversation is currently unavailable"))),
+                )
+                return currentFrame(Effect.gen(function* () {
+                  const fresh = yield* repo.getGroup({ groupID: groupId, workspaceID, userID })
+                  if (!fresh) return yield* KernelReaderSchema.failure("reader_unavailable", "websocket")
+                  const protectedEvent = fresh.reader && ["message_created", "agent_progress", "agent_status", "read_receipt"].includes(event.type)
+                  const safe = protectedEvent ? { type: "reader_changed" as const, data: { groupID: groupId, displayEpoch: acquired?.reader.runtime.displayEpoch ?? "unavailable" } } : event
+                  yield* write(JSON.stringify(safe))
+                })).pipe(Effect.catch(() => Effect.gen(function* () {
+                  yield* write(JSON.stringify({ type: "reader_invalidated", data: { groupID: groupId, displayEpoch: "unavailable", code: "reader_unavailable" } }))
+                  close(1008, "Remote conversation is currently unavailable")
+                })))
+              }),
               Effect.onError(() =>
                 Effect.sync(() => {
                   close(1011, "WebSocket write failed")
@@ -176,6 +210,11 @@ export const imWebSocketHandlers = () =>
                     return
                   }
                   const event = decoded.value
+                  const current = yield* currentFrame(repo.getGroup({ groupID: groupId, workspaceID, userID })).pipe(Effect.option)
+                  if (Option.isNone(current) || current.value === undefined) {
+                    close(1008, "Conversation access is no longer available")
+                    return
+                  }
 
                   // Update last ping time on any client message
                   lastPingTime = Date.now()
@@ -202,6 +241,10 @@ export const imWebSocketHandlers = () =>
                       break
 
                     case "read_receipt": {
+                      if (current.value.reader) {
+                        send({ type: "message_failed", data: { code: "reader_required", message: "Protected conversations require an explicit read action", retryable: false } })
+                        break
+                      }
                       const readAt = Date.now()
                       yield* repo.markRead({ groupID: groupId, memberID: userID, readAt })
                       broadcaster.broadcast(groupId, {

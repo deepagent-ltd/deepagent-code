@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "name": "deepagent-code",
   "type": "module",
   "license": "AGPL-3.0-or-later",
@@ -72,6 +72,11 @@
     "./*": "./src/*.ts"
   },
   "imports": {
+    "#operator-password": {
+      "bun": "./src/im/auth-password.bun.ts",
+      "node": "./src/im/auth-password.node.ts",
+      "default": "./src/im/auth-password.node.ts"
+    },
     "#location-index-sqlite": {
       "bun": "./src/location-index/sqlite.bun.ts",
       "node": "./src/location-index/sqlite.node.ts",
@@ -94,6 +99,7 @@
     }
   },
   "devDependencies": {
+    "jugglechat-websdk": "1.9.17",
     "@babel/core": "7.29.6",
     "@octokit/webhooks-types": "7.6.1",
     "@deepagent-code/core": "workspace:*",
@@ -150,7 +156,6 @@
     "@deepagent-code/tui": "workspace:*",
     "@effect/opentelemetry": "catalog:",
     "@effect/platform-node": "catalog:",
-    "@modelcontextprotocol/sdk": "1.29.0",
     "@octokit/graphql": "9.0.2",
     "@octokit/rest": "catalog:",
     "@openauthjs/openauth": "catalog:",
@@ -186,11 +191,12 @@
     "glob": "13.0.5",
     "google-auth-library": "10.5.0",
     "gray-matter": "4.0.3",
+    "hash-wasm": "4.12.0",
     "htmlparser2": "8.0.2",
     "ignore": "7.0.5",
     "immer": "11.1.4",
     "jsonc-parser": "3.3.1",
-    "jugglechat-websdk": "1.9.17",
+    "@deepagent-code/im-kernel-sdk": "workspace:*",
     "marked": "catalog:",
     "mime-types": "3.0.2",
     "minimatch": "10.2.3",
@@ -208,7 +214,10 @@
     "vscode-jsonrpc": "8.2.1",
     "ws": "8.21.0",
     "yargs": "18.0.0",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/core": "2.3.1",
+    "@modelcontextprotocol/server": "2.3.1"
   },
   "overrides": {
     "drizzle-orm": "catalog:"

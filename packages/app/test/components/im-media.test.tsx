@@ -6,9 +6,16 @@ import { AttachmentCard } from "@/components/im/attachment-card"
 import type { IMAttachment } from "@/components/im/types"
 import type { LocalMessage } from "@/hooks/use-im-websocket"
 import { dict } from "@/i18n/en"
+const png = Uint8Array.from(
+  atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8MsAAAAASUVORK5CYII="),
+  (value) => value.charCodeAt(0),
+)
 
 const api = vi.hoisted(() => ({ getAttachment: vi.fn(), downloadAttachment: vi.fn() }))
-vi.mock("@/utils/im-client", () => ({ useIMClient: () => api }))
+vi.mock("@/utils/im-client", async (original) => ({
+  ...(await original<typeof import("@/utils/im-client")>()),
+  useIMClient: () => api,
+}))
 vi.mock("@/context/language", () => ({
   useLanguage: () => ({
     t: (key: keyof typeof dict, values?: Record<string, string | number>) =>
@@ -24,7 +31,7 @@ const attachment = (): IMAttachment => ({
   uploadedBy: "server",
   filename: "image.png",
   mime: "image/png",
-  sizeBytes: 10,
+  sizeBytes: png.length,
   checksum: "verified-by-service",
   preview: true,
   createdAt: Date.now(),
@@ -47,7 +54,7 @@ const message = (): LocalMessage => ({
 beforeEach(() => {
   Object.values(api).forEach((method) => method.mockReset())
   api.getAttachment.mockResolvedValue(attachment())
-  api.downloadAttachment.mockResolvedValue(new Blob(["fixture"], { type: "image/png" }))
+  api.downloadAttachment.mockResolvedValue(new Blob([png], { type: "image/png" }))
   vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:fixture")
   vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
 })

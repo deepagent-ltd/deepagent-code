@@ -4,7 +4,7 @@ import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Config, Effect, Exit, Layer, Schedule, Stream } from "effect"
+import { Cause, Config, Effect, Exit, Layer, Schedule, Schema, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
@@ -292,6 +292,49 @@ afterEach(async () => {
 })
 
 describe("session HttpApi", () => {
+  it.instance(
+    "derives canonical message metadata on public reads without changing time cursor selection or legacy fallback",
+    () => Effect.gen(function* () {
+      const test = yield* TestInstance
+      const headers = { "x-deepagent-code-directory": test.directory }
+      const session = yield* createSession({ title: "canonical metadata" })
+      const first = yield* insertLegacyAssistantMessage(session.id, 41, 2000)
+      const queued = yield* insertLegacyAssistantMessage(session.id, 42, 1000)
+      const { db } = yield* Database.Service
+      yield* Effect.forEach([first, queued], (message) => db.insert(MessageTable).values({
+        id: Schema.decodeUnknownSync(SessionV1.MessageID)(String(message.id)), session_id: session.id,
+        time_created: DateTime.toEpochMillis(message.time.created), time_updated: 3000,
+        data: Object.assign({
+          role: "assistant" as const, time: { created: DateTime.toEpochMillis(message.time.created) },
+          parentID: Schema.decodeUnknownSync(SessionV1.MessageID)("msg_original_parent"), modelID: message.model.id,
+          providerID: message.model.providerID, mode: "build", agent: "build",
+          path: { cwd: test.directory, root: test.directory }, cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        }, { canonicalSeq: 999 }),
+      }).run().pipe(Effect.orDie))
+      const legacy = Schema.decodeUnknownSync(SessionV1.MessageID)("msg_legacy_without_canonical")
+      yield* db.insert(MessageTable).values({
+        id: legacy, session_id: session.id, time_created: 1500, time_updated: 3000,
+        data: Object.assign({ role: "user" as const, time: { created: 1500 }, agent: "build", model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") } }, { canonicalSeq: 999 }),
+      }).run().pipe(Effect.orDie)
+      const before = yield* db.select().from(MessageTable).where(eq(MessageTable.session_id, session.id)).all().pipe(Effect.orDie)
+      const page = yield* requestJson<SessionV1.WithParts[]>(pathFor(SessionPaths.messages, { sessionID: session.id }), { headers })
+      expect(page.map((message) => [String(message.info.id), message.info.time.created, message.info.canonicalSeq])).toEqual([
+        [String(queued.id), 1000, 42], [String(legacy), 1500, undefined], [String(first.id), 2000, 41],
+      ])
+      const latest = yield* request(`${pathFor(SessionPaths.messages, { sessionID: session.id })}?limit=1`, { headers })
+      expect((yield* json<SessionV1.WithParts[]>(latest)).map((message) => String(message.info.id))).toEqual([String(first.id)])
+      expect(JSON.parse(Buffer.from(latest.headers["x-next-cursor"]!, "base64url").toString("utf8"))).toMatchObject({ id: String(first.id), time: 2000 })
+      const detail = yield* requestJson<SessionV1.WithParts>(pathFor(SessionPaths.message, { sessionID: session.id, messageID: String(queued.id) }), { headers })
+      expect(detail.info).toMatchObject({ id: String(queued.id), canonicalSeq: 42, time: { created: 1000 } })
+      const history = yield* MessageV2.page({ sessionID: session.id, limit: 10 })
+      expect(history.items.map((message) => message.info.canonicalSeq)).toEqual([42, undefined, 41])
+      expect(yield* db.select().from(MessageTable).where(eq(MessageTable.session_id, session.id)).all().pipe(Effect.orDie)).toEqual(before)
+      expect(yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, session.id)).all().pipe(Effect.orDie)).toEqual([])
+    }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   it.live("reads a V2 session by ID and returns a typed miss", () =>
     Effect.gen(function* () {
       const directory = yield* tmpdirScoped({ git: true })
@@ -556,7 +599,9 @@ describe("session HttpApi", () => {
       const flags = yield* RuntimeFlags.Service.pipe(Effect.provide(RuntimeFlags.defaultLayer))
       expect(flags.debugTool).toBe(true)
       expect(flags.profileTool).toBe(true)
-      const expected = [...builtinToolNames, "debug", "profile", "query_log"].sort()
+      // This HTTP host has no native BrowserHost, so browser cannot be registered
+      // or offered. Desktop's actual native runner owns the browser-positive gate.
+      const expected = [...Array.from(builtinToolNames).filter((name) => name !== "browser"), "debug", "profile", "query_log"].sort()
       const inputs = yield* llm.inputs
       const advertised = ((inputs[0]?.tools ?? []) as Array<{ function?: { name?: string } }>)
         .flatMap((tool) => (tool.function?.name ? [tool.function.name] : []))

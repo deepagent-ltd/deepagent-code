@@ -1,21 +1,36 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import { and, asc, desc, eq, gt, isNotNull, isNull, like, lt, or, sql } from "drizzle-orm"
 import { Database } from "../database/database"
 import { contentDigest } from "../contract/digest"
 import { stringify } from "../util/canonical-json"
 import { IMMentionIntentTable } from "./mention-intent.sql"
 import { AttachmentStorage } from "./attachment-storage"
+import { AttachmentRefMetadata, type MessageMetadataValue } from "./sql"
+import { MediaCleanupCursorTable } from "./media-cleanup.sql"
+import { LocalTaskPolicy } from "./local-task-policy"
+import { LocalOrigin } from "./local-origin"
+import { ReplyBodyRetirement } from "./reply-body-retirement"
+import { MediaUploadCheckpointModel } from "./media-upload-checkpoint.model"
+import { MediaUploadCheckpoint } from "./media-upload-checkpoint"
+import { KernelDelivery } from "./kernel-delivery"
+import { IMTaskStatusNotice } from "./task-status-notice"
+import { KernelDeliverySchema } from "./kernel-delivery.schema"
+import { KernelReader } from "./kernel-reader"
+import { KernelReaderSchema } from "./kernel-reader.schema"
 import * as IMID from "./id"
 import { AttachmentTable, GroupTable, MemberTable, MessageTable, SyncCursorTable, GroupType, MemberType, MemberRole, SenderType, MessageType, MessageMetadata } from "./sql"
 
 // Repository errors
 export class IMRepositoryError extends Schema.ErrorClass<IMRepositoryError>("IMRepositoryError")({
   message: Schema.String,
-  code: Schema.optional(Schema.Literals(["message_identity_conflict", "attachment_unavailable"])),
+  code: Schema.optional(Schema.Literals(["message_identity_conflict", "attachment_unavailable", "task_authority_unavailable", "task_mode_requires_review", "kernel_delivery_unavailable", ...KernelReaderSchema.CODES])),
+  operation: Schema.optional(Schema.String),
+  wireCode: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 65535 }))),
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
-const dbError = (message: string) => (cause: unknown) => new IMRepositoryError({ message, cause })
+const dbError = (message: string) => (cause: unknown) => cause instanceof IMRepositoryError ? cause : cause instanceof KernelReaderSchema.Error ? new IMRepositoryError({ message: cause.message, code: cause.code, operation: cause.operation, wireCode: cause.wireCode }) : new IMRepositoryError({ message, cause })
+const readerGuard = <A>(effect: Effect.Effect<A, unknown>) => effect.pipe(Effect.mapError(dbError("Remote conversation is currently unavailable")))
 
 // Domain models
 export const IMGroup = Schema.Struct({
@@ -29,6 +44,7 @@ export const IMGroup = Schema.Struct({
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
   deletedAt: Schema.NullOr(Schema.Number),
+  reader: Schema.optional(Schema.Struct({ mode: Schema.Literal("protected"), state: Schema.Literals(["pending", "ready"]), liveUnread: Schema.NullOr(Schema.String), peerID: Schema.optional(Schema.String), admittedOrdinal: Schema.optional(KernelReaderSchema.Decimal), readAction: Schema.optional(KernelReaderSchema.ReadActionSummary), unresolvedReadActions: Schema.optional(Schema.Array(KernelReaderSchema.ReadActionSummary).check(Schema.isMaxLength(8))) })),
 })
 export type IMGroup = typeof IMGroup.Type
 
@@ -39,6 +55,7 @@ export const IMMessage = Schema.Struct({
   senderType: Schema.String,
   type: Schema.String,
   content: Schema.String,
+  remoteAttachments: Schema.optional(Schema.Array(KernelReaderSchema.RemoteAttachment).check(Schema.isMinLength(1), Schema.isMaxLength(4))),
   mentions: Schema.NullOr(Schema.Array(Schema.String)),
   metadata: Schema.NullOr(Schema.Unknown),
   replyToID: Schema.NullOr(Schema.String),
@@ -63,6 +80,8 @@ export const MessagePage = Schema.Struct({
   messages: Schema.Array(IMMessage),
   nextCursor: Schema.NullOr(Schema.String),
   hasMore: Schema.Boolean,
+  reader: Schema.optional(Schema.Struct({ state: Schema.Literals(["ready", "partial"]), displayEpoch: Schema.String, projectionRevision: Schema.String, validatedServerNow: KernelReaderSchema.Time, nextExpiryAt: Schema.NullOr(KernelReaderSchema.Time) })),
+  protectedUnavailable: Schema.optional(Schema.Boolean),
 })
 export type MessagePage = typeof MessagePage.Type
 
@@ -82,6 +101,7 @@ export const IMAttachment = Schema.Struct({
   deletedAt: Schema.NullOr(Schema.Number),
 })
 export type IMAttachment = typeof IMAttachment.Type
+export type AttachmentCleanupCursor = Readonly<{ revision: number; after?: Readonly<{ createdAt: number; id: string }> }>
 
 // IM-kernel sync cursor (JuggleIM B1): per-conversation high-water mark, see SyncCursorTable.
 export const IMSyncCursor = Schema.Struct({
@@ -258,7 +278,8 @@ export interface CreateMessageInput {
   /** Trusted internal stable identity, e.g. one reply-outbox delivery. */
   id?: string
   clientRequestID?: string
-  attachment?: { id: string; workspaceID: string }
+  attachment?: { id: string; workspaceID: string; expected?: IMAttachment }
+  attachments?: { id: string; workspaceID: string; expected?: IMAttachment }[]
   /** Server-only verified live provenance; never populated by history or HTTP payload metadata. */
   mentionIntent?: LiveMentionContext
   groupID: string
@@ -267,7 +288,7 @@ export interface CreateMessageInput {
   type: MessageType
   content: string
   mentions?: string[]
-  metadata?: MessageMetadata
+  metadata?: MessageMetadataValue
   replyToID?: string
   // IM-kernel (JuggleIM B1): set for inbound kernel messages at insert time (dedup identity) and
   // left unset for locally authored sends (written back on kernel ack via setMessageKernelMsgID).
@@ -289,6 +310,7 @@ export interface SetMessageKernelMsgIDInput {
 }
 
 export interface ListPendingKernelMessagesInput {
+  runtime?: KernelDelivery.Runtime
   limit: number
 }
 
@@ -309,9 +331,18 @@ export interface ListGroupsInput {
   userID: string
 }
 
+/** Body-free keyset selection. Protected names are decoded only inside the later current output frame. */
+export const groupPageCandidates = (db: Database.Interface["db"], input: ListGroupsInput & { lane: "ordinary" | "protected"; limit: number; upper?: KernelReaderSchema.GroupPosition; after?: KernelReaderSchema.GroupPosition; readerKey?: string }) => Effect.gen(function* () {
+  if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > (input.lane === "protected" ? 2 : 32) || input.lane === "protected" && !input.readerKey) return yield* KernelReaderSchema.failure("reader_scope_mismatch", "group-page")
+  const rows = yield* db.select({ id: GroupTable.id, createdAt: GroupTable.created_at, bytes: sql<number>`length(CAST(${GroupTable.id} AS BLOB)) + length(CAST(${GroupTable.workspace_id} AS BLOB)) + length(CAST(${GroupTable.name} AS BLOB)) + length(CAST(${GroupTable.created_by} AS BLOB)) + length(CAST(${GroupTable.type} AS BLOB)) + coalesce(length(CAST(${GroupTable.kernel_conv_id} AS BLOB)),0) + coalesce(length(CAST(${GroupTable.project_id} AS BLOB)),0)` }).from(GroupTable).innerJoin(MemberTable, and(eq(MemberTable.group_id, GroupTable.id), eq(MemberTable.member_id, input.userID), eq(MemberTable.member_type, "user"))).where(and(eq(GroupTable.workspace_id, input.workspaceID), isNull(GroupTable.deleted_at), input.lane === "ordinary" ? KernelReader.ordinaryGroup : sql`EXISTS(SELECT 1 FROM im_kernel_reader_projection p WHERE p.local_group_id = ${GroupTable.id} AND p.reader_key = ${input.readerKey} AND p.visibility IN ('visible','pending'))`, input.upper ? or(lt(GroupTable.created_at, input.upper.createdAt), and(eq(GroupTable.created_at, input.upper.createdAt), sql`${GroupTable.id} <= ${input.upper.id}`)) : undefined, input.after ? or(lt(GroupTable.created_at, input.after.createdAt), and(eq(GroupTable.created_at, input.after.createdAt), sql`${GroupTable.id} < ${input.after.id}`)) : undefined)).orderBy(desc(GroupTable.created_at), desc(GroupTable.id)).limit(input.limit + 1).all()
+  if (rows.some((row) => !Number.isSafeInteger(row.bytes) || row.bytes > 8192 || Option.isNone(Schema.decodeUnknownOption(KernelReaderSchema.GroupPosition)({ createdAt: row.createdAt, id: row.id })))) return yield* KernelReaderSchema.failure("reader_capacity", "group-page-metadata")
+  return { rows: rows.slice(0, input.limit).map((row) => ({ id: row.id, createdAt: row.createdAt })), upper: input.upper ?? (rows[0] ? { id: rows[0].id, createdAt: rows[0].createdAt } : undefined), hasMore: rows.length > input.limit }
+})
+
 export interface GetGroupInput {
   groupID: string
   userID: string
+  workspaceID?: string
 }
 
 export interface ListMessagesInput {
@@ -353,15 +384,19 @@ export interface IMRepositoryInterface {
   readonly searchMessages: (input: SearchMessagesInput) => Effect.Effect<MessagePage, IMRepositoryError, never>
   readonly createMessage: (input: CreateMessageInput) => Effect.Effect<IMMessage & { readonly replayed?: boolean }, IMRepositoryError, never>
   readonly listPendingMentions: (input: { origin: LiveMentionContext["origin"]; receiverID?: string; limit?: number }) => Effect.Effect<readonly IMMentionIntent[], IMRepositoryError>
+  readonly requireLegacyMention: (groupID: string) => Effect.Effect<void, IMRepositoryError>
   readonly bindMention: (input: { id: string; agent: string; sessionID: string; inputID: string }) => Effect.Effect<IMMentionIntent | undefined, IMRepositoryError>
   readonly settleMention: (input: { id: string; status: "pending" | "admitted" | "rejected"; error?: string }) => Effect.Effect<void, IMRepositoryError>
   readonly getMessage: (messageID: string) => Effect.Effect<IMMessage | undefined, IMRepositoryError, never>
+  readonly getRawMessageForKernelDelivery?: (messageID: string) => Effect.Effect<IMMessage | undefined, IMRepositoryError, never>
   readonly markRead: (input: MarkReadInput) => Effect.Effect<void, IMRepositoryError, never>
   // §B3 文件 — attachment records (decoupled from messages).
   readonly createAttachment: (input: CreateAttachmentInput) => Effect.Effect<IMAttachment, IMRepositoryError, never>
   readonly getAttachment: (attachmentID: string) => Effect.Effect<IMAttachment | undefined, IMRepositoryError, never>
   readonly listAttachments: (input: ListAttachmentsInput) => Effect.Effect<IMAttachment[], IMRepositoryError, never>
-  readonly listExpiredAttachments: (workspaceID: string) => Effect.Effect<IMAttachment[], IMRepositoryError, never>
+  readonly listExpiredAttachments: (workspaceID: string, after?: AttachmentCleanupCursor["after"]) => Effect.Effect<IMAttachment[], IMRepositoryError, never>
+  readonly attachmentCleanupCursor: (workspaceID: string) => Effect.Effect<AttachmentCleanupCursor, IMRepositoryError>
+  readonly advanceAttachmentCleanupCursor: (workspaceID: string, expected: AttachmentCleanupCursor, next?: AttachmentCleanupCursor["after"]) => Effect.Effect<boolean, IMRepositoryError>
   /** Tombstone expired or unbound records only after the caller has removed their bytes. */
   readonly expireAttachment: (attachmentID: string) => Effect.Effect<void, IMRepositoryError, never>
   // IM-kernel (JuggleIM B1) — conversation binding + message dedup/ack + sync high-water marks.
@@ -376,9 +411,31 @@ export interface IMRepositoryInterface {
   // Write the kernel ack's message id onto a locally authored row. Returns false when the row is
   // gone (or already carries a different kernel id — the unique index refuses the update).
   readonly setMessageKernelMsgID: (input: SetMessageKernelMsgIDInput) => Effect.Effect<boolean, IMRepositoryError, never>
-  // Locally authored text rows in kernel-bound groups still awaiting their kernel ack
-  // (kernel_msg_id IS NULL), oldest first — the pending-send drain's worklist.
-  readonly listPendingKernelMessages: (input: ListPendingKernelMessagesInput) => Effect.Effect<IMPendingKernelMessage[], IMRepositoryError, never>
+  // Managed delivery transitions and read-only projections; pending excludes unknown results.
+  readonly claimKernelDelivery: (
+    runtime: KernelDelivery.Runtime,
+    messageID: string,
+  ) => Effect.Effect<KernelDelivery.Dispatch | undefined, IMRepositoryError>
+  readonly acknowledgeKernelDelivery: (
+    runtime: KernelDelivery.Runtime,
+    dispatch: KernelDelivery.Dispatch,
+    kernelMessageID: string,
+  ) => Effect.Effect<boolean, IMRepositoryError>
+  readonly uncertainKernelDelivery: (
+    runtime: KernelDelivery.Runtime,
+    dispatch: KernelDelivery.Dispatch,
+  ) => Effect.Effect<void, IMRepositoryError>
+  readonly kernelDeliveryStatuses: (
+    messageIDs: readonly string[],
+    runtime?: KernelDelivery.Runtime,
+  ) => Effect.Effect<Record<string, KernelDelivery.Transport>, IMRepositoryError>
+  readonly kernelDeliveryStatus: (
+    messageID: string,
+    runtime?: KernelDelivery.Runtime,
+  ) => Effect.Effect<KernelDeliverySchema.Status, IMRepositoryError>
+  readonly listPendingKernelMessages: (
+    input: ListPendingKernelMessagesInput,
+  ) => Effect.Effect<IMPendingKernelMessage[], IMRepositoryError, never>
   // All groups bound to a kernel conversation (internal: the kernel catch-up pass iterates these;
   // no membership check — the sync engine is process-global, not per-user).
   readonly listKernelBoundGroups: Effect.Effect<IMGroup[], IMRepositoryError, never>
@@ -430,12 +487,15 @@ export const IMRepositoryLive = Layer.effect(
               and(
                 eq(GroupTable.workspace_id, input.workspaceID),
                 isNull(GroupTable.deleted_at),
+                yield* readerGuard(KernelReader.groupPredicate(db)),
               ),
             )
             .all()
             .pipe(Effect.mapError(dbError("Database operation failed")))
 
-          return groups.map(({ group: g }) => ({
+          return yield* Effect.forEach(groups, ({ group: g }) => Effect.gen(function* () {
+            const reader = yield* readerGuard(KernelReader.gateGroup(db, g.id))
+            return {
             id: g.id,
             workspaceID: g.workspace_id,
             projectID: g.project_id ?? null,
@@ -446,6 +506,8 @@ export const IMRepositoryLive = Layer.effect(
             createdAt: g.created_at,
             updatedAt: g.updated_at,
             deletedAt: g.deleted_at ?? null,
+            ...(reader ? { reader } : {}),
+          }
           }))
         }),
 
@@ -692,6 +754,7 @@ export const IMRepositoryLive = Layer.effect(
 
       getGroup: (input) =>
         Effect.gen(function* () {
+          const reader = yield* readerGuard(KernelReader.gateGroup(db, input.groupID))
           const group = yield* db
             .select()
             .from(GroupTable)
@@ -699,7 +762,7 @@ export const IMRepositoryLive = Layer.effect(
             .get()
             .pipe(Effect.mapError(dbError("Database operation failed")))
 
-          if (!group) return undefined
+          if (!group || input.workspaceID && group.workspace_id !== input.workspaceID) return undefined
 
           // Verify user is a member of the group
           const member = yield* db
@@ -727,6 +790,7 @@ export const IMRepositoryLive = Layer.effect(
             createdAt: group.created_at,
             updatedAt: group.updated_at,
             deletedAt: group.deleted_at ?? null,
+            ...(reader ? { reader } : {}),
           }
         }),
 
@@ -745,6 +809,7 @@ export const IMRepositoryLive = Layer.effect(
 
       listMessages: (input) =>
         Effect.gen(function* () {
+          yield* readerGuard(KernelReader.gateGroup(db, input.groupID))
           const limit = input.limit + 1
 
           const cursor = parseCompositeCursor(input.cursor)
@@ -758,6 +823,7 @@ export const IMRepositoryLive = Layer.effect(
           const whereClause = and(
             eq(MessageTable.group_id, input.groupID as IMID.GroupID),
             isNull(MessageTable.deleted_at),
+            yield* readerGuard(KernelReader.messagePredicate(db)),
             cursor ? or(lt(MessageTable.created_at, cursor.createdAt), and(eq(MessageTable.created_at, cursor.createdAt), lt(MessageTable.id, cursor.id as IMID.MessageID)))
               : cursorTimestamp !== undefined && Number.isFinite(cursorTimestamp) ? lt(MessageTable.created_at, cursorTimestamp) : undefined,
           )
@@ -771,32 +837,23 @@ export const IMRepositoryLive = Layer.effect(
             .all()
             .pipe(Effect.mapError(dbError("Database operation failed")))
 
+          yield* Effect.forEach(messages, (message) => readerGuard(KernelReader.verifyMessage(db, message)))
+          yield* readerGuard(KernelReader.assertOutput(db))
+          const reader = yield* readerGuard(KernelReader.pageState(db, input.groupID))
           const hasMore = messages.length > input.limit
           const resultMessages = hasMore ? messages.slice(0, input.limit) : messages
 
           return {
-            messages: resultMessages.map((m) => ({
-              id: m.id,
-              groupID: m.group_id,
-              senderID: m.sender_id,
-              senderType: m.sender_type,
-              type: m.type,
-              content: m.content,
-              mentions: m.mentions ?? null,
-              metadata: m.metadata ?? null,
-              replyToID: m.reply_to_id ?? null,
-              kernelMsgID: m.kernel_msg_id ?? null,
-              createdAt: m.created_at,
-              updatedAt: m.updated_at,
-              deletedAt: m.deleted_at ?? null,
-            })),
+            messages: yield* Effect.forEach(resultMessages, (message) => readerGuard(KernelReader.displayMessage(db, message)).pipe(Effect.map((display) => ({ ...mapMessageRow(message), ...display })))),
             nextCursor: hasMore ? encodeCompositeCursor(resultMessages[resultMessages.length - 1].created_at, resultMessages[resultMessages.length - 1].id) : null,
             hasMore,
+            ...(reader ? { reader } : {}),
           }
         }),
 
       listThread: (input) =>
         Effect.gen(function* () {
+          yield* readerGuard(KernelReader.gateGroup(db, input.groupID))
           const limit = input.limit + 1
           const cursor = parseCompositeCursor(input.cursor)
 
@@ -808,6 +865,7 @@ export const IMRepositoryLive = Layer.effect(
             eq(MessageTable.group_id, input.groupID as IMID.GroupID),
             eq(MessageTable.reply_to_id, input.replyToID as IMID.MessageID),
             isNull(MessageTable.deleted_at),
+            yield* readerGuard(KernelReader.messagePredicate(db)),
             cursor !== undefined
               ? or(
                   gt(MessageTable.created_at, cursor.createdAt),
@@ -825,14 +883,18 @@ export const IMRepositoryLive = Layer.effect(
             .all()
             .pipe(Effect.mapError(dbError("Database operation failed")))
 
+          yield* Effect.forEach(messages, (message) => readerGuard(KernelReader.verifyMessage(db, message)))
+          yield* readerGuard(KernelReader.assertOutput(db))
+          const reader = yield* readerGuard(KernelReader.pageState(db, input.groupID))
           const hasMore = messages.length > input.limit
           const resultMessages = hasMore ? messages.slice(0, input.limit) : messages
           const last = resultMessages[resultMessages.length - 1]
 
           return {
-            messages: resultMessages.map(mapMessageRow),
+            messages: yield* Effect.forEach(resultMessages, (message) => readerGuard(KernelReader.displayMessage(db, message)).pipe(Effect.map((display) => ({ ...mapMessageRow(message), ...display })))),
             nextCursor: hasMore && last ? encodeCompositeCursor(last.created_at, last.id) : null,
             hasMore,
+            ...(reader ? { reader } : {}),
           }
         }),
 
@@ -854,6 +916,7 @@ export const IMRepositoryLive = Layer.effect(
           // Column / metadata filters. Workspace scoping is via the GroupTable join (im_messages has no
           // workspace_id column — it lives on the group).
           const filters = [
+            yield* readerGuard(KernelReader.messagePredicate(db)),
             eq(GroupTable.workspace_id, input.workspaceID),
             isNull(MessageTable.deleted_at),
             isNull(GroupTable.deleted_at),
@@ -861,7 +924,12 @@ export const IMRepositoryLive = Layer.effect(
             input.senderType ? eq(MessageTable.sender_type, input.senderType) : undefined,
             input.type ? eq(MessageTable.type, input.type) : undefined,
             input.metadataType
-              ? sql`json_extract(${MessageTable.metadata}, '$.type') = ${input.metadataType}`
+              ? sql`(json_extract(${MessageTable.metadata}, '$.type') = ${input.metadataType}
+                  OR (json_type(${MessageTable.metadata}) = 'array' AND EXISTS (
+                    SELECT 1 FROM json_each(${MessageTable.metadata}) item
+                    WHERE json_extract(item.value, '$.type') = ${input.metadataType}
+                      AND json_extract(item.value, '$.batch') = 1
+                  )))`
               : undefined,
             cursor !== undefined
               ? or(
@@ -901,32 +969,50 @@ export const IMRepositoryLive = Layer.effect(
                 .all()
                 .pipe(Effect.mapError(dbError("Database operation failed")))
 
+          yield* Effect.forEach(rows, (row) => readerGuard(KernelReader.verifyMessage(db, row.message)))
+          yield* readerGuard(KernelReader.assertOutput(db))
+          const protectedUnavailable = yield* db.select({ id: GroupTable.id }).from(GroupTable).innerJoin(MemberTable, and(eq(MemberTable.group_id, GroupTable.id), eq(MemberTable.member_id, input.userID), eq(MemberTable.member_type, "user"))).where(and(eq(GroupTable.workspace_id, input.workspaceID), isNull(GroupTable.deleted_at), input.groupID ? eq(GroupTable.id, IMID.GroupID.make(input.groupID)) : undefined, yield* readerGuard(KernelReader.uncoveredGroupPredicate(db)))).limit(1).get().pipe(Effect.map((row) => row !== undefined), Effect.mapError(dbError("Database operation failed")))
+          const reader = yield* readerGuard(KernelReader.searchState(db, rows.map((row) => row.message.group_id)))
           const hasMore = rows.length > input.limit
           const resultRows = hasMore ? rows.slice(0, input.limit) : rows
           const last = resultRows[resultRows.length - 1]?.message
 
           return {
-            messages: resultRows.map((r) => mapMessageRow(r.message)),
+            messages: yield* Effect.forEach(resultRows, (row) => readerGuard(KernelReader.displayMessage(db, row.message)).pipe(Effect.map((display) => ({ ...mapMessageRow(row.message), ...display })))),
             nextCursor: hasMore && last ? encodeCompositeCursor(last.created_at, last.id) : null,
             hasMore,
+            ...(reader ? { reader } : {}),
+            ...(protectedUnavailable ? { protectedUnavailable: true } : {}),
           }
         }),
 
       createMessage: (input) =>
         db.transaction((tx) => Effect.gen(function* () {
+          if (input.mentionIntent && (yield* LocalTaskPolicy.lookup(tx, input.groupID)))
+            return yield* new IMRepositoryError({ code: "task_mode_requires_review", message: "Task-mode messages require explicit review and cannot create legacy mention intents" })
           const id = input.clientRequestID ? clientMessageID(input.senderID, input.clientRequestID)
             : input.id ? IMID.MessageID.make(input.id)
             : input.kernelMsgID ? IMID.MessageID.make(`imsg_kernel_${contentDigest(input.kernelMsgID).slice(0, 40)}`)
             : IMID.MessageID.create()
           const now = Date.now()
-          if (input.attachment) {
+          // An expired managed identity is refused before this repository's
+          // attachment gates or any new Message/mention admission. Explicit
+          // historical comparisons use KernelDelivery.history instead.
+          if (input.type === "file") yield* KernelDelivery.read(tx, id).pipe(Effect.mapError((error) =>
+            new IMRepositoryError({ code: error instanceof KernelDeliverySchema.Error && error.code === "KERNEL_DELIVERY_RETIRED" ? "message_identity_conflict" : "kernel_delivery_unavailable",
+              message: error instanceof KernelDeliverySchema.Error && error.code === "KERNEL_DELIVERY_RETIRED" ? "The original media body has expired; it cannot be uploaded or sent again" : "Original media body custody is unavailable" })))
+          const attachments = input.attachments ?? (input.attachment ? [input.attachment] : [])
+          if (input.attachments !== undefined && (input.attachment || !attachments.length || attachments.length > 4 || new Set(attachments.map((item) => item.id)).size !== attachments.length || !Array.isArray(input.metadata) || input.metadata.length !== attachments.length || input.metadata.some((item, index) => item.type !== "attachment_ref" || item.batch !== true || item.attachmentID !== attachments[index]?.id)))
+            return yield* new IMRepositoryError({ code: "attachment_unavailable", message: "Attachment batch is unavailable for this message" })
+          for (const item of attachments) {
+            const media = yield* KernelDelivery.mediaAttachment({ messageID: id, groupID: input.groupID, senderID: input.senderID, attachmentID: item.id, workspaceID: item.workspaceID })
             const attachment = yield* tx
               .select()
               .from(AttachmentTable)
               .where(
                 and(
-                  eq(AttachmentTable.id, IMID.AttachmentID.make(input.attachment.id)),
-                  eq(AttachmentTable.workspace_id, input.attachment.workspaceID),
+                  eq(AttachmentTable.id, IMID.AttachmentID.make(item.id)),
+                  eq(AttachmentTable.workspace_id, item.workspaceID),
                   eq(AttachmentTable.group_id, IMID.GroupID.make(input.groupID)),
                   eq(AttachmentTable.uploaded_by, input.senderID),
                   isNull(AttachmentTable.deleted_at),
@@ -947,8 +1033,8 @@ export const IMRepositoryLive = Layer.effect(
               .where(
                 and(
                   eq(GroupTable.id, IMID.GroupID.make(input.groupID)),
-                  eq(GroupTable.workspace_id, input.attachment.workspaceID),
-                  isNull(GroupTable.kernel_conv_id),
+                  eq(GroupTable.workspace_id, item.workspaceID),
+                  media ? undefined : isNull(GroupTable.kernel_conv_id),
                   isNull(GroupTable.deleted_at),
                 ),
               )
@@ -956,19 +1042,24 @@ export const IMRepositoryLive = Layer.effect(
             if (
               !attachment ||
               !group ||
+              attachment.size_bytes < 0 || attachment.size_bytes > AttachmentStorage.maxAttachmentBytes() ||
+              !AttachmentStorage.isAllowedMime(AttachmentStorage.normalizeMime(attachment.mime)) ||
+              !/^[a-f0-9]{64}$/.test(attachment.checksum) ||
               AttachmentStorage.expiresAt(attachment.created_at) <= now ||
               (attachment.message_id !== null && attachment.message_id !== id) ||
+              (item.expected && (item.expected.deletedAt !== null || stringify([attachment.id, attachment.workspace_id, attachment.project_id, attachment.group_id, attachment.uploaded_by, attachment.storage_path, attachment.filename, attachment.mime, attachment.size_bytes, attachment.checksum, attachment.created_at]) !== stringify([item.expected.id, item.expected.workspaceID, item.expected.projectID, item.expected.groupID, item.expected.uploadedBy, item.expected.storagePath, item.expected.filename, item.expected.mime, item.expected.sizeBytes, item.expected.checksum, item.expected.createdAt]))) ||
               input.type !== "file" ||
-              input.metadata?.type !== "attachment_ref" ||
-              input.metadata.attachmentID !== attachment.id
+              (!input.attachments && (!Schema.is(AttachmentRefMetadata)(input.metadata) || input.metadata.attachmentID !== attachment.id || input.metadata.batch !== undefined))
             )
               return yield* new IMRepositoryError({
                 code: "attachment_unavailable",
                 message: "Attachment is unavailable for this message",
               })
-            yield* tx.update(AttachmentTable).set({ message_id: id }).where(eq(AttachmentTable.id, attachment.id)).run()
+            if (attachment.message_id === null) yield* tx.update(AttachmentTable).set({ message_id: id }).where(eq(AttachmentTable.id, attachment.id)).run()
           }
+          yield* ReplyBodyRetirement.preflight(tx,id).pipe(Effect.mapError(() => new IMRepositoryError({code:"message_identity_conflict",message:"Original reply body is unavailable"})))
           const mentions = input.mentions ? Array.from(new Set(input.mentions)).sort() : null
+          yield* IMTaskStatusNotice.requireCreationInTransaction(tx, db, { ...input, id })
           const inserted = yield* tx.insert(MessageTable).values({
             id,
             group_id: input.groupID as IMID.GroupID,
@@ -991,6 +1082,16 @@ export const IMRepositoryLive = Layer.effect(
           ]) !== stringify([
             input.groupID, input.senderID, input.senderType, input.type, input.content, mentions, input.metadata ?? null, input.replyToID ?? null,
           ])) return yield* new IMRepositoryError({ code: "message_identity_conflict", message: "Message request identity was already used with a different payload" })
+          yield* KernelDelivery.prepare(tx, row, inserted !== undefined).pipe(
+            Effect.mapError(() => new IMRepositoryError({
+              code: "kernel_delivery_unavailable",
+              message: "Current transport identity or original delivery receipt is unavailable; message requires review",
+            })),
+          )
+          yield* ReplyBodyRetirement.bindMessage(tx,id).pipe(Effect.mapError(() => new IMRepositoryError({code:"kernel_delivery_unavailable",message:"Original reply body accounting is unavailable"})))
+          yield* LocalOrigin.commit(tx, row, inserted !== undefined, now).pipe(Effect.mapError(() =>
+            new IMRepositoryError({ code: "task_authority_unavailable", message: "Authenticated local task origin is unavailable" }),
+          ))
           // A local retry cannot retroactively authorize chat sent with the responder off.
           // Kernel live proof may still reconcile an earlier history-only observation.
           if (input.mentionIntent && (inserted || input.mentionIntent.origin === "kernel_live")) {
@@ -1012,6 +1113,7 @@ export const IMRepositoryLive = Layer.effect(
                 updated_at: now,
               }).onConflictDoNothing().run()
             }
+            yield* KernelReader.accountObligations(tx, row.id)
           }
           return { ...mapMessageRow(row), replayed: inserted === undefined }
         })).pipe(Effect.mapError((cause) => cause instanceof IMRepositoryError ? cause : dbError("Database operation failed")(cause))),
@@ -1028,9 +1130,20 @@ export const IMRepositoryLive = Layer.effect(
         .limit(input.limit ?? 64).all()
         .pipe(Effect.map((rows) => rows.map((row) => ({ ...row.intent, message: mapMessageRow(row.message) }))), Effect.mapError(dbError("Mention intent lookup failed"))),
 
+      requireLegacyMention: (groupID) => Effect.gen(function* () {
+        if (yield* LocalTaskPolicy.lookup(db, groupID))
+          return yield* new IMRepositoryError({ code: "task_mode_requires_review", message: "Task-mode conversation cannot execute legacy mentions" })
+      }),
+
       bindMention: (input) => db.transaction((tx) => Effect.gen(function* () {
+        const source = yield* tx.select({ groupID: MessageTable.group_id, messageID: MessageTable.id }).from(IMMentionIntentTable)
+          .innerJoin(MessageTable, eq(MessageTable.id, IMMentionIntentTable.message_id))
+          .where(eq(IMMentionIntentTable.id, input.id)).get()
+        if (source && (yield* LocalTaskPolicy.lookup(tx, source.groupID)))
+          return yield* new IMRepositoryError({ code: "task_mode_requires_review", message: "Task-mode conversation cannot bind legacy mentions" })
         yield* tx.update(IMMentionIntentTable).set({ resolved_agent: input.agent, session_id: input.sessionID, input_id: input.inputID, updated_at: Date.now() })
           .where(and(eq(IMMentionIntentTable.id, input.id), eq(IMMentionIntentTable.status, "pending"), isNull(IMMentionIntentTable.resolved_agent))).run()
+        if (source) yield* KernelReader.accountObligations(tx, source.messageID)
         const row = yield* tx.select({ intent: IMMentionIntentTable, message: MessageTable }).from(IMMentionIntentTable)
           .innerJoin(MessageTable, eq(MessageTable.id, IMMentionIntentTable.message_id))
           .where(eq(IMMentionIntentTable.id, input.id)).get()
@@ -1040,12 +1153,49 @@ export const IMRepositoryLive = Layer.effect(
         return { ...row.intent, message: mapMessageRow(row.message) }
       })).pipe(Effect.mapError((cause) => cause instanceof IMRepositoryError ? cause : dbError("Mention binding failed")(cause))),
 
-      settleMention: (input) => db.update(IMMentionIntentTable)
-        .set({ status: input.status, last_error: input.error ?? null, updated_at: Date.now() })
-        .where(and(eq(IMMentionIntentTable.id, input.id), eq(IMMentionIntentTable.status, "pending"))).run()
-        .pipe(Effect.asVoid, Effect.mapError(dbError("Mention settlement failed"))),
+      settleMention: (input) => db.transaction((tx) => Effect.gen(function* () {
+        const source = yield* tx.select({ messageID: IMMentionIntentTable.message_id }).from(IMMentionIntentTable)
+          .where(eq(IMMentionIntentTable.id, input.id)).get()
+        yield* tx.update(IMMentionIntentTable)
+          .set({ status: input.status, last_error: input.error ?? null, updated_at: Date.now() })
+          .where(and(eq(IMMentionIntentTable.id, input.id), eq(IMMentionIntentTable.status, "pending"))).run()
+        if (source) yield* KernelReader.accountObligations(tx, source.messageID)
+      }), { behavior: "immediate" }).pipe(Effect.mapError(dbError("Mention settlement failed"))),
 
       getMessage: (messageID) =>
+        Effect.gen(function* () {
+          const identity = yield* db.select({ groupID: MessageTable.group_id }).from(MessageTable).where(eq(MessageTable.id, IMID.MessageID.make(messageID))).get().pipe(Effect.mapError(dbError("Database operation failed")))
+          if (!identity) return undefined
+          yield* readerGuard(KernelReader.gateGroup(db, identity.groupID))
+          const message = yield* db
+            .select()
+            .from(MessageTable)
+            .where(and(eq(MessageTable.id, messageID as IMID.MessageID), isNull(MessageTable.deleted_at), yield* readerGuard(KernelReader.messagePredicate(db))))
+            .get()
+            .pipe(Effect.mapError(dbError("Database operation failed")))
+
+          if (!message) return undefined
+          yield* readerGuard(KernelReader.verifyMessage(db, message))
+          yield* readerGuard(KernelReader.assertOutput(db))
+
+          return {
+            id: message.id,
+            groupID: message.group_id,
+            senderID: message.sender_id,
+            senderType: message.sender_type,
+            type: message.type,
+            ...(yield* readerGuard(KernelReader.displayMessage(db, message))),
+            mentions: message.mentions ?? null,
+            metadata: message.metadata ?? null,
+            replyToID: message.reply_to_id ?? null,
+            kernelMsgID: message.kernel_msg_id ?? null,
+            createdAt: message.created_at,
+            updatedAt: message.updated_at,
+            deletedAt: message.deleted_at ?? null,
+          }
+        }),
+
+      getRawMessageForKernelDelivery: (messageID) =>
         Effect.gen(function* () {
           const message = yield* db
             .select()
@@ -1075,6 +1225,7 @@ export const IMRepositoryLive = Layer.effect(
 
       markRead: (input) =>
         Effect.gen(function* () {
+          if (yield* readerGuard(KernelReader.gateGroup(db, input.groupID))) return yield* new IMRepositoryError({ code: "reader_required", message: "Protected conversations require an explicit reader action" })
           yield* db
             .update(MemberTable)
             .set({ last_read_at: input.readAt })
@@ -1088,42 +1239,99 @@ export const IMRepositoryLive = Layer.effect(
         }),
 
       createAttachment: (input) =>
-        Effect.gen(function* () {
-          const id = input.id ? IMID.AttachmentID.make(input.id) : IMID.AttachmentID.create()
-          const now = Date.now()
+        db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const id = input.id ? IMID.AttachmentID.make(input.id) : IMID.AttachmentID.create()
+                const now = Date.now()
+                const values = {
+                  id,
+                  workspace_id: input.workspaceID,
+                  project_id: input.projectID ?? null,
+                  group_id: (input.groupID as IMID.GroupID | undefined) ?? null,
+                  message_id: (input.messageID as IMID.MessageID | undefined) ?? null,
+                  uploaded_by: input.uploadedBy,
+                  storage_path: input.storagePath,
+                  filename: input.filename,
+                  mime: input.mime,
+                  size_bytes: input.sizeBytes,
+                  checksum: input.checksum,
+                  created_at: now,
+                  deleted_at: null,
+                }
+                const metadataBytes = Buffer.byteLength(
+                  JSON.stringify([
+                    values.workspace_id,
+                    values.project_id,
+                    values.group_id,
+                    values.uploaded_by,
+                    values.storage_path,
+                    values.filename,
+                    values.mime,
+                    values.checksum,
+                  ]),
+                )
+                if (
+                  !Number.isSafeInteger(input.sizeBytes) ||
+                  input.sizeBytes < 0 ||
+                  input.sizeBytes > AttachmentStorage.maxAttachmentBytes() ||
+                  metadataBytes > 32_768
+                )
+                  return yield* new IMRepositoryError({
+                    message: "Attachment reservation is invalid",
+                    operation: "attachment_capacity",
+                  })
+                const existing = yield* tx.select().from(AttachmentTable).where(eq(AttachmentTable.id,id)).get()
+                if (existing) {
+                  if (MediaUploadCheckpointModel.attachmentHash(MediaUploadCheckpoint.attachment(existing)) !== MediaUploadCheckpointModel.attachmentHash(MediaUploadCheckpoint.attachment({...values,created_at:existing.created_at})) || existing.message_id !== values.message_id || existing.deleted_at !== null) return yield* new IMRepositoryError({code:"message_identity_conflict",message:"Attachment identity conflicts with an existing reservation"})
+                  return MediaUploadCheckpoint.attachment(existing)
+                }
+                // The durable row reserves the full body before file creation. Aggregate only at
+                // admission, under the same immediate transaction, including tombstone metadata.
+                const usage = yield* tx
+                  .select({
+                    records: sql<number>`count(*)`,
+                    bytes: sql<number>`coalesce(sum(${AttachmentStorage.recordOverheadBytes} + length(CAST(json_array(${AttachmentTable.workspace_id}, ${AttachmentTable.project_id}, ${AttachmentTable.group_id}, ${AttachmentTable.uploaded_by}, ${AttachmentTable.storage_path}, ${AttachmentTable.filename}, ${AttachmentTable.mime}, ${AttachmentTable.checksum}) AS BLOB)) + CASE WHEN ${AttachmentTable.deleted_at} IS NULL THEN ${AttachmentTable.size_bytes} ELSE 0 END),0)`,
+                    invalid: sql<number>`coalesce(sum(CASE WHEN ${AttachmentTable.deleted_at} IS NULL AND (typeof(${AttachmentTable.size_bytes}) <> 'integer' OR ${AttachmentTable.size_bytes} < 0 OR ${AttachmentTable.size_bytes} > ${AttachmentStorage.hardMaxBytes}) THEN 1 ELSE 0 END),0)`,
+                  })
+                  .from(AttachmentTable)
+                  .get()
+                if (
+                  !usage ||
+                  !Number.isSafeInteger(usage.records) ||
+                  !Number.isSafeInteger(usage.bytes) ||
+                  usage.invalid ||
+                  usage.records >= AttachmentStorage.maxRecords ||
+                  usage.bytes + input.sizeBytes + metadataBytes + AttachmentStorage.recordOverheadBytes >
+                    AttachmentStorage.capacityBytes
+                )
+                  return yield* new IMRepositoryError({
+                    message: "Attachment capacity exhausted",
+                    operation: "attachment_capacity",
+                  })
+                yield* tx.insert(AttachmentTable).values(values)
+                yield* MediaUploadCheckpoint.initializeOrigin(tx,values)
 
-          yield* db.insert(AttachmentTable).values({
-            id,
-            workspace_id: input.workspaceID,
-            project_id: input.projectID ?? null,
-            group_id: (input.groupID as IMID.GroupID | undefined) ?? null,
-            message_id: (input.messageID as IMID.MessageID | undefined) ?? null,
-            uploaded_by: input.uploadedBy,
-            storage_path: input.storagePath,
-            filename: input.filename,
-            mime: input.mime,
-            size_bytes: input.sizeBytes,
-            checksum: input.checksum,
-            created_at: now,
-            deleted_at: null,
-          }).pipe(Effect.mapError(dbError("Database operation failed")))
-
-          return {
-            id,
-            workspaceID: input.workspaceID,
-            projectID: input.projectID ?? null,
-            groupID: input.groupID ?? null,
-            messageID: input.messageID ?? null,
-            uploadedBy: input.uploadedBy,
-            storagePath: input.storagePath,
-            filename: input.filename,
-            mime: input.mime,
-            sizeBytes: input.sizeBytes,
-            checksum: input.checksum,
-            createdAt: now,
-            deletedAt: null,
-          }
-        }),
+                return {
+                  id,
+                  workspaceID: input.workspaceID,
+                  projectID: input.projectID ?? null,
+                  groupID: input.groupID ?? null,
+                  messageID: input.messageID ?? null,
+                  uploadedBy: input.uploadedBy,
+                  storagePath: input.storagePath,
+                  filename: input.filename,
+                  mime: input.mime,
+                  sizeBytes: input.sizeBytes,
+                  checksum: input.checksum,
+                  createdAt: now,
+                  deletedAt: null,
+                }
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.mapError(dbError("Attachment reservation failed"))),
 
       getAttachment: (attachmentID) =>
         Effect.gen(function* () {
@@ -1164,7 +1372,65 @@ export const IMRepositoryLive = Layer.effect(
           return rows.map(mapAttachmentRow)
         }),
 
-      listExpiredAttachments: (workspaceID) =>
+      attachmentCleanupCursor: (workspaceID) =>
+        db
+          .select()
+          .from(MediaCleanupCursorTable)
+          .where(eq(MediaCleanupCursorTable.workspace_id, workspaceID))
+          .get()
+          .pipe(
+            Effect.map((row) => ({
+              revision: row?.revision ?? 0,
+              ...(row?.after_id !== null && row?.after_created_at !== null && row !== undefined
+                ? { after: { id: row.after_id, createdAt: row.after_created_at } }
+                : {}),
+            })),
+            Effect.mapError(dbError("Attachment cleanup cursor lookup failed")),
+          ),
+      advanceAttachmentCleanupCursor: (workspaceID, expected, next) =>
+        db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                yield* tx
+                  .insert(MediaCleanupCursorTable)
+                  .values({
+                    workspace_id: workspaceID,
+                    after_created_at: null,
+                    after_id: null,
+                    revision: 0,
+                    updated_at: Date.now(),
+                  })
+                  .onConflictDoNothing()
+                  .run()
+                const changed = yield* tx
+                  .update(MediaCleanupCursorTable)
+                  .set({
+                    after_created_at: next?.createdAt ?? null,
+                    after_id: next?.id ?? null,
+                    revision: expected.revision + 1,
+                    updated_at: Date.now(),
+                  })
+                  .where(
+                    and(
+                      eq(MediaCleanupCursorTable.workspace_id, workspaceID),
+                      eq(MediaCleanupCursorTable.revision, expected.revision),
+                      expected.after
+                        ? eq(MediaCleanupCursorTable.after_created_at, expected.after.createdAt)
+                        : isNull(MediaCleanupCursorTable.after_created_at),
+                      expected.after
+                        ? eq(MediaCleanupCursorTable.after_id, expected.after.id)
+                        : isNull(MediaCleanupCursorTable.after_id),
+                    ),
+                  )
+                  .returning({ revision: MediaCleanupCursorTable.revision })
+                  .get()
+                return changed !== undefined
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.mapError(dbError("Attachment cleanup cursor changed"))),
+      listExpiredAttachments: (workspaceID, after) =>
         db
           .select()
           .from(AttachmentTable)
@@ -1173,8 +1439,18 @@ export const IMRepositoryLive = Layer.effect(
               eq(AttachmentTable.workspace_id, workspaceID),
               isNull(AttachmentTable.deleted_at),
               lt(AttachmentTable.created_at, Date.now() - AttachmentStorage.ttlMs()),
+              after
+                ? or(
+                    gt(AttachmentTable.created_at, after.createdAt),
+                    and(
+                      eq(AttachmentTable.created_at, after.createdAt),
+                      gt(AttachmentTable.id, IMID.AttachmentID.make(after.id)),
+                    ),
+                  )
+                : undefined,
             ),
           )
+          .orderBy(asc(AttachmentTable.created_at), asc(AttachmentTable.id))
           .limit(32)
           .all()
           .pipe(
@@ -1182,22 +1458,10 @@ export const IMRepositoryLive = Layer.effect(
             Effect.mapError(dbError("Attachment cleanup lookup failed")),
           ),
 
-      expireAttachment: (attachmentID) =>
-        db
-          .update(AttachmentTable)
-          .set({ deleted_at: Date.now() })
-          .where(
-            and(
-              eq(AttachmentTable.id, IMID.AttachmentID.make(attachmentID)),
-              // Failed, unbound uploads may be tombstoned after the caller removes partial bytes.
-              or(
-                isNull(AttachmentTable.message_id),
-                lt(AttachmentTable.created_at, Date.now() - AttachmentStorage.ttlMs()),
-              ),
-            ),
-          )
-          .run()
-          .pipe(Effect.asVoid, Effect.mapError(dbError("Attachment expiration failed"))),
+      expireAttachment: (attachmentID) => db.transaction((tx) => Effect.gen(function* () {
+        yield* tx.update(AttachmentTable).set({deleted_at:Date.now()}).where(and(eq(AttachmentTable.id,IMID.AttachmentID.make(attachmentID)),or(isNull(AttachmentTable.message_id),lt(AttachmentTable.created_at,Date.now()-AttachmentStorage.ttlMs())))).run()
+        yield* MediaUploadCheckpoint.expire(tx,attachmentID)
+      }),{behavior:"immediate"}).pipe(Effect.mapError(dbError("Attachment expiration failed"))),
 
       getGroupByKernelConvID: (kernelConvID) =>
         Effect.gen(function* () {
@@ -1268,48 +1532,66 @@ export const IMRepositoryLive = Layer.effect(
         }),
 
       setMessageKernelMsgID: (input) =>
-        Effect.gen(function* () {
+        db.transaction((tx) => Effect.gen(function* () {
+          if (
+            yield* KernelDelivery.read(tx, input.messageID).pipe(
+              Effect.mapError(dbError("Transport receipt is unavailable")),
+            )
+          )
+            return yield* new IMRepositoryError({
+              code: "kernel_delivery_unavailable",
+              message: "Managed transport acknowledgements require their exact dispatch owner",
+            })
           // Only fill a still-NULL kernel id: overwriting an acked row (or a row the inbound
           // dedup already wrote) would break the at-least-once identity, and the unique index is
           // the backstop if two writers race the same kernel id.
-          const updated = yield* db
+          yield* ReplyBodyRetirement.preflight(tx,input.messageID).pipe(Effect.mapError(dbError("Original reply body is unavailable")))
+          const updated = yield* tx
             .update(MessageTable)
             .set({ kernel_msg_id: input.kernelMsgID })
-            .where(and(eq(MessageTable.id, input.messageID as IMID.MessageID), isNull(MessageTable.kernel_msg_id)))
+            .where(and(
+              eq(MessageTable.id, input.messageID as IMID.MessageID),
+              isNull(MessageTable.kernel_msg_id),
+              sql`NOT EXISTS (SELECT 1 FROM im_kernel_delivery WHERE message_id = ${input.messageID})`,
+            ))
             .returning({ id: MessageTable.id })
             .get()
             .pipe(Effect.mapError(dbError("Database operation failed")))
+          if (updated) yield* ReplyBodyRetirement.refreshMessage(tx,input.messageID).pipe(Effect.mapError(dbError("Original reply body accounting is unavailable")))
           return updated !== undefined
-        }),
+        }), {behavior:"immediate"}),
 
+      claimKernelDelivery: (runtime, messageID) =>
+        KernelDelivery.claim(db, runtime, messageID).pipe(Effect.mapError(dbError("Kernel delivery admission failed"))),
+      acknowledgeKernelDelivery: (runtime, dispatch, kernelMessageID) =>
+        KernelDelivery.acknowledge(db, runtime, dispatch, kernelMessageID).pipe(
+          Effect.mapError(dbError("Kernel acknowledgement could not be persisted")),
+        ),
+      uncertainKernelDelivery: (runtime, dispatch) =>
+        KernelDelivery.uncertain(db, runtime, dispatch).pipe(
+          Effect.mapError(dbError("Kernel delivery outcome is unknown")),
+        ),
+      kernelDeliveryStatuses: (messageIDs, runtime) =>
+        KernelDelivery.statuses(db, messageIDs, runtime).pipe(
+          Effect.mapError(dbError("Kernel delivery status page could not be read")),
+        ),
+      kernelDeliveryStatus: (messageID, runtime) =>
+        KernelDelivery.status(db, messageID, runtime).pipe(
+          Effect.mapError(dbError("Kernel delivery receipt could not be read")),
+        ),
       listPendingKernelMessages: (input) =>
-        Effect.gen(function* () {
-          // Pending = locally authored, never-acked text/agent rows in a kernel-bound group. System
-          // rows and non-text types stay local in B1 (the kernel path is text-only).
-          const rows = yield* db
-            .select({ message: MessageTable, kernel_conv_id: GroupTable.kernel_conv_id })
-            .from(MessageTable)
-            .innerJoin(
-              GroupTable,
-              and(eq(GroupTable.id, MessageTable.group_id), isNotNull(GroupTable.kernel_conv_id)),
-            )
-            .where(
-              and(
-                isNull(MessageTable.kernel_msg_id),
-                isNull(MessageTable.deleted_at),
-                isNull(GroupTable.deleted_at),
-                eq(MessageTable.type, "text"),
-                or(eq(MessageTable.sender_type, "user"), eq(MessageTable.sender_type, "agent")),
+        input.runtime
+          ? KernelDelivery.pending(db, input.runtime, input.limit).pipe(
+              Effect.map((rows) =>
+                rows.flatMap((row) =>
+                  row.kernel_conv_id === null
+                    ? []
+                    : [{ message: mapMessageRow(row.message), kernelConvID: row.kernel_conv_id }],
+                ),
               ),
+              Effect.mapError(dbError("Prepared kernel delivery scan failed")),
             )
-            .orderBy(asc(MessageTable.created_at), asc(MessageTable.id))
-            .limit(input.limit)
-            .all()
-            .pipe(Effect.mapError(dbError("Database operation failed")))
-          return rows.flatMap((row) =>
-            row.kernel_conv_id === null ? [] : [{ message: mapMessageRow(row.message), kernelConvID: row.kernel_conv_id }],
-          )
-        }),
+          : Effect.succeed([]),
 
       listKernelBoundGroups:
         Effect.gen(function* () {

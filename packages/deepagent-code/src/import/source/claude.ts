@@ -57,6 +57,39 @@ export function parseClaude(root: string, opts?: { cwdFilter?: string }): Parsed
   return { sessions, memories, skills, skipped }
 }
 
+/** Uses the same file decoder as CLI parsing; only iteration is cooperative. */
+export async function parseClaudeCooperative(
+  root: string,
+  opts: { cwdFilter?: string; checkpoint: () => Promise<void>; onSession?: (session: SourceSession) => void },
+): Promise<ParsedSource> {
+  const sessions: SourceSession[] = []
+  const skipped: string[] = []
+  const memories = []
+  for (const project of readdirSyncStat(join(root, "projects"))) {
+    await opts.checkpoint()
+    if (!project.isDirectory) continue
+    memories.push(...fromMarkdownTree("claude", join(project.path, "memory")))
+    for (const entry of readdirSyncStat(project.path)) {
+      await opts.checkpoint()
+      if (!entry.isFile || !entry.path.endsWith(".jsonl")) continue
+      if (isExcludedFile(basename(entry.path))) {
+        skipped.push(entry.path)
+        continue
+      }
+      const parsed = parseSessionFile(entry.path)
+      if (!parsed) {
+        skipped.push(entry.path)
+        continue
+      }
+      if (opts.cwdFilter && !parsed.cwd.startsWith(opts.cwdFilter)) continue
+      opts.onSession?.(parsed)
+      sessions.push(parsed)
+    }
+  }
+  await opts.checkpoint()
+  return { sessions, memories, skills: parseClaudeSkills(join(root, "skills")), skipped }
+}
+
 interface ClaudeLine {
   type?: string
   uuid?: string

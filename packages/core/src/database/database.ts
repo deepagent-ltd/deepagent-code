@@ -134,35 +134,44 @@ const toBootstrapInput = (preflightResult: DatabasePreflight.PreflightResult): B
  */
 export const bootstrap = async (filename: string, buildVersion = InstallationVersion): Promise<BootstrapState> => {
   const buildDigest = registryDigest(knownMigrationIds)
-  const preflightResult = await DatabasePreflight.preflight(preflightOptionsFor(filename, buildVersion))
-  const input = toBootstrapInput(preflightResult)
-  const state = DatabaseBootstrap.describeBootstrap(input, { buildDigest })
-  if (!state.ready || !input.hasExistingDatabase || input.pendingMigrationIds.length > 0) return state
+  return DatabasePreflight.withReadOnlyPreflight(
+    preflightOptionsFor(filename, buildVersion),
+    async (preflightResult, readonlyFilename) => {
+      const input = toBootstrapInput(preflightResult)
+      const state = DatabaseBootstrap.describeBootstrap(input, { buildDigest })
+      if (!state.ready || !input.hasExistingDatabase || input.pendingMigrationIds.length > 0) return state
 
-  const inventory = await Effect.runPromise(
-    Effect.gen(function* () {
-      const db = yield* makeDatabase
-      yield* db.run("PRAGMA query_only = ON")
-      return yield* StartupInventory.verifyStartupInventory(db)
-    }).pipe(Effect.provide(sqliteLayer({ filename, readonly: true })), Effect.scoped, Effect.exit),
-  )
-  if (inventory._tag === "Failure")
-    return DatabaseBootstrap.startupRecoveryState(
-      { buildDigest },
-      {
-        stableCode: "startup_inventory_check_failed",
-        message: "durable startup inventory could not be read safely",
-      },
-    )
-  if (inventory.value.ok) return state
-  return DatabaseBootstrap.startupRecoveryState(
-    { buildDigest },
-    {
-      stableCode: "startup_inventory_unclassified",
-      message: `${inventory.value.unclassifiedItems.length} durable startup item(s) could not be classified`,
-      table: inventory.value.unclassifiedItems[0]?.category,
-      key: inventory.value.unclassifiedItems[0]?.id,
+      const inventory = await Effect.runPromise(
+        Effect.gen(function* () {
+          const db = yield* makeDatabase
+          yield* db.run("PRAGMA query_only = ON")
+          return yield* StartupInventory.verifyStartupInventory(db)
+        }).pipe(
+          Effect.provide(sqliteLayer({ filename: readonlyFilename, readonly: true, disableWAL: true })),
+          Effect.scoped,
+          Effect.exit,
+        ),
+      )
+      if (inventory._tag === "Failure")
+        return DatabaseBootstrap.startupRecoveryState(
+          { buildDigest },
+          {
+            stableCode: "startup_inventory_check_failed",
+            message: "durable startup inventory could not be read safely",
+          },
+        )
+      if (inventory.value.ok) return state
+      return DatabaseBootstrap.startupRecoveryState(
+        { buildDigest },
+        {
+          stableCode: "startup_inventory_unclassified",
+          message: `${inventory.value.unclassifiedItems.length} durable startup item(s) could not be classified`,
+          table: inventory.value.unclassifiedItems[0]?.category,
+          key: inventory.value.unclassifiedItems[0]?.id,
+        },
+      )
     },
+    (preflightResult) => DatabaseBootstrap.describeBootstrap(toBootstrapInput(preflightResult), { buildDigest }),
   )
 }
 
@@ -326,7 +335,9 @@ export function layerFromPath(filename: string) {
         layer.pipe(
           Layer.provide(Layer.succeed(CurrentPreflightState, { state })),
           Layer.provide(Layer.succeed(CurrentDatabaseFile, { filename })),
-          Layer.provide(sqliteLayer({ filename })),
+          // Keep the existing journal readable by the consistency backup. The business
+          // layer selects WAL only after backup verification and acquiring its runtime lock.
+          Layer.provide(sqliteLayer({ filename, disableWAL: true })),
         ),
       ),
     ),

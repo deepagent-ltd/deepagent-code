@@ -1,3 +1,4 @@
+import { KernelSdk } from "@/im/kernel/sdk"
 import { beforeEach, describe, expect } from "bun:test"
 import { Effect, Layer, PubSub, Stream, SubscriptionRef } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
@@ -7,6 +8,7 @@ import { KernelClient } from "@/im/kernel/client"
 import { IMKernelSync } from "@/im/kernel/sync"
 import { IMKernelExchange } from "@/im/kernel/exchange"
 import { pollWithTimeout, testEffect } from "../lib/effect"
+import { InstanceRegistry } from "@/effect/instance-registry"
 
 let publish: (message: KernelClient.KernelTextMessage) => Effect.Effect<void>
 let clientState: SubscriptionRef.SubscriptionRef<KernelClient.ConnectionState>
@@ -44,6 +46,11 @@ const client = Layer.effect(
             latestTime: Math.max(input.after, ...messages.map((message) => message.msgTime)),
           }
         }),
+      getDeliveryReader: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryReader", message: "Protected reader unavailable in legacy fixture" })),
+      getDeliveryChanges: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryChanges", message: "Protected reader unavailable in legacy fixture" })),
+      getDeliveryMessages: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryMessages", message: "Protected reader unavailable in legacy fixture" })),
+      getDeliveryReadCut: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryReadCut", message: "Protected reader unavailable in legacy fixture" })),
+      markDeliveryRead: () => Effect.fail(new KernelSdk.KernelError({ operation: "markDeliveryRead", message: "Protected reader unavailable in legacy fixture" })),
       disconnect: Effect.void,
     })
   }),
@@ -77,6 +84,8 @@ const sync = IMKernelSync.layer(
   },
 ).pipe(
   Layer.provide(repository),
+  Layer.provide(database),
+  Layer.provide(InstanceRegistry.layer),
   Layer.provide(client),
   Layer.provide(
     Layer.succeed(IMBroadcasterService, {

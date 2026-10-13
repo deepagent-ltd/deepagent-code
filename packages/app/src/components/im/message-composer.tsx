@@ -4,16 +4,21 @@ import { Button } from "@deepagent-code/ui/button"
 import { useLanguage } from "@/context/language"
 import type { AgentDescriptor } from "./types"
 import { createComposerDraft, type ComposerDraft } from "./composer-draft"
+import { parseDacCommand } from "./personal-command"
 
 interface MessageComposerProps {
   onSend: (content: string, clientRequestID: string) => void | Promise<void>
+  onDac?: (text: string, delivery: "queue" | "steer") => boolean | void | Promise<boolean | void>
   onTyping?: (typing: boolean) => void
   agents: AgentDescriptor[]
   disabled?: boolean
   draft?: ComposerDraft
-  // §B3 file attachments — when provided, a paperclip button lets the user upload a file. The panel
-  // owns the upload (uploadAttachment → file message) so the composer stays presentation-only.
-  onAttach?: (file: File) => Promise<void>
+  // The panel persists uploads in its attachment draft; selecting files never sends a message.
+  onAttach?: (files: readonly File[]) => Promise<void>
+  hasAttachments?: boolean
+  attachmentLimit?: number
+  attachmentBusy?: boolean
+  sendDisabled?: boolean
   // Placeholder override (e.g. thread replies read "Reply in thread…").
   placeholder?: string
 }
@@ -24,6 +29,7 @@ export function MessageComposer(props: MessageComposerProps) {
   const delivery = draft.state
   const setDelivery = draft.setState
   const content = () => draft.state.content
+  const privateCommand = () => parseDacCommand(content()) !== undefined
   const setContent = (value: string) =>
     draft.setState({
       content: value,
@@ -35,6 +41,7 @@ export function MessageComposer(props: MessageComposerProps) {
     mentionPosition: { top: 0, left: 0 },
     selectedIndex: 0,
     uploading: false,
+    dacDelivery: "queue" as "queue" | "steer",
   })
   let textareaRef: HTMLTextAreaElement | undefined
   let fileInputRef: HTMLInputElement | undefined
@@ -43,14 +50,14 @@ export function MessageComposer(props: MessageComposerProps) {
   let disposed = false
 
   const handleFileSelected = async (e: Event & { currentTarget: HTMLInputElement }) => {
-    const file = e.currentTarget.files?.[0]
+    const files = Array.from(e.currentTarget.files ?? [])
     e.currentTarget.value = ""
-    if (!file || !props.onAttach) return
+    if (!files.length || !props.onAttach || editor.uploading || delivery.sending) return
     setEditor("uploading", true)
     try {
-      await props.onAttach(file)
+      await props.onAttach(files)
     } finally {
-      setEditor("uploading", false)
+      if (!disposed) setEditor("uploading", false)
     }
   }
 
@@ -78,6 +85,7 @@ export function MessageComposer(props: MessageComposerProps) {
   }
 
   onCleanup(() => {
+    if (delivery.sending) setDelivery({ sending: false, failed: true })
     disposed = true
     stopTyping()
   })
@@ -164,20 +172,38 @@ export function MessageComposer(props: MessageComposerProps) {
   }
 
   const submit = async () => {
-    if (!content().trim() || props.disabled || delivery.sending) return
+    if (
+      (!content().trim() && !props.hasAttachments) ||
+      props.disabled ||
+      props.sendDisabled ||
+      delivery.sending ||
+      props.attachmentBusy
+    )
+      return
     const sent = content()
+    const command = parseDacCommand(sent)
+    if (command !== undefined) {
+      if (!props.onDac || props.hasAttachments) return
+      const accepted = await props.onDac(command, editor.dacDelivery)
+      if (accepted === false) return
+      if (!disposed && content() === sent) setContent("")
+      return
+    }
     const requestID = delivery.requestID || crypto.randomUUID()
     setDelivery({ sending: true, failed: false, requestID, requestContent: sent })
     try {
       await props.onSend(sent, requestID)
+      if (disposed) return
       if (content() === sent) setContent("")
       setDelivery({ requestID: "", requestContent: "" })
       stopTyping()
     } catch {
-      setDelivery("failed", true)
+      if (!disposed) setDelivery("failed", true)
     } finally {
-      setDelivery("sending", false)
-      if (!disposed) textareaRef?.focus()
+      if (!disposed) {
+        setDelivery("sending", false)
+        textareaRef?.focus()
+      }
     }
   }
 
@@ -209,6 +235,30 @@ export function MessageComposer(props: MessageComposerProps) {
 
   return (
     <div class="relative shrink-0 border-t border-border-weaker-base p-3">
+      <Show when={props.onDac && /^\/(?:d(?:a(?:c)?)?)?$/.test(content())}>
+        <Button
+          size="small"
+          variant="ghost"
+          onClick={() => {
+            void props.onDac?.("", "queue")
+          }}
+        >
+          {language.t("im.dac.activate")}
+        </Button>
+      </Show>
+      <Show when={props.onDac && parseDacCommand(content()) !== undefined}>
+        <div class="flex items-center gap-2 text-11-regular text-text-weak">
+          <span>{language.t("im.dac.private")}</span>
+          <select
+            aria-label={language.t("im.dac.delivery")}
+            value={editor.dacDelivery}
+            onChange={(event) => setEditor("dacDelivery", event.currentTarget.value === "steer" ? "steer" : "queue")}
+          >
+            <option value="queue">{language.t("im.dac.queue")}</option>
+            <option value="steer">{language.t("im.dac.steer")}</option>
+          </select>
+        </div>
+      </Show>
       <textarea
         ref={textareaRef}
         value={content()}
@@ -229,6 +279,11 @@ export function MessageComposer(props: MessageComposerProps) {
       <Show when={delivery.failed}>
         <p role="alert" class="mt-1 text-12-regular text-text-critical">
           {language.t("im.composer.failed")}
+        </p>
+      </Show>
+      <Show when={privateCommand() && props.hasAttachments}>
+        <p role="alert" class="mt-1 text-12-regular text-text-weak">
+          {language.t("im.dac.attachments")}
         </p>
       </Show>
 
@@ -262,11 +317,18 @@ export function MessageComposer(props: MessageComposerProps) {
       <div class="mt-2 flex items-center justify-between gap-2">
         <div class="min-w-0 text-11-regular text-text-weak">{language.t("im.composer.hint")}</div>
         <Show when={props.onAttach}>
-          <input ref={fileInputRef} type="file" class="hidden" onChange={handleFileSelected} />
+          <input ref={fileInputRef} type="file" multiple class="hidden" onChange={handleFileSelected} />
           <button
             type="button"
             class="shrink-0 flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-base hover:bg-surface-raised-base-hover disabled:opacity-50"
-            disabled={props.disabled || editor.uploading || delivery.sending}
+            disabled={
+              props.disabled ||
+              editor.uploading ||
+              delivery.sending ||
+              props.attachmentBusy ||
+              privateCommand() ||
+              props.attachmentLimit === 0
+            }
             onClick={() => fileInputRef?.click()}
             aria-label={language.t("im.composer.attach")}
           >
@@ -277,7 +339,14 @@ export function MessageComposer(props: MessageComposerProps) {
           class="shrink-0"
           variant="primary"
           size="small"
-          disabled={props.disabled || delivery.sending || !content().trim()}
+          disabled={
+            props.disabled ||
+            props.sendDisabled ||
+            delivery.sending ||
+            props.attachmentBusy ||
+            (privateCommand() && (!!props.hasAttachments || !props.onDac)) ||
+            (!content().trim() && !props.hasAttachments)
+          }
           onClick={() => void submit()}
         >
           {delivery.sending ? language.t("im.composer.sending") : language.t("im.composer.send")}

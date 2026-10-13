@@ -37,7 +37,10 @@ describe("durable attention", () => {
         const db = yield* EffectDrizzleSqlite.makeWithDefaults()
         yield* DatabaseMigration.applyOnly(
           db,
-          migrations.filter((migration) => migration.id !== "20261006073407_attention_seen"),
+          migrations.slice(
+            0,
+            migrations.findIndex((migration) => migration.id === "20261006073407_attention_seen"),
+          ),
         )
         const session = yield* seedSession({ db }, "upgrade")
         yield* seedActivity({ db }, session, "upgrade")

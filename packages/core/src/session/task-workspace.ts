@@ -32,7 +32,7 @@ import { existsSync } from "node:fs"
 import path from "path"
 import { spawnSync } from "node:child_process"
 import { and, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
-import { Data, Effect } from "effect"
+import { Context, Data, Effect, Option } from "effect"
 import type { Database } from "../database/database"
 import { AgentExecutionTable } from "../deepagent/agent-execution-sql"
 import type { DeepAgentEvent } from "../deepagent/deepagent-event"
@@ -47,6 +47,15 @@ type DatabaseService = Database.Interface["db"]
 type Writer = Pick<DatabaseService, "select" | "insert" | "update">
 type RunRow = typeof TaskRunTable.$inferSelect
 type EventRow = typeof EventTaskWorkspaceTable.$inferSelect
+
+/** Installation-owned fixed Git/raw-blob materializer, supplied only for formal event Work.
+ * Legacy task behavior remains unchanged when this private service is absent. */
+export class EventGit extends Context.Service<EventGit, {
+  readonly run: (cwd: string, args: readonly string[]) => Effect.Effect<GitResult>
+  readonly prepareParent?: (repositoryRoot: string, parent: string) => Effect.Effect<{ readonly outcome: "known" | "unknown"; readonly directory: string }>
+  readonly materialize: (input: { repositoryRoot: string; baseCommit: string; branch: string; directory: string }) => Effect.Effect<GitResult>
+  readonly settle: (input: { repositoryRoot: string; baseCommit: string; branch: string; directory: string }) => Effect.Effect<GitResult & { readonly commit?: string; readonly continuationRef?: string }>
+}>()("@deepagent-code/TaskWorkspace/EventGit") {}
 
 export class WorkspaceError extends Data.TaggedError("TaskWorkspace.Error")<{
   readonly runID: string
@@ -81,7 +90,7 @@ export type WorkspaceReceipt = {
 export class EventWorkspaceError extends Data.TaggedError("TaskWorkspace.EventError")<{
   readonly eventID: string
   readonly taskID: string
-  readonly code: "git_failed" | "preflight_conflict" | "preflight_failed" | "preflight_not_ready"
+  readonly code: "git_failed" | "preflight_conflict" | "preflight_failed" | "preflight_not_ready" | "unknown"
   readonly message: string
 }> {}
 
@@ -130,9 +139,15 @@ export const prepareEvent = Effect.fn("TaskWorkspace.prepareEvent")(function* (
 ) {
   const error = (code: EventWorkspaceError["code"], message: string) =>
     new EventWorkspaceError({ eventID: input.eventID, taskID: input.taskID, code, message })
+  const unknown = (message: string) => Effect.gen(function* () {
+    yield* db.update(EventTaskWorkspaceTable).set({ error: "formal_physical_unknown" })
+      .where(and(eventIdentity(input), inArray(EventTaskWorkspaceTable.state, ["pending", "ready"]))).pipe(Effect.orDie)
+    return yield* error("unknown", message)
+  })
   if (!Number.isSafeInteger(input.generation) || input.generation < 0)
     return yield* error("preflight_conflict", "invalid execution generation")
   const rootResult = yield* git(input.parentDirectory, ["rev-parse", "--show-toplevel"])
+  if (rootResult.outcome === "unknown") return yield* error("unknown", "Original Git observation is unresolved")
   if (rootResult.exitCode !== 0) return yield* error("git_failed", `repository root unavailable: ${text(rootResult.stderr)}`)
   const repositoryRoot = text(rootResult.stdout)
   const operationKey = `${input.eventID}:${input.taskID}`
@@ -140,14 +155,23 @@ export const prepareEvent = Effect.fn("TaskWorkspace.prepareEvent")(function* (
   const name = `event-${Hash.sha256(`${operationKey}:${input.generation}`).slice(0, 24)}`
   const branch = `deepagent-code/${name}`
   const parent = path.join(Global.Path.data, "worktree", "durable", Hash.sha256(repositoryRoot).slice(0, 16))
-  yield* Effect.promise(() => fs.mkdir(parent, { recursive: true }))
-  const directory = path.join(yield* Effect.promise(() => fs.realpath(parent)), name)
+  const fixed = yield* Effect.serviceOption(EventGit)
+  const originalParent = Option.isSome(fixed) && fixed.value.prepareParent
+    ? yield* fixed.value.prepareParent(repositoryRoot, parent) : undefined
+  if (originalParent?.outcome === "unknown") return yield* error("unknown", "Original event parent namespace creation is unresolved")
+  if (originalParent && originalParent.directory !== parent)
+    return yield* error("preflight_conflict", "Original event parent namespace differs from the deterministic layout")
+  // The Windows producer creates and verifies its original protected namespace.
+  // A refusal cannot fall back to Node mkdir or create a pending workspace row.
+  if (!originalParent) yield* Effect.promise(() => fs.mkdir(parent, { recursive: true }))
+  const directory = path.join(originalParent?.directory ?? (yield* Effect.promise(() => fs.realpath(parent))), name)
   const previous = yield* db.select().from(EventTaskWorkspaceTable).where(eventIdentity(input)).get().pipe(Effect.orDie)
   const baseResult = previous
-    ? { exitCode: 0, stdout: previous.base_commit, stderr: "" }
+    ? { outcome: "known" as const, exitCode: 0, stdout: previous.base_commit, stderr: "" }
     : yield* git(repositoryRoot, ["rev-parse", "--verify", `${input.baseRef ?? "HEAD"}^{commit}`])
   if (baseResult.exitCode !== 0) return yield* error("git_failed", `base ref unavailable: ${text(baseResult.stderr)}`)
   const baseCommit = text(baseResult.stdout)
+  if (baseResult.outcome === "unknown") return yield* error("unknown", "Original Git base observation is unresolved")
   if (!previous) {
     yield* db
       .insert(EventTaskWorkspaceTable)
@@ -169,6 +193,7 @@ export const prepareEvent = Effect.fn("TaskWorkspace.prepareEvent")(function* (
   const row = (yield* db.select().from(EventTaskWorkspaceTable).where(eventIdentity(input)).get().pipe(Effect.orDie))!
   if (row.repository_root !== repositoryRoot || row.operation_key !== operationKey || row.branch !== branch || row.directory !== directory)
     return yield* error("preflight_conflict", "event workspace receipt identity changed")
+  if (row.error === "formal_physical_unknown") return yield* error("unknown", "Original physical worktree outcome requires explicit reconciliation")
   if (row.state === "failed" || row.state === "reclaimed")
     return yield* error("preflight_failed", row.error ?? `workspace is ${row.state}`)
   if (row.state === "ready" || row.state === "retained") {
@@ -181,11 +206,21 @@ export const prepareEvent = Effect.fn("TaskWorkspace.prepareEvent")(function* (
   }
   const ensured = yield* ensureWorktree({ repositoryRoot, baseCommit: row.base_commit, name, branch, directory })
   if (!ensured.ok) {
+    if (ensured.code === "unknown") return yield* unknown("Original worktree creation is unresolved")
     yield* db.update(EventTaskWorkspaceTable)
       .set({ state: "failed", error: ensured.message, time_settled: input.now ?? Date.now() })
       .where(and(eventIdentity(input), eq(EventTaskWorkspaceTable.state, "pending")))
       .pipe(Effect.orDie)
     return yield* error(ensured.code, ensured.message)
+  }
+  if (Option.isSome(fixed)) {
+    const complete = yield* fixed.value.materialize({ repositoryRoot, baseCommit: row.base_commit, branch, directory })
+    if (complete.outcome === "unknown") return yield* unknown("Original materialization is unresolved")
+    if (complete.exitCode !== 0) {
+      yield* db.update(EventTaskWorkspaceTable).set({ state: "failed", error: "formal_materialization_unavailable", time_settled: input.now ?? Date.now() })
+        .where(and(eventIdentity(input), eq(EventTaskWorkspaceTable.state, "pending"))).pipe(Effect.orDie)
+      return yield* error("preflight_failed", "Formal worktree materialization did not prove complete")
+    }
   }
   yield* db.update(EventTaskWorkspaceTable)
     .set({ state: "ready" })
@@ -227,8 +262,32 @@ export const settleEvent = Effect.fn("TaskWorkspace.settleEvent")(function* (
     })
   })
   if (!row || !["ready", "retained"].includes(row.state)) return yield* fail("event worktree is not ready")
+  if (row.error === "formal_physical_unknown") return yield* new EventWorkspaceError({ eventID: input.eventID, taskID: input.taskID,
+    code: "unknown", message: "Original physical worktree outcome requires explicit reconciliation" })
   if (row.state === "retained" && row.continuation_ref)
     return { ...eventReceipt(row), continuationRef: row.continuation_ref, artifacts: [`git-ref:${row.continuation_ref}`] }
+  const fixed = yield* Effect.serviceOption(EventGit)
+  if (Option.isSome(fixed)) {
+    const result = yield* fixed.value.settle({ repositoryRoot: row.repository_root, baseCommit: row.base_commit, branch: row.branch, directory: row.directory })
+    if (result.outcome === "unknown") {
+      yield* db.update(EventTaskWorkspaceTable).set({ error: "formal_physical_unknown" })
+        .where(and(eventIdentity(input), eq(EventTaskWorkspaceTable.state, "ready"))).pipe(Effect.orDie)
+      return yield* new EventWorkspaceError({ eventID: input.eventID, taskID: input.taskID,
+        code: "unknown", message: "Original worktree preservation is unresolved" })
+    }
+    if (result.exitCode !== 0 || !result.commit || !/^[a-f0-9]{40,64}$/.test(result.commit) ||
+      result.continuationRef !== result.commit)
+      return yield* fail("Formal worktree preservation did not prove complete")
+    const registered = yield* registeredWorktree(row.repository_root, row.directory)
+    const ancestor = yield* git(row.repository_root, ["merge-base", "--is-ancestor", row.base_commit, result.commit])
+    if (ancestor.outcome === "unknown") return yield* new EventWorkspaceError({ eventID: input.eventID, taskID: input.taskID,
+      code: "unknown", message: "Original preserved branch observation is unresolved" })
+    if (registered?.branch !== row.branch || registered.head !== result.commit || ancestor.exitCode !== 0)
+      return yield* fail("Formal worktree preservation changed its recorded identity")
+    yield* db.update(EventTaskWorkspaceTable).set({ state: "retained", continuation_ref: result.continuationRef, time_settled: input.now ?? Date.now() })
+      .where(and(eventIdentity(input), eq(EventTaskWorkspaceTable.state, "ready"))).pipe(Effect.orDie)
+    return { ...eventReceipt(row), continuationRef: result.continuationRef, artifacts: [`git-ref:${result.continuationRef}`] }
+  }
   const status = yield* git(row.directory, ["status", "--porcelain"])
   if (status.exitCode !== 0) return yield* fail(`event worktree status failed: ${text(status.stderr)}`)
   if (text(status.stdout)) {
@@ -393,7 +452,11 @@ export const prepare = Effect.fn("TaskWorkspace.prepare")(function* (
   yield* markStarted(db, row, plan)
 
   const ensured = yield* ensureWorktree({ repositoryRoot, baseCommit, ...derived, directory })
-  if (!ensured.ok) return yield* failPreflight(db, row, ensured.code, ensured.message, now)
+  if (!ensured.ok) {
+    if (ensured.code === "unknown") return yield* new WorkspaceError({ runID: input.runID,
+      code: "preflight_conflict", message: "Original physical workspace mutation is unresolved" })
+    return yield* failPreflight(db, row, ensured.code, ensured.message, now)
+  }
 
   return yield* markReady(db, row.run_id, plan)
 })
@@ -798,7 +861,7 @@ export const retain = Effect.fn("TaskWorkspace.retain")(function* (
  */
 export const DEFAULT_WORKTREE_RETENTION_MS = 7 * 24 * 60 * 60_000
 
-const worktreeRetentionMs = () => {
+export const worktreeRetentionMs = () => {
   const raw = process.env["DEEPAGENT_CODE_TASK_WORKTREE_RETENTION_MS"]
   const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_WORKTREE_RETENTION_MS
@@ -868,6 +931,7 @@ export const reclaimStale = Effect.fn("TaskWorkspace.reclaimStale")(function* (
     .where(and(eq(EventTaskWorkspaceTable.state, "ready"), lte(EventTaskWorkspaceTable.time_created, cutoff)))
     .all().pipe(Effect.orDie)
   for (const row of abandoned) {
+    if (yield* formalEventCustody(db, row)) continue
     const owners = yield* db.select({
       generation: AgentExecutionTable.generation,
       status: AgentExecutionTable.status,
@@ -897,6 +961,7 @@ export const reclaimStale = Effect.fn("TaskWorkspace.reclaimStale")(function* (
     .all()
     .pipe(Effect.orDie)
   for (const row of eventStale) {
+    if (yield* formalEventCustody(db, row)) continue
     const pruned = yield* pruneWorktree(row.repository_root, row.directory)
     if (!pruned.ok) {
       failed.push({ runID: `${row.event_id}:${row.task_id}:${row.generation}`, error: pruned.message })
@@ -980,7 +1045,13 @@ const reclaimOne = (
 
 // ── Physical git (spawned git; the parent repository is read-only here) ────────────────────────
 
-type GitResult = { readonly exitCode: number; readonly stdout: string; readonly stderr: string }
+export type GitResult = { readonly outcome: "known" | "unknown"; readonly exitCode: number; readonly stdout: string; readonly stderr: string }
+
+/** Formal event rows outlive the legacy AgentExecution generation and retention clock. Their
+ * controller, pending preparation and known artifact custody are released by explicit proof. */
+const formalEventCustody = (db: DatabaseService, row: EventRow) => db.get<{ found: number }>(sql`SELECT 1 found
+  FROM event_work_receipt r JOIN event_work_controller c ON c.receipt_id=r.receipt_id
+  WHERE r.event_id=${row.event_id} AND ${row.generation}=0 LIMIT 1`).pipe(Effect.map((value) => value !== undefined), Effect.orDie)
 
 // node:child_process is used (not Bun.spawnSync) because the desktop main process bundles this
 // server code for Node; an unusable cwd or missing git surfaces as status null, which the
@@ -994,15 +1065,20 @@ const spawnOrNull = (cwd: string, args: readonly string[]) => {
 }
 
 const git = (cwd: string, args: readonly string[]): Effect.Effect<GitResult> =>
-  Effect.sync(() => {
+  Effect.gen(function* () {
+    const fixed = yield* Effect.serviceOption(EventGit)
+    if (Option.isSome(fixed)) return yield* fixed.value.run(cwd, args)
+    return yield* Effect.sync(() => {
     const proc = spawnOrNull(cwd, args)
     if (proc === undefined || proc.status === null || proc.stdout === null || proc.stderr === null)
-      return { exitCode: -1, stdout: "", stderr: `git ${args[0]} could not run in ${cwd}` }
+      return { outcome: "known" as const, exitCode: -1, stdout: "", stderr: `git ${args[0]} could not run in ${cwd}` }
     return {
+      outcome: "known" as const,
       exitCode: proc.status,
       stdout: proc.stdout.toString(),
       stderr: proc.stderr.toString(),
     }
+    })
   })
 
 const text = (value: string) => value.trim()
@@ -1025,7 +1101,10 @@ const parseWorktreeList = (porcelain: string) =>
     .map((block) => {
       const entry: { directory?: string; head?: string; branch?: string } = {}
       for (const line of block.split("\n")) {
-        if (line.startsWith("worktree ")) entry.directory = text(line.slice("worktree ".length))
+        if (line.startsWith("worktree ")) {
+          const directory = text(line.slice("worktree ".length))
+          entry.directory = process.platform === "win32" ? path.isAbsolute(directory) ? path.resolve(directory) : undefined : directory
+        }
         if (line.startsWith("HEAD ")) entry.head = text(line.slice("HEAD ".length))
         if (line.startsWith("branch "))
           entry.branch = text(line.slice("branch ".length)).replace(/^refs\/heads\//, "")
@@ -1061,7 +1140,7 @@ const verifyWorktree = (input: {
     return { status: "adopted" }
   })
 
-type EnsureFailure = { readonly ok: false; readonly code: "git_failed" | "preflight_conflict"; readonly message: string }
+type EnsureFailure = { readonly ok: false; readonly code: "git_failed" | "preflight_conflict" | "unknown"; readonly message: string }
 type EnsureOutcome = { readonly ok: true } | EnsureFailure
 
 /**
@@ -1097,6 +1176,7 @@ const ensureWorktree = (input: {
           message: `branch '${input.branch}' exists at ${text(tip.stdout) || "unknown"}, expected base ${input.baseCommit}`,
         }
       const added = yield* git(input.repositoryRoot, ["worktree", "add", input.directory, input.branch])
+      if (added.outcome === "unknown") return { ok: false, code: "unknown", message: "Original Git mutation is unresolved" }
       return added.exitCode === 0 ? { ok: true } : yield* adoptAfterRace(input, `${text(added.stderr)} ${text(added.stdout)}`.trim())
     }
 
@@ -1109,6 +1189,7 @@ const ensureWorktree = (input: {
       input.directory,
       input.baseCommit,
     ])
+    if (created.outcome === "unknown") return { ok: false, code: "unknown", message: "Original Git mutation is unresolved" }
     return created.exitCode === 0
       ? { ok: true }
       : yield* adoptAfterRace(input, `${text(created.stderr)} ${text(created.stdout)}`.trim())

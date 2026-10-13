@@ -20,7 +20,7 @@ import { Log } from "@deepagent-code/core/util/log"
 // `goal.tick.requested`, executes EXACTLY ONE tick (via an injected `runTick` port), and — while the goal
 // is non-terminal — re-emits the next `goal.tick.requested` (the self-driving chain). Because the command
 // rides the Event Bus, the tick inherits persistence, at-least-once delivery, retry-with-backoff, and
-// dedup; a nack retries the REAL tick, not a breadcrumb.
+// dedup. Managed ticks additionally require the SQL permit: a nack cannot replay an issued/unknown tick.
 //
 // COLD RECOVERY: the production `runTick` port (makeGoalTickPort, wired separately) reconstructs the
 // entire goal wiring from durable state + the event payload on a COLD fiber (no in-memory control map),
@@ -34,7 +34,7 @@ import { Log } from "@deepagent-code/core/util/log"
 //
 // FLAG-GATED: either v4MultiAgentRuntime or the independent v4GoalTickEventDriven flag enables this
 // consumer, matching GoalManager's driver selection. Both off ⇒ handle() ACKS deliveries but drives
-// nothing — the in-process BackgroundJob driver (goal-manager, flags-OFF path) is authoritative.
+// nothing for legacy commands. Managed commands retain their pending obligation; no resident takeover occurs.
 
 const log = Log.create({ service: "goal-tick-consumer" })
 
@@ -54,6 +54,7 @@ export type GoalTickRequest = {
   readonly planDocId: string
   readonly seq: number
   readonly expectedPlanVersion: number
+  readonly revision?: number
   /** §E4/§N — real workspace id for the quiet-hours lookup. Absent ⇒ never quiet (fail-safe). */
   readonly workspaceID?: string
 }
@@ -90,6 +91,9 @@ const parseRequest = (payload: unknown): GoalTickRequest | null => {
     planDocId: p.planDocId,
     seq: p.seq,
     expectedPlanVersion: p.expectedPlanVersion,
+    ...(typeof p.revision === "number" && Number.isSafeInteger(p.revision) && p.revision > 0
+      ? { revision: p.revision }
+      : {}),
     // §E4/§N — optional real workspace id; absent on old commands ⇒ falls back to "never quiet".
     ...(typeof p.workspaceID === "string" ? { workspaceID: p.workspaceID } : {}),
   }
@@ -103,6 +107,7 @@ export const tickCommand = (request: {
   planDocId: string
   seq: number
   expectedPlanVersion: number
+  revision?: number
   /** §E4/§N — real workspace id; included in the payload so the consumer's quiet-hours gate can use it. */
   workspaceID?: string
 }): DeepAgentEvent.PublishInput => ({
@@ -119,13 +124,17 @@ export const tickCommand = (request: {
   // §N: the command is the goal's own work — normal priority; it is NOT an approval-queue candidate.
   priority: "normal",
   // Dedup identity — a redelivered command for the same (goal, seq) is a no-op at the bus.
-  idempotencyKey: `goal:tick:${request.goalId}:${request.seq}`,
+  idempotencyKey:
+    request.revision === undefined
+      ? `goal:tick:${request.goalId}:${request.seq}`
+      : `goal:tick:${request.goalId}:${request.revision}:${request.seq}`,
   payload: {
     sessionID: request.sessionID,
     goalId: request.goalId,
     planDocId: request.planDocId,
     seq: request.seq,
     expectedPlanVersion: request.expectedPlanVersion,
+    ...(request.revision === undefined ? {} : { revision: request.revision }),
     // §E4/§N — carry the real workspace id in the payload for the quiet-hours gate downstream.
     ...(request.workspaceID != null ? { workspaceID: request.workspaceID } : {}),
   },
@@ -142,7 +151,7 @@ export const resumeTickCommand = (request: Parameters<typeof tickCommand>[0]): D
 export interface Interface {
   /**
    * Claim ONE due goal.tick.requested delivery. A future or already-owned delivery is a no-op.
-   * Flag off ⇒ ack (discharge) + drive nothing; quiet hours ⇒ defer the original pending row.
+   * Flag off ⇒ defer managed commands (legacy commands are discharged); quiet hours ⇒ defer the original row.
    * Otherwise: run one tick via the port, then re-emit the next command (progress==="continue") or stop
    * the chain (terminal/paused/stopped), and ack. A port DEFECT nacks (the bus retries the real tick).
    * Exposed for deterministic testing; the background subscription calls it.
@@ -235,14 +244,18 @@ export const layerWith = (options: LayerOptions) =>
         Effect.gen(function* () {
           const claim = { subscriptionGroup: TICK_GROUP, eventID: event.id, claimToken }
           const ack = () => bus.ackClaim(claim).pipe(Effect.asVoid)
-          // Both flags off ⇒ the event-driven path is dormant; the in-process driver is authoritative. Still ACK
-          // to discharge the durable delivery row (this group wildcard-less-subscribes only this type, but
-          // a stray delivery must not pile up).
+          const request = parseRequest(event.payload)
+          // A managed Goal pins its driver at creation. Disabling the consumer cannot discharge its
+          // existing obligation or transfer authority to the legacy resident driver.
           if (!flags.v4MultiAgentRuntime && !flags.v4GoalTickEventDriven) {
+            if (request?.revision !== undefined) {
+              const deferred = yield* bus.deferClaim({ ...claim, until: now() + DEFAULT_RETRY_PUMP_INTERVAL_MS })
+              if (!deferred) return yield* Effect.die("goal flag deferral lost its live claim")
+              return
+            }
             yield* ack()
             return
           }
-          const request = parseRequest(event.payload)
           if (request == null) {
             log.warn("goal.tick.requested with malformed payload; acking (dropped)", { eventID: event.id })
             yield* ack()
@@ -293,6 +306,7 @@ export const layerWith = (options: LayerOptions) =>
                           planDocId: request.planDocId,
                           seq: nextSeq,
                           expectedPlanVersion: nextExpectedPlanVersion,
+                          revision: request.revision,
                           workspaceID: request.workspaceID,
                         }),
                       )

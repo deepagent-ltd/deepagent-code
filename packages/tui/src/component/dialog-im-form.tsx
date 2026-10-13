@@ -5,7 +5,13 @@ import { useTuiI18n } from "../context/i18n"
 import { useBindings } from "../keymap"
 import { imErrorText } from "./im-errors"
 
-export type IMFormField = { label: string; placeholder?: string; value?: string; multiline?: boolean }
+export type IMFormField = {
+  label: string
+  placeholder?: string
+  value?: string
+  multiline?: boolean
+  onChange?: (value: string) => void
+}
 
 export function DialogIMForm(props: {
   title: string
@@ -99,6 +105,7 @@ export function DialogIMForm(props: {
               ref={(input: TextareaRenderable) => {
                 inputs[index()] = input
               }}
+              onContentChange={() => item.onChange?.(inputs[index()]?.plainText ?? "")}
               onMouseDown={() => {
                 if (!busy()) setField(index())
               }}

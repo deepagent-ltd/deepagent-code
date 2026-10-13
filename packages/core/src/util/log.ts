@@ -68,6 +68,11 @@ let write = writeStderr
 let closeWrite: (() => Promise<void>) | undefined
 let initialization = Promise.resolve()
 
+/** Stable instrumentation lines follow the configured sink, including TUI file logs. */
+export function raw(message: string) {
+  write(message)
+}
+
 export function init(options: Options) {
   const next = initialization.then(() => initialize(options))
   initialization = next.then(

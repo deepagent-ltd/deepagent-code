@@ -85,7 +85,61 @@ import { migrations } from "../src/database/migration.gen"
 // (im_mention_intents durable admission intents + im_messages.client_request_id) and
 // 20261005162726_im_activity_final_message (session_activity final-message pointer) joined the
 // registry; fresh-apply oracle and `migration --check` green at re-pin time.
-const PINNED_DIGEST = "5ad8bdd8d0a224f7b0ea6a18f1433591d6e6fbbcf7a5ff603443c5afa1b4cebb"
+// Successor candidate pin (2026-10-07, v2.0.3 R2): attention_seen, durable_import_jobs and
+// work_execution_authority are reviewed forward migrations. Historical SQL/TS bodies are
+// unchanged; the latest-only schema snapshot rotates independently of this executable pin.
+// This candidate identity is not release approval or completion of the Work execution profile.
+// Successor candidate pin (2026-10-07, v2.0.3 IM task source): the reviewed additive
+// im_task_authority migration records source/request/grant business facts without a second
+// quota. Full fresh apply and re-apply preserve committed identities; migration --check passes.
+// Production operator/route authority and restricted execution remain unavailable at this pin.
+// Successor candidate (2026-10-07): reviewed stable Goal control/command/tick permit and
+// explicit local operator authority/command/task-conversation/origin tables. Fresh/reopen/reapply
+// evidence preserves the old candidate pins; this is not production acceptance or release approval.
+// Successor candidate (2026-10-07, F15-A): the additive goal_child_unit business binding
+// has a fresh/reopen/re-apply oracle and preserves all existing SQL/TS migration bytes.
+// Its default-closed child execution gate is not F15 completion or release approval.
+// Successor candidate (2026-10-07, W1.3): one reviewed im_kernel_delivery table binds
+// stable wire identity and durable dispatch/acknowledgement facts. Existing 213-entry
+// executable digest and all 288 historical SQL/TS sources remain unchanged. This pin
+// does not prove kernel persistent deduplication, cold delivery or release acceptance.
+// Actual SQLite readback found the generator suppresses NOT NULL on a text primary key.
+// A subsequent forward migration adds an explicit message_id IS NOT NULL CHECK;
+// the already-applied 214-entry body is preserved. NULL refusal is an actual SQL oracle.
+// Successor candidate (2026-10-07, F15-C1): one additive bounded checkpoint journal.
+// A generator-only draft accepted NULL on its text primary key and was replaced before use;
+// the actual SQL CHECK now refuses NULL. Forward file reopen and late DDL rollback are covered.
+// Existing 215 migrations retain their exact executable bytes; no Goal caller is switched here.
+// Successor candidate (217): forward same-table Goal program v2; all 216 prior executable bytes unchanged.
+// Successor candidate (218): reviewed additive route approval/count disclosure receipts;
+// fresh apply and re-apply passed, all 217 prior executable bodies remain byte-identical.
+// Production route admission remains closed pending the actual factory/runner authority chain.
+// Successor candidate (219): reviewed additive managed Browser business records, without
+// independent execution authority. All 218 prior executable bodies remain byte-identical;
+// physical NULL/byte/integer constraints, same-file upgrade and late DDL rollback are covered.
+// This storage pin does not prove native Browser dispatch, three-OS support or release acceptance.
+// Successor candidate (220): one plan-rebase journal, default-zero structural lineage and
+// strict v3 checkpoint shape. Old v1/v2 checkpoint and command bytes are preserved; the
+// draft SQL parameter/minimum-shape failures were fixed before any migration application.
+// This storage pin does not prove live plan editing or UI acceptance.
+// Successor candidate (221): pure ALTER adds nullable account identity generation and
+// default-zero selection revision; populated active-account and SET NULL references survive.
+// The unregistered generated DROP draft is retained separately and never installed.
+// Successor candidate (233): wire JSON reader versions 1/2; original intent row version and bytes remain 1.
+// Actual self-referenced upgrade, late DDL rollback and cold reapply preserve old cuts and audit guards.
+// Successor candidate (234): additive event validation rule, run, project slot and immutable command ledger.
+// Real old-data upgrade, late rollback, cold reapply and unknown replay/release guards are covered.
+// This storage pin is not complete EV-02 or release approval.
+// Successor candidate (235): forward prepare-only custody cleanup; prior run/migration bytes stay unchanged.
+// Unknown or dispatched effects cannot use the private preparation release path.
+// Successor candidate (236): immutable failed-validation investigation receipts and
+// independent Rule authority epoch; old 332 SQL/TS bodies remain byte-identical.
+// The file DB oracle covers populated 235 upgrade, late rollback and cold reapply.
+// Successor working-tree candidate (2026-10-11): all 259 ordered identities and executable
+// bodies are pinned after the affected fresh/upgrade/FK fixtures passed. The 207 identities
+// in the informational HEAD baseline are retained byte-for-byte; 52 forward additions cover
+// the reviewed v2.0.3 business/Native lifecycle work. This is not release approval.
+const PINNED_DIGEST = "c983db24529334edb193af6054dc6cfda43948b727f2bf14830da8791c79450c"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

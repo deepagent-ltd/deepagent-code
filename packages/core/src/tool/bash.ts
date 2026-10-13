@@ -10,6 +10,7 @@ import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
 import { AppProcess } from "../process"
 import { PermissionV2 } from "../permission"
+import { CurrentToolExecution } from "../session/runner/current-tool-execution"
 import { Policy } from "../policy"
 import { ServerCapabilities } from "../server-capabilities"
 import { tolerantInt } from "../schema"
@@ -17,6 +18,9 @@ import { ShellScan } from "../shell/scan"
 import { which } from "../util/which"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+
+const builtins = new WeakSet<Tool.AnyTool>()
+export const isBuiltin = (tool: Tool.AnyTool | undefined) => tool !== undefined && builtins.has(tool)
 
 export const name = "bash"
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
@@ -111,7 +115,7 @@ const isTimeout = (error: AppProcess.AppProcessError) =>
 const shellTokens = (command: string) => command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
 // Best-effort `git push` detection for the git.push capability gate. Advisory:
 // catches the direct form, not shell tricks.
-const isGitPush = (command: string) => {
+export const isGitPush = (command: string) => {
   const tokens = shellTokens(command).map((token) => token.replace(/^(['"])(.*)\1$/, "$2"))
   const git = tokens.indexOf("git")
   if (git === -1) return false
@@ -129,181 +133,181 @@ export const layer = Layer.effectDiscard(
     const permission = yield* PermissionV2.Service
     const policy = yield* Policy.Service
 
-    yield* tools
-      .register({
-        [name]: Tool.make({
-          description: `Execute one shell command string with the host user's filesystem, process, and network authority. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values and command file arguments outside the Location require external_directory approval. Timeout values are milliseconds (default: ${DEFAULT_TIMEOUT_MS}; maximum: ${MAX_TIMEOUT_MS}). Uses the configured shell when set; otherwise uses /bin/sh on POSIX and the first available of pwsh, powershell, or cmd.exe on Windows.`,
-          input: Input,
-          output: Output,
-          toModelOutput: ({ output }) => [toolText({ type: "text", text: modelOutput(output) })],
-          execute: (input, context) =>
+    const tool = Tool.make({
+      description: `Execute one shell command string with the host user's filesystem, process, and network authority. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values and command file arguments outside the Location require external_directory approval. Timeout values are milliseconds (default: ${DEFAULT_TIMEOUT_MS}; maximum: ${MAX_TIMEOUT_MS}). Uses the configured shell when set; otherwise uses /bin/sh on POSIX and the first available of pwsh, powershell, or cmd.exe on Windows.`,
+      input: Input,
+      output: Output,
+      toModelOutput: ({ output }) => [toolText({ type: "text", text: modelOutput(output) })],
+      execute: (input, context) =>
+        Effect.gen(function* () {
+          const source = {
+            type: "tool" as const,
+            messageID: context.assistantMessageID,
+            callID: context.toolCallID,
+          }
+          const target = yield* mutation.resolve({ path: input.workdir ?? ".", kind: "directory" })
+          const external = target.externalDirectory
+          if (external)
+            yield* CurrentToolExecution.beforeEffectPermission(context, permission.assert({
+              ...LocationMutation.externalDirectoryPermission(external),
+              sessionID: context.sessionID,
+              agent: context.agent,
+              source,
+            }))
+          const entries = yield* config.entries()
+          const configured = Object.assign(
+            {},
+            ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info] : [])),
+          ).shell
+          const shell = configured ?? (yield* defaultShell())
+          const ps = ShellScan.isPs(shell)
+
+          // Parser-based approval scan (D-W2), same source as the V1 ShellTool. Fail-soft: a
+          // command the grammar cannot parse still gets whole-command approval plus an
+          // advisory warning rather than failing the tool call. This is a DELIBERATE
+          // divergence from V1 (which fails hard on unparseable commands): whole-command
+          // approval is stricter in the permission sense (fail-closed), so refusing the
+          // call would only remove safety, not add it. Do not align V2 to V1 here.
+          const root = yield* fs
+            .realPath(location.directory)
+            .pipe(Effect.catch(() => Effect.succeed(location.directory)))
+          const io: ShellScan.IO = {
+            lines: (command) => appProcess.lines(command),
+            isDir: (file) => fs.isDir(file),
+          }
+          const scanned = yield* Effect.scoped(
             Effect.gen(function* () {
-              const source = {
-                type: "tool" as const,
-                messageID: context.assistantMessageID,
-                callID: context.toolCallID,
-              }
-              const target = yield* mutation.resolve({ path: input.workdir ?? ".", kind: "directory" })
-              const external = target.externalDirectory
-              if (external)
-                yield* permission.assert({
-                  ...LocationMutation.externalDirectoryPermission(external),
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source,
-                })
-              const entries = yield* config.entries()
-              const configured = Object.assign(
-                {},
-                ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info] : [])),
-              ).shell
-              const shell = configured ?? (yield* defaultShell())
-              const ps = ShellScan.isPs(shell)
+              const tree = yield* Effect.acquireRelease(ShellScan.parse(input.command, ps), (tree) =>
+                Effect.sync(() => tree.delete()),
+              )
+              return yield* ShellScan.collect(io, tree.rootNode, target.canonical, ps, shell, (candidate) =>
+                FSUtil.contains(root, candidate),
+              )
+            }),
+          ).pipe(Effect.option)
 
-              // Parser-based approval scan (D-W2), same source as the V1 ShellTool. Fail-soft: a
-              // command the grammar cannot parse still gets whole-command approval plus an
-              // advisory warning rather than failing the tool call. This is a DELIBERATE
-              // divergence from V1 (which fails hard on unparseable commands): whole-command
-              // approval is stricter in the permission sense (fail-closed), so refusing the
-              // call would only remove safety, not add it. Do not align V2 to V1 here.
-              const root = yield* fs
-                .realPath(location.directory)
-                .pipe(Effect.catch(() => Effect.succeed(location.directory)))
-              const io: ShellScan.IO = {
-                lines: (command) => appProcess.lines(command),
-                isDir: (file) => fs.isDir(file),
-              }
-              const scanned = yield* Effect.scoped(
-                Effect.gen(function* () {
-                  const tree = yield* Effect.acquireRelease(ShellScan.parse(input.command, ps), (tree) =>
-                    Effect.sync(() => tree.delete()),
-                  )
-                  return yield* ShellScan.collect(io, tree.rootNode, target.canonical, ps, shell, (candidate) =>
-                    FSUtil.contains(root, candidate),
-                  )
-                }),
-              ).pipe(Effect.option)
+          const warnings: string[] = []
+          if (Option.isNone(scanned))
+            warnings.push(
+              "Command could not be parsed for per-command approval; approval covered the full command text instead.",
+            )
 
-              const warnings: string[] = []
-              if (Option.isNone(scanned))
-                warnings.push(
-                  "Command could not be parsed for per-command approval; approval covered the full command text instead.",
-                )
+          const externalGlobs = (Option.isSome(scanned) ? [...scanned.value.dirs] : [])
+            .map((directory) => path.join(directory, "*").replaceAll("\\", "/"))
+            .filter((glob) => glob !== external?.resource)
+          if (externalGlobs.length > 0)
+            yield* CurrentToolExecution.beforeEffectPermission(context, permission.assert({
+              action: "external_directory",
+              resources: externalGlobs,
+              save: externalGlobs,
+              sessionID: context.sessionID,
+              agent: context.agent,
+              source,
+            }))
 
-              const externalGlobs = (Option.isSome(scanned) ? [...scanned.value.dirs] : [])
-                .map((directory) => path.join(directory, "*").replaceAll("\\", "/"))
-                .filter((glob) => glob !== external?.resource)
-              if (externalGlobs.length > 0)
-                yield* permission.assert({
-                  action: "external_directory",
-                  resources: externalGlobs,
-                  save: externalGlobs,
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source,
-                })
+          const patterns = Option.isSome(scanned) ? [...scanned.value.patterns] : [input.command]
+          const always = Option.isSome(scanned) ? [...scanned.value.always] : [input.command]
+          if (patterns.length > 0)
+            yield* CurrentToolExecution.beforeEffectPermission(context, permission.assert({
+              action: name,
+              resources: patterns,
+              save: always,
+              sessionID: context.sessionID,
+              agent: context.agent,
+              source,
+            }))
 
-              const patterns = Option.isSome(scanned) ? [...scanned.value.patterns] : [input.command]
-              const always = Option.isSome(scanned) ? [...scanned.value.always] : [input.command]
-              if (patterns.length > 0)
-                yield* permission.assert({
-                  action: name,
-                  resources: patterns,
-                  save: always,
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source,
-                })
+          // Admin-controlled ServerCapabilities gate. Evaluated AFTER the
+          // user permission prompt so an admin deny is a hard override that
+          // user approval cannot bypass. No-op unless a capability set is
+          // injected (statements empty → fallback "allow"). See
+          // server-capabilities.ts / config.ts policy.load wiring.
+          if (policy.hasStatements()) {
+            if ((yield* policy.evaluate(ServerCapabilities.Actions.shell, input.command, "allow")) === "deny")
+              return yield* Effect.fail(
+                new ToolFailure({ message: "Shell execution is disabled by the server administrator." }),
+              )
+            if (
+              isGitPush(input.command) &&
+              (yield* policy.evaluate(ServerCapabilities.Actions.gitPush, input.command, "allow")) === "deny"
+            )
+              // ApprovalQueue resolution records a human decision; it does not own a durable
+              // command continuation. Do not claim a denied push will execute after approval.
+              // A future approval workflow must bind the decision to a new admitted tool effect.
+              return yield* Effect.fail(
+                new ToolFailure({ message: "`git push` is disabled by the server administrator." }),
+              )
+          }
 
-              // Admin-controlled ServerCapabilities gate. Evaluated AFTER the
-              // user permission prompt so an admin deny is a hard override that
-              // user approval cannot bypass. No-op unless a capability set is
-              // injected (statements empty → fallback "allow"). See
-              // server-capabilities.ts / config.ts policy.load wiring.
-              if (policy.hasStatements()) {
-                if ((yield* policy.evaluate(ServerCapabilities.Actions.shell, input.command, "allow")) === "deny")
-                  return yield* Effect.fail(
-                    new ToolFailure({ message: "Shell execution is disabled by the server administrator." }),
-                  )
-                if (
-                  isGitPush(input.command) &&
-                  (yield* policy.evaluate(ServerCapabilities.Actions.gitPush, input.command, "allow")) === "deny"
-                )
-                  // ApprovalQueue resolution records a human decision; it does not own a durable
-                  // command continuation. Do not claim a denied push will execute after approval.
-                  // A future approval workflow must bind the decision to a new admitted tool effect.
-                  return yield* Effect.fail(
-                    new ToolFailure({ message: "`git push` is disabled by the server administrator." }),
-                  )
-              }
+          if ((yield* fs.stat(target.canonical)).type !== "Directory")
+            return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))
 
-              if ((yield* fs.stat(target.canonical)).type !== "Directory")
-                return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))
-
-              // PowerShell dialects take the script as a -Command argument (D-W2); every other
-              // shell goes through the platform shell transport.
-              const command =
-                process.platform === "win32" && ps
-                  ? ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", input.command], {
-                      cwd: target.canonical,
-                      stdin: "ignore",
-                      detached: false,
-                      forceKillAfter: Duration.seconds(3),
-                    })
-                  : ChildProcess.make(input.command, [], {
-                      cwd: target.canonical,
-                      shell,
-                      stdin: "ignore",
-                      detached: process.platform !== "win32",
-                      forceKillAfter: Duration.seconds(3),
-                    })
-              const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
-              const result = yield* appProcess
-                .run(command, {
-                  timeout: Duration.millis(timeout),
-                  maxOutputBytes: MAX_CAPTURE_BYTES,
-                  maxErrorBytes: MAX_CAPTURE_BYTES,
-                })
-                .pipe(
-                  Effect.catchTag("AppProcessError", (error) =>
-                    isTimeout(error) ? Effect.succeed(undefined) : Effect.fail(error),
-                  ),
-                )
-              if (!result) {
-                return {
-                  command: input.command,
+          // PowerShell dialects take the script as a -Command argument (D-W2); every other
+          // shell goes through the platform shell transport.
+          const command =
+            process.platform === "win32" && ps
+              ? ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", input.command], {
                   cwd: target.canonical,
-                  output: `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
-                  truncated: false,
-                  timedOut: true,
-                  ...(warnings.length ? { warnings } : {}),
-                }
-              }
+                  stdin: "ignore",
+                  detached: false,
+                  forceKillAfter: Duration.seconds(3),
+                })
+              : ChildProcess.make(input.command, [], {
+                  cwd: target.canonical,
+                  shell,
+                  stdin: "ignore",
+                  detached: process.platform !== "win32",
+                  forceKillAfter: Duration.seconds(3),
+                })
+          const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
+          const result = yield* appProcess
+            .run(command, {
+              timeout: Duration.millis(timeout),
+              maxOutputBytes: MAX_CAPTURE_BYTES,
+              maxErrorBytes: MAX_CAPTURE_BYTES,
+            })
+            .pipe(
+              Effect.catchTag("AppProcessError", (error) =>
+                isTimeout(error) ? Effect.succeed(undefined) : Effect.fail(error),
+              ),
+            )
+          if (!result) {
+            return {
+              command: input.command,
+              cwd: target.canonical,
+              output: `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
+              truncated: false,
+              timedOut: true,
+              ...(warnings.length ? { warnings } : {}),
+            }
+          }
 
-              const compact = compactOutput(result.stdout.toString("utf8"), result.stderr.toString("utf8"))
-              const notice = captureNotice(result.stdoutTruncated, result.stderrTruncated)
-              return {
-                command: input.command,
-                cwd: target.canonical,
-                exitCode: result.exitCode,
-                output: notice ? `${compact}\n\n${notice}` : compact,
-                truncated: result.stdoutTruncated || result.stderrTruncated,
-                ...(warnings.length ? { warnings } : {}),
-                ...(result.stdoutTruncated ? { stdoutTruncated: true } : {}),
-                ...(result.stderrTruncated ? { stderrTruncated: true } : {}),
-              }
-            }).pipe(
-              Effect.mapError((error) => {
-                // Preserve deliberate ToolFailure messages (e.g. capability denials);
-                // only opaque runtime errors get the generic fallback.
-                const refusal = PermissionV2.permissionToolFailure(error)
-                if (error instanceof ToolFailure) return error
-                if (refusal !== null) return refusal
-                return new ToolFailure({ message: `Unable to execute command: ${input.command}` })
-              }),
-            ),
-        }),
-      })
+          const compact = compactOutput(result.stdout.toString("utf8"), result.stderr.toString("utf8"))
+          const notice = captureNotice(result.stdoutTruncated, result.stderrTruncated)
+          return {
+            command: input.command,
+            cwd: target.canonical,
+            exitCode: result.exitCode,
+            output: notice ? `${compact}\n\n${notice}` : compact,
+            truncated: result.stdoutTruncated || result.stderrTruncated,
+            ...(warnings.length ? { warnings } : {}),
+            ...(result.stdoutTruncated ? { stdoutTruncated: true } : {}),
+            ...(result.stderrTruncated ? { stderrTruncated: true } : {}),
+          }
+        }).pipe(
+          Effect.mapError((error) => {
+            // Preserve deliberate ToolFailure messages (e.g. capability denials);
+            // only opaque runtime errors get the generic fallback.
+            const refusal = PermissionV2.permissionToolFailure(error)
+            if (error instanceof ToolFailure) return error
+            if (refusal !== null) return refusal
+            return new ToolFailure({ message: `Unable to execute command: ${input.command}` })
+          }),
+        ),
+    })
+    builtins.add(tool)
+    yield* Effect.addFinalizer(() => Effect.sync(() => { builtins.delete(tool) }))
+    yield* tools.register({ [name]: tool })
       .pipe(Effect.orDie)
   }),
 )

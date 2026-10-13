@@ -35,7 +35,7 @@ import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
 import { V2TaskRunReceiptTable } from "@deepagent-code/core/session/runner/v2-task-run-receipt.sql"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
-import { SessionInputTable, SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { SessionInputTable, SessionTable, TaskNotificationOutboxTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { TaskRunDispatcher } from "@deepagent-code/core/session/task-run-dispatcher"
@@ -286,6 +286,8 @@ const sessions = SessionV2.layer.pipe(
 const taskRuntime = TaskRunDispatcher.runtimeLayer({ scanIntervalMs: 20 }).pipe(
   Layer.provide(database),
   Layer.provide(sessions),
+  Layer.provide(events),
+  Layer.provide(execution),
 )
 // App-side registry services the V1-facing TaskTool entry still requires (agent roster for the
 // policy gates, app config, runtime flags), pinned to the SAME in-memory database as the core
@@ -294,8 +296,9 @@ const appFlags = RuntimeFlags.layer({ experimentalBackgroundSubagents: true })
 
 
 // Facade task-subkind E2E on the ONE V2 owner: start → TaskRunAuthority background submission →
-// process-global dispatcher drain → fenced settle → outbox queue input to the parent → the
-// facade row converges to the durable terminal with the run's result receipt.
+// process-global dispatcher drain → fenced settle → the facade row converges to the
+// durable terminal with the run's result receipt. Manual starts have no canonical parent
+// wait, so their terminal facts must not admit a parent prompt.
 import { FacadeActivity } from "@/session/facade-activity"
 import { Snapshot } from "@/snapshot"
 
@@ -334,7 +337,9 @@ const pollUntil = <A>(effect: Effect.Effect<A>, check: (value: A) => boolean, at
         ? Effect.succeed(value)
         : Effect.sleep(20).pipe(
             Effect.andThen(
-              attempts > 1 ? pollUntil(effect, check, attempts - 1) : Effect.die(new Error("poll exhausted")),
+              attempts > 1
+                ? pollUntil(effect, check, attempts - 1)
+                : Effect.die(new Error(`poll exhausted: ${JSON.stringify(value)}`)),
             ),
           ),
     ),
@@ -342,7 +347,7 @@ const pollUntil = <A>(effect: Effect.Effect<A>, check: (value: A) => boolean, at
 
 describe("facade-activity task subkind on the V2 authority", () => {
   it.instance(
-    "start drains through the dispatcher, notifies the parent once, and settles the facade row",
+    "start drains and settles the facade row without creating an unregistered parent continuation",
     () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -373,17 +378,21 @@ describe("facade-activity task subkind on the V2 authority", () => {
       expect(settled!.execution_runtime).toBe("v2")
       expect(settled!.delivery_mode).toBe("background")
 
-      // The outbox delivered exactly ONE queue-mode parent input.
-      const delivered = yield* pollUntil(
+      // A manual facade start has no canonical task wait authorizing another
+      // parent turn. Keep the result readable without admitting a prompt.
+      const notification = yield* pollUntil(
         db
           .select()
-          .from(SessionInputTable)
-          .where(eq(SessionInputTable.session_id, parent.id))
-          .all()
+          .from(TaskNotificationOutboxTable)
+          .where(eq(TaskNotificationOutboxTable.run_id, started.ref.runID))
+          .get()
           .pipe(Effect.orDie),
-        (rows) => rows.some((row) => row.delivery === "queue"),
+        (row) => row?.status === "dead",
       )
-      expect(delivered.filter((row) => row.delivery === "queue")).toHaveLength(1)
+      expect(notification?.last_error).toContain("Task result continuation unregistered")
+      expect(
+        yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, parent.id)).all().pipe(Effect.orDie),
+      ).toHaveLength(0)
 
       // Lazy convergence settles the facade row from the durable terminal.
       const status = yield* facade.status({ sessionID: parent.id, subkind: "task" })

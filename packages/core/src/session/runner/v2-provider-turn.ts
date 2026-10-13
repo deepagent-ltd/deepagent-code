@@ -28,6 +28,11 @@ import {
 } from "./v2-provider-turn.sql"
 import { V2OwnerAuthorization } from "./v2-owner-authorization"
 import { V2OwnerAuthorizationTable } from "./v2-owner-authorization.sql"
+import { WorkProviderDispatch } from "../work-provider-dispatch"
+import { WorkAuthoritySchema } from "../work-authority.schema"
+import { GoalChildExecution } from "../../deepagent/goal-child-execution"
+import { GoalChildSchema } from "../../deepagent/goal-child.schema"
+import { TaskContinuation } from "../task-continuation"
 
 export const AllowlistVersion = "v2-provider-parity-allowlist.v1"
 export const AllowedDifferences = [
@@ -53,6 +58,10 @@ export const ReleaseQualification = {
 }
 
 export interface RequestSealInput {
+  readonly method?: string
+  readonly url?: string
+  /** Internal validation only; receipts persist hashes, never this raw request body. */
+  readonly bodyText?: string
   readonly wireHash: string
   readonly bodyHash: string
   readonly bodyLength: number
@@ -139,6 +148,8 @@ export type Error =
   | NotFoundError
   | SessionProviderAttempt.Error
   | RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError
+  | WorkAuthoritySchema.Error
+  | GoalChildSchema.Error
 
 export type AdmitInput = {
   readonly sessionId: SessionSchema.ID
@@ -757,6 +768,7 @@ export const layerWith = (options: LayerOptions = {}) =>
         readonly from: readonly Receipt["state"][]
         readonly state: Receipt["state"]
         readonly preparedTurn?: PreparedProviderTurn.PreparedProviderTurn
+        readonly wire?: RequestSealInput
         readonly outcomeHash?: string
         readonly outcomeArtifact?: readonly unknown[]
         readonly errorCode?: string
@@ -785,6 +797,25 @@ export const layerWith = (options: LayerOptions = {}) =>
                   )
                   .get()
                 if (!owner) return yield* new ConflictError({ reason: "v2_provider_owner_lease_not_live" })
+                if (input.state === "dispatching" && input.preparedTurn && input.wire) {
+                  const prior = yield* tx
+                    .select()
+                    .from(V2ProviderTurnReceiptTable)
+                    .where(
+                      and(
+                        eq(V2ProviderTurnReceiptTable.receipt_id, input.receipt.receiptId),
+                        eq(V2ProviderTurnReceiptTable.owner_token, ownerToken),
+                        inArray(V2ProviderTurnReceiptTable.state, [...input.from]),
+                      ),
+                    )
+                    .get()
+                  if (!prior) return yield* new ConflictError({ reason: "v2_receipt_cas_lost" })
+                  // This permit and both real receipt/attempt transitions either all commit or
+                  // all roll back. The hook consumes local evidence only, never a network count.
+                  yield* GoalChildExecution.requireProvider(tx, { sessionID: prior.session_id, activityID: prior.activity_id, inputID: prior.user_message_id })
+                  yield* TaskContinuation.requireExecution(tx, prior.session_id, prior.user_message_id)
+                  yield* WorkProviderDispatch.authorizeInTransaction(tx, db, prior, input.preparedTurn, input.wire)
+                }
                 const row = yield* tx
                   .update(V2ProviderTurnReceiptTable)
                   .set({
@@ -907,7 +938,7 @@ export const layerWith = (options: LayerOptions = {}) =>
       const seal = (receipt: Receipt, prepared: PreparedProviderTurn.PreparedProviderTurn, input: RequestSealInput) => {
         if (prepared.receipt_id !== receipt.receiptId || prepared.wire_request_hash !== input.wireHash)
           return Effect.fail(new ConflictError({ reason: "v2_wire_seal_binding_mismatch" }))
-        return transition({ receipt, from: ["preparing"], state: "dispatching", preparedTurn: prepared })
+        return transition({ receipt, from: ["preparing"], state: "dispatching", preparedTurn: prepared, wire: input })
       }
       const markStreaming = (receipt: Receipt) => transition({ receipt, from: ["dispatching"], state: "streaming" })
       const settle = (input: {
@@ -1323,6 +1354,9 @@ export function stream<A, E, R>(input: {
   readonly service: Interface
   readonly receipt: Receipt
   readonly prepare: (wireHash: string) => PreparedProviderTurn.PreparedProviderTurn
+  /** Authorized external count acquisition runs after final lowering, before the SQL seal.
+   * The seal still independently rechecks all current authority and persisted evidence. */
+  readonly beforeSeal?: (wire: RequestSealInput) => Effect.Effect<void, unknown>
   readonly stream: Stream.Stream<A, E, R>
   readonly outcomeArtifact: () => readonly unknown[]
   readonly errorCode: (error: unknown) => string
@@ -1338,6 +1372,7 @@ export function stream<A, E, R>(input: {
 }) {
   let current = input.receipt
   let reachedEnd = false
+  let sealFailure: Cause.Cause<never> | undefined
   const persistIntegrityEvidence = (receipt: Receipt) =>
     input.integrityIdentity === undefined
       ? Effect.void
@@ -1374,12 +1409,18 @@ export function stream<A, E, R>(input: {
     Stream.provideService(RequestExecutor.CurrentRetryLimit, 0),
     Stream.provideService(CurrentRequestSeal, {
       seal: (sealed) =>
-        input.service.seal(current, input.prepare(sealed.wireHash), sealed).pipe(
+        (input.beforeSeal?.(sealed) ?? Effect.void).pipe(
+          Effect.andThen(() => input.service.seal(current, input.prepare(sealed.wireHash), sealed)),
           Effect.tap((receipt) => Effect.sync(() => (current = receipt))),
           Effect.orDie,
+          Effect.tapCause((cause) => Effect.sync(() => { sealFailure = cause })),
+          Effect.tap(() => Effect.sync(() => { sealFailure = undefined })),
           Effect.asVoid,
         ),
     }),
+    // Protocol adapters classify their transport errors. A refusal from this private seal is
+    // host authority, not provider output; restore only the cause this exact seal observed.
+    Stream.catchCause((cause) => Stream.failCause(sealFailure ?? cause)),
     Stream.tap(() =>
       current.state === "dispatching"
         ? input.service.markStreaming(current).pipe(
@@ -1399,7 +1440,13 @@ export function stream<A, E, R>(input: {
       Effect.uninterruptible(
         Effect.suspend(() => {
           if (current.state === "preparing") {
-            return finalizeTransition(input.service.abandon(current, "wire_seal_failed_before_dispatch"))
+            // No final wire was sealed, so no prepared-turn RI bundle exists to export. The
+            // durable abandonment proves this boundary without inventing a physical call or
+            // replacing the original count/authorization refusal with an RI shape error.
+            return input.service.abandon(current, "wire_seal_failed_before_dispatch").pipe(
+              Effect.asVoid,
+              Effect.catch(recoverOwnerFence),
+            )
           }
           if (current.state !== "dispatching" && current.state !== "streaming") return Effect.void
           if (reachedEnd && Exit.isSuccess(exit)) {
@@ -1551,6 +1598,7 @@ export function writeTurnTerminalDescriptor(
   observedAt: number,
 ): Effect.Effect<void, never> {
   return Effect.gen(function* () {
+    yield* WorkProviderDispatch.terminalInTransaction(tx, row, observedAt)
     if (!row.provider_attempt_id)
       return yield* Effect.die("terminal V2 provider receipt is missing its provider-attempt binding")
     const attempt = yield* tx
@@ -1823,7 +1871,9 @@ function preserveErrors<A, E, R>(effect: Effect.Effect<A, E, R>) {
       error instanceof ConflictError ||
       error instanceof UnsafeRetryError ||
       error instanceof NotFoundError ||
-      error instanceof RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError
+      error instanceof RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError ||
+      error instanceof WorkAuthoritySchema.Error ||
+      error instanceof GoalChildSchema.Error
         ? Effect.fail(error)
         : Effect.die(error),
     ),

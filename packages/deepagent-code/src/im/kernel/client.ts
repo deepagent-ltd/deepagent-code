@@ -3,12 +3,13 @@ export * as KernelClient from "./client"
 import { Cause, Context, Effect, Layer, PubSub, Schema, Stream, SubscriptionRef } from "effect"
 import * as Log from "@deepagent-code/core/util/log"
 import { KernelSdk } from "./sdk"
+import { KernelTaskLiveOrigin } from "./task-live-origin"
 
 // 内核客户端封装：连接状态机 + 文本消息归一化 + 带 TTL 的发送。架构（design §2）：
 // 内核只做在线路由 + TTL 离线队列，本地 sqlite 是消息权威存储；本服务是内核 WS 的单一口，
 // 同步引擎（sync.ts）消费 messages 落库，发送路径经 sendText 上内核。
 
-// 硬约束⑨：全部业务消息 life_time = 72h（毫秒）。与内核 app 配置 his_msg_save_day=3 配套成双轨。
+// 业务消息 life_time 使用本地准备时固定的 72h 到期时间的剩余值，排队不会重置生命周期。
 export const MESSAGE_TTL_MS = 259_200_000
 
 export const ConnectionState = Schema.Literals(["connecting", "connected", "disconnected", "failed"])
@@ -33,6 +34,9 @@ export interface HistoryPage {
 }
 
 export interface SendTextInput {
+  readonly messageID: string
+  readonly wireID: string
+  readonly expiresAt: number
   readonly conversationType: number
   readonly conversationID: string
   readonly text: string
@@ -41,14 +45,34 @@ export interface SendTextInput {
 export interface Interface {
   /** 连接状态机——UI 经它观察内核链路（B2 的连接状态指示器的数据源）。 */
   readonly state: SubscriptionRef.SubscriptionRef<ConnectionState>
+  readonly captureCurrentLink?: KernelSdk.Interface["captureCurrentLink"]
+  readonly readCurrentLink?: KernelSdk.Interface["readCurrentLink"]
   /** 归一化后的入站文本消息流（jg:text 以外、字段不全的载荷已在此丢弃）。 */
   readonly messages: Stream.Stream<KernelTextMessage>
+  /** Original protected callbacks, separate from legacy message normalization. */
+  readonly liveObservations?: Stream.Stream<object>
+  readonly readLiveObservation?: (handle: object) => ReturnType<typeof KernelTaskLiveOrigin.read>
   /** ack 后 resolve 出内核 messageId；失败（含 15s ack 超时）为 KernelError。 */
   readonly sendText: (input: SendTextInput) => Effect.Effect<{ readonly messageID: string }, KernelSdk.KernelError>
+  readonly sendMedia?: (input: KernelSdk.OutboundMediaMessage) => Effect.Effect<{ readonly messageID: string }, KernelSdk.KernelError>
+  readonly media?: KernelSdk.Media
   /** hismsgs 历史拉取（离线补拉兜底通道），结果过同一条归一化。 */
   readonly fetchHistory: (input: KernelSdk.FetchHistoryInput) => Effect.Effect<HistoryPage, KernelSdk.KernelError>
   readonly fetchConversations: KernelSdk.Interface["fetchConversations"]
   readonly disconnect: Effect.Effect<void>
+  readonly liveReadAvailable?: KernelSdk.Interface["liveReadAvailable"]
+  readonly receiverBaselineAvailable?: KernelSdk.Interface["receiverBaselineAvailable"]
+  readonly readReceiverBaseline?: KernelSdk.Interface["readReceiverBaseline"]
+  readonly getDeliveryReceiverBaseline?: KernelSdk.Interface["getDeliveryReceiverBaseline"]
+  readonly readLiveCut?: KernelSdk.Interface["readLiveCut"]
+  readonly getDeliveryLiveCut?: KernelSdk.Interface["getDeliveryLiveCut"]
+  readonly getDeliveryLiveMessages?: KernelSdk.Interface["getDeliveryLiveMessages"]
+  readonly getDeliveryReader: KernelSdk.Interface["getDeliveryReader"]
+  readonly getDeliveryChanges: KernelSdk.Interface["getDeliveryChanges"]
+  readonly getDeliveryMessages: KernelSdk.Interface["getDeliveryMessages"]
+  readonly getDeliveryReadCut: KernelSdk.Interface["getDeliveryReadCut"]
+  readonly getDeliveryOutputProof?: KernelSdk.Interface["getDeliveryOutputProof"]
+  readonly markDeliveryRead: KernelSdk.Interface["markDeliveryRead"]
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/im/kernel/Client") {}
@@ -105,15 +129,20 @@ export const layer = Layer.effect(
     const sdk = yield* KernelSdk.Service
     const state = yield* SubscriptionRef.make<ConnectionState>("connecting")
     const pubsub = yield* PubSub.bounded<KernelTextMessage>(1024)
+    const live = yield* PubSub.dropping<object>(64)
+    const liveHandles = new WeakSet<object>()
+    yield* Effect.addFinalizer(() => PubSub.shutdown(live))
 
     const onRawEvent = (event: KernelSdk.RawEvent) => {
       if (event.tag === "state_changed") {
         const mapped = mapState(event.state)
         return mapped ? SubscriptionRef.set(state, mapped) : Effect.void
       }
-      const msg = normalizeTextMessage(event.payload)
-      if (!msg) return Effect.void
-      return PubSub.publish(pubsub, msg).pipe(Effect.asVoid)
+      if (event.tag === "protected_live_observed" && KernelTaskLiveOrigin.read(event.handle)) {
+        liveHandles.add(event.handle)
+        return PubSub.publish(live, event.handle).pipe(Effect.asVoid)
+      }
+      return Effect.void
     }
 
     yield* Stream.runForEach(sdk.rawEvents, (event) =>
@@ -126,9 +155,23 @@ export const layer = Layer.effect(
 
     return Service.of({
       state,
+      captureCurrentLink: sdk.captureCurrentLink,
+      readCurrentLink: sdk.readCurrentLink,
       messages: Stream.fromPubSub(pubsub),
+      liveObservations: Stream.fromPubSub(live),
+      readLiveObservation: (handle) => liveHandles.has(handle) ? KernelTaskLiveOrigin.read(handle) : undefined,
+      media: sdk.media,
+      sendMedia: (input) => Effect.suspend(() => input.expiresAt <= Date.now() || !sdk.sendMedia ?
+        Effect.fail(new KernelSdk.KernelError({ operation: "sendMedia", message: "Protected media is unavailable or expired" })) : sdk.sendMedia(input)),
       sendText: (input) =>
-        sdk.sendMessage({ ...input, lifeTime: MESSAGE_TTL_MS }).pipe(
+        Effect.suspend(() => {
+          const remaining = Math.min(MESSAGE_TTL_MS, input.expiresAt - Date.now())
+          return remaining <= 0
+            ? Effect.fail(
+                new KernelSdk.KernelError({ operation: "sendText", message: "Message transport lifetime expired" }),
+              )
+            : sdk.sendMessage({ ...input, lifeTime: remaining })
+        }).pipe(
           Effect.timeoutOrElse({
             duration: "15 seconds",
             orElse: () =>
@@ -159,6 +202,21 @@ export const layer = Layer.effect(
           }),
         ),
       fetchConversations: sdk.fetchConversations,
+      liveReadAvailable: sdk.liveReadAvailable,
+      receiverBaselineAvailable: sdk.receiverBaselineAvailable,
+      readReceiverBaseline: sdk.readReceiverBaseline,
+      getDeliveryReceiverBaseline: sdk.getDeliveryReceiverBaseline,
+      readLiveCut: sdk.readLiveCut,
+      getDeliveryLiveCut: sdk.getDeliveryLiveCut,
+      getDeliveryLiveMessages: sdk.getDeliveryLiveMessages ? (input, cut) => sdk.getDeliveryLiveMessages!(input, cut).pipe(
+        Effect.tap((page) => Effect.sync(() => page.handles.forEach((handle) => liveHandles.add(handle)))),
+      ) : undefined,
+      getDeliveryReader: sdk.getDeliveryReader,
+      getDeliveryChanges: sdk.getDeliveryChanges,
+      getDeliveryMessages: sdk.getDeliveryMessages,
+      getDeliveryReadCut: sdk.getDeliveryReadCut,
+      getDeliveryOutputProof: sdk.getDeliveryOutputProof,
+      markDeliveryRead: sdk.markDeliveryRead,
       disconnect: sdk.disconnect,
     })
   }),

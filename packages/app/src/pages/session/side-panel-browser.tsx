@@ -24,6 +24,7 @@ export const SidePanelBrowser: Component<{ onClose: () => void }> = (props) => {
   })
   const [address, setAddress] = createSignal("")
   let container: HTMLDivElement | undefined
+  let addressInput: HTMLInputElement | undefined
 
   const reportBounds = () => {
     if (!container || !browser) return
@@ -40,8 +41,10 @@ export const SidePanelBrowser: Component<{ onClose: () => void }> = (props) => {
     if (!browser) return
     const off = browser.onState((s) => {
       setState(s)
-      // keep the address bar in sync unless the user is mid-edit (input focused)
-      if (document.activeElement?.tagName !== "INPUT") setAddress(s.url === "about:blank" ? "" : s.url)
+      // A focused WebContentsView leaves the renderer's last active input in place. Only
+      // an address input being edited in this focused renderer may retain its draft.
+      if (!document.hasFocus() || document.activeElement !== addressInput)
+        setAddress(s.url === "about:blank" ? "" : s.url)
     })
     const ro = new ResizeObserver(() => reportBounds())
     if (container) ro.observe(container)
@@ -96,12 +99,15 @@ export const SidePanelBrowser: Component<{ onClose: () => void }> = (props) => {
           aria-label={language.t("browser.reload")}
         />
         <InlineInput
+          ref={addressInput}
           class="flex-1 min-w-0"
           value={address()}
           placeholder={language.t("browser.address")}
           onInput={(e) => setAddress(e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") go()
+            if (e.key !== "Enter") return
+            go()
+            e.currentTarget.blur()
           }}
         />
         <IconButton

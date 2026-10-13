@@ -1,4 +1,5 @@
 import { AttentionSchema } from "@deepagent-code/core/attention/schema"
+import { TaskHumanControlSchema } from "@deepagent-code/core/session/task-human-control.schema"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { ConflictError, InvalidRequestError, ServiceUnavailableError } from "../errors"
@@ -9,10 +10,61 @@ export class AttentionNotFoundError extends Schema.TaggedErrorClass<AttentionNot
   { httpApiStatus: 404 },
 ) {}
 
+const controlError = { code: TaskHumanControlSchema.Error.fields.code, message: Schema.String }
+export class TaskControlInvalidError extends Schema.TaggedErrorClass<TaskControlInvalidError>()(
+  "TaskControlInvalidError",
+  controlError,
+  { httpApiStatus: 400 },
+) {}
+export class TaskControlAuthenticationError extends Schema.TaggedErrorClass<TaskControlAuthenticationError>()(
+  "TaskControlAuthenticationError",
+  controlError,
+  { httpApiStatus: 401 },
+) {}
+export class TaskControlForbiddenError extends Schema.TaggedErrorClass<TaskControlForbiddenError>()(
+  "TaskControlForbiddenError",
+  controlError,
+  { httpApiStatus: 403 },
+) {}
+export class TaskControlConflictError extends Schema.TaggedErrorClass<TaskControlConflictError>()(
+  "TaskControlConflictError",
+  controlError,
+  { httpApiStatus: 409 },
+) {}
+export class TaskControlLimitError extends Schema.TaggedErrorClass<TaskControlLimitError>()(
+  "TaskControlLimitError",
+  controlError,
+  { httpApiStatus: 429 },
+) {}
+export class TaskControlUnavailableError extends Schema.TaggedErrorClass<TaskControlUnavailableError>()(
+  "TaskControlUnavailableError",
+  controlError,
+  { httpApiStatus: 503 },
+) {}
+
 const scopeQuery = { workspace: Schema.optional(Schema.String), directory: Schema.optional(Schema.String) }
 const errors = [InvalidRequestError, ServiceUnavailableError]
 
 export const AttentionGroup = HttpApiGroup.make("server.attention").add(
+  HttpApiEndpoint.post("attention.taskControl", "/api/attention/task/control", {
+    query: Schema.Struct(scopeQuery),
+    payload: TaskHumanControlSchema.Input,
+    success: TaskHumanControlSchema.Result,
+    error: [
+      InvalidRequestError,
+      TaskControlInvalidError,
+      TaskControlAuthenticationError,
+      TaskControlForbiddenError,
+      TaskControlConflictError,
+      TaskControlLimitError,
+      TaskControlUnavailableError,
+    ],
+  }).annotateMerge(
+    OpenApi.annotations({
+      identifier: "v2.attention.taskControl",
+      summary: "Control an original ordinary Task through authenticated human authority",
+    }),
+  ),
   HttpApiEndpoint.get("attention.capability", "/api/attention/capability", {
     query: Schema.Struct(scopeQuery),
     success: AttentionSchema.Capability,

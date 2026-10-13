@@ -2,12 +2,16 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { app, utilityProcess } from "electron"
 import type { Details } from "electron"
+import { installManagedBrowser } from "./managed-browser"
 import { getLogger } from "./logging"
 import { SIDECAR_SPAWN_FAILED, sidecarSpawnFailure } from "./sidecar-routing"
 import { getUserShell, loadShellEnv, shouldLoadShellEnv } from "./shell-env"
 import { getStore } from "./store"
 import { DEFAULT_SERVER_URL_KEY } from "./store-keys"
 import { loadWindowsEnv } from "./win-env"
+import { createSidecarStop } from "./sidecar-stop"
+import { prepareWindowsNativeSidecar } from "./windows-native-sidecar"
+import { rendererOrigin } from "./renderer-origin"
 
 // Counts how many times a local sidecar has been spawned in this process.
 // spawnIndex === 1 means cold start; > 1 means a hot restart.
@@ -17,6 +21,8 @@ export type HealthCheck = { wait: Promise<void> }
 
 type SidecarMessage =
   | { type: "ready" }
+  | { type: "managed-browser-bootstrap-ready-v1" }
+  | { type: "managed-browser-ready-v1" }
   | { type: "stopped" }
   | { type: "error"; error: { message: string; stack?: string } }
 
@@ -24,7 +30,6 @@ export type SidecarListener = { stop: () => Promise<void> }
 
 const SIDECAR_SERVICE_NAME = "deepagent-code server"
 const SIDECAR_START_STALL_TIMEOUT = 60_000
-const SIDECAR_STOP_TIMEOUT = 6_000
 
 type SpawnLocalServerOptions = {
   onStdout?: (message: string) => void
@@ -87,10 +92,19 @@ export async function spawnLocalServer(
   const spawnIndex = ++sidecarSpawnCount
   const cold = spawnIndex === 1
   const logger = getLogger()
+  // The development renderer has a distinct origin from the API listener. Pass only
+  // this parent-captured origin so the same strict local-authority gate can accept it.
+  const renderer = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL
+  const origin = rendererOrigin(renderer)
+  if (renderer && !origin) throw new Error("Desktop dev renderer origin unavailable")
 
-  const sidecar = join(dirname(fileURLToPath(import.meta.url)), "sidecar.js")
+  const sidecarURL = new URL("./sidecar.js", import.meta.url)
+  // Windows Native holds the physical image used by the original fork.
+  if (process.platform === "win32") sidecarURL.pathname = sidecarURL.pathname.replace("/app.asar/", "/app.asar.unpacked/")
+  const sidecar = fileURLToPath(sidecarURL)
   // desktop.sidecar_spawn — start: utility process fork
   const sidecarSpawnT0 = Date.now()
+  const native = prepareWindowsNativeSidecar()
   let child: Electron.UtilityProcess
   try {
     child = utilityProcess.fork(sidecar, [], {
@@ -114,8 +128,8 @@ export async function spawnLocalServer(
   child.once("exit", (code) => {
     exited = true
     app.off("child-process-gone", onProcessGone)
-    options.onExit?.(code)
     exit.resolve(code)
+    options.onExit?.(code)
   })
   child.on("error", (error) => options.onStderr?.(`utility process error: ${serializeError(error).message}`))
 
@@ -140,7 +154,12 @@ export async function spawnLocalServer(
       }, SIDECAR_START_STALL_TIMEOUT)
     }
 
+    let nativeInstalled = false
     const onMessage = (message: SidecarMessage) => {
+      if (message.type === "managed-browser-bootstrap-ready-v1") {
+        if (!nativeInstalled) { nativeInstalled = true; installManagedBrowser(child, password) }
+        return
+      }
       if (message.type === "ready") {
         if (done) return
         done = true
@@ -171,12 +190,14 @@ export async function spawnLocalServer(
     child.on("message", onMessage)
     child.on("exit", onExit)
     refreshTimeout()
-    child.postMessage({
-      type: "start",
-      hostname,
-      port,
-      password,
-    })
+    // Keep all existing browser/ready/exit listeners installed while the same
+    // original child accepts its parent-held Windows image cohort.
+    void Promise.resolve().then(async () => {
+      if (native) await native.bind(child)
+      if (!native && process.platform === "win32") child.postMessage({ type: "dac-native-preload-unavailable-v1" })
+      if (done || exited) return
+      child.postMessage({ type: "start", hostname, port, password, rendererOrigin: origin })
+    }).catch((error) => fail(error instanceof Error ? error : new Error("Windows native sidecar preparation rejected")))
   }).catch((error) => {
     if (!exited) child.kill()
     throw error
@@ -218,22 +239,15 @@ export async function spawnLocalServer(
     await Promise.race([ready(), gone])
   })()
 
-  let stopping: Promise<void> | undefined
-
   return {
     listener: {
-      stop: () => {
-        if (stopping) return stopping
-        if (exited) return Promise.resolve()
-        child.postMessage({ type: "stop" })
-        stopping = Promise.race([
-          exit.promise.then(() => undefined),
-          delay(SIDECAR_STOP_TIMEOUT).then(() => {
-            if (!exited) child.kill()
-          }),
-        ])
-        return stopping
-      },
+      stop: createSidecarStop({
+        postStop: () => child.postMessage({ type: "stop" }),
+        kill: () => child.kill(),
+        exit: exit.promise,
+        hasExited: () => exited,
+        onObservation: (observation) => options.onStderr?.(`utility stop ${JSON.stringify(observation)}`),
+      }),
     },
     health: { wait },
   }
@@ -273,10 +287,6 @@ function createSidecarEnv(): Record<string, string> {
   if (process.platform === "linux") delete env.LD_PRELOAD
   if (!app.isPackaged) env.DEEPAGENT_CODE_DISABLE_CHANNEL_DB = "1"
   return env
-}
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms))
 }
 
 function serializeError(error: unknown) {

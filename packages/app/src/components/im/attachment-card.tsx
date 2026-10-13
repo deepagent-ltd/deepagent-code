@@ -3,13 +3,18 @@ import { createStore } from "solid-js/store"
 import { Button } from "@deepagent-code/ui/button"
 import { useLanguage } from "@/context/language"
 import { useIMClient } from "@/utils/im-client"
-import type { IMAttachment } from "./types"
+import type { IMAttachment, IMRemoteAttachment } from "./types"
+import { AttachmentPreview } from "@deepagent-code/core/im/attachment-preview"
 
-export function AttachmentCard(props: { attachmentID: string }) {
+export function AttachmentCard(props: {
+  attachmentID: string
+  local?: { groupID: string; messageID: string }
+  remote?: { groupID: string; messageID: string; attachmentID: string }
+}) {
   const language = useLanguage()
   const client = useIMClient()
   const [state, setState] = createStore({
-    attachment: undefined as IMAttachment | undefined,
+    attachment: undefined as IMAttachment | IMRemoteAttachment | undefined,
     url: undefined as string | undefined,
     preview: false,
     busy: false,
@@ -19,6 +24,7 @@ export function AttachmentCard(props: { attachmentID: string }) {
   let generation = 0
   let disposed = false
   let cacheTimer: ReturnType<typeof setTimeout> | undefined
+  let request = new AbortController()
 
   const release = () => {
     if (cacheTimer !== undefined) clearTimeout(cacheTimer)
@@ -29,13 +35,30 @@ export function AttachmentCard(props: { attachmentID: string }) {
     setState("preview", false)
   }
 
+  const lookup = async (signal: AbortSignal) => {
+    const value = props.remote
+      ? await client.getRemoteAttachment(props.remote, signal)
+      : await client.getAttachment(props.attachmentID, signal)
+    if (
+      props.local &&
+      (!("id" in value) || value.groupID !== props.local.groupID || value.messageID !== props.local.messageID)
+    )
+      throw new Error("media_scope_mismatch")
+    return value
+  }
+  const previewAllowed = (value: IMAttachment | IMRemoteAttachment) =>
+    "profile" in value ? ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(value.mime) : value.preview
   createEffect(() => {
-    const id = props.attachmentID
+    props.attachmentID
+    props.remote
+    props.local
+    client.scope?.()
+    request.abort()
+    request = new AbortController()
     const run = ++generation
     setState({ attachment: undefined, failed: false, expired: false, busy: false })
     untrack(release)
-    void client
-      .getAttachment(id)
+    void lookup(request.signal)
       .then((value) => {
         if (disposed || run !== generation) return
         setState("attachment", value)
@@ -61,6 +84,7 @@ export function AttachmentCard(props: { attachmentID: string }) {
   onCleanup(() => {
     disposed = true
     generation++
+    request.abort()
     release()
   })
 
@@ -71,26 +95,36 @@ export function AttachmentCard(props: { attachmentID: string }) {
     const run = generation
     setState("busy", true)
     setState("failed", false)
-    const current = await client.getAttachment(value.id).catch(() => undefined)
+    const current = await lookup(request.signal).catch(() => undefined)
     if (disposed || run !== generation) return
-    if (!current || current.checksum !== value.checksum || current.expiresAt <= Date.now()) {
+    if (!current || JSON.stringify(current) !== JSON.stringify(value) || current.expiresAt <= Date.now()) {
       release()
       setState("busy", false)
       setState("failed", true)
       return
     }
-    const loaded =
-      state.url ??
-      (await client
-        .downloadAttachment(value)
-        .then((blob) => {
-          if (disposed || run !== generation || value.expiresAt <= Date.now()) return
-          const next = URL.createObjectURL(blob)
-          setState("url", next)
-          cacheTimer = setTimeout(release, Math.min(60_000, value.expiresAt - Date.now()))
-          return next
-        })
-        .catch(() => undefined))
+    release()
+    const download =
+      "profile" in value && props.remote
+        ? client.downloadRemoteAttachment(props.remote, value, request.signal)
+        : "id" in value
+          ? client.downloadAttachment(value, request.signal)
+          : Promise.reject(new Error("Attachment is unavailable"))
+    const loaded = await download
+      .then(async (blob) => {
+        if (disposed || run !== generation || value.expiresAt <= Date.now()) return
+        if (blob.size !== value.sizeBytes || blob.size > AttachmentPreview.maxBytes) return
+        if (previewOnly) {
+          if (blob.size > AttachmentPreview.previewBytes) return
+          const inspected = AttachmentPreview.inspect(new Uint8Array(await blob.arrayBuffer()))
+          if (!inspected || inspected.mime !== value.mime || disposed || run !== generation) return
+        }
+        const next = URL.createObjectURL(blob)
+        setState("url", next)
+        cacheTimer = setTimeout(release, Math.min(60_000, value.expiresAt - Date.now()))
+        return next
+      })
+      .catch(() => undefined)
     if (disposed || run !== generation) return
     setState("busy", false)
     if (!loaded || value.expiresAt <= Date.now()) {
@@ -103,7 +137,7 @@ export function AttachmentCard(props: { attachmentID: string }) {
     }
     const link = document.createElement("a")
     link.href = loaded
-    link.download = value.filename
+    link.download = AttachmentPreview.displayName(value.filename)
     link.click()
   }
 
@@ -129,7 +163,11 @@ export function AttachmentCard(props: { attachmentID: string }) {
                 {language.t("im.media.download")}
               </Button>
               <Show
-                when={value().preview && ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(value().mime)}
+                when={
+                  previewAllowed(value()) &&
+                  ["image/png", "image/jpeg"].includes(value().mime) &&
+                  value().sizeBytes <= AttachmentPreview.previewBytes
+                }
               >
                 <Button size="small" disabled={state.busy || state.expired} onClick={() => void open(true)}>
                   {language.t("im.media.preview")}
@@ -140,7 +178,7 @@ export function AttachmentCard(props: { attachmentID: string }) {
               {(source) => (
                 <img
                   src={source()}
-                  alt={value().filename}
+                  alt={AttachmentPreview.displayName(value().filename)}
                   class="max-w-full max-h-64 object-contain rounded-md"
                   onError={() => {
                     release()
@@ -149,7 +187,9 @@ export function AttachmentCard(props: { attachmentID: string }) {
                 />
               )}
             </Show>
-            <p class="text-11-regular text-text-weak">{language.t("im.media.localOnly")}</p>
+            <Show when={!props.remote}>
+              <p class="text-11-regular text-text-weak">{language.t("im.media.localOnly")}</p>
+            </Show>
           </>
         )}
       </Show>

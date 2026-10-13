@@ -467,6 +467,12 @@ export const layer = Layer.effect(
               .returning()
               .get()
             if (!settled) return undefined
+            if (settled.state === "settled" && settled.final_message_id) {
+              const { EventWorkRule } = yield* Effect.promise(() => import("../deepagent/event-work-rule"))
+              // This is data-only capture in the original terminal commit. Provider/source/rule
+              // authority is independently revalidated before any later Work reservation.
+              yield* EventWorkRule.observeInTransaction(tx, { sessionID: settled.session_id, activityID: settled.activity_id })
+            }
             return activity(settled)
           }),
         )
@@ -651,44 +657,74 @@ export const layer = Layer.effect(
     })
 
     const appendValidation = Effect.fn("SessionContext.appendValidation")(function* (input: ValidationInput) {
-      const selection = yield* db
-        .select()
-        .from(SessionContextSelectionTable)
-        .where(eq(SessionContextSelectionTable.selection_id, input.selectionId))
-        .get()
-        .pipe(Effect.orDie)
-      if (!selection) return yield* new ValidationError()
-      if (
-        input.outcome === "valid" &&
-        (input.validUntil <= input.validatedAt ||
-          input.selectedSourceFingerprint !== selection.selected_source_fingerprint ||
-          input.observedLocationMutationEpoch < selection.observed_location_mutation_epoch)
-      ) {
-        return yield* new ValidationError()
+      const values = {
+        selection_id: input.selectionId,
+        provider_turn_seq: input.providerTurnSeq,
+        authorization_epoch: input.authorizationEpoch,
+        egress_epoch: input.egressEpoch,
+        observed_location_mutation_epoch: input.observedLocationMutationEpoch,
+        selected_source_fingerprint: input.selectedSourceFingerprint,
+        validated_at: input.validatedAt,
+        valid_until: input.validUntil,
+        outcome: input.outcome,
+        reason_code: input.reasonCode,
       }
-      // §4.1 step 7 revalidation refresh: a validation may extend the freshness window past the
-      // selection row's original next_revalidation_at when the identity still matches — long
-      // provider turns routinely outlive the 60s TTL. The immutable selection row keeps its
-      // original window; the validation row carries the extended one.
-      const id = opaque("validation")
-      yield* db
-        .insert(SessionContextValidationTable)
-        .values({
-          validation_id: id,
-          selection_id: input.selectionId,
-          provider_turn_seq: input.providerTurnSeq,
-          authorization_epoch: input.authorizationEpoch,
-          egress_epoch: input.egressEpoch,
-          observed_location_mutation_epoch: input.observedLocationMutationEpoch,
-          selected_source_fingerprint: input.selectedSourceFingerprint,
-          validated_at: input.validatedAt,
-          valid_until: input.validUntil,
-          outcome: input.outcome,
-          reason_code: input.reasonCode,
-        })
-        .run()
-        .pipe(Effect.orDie)
-      return id
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const selection = yield* tx
+                .select()
+                .from(SessionContextSelectionTable)
+                .where(eq(SessionContextSelectionTable.selection_id, values.selection_id))
+                .get()
+                .pipe(Effect.orDie)
+              if (!selection) return yield* new ValidationError()
+              if (
+                values.outcome === "valid" &&
+                (values.valid_until <= values.validated_at ||
+                  values.selected_source_fingerprint !== selection.selected_source_fingerprint ||
+                  values.observed_location_mutation_epoch < selection.observed_location_mutation_epoch)
+              )
+                return yield* new ValidationError()
+              // Refresh can extend the selection's original window. Exact retries within one
+              // millisecond share the observation; they cannot alter its authority or freshness.
+              const created = yield* tx
+                .insert(SessionContextValidationTable)
+                .values({ validation_id: opaque("validation"), ...values })
+                .onConflictDoNothing({
+                  target: [
+                    SessionContextValidationTable.selection_id,
+                    SessionContextValidationTable.provider_turn_seq,
+                    SessionContextValidationTable.validated_at,
+                  ],
+                })
+                .returning()
+                .get()
+                .pipe(Effect.orDie)
+              if (created) return created.validation_id
+              const previous = yield* tx
+                .select()
+                .from(SessionContextValidationTable)
+                .where(
+                  and(
+                    eq(SessionContextValidationTable.selection_id, values.selection_id),
+                    eq(SessionContextValidationTable.provider_turn_seq, values.provider_turn_seq),
+                    eq(SessionContextValidationTable.validated_at, values.validated_at),
+                  ),
+                )
+                .get()
+                .pipe(Effect.orDie)
+              if (
+                !previous ||
+                !Object.entries(values).every(([key, value]) => previous[key as keyof typeof values] === value)
+              )
+                return yield* new ValidationError()
+              return previous.validation_id
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(preserveErrors)
     })
 
     const hasValidValidation = Effect.fn("SessionContext.hasValidValidation")(function* (input: {

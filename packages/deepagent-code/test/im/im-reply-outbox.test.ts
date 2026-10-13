@@ -58,6 +58,12 @@ const v2Session = SessionV2.layer.pipe(
 const createdMessages: Array<{ groupID: string; senderID: string; content: string; metadata: unknown }> = []
 let deliveriesFail = false
 const repo: IMRepositoryInterface = {
+  claimKernelDelivery: () => Effect.die("unused transport admission"),
+  acknowledgeKernelDelivery: () => Effect.die("unused transport acknowledgement"),
+  uncertainKernelDelivery: () => Effect.die("unused transport unknown"),
+  kernelDeliveryStatuses: () => Effect.die("unused transport statuses"),
+  kernelDeliveryStatus: () => Effect.die("unused transport status"),
+  requireLegacyMention: () => Effect.die("unused"),
   listPendingMentions: () => Effect.succeed([]),
   bindMention: () => Effect.die("unused"),
   settleMention: () => Effect.void,
@@ -102,6 +108,8 @@ const repo: IMRepositoryInterface = {
   getAttachment: () => Effect.die("unused"),
   listAttachments: () => Effect.die("unused"),
   listExpiredAttachments: () => Effect.die("unused"),
+  attachmentCleanupCursor: () => Effect.die("unused attachment cleanup cursor"),
+  advanceAttachmentCleanupCursor: () => Effect.die("unused attachment cleanup cursor update"),
   expireAttachment: () => Effect.die("unused"),
   getGroupByKernelConvID: () => Effect.die("unused"),
   getGroupByID: () => Effect.die("unused"),
@@ -156,6 +164,19 @@ const baseAppend = {
 }
 
 describe("IMReplyOutbox append/claim/settle", () => {
+  it.effect("an ordinary-looking outbox ID cannot bypass a managed task's actual terminal authority", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const before = { messages: createdMessages.length, broadcasts: broadcasts.length }
+      const result = yield* IMReplyOutbox.deliverReply({ db, repo, broadcaster }, {
+        id: "imo_forged", sessionID: "ses_imtask_no_grant", groupID: "other-group", agentID: "auto",
+        replyText: "must not disclose", attempts: 1, triggerMessageID: "other-source", replyMessageID: "other-final",
+      }).pipe(Effect.exit)
+      expect(result._tag).toBe("Failure")
+      expect({ messages: createdMessages.length, broadcasts: broadcasts.length }).toEqual(before)
+    }),
+  )
+
   it.effect("append is idempotent per (session, reply) — re-collection never double-writes", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -225,6 +246,9 @@ describe("IMReplyOutbox append/claim/settle", () => {
       yield* IMReplyOutbox.appendReply(db, { ...input, now: 0 })
       const kernelSends: Array<{ groupID: string; messageID: string; content: string }> = []
       const kernelSync: IMKernelSync.Interface = {
+        createMessage: repo.createMessage,
+        deliveryStatuses: () => Effect.die("unused transport statuses"),
+        deliveryStatus: () => Effect.die("unused transport status"),
         state: yield* SubscriptionRef.make<KernelClient.ConnectionState>("connected"),
         send: (send) => Effect.sync(() => void kernelSends.push(send)),
         drainPending: Effect.void,
