@@ -59,3 +59,7 @@ extra-domain/
 
 # Upstream SDK build identity only (PACKAGE_NAME=JuggleIM), no credentials.
 !packages/im-kernel-sdk/upstream/.env
+
+# Local acceptance evidence and test packages are generated outside source control.
+/.artifacts/
+/release/

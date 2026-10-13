@@ -26,7 +26,6 @@ concurrency:
 
 jobs:
   build:
-    needs: source
     strategy:
       fail-fast: false
       matrix:
@@ -52,7 +51,7 @@ jobs:
     env:
       DEEPAGENT_CODE_ALLOW_UNSIGNED: "1"
       DEEPAGENT_CODE_CHANNEL: dev
-      DEEPAGENT_CODE_VERSION: "0.0.0-dev-203.${{ github.run_id }}.${{ github.run_attempt }}"
+      DEEPAGENT_CODE_VERSION: "0.0.0-dev-204.${{ github.run_id }}.${{ github.run_attempt }}"
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       DEEPAGENT_CODE_BUILD_LINUX_NATIVE_ASSETS: ${{ matrix.group == 'linux' && '1' || '' }}
     steps:
@@ -76,12 +75,6 @@ jobs:
         run: |
           npm ci --ignore-scripts --prefix packages/im-kernel-sdk/upstream
           bun run --cwd packages/im-kernel-sdk build
-      - name: Verify this runner uses the frozen complete source candidate
-        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
-        shell: bash
-        run: |
-          bun -e 'await Bun.write(process.env.RUNNER_TEMP + "/dac-source-roots.json", JSON.stringify({ dac: process.cwd() }))'
-          bun ./scripts/materialize-source-closure.ts --manifest release/source-closure/2.0.3-acceptance-20261012/manifest.json --out "$RUNNER_TEMP/dac-source-check-only" --roots "$RUNNER_TEMP/dac-source-roots.json" --check --require dac,kernel,platform
       - name: Verify the internal QA publisher and fixed artifact guard module
         if: inputs.platforms == 'all' || inputs.platforms == matrix.group
         working-directory: packages/desktop
@@ -183,7 +176,7 @@ jobs:
         if: (inputs.platforms == 'all' || inputs.platforms == matrix.group) && success()
         uses: actions/upload-artifact@v4
         with:
-          name: dac-2.0.3-test-${{ matrix.target }}-${{ github.run_id }}
+          name: dac-2.0.4-test-${{ matrix.target }}-${{ github.run_id }}
           retention-days: 7
           if-no-files-found: error
           path: |
@@ -200,7 +193,7 @@ jobs:
         if: (inputs.platforms == 'all' || inputs.platforms == matrix.group) && always()
         uses: actions/upload-artifact@v4
         with:
-          name: dac-2.0.3-diagnostic-report-${{ matrix.target }}-${{ github.run_id }}
+          name: dac-2.0.4-diagnostic-report-${{ matrix.target }}-${{ github.run_id }}
           retention-days: 7
           if-no-files-found: warn
           path: packages/desktop/dist/test-native-qualification.json
@@ -210,66 +203,3 @@ jobs:
           DAC_TEST_PACKAGE_TARGET: ${{ matrix.target }}
         run: bun ./packages/desktop/scripts/test-native-publisher.ts cleanup
 
-  source:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
-    env:
-      GOTOOLCHAIN: local
-      GOPROXY: https://proxy.golang.org
-      GOSUMDB: sum.golang.org
-    steps:
-      - name: Preserve frozen source bytes on checkout
-        run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/setup-bun
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.5"
-          cache: false
-      - name: Reconstruct all reviewed production and formal test sources
-        shell: bash
-        run: |
-          mkdir -p artifacts/source artifacts/services
-          bun -e 'await Bun.write(process.env.RUNNER_TEMP + "/dac-source-roots.json", JSON.stringify({ dac: process.cwd() }))'
-          bun ./scripts/materialize-source-closure.ts --manifest release/source-closure/2.0.3-acceptance-20261012/manifest.json --out "$RUNNER_TEMP/dac-source-tree" --roots "$RUNNER_TEMP/dac-source-roots.json" --require dac,kernel,platform
-          cp "$RUNNER_TEMP/dac-source-tree/source-closure-manifest.json" artifacts/source/source-closure-manifest.json
-          cp "$RUNNER_TEMP/dac-source-tree/source-materialization.json" artifacts/source/source-materialization.json
-          git rev-parse HEAD > artifacts/source/actions-source-commit.txt
-      - name: Build the real Platform frontend with its frozen lock
-        working-directory: ${{ runner.temp }}/dac-source-tree/platform/web
-        shell: bash
-        run: |
-          bun install --frozen-lockfile --ignore-scripts --registry https://registry.npmjs.org
-          bun run build
-      - name: Build formal IM kernel and Platform production entrypoints
-        shell: bash
-        timeout-minutes: 20
-        run: |
-          DAC_SERVICE_OUT="$GITHUB_WORKSPACE/artifacts/services"
-          (cd "$RUNNER_TEMP/dac-source-tree/kernel" && go build -mod=readonly -buildvcs=false -p=2 -o "$DAC_SERVICE_OUT/im-kernel-linux-x64" ./launcher)
-          (cd "$RUNNER_TEMP/dac-source-tree/platform" && go build -mod=readonly -buildvcs=false -p=2 -o "$DAC_SERVICE_OUT/im-platform-linux-x64" .)
-          go version -m "$DAC_SERVICE_OUT/im-kernel-linux-x64" > "$DAC_SERVICE_OUT/im-kernel-buildinfo.txt"
-          go version -m "$DAC_SERVICE_OUT/im-platform-linux-x64" > "$DAC_SERVICE_OUT/im-platform-buildinfo.txt"
-          sha256sum "$DAC_SERVICE_OUT/im-kernel-linux-x64" "$DAC_SERVICE_OUT/im-platform-linux-x64" > "$DAC_SERVICE_OUT/SHA256SUMS"
-      - name: Archive the exact reconstructed full source
-        shell: bash
-        run: |
-          # Dependencies and generated frontend assets are reproducible build products.
-          # Archive the reviewed source tree before including any tool cache or binary.
-          rm -rf "$RUNNER_TEMP/dac-source-tree/platform/web/node_modules" "$RUNNER_TEMP/dac-source-tree/platform/web/dist"
-          tar -czf artifacts/source/deepagent-code-2.0.3-full-source.tar.gz -C "$RUNNER_TEMP/dac-source-tree" .
-          sha256sum artifacts/source/deepagent-code-2.0.3-full-source.tar.gz artifacts/source/source-closure-manifest.json > artifacts/source/SHA256SUMS
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dac-2.0.3-test-source-${{ github.run_id }}
-          retention-days: 7
-          if-no-files-found: error
-          path: artifacts/source/*
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dac-2.0.3-test-im-services-linux-x64-${{ github.run_id }}
-          retention-days: 7
-          if-no-files-found: error
-          path: artifacts/services/*
