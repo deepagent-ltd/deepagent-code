@@ -1,44 +1,15 @@
-# Mintlify Starter Kit
+# Documentation scaffold
 
-Use the starter kit to get your docs deployed and ready to customize.
+This directory contains a Mintlify documentation scaffold. Its example pages and hosted OpenAPI URL are not a complete guide to the current DAC release.
 
-Click the green **Use this template** button at the top of this repo to copy the Mintlify starter kit. The starter kit contains examples with
+For the **2.0.4** product introduction and current development commands, use the [repository README](../../README.md). The public documentation site's source lives in [packages/web](../web/src/content/docs), and the generated API contract is [packages/sdk/openapi.json](../sdk/openapi.json).
 
-- Guide pages
-- Navigation
-- Customizations
-- API reference pages
-- Use of popular components
+## Local preview
 
-**[Follow the full quickstart guide](https://starter.mintlify.com/quickstart)**
+To work on this scaffold, run the Mintlify CLI from this directory:
 
-## Development
-
-Install the [Mintlify CLI](https://www.npmjs.com/package/mint) to preview your documentation changes locally. To install, use the following command:
-
-```
-npm i -g mint
-```
-
-Run the following command at the root of your documentation, where your `docs.json` is located:
-
-```
+```bash
 mint dev
 ```
 
-View your local preview at `http://localhost:3000`.
-
-## Publishing changes
-
-Install our GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app) to propagate changes from your repo to your deployment. Changes are deployed to production automatically after pushing to the default branch.
-
-## Need help?
-
-### Troubleshooting
-
-- If your dev environment isn't running: Run `mint update` to ensure you have the most recent version of the CLI.
-- If a page loads as a 404: Make sure you are running in a folder with a valid `docs.json`.
-
-### Resources
-
-- [Mintlify documentation](https://mintlify.com/docs)
+The navigation and hosted API reference are configured in `docs.json`. Deployment of this scaffold requires its own Mintlify configuration; changing it does not publish the DAC application or replace the main documentation site.
