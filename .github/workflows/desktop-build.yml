@@ -139,6 +139,13 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Read the reviewed Desktop release version
+        id: release-version
+        shell: bash
+        run: |
+          dac_release_version=$(node -p 'require("./packages/desktop/package.json").version')
+          echo "version=$dac_release_version" >> "$GITHUB_OUTPUT"
+
       - name: Download Electron runtime for macOS arm64
         if: matrix.target == 'darwin-arm64'
         working-directory: packages/desktop
@@ -181,6 +188,7 @@ jobs:
       - name: Build renderer
         working-directory: packages/desktop
         env:
+          DEEPAGENT_CODE_VERSION: ${{ steps.release-version.outputs.version }}
           DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
           NODE_OPTIONS: --max-old-space-size=4096
         run: bun run build
@@ -189,6 +197,7 @@ jobs:
         working-directory: packages/desktop
         timeout-minutes: 60
         env:
+          DEEPAGENT_CODE_VERSION: ${{ steps.release-version.outputs.version }}
           DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
           # Sign + notarize on macOS only when BOTH the signing cert and the Apple ID
           # notarization secrets are present; otherwise build unsigned instead of failing.

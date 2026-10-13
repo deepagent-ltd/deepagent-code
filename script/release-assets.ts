@@ -19,7 +19,7 @@ const desktopTargets = [
   "deepagent-code-desktop-win-x64.exe",
   "deepagent-code-desktop-mac-x64.app.tar.gz",
   "deepagent-code-desktop-mac-arm64.app.tar.gz",
-  "deepagent-code-desktop-linux-x64.deb",
+  "deepagent-code-desktop-linux-amd64.deb",
 ]
 const unsupportedArmAsset = /^deepagent-code-(?:(?:linux|windows)-arm64|desktop-(?:linux|win)-arm64)/
 

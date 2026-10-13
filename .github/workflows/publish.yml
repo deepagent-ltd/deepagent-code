@@ -446,6 +446,7 @@ jobs:
         run: bun run build
         working-directory: packages/desktop
         env:
+          DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
           DEEPAGENT_CODE_CHANNEL: ${{ (needs.version.outputs.channel == 'beta' && 'beta') || 'prod' }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
