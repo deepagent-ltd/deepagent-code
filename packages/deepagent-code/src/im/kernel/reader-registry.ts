@@ -62,7 +62,18 @@ export const make = (config: KernelConfig.Info, options?: IMKernelSync.LayerOpti
   }
   const unregisterDirectory = instances.registerDisposer(retireDirectory)
   const releaseOwner = options?.onOwnerRevoked?.(() => Array.from(owned).forEach(revoke))
-  yield* Effect.addFinalizer(() => Effect.sync(() => { unregisterDirectory(); releaseOwner?.(); Array.from(owned).forEach(revoke) }).pipe(Effect.andThen(Effect.promise(() => Promise.all(Array.from(owned).map(retire))))))
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      unregisterDirectory()
+      releaseOwner?.()
+      Array.from(owned).forEach(revoke)
+    }).pipe(
+      // Child scopes retain dispatched native requests until actual settlement.
+      // Disconnect the owning client after revocation, before joining those scopes.
+      Effect.andThen(client.disconnect),
+      Effect.ensuring(Effect.promise(() => Promise.all(Array.from(owned).map(retire)))),
+    ),
+  )
   const hint = (entry: Entry) => Effect.gen(function* () {
     if (!entry.lifetime.active) return
     entry.lifetime.hint = true

@@ -1,11 +1,11 @@
-import { expect } from "bun:test"
+import { expect, test } from "bun:test"
 import { Deferred, Effect, Exit, Fiber, Layer, Queue, Scope, Stream, SubscriptionRef } from "effect"
 import { eq } from "drizzle-orm"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Database } from "@deepagent-code/core/database/database"
-import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
+import { IMBroadcasterLive, IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
 import { KernelReader } from "@deepagent-code/core/im/kernel-reader"
 import { IMKernelReaderScopeTable } from "@deepagent-code/core/im/kernel-reader.sql"
 import { InstanceRegistry } from "@/effect/instance-registry"
@@ -16,6 +16,8 @@ import { KernelReaderSchema } from "@deepagent-code/core/im/kernel-reader.schema
 import { KernelClient } from "@/im/kernel/client"
 import { KernelSdk } from "@/im/kernel/sdk"
 import { IMReaderRegistry } from "@/im/kernel/reader-registry"
+import { ListenerStop } from "@/server/listener-stop"
+import { KernelLiveFirstSeenFixture } from "./fixture/kernel-live-first-seen"
 import { ReaderInstanceFixture } from "./reader-instance-fixture"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 
@@ -37,13 +39,178 @@ const leaseScope = Effect.gen(function* () {
   return scope
 })
 
+function nativeShutdownFixture(
+  options: Parameters<typeof KernelLiveFirstSeenFixture.make>[0],
+  run: (input: {
+    directory: string
+    native: ReturnType<typeof KernelLiveFirstSeenFixture.make>
+    client: KernelClient.Interface
+    store: InstanceStore.Interface
+    registry: IMReaderRegistry.Interface
+    entry: IMReaderRegistry.Entry
+    scope: Scope.Closeable
+  }) => Effect.Effect<void, unknown, Scope.Scope>,
+) {
+  return Effect.gen(function* () {
+    const directory = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "dac-im-registry-shutdown-")))
+    yield* Effect.addFinalizer(() => Effect.promise(() => rm(directory, { recursive: true, force: true })))
+    const native = KernelLiveFirstSeenFixture.make(options)
+    yield* Effect.addFinalizer(() => Effect.sync(() => native.server.stop(true)))
+    const config = { appkey: `private-registry-shutdown-${native.server.port}`, navigator: native.server.url.origin,
+      token: "private-first-seen-token", userID: "receiver", identity: { uuid: "receiver", orgID: 1, name: "Receiver", orgAllGroupID: "unused" } }
+    return yield* Effect.gen(function* () {
+      const client = yield* KernelClient.Service
+      yield* pollWithTimeout(SubscriptionRef.get(client.state).pipe(Effect.map((state) => state === "connected" ? true : undefined)), "original SDK did not connect")
+      const store = yield* InstanceStore.Service
+      const workspace = join(directory, "workspace")
+      yield* Effect.promise(() => mkdir(workspace))
+      const instance = yield* store.load({ directory: workspace })
+      const scope = yield* leaseScope
+      const registry = yield* IMReaderRegistry.make(config).pipe(Effect.provideService(Scope.Scope, scope))
+      const entry = yield* registry.acquire({ instance, workspaceID: workspace, userID: "server",
+        instanceCurrent: store.peek(workspace).pipe(Effect.map((current) => current === instance)) })
+      yield* pollWithTimeout(Effect.sync(() => entry.lifetime.lastSync > 0 && !entry.lifetime.native && !entry.lifetime.running && !entry.lifetime.queued ? true : undefined), "original registry did not become idle")
+      return yield* run({ directory, native, client, store, registry, entry, scope })
+    }).pipe(Effect.provide(Layer.mergeAll(
+      Database.layerFromPath(join(directory, "reader.sqlite")), ReaderInstanceFixture.layer,
+      ReaderInstanceFixture.registry, IMBroadcasterLive,
+      KernelClient.layer.pipe(Layer.provide(KernelSdk.liveFromConfig(config))),
+    )))
+  })
+}
+
+function stopRegistry(scope: Scope.Closeable) {
+  return ListenerStop.make({ scope, unpublish: Effect.void, websockets: { closeAll: Effect.void },
+    http: { closeAll: Effect.void, close: Effect.void } })
+}
+
+function shutdownTest(name: string, run: () => Effect.Effect<void, unknown, Scope.Scope>) {
+  if (process.env.DAC_IM_REGISTRY_SHUTDOWN_CASE === name) {
+    it.live(name, run)
+    return
+  }
+  if (process.env.DAC_IM_REGISTRY_SHUTDOWN_CASE) return
+  // The real SDK retains its transport singleton across init/disconnect. Each
+  // native case gets an actual process lifetime rather than resetting SDK state.
+  test(name, async () => {
+    const root = await mkdtemp(join(tmpdir(), "dac-im-registry-shutdown-child-"))
+    const child = Bun.spawn([process.execPath, "test", import.meta.path, "--test-name-pattern",
+      `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "--timeout", "15000"], {
+      cwd: process.cwd(), env: { ...process.env, DAC_IM_REGISTRY_SHUTDOWN_CASE: name }, stdout: "pipe", stderr: "pipe",
+    })
+    const output = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+    await Promise.all([Bun.write(join(root, "stdout-private.log"), output[0]), Bun.write(join(root, "stderr-private.log"), output[1])])
+    if (output[2] !== 0) console.error({ case: name, childLogRoot: root })
+    expect(output[2]).toBe(0)
+  }, 20000)
+}
+
+shutdownTest("whole-registry shutdown disconnects the original in-flight readonly query before joining child scopes", () => {
+  const stalled = { value: false }
+  return nativeShutdownFixture({ queryDelayMs: (topic) => stalled.value && topic === "qry_delivery_reader" ? 3000 : 0 },
+    (input) => Effect.gen(function* () {
+      const before = input.native.topics.filter((topic) => topic === "qry_delivery_reader").length
+      stalled.value = true
+      const request = yield* Effect.forkChild(input.entry.reader.request(input.client.getDeliveryReader()))
+      yield* pollWithTimeout(Effect.sync(() => input.native.topics.filter((topic) => topic === "qry_delivery_reader").length === before + 1 ? true : undefined), "readonly query did not reach the actual peer")
+      expect(input.registry.statistics().native).toBe(1)
+      const stop = stopRegistry(input.scope)
+      const started = performance.now()
+      yield* Effect.promise(() => stop(true))
+      expect(performance.now() - started).toBeLessThan(1950)
+      expect(yield* Fiber.join(request).pipe(Effect.flip)).toMatchObject({ operation: "getDeliveryReader", cause: { kind: "disconnected" } })
+      expect(input.entry.lifetime.active).toBe(false)
+      expect(yield* input.entry.assertCurrent.pipe(Effect.flip)).toMatchObject({ code: "reader_unavailable" })
+      expect(input.registry.statistics()).toEqual({ entries: 0, owned: 0, native: 0 })
+      yield* pollWithTimeout(Effect.sync(() => input.native.state.disconnected > 0 ? true : undefined), "original SDK socket did not close")
+      expect(input.native.topics.filter((topic) => topic === "qry_delivery_reader")).toHaveLength(before + 1)
+    }))
+})
+
+shutdownTest("whole-registry shutdown leaves dispatched original SDK send and mark-read outcomes unknown without repeating them", () => {
+  const published = { count: 0 }
+  return nativeShutdownFixture({
+    outboundPublish: () => { published.count++; return { code: 0, messageId: "private-unobserved-ack", timestamp: Date.now(), msgSeqNo: 1 } },
+    afterOutboundPublish: () => "drop_ack",
+    queryDelayMs: (topic) => topic === "mark_delivery_read" ? 3000 : 0,
+    response: (topic, request, original) => topic === "qry_delivery_capabilities"
+      ? { name: "DeliveryCapabilities", value: { version: 1, profile: "mysql-receipt-v1", maxLifetimeMs: 259200000, maxContentBytes: 65536, eventualDelivery: false } }
+      : topic === "mark_delivery_read"
+        ? { name: "DeliveryReadCutResult", value: { ...request, throughOrdinal: "1", targetAdmittedOrdinal: "1", readOrdinal: "1", liveUnread: "0", storedUnread: "0", serverNow: Date.now(), complete: true } }
+        : original,
+  }, (input) => Effect.gen(function* () {
+    const send = yield* Effect.forkChild(input.entry.reader.request(input.client.sendText({ conversationType: 1,
+      conversationID: "sender", text: "private controlled shutdown", messageID: "private-shutdown-local",
+      wireID: "private-shutdown-wire", expiresAt: Date.now() + 60000 })))
+    const mark = yield* Effect.forkChild(input.entry.reader.request(input.client.markDeliveryRead({ version: 1,
+      scopeKey, projectionKey, projectionRevision: "1", throughOrdinal: "1" })))
+    yield* pollWithTimeout(Effect.sync(() => published.count === 1 && input.native.topics.includes("mark_delivery_read") ? true : undefined), "original write calls did not reach the peer")
+    expect(input.registry.statistics().native).toBe(2)
+    yield* Effect.promise(() => stopRegistry(input.scope)(true))
+    expect(yield* Fiber.join(send).pipe(Effect.flip)).toMatchObject({ operation: "sendMessage", cause: { kind: "unknown" } })
+    expect(yield* Fiber.join(mark).pipe(Effect.flip)).toMatchObject({ operation: "markDeliveryRead", cause: { kind: "unknown" } })
+    yield* Effect.sleep("100 millis")
+    expect(published.count).toBe(1)
+    expect(input.native.topics.filter((topic) => topic === "mark_delivery_read")).toHaveLength(1)
+    expect(input.registry.statistics()).toEqual({ entries: 0, owned: 0, native: 0 })
+  }))
+})
+
+shutdownTest("ordinary workspace retirement leaves the original SDK connected and another captured workspace usable", () =>
+  nativeShutdownFixture({}, (input) => Effect.gen(function* () {
+    const directory = join(input.directory, "other-workspace")
+    yield* Effect.promise(() => mkdir(directory))
+    const instance = yield* input.store.load({ directory })
+    const entry = yield* input.registry.acquire({ instance, workspaceID: directory, userID: "server",
+      instanceCurrent: input.store.peek(directory).pipe(Effect.map((current) => current === instance)) })
+    yield* input.store.dispose(input.entry.context.instance)
+    expect(input.entry.lifetime.active).toBe(false)
+    expect(input.native.state.disconnected).toBe(0)
+    expect(yield* SubscriptionRef.get(input.client.state)).toBe("connected")
+    yield* entry.assertCurrent
+    yield* entry.reader.sync
+    expect(input.registry.find(directory, "server")).toBe(entry)
+    expect(entry.lifetime.active).toBe(true)
+    expect(input.registry.statistics().entries).toBe(1)
+    yield* Effect.promise(() => stopRegistry(input.scope)(true))
+    expect(input.registry.statistics()).toEqual({ entries: 0, owned: 0, native: 0 })
+  })),
+)
+
+it.live("a disconnect defect preserves shutdown failure while still joining every owned reader child scope", () => Effect.gen(function* () {
+  const state = yield* SubscriptionRef.make<KernelClient.ConnectionState>("connected")
+  const client = Layer.mock(KernelClient.Service, { state, messages: Stream.empty,
+    disconnect: Effect.die(new Error("controlled disconnect defect")),
+    getDeliveryReader: () => Effect.succeed(header()),
+    getDeliveryChanges: (input) => Effect.succeed({ ...change(input), items: [] }),
+  })
+  yield* fixture((directory) => Effect.gen(function* () {
+    const store = yield* InstanceStore.Service
+    const instance = yield* store.load({ directory })
+    const scope = yield* leaseScope
+    const registry = yield* IMReaderRegistry.make(config).pipe(Effect.provideService(Scope.Scope, scope))
+    const entry = yield* registry.acquire({ instance, workspaceID: directory, userID: "server",
+      instanceCurrent: store.peek(directory).pipe(Effect.map((current) => current === instance)) })
+    const closed = { count: 0 }
+    yield* Scope.addFinalizer(entry.scope, Effect.sync(() => { closed.count++ }))
+    const stop = stopRegistry(scope)
+    const failure = yield* Effect.promise(() => stop(true).catch((error: unknown) => error))
+    expect(failure).toMatchObject({ code: "LISTENER_STOP_FAILED", stage: "scope", reason: "failed" })
+    expect(closed.count).toBe(1)
+    expect(entry.lifetime.active).toBe(false)
+    expect(registry.statistics()).toEqual({ entries: 0, owned: 0, native: 0 })
+    expect(yield* Effect.promise(() => stop(true).catch((error: unknown) => error))).toBe(failure)
+    expect(closed.count).toBe(1)
+  }), client)
+}))
+
 it.live("advisory hints coalesce for five seconds while foreground and original live-lane consumers remain immediate", () => Effect.gen(function* () {
   const calls = { reader: 0 }
   const live = yield* Queue.bounded<object>(4)
   const observed = { handle: Object.freeze({}), deadline: 0 }
   const state = yield* SubscriptionRef.make<KernelClient.ConnectionState>("connected")
   const client = Layer.mock(KernelClient.Service, {
-    state, messages: Stream.empty, liveObservations: Stream.fromQueue(live),
+    state, messages: Stream.empty, disconnect: Effect.void, liveObservations: Stream.fromQueue(live),
     // This controlled transport hint drives the real registry lane. Empty
     // native pages below deliberately create no task source or authority.
     readLiveObservation: (handle) => handle === observed.handle && performance.now() < observed.deadline
@@ -108,7 +275,7 @@ it.live("two actual directories share two native slots; disposing stalled A imme
     return yield* KernelSdk.request(operation, run).pipe(Effect.ensuring(Effect.sync(() => { native.active-- })))
   })
   const client = Layer.mock(KernelClient.Service, {
-    state, messages: Stream.empty,
+    state, messages: Stream.empty, disconnect: Effect.void,
     getDeliveryReader: () => request("getDeliveryReader", () => Promise.resolve(header())),
     getDeliveryChanges: (input) => Effect.suspend(() => {
       if (!native.stall) return request("getDeliveryChanges", () => Promise.resolve(change(input)))
@@ -195,7 +362,7 @@ it.live("two actual directories share two native slots; disposing stalled A imme
 
 it.live("the bounded registry never evicts active leases and idle eviction retains the file-backed scope", () => Effect.gen(function* () {
   const state = yield* SubscriptionRef.make<KernelClient.ConnectionState>("connected")
-  const client = Layer.mock(KernelClient.Service, { state, messages: Stream.empty, getDeliveryReader: () => Effect.succeed(header()), getDeliveryChanges: (input) => Effect.succeed({ ...change(input), items: [] }) })
+  const client = Layer.mock(KernelClient.Service, { state, messages: Stream.empty, disconnect: Effect.void, getDeliveryReader: () => Effect.succeed(header()), getDeliveryChanges: (input) => Effect.succeed({ ...change(input), items: [] }) })
   yield* fixture((directory) => Effect.gen(function* () {
     const store = yield* InstanceStore.Service
     const db = (yield* Database.Service).db
@@ -233,7 +400,7 @@ it.live("each real reader slice makes at most four native queries and leaves the
   const calls: string[] = []
   const state = yield* SubscriptionRef.make<KernelClient.ConnectionState>("connected")
   const client = Layer.mock(KernelClient.Service, {
-    state, messages: Stream.empty,
+    state, messages: Stream.empty, disconnect: Effect.void,
     getDeliveryReader: () => Effect.sync(() => { calls.push("reader"); return header() }),
     getDeliveryChanges: (input) => Effect.sync(() => {
       calls.push("changes")
