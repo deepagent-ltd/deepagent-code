@@ -19,13 +19,12 @@ const sourceSha = process.env.GITHUB_SHA ?? baseSha
 let candidateSha = baseSha
 
 if (!Script.preview) {
-  const file = `${process.cwd()}/UPCOMING_CHANGELOG.md`
   const body = await $`bun script/raw-changelog.ts --to ${sourceSha}`.cwd(process.cwd()).text()
-  await Bun.write(file, body)
   const dir = process.env.RUNNER_TEMP ?? "/tmp"
   const notesFile = `${dir}/deepagent-code-release-notes.txt`
   await Bun.write(notesFile, body)
   await prepareReleaseFiles(Script.version, process.cwd())
+  await $`bun script/check-public-source-boundary.ts --worktree`.cwd(process.cwd())
   await $`git add -A`
   if ((await $`git diff --cached --quiet`.nothrow()).exitCode !== 0)
     await $`git commit -m ${`chore(release): prepare v${Script.version}`}`

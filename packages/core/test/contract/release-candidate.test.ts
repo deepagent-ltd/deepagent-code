@@ -21,7 +21,7 @@ test("release candidate guard binds HEAD, remote tag, clean tree, and packaged b
   git(repository, "config", "user.name", "Release Test")
   await Bun.write(join(repository, "tracked.txt"), "candidate")
   await mkdir(join(repository, "packages/sdk/js/dist"), { recursive: true })
-  const preparedFiles = ["package.json", "bun.lock", "packages/sdk/js/dist/generated.js", "UPCOMING_CHANGELOG.md"]
+  const preparedFiles = ["package.json", "bun.lock", "packages/sdk/js/dist/generated.js"]
   for (const file of preparedFiles) await Bun.write(join(repository, file), "prepared candidate bytes")
   git(repository, "add", "-A")
   git(repository, "commit", "-m", "chore(release): prepare candidate")

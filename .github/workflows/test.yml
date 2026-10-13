@@ -20,6 +20,22 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  public-source-boundary:
+    name: public-source-boundary
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Verify public documents and complete history
+        run: bun script/check-public-source-boundary.ts --history
+
   test-fixture-gate:
     name: test-fixture-gate
     # QUAL-003: forbid test fixtures from bypassing the durable session state

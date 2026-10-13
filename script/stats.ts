@@ -1,5 +1,8 @@
 #!/usr/bin/env bun
 
+import { mkdir } from "node:fs/promises"
+import path from "node:path"
+
 async function sendToPostHog(event: string, properties: Record<string, any>) {
   const key = process.env["POSTHOG_KEY"]
 
@@ -123,7 +126,7 @@ function calculate(releases: Release[]) {
 }
 
 async function save(githubTotal: number, npmDownloads: number) {
-  const file = "STATS.md"
+  const file = path.join(process.env.RUNNER_TEMP ?? path.join(import.meta.dir, "../docs/private-reports"), "download-stats.md")
   const date = new Date().toISOString().split("T")[0]
   const total = githubTotal + npmDownloads
 
@@ -180,6 +183,7 @@ async function save(githubTotal: number, npmDownloads: number) {
       "# Download Stats\n\n| Date | GitHub Downloads | npm Downloads | Total |\n|------|------------------|---------------|-------|\n"
   }
 
+  await mkdir(path.dirname(file), { recursive: true })
   await Bun.write(file, content + line)
   await Bun.spawn(["bunx", "prettier", "--write", file]).exited
 
