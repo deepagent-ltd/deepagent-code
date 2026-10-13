@@ -1,3 +1,5 @@
+export * as DeepAgentPlanStore from "./plan-store"
+
 // I33-1 (deepagentcore-v4.0.3 storage prereq): the SINGLE structural authority for a session's plan.
 //
 // Before I33-1 the structural PlanDoc lived on the in-memory SessionRunState (flushed to sessions.json)
@@ -298,6 +300,59 @@ export const compareAndCommitPlanDocument = (
 
 export const compareAndCommitPlan = (input: PlanCompareAndCommitInput): PlanCompareAndCommitResult =>
   compareAndCommitPlanDocument(store(input.sessionId), input)
+
+/** Managed child scratch plans have an exact frozen identity, never an allocated parent plan alias. */
+export const readExactPlan = (sessionId: string, documentID: string) => {
+  if (documentID !== `doc:plan:plan-${sessionId}`) throw new PlanValidationError("invalid_precondition")
+  const documentStore = DocumentStore.openExactForCreate(planStoreRoot(sessionId), [documentID])
+  const doc = documentStore.get(documentID)
+  const plan = doc ? decodePlanDoc(doc.body) : null
+  if (doc && (!plan || plan.session_id !== sessionId || doc.scope !== planScope(sessionId) || doc.type !== "plan"))
+    throw new PlanValidationError("invalid_precondition")
+  return { documentStore, doc, plan, ref: doc ? { id: doc.id, version: doc.version } : null }
+}
+
+export const compareAndCommitExactPlan = (
+  input: PlanCompareAndCommitInput & { readonly documentID: string },
+): PlanCompareAndCommitResult => {
+  if (input.candidate.session_id !== input.sessionId || !decodePlanDoc(JSON.stringify(input.candidate)))
+    throw new PlanValidationError("invalid_precondition")
+  const current = readExactPlan(input.sessionId, input.documentID)
+  const actual =
+    current.doc && current.plan
+      ? { plan_id: current.plan.plan_id, doc_id: current.doc.id, version: current.doc.version }
+      : null
+  if (
+    actual === null
+      ? input.expected !== null
+      : input.expected === null ||
+        actual.plan_id !== input.expected.plan_id ||
+        actual.doc_id !== input.expected.doc_id ||
+        actual.version !== input.expected.version
+  )
+    throw new PlanConflictError(input.expected, actual)
+  if (current.plan && current.doc && planProgressFingerprint(current.plan) === planProgressFingerprint(input.candidate))
+    return { plan: current.plan, doc_id: current.doc.id, version: current.doc.version, changed: false }
+  const doc = current.documentStore.projectExact(
+    {
+      id: input.documentID,
+      type: "plan",
+      scope: planScope(input.sessionId),
+      status: "draft",
+      version: (current.doc?.version ?? 0) + 1,
+      superseded_by: null,
+      created_round: null,
+      domain: null,
+      tags: [],
+      description: planDescription(input.sessionId),
+      provenance: provenanceFor(input.origin, input.sessionId),
+      links: [],
+      body: JSON.stringify(input.candidate),
+    },
+    current.doc ? { id: current.doc.id, version: current.doc.version, hash: current.doc.hash } : null,
+  )
+  return { plan: input.candidate, doc_id: doc.id, version: doc.version, changed: true }
+}
 
 // Write (create or new-version) the structural plan for legacy callers. It retains the historical API
 // shape, but still goes through strict structural decode, session binding, and a synchronous CAS. The

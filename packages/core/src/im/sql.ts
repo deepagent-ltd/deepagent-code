@@ -32,6 +32,22 @@ export const FileRefMetadata = Schema.Struct({
 })
 export type FileRefMetadata = Schema.Schema.Type<typeof FileRefMetadata>
 
+export const AttachmentRefMetadata = Schema.Struct({
+  type: Schema.Literal("attachment_ref"),
+  attachmentID: Schema.String,
+  batch: Schema.optional(Schema.Literal(true)),
+})
+
+// The ordered array is an explicit batch identity, including a batch of one.
+// Legacy single attachment objects retain their original retry identity.
+export const AttachmentRefsMetadata = Schema.Array(AttachmentRefMetadata).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(4),
+  Schema.makeFilter((value) => value.every((item) => item.batch === true) &&
+    new Set(value.map((item) => item.attachmentID)).size === value.length),
+)
+export type AttachmentRefsMetadata = Schema.Schema.Type<typeof AttachmentRefsMetadata>
+
 export const CodeRefMetadata = Schema.Struct({
   type: Schema.Literal("code_ref"),
   path: Schema.optional(Schema.String),
@@ -71,28 +87,26 @@ export const ErrorMetadata = Schema.Struct({
 })
 export type ErrorMetadata = Schema.Schema.Type<typeof ErrorMetadata>
 
-// W0.4 — durable @mention-routing receipt. Written by the event-dispatcher mention router when a
-// mentioned agent did not declare the mention trigger (or no agent declared it), so the user gets an
-// explicit receipt instead of a silent no_match drop. Additive: older rows decode unchanged.
-export const NoTriggerMentionMetadata = Schema.Struct({
-  type: Schema.Literal("agent_no_trigger_mention"),
-  agentID: Schema.optional(Schema.String),
-  agentNames: Schema.optional(Schema.Array(Schema.String)),
-  eventID: Schema.optional(Schema.String),
-  messageID: Schema.optional(Schema.String),
+// Protected message mirror metadata is communication data, never execution authority.
+export const KernelSyncMetadata = Schema.Struct({
+  type: Schema.Literal("kernel_sync"),
+  liveEligible: Schema.Boolean,
 })
-export type NoTriggerMentionMetadata = Schema.Schema.Type<typeof NoTriggerMentionMetadata>
 
 export const MessageMetadata = Schema.Union([
+  AttachmentRefMetadata,
+  KernelSyncMetadata,
   FileRefMetadata,
   CodeRefMetadata,
   AgentRunMetadata,
   DebugMetadata,
   ProfileMetadata,
   ErrorMetadata,
-  NoTriggerMentionMetadata,
 ]).pipe(Schema.toTaggedUnion("type"))
 export type MessageMetadata = Schema.Schema.Type<typeof MessageMetadata>
+
+export const MessageMetadataValue = Schema.Union([MessageMetadata, AttachmentRefsMetadata])
+export type MessageMetadataValue = Schema.Schema.Type<typeof MessageMetadataValue>
 
 // V3.8 schema: im_groups
 export const GroupTable = sqliteTable(
@@ -107,13 +121,20 @@ export const GroupTable = sqliteTable(
     type: text().$type<GroupType>().notNull(),
     name: text().notNull(),
     created_by: text().notNull(),
+    // IM-kernel conversation binding (JuggleIM B1): `k:<channel_type>:<id>` — channel_type 1 (private)
+    // holds the counterparty's kernel user id, 2 (group) the kernel group id. NULL for local-only
+    // groups (e.g. "我的 Agent"). SQLite treats NULLs as distinct in a unique index, so any number of
+    // unbound groups coexist.
+    kernel_conv_id: text(),
     created_at: integer().notNull().$default(() => Date.now()),
     updated_at: integer().notNull().$onUpdate(() => Date.now()),
     deleted_at: integer(),
   },
   (table) => [
     index("im_groups_workspace_idx").on(table.workspace_id),
+    index("im_groups_page_idx").on(table.workspace_id, table.deleted_at, table.created_at, table.id),
     index("im_groups_project_idx").on(table.project_id),
+    uniqueIndex("idx_im_groups_kernel_conv").on(table.kernel_conv_id),
   ],
 )
 
@@ -151,15 +172,21 @@ export const MessageTable = sqliteTable(
     type: text().$type<MessageType>().notNull().$default(() => "text"),
     content: text().notNull(),
     mentions: text({ mode: "json" }).$type<string[]>(),
-    metadata: text({ mode: "json" }).$type<MessageMetadata>(),
+    metadata: text({ mode: "json" }).$type<MessageMetadataValue>(),
     reply_to_id: text().$type<IMID.MessageID>(),
-    // V4.0 §B4 — the DeepAgent Event Bus event this message was produced from (agent replies / proactive
-    // pushes carry it; user messages that publish im.message.created link back via it). NULL for legacy
-    // V3.8 messages — nullable so the V3.8 write path is unchanged (§H compatibility).
+    // Proactive notifications can reference their originating Event. Ordinary user IM messages
+    // are communication records and never create an Event execution grant.
     event_id: text(),
     // V4.0 §B4 — delivery lifecycle for event-driven messages: pending | delivered | failed. NULL ⇒
     // the legacy synchronous path (no delivery tracking). Nullable for V3.8 compatibility.
     delivery_status: text().$type<"pending" | "delivered" | "failed">(),
+    // IM-kernel dedup/identity key (JuggleIM B1): the kernel-assigned message id from the send ack
+    // (or from an inbound kernel push). NULL ⇒ the message never reached the kernel (locally
+    // persisted pending send, or a local-only group). At-least-once delivery + this unique index =
+    // exactly-once local persistence: an inbound redelivery whose kernel id already has a row is a
+    // no-op. SQLite admits any number of NULLs in a unique index.
+    kernel_msg_id: text(),
+    client_request_id: text(),
     created_at: integer().notNull().$default(() => Date.now()),
     updated_at: integer().notNull().$onUpdate(() => Date.now()),
     deleted_at: integer(),
@@ -172,8 +199,24 @@ export const MessageTable = sqliteTable(
     // V4.0 §B4 — thread pagination (reply_to_id chains) + event linkage lookups.
     index("idx_im_messages_thread").on(table.group_id, table.reply_to_id, table.created_at),
     index("idx_im_messages_event").on(table.event_id),
+    uniqueIndex("idx_im_messages_kernel_msg").on(table.kernel_msg_id),
+    uniqueIndex("idx_im_messages_client_request").on(table.sender_id, table.client_request_id),
   ],
 )
+
+// IM-kernel sync cursors (JuggleIM B1): per-kernel-conversation high-water marks for the offline
+// catch-up pass. `conversation_id` is the kernel conversation key (`k:<channel_type>:<id>`, the same
+// convention as im_groups.kernel_conv_id). `last_sync_time` is the newest kernel msgTime (ms)
+// persisted locally; the hismsgs backstop pages BACKWARD from the TTL window and stops once it hits
+// rows at or below this watermark (kernel WS sync queue only covers the recent window, so hismsgs is
+// the 72h catch-up channel). `last_sync_seq` reserves the kernel monotonic per-conversation sequence
+// for gap detection; NULL when the kernel did not supply one.
+export const SyncCursorTable = sqliteTable("im_sync_cursors", {
+  conversation_id: text().primaryKey(),
+  last_sync_time: integer().notNull().$default(() => 0),
+  last_sync_seq: integer(),
+  updated_at: integer().notNull().$onUpdate(() => Date.now()),
+})
 
 // V4.0 §B3/§B4 schema: im_attachments
 //

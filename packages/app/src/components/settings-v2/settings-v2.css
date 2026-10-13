@@ -267,6 +267,62 @@
     padding: 8px;
   }
 
+  .settings-v2[data-orientation="horizontal"] > [data-slot="tabs-v2-list"] {
+    width: calc(100% - 40px);
+    min-width: 0;
+    flex-shrink: 0;
+    height: 40px;
+    gap: 4px;
+    align-items: center;
+    padding: 4px;
+    border-radius: var(--workbench-radius);
+    background: var(--v2-background-bg-layer-01);
+    overscroll-behavior-x: contain;
+  }
+
+  .settings-v2[data-orientation="horizontal"] [data-slot="tabs-v2-list"] [class~="flex"] {
+    display: contents;
+  }
+
+  .settings-v2[data-orientation="horizontal"] [data-slot="tabs-v2-section-title"],
+  .settings-v2[data-orientation="horizontal"] .settings-v2-nav-footer {
+    display: none;
+  }
+
+  .settings-v2[data-orientation="horizontal"] [data-slot="tabs-v2-trigger-wrapper"] {
+    height: 32px;
+    border-radius: 4px;
+    color: var(--v2-text-text-muted);
+  }
+
+  .settings-v2[data-orientation="horizontal"] [data-slot="tabs-v2-trigger"] {
+    height: 100%;
+    padding: 0 8px;
+  }
+
+  .settings-v2[data-orientation="horizontal"] [data-slot="tabs-v2-trigger"]:focus-visible {
+    outline: 2px solid var(--workbench-nav-accent);
+    outline-offset: -2px;
+  }
+
+  .settings-v2[data-orientation="horizontal"] [data-slot="tabs-v2-trigger-wrapper"]:has([data-selected]) {
+    background: var(--v2-background-bg-layer-02);
+    color: var(--v2-text-text-base);
+  }
+
+  .settings-v2[data-orientation="horizontal"] [data-slot="tabs-v2-trigger-wrapper"]:has([data-selected])::before {
+    left: 8px;
+    right: 8px;
+    top: auto;
+    bottom: 0;
+    width: auto;
+    height: 2px;
+  }
+
+  .settings-v2[data-orientation="horizontal"] > [data-slot="tabs-v2-content"] {
+    min-height: 0;
+  }
+
   .settings-v2-tab-header {
     padding: 32px 16px 24px;
   }
@@ -789,17 +845,40 @@
   color: var(--v2-text-text-faint);
 }
 
-/* Import: the run action is a full-width bar button under the options list, not a small
-   right-aligned row control. Cancel (only while running) sits beside it, sized to content. */
+/* Keep the import action at the same scale as other settings controls. */
 .settings-v2-import-actions {
   display: flex;
   gap: 8px;
   margin-top: 4px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .settings-v2-import-run {
-  flex: 1;
+  flex: 0 0 auto;
   justify-content: center;
+}
+
+.settings-v2-import-file-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-v2-import-file-picker [data-component="button-v2"] {
+  flex-shrink: 0;
+}
+
+.settings-v2-import-file-name {
+  flex: 1 1 140px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--v2-text-text-muted);
 }
 
 .settings-v2-import-log {
@@ -823,61 +902,8 @@
 .settings-v2-scope-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 12px 20px;
   width: 100%;
-}
-
-.settings-v2-scope-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--v2-border-border-strong, var(--v2-border-border-muted));
-  background: var(--v2-background-bg-layer-01);
-  color: var(--v2-text-text-base);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  user-select: none;
-  transition:
-    background 0.12s ease,
-    border-color 0.12s ease,
-    color 0.12s ease;
-}
-
-.settings-v2-scope-toggle:hover:not(:disabled) {
-  border-color: var(--v2-border-border-hover, var(--v2-border-border-strong));
-  background: var(--v2-background-bg-layer-02, var(--v2-background-bg-layer-01));
-}
-
-.settings-v2-scope-toggle:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.settings-v2-scope-toggle--active {
-  border-color: var(--v2-border-border-strong, currentColor);
-  background: var(--v2-background-bg-strong, var(--v2-background-bg-layer-02));
-  color: var(--v2-text-text-base);
-}
-
-.settings-v2-scope-toggle-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  border: 1px solid var(--v2-border-border-muted);
-  background: var(--v2-background-bg-base, transparent);
-  color: var(--v2-text-text-invert, currentColor);
-}
-
-.settings-v2-scope-toggle--active .settings-v2-scope-toggle-mark {
-  border-color: var(--v2-accent-accent, var(--v2-border-border-strong));
-  background: var(--v2-accent-accent, var(--v2-background-bg-strong));
-  color: #fff;
 }
 
 /* ── Capabilities (C6-09) ─────────────────────────────────────────────── */
@@ -949,4 +975,103 @@
 .settings-v2-capabilities-meta {
   font-size: 11px;
   color: var(--v2-text-text-muted);
+}
+
+/* Import receipts contain paths and hashes; keep their controls inside the dialog
+   instead of allowing the shared desktop row layout to shrink titles to one glyph. */
+.settings-v2-import {
+  container-name: settings-import;
+  container-type: inline-size;
+}
+
+.settings-v2-import [data-component="settings-v2-row"] {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.settings-v2-import [data-slot="settings-v2-row-control"] {
+  width: 100%;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.settings-v2-import [data-slot="settings-v2-row-control"] > * {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.settings-v2-import [data-slot="settings-v2-row-description"] {
+  line-height: 1.5;
+}
+
+/* Only this short configuration row follows the shared two-column layout.
+   Query the actual panel, since a wide window can still contain a narrow dialog. */
+@container settings-import (min-width: 400px) {
+  .settings-v2-import [data-component="settings-v2-row"]:has([data-action="settings-import-source"]) {
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .settings-v2-import [data-component="settings-v2-row"]:has([data-action="settings-import-source"])
+    > [data-slot="settings-v2-row-control"] {
+    width: auto;
+    flex-shrink: 0;
+  }
+}
+
+.settings-v2-import .settings-v2-import-log {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-v2-import-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+  gap: 12px 20px;
+  margin: 0;
+}
+
+.settings-v2-import-summary dt {
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-v2-import-summary dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--v2-text-text-base);
+  overflow-wrap: anywhere;
+}
+
+.settings-v2-import-copy-notice {
+  margin: 4px 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--v2-background-bg-layer-01);
+  color: var(--v2-text-text-base);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.settings-v2-import-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.settings-v2-import-details [data-component="textarea-v2"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-v2-import-details textarea {
+  max-height: 280px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.5;
 }

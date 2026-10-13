@@ -2,6 +2,35 @@
 
 This changelog contains public, user-facing product changes. Internal incident identifiers, local paths, private environment topology, test credentials, release-gate evidence, and operational measurements are intentionally excluded.
 
+## DeepAgent Code 2.0.4
+
+### IM and personal agent
+
+- Added public IM with explicit activation: one credit for a perpetual entitlement, with no automatic renewal or charge when connecting a model provider.
+- Added `/dac` commands for your own local agent. Requests use the ordinary DAC Session, tools, and permissions; the same conversation reuses its Session for follow-up, with an explicit new-Session option.
+- Commands and execution remain private to the caller. Open the local DAC Session to view streaming progress; the final answer is delivered back to the original IM conversation with delivery state and retry handling.
+- Added independent IM model selection from locally configured models in GUI and TUI.
+- Added file and image sharing with a 10 MiB per-attachment limit, previews, and interrupted-transfer recovery.
+- Removed the superseded restricted IM task-execution path while retaining the data schema needed to read existing records.
+
+### Browser and workspace
+
+- Added Desktop-managed browser controls for supported page inspection and interaction, with Session-bound authorization, fresh-target checks, and explicit refusal for unsupported host capabilities.
+- Added controlled browser file uploads, downloads, and clipboard operations.
+- Moved collaboration-mode selection into Settings, placed model and reasoning controls near composer actions, and kept Expert Panel out of the current public interface.
+
+### Durable execution and events
+
+- Improved durable Session admission, live steering, queued work, and result projection across GUI and TUI.
+- Added dependency-aware event work with recorded admission, node execution, artifacts, and recovery state; uncertain external effects remain explicit recovery cases.
+- Hardened the Native event-work path and its package asset checks against missing assets, interrupted writes, and process crashes.
+
+### Build and test infrastructure
+
+- Unified Native asset preparation and package validation for desktop build and formal publish workflows.
+- Aligned the Desktop runtime and reviewed browser-input Native version checks to Electron 41.10.6 and Node 24.18.0.
+- Connected the current IM end-to-end entry point and omitted package/tool test runners; consolidated duplicate coverage and removed obsolete diagnostic scripts from the active source tree.
+
 ## Core 2.0.2 / Desktop 2.0.2
 
 Release labels: `core-v2.0.2` and `desktop-v2.0.2` (`2.0.2`).
@@ -105,8 +134,8 @@ Release labels: `core-v2.0` and `desktop-v2.0` (`2.0.0`).
 - Added the official DeepAgent platform provider (OpenAI Chat Completions + Responses, Anthropic-compatible) with live calibration; GPT/DeepSeek families run on the Responses protocol.
 - Added the capability system: a machine-readable manifest catalog, L0 boot catalog and `capability_search` discovery entry in the production context, with durable load receipts and a per-session catalog/load snapshot bound into the prepared attempt identity.
 - Connected the four-graph context base into the V2 runner with explicit per-graph readiness status (never a silent fallback), staged V2 adapters, and deterministic selection rows.
-- Added byte-stable history projection: uniform tool-output caps, protocol-aware reasoning replay, and budget-triggered batched clearing — measured 96%+ prefix-cache hit rate.
-- Measured on DeepSWE tasks against the mini-swe-agent baseline (same model): output tokens cut to roughly one third, fix-to-pass rate up from 71.8% to 98.4% on harder tasks.
+- Added byte-stable history projection: uniform tool-output caps, protocol-aware reasoning replay, and budget-triggered batched clearing to support provider caching.
+- Added structured tool handling and budget-aware context selection for longer coding tasks.
 - Added durable task delegation: isolated git worktrees for write-capable subagents, per-SHA PR review, generation-fenced recovery.
 - Removed 7,269-line prompt.ts V1 monolith; replaced with lean V2 surfaces.
 - Added download distribution with mirror priority, sha256 verification, and GitHub Releases fallback.

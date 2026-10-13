@@ -1,0 +1,29 @@
+{
+  "name": "@deepagent-code/im-kernel-sdk",
+  "version": "1.9.17-dac.1",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "LICENSE",
+    "NOTICE",
+    "build-manifest.json",
+    "upstream",
+    "script"
+  ],
+  "scripts": {
+    "build": "bun run script/build.ts",
+    "test": "bun test --isolate ./test --timeout 30000",
+    "test:ci": "mkdir -p .artifacts/unit && bun run test --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml"
+  }
+}

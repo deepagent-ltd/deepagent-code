@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "composite": false, "rootDir": "..", "types": ["bun", "node"] },
+  "include": ["../src", "../script/patch-required-object-bodies.ts", "transport-lifecycle.test.ts", "fixture/sse-abort.ts"]
+}

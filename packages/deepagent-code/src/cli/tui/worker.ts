@@ -1,3 +1,4 @@
+import { NativeBootstrap } from "@/runtime/native-bootstrap"
 import { Installation } from "@/installation"
 import { Server } from "@/server/server"
 import * as Log from "@deepagent-code/core/util/log"
@@ -13,7 +14,11 @@ import { AppRuntime } from "@/effect/app-runtime"
 import { ensureProcessMetadata } from "@deepagent-code/core/util/deepagent-code-process"
 import { Effect } from "effect"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
+import { GoalPlanRebaseAccess } from "@/session/goal-plan-rebase-access"
+import { McpLocalOperator } from "@/mcp/local-operator"
+import { TaskTuiPrivate } from "@/attention/task-tui-private"
 
+NativeBootstrap.install()
 ensureProcessMetadata("worker")
 
 await Log.init({
@@ -73,6 +78,9 @@ export const rpc = {
   },
   async server(input: { port: number; hostname: string; mdns?: boolean; cors?: string[] }) {
     if (server) await server.stop(true)
+    // CLI instance operations and the listener must share one database owner. A listener
+    // built first would take a private lock before checkUpgrade builds AppRuntime.
+    await AppRuntime.runPromise(Effect.void)
     server = await Server.listen(input)
     return { url: server.url.toString() }
   },
@@ -81,6 +89,9 @@ export const rpc = {
     await upgrade().catch(() => {})
   },
   async reload() {
+    await TaskTuiPrivate.closeTuiBridge()
+    GoalPlanRebaseAccess.closeTuiBridge()
+    await McpLocalOperator.closeTuiBridge()
     await AppRuntime.runPromise(
       Effect.gen(function* () {
         const cfg = yield* Config.Service
@@ -90,14 +101,21 @@ export const rpc = {
     )
   },
   async shutdown() {
+    await TaskTuiPrivate.closeTuiBridge()
+    GoalPlanRebaseAccess.closeTuiBridge()
+    await McpLocalOperator.closeTuiBridge()
     Log.Default.info("worker shutting down")
 
     GlobalBus.off("event", forwardGlobalEvent)
     await InstanceRuntime.disposeAllInstances()
     if (server) await server.stop(true)
     await Server.disposeDefault()
+    await AppRuntime.dispose()
     Heap.stop()
   },
 }
 
+await GoalPlanRebaseAccess.installTuiBridge()
+await McpLocalOperator.installTuiBridge()
+await TaskTuiPrivate.installTuiBridge()
 Rpc.listen(rpc)

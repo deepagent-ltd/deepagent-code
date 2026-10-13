@@ -19,15 +19,12 @@ const sourceSha = process.env.GITHUB_SHA ?? baseSha
 let candidateSha = baseSha
 
 if (!Script.preview) {
-  await $`bun script/changelog.ts --to ${sourceSha}`.cwd(process.cwd())
-  const file = `${process.cwd()}/UPCOMING_CHANGELOG.md`
-  const body = await Bun.file(file)
-    .text()
-    .catch(() => "No notable changes")
+  const body = await $`bun script/raw-changelog.ts --to ${sourceSha}`.cwd(process.cwd()).text()
   const dir = process.env.RUNNER_TEMP ?? "/tmp"
   const notesFile = `${dir}/deepagent-code-release-notes.txt`
   await Bun.write(notesFile, body)
   await prepareReleaseFiles(Script.version, process.cwd())
+  await $`bun script/check-public-source-boundary.ts --worktree`.cwd(process.cwd())
   await $`git add -A`
   if ((await $`git diff --cached --quiet`.nothrow()).exitCode !== 0)
     await $`git commit -m ${`chore(release): prepare v${Script.version}`}`
@@ -39,6 +36,13 @@ if (!Script.preview) {
     baseCommit: baseSha,
     commit: (await $`git rev-parse HEAD`.text()).trim(),
   })
+  // A draft GitHub release does not create its Git tag.
+  const tagRef = `refs/tags/v${Script.version}`
+  const remoteTags = (await $`git ls-remote origin ${tagRef} ${`${tagRef}^{}`}`.text()).trim().split("\n")
+  const remoteTag = remoteTags.find((line) => line.endsWith(`${tagRef}^{}`)) ?? remoteTags.find((line) => line.endsWith(tagRef))
+  if (remoteTag && remoteTag.split("\t")[0] !== candidateSha)
+    throw new Error("release tag does not point at candidate commit")
+  if (!remoteTag) await $`git push origin ${`${candidateSha}:${tagRef}`}`
   const existingRelease =
     await $`gh release view v${Script.version} --json tagName,databaseId,isDraft --repo ${process.env.GH_REPO}`.nothrow()
   if (existingRelease.exitCode === 0) {

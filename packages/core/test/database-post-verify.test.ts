@@ -5,7 +5,9 @@ import { DatabaseMigration } from "@deepagent-code/core/database/migration"
 import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
 import { PostVerify, PostVerifyError } from "@deepagent-code/core/database/post-verify"
 import { Effect } from "effect"
-import { sql } from "drizzle-orm"
+import { getTableColumns, getTableName, sql } from "drizzle-orm"
+import { WorkExecutionTable, WorkDispatchReservationTable } from "../src/session/work-authority.sql"
+import { McpAppInvocationTable, McpAppEffectTable } from "../src/session/mcp-app-invocation.sql"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 
 // C1A-11 POST-MIGRATION GATE. After apply() reaches 'verifying' and BEFORE the run may advance to
@@ -52,6 +54,12 @@ const createRecoveryTables = (db: EffectDrizzleSqlite.EffectSQLiteDatabase) =>
     yield* db.run(sql`CREATE TABLE session_provider_attempt_resolution (resolution_id TEXT PRIMARY KEY, attempt_id TEXT, decision TEXT)`)
     yield* db.run(sql`CREATE TABLE session_v2_provider_recovery_bridge (resolution_id TEXT PRIMARY KEY, attempt_id TEXT, receipt_id TEXT, command_id TEXT)`)
     yield* db.run(sql`CREATE TABLE session_input (id TEXT PRIMARY KEY, delivery TEXT, promoted_seq INTEGER)`)
+    // Current startup inventory also reads the Work and App surfaces. Empty fixtures still
+    // expose every real column so missing durable tables cannot be mistaken for clean state.
+    for (const table of [WorkExecutionTable, WorkDispatchReservationTable, McpAppInvocationTable, McpAppEffectTable])
+      yield* db.run(sql`CREATE TABLE ${sql.identifier(getTableName(table))} (${sql.join(
+        Object.values(getTableColumns(table)).map((column) => sql`${sql.identifier(column.name)} TEXT`), sql`,`,
+      )})`)
     yield* db.run(sql`CREATE TABLE deepagent_event_outbox (outbox_id TEXT PRIMARY KEY, status TEXT, claim_token TEXT, claimant_id TEXT, lease_expires_at INTEGER, published_at INTEGER)`)
     yield* db.run(sql`CREATE TABLE deepagent_event_consumer (consumer_key TEXT PRIMARY KEY)`)
     yield* db.run(sql`CREATE TABLE deepagent_event_consumer_delivery (outbox_id TEXT, consumer_key TEXT, status TEXT, claim_token TEXT, claimant_id TEXT, lease_expires_at INTEGER, resolved_at INTEGER, PRIMARY KEY (outbox_id, consumer_key))`)

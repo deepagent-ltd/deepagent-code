@@ -76,6 +76,7 @@ export function endsWithPathSuffix(path: string, suffix: string): boolean {
 /** Receiver entry id -> the module path that owns/provides the delegated authority. */
 export const DELEGATION_TARGET_MODULE: Readonly<Record<string, string>> = {
   "composition.dacode-cli-entry": "packages/deepagent-code/src/index.ts",
+  "composition.dacode-node-server": "packages/deepagent-code/src/node.ts",
   "composition.instance-httpapi-stack": "packages/deepagent-code/src/server/routes/instance/httpapi/server.ts",
   "composition.server-web-handler": "packages/server/src/routes.ts",
   "composition.lildax-runtime": "packages/cli/src/index.ts",
@@ -92,10 +93,12 @@ export const DELEGATION_TARGET_ENTRY: Readonly<Record<string, string>> = {
 }
 /** Spawn/fork/exec or client-call string-literal target -> inventory entry id (process/CLI boundary). */
 export const DELEGATION_SPAWN_BINDINGS: Readonly<Record<string, string>> = {
-  // Desktop sidecar process forks sidecar.js, which loads the dacode server (dacode-cli-entry).
-  "sidecar.js": "composition.dacode-cli-entry",
+  // The sidecar loads the sealed physical Node entry, while CLI launchers use index.ts.
+  "sidecar.js": "composition.dacode-node-server",
+  "./sidecar.js": "composition.dacode-node-server",
+  "./chunks/node.js": "composition.dacode-node-server",
   "deepagent-code": "composition.dacode-cli-entry",
-  "virtual:deepagent-code-server": "composition.dacode-cli-entry",
+  "virtual:deepagent-code-server": "composition.dacode-node-server",
   // lildax daemon: DEEPAGENT_CODE_DAEMON_BACKEND=legacy mounts the legacy deepagent-code server;
   // the daemon (composition.lildax-runtime) is the authority receiver for client/daemon commands.
 }
@@ -116,8 +119,8 @@ export const PORTS: Readonly<Record<string, { service: string; providerModule: s
   // v2f-d IM durable-only migration: both IM Effect service ports are unwired. No production
   // provider constructs AgentExecutorService anymore (agent-executor-server.ts now provides only
   // the AgentListProvider mention resolver), and the AgentReplySinkService provider module
-  // (agent-reply-sink-server.ts) is deleted. @mentions admit durable SessionV2 work directly
-  // (src/im/im-agent-execution.ts), so no portBound consumer edges remain.
+  // (agent-reply-sink-server.ts) is deleted. owner /dac admits ordinary SessionV2 work through
+  // core/src/im/dac-session.ts, so no portBound consumer edges remain.
 }
 /**
  * Client/service INVOCATION call-site bindings: a member-call chain the entry's handler BODY

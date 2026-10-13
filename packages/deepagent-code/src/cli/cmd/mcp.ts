@@ -2,32 +2,31 @@ import { cmd } from "./cmd"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { effectCmd, fail } from "../effect-cmd"
 import { Cause } from "effect"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { MCP } from "../../mcp"
-import { McpAuth } from "../../mcp/auth"
-import { McpOAuthProvider } from "../../mcp/oauth-provider"
+import { McpOAuthState } from "../../mcp/oauth-state"
 import { Config } from "@/config/config"
+import { ConfigFileWrite } from "@/config/file-write"
+import { SecretRefScope } from "@/mcp/secret-ref-scope"
 import { ConfigMCPV1 } from "@deepagent-code/core/v1/config/mcp"
 import { InstanceRef } from "@/effect/instance-ref"
 import { AppRuntime } from "@/effect/app-runtime"
-import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import path from "path"
 import { Global } from "@deepagent-code/core/global"
 import { modify, applyEdits, parse } from "jsonc-parser"
 import { Filesystem } from "@/util/filesystem"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 
 function getAuthStatusIcon(status: MCP.AuthStatus): string {
   switch (status) {
     case "authenticated":
       return "✓"
     case "expired":
+    case "unknown":
+    case "legacy_unverified":
       return "⚠"
     case "not_authenticated":
       return "✗"
@@ -42,6 +41,10 @@ function getAuthStatusText(status: MCP.AuthStatus): string {
       return "expired"
     case "not_authenticated":
       return "not authenticated"
+    case "unknown":
+      return "outcome unknown; automatic retry is blocked"
+    case "legacy_unverified":
+      return "legacy credentials retained; authenticate explicitly for this account and location"
   }
 }
 
@@ -71,7 +74,7 @@ function listState() {
   return Effect.gen(function* () {
     const cfg = yield* Config.Service
     const mcp = yield* MCP.Service
-    const config = yield* cfg.get()
+    const config = cfg.mcpSnapshot ? (yield* cfg.mcpSnapshot()).config : yield* cfg.get()
     const statuses = yield* mcp.status()
     const stored = yield* Effect.all(
       Object.fromEntries(configuredServers(config).map(([name]) => [name, mcp.hasStoredTokens(name)])),
@@ -85,7 +88,7 @@ function authState() {
   return Effect.gen(function* () {
     const cfg = yield* Config.Service
     const mcp = yield* MCP.Service
-    const config = yield* cfg.get()
+    const config = cfg.mcpSnapshot ? (yield* cfg.mcpSnapshot()).config : yield* cfg.get()
     const auth = yield* Effect.all(
       Object.fromEntries(oauthServers(config).map(([name]) => [name, mcp.getAuthStatus(name)])),
       { concurrency: 16 },
@@ -107,8 +110,93 @@ export const McpCommand = cmd({
       .command(McpAuthCommand)
       .command(McpLogoutCommand)
       .command(McpDebugCommand)
+      .command(McpSecretCommand)
       .demandCommand(),
   async handler() {},
+})
+
+export const McpSecretCommand = effectCmd({
+  command: "secrets <action> [name]",
+  describe: "explicitly initialize scoped MCP binding, migrate credentials, or inspect a migration",
+  instance: false,
+  builder: (yargs) =>
+    yargs
+      .positional("action", {
+        choices: ["init", "preview", "commit", "status", "reconcile", "binding-preview", "binding-repair"],
+        type: "string",
+        demandOption: true,
+      })
+      .positional("name", { type: "string" })
+      .option("request-id", { type: "string" }),
+  handler: Effect.fn("Cli.mcp.secrets")(function* (args) {
+    const migration = (yield* MCP.Service).secretMigration
+    if (!migration) return yield* fail("Scoped MCP credential migration is unavailable")
+    const operation = Effect.gen(function* () {
+      if (args.action === "status" || args.action === "reconcile") {
+        if (!args.requestId) return yield* fail("An original --request-id is required")
+        const status = yield* (
+          args.action === "status" ? migration.status(args.requestId) : migration.reconcile(args.requestId)
+        ).pipe(Effect.mapError((error) => ({ ...error, message: error.message })))
+        if (!status) return yield* fail("The migration receipt is unavailable in this location")
+        console.log(JSON.stringify(status))
+        return
+      }
+      if (!args.name) return yield* fail("A configured MCP name is required")
+      if (args.action === "binding-preview" || args.action === "binding-repair") {
+        const preview = yield* migration.previewBinding(args.name)
+        console.log(
+          JSON.stringify({
+            name: preview.name,
+            source: preview.source,
+            old: preview.old,
+            nextObservedProjectId: preview.nextObservedProjectId,
+          }),
+        )
+        console.log(
+          "Commit rechecks this exact binding and current Config leaf. Pending or unknown Work blocks repair. OAuth, grants, routes and Work are not migrated.",
+        )
+        if (args.action === "binding-preview") return
+        const confirmed = yield* Effect.promise(() =>
+          prompts.confirm({
+            message:
+              "Repair only these observed project IDs in this same namespace and root? Existing execution approvals are not renewed.",
+          }),
+        )
+        if (prompts.isCancel(confirmed) || !confirmed) return
+        console.log(JSON.stringify(yield* migration.repairBinding(preview.previewID)))
+        return
+      }
+      if (args.action === "init") {
+        const confirmed = yield* Effect.promise(() =>
+          prompts.confirm({
+            message:
+              "Initialize the private installation and this directory's current MCP binding? Existing conflicting bindings remain blocked. Credentials and OAuth are not moved.",
+          }),
+        )
+        if (prompts.isCancel(confirmed) || !confirmed) return
+        console.log(JSON.stringify(yield* migration.initialize(args.name)))
+        return
+      }
+      const preview = yield* migration.preview(args.name)
+      console.log(JSON.stringify({ name: preview.name, source: preview.source, fields: preview.fields }))
+      if (args.action === "preview" || !preview.fields.length) return
+      if (!args.requestId)
+        return yield* fail("Choose an original --request-id before committing; keep it for status or reconcile")
+      const confirmed = yield* Effect.promise(() =>
+        prompts.confirm({
+          message:
+            "Move exactly these credentials into scoped secret storage? The old OAuth credentials remain unchanged.",
+        }),
+      )
+      if (prompts.isCancel(confirmed) || !confirmed) return
+      const status = yield* migration.commit({ previewID: preview.previewID, requestID: args.requestId })
+      console.log(JSON.stringify(status))
+    }).pipe(
+      Effect.provideService(SecretRefScope.CliDirectory, process.cwd()),
+      Effect.mapError((error) => ({ ...error, message: error.message })),
+    )
+    return yield* operation.pipe(Effect.catch((error) => fail(error.message)))
+  }),
 })
 
 export const McpListCommand = effectCmd({
@@ -149,6 +237,13 @@ export const McpListCommand = effectCmd({
       } else if (status.status === "disabled") {
         statusIcon = "○"
         statusText = "disabled"
+      } else if (status.status === "disconnected") {
+        statusIcon = "○"
+        statusText = `disconnected; ${getAuthStatusText(status.authStatus)}`
+        hint =
+          status.reason === "unknown_outcome"
+            ? " (inspect the unknown operation before authenticating again)"
+            : " (connect explicitly)"
       } else if (status.status === "needs_auth") {
         statusIcon = "⚠"
         statusText = "needs authentication"
@@ -291,7 +386,8 @@ export const McpAuthCommand = effectCmd({
       "url": "${serverConfig.url}",
       "oauth": {
         "clientId": "your-client-id",
-        "clientSecret": "your-client-secret"
+        "clientSecret": "your-client-secret",
+        "expectedIssuer": "https://your-authorization-server.example"
       }
     }
   }`)
@@ -359,11 +455,17 @@ export const McpLogoutCommand = effectCmd({
     UI.empty()
     prompts.intro("MCP OAuth Logout")
 
-    const credentials = yield* McpAuth.Service.use((auth) => auth.all())
-    const serverNames = Object.keys(credentials)
+    const configuration = yield* Config.Service
+    const current = configuration.mcpSnapshot ? (yield* configuration.mcpSnapshot()).config : yield* configuration.get()
+    const servers = Object.entries(current.mcp ?? {}).filter(
+      (entry) => "type" in entry[1] && entry[1].type === "remote" && entry[1].oauth !== false,
+    )
+    const serverNames = servers.map(([name]) => name)
 
     if (serverNames.length === 0) {
-      prompts.log.warn("No MCP OAuth credentials stored")
+      prompts.log.warn(
+        "No OAuth-capable MCP server is configured in this location; legacy credentials remain unchanged",
+      )
       prompts.outro("Done")
       return
     }
@@ -373,34 +475,20 @@ export const McpLogoutCommand = effectCmd({
       const selected = yield* Effect.promise(() =>
         prompts.select({
           message: "Select MCP server to logout",
-          options: serverNames.map((name) => {
-            const entry = credentials[name]
-            const hasTokens = !!entry.tokens
-            const hasClient = !!entry.clientInfo
-            let hint = ""
-            if (hasTokens && hasClient) hint = "tokens + client"
-            else if (hasTokens) hint = "tokens"
-            else if (hasClient) hint = "client registration"
-            return {
-              label: name,
-              value: name,
-              hint,
-            }
-          }),
+          options: serverNames.map((name) => ({ label: name, value: name, hint: "current account and location" })),
         }),
       )
       if (prompts.isCancel(selected)) throw new UI.CancelledError()
       serverName = selected
     }
 
-    if (!credentials[serverName]) {
-      prompts.log.error(`No credentials found for: ${serverName}`)
-      prompts.outro("Done")
-      return
-    }
+    if (!serverNames.includes(serverName))
+      return yield* fail(`No OAuth-capable MCP server configured here: ${serverName}`)
 
-    yield* MCP.Service.use((mcp) => mcp.removeAuth(serverName))
-    prompts.log.success(`Removed OAuth credentials for ${serverName}`)
+    yield* MCP.Service.use((mcp) => mcp.removeAuth(serverName)).pipe(
+      Effect.catchTag("MCP.OAuthFlowError", (error) => fail(error.message)),
+    )
+    prompts.log.success(`Removed scoped OAuth credentials for ${serverName}; legacy credentials remain unchanged`)
     prompts.outro("Done")
   }),
 })
@@ -426,21 +514,27 @@ async function resolveConfigPath(baseDir: string, global = false) {
   return candidates[0]
 }
 
-async function addMcpToConfig(name: string, mcpConfig: ConfigMCPV1.Info, configPath: string) {
-  let text = "{}"
-  if (await Filesystem.exists(configPath)) {
-    text = await Filesystem.readText(configPath)
-  }
-
-  // Use jsonc-parser to modify while preserving comments
-  const edits = modify(text, ["mcp", name], mcpConfig, {
-    formattingOptions: { tabSize: 2, insertSpaces: true },
-  })
-  const result = applyEdits(text, edits)
-
-  await Filesystem.write(configPath, result)
-
-  return configPath
+export async function addMcpToConfig(
+  name: string,
+  mcpConfig: ConfigMCPV1.Info,
+  configPath: string,
+  expected?: ConfigFileWrite.Observation,
+) {
+  return ConfigFileWrite.run(
+    ConfigFileWrite.edit(
+      configPath,
+      (file) => ({
+        text: applyEdits(
+          file.text ?? "{}",
+          modify(file.text ?? "{}", ["mcp", name], mcpConfig, {
+            formattingOptions: { tabSize: 2, insertSpaces: true },
+          }),
+        ),
+        value: configPath,
+      }),
+      expected,
+    ),
+  )
 }
 
 // PARITY-004 quick-win: `mcp remove` parity with the GUI delete button
@@ -463,16 +557,23 @@ function globalMcpConfigCandidates() {
   )
 }
 
-async function removeMcpFromConfig(name: string, configPath: string) {
-  if (!(await Filesystem.exists(configPath))) return false
-  const text = await Filesystem.readText(configPath)
-  const parsed = parse(text) as { mcp?: Record<string, unknown> } | undefined
-  if (!parsed || typeof parsed !== "object" || !parsed.mcp || !(name in parsed.mcp)) return false
-  const edits = modify(text, ["mcp", name], undefined, {
-    formattingOptions: { tabSize: 2, insertSpaces: true },
-  })
-  await Filesystem.write(configPath, applyEdits(text, edits))
-  return true
+export async function removeMcpFromConfig(name: string, configPath: string, expected?: ConfigFileWrite.Observation) {
+  return ConfigFileWrite.run(
+    ConfigFileWrite.edit(
+      configPath,
+      (file) => {
+        const text = file.text
+        if (text === undefined) return { value: false }
+        const parsed = parse(text) as { mcp?: Record<string, unknown> } | undefined
+        if (!parsed || typeof parsed !== "object" || !parsed.mcp || !(name in parsed.mcp)) return { value: false }
+        const edits = modify(text, ["mcp", name], undefined, {
+          formattingOptions: { tabSize: 2, insertSpaces: true },
+        })
+        return { text: applyEdits(text, edits), value: true }
+      },
+      expected,
+    ),
+  )
 }
 
 // PARITY-004 long-tail: `mcp edit` modifies an EXISTING server definition in
@@ -486,32 +587,54 @@ type McpEditPatch = {
   command?: string[]
 }
 
-async function editMcpInConfig(
+export async function editMcpInConfig(
   name: string,
   configPath: string,
   patch: McpEditPatch,
+  expected?: ConfigFileWrite.Observation,
 ): Promise<{ edited: boolean; error?: string }> {
-  if (!(await Filesystem.exists(configPath))) return { edited: false }
-  const text = await Filesystem.readText(configPath)
-  const parsed = parse(text) as { mcp?: Record<string, ConfigMCPV1.Info> } | undefined
-  const existing = parsed && typeof parsed === "object" ? parsed.mcp?.[name] : undefined
-  if (!existing || typeof existing !== "object" || !("type" in existing)) return { edited: false }
-  if ((patch.url !== undefined || patch.headers !== undefined) && existing.type !== "remote") {
-    return { edited: false, error: `--url/--header only apply to remote servers ("${name}" is ${existing.type} in ${configPath})` }
-  }
-  if ((patch.environment !== undefined || patch.command?.length) && existing.type !== "local") {
-    return { edited: false, error: `--env/command only apply to local servers ("${name}" is ${existing.type} in ${configPath})` }
-  }
-  let result = text
-  const apply = (jsonPath: (string | number)[], value: unknown) => {
-    result = applyEdits(result, modify(result, jsonPath, value, { formattingOptions: { tabSize: 2, insertSpaces: true } }))
-  }
-  if (patch.url !== undefined) apply(["mcp", name, "url"], patch.url)
-  if (patch.command?.length) apply(["mcp", name, "command"], patch.command)
-  for (const [key, value] of Object.entries(patch.environment ?? {})) apply(["mcp", name, "environment", key], value)
-  for (const [key, value] of Object.entries(patch.headers ?? {})) apply(["mcp", name, "headers", key], value)
-  await Filesystem.write(configPath, result)
-  return { edited: true }
+  return ConfigFileWrite.run(
+    ConfigFileWrite.edit<{ edited: boolean; error?: string }>(
+      configPath,
+      (file) => {
+        const text = file.text
+        if (text === undefined) return { value: { edited: false } }
+        const parsed = parse(text) as { mcp?: Record<string, ConfigMCPV1.Info> } | undefined
+        const existing = parsed && typeof parsed === "object" ? parsed.mcp?.[name] : undefined
+        if (!existing || typeof existing !== "object" || !("type" in existing)) return { value: { edited: false } }
+        if ((patch.url !== undefined || patch.headers !== undefined) && existing.type !== "remote") {
+          return {
+            value: {
+              edited: false,
+              error: `--url/--header only apply to remote servers ("${name}" is ${existing.type} in ${configPath})`,
+            },
+          }
+        }
+        if ((patch.environment !== undefined || patch.command?.length) && existing.type !== "local") {
+          return {
+            value: {
+              edited: false,
+              error: `--env/command only apply to local servers ("${name}" is ${existing.type} in ${configPath})`,
+            },
+          }
+        }
+        let result = text
+        const apply = (jsonPath: (string | number)[], value: unknown) => {
+          result = applyEdits(
+            result,
+            modify(result, jsonPath, value, { formattingOptions: { tabSize: 2, insertSpaces: true } }),
+          )
+        }
+        if (patch.url !== undefined) apply(["mcp", name, "url"], patch.url)
+        if (patch.command?.length) apply(["mcp", name, "command"], patch.command)
+        for (const [key, value] of Object.entries(patch.environment ?? {}))
+          apply(["mcp", name, "environment", key], value)
+        for (const [key, value] of Object.entries(patch.headers ?? {})) apply(["mcp", name, "headers", key], value)
+        return { text: result, value: { edited: true } }
+      },
+      expected,
+    ),
+  )
 }
 
 export const McpEditCommand = effectCmd({
@@ -574,7 +697,9 @@ export const McpEditCommand = effectCmd({
     })
     if (outcome.editedFrom.length === 0) return yield* fail(outcome.error ?? `MCP server not found: ${args.name}`)
     for (const configPath of outcome.editedFrom) {
-      UI.println(UI.Style.TEXT_SUCCESS_BOLD + `Updated MCP server "${args.name}" in ${configPath}` + UI.Style.TEXT_NORMAL)
+      UI.println(
+        UI.Style.TEXT_SUCCESS_BOLD + `Updated MCP server "${args.name}" in ${configPath}` + UI.Style.TEXT_NORMAL,
+      )
     }
   }),
 })
@@ -603,9 +728,16 @@ export const McpRemoveCommand = effectCmd({
     })
     if (removedFrom.length === 0) return yield* fail(`MCP server not found: ${args.name}`)
     for (const configPath of removedFrom) {
-      UI.println(UI.Style.TEXT_SUCCESS_BOLD + `Removed MCP server "${args.name}" from ${configPath}` + UI.Style.TEXT_NORMAL)
+      UI.println(
+        UI.Style.TEXT_SUCCESS_BOLD + `Removed MCP server "${args.name}" from ${configPath}` + UI.Style.TEXT_NORMAL,
+      )
     }
-    UI.println(UI.Style.TEXT_DIM + "OAuth credentials (if any) remain; drop them with: deepagent-code mcp logout " + args.name + UI.Style.TEXT_NORMAL)
+    UI.println(
+      UI.Style.TEXT_DIM +
+        "OAuth credentials (if any) remain; drop them with: deepagent-code mcp logout " +
+        args.name +
+        UI.Style.TEXT_NORMAL,
+    )
   }),
 })
 
@@ -644,7 +776,9 @@ export const McpCatalogCommand = effectCmd({
         `${entry.id} — ${entry.title} [${entry.transport}/${entry.riskTier}]${creds}\n    ${UI.Style.TEXT_DIM}${entry.description}${UI.Style.TEXT_NORMAL}`,
       )
     }
-    prompts.outro(`${entries.length} preset(s); enable one from the GUI MCP dialog or add it manually with: deepagent-code mcp add`)
+    prompts.outro(
+      `${entries.length} preset(s); enable one from the GUI MCP dialog or add it manually with: deepagent-code mcp add`,
+    )
   }),
 })
 
@@ -813,8 +947,7 @@ export const McpAddCommand = effectCmd({
           validate: (x) => {
             if (!x) return "Required"
             if (x.length === 0) return "Required"
-            const isValid = URL.canParse(x)
-            return isValid ? undefined : "Invalid URL"
+            return Schema.is(McpOAuthState.Uri)(x) ? undefined : "Enter an HTTP(S) URL without credentials or fragment"
           },
         })
         if (prompts.isCancel(url)) throw new UI.CancelledError()
@@ -848,12 +981,24 @@ export const McpAddCommand = effectCmd({
             if (prompts.isCancel(hasSecret)) throw new UI.CancelledError()
 
             let clientSecret: string | undefined
+            let expectedIssuer: string | undefined
             if (hasSecret) {
               const secret = await prompts.password({
                 message: "Enter client secret",
+                validate: (value) => (value ? undefined : "Required"),
               })
               if (prompts.isCancel(secret)) throw new UI.CancelledError()
               clientSecret = secret
+              const issuer = await prompts.text({
+                message: "Enter the authorization server issuer URL",
+                placeholder: "e.g., https://auth.example.com",
+                validate: (value) =>
+                  Schema.is(McpOAuthState.Issuer)(value)
+                    ? undefined
+                    : "Enter an HTTP(S) issuer URL without credentials, query or fragment",
+              })
+              if (prompts.isCancel(issuer)) throw new UI.CancelledError()
+              expectedIssuer = issuer
             }
 
             mcpConfig = {
@@ -862,6 +1007,7 @@ export const McpAddCommand = effectCmd({
               oauth: {
                 clientId,
                 ...(clientSecret && { clientSecret }),
+                ...(expectedIssuer && { expectedIssuer }),
               },
             }
           } else {
@@ -897,171 +1043,33 @@ export const McpDebugCommand = effectCmd({
       demandOption: true,
     }),
   handler: Effect.fn("Cli.mcp.debug")(function* (args) {
-    const config = yield* Config.Service.use((cfg) => cfg.get())
+    const configuration = yield* Config.Service
+    const config = configuration.mcpSnapshot ? (yield* configuration.mcpSnapshot()).config : yield* configuration.get()
     const mcp = yield* MCP.Service
-    const auth = yield* McpAuth.Service
-    yield* Effect.promise(async () => {
-      UI.empty()
-      prompts.intro("MCP OAuth Debug")
-
-      const mcpServers = config.mcp ?? {}
-      const serverName = args.name
-
-      const serverConfig = mcpServers[serverName]
-      if (!serverConfig) {
-        prompts.log.error(`MCP server not found: ${serverName}`)
-        prompts.outro("Done")
-        return
-      }
-
-      if (!isMcpRemote(serverConfig)) {
-        prompts.log.error(`MCP server ${serverName} is not a remote server`)
-        prompts.outro("Done")
-        return
-      }
-
-      if (serverConfig.oauth === false) {
-        prompts.log.warn(`MCP server ${serverName} has OAuth explicitly disabled`)
-        prompts.outro("Done")
-        return
-      }
-
-      prompts.log.info(`Server: ${serverName}`)
-      prompts.log.info(`URL: ${serverConfig.url}`)
-
-      // Check stored auth status — services already in hand, run inline.
-      const { authStatus, entry } = await Effect.runPromise(
-        Effect.all({
-          authStatus: mcp.getAuthStatus(serverName),
-          entry: auth.get(serverName),
-        }),
-      )
-      prompts.log.info(`Auth status: ${getAuthStatusIcon(authStatus)} ${getAuthStatusText(authStatus)}`)
-
-      if (entry?.tokens) {
-        prompts.log.info(`  Access token: ${entry.tokens.accessToken.substring(0, 20)}...`)
-        if (entry.tokens.expiresAt) {
-          const expiresDate = new Date(entry.tokens.expiresAt * 1000)
-          const isExpired = entry.tokens.expiresAt < Date.now() / 1000
-          prompts.log.info(`  Expires: ${expiresDate.toISOString()} ${isExpired ? "(EXPIRED)" : ""}`)
-        }
-        if (entry.tokens.refreshToken) {
-          prompts.log.info(`  Refresh token: present`)
-        }
-      }
-      if (entry?.clientInfo) {
-        prompts.log.info(`  Client ID: ${entry.clientInfo.clientId}`)
-        if (entry.clientInfo.clientSecretExpiresAt) {
-          const expiresDate = new Date(entry.clientInfo.clientSecretExpiresAt * 1000)
-          prompts.log.info(`  Client secret expires: ${expiresDate.toISOString()}`)
-        }
-      }
-
-      const spinner = prompts.spinner()
-      spinner.start("Testing connection...")
-
-      // Test basic HTTP connectivity first
-      try {
-        const response = await fetch(serverConfig.url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json, text/event-stream",
-          },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            method: "initialize",
-            params: {
-              protocolVersion: "2024-11-05",
-              capabilities: {},
-              clientInfo: { name: "deepagent-code-debug", version: InstallationVersion },
-            },
-            id: 1,
-          }),
-        })
-
-        spinner.stop(`HTTP response: ${response.status} ${response.statusText}`)
-
-        // Check for WWW-Authenticate header
-        const wwwAuth = response.headers.get("www-authenticate")
-        if (wwwAuth) {
-          prompts.log.info(`WWW-Authenticate: ${wwwAuth}`)
-        }
-
-        if (response.status === 401) {
-          prompts.log.warn("Server returned 401 Unauthorized")
-
-          // Try to discover OAuth metadata
-          const oauthConfig = typeof serverConfig.oauth === "object" ? serverConfig.oauth : undefined
-          const authProvider = new McpOAuthProvider(
-            serverName,
-            serverConfig.url,
-            {
-              clientId: oauthConfig?.clientId,
-              clientSecret: oauthConfig?.clientSecret,
-              scope: oauthConfig?.scope,
-              redirectUri: oauthConfig?.redirectUri,
-            },
-            {
-              onRedirect: async () => {},
-            },
-            auth,
-          )
-
-          prompts.log.info("Testing OAuth flow (without completing authorization)...")
-
-          // Try creating transport with auth provider to trigger discovery
-          const transport = new StreamableHTTPClientTransport(new URL(serverConfig.url), {
-            authProvider,
-          })
-
-          try {
-            const client = new Client({
-              name: "deepagent-code-debug",
-              version: InstallationVersion,
-            })
-            await client.connect(transport)
-            prompts.log.success("Connection successful (already authenticated)")
-            await client.close()
-          } catch (error) {
-            if (error instanceof UnauthorizedError) {
-              prompts.log.info(`OAuth flow triggered: ${error.message}`)
-
-              // Check if dynamic registration would be attempted
-              const clientInfo = await authProvider.clientInformation()
-              if (clientInfo) {
-                prompts.log.info(`Client ID available: ${clientInfo.client_id}`)
-              } else {
-                prompts.log.info("No client ID - dynamic registration will be attempted")
-              }
-            } else {
-              prompts.log.error(`Connection error: ${error instanceof Error ? error.message : String(error)}`)
-            }
-          }
-        } else if (response.status >= 200 && response.status < 300) {
-          prompts.log.success("Server responded successfully (no auth required or already authenticated)")
-          const body = await response.text()
-          try {
-            const json = JSON.parse(body)
-            if (json.result?.serverInfo) {
-              prompts.log.info(`Server info: ${JSON.stringify(json.result.serverInfo)}`)
-            }
-          } catch {
-            // Not JSON, ignore
-          }
-        } else {
-          prompts.log.warn(`Unexpected status: ${response.status}`)
-          const body = await response.text().catch(() => "")
-          if (body) {
-            prompts.log.info(`Response body: ${body.substring(0, 500)}`)
-          }
-        }
-      } catch (error) {
-        spinner.stop("Connection failed", 1)
-        prompts.log.error(`Error: ${error instanceof Error ? error.message : String(error)}`)
-      }
-
-      prompts.outro("Debug complete")
-    })
+    UI.empty()
+    prompts.intro("MCP OAuth Diagnostics")
+    const server = config.mcp?.[args.name]
+    if (!server || !isMcpRemote(server)) {
+      prompts.log.error(`Remote MCP server not found: ${args.name}`)
+      prompts.outro("Done")
+      return
+    }
+    if (server.oauth === false) {
+      prompts.log.info("OAuth is disabled for this server")
+      prompts.outro("Done")
+      return
+    }
+    const status = yield* mcp.getAuthStatus(args.name)
+    prompts.log.info(`Server: ${args.name}`)
+    prompts.log.info(`Auth status: ${getAuthStatusIcon(status)} ${getAuthStatusText(status)}`)
+    prompts.log.info(
+      "This read-only diagnostic does not connect, discover an issuer, register a client or refresh credentials.",
+    )
+    prompts.log.info(
+      status === "unknown"
+        ? "The previous OAuth request outcome is unknown. Inspect it before beginning an explicit new authentication."
+        : "Use an explicit connect or auth action when you want to contact this server.",
+    )
+    prompts.outro("Diagnostics complete")
   }),
 })

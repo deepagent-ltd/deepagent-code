@@ -28,7 +28,7 @@ const execution = Layer.succeed(
 )
 const store = SessionStore.layer.pipe(Layer.provide(database))
 const restart = SessionRestart.layer.pipe(Layer.provide(database), Layer.provide(execution), Layer.provide(store))
-const status = SessionRuntimeStatus.layer.pipe(Layer.provide(execution), Layer.provide(restart))
+const status = SessionRuntimeStatus.layer.pipe(Layer.provide(database), Layer.provide(execution), Layer.provide(restart))
 const it = testEffect(Layer.mergeAll(database, execution, store, restart, status))
 
 describe("SessionRuntimeStatus", () => {

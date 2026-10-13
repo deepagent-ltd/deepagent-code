@@ -14,11 +14,16 @@ import { FileLock } from "../file-lock"
 import { FileMutation } from "../file-mutation"
 import { LocationMutation } from "../location-mutation"
 import { PermissionV2 } from "../permission"
+import { WorkToolPolicy } from "../session/work-tool-policy"
+import { WorkFileCapability } from "../session/work-file-capability"
+import { WorkCommandSchema } from "../session/work-command.schema"
 import * as SessionState from "../deepagent/session-state"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
 export const name = "write"
+const nativeWrites = new WeakSet<object>()
+export function isNativeWrite(tool: object) { return nativeWrites.has(tool) }
 
 // TODO: Revisit whether model-facing mutation schemas should prefer absolute `filePath` naming for trained-in compatibility after evaluating model behavior.
 export const Input = Schema.Struct({
@@ -26,10 +31,11 @@ export const Input = Schema.Struct({
     description:
       "File path to write. Relative paths resolve within the active Location. Absolute paths inside that Location are accepted; external absolute paths require external_directory approval. Named project references are read-oriented and are not accepted.",
   }),
-  content: Schema.String.annotate({ description: "Content to write to the file" }),
+  content: Schema.Union([Schema.String, WorkCommandSchema.OutputReference]).annotate({
+    description: "Text content, or an authenticated command_output reference from the same managed Work (at most 50 KiB)." }),
   overwrite: Schema.Boolean.pipe(Schema.optional).annotate({
     description:
-      "Required to overwrite a file that already exists but that you have NOT read in this session. Without it, an unread existing file is refused rather than silently replaced.",
+      "Required to overwrite an unread existing file in an ordinary session. Managed Work must still read the current file first; overwrite never bypasses its authenticated observation or native version check.",
   }),
 })
 
@@ -60,10 +66,9 @@ export const layer = Layer.effectDiscard(
     // The freshness precondition needs the on-disk version; FSUtil is the shared Location fs service
     // the other mutating leaves already acquire.
     const fs = yield* FSUtil.Service
+    const storage = yield* SessionState.CurrentStorage
 
-    yield* tools
-      .register({
-        [name]: Tool.withPermission(
+    const tool = Tool.withPermission(
           Tool.make({
             description:
               "Write content to one file. Relative paths resolve within the active Location. Absolute paths inside the Location are accepted. Explicit external absolute paths require external_directory approval before edit approval. Named project references are read-oriented and are not accepted.",
@@ -77,6 +82,28 @@ export const layer = Layer.effectDiscard(
                   messageID: context.assistantMessageID,
                   callID: context.toolCallID,
                 }
+                const resource = yield* WorkToolPolicy.writeResource(context, input.path).pipe(Effect.orDie)
+                if (resource !== undefined) {
+                  if (!permission.authorizeAction || !permission.checkAction)
+                    return yield* Effect.die(new Error("Project native write requires current scoped approval and observed content"))
+                  const request = { action: "edit", resources: [resource], save: [resource],
+                    sessionID: context.sessionID, agent: context.agent, source }
+                  const checkAction = permission.checkAction
+                  const authorizeAction = permission.authorizeAction
+                  return yield* Effect.scoped(Effect.gen(function* () {
+                    const permit = yield* authorizeAction(request)
+                    // The model's overwrite intent cannot waive managed Work's read
+                    // observation, scoped approval or Native compare-and-swap.
+                    const result = yield* WorkToolPolicy.write(context, { path: input.path, content: input.content,
+                      checkPermission: checkAction(permit, request).pipe(Effect.mapError(() => new WorkFileCapability.Error({
+                        code: "WORK_FILE_CHANGED", message: "The native write approval is no longer current",
+                      }))),
+                    }).pipe(Effect.orDie)
+                    if (result.outcome === "refused_before_publish") return yield* new ToolFailure({ message: WorkToolPolicy.WRITE_REFUSED })
+                    return { operation: "write" as const, target: resource, resource, existed: result.existed }
+                  }))
+                }
+                if (typeof input.content !== "string") return yield* new ToolFailure({ message: "Command output references require the originating managed Work" })
                 const target = yield* mutation.resolve({ path: input.path, kind: "file" })
                 const external = target.externalDirectory
                 if (external)
@@ -114,7 +141,7 @@ export const layer = Layer.effectDiscard(
                 // the references, where recovery is model-driven off the error result).
                 const current = yield* fs.stat(target.canonical).pipe(Effect.orElseSucceed(() => undefined))
                 if (current !== undefined) {
-                  const observed = SessionState.observedFile(context.sessionID, target.canonical)
+                  const observed = storage.run(() => SessionState.observedFile(context.sessionID, target.canonical))
                   const now = {
                     mtimeMs: current.mtime.pipe(
                       Option.map((date) => date.getTime()),
@@ -143,7 +170,7 @@ export const layer = Layer.effectDiscard(
                 // the recorded version is the one on disk, not an assumption about it.
                 const after = yield* fs.stat(target.canonical).pipe(Effect.orElseSucceed(() => undefined))
                 if (after !== undefined)
-                  yield* Effect.sync(() => {
+                  yield* Effect.sync(() => storage.run(() => {
                     SessionState.observeFile(context.sessionID, target.canonical, {
                       mtimeMs: after.mtime.pipe(
                         Option.map((date) => date.getTime()),
@@ -151,7 +178,7 @@ export const layer = Layer.effectDiscard(
                       ),
                       size: Number(after.size),
                     })
-                  })
+                  }))
                 return written
               }).pipe(
                 // Preserve the freshness precondition's own message (it names the recovery step);
@@ -165,9 +192,9 @@ export const layer = Layer.effectDiscard(
               ),
           }),
           "edit",
-        ),
-      })
-      .pipe(Effect.orDie)
+        )
+    nativeWrites.add(tool)
+    yield* tools.register({ [name]: tool }).pipe(Effect.orDie)
   }),
   // V3.7 Phase 4.1C: FileLock.layer is self-contained (no external deps),
   // provided here so WriteTool.layer doesn't leak FileLock.Service as a requirement.

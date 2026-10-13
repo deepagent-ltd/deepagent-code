@@ -55,7 +55,11 @@ const run = <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromise(effe
 const runWithFile = <A, E>(
   filename: string,
   effect: Effect.Effect<A, E, import("effect/unstable/sql/SqlClient").SqlClient>,
-) => Effect.runPromise(effect.pipe(Effect.provide(SqliteClient.layer({ filename })), Effect.scoped))
+) => Effect.runPromise(Effect.gen(function* () {
+      // Migrations run on the same FK-on client contract as production bootstrap.
+      yield* (yield* SqliteClient.SqliteClient).unsafe("PRAGMA foreign_keys = ON")
+      return yield* effect
+    }).pipe(Effect.provide(SqliteClient.layer({ filename })), Effect.scoped))
 
 const topLevelRun = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect)
 

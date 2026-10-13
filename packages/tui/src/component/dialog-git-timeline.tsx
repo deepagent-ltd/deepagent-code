@@ -81,34 +81,25 @@ export function DialogGitTimeline(props: { file?: string }) {
       .catch(() => undefined)
   })
 
-  if (props.file && commits() !== undefined) {
-    return (
-      <DialogSelect
-        title={`${i18n.t("tui.git.timeline")} — ${props.file}`}
-        options={(commits() ?? []).map((commit) => ({
-          title: `${commit.hash} ${commit.subject}`.slice(0, 120),
-          value: commit.hash,
-          category: commit.date,
-          footer: commit.author,
-        }))}
-        current={undefined}
-        onSelect={(option) => {
-          const commit = (commits() ?? []).find((item) => item.hash === String(option.value))
-          if (!commit) return
-          dialog.replace(() => (
-            <DialogAlert title={commit.hash} message={`${commit.author} · ${commit.date}\n\n${commit.subject}`} />
-          ))
-        }}
-      />
-    )
-  }
-
   return (
     <DialogSelect
-      title={i18n.t("tui.git.timeline")}
-      options={[{ title: props.file ?? i18n.t("tui.git.loading"), value: "loading", category: "…" }]}
+      title={props.file ? `${i18n.t("tui.git.timeline")} — ${props.file}` : i18n.t("tui.git.timeline")}
+      options={commits() === undefined
+        ? [{ title: props.file ?? i18n.t("tui.git.loading"), value: "loading", category: "…" }]
+        : (commits() ?? []).map((commit) => ({
+            title: `${commit.hash} ${commit.subject}`.slice(0, 120),
+            value: commit.hash,
+            category: commit.date,
+            footer: commit.author,
+          }))}
       current={undefined}
-      onSelect={() => {}}
+      onSelect={(option) => {
+        const commit = (commits() ?? []).find((item) => item.hash === String(option.value))
+        if (!commit) return
+        dialog.replace(() => (
+          <DialogAlert title={commit.hash} message={`${commit.author} · ${commit.date}\n\n${commit.subject}`} />
+        ))
+      }}
     />
   )
 }

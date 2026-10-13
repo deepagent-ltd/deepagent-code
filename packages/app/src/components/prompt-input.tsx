@@ -56,10 +56,7 @@ import { usePlatform } from "@/context/platform"
 import { serverAttachmentFile } from "./prompt-input/server-attachment"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
-import { PanelButton } from "@/components/deepagent/panel-button"
-import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { ApprovalControl } from "@/components/deepagent/approval-control"
-import { ModeSelector, useModeLabel } from "@/components/deepagent/mode-selector"
 import { createTextFragment, getCursorPosition, setCursorPosition, setRangeEdge } from "./prompt-input/editor-dom"
 import { createPromptAttachments } from "./prompt-input/attachments"
 import { ACCEPTED_FILE_TYPES, pickAttachmentFiles } from "./prompt-input/files"
@@ -78,12 +75,14 @@ import { PromptPopover, type AtOption, type SlashCommand } from "./prompt-input/
 import { PromptContextItems } from "./prompt-input/context-items"
 import { PromptImageAttachments } from "./prompt-input/image-attachments"
 import { PromptDragOverlay } from "./prompt-input/drag-overlay"
+import { PromptSubmitControl } from "./prompt-input/submit-control"
 import { promptPlaceholder } from "./prompt-input/placeholder"
 import { useDirectoryPicker } from "./directory-picker"
 import { showToast } from "@/utils/toast"
 import { ImagePreview } from "@deepagent-code/ui/image-preview"
 import { useQueries } from "@tanstack/solid-query"
-import { useQueryOptions } from "@/context/server-sync"
+import { useQueryOptions, useServerSync } from "@/context/server-sync"
+import { sessionControls } from "@/utils/session-controls"
 import { pathKey } from "@/utils/path-key"
 import { base64Encode } from "@deepagent-code/core/util/encode"
 import { displayName } from "@/pages/layout/helpers"
@@ -142,6 +141,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const queryOptions = useQueryOptions()
 
   const sync = useSync()
+  const serverSync = useServerSync()
   const local = useLocal()
   const files = useFile()
   const prompt = usePrompt()
@@ -153,7 +153,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const command = useCommand()
   const permission = usePermission()
   const language = useLanguage()
-  const modeLabel = useModeLabel()
   const platform = usePlatform()
   const pickDirectory = useDirectoryPicker()
   const { params, tabs, view } = useSessionLayout()
@@ -278,7 +277,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       // D1: prepare locked the editor (blur + cursor-wait). When no draft surface remains —
       // including a server-side degrade that ends preparation without ever producing a draft —
       // hand focus back so the composer is usable again instead of looking stuck.
-      if (!props.disabled) {
+      if (!disabled()) {
         editorRef.focus()
         queueScroll()
       }
@@ -392,7 +391,28 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return paths
   })
   const info = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
+  const controls = createMemo(() =>
+    sessionControls({
+      sessionID: params.id,
+      directory: sdk.directory,
+      session: info(),
+      goal: serverSync.data.session_goal[params.id ?? ""],
+    }),
+  )
+  const ordinaryBlocked = () => controls() !== "editable"
+  const controlReason = () =>
+    ordinaryBlocked()
+      ? language.t(controls() === "pending" ? "composer.sessionControl.pending" : "composer.sessionControl.fixed")
+      : undefined
+  createEffect(() => {
+    const sessionID = params.id
+    if (!sessionID || controls() !== "pending" || info()?.directory !== sdk.directory) return
+    // List/SSE records do not carry the GET-only hint. Reuse the original coalesced scoped read.
+    void sync.session.sync(sessionID).catch(() => undefined)
+  })
   const working = createMemo(() => sync.data.session_working(params.id ?? ""))
+  const recoveryRequired = createMemo(() => sync.data.session_status[params.id ?? ""]?.type === "recovery_required")
+  const disabled = createMemo(() => props.disabled || recoveryRequired())
   // A finished subagent is read-only: it did its one turn and was marked done by the task tool
   // (metadata.deepagent.subagent.finished). The panel still lists it so its history is viewable,
   // but new prompts must be refused — the parent orchestrates work, you don't chat with a done child.
@@ -450,8 +470,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       .join("")
     return text.trim().length === 0 && imageAttachments().length === 0 && commentCount() === 0
   })
-  const stopping = createMemo(() => draftPreparing() || (working() && blank()))
+  const stopping = createMemo(
+    () => !recoveryRequired() && (draftPreparing() || (working() && (blank() || ordinaryBlocked()))),
+  )
   const tip = () => {
+    if (recoveryRequired()) return language.t("composer.recovery.hint")
     if (stopping()) {
       return (
         <div class="flex items-center gap-2">
@@ -754,15 +777,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       .map((agent): AtOption => ({ type: "agent", name: agent.name, display: agent.name })),
   )
   const agentNames = createMemo(() => local.agent.list().map((agent) => agent.name))
-  // V3.9 §C/§D: gate the panel button on the server's advertised capabilities (/global/capabilities),
-  // so the Expert Panel (§C) and Goal Loop (§D) flags are honoured INDEPENDENTLY — the panel button
-  // appears iff expertPanel is enabled, regardless of goal mode. (goal mode gates itself: the `goal`
-  // primary agent is only registered when goalLoop is on, so it self-appears in the switcher.)
-  const [capabilities] = createResource(
-    () => (params.id ? "capabilities" : undefined),
-    () => fetchCapabilities(sdk.client as never),
-  )
-  const panelAvailable = createMemo(() => capabilities()?.expertPanel === true)
 
   const handleAtSelect = (option: AtOption | undefined) => {
     if (!option) return
@@ -827,14 +841,16 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         type: "builtin" as const,
       }))
 
-    const custom = sync.data.command.map((cmd) => ({
-      id: `custom.${cmd.name}`,
-      trigger: cmd.name,
-      title: cmd.name,
-      description: cmd.description,
-      type: "custom" as const,
-      source: cmd.source,
-    }))
+    const custom = sync.data.command
+      .filter((cmd) => cmd.name !== "dac")
+      .map((cmd) => ({
+        id: `custom.${cmd.name}`,
+        trigger: cmd.name,
+        title: cmd.name,
+        description: cmd.description,
+        type: "custom" as const,
+        source: cmd.source,
+      }))
 
     return [...custom, ...builtin]
   })
@@ -1354,7 +1370,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   onCleanup(() => props.controlRef?.(undefined))
 
   const handlePromptSubmit = (event: Event) => {
-    if (props.disabled) {
+    if (ordinaryBlocked() && !stopping()) {
+      event.preventDefault()
+      return
+    }
+    if (disabled()) {
       event.preventDefault()
       return
     }
@@ -1383,7 +1403,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
-    if (props.disabled) {
+    if (ordinaryBlocked()) {
+      if (event.key === "Escape" && stopping()) void abort()
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
+    if (disabled()) {
       event.preventDefault()
       event.stopPropagation()
       return
@@ -1853,7 +1879,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           <div
             class="relative"
             onMouseDown={() => {
-              if (draftPreparing() || props.disabled) return
+              if (draftPreparing() || disabled()) return
               editorRef?.focus()
             }}
           >
@@ -1871,8 +1897,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 role="textbox"
                 aria-multiline="true"
                 aria-label={placeholder()}
-                aria-disabled={draftPreparing() || props.disabled}
-                contenteditable={draftPreparing() || props.disabled ? "false" : "true"}
+                aria-disabled={draftPreparing() || disabled() || ordinaryBlocked()}
+                contenteditable={draftPreparing() || disabled() || ordinaryBlocked() ? "false" : "true"}
                 autocapitalize={store.mode === "normal" ? "sentences" : "off"}
                 autocorrect={store.mode === "normal" ? "on" : "off"}
                 spellcheck={store.mode === "normal"}
@@ -1893,7 +1919,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   "font-mono!": store.mode === "shell",
                   // Editor keeps the raw user input during preparation (the streamed draft shows in the
                   // panel below), so it reads normally — locked to edits, not greyed as a placeholder.
-                  "cursor-wait": draftPreparing() || props.disabled,
+                  "cursor-wait": draftPreparing() || disabled(),
                 }}
                 style={{ "padding-bottom": space }}
               />
@@ -1921,7 +1947,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           {draftPreviewPanel()}
         </DockShellForm>
         <Show when={store.mode === "normal" || store.mode === "shell"}>
-          <div data-component="prompt-controls" class="flex min-w-0 items-center gap-2 px-3 pb-3 pt-1">
+          <div
+            data-component="prompt-controls"
+            class="flex min-w-0 flex-wrap items-center gap-2 px-3 pb-3 pt-1 [&_button]:min-h-8"
+          >
             <Show when={store.mode === "normal"}>
               <TooltipKeybind
                 placement="top"
@@ -1940,10 +1969,24 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 </Button>
               </TooltipKeybind>
             </Show>
-            <div class="flex min-w-0 flex-1 items-center gap-2">
-              <div class="flex items-center gap-1.5 min-w-0 flex-1 relative">
+            {/* Share one wrapping row so a shrinking model picker cannot overlap the send controls. */}
+            <div
+              class="min-w-0"
+              classList={{
+                contents: store.mode === "normal",
+                "flex flex-1 items-center gap-2": store.mode === "shell",
+              }}
+            >
+              <div
+                class="min-w-0"
+                classList={{
+                  contents: store.mode === "normal",
+                  "flex flex-1 items-center gap-1.5 relative min-h-8": store.mode === "shell",
+                }}
+              >
                 <div
-                  class="h-7 flex items-center gap-1.5 min-w-0 absolute inset-0"
+                  class="h-8 items-center gap-1.5 min-w-0 absolute inset-0"
+                  classList={{ hidden: store.mode === "normal", flex: store.mode === "shell" }}
                   style={{
                     padding: "0 0px 0 8px",
                     ...shell(),
@@ -1962,77 +2005,52 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     {language.t("common.cancel")}
                   </Button>
                 </div>
-                <div class="flex items-center gap-1.5 min-w-0 flex-1 h-7">
-                  <Show when={!agentsLoading()}>
-                    <div
-                      data-component="prompt-agent-control"
-                      style={agentsShouldFadeIn() ? { animation: "fade-in 0.3s" } : undefined}
-                    >
-                      <TooltipKeybind
-                        placement="top"
-                        gutter={4}
-                        title={language.t("command.agent.cycle")}
-                        keybind={command.keybind("agent.cycle")}
-                      >
-                        <ModeSelector
-                          triggerAs={Button}
-                          triggerProps={{
-                            variant: "ghost",
-                            size: "normal",
-                            style: control(),
-                            class: "capitalize max-w-[160px] text-13-regular text-text-base group",
-                            "data-action": "prompt-agent",
-                          }}
-                          onClose={restoreFocus}
-                        >
-                          <span class="truncate">{modeLabel(local.agent.current()?.name)}</span>
-                          <Icon name="chevron-down" size="small" class="shrink-0" />
-                        </ModeSelector>
-                      </TooltipKeybind>
-                    </div>
-                  </Show>
+                <div classList={{ contents: store.mode === "normal", hidden: store.mode === "shell" }}>
                   <Show when={store.mode !== "shell" && sdk.directory}>
                     <div data-component="prompt-approval-wrap">
                       <ApprovalControl directory={sdk.directory} triggerStyle={control()} onAfter={restoreFocus} />
                     </div>
                   </Show>
-                  <Show when={panelAvailable() && store.mode !== "shell" && params.id}>
-                    <PanelButton sessionID={params.id!} />
-                  </Show>
-                  <Show when={!providersLoading() && store.mode !== "shell"}>
-                    <div
-                      data-component="prompt-model-control"
-                      class="ml-auto min-w-0"
-                      style={providersShouldFadeIn() ? { animation: "fade-in 0.3s" } : undefined}
-                    >
-                      <TooltipKeybind
-                        placement="top"
-                        gutter={4}
-                        title={language.t("prompt.model.options")}
-                        keybind={command.keybind("model.choose")}
-                      >
-                        <ComposerModelSelector model={local.model} style={control()} onClose={restoreFocus} />
-                      </TooltipKeybind>
-                    </div>
-                  </Show>
                 </div>
               </div>
             </div>
-            <div class="flex shrink-0 items-center gap-2">
+            <div class="ml-auto flex min-w-0 max-w-full flex-1 flex-wrap items-center justify-end gap-2">
               <ScenarioToggle />
-              <Tooltip placement="top" inactive={!draftPreparing() && !working() && blank()} value={tip()}>
-                <IconButton
-                  data-action="prompt-submit"
-                  type="submit"
-                  form={formID}
-                  disabled={props.disabled || subagentFinished() || (!draftPreparing() && !working() && blank())}
-                  tabIndex={store.mode === "normal" ? undefined : -1}
-                  icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
-                  variant="primary"
-                  class="size-8 rounded-full"
-                  aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
-                />
-              </Tooltip>
+              <Show when={!providersLoading() && store.mode !== "shell"}>
+                <div
+                  data-component="prompt-model-control"
+                  class="min-w-0 max-w-full"
+                  style={providersShouldFadeIn() ? { animation: "fade-in 0.3s" } : undefined}
+                >
+                  <TooltipKeybind
+                    placement="top"
+                    gutter={4}
+                    title={language.t("prompt.model.options")}
+                    keybind={command.keybind("model.choose")}
+                  >
+                    <ComposerModelSelector
+                      model={local.model}
+                      disabled={ordinaryBlocked()}
+                      style={control()}
+                      onClose={restoreFocus}
+                    />
+                  </TooltipKeybind>
+                </div>
+              </Show>
+              <PromptSubmitControl
+                form={formID}
+                disabled={!!disabled()}
+                blockedReason={controlReason()}
+                finished={subagentFinished()}
+                preparing={draftPreparing()}
+                working={working()}
+                blank={blank()}
+                stopping={stopping()}
+                recovery={recoveryRequired()}
+                selectionRequired={!local.model.current() || !local.agent.current()}
+                mode={store.mode}
+                tip={tip()}
+              />
             </div>
           </div>
         </Show>

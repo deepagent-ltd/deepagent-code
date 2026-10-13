@@ -13,6 +13,7 @@ import { AgentGroup } from "./groups/agent"
 import { HealthGroup } from "./groups/health"
 import { QuestionGroup } from "./groups/question"
 import { Authorization } from "./middleware/authorization"
+import { AttentionGroup } from "./groups/attention"
 
 export const Api = HttpApi.make("server")
   .add(HealthGroup)
@@ -27,6 +28,7 @@ export const Api = HttpApi.make("server")
   .add(SkillGroup)
   .add(EventGroup)
   .add(QuestionGroup)
+  .add(AttentionGroup)
   .annotateMerge(
     OpenApi.annotations({
       title: "deepagent-code HttpApi",

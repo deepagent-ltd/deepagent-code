@@ -1,15 +1,22 @@
-import { createMemo, Match, onCleanup, onMount, Show, Switch } from "solid-js"
+import { createEffect, createMemo, Match, onCleanup, onMount, Show, Switch, untrack } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { useSync } from "../../context/sync"
 import { useDirectory } from "../../context/directory"
 import { useConnected } from "../../component/use-connected"
 import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
+import { useSDK } from "../../context/sdk"
+import { useProject } from "../../context/project"
+import { useTuiI18n } from "../../context/i18n"
+import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
 
 export function Footer() {
   const { theme } = useTheme()
   const sync = useSync()
   const route = useRoute()
+  const i18n = useTuiI18n()
+  const sdk = useSDK()
+  const project = useProject()
   const mcp = createMemo(() => Object.values(sync.data.mcp).filter((x) => x.status === "connected").length)
   const mcpError = createMemo(() => Object.values(sync.data.mcp).some((x) => x.status === "failed"))
   const lsp = createMemo(() => Object.keys(sync.data.lsp))
@@ -31,8 +38,47 @@ export function Footer() {
         : phase === "needs_human"
           ? theme.error
           : theme.text
-  const goalLabel = (phase: string) =>
-    phase === "needs_human" ? "needs human" : phase === "rolled_back" ? "rolled back" : phase
+  const goalLabel = () => {
+    const value = goal()?.control
+    if (!value) return i18n.t("tui.goal.control.checking")
+    if (value.recoveryRequired || value.preparation === "recovery_required") return i18n.t("tui.goal.control.recovery")
+    if (value.preparation === "preparing") return i18n.t("tui.goal.control.preparing")
+    if (value.inFlight && value.requestedPhase === "paused") return i18n.t("tui.goal.control.pauseRequested")
+    if (value.inFlight && value.requestedPhase === "stopped") return i18n.t("tui.goal.control.stopRequested")
+    if (value.wakeState === "pending") return i18n.t("tui.goal.control.pending")
+    const keys = {
+      running: "running",
+      paused: "paused",
+      stopped: "stopped",
+      done: "done",
+      needs_human: "needsHuman",
+      rolled_back: "rolledBack",
+    } as const
+    const phase = keys[value.phase as keyof typeof keys]
+    return phase ? i18n.t(`tui.goal.control.phase.${phase}`) : value.phase
+  }
+  createEffect(() => {
+    const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+    if (!sessionID) return
+    const client = sdk.client
+    const directory = project.instance.path().directory
+    let observed = false
+    const read = () =>
+      sync.goal
+        .sync(sessionID)
+        .then(() => {
+          observed = true
+        })
+        .catch(() => undefined)
+    void untrack(read)
+    const timer = setInterval(() => {
+      if (sdk.client !== client || project.instance.path().directory !== directory) return
+      const control = goal()?.control
+      if ((!goal() && observed) || (control && GoalClient.confirmedTerminal(control))) return
+      void read()
+    }, 5_000)
+    onCleanup(() => clearInterval(timer))
+  })
   const directory = useDirectory()
   const connected = useConnected()
 
@@ -79,8 +125,8 @@ export function Footer() {
             <Show when={goal()}>
               {(g) => (
                 <text fg={goalPhaseColor(g().phase)}>
-                  <span style={{ fg: goalPhaseColor(g().phase) }}>◉</span> goal {goalLabel(g().phase)} · t
-                  {g().ticks} · {(g().tokens / 1000).toFixed(1)}k tok
+                  <span style={{ fg: goalPhaseColor(g().phase) }}>◉</span> goal {goalLabel()} · t{g().ticks} ·{" "}
+                  {(g().tokens / 1000).toFixed(1)}k tok
                   {g().cost > 0 ? ` · $${g().cost.toFixed(2)}` : ""}
                 </text>
               )}

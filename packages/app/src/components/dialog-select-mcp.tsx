@@ -6,12 +6,14 @@ import { Button } from "@deepagent-code/ui/button"
 import { List } from "@deepagent-code/ui/list"
 import { Switch } from "@deepagent-code/ui/switch"
 import { useLanguage } from "@/context/language"
-import { useMcpRemove, useMcpToggle } from "@/context/mcp"
+import { useMcpRemove, useMcpToggle, useMcpRefresh } from "@/context/mcp"
 import { DialogAddMcp } from "./dialog-add-mcp"
 import { DialogConfigureMcp } from "./dialog-configure-mcp"
+import { mcpConnectionBlocked, mcpConnectionMessage } from "@/context/global-sync/mcp"
 
 const statusLabels = {
   connected: "mcp.status.connected",
+  disconnected: "mcp.status.disconnected",
   failed: "mcp.status.failed",
   needs_auth: "mcp.status.needs_auth",
   needs_client_registration: "mcp.status.needs_client_registration",
@@ -31,6 +33,7 @@ export const DialogSelectMcp: Component = () => {
   )
 
   const toggle = useMcpToggle()
+  const refresh = useMcpRefresh()
   const remove = useMcpRemove()
 
   const enabledCount = createMemo(() => items().filter((i) => i.status === "connected").length)
@@ -114,19 +117,36 @@ export const DialogSelectMcp: Component = () => {
                     <span class="text-11-regular text-text-weaker">{statusLabel()}</span>
                   </Show>
                 </div>
+                <Show when={mcpConnectionMessage(mcpStatus())}>
+                  {(key) => <span class="text-11-regular text-text-weaker">{language.t(key())}</span>}
+                </Show>
                 <Show when={error()}>
                   <span class="text-11-regular text-text-weaker truncate">{error()}</span>
                 </Show>
               </div>
-              <div onClick={(e) => e.stopPropagation()}>
+              <div class="flex shrink-0 items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                <Show when={mcpConnectionBlocked(mcpStatus())}>
+                  <Button variant="secondary" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+                    {language.t("mcp.action.refresh")}
+                  </Button>
+                </Show>
                 <Switch
                   checked={enabled()}
-                  disabled={toggle.isPending && toggle.variables === i.name}
+                  hideLabel
+                  disabled={mcpConnectionBlocked(mcpStatus()) || (toggle.isPending && toggle.variables === i.name)}
                   onChange={() => {
                     if (toggle.isPending) return
                     toggle.mutate(i.name)
                   }}
-                />
+                >
+                  {language.t(
+                    enabled()
+                      ? "mcp.action.disconnect"
+                      : status() === "needs_auth"
+                        ? "mcp.action.authenticate"
+                        : "mcp.action.connect",
+                  )}
+                </Switch>
               </div>
             </div>
           )

@@ -1,3 +1,4 @@
+import { Config } from "@deepagent-code/core/config"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
 import { ProductionV2Sources } from "@deepagent-code/core/context-federation/production-adapters"
@@ -84,6 +85,7 @@ const host = Layer.effect(
           V2RunnerFrame.runnerFrameSeamFor(ref, sources),
           V2RunnerFrame.runnerFrameContextToolsFor(ref),
           IMExternalDelivery.unavailableLayer,
+          Layer.succeed(Config.ApplicationLSP, { consumer: null }),
           Layer.succeed(SessionRunner.CurrentToolSettleGate, undefined),
           Layer.succeed(SessionRunner.CurrentOnSessionSettled, undefined),
           Layer.succeed(V2ProviderTurn.CurrentBuildIdentity, buildIdentity),

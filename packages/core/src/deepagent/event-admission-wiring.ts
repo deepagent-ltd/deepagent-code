@@ -63,7 +63,7 @@ export interface AdmissionScope {
   readonly verifiedSource?: { readonly sourceRef: string }
   /** The router authorized this trigger (it returned `dispatch` for the event) ⇒ trust level `derived`. */
   readonly authorizedTrigger?: boolean
-  /** Optional per-event work intent, used ONLY for the over-budget refusal + declared scopes. */
+  /** Optional per-event intent: maxTokens may shrink the default budget; scopes are declared permissions. */
   readonly declared?: {
     readonly maxTokens?: number
     readonly scopes?: ReadonlyArray<string>
@@ -145,8 +145,8 @@ export function resolveAdmissionInput(
       : { level: "unverified" as const }
   if (trust.level === "unverified") return unknownRoutingRefusal(event)
 
-  // BUDGET — an event that declares a per-work token intent above the frozen default is refused. The
-  // mapping never spends more than the frozen default; the caller may only shrink it.
+  // BUDGET — preserve a caller's smaller limit, including zero. This bounds the mapped envelope;
+  // actual token spending still requires enforcement at the execution boundary.
   const declaredMax = scope.declared?.maxTokens
   if (declaredMax != null && declaredMax > DEFAULT_WORK_BUDGET.maxTokens) {
     return {
@@ -155,8 +155,19 @@ export function resolveAdmissionInput(
       message: `event "${event.eventId}" declares an over-budget intent (${declaredMax} tokens) above the frozen default (${DEFAULT_WORK_BUDGET.maxTokens}); refusing`,
     }
   }
+  if (declaredMax != null && (!Number.isInteger(declaredMax) || declaredMax < 0)) {
+    return {
+      ok: false,
+      reason: "invalid_envelope",
+      message: `event "${event.eventId}" declares an invalid token budget; maxTokens must be a non-negative integer`,
+    }
+  }
 
-  const budget: WorkBudget = { ...DEFAULT_WORK_BUDGET, eventRoot: event.aggregate.aggregateId }
+  const budget: WorkBudget = {
+    ...DEFAULT_WORK_BUDGET,
+    maxTokens: declaredMax ?? DEFAULT_WORK_BUDGET.maxTokens,
+    eventRoot: event.aggregate.aggregateId,
+  }
 
   const resolution: WorkResolution = {
     trust,

@@ -14,7 +14,11 @@ import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClien
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
   Effect.runPromise(
-    effect.pipe(
+    Effect.gen(function* () {
+      // Migrations run on the same FK-on client contract as production bootstrap.
+      yield* (yield* SqliteClient.SqliteClient).unsafe("PRAGMA foreign_keys = ON")
+      return yield* effect
+    }).pipe(
       Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })),
       Effect.scoped,
     ),
@@ -25,13 +29,13 @@ const H64 = (c: string) => c.repeat(64)
 
 const setup = Effect.gen(function* () {
   const db = yield* EffectDrizzleSqlite.makeWithDefaults()
-  // The audit queries join only the binding columns; foreign keys stay OFF so the minimal rows
-  // bypass the federation-knowledge insert guards on unrelated parent tables.
-  yield* db.run(sql`PRAGMA foreign_keys = OFF`)
   // applyOnly bypasses apply()'s prelude, so mirror it: the journal content-hash migration
   // (20260907130000) reads database_migration_receipt, which only ensureTables creates.
   yield* DatabaseUpgradeRun.ensureTables(db)
   yield* DatabaseMigration.applyOnly(db, migrations)
+  // Only the deliberately broken audit snapshot omits unrelated parent rows.
+  // Schema installation itself uses the production FK-on contract above.
+  yield* db.run(sql`PRAGMA foreign_keys = OFF`)
   const ph = H64("a")
   const rh = H64("b")
   const oh = H64("c")

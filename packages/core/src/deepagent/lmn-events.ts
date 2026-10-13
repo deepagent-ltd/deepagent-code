@@ -14,8 +14,8 @@ import { readonlySet } from "../util/readonly-collections"
 // as Wiki pages, and they feed IM push notifications for supervisors.
 export const SESSION_COMPLETED = "session.completed"
 
-// §B IM — a user message, after it persists, publishes this (the §B1 double-write). The Router/
-// MentionAgent consume it; the legacy synchronous @mention path stays authoritative until the flag is on.
+// Retired IM ingress identity is retained only so stored events can be explicitly denied.
+// Ordinary messages never publish it; /dac admits ordinary Session inputs directly.
 export const IM_MESSAGE_CREATED = "im.message.created"
 
 // §A1 EXTERNAL INGRESS — the four external event sources (git hook/webhook, CI webhook, PR webhook,

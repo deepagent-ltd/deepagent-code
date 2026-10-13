@@ -11,7 +11,11 @@ import path from "node:path"
 // - src/index.ts main() finally: exits only AFTER AppRuntime.dispose() and
 //   ProcessLifecycle.disposeAll() had a bounded 2s opportunity to finish;
 //   required because some external subprocesses keep the event loop alive.
-const SANCTIONED = new Set(["node.ts", "index.ts"])
+// - src/windows-cli.ts compiled proxy: the parent has no application runtime;
+//   its terminal exits follow Native stopping/joining the original child/Job,
+//   or report unknown retirement. The preloaded business branch imports index
+//   and returns before installing the proxy's listeners or terminal exits.
+const SANCTIONED = new Set(["node.ts", "index.ts", "windows-cli.ts"])
 
 describe("cli process exit discipline", () => {
   test("no source file calls process.exit() directly", async () => {

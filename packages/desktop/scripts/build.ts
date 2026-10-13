@@ -30,7 +30,7 @@ if (import.meta.main) {
       stderr: "inherit",
     }).exited
   const exitCode = await preserveBuildOutput("out", async () => {
-    const build = await run([process.execPath, "x", "electron-vite", "build"])
+    const build = await run([process.execPath, "--bun", "x", "electron-vite", "build"])
     if (build !== 0) return build
     return run([process.execPath, "./scripts/audit-server-bundle.ts"])
   })

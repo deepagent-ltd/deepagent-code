@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { KernelReaderSchema } from "./kernel-reader.schema"
 
 // WebSocket 消息类型
 
@@ -119,7 +120,11 @@ export const PongEvent = Schema.Struct({
 export type PongEvent = typeof PongEvent.Type
 
 // 所有服务端发送的事件
+export const ReaderChangedEvent = Schema.Struct({ type: Schema.Literal("reader_changed"), data: Schema.Struct({ groupID: Schema.String, displayEpoch: Schema.String }) })
+export const ReaderInvalidatedEvent = Schema.Struct({ type: Schema.Literal("reader_invalidated"), data: Schema.Struct({ groupID: Schema.String, displayEpoch: Schema.String, code: KernelReaderSchema.Code }) })
 export const ServerEvent = Schema.Union([
+  ReaderChangedEvent,
+  ReaderInvalidatedEvent,
   MessageCreatedEvent,
   MessageFailedEvent,
   AgentStatusEvent,

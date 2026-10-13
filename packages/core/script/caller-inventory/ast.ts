@@ -56,6 +56,11 @@ function collectRefs(sourceFile: ts.SourceFile): Map<string, number[]> {
       let chain = node.name.text
       let cursor: ts.Expression = node.expression
       while (true) {
+        if (ts.isNonNullExpression(cursor) || ts.isParenthesizedExpression(cursor) ||
+          ts.isAsExpression(cursor) || ts.isTypeAssertionExpression(cursor) || ts.isSatisfiesExpression(cursor)) {
+          cursor = cursor.expression
+          continue
+        }
         if (ts.isIdentifier(cursor)) {
           record(cursor.text, lineOf(node))
           record(`${cursor.text}.${chain}`, lineOf(node))
@@ -94,6 +99,11 @@ export function refsInSubtree(sourceFile: ts.SourceFile, root: ts.Node): Map<str
       let chain = node.name.text
       let cursor: ts.Expression = node.expression
       while (true) {
+        if (ts.isNonNullExpression(cursor) || ts.isParenthesizedExpression(cursor) ||
+          ts.isAsExpression(cursor) || ts.isTypeAssertionExpression(cursor) || ts.isSatisfiesExpression(cursor)) {
+          cursor = cursor.expression
+          continue
+        }
         if (ts.isIdentifier(cursor)) {
           record(cursor.text, lineOf(node))
           record(`${cursor.text}.${chain}`, lineOf(node))

@@ -1,20 +1,16 @@
-import { Config as EffectConfig, Context, Effect, Layer } from "effect"
+import { Config as EffectConfig, Context, Effect, Layer, Option } from "effect"
 import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
-import {
-  FetchHttpClient,
-  HttpClient,
-  HttpMiddleware,
-  HttpRouter,
-  HttpServer,
-  HttpServerResponse,
-} from "effect/unstable/http"
+import { NodeHttpServer } from "@effect/platform-node"
+import { FetchHttpClient, HttpClient, HttpMiddleware, HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { FileLock } from "@deepagent-code/core/file-lock"
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
+import { InstanceStore } from "@/project/instance-store"
 import { Auth } from "@/auth"
+import { IMActivation } from "@/im/activation"
 import { BackgroundJob } from "@/background/job"
 import { Config } from "@/config/config"
 import { Command } from "@/command"
@@ -23,6 +19,10 @@ import * as Observability from "@deepagent-code/core/effect/observability"
 import { Ripgrep } from "@deepagent-code/core/filesystem/ripgrep"
 import { Format } from "@/format"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Attention } from "@deepagent-code/core/attention"
+import { AttentionControl } from "@deepagent-code/server/attention-control"
+import { TaskControl } from "@/attention/task-control"
+import { GoalPlanRebaseAccess } from "@/session/goal-plan-rebase-access"
 import { RuntimeIntegrityIdentity } from "@/effect/runtime-integrity-identity"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
@@ -50,6 +50,7 @@ import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { LearningReviewerRunner } from "@/deepagent/learning-reviewer-runner"
 import { DevCampaignMint, devCampaignMint } from "@/effect/dev-campaign-mint"
 import { GoalManager } from "@/session/goal-manager"
+import { GoalTickExecution } from "@/session/goal-tick-execution"
 import { SessionRevert } from "@/session/revert"
 import { SessionSteer } from "@/session/steer"
 import { SessionRunState } from "@/session/run-state"
@@ -64,6 +65,7 @@ import { ShareNext } from "@/share/share-next"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
 import { Database } from "@deepagent-code/core/database/database"
+import { Global } from "@deepagent-code/core/global"
 import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { Skill } from "@/skill"
 import { Snapshot } from "@/snapshot"
@@ -78,16 +80,22 @@ import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/reposito
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
 import { ServerAgentListProviderLive } from "@/im/agent-executor-server"
 import { IMReplyOutbox } from "@/im/im-reply-outbox"
+import { IMFacade } from "@/im/facade"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
-import { InstanceHttpApi, RootHttpApi } from "./api"
+import { BrowserHttpApi, EventValidationHttpApi, InstanceHttpApi, RootHttpApi } from "./api"
 import { GatewayHttpApi } from "./groups/gateway"
 import { gatewayHandlers } from "./handlers/gateway"
 import { gatewayServiceTags } from "@/effect/gateway-service-tags"
 import { gatewayAdminHandlers } from "./handlers/gateway-admin"
 import { GatewayAdminApi } from "./groups/gateway-admin"
-import { authorizeProxyKey, proxyAuthorizationLayer, proxyError, proxyStartupGate } from "./middleware/proxy-authorization"
+import {
+  authorizeProxyKey,
+  proxyAuthorizationLayer,
+  proxyError,
+  proxyStartupGate,
+} from "./middleware/proxy-authorization"
 import { Api } from "@deepagent-code/server/api"
 import { PublicApi } from "./public"
 import {
@@ -101,6 +109,12 @@ import { IMWebSocketApi } from "./groups/im-websocket"
 import { PtyConnectApi } from "./groups/pty"
 import { eventHandlers } from "./handlers/event"
 import { configHandlers } from "./handlers/config"
+import { browserHandlers } from "./handlers/browser"
+import { eventValidationHandlers } from "./handlers/event-validation"
+import { eventInvestigationHandlers } from "./handlers/event-investigation"
+import { eventWorkHandlers } from "./handlers/event-work"
+import { EventValidationHost } from "@/deepagent/event-validation"
+import { EventInvestigationHost } from "@/deepagent/event-investigation"
 import { controlHandlers } from "./handlers/control"
 import { controlPlaneHandlers } from "./handlers/control-plane"
 import { deepagentHandlers } from "./handlers/deepagent"
@@ -122,10 +136,11 @@ import { debugHandlers } from "./handlers/debug"
 import { fileHandlers } from "./handlers/file"
 import { profileHandlers } from "./handlers/profile"
 import { globalHandlers } from "./handlers/global"
+import { workRecoveryHandlers } from "./handlers/work-recovery"
 import { imHandlers } from "./handlers/im"
 import { imWebSocketHandlers } from "./handlers/im-websocket"
 import { instanceHandlers } from "./handlers/instance"
-import { mcpHandlers } from "./handlers/mcp"
+import { mcpHandlers, mcpMutationAuthorizationLayer } from "./handlers/mcp"
 import { permissionHandlers } from "./handlers/permission"
 import { projectHandlers } from "./handlers/project"
 import { projectCopyHandlers } from "./handlers/project-copy"
@@ -137,7 +152,7 @@ import { sessionHandlers } from "./handlers/session"
 import { ContextFederationDiagnostics } from "@/context-federation/diagnostics"
 import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
-import { handlers } from "@deepagent-code/server/handlers"
+import { createHandlers } from "@deepagent-code/server/handlers"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@deepagent-code/server/middleware/schema-error"
 import { workspaceHandlers } from "./handlers/workspace"
 import { workspaceConfigHandlers } from "./handlers/workspace-config"
@@ -193,12 +208,32 @@ const cors = (corsOptions?: CorsOptions) =>
 // - maintenanceApiRoutes: process-admin database/recovery routes; never workspace-routed.
 // - instanceApiRoutes: remaining typed instance routes.
 // - uiRoute: raw catch-all fallback; auth is router middleware so public static assets can bypass it.
-const authOnlyRouterLayer = authorizationRouterMiddleware.layer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
-const httpApiAuthLayer = authorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
-const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
-const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
+// These exact layer objects hold the middleware's memoized config. A listener observer must
+// inspect them; constructing another defaultLayer would read a different config generation.
+export const listenerAuthConfigLayers = Object.freeze({
+  router: ServerAuth.Config.defaultLayer,
+  http: ServerAuth.Config.defaultLayer,
+  pty: ServerAuth.Config.defaultLayer,
+  server: ServerAuth.Config.defaultLayer,
+})
+const authOnlyRouterLayer = authorizationRouterMiddleware.layer.pipe(Layer.provide(listenerAuthConfigLayers.router))
+const httpApiAuthLayer = authorizationLayer.pipe(Layer.provide(listenerAuthConfigLayers.http))
+const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provide(listenerAuthConfigLayers.pty))
+const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(listenerAuthConfigLayers.server))
 const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
 const imRepositoryLayer = IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))
+// IM 门面（B2，design §2/§4/§7）：new-api 门面的客户端门户 + 内核引擎生命周期的唯一所有者。
+// boot 时按凭据解析落状态机（disabled / claim_required / blocked / active），拿到内核坐标即建成
+// 同步引擎（B1 的 boot 语义收编进 IMFacade.layer：URL 只认 env，key 优先级 auth.json(rebind 持久化)
+// > DEEPAGENT_IM_FACADE_KEY；exchange 失败不阻塞启动——blocked/claim_required 由 GUI 引导恢复）。
+// B1 PoC 直连 env（DEEPAGENT_IM_KERNEL_*）照跑引擎但门面功能关闭。两边都没有 ⇒ 状态 disabled——
+// 单用户路径零内核足迹。门面热路径（claim/retry 后的引擎热启动）在 facade 内部用 SDK 进程单例
+// 安全的串行化构建完成。Error channel is unknown: providing imRepositoryLayer pulls in
+// Database.defaultLayer, whose bootstrap preflight rejects with unknown (same as every other
+// consumer of imRuntimeLayer). The R channel (Agent/InstanceStore for the roster provider,
+// Auth.Service for rebind persistence, HttpClient for facade calls) is satisfied by the shared
+// instance graph — the same requirements the sibling ServerAgentListProviderLive declaration
+// already places on it.
 // V4.0 §D2/§F — Oversight services (read-only projection of the durable V4 substrate). Both need only
 // the Database layer; provided independently to the oversight handler.
 const oversightServicesLayer = Layer.mergeAll(
@@ -211,19 +246,37 @@ const oversightServicesLayer = Layer.mergeAll(
   // shared instance runtime graph below (Session.defaultLayer / SessionRevert.defaultLayer).
   RollbackAudit.layer,
 ).pipe(Layer.provide(Database.defaultLayer))
-// V2 IM durable-only: @mentions are admitted by the IM handler directly as durable SessionV2
-// work (src/im/im-agent-execution.ts) on the SHARED V2 runtime graph (V2RunnerFrame.sessionRuntimeLayer —
-// the real SessionExecutionLocal owner, not the noop-execution standalone default). The terminal
+// Private /dac commands admit ordinary SessionV2 inputs on the shared runner graph.
+// Ordinary communication and @mentions never admit work. The terminal
 // assistant reply returns through the im_reply_outbox daemon (IMReplyOutbox.layer), which draws
-// Database/SessionV2/EventV2Bridge from the shared graph and IMRepository/broadcaster from here.
+// Database/SessionV2/EventV2Bridge from the shared graph and IMRepository/broadcaster/facade
+// from here — mergeAll siblings are invisible to each other, so the facade edge is supplied
+// directly (same pattern as ServerAgentListProviderLive in imFacadeLayer); without it
+// the outbox's prefixed `[Agent·<id>]` kernel copy never leaves and only the bare pending-drain
+// lane reaches the kernel.
 // ServerAgentListProviderLive still requires Agent/InstanceStore from the shared instance graph,
 // so it stays declared here WITHOUT those deps and resolved against that graph.
-const imRuntimeLayer = Layer.mergeAll(
-  imRepositoryLayer,
-  IMBroadcasterLive,
-  ServerAgentListProviderLive,
-  IMReplyOutbox.layer.pipe(Layer.provide(imRepositoryLayer), Layer.provide(IMBroadcasterLive)),
-)
+function createIMRuntimeLayer(options?: IMFacade.Options) {
+  const facade = IMFacade.layer(options).pipe(
+    Layer.provide(imRepositoryLayer),
+    Layer.provide(IMBroadcasterLive),
+    Layer.provide(ServerAgentListProviderLive),
+  )
+  return Layer.mergeAll(
+    IMActivation.layer(options?.env),
+    imRepositoryLayer,
+    IMBroadcasterLive,
+    ServerAgentListProviderLive,
+    IMReplyOutbox.layer.pipe(
+      Layer.provide(ServerAgentListProviderLive),
+      Layer.provide(imRepositoryLayer),
+      Layer.provide(IMBroadcasterLive),
+      Layer.provide(facade),
+    ),
+    facade,
+  )
+}
+const imRuntimeLayer = createIMRuntimeLayer()
 // V4.0 §A4/§C — the PRODUCTION event-runtime daemons (EventDispatcher router + tick + retry pump,
 // MultiAgentRuntime DispatchPort, RetentionSweeper). Without this the V4 daemons never start and
 // published events are logged-then-ignored. Composed here so it shares the ONE DeepAgentEventBus +
@@ -255,91 +308,178 @@ const v4EventRuntimeLayer = V4EventRuntime.layer.pipe(
   Layer.provide(imRepositoryLayer),
 )
 
-const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
-  Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
-  Layer.provide(schemaErrorLayer),
-  Layer.provide(httpApiAuthLayer),
+const rootApiRoutes = () =>
+  HttpApiBuilder.layer(RootHttpApi).pipe(
+    Layer.provide([
+      controlHandlers,
+      controlPlaneHandlers,
+      globalHandlers,
+      workRecoveryHandlers().pipe(Layer.provide(ServerAuth.Config.defaultLayer)),
+    ]),
+    Layer.provide(schemaErrorLayer),
+    Layer.provide(httpApiAuthLayer),
+  )
+const browserApiRoutes = () =>
+  HttpApiBuilder.layer(BrowserHttpApi).pipe(
+    Layer.provide(browserHandlers().pipe(Layer.provide(ServerAuth.Config.defaultLayer),
+      Layer.provide(LocationIdentity.defaultLayer), Layer.provide(V2RunnerFrame.browserFilesLayer))),
+    Layer.provide([schemaErrorLayer, httpApiAuthLayer]),
+  )
+const eventValidationRuntime = Layer.effectDiscard(Effect.gen(function* () {
+  const service = yield* EventValidationHost.Service
+  // No installed operator means no enabled rules to restore. Startup never creates
+  // an approval; an explicit authenticated command enables each rule later.
+  yield* service.start.pipe(Effect.catch(() => Effect.void))
+  const investigation = yield* EventInvestigationHost.Service
+  yield* investigation.reconcile.pipe(Effect.catch(() => Effect.void))
+})).pipe(
+  Layer.provideMerge(EventValidationHost.defaultLayer),
 )
-const gatewayApiRoutes = HttpApiBuilder.layer(GatewayHttpApi).pipe(
-  Layer.provide(gatewayHandlers),
-  Layer.provide(proxyAuthorizationLayer),
+const eventValidationApiRoutes = () =>
+  HttpApiBuilder.layer(EventValidationHttpApi).pipe(
+    Layer.provide([eventValidationHandlers(), eventInvestigationHandlers()]),
+    Layer.provide(eventValidationRuntime),
+    Layer.provide(currentServerAuthLayer),
+    Layer.provide(currentGlobalLayer),
+    Layer.provide([schemaErrorLayer, httpApiAuthLayer]),
+  )
+const gatewayApiRoutes = () =>
+  HttpApiBuilder.layer(GatewayHttpApi).pipe(Layer.provide(gatewayHandlers), Layer.provide(proxyAuthorizationLayer))
+const gatewayAdminRoutes = () =>
+  HttpApiBuilder.layer(GatewayAdminApi).pipe(Layer.provide(gatewayAdminHandlers), Layer.provide(httpApiAuthLayer))
+const gatewayServiceSubsetGate = Layer.effectDiscard(
+  Effect.gen(function* () {
+    if (!(yield* RuntimeFlags.Service).gateway) return
+    // Resolve the handler's actual service inventory from this server root before any gateway
+    // request can be admitted. The scoped composition test checks the same root's live digest.
+    yield* Effect.all(gatewayServiceTags, { discard: true })
+  }),
 )
-const gatewayAdminRoutes = HttpApiBuilder.layer(GatewayAdminApi).pipe(
-  Layer.provide(gatewayAdminHandlers),
-  Layer.provide(httpApiAuthLayer),
-)
-const gatewayServiceSubsetGate = Layer.effectDiscard(Effect.gen(function* () {
-  if (!(yield* RuntimeFlags.Service).gateway) return
-  // Resolve the handler's actual service inventory from this server root before any gateway
-  // request can be admitted. The scoped composition test checks the same root's live digest.
-  yield* Effect.all(gatewayServiceTags, { discard: true })
-}))
-const eventApiRoutes = HttpApiBuilder.layer(EventApi).pipe(
-  Layer.provide(eventHandlers),
-  Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
-)
-const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
-  Layer.provide(ptyConnectHandlers),
-  Layer.provide([ptyConnectHttpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
-)
-const imWebSocketApiRoutes = HttpApiBuilder.layer(IMWebSocketApi).pipe(
-  Layer.provide(imWebSocketHandlers),
-  Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
-  Layer.provide(imRuntimeLayer),
-)
-const maintenanceApiRoutes = HttpApiBuilder.layer(MaintenanceApi).pipe(
-  Layer.provide(maintenanceHandlers),
-  Layer.provide([httpApiAuthLayer, schemaErrorLayer]),
-  Layer.provide(maintenanceRegistryLayer),
-)
-const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
-  Layer.provide([
-    configHandlers,
-    debugHandlers,
-    profileHandlers,
-    deepagentHandlers.pipe(Layer.provide(V2RunnerFrame.gatewayRuntimeLayer)),
-    oversightHandlers,
-    webhookHandlers,
-    experimentalHandlers,
-    fileHandlers,
-    imHandlers,
-    instanceHandlers,
-    mcpHandlers,
-    projectHandlers,
-    projectCopyHandlers,
-    ptyHandlers,
-    questionHandlers,
-    referenceHandlers,
-    permissionHandlers,
-    providerHandlers,
-    sessionHandlers,
-    syncHandlers,
-    tuiHandlers,
-    workspaceHandlers,
-    workspaceConfigHandlers,
-    capabilityHandlers,
-    systemContextHandlers,
-    contextHandlers,
-  ]),
-)
+const eventApiRoutes = () =>
+  HttpApiBuilder.layer(EventApi).pipe(
+    Layer.provide(eventHandlers),
+    Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
+  )
+// Origin-aware groups are listener-local; shared services keep their memoized identity.
+// Reusing a group built by the embedded app would capture its earlier CORS options.
+const ptyConnectApiRoutes = () =>
+  HttpApiBuilder.layer(PtyConnectApi).pipe(
+    Layer.provide(ptyConnectHandlers()),
+    Layer.provide([ptyConnectHttpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
+  )
+const imWebSocketApiRoutes = (runtime = imRuntimeLayer) =>
+  HttpApiBuilder.layer(IMWebSocketApi).pipe(
+    Layer.provide(imWebSocketHandlers()),
+    Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
+    Layer.provide(runtime),
+  )
+const maintenanceApiRoutes = () =>
+  HttpApiBuilder.layer(MaintenanceApi).pipe(
+    Layer.provide(maintenanceHandlers),
+    Layer.provide([httpApiAuthLayer, schemaErrorLayer]),
+    Layer.provide(maintenanceRegistryLayer),
+  )
+const currentServerAuthLayer = Layer.unwrap(Effect.serviceOption(ServerAuth.Config).pipe(Effect.map((config) =>
+  Option.isSome(config) ? Layer.succeed(ServerAuth.Config, config.value) : ServerAuth.Config.defaultLayer)))
+const currentGlobalLayer = Layer.unwrap(Effect.serviceOption(Global.Service).pipe(Effect.map((global) =>
+  Option.isSome(global) ? Layer.succeed(Global.Service, global.value) : Global.defaultLayer)))
 
-const instanceRoutes = instanceApiRoutes.pipe(
-  Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
-  Layer.provide(imRuntimeLayer),
-  Layer.provide(oversightServicesLayer),
-  // The DeepAgent Event Bus stays provided to the instance route graph for the remaining bus
-  // consumers (oversight/event surfaces); the V2 IM path no longer publishes im.message.created.
-  Layer.provide(DeepAgentEventBus.defaultLayer),
-  // §E1 — the workspace trusted-sources config handler reads/writes WorkspaceConfig (GET+PUT
-  // /workspace/:workspaceID/config/trusted-sources). Provide the default layer (Database-backed) here so
-  // it shares the same Database singleton as the rest of the instance graph.
-  Layer.provide(WorkspaceConfig.defaultLayer),
-  Layer.provide(ContextFederationDiagnostics.defaultLayer),
-)
-const serverRoutes = HttpApiBuilder.layer(Api).pipe(
-  Layer.provide(handlers),
-  Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),
-)
+const instanceApiRoutes = () =>
+  HttpApiBuilder.layer(InstanceHttpApi).pipe(
+    Layer.provide([
+      configHandlers,
+      debugHandlers,
+      profileHandlers,
+      deepagentHandlers.pipe(Layer.provide([
+        V2RunnerFrame.gatewayRuntimeLayer,
+        currentServerAuthLayer,
+      ])),
+      oversightHandlers,
+      webhookHandlers,
+      experimentalHandlers,
+      fileHandlers,
+      imHandlers.pipe(Layer.provide(ServerAuth.Config.defaultLayer)),
+      eventWorkHandlers().pipe(Layer.provide(currentServerAuthLayer)),
+      instanceHandlers,
+      mcpHandlers.pipe(Layer.provide(currentServerAuthLayer)),
+      projectHandlers,
+      projectCopyHandlers,
+      ptyHandlers(),
+      questionHandlers,
+      referenceHandlers,
+      permissionHandlers,
+      providerHandlers,
+      sessionHandlers,
+      syncHandlers,
+      tuiHandlers,
+      workspaceHandlers,
+      workspaceConfigHandlers,
+      capabilityHandlers,
+      systemContextHandlers,
+      contextHandlers,
+    ]),
+  )
+
+const instanceRoutes = (runtime = imRuntimeLayer) =>
+  instanceApiRoutes().pipe(
+    Layer.provide([
+      httpApiAuthLayer,
+      mcpMutationAuthorizationLayer.pipe(Layer.provide(currentServerAuthLayer)),
+      workspaceRoutingLive,
+      instanceContextLayer,
+      schemaErrorLayer,
+    ]),
+    Layer.provide(runtime),
+    Layer.provide(oversightServicesLayer),
+    // The DeepAgent Event Bus stays provided to the instance route graph for the remaining bus
+    // consumers (oversight/event surfaces); the V2 IM path no longer publishes im.message.created.
+    Layer.provide(DeepAgentEventBus.defaultLayer),
+    // §E1 — the workspace trusted-sources config handler reads/writes WorkspaceConfig (GET+PUT
+    // /workspace/:workspaceID/config/trusted-sources). Provide the default layer (Database-backed) here so
+    // it shares the same Database singleton as the rest of the instance graph.
+    Layer.provide(WorkspaceConfig.defaultLayer),
+    Layer.provide(ContextFederationDiagnostics.defaultLayer),
+  )
+const serverRoutes = () =>
+  HttpApiBuilder.layer(Api).pipe(
+    Layer.provide(createHandlers().pipe(Layer.provide(
+      Layer.effect(AttentionControl.Task, Effect.gen(function* () {
+        const control = yield* TaskControl.bind
+        const authentication = yield* ServerAuth.Config
+        const corsPolicy = yield* CorsConfig
+        const flags = yield* RuntimeFlags.Service
+        return AttentionControl.Task.of({
+          control,
+          advertise: (request) => GoalPlanRebaseAccess.authenticateOperator(authentication, request).pipe(
+            Effect.andThen((access) => GoalPlanRebaseAccess.current(access)),
+            Effect.provideService(CorsConfig, corsPolicy),
+            Effect.match({
+              onSuccess: () => ({ task: true, goal: flags.experimentalGoalLoop }),
+              onFailure: () => ({ task: false, goal: false }),
+            }),
+          ),
+        })
+      })).pipe(Layer.provide(currentServerAuthLayer)),
+    ))),
+    Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),
+    Layer.provide(
+      Layer.effect(
+        Attention.Access,
+        Effect.gen(function* () {
+          const flags = yield* RuntimeFlags.Service
+          // Only trusted host configuration can enable cross-project implicit-local
+          // reads. A gateway or explicitly placed workspace never gains this scope.
+          const profile = yield* EffectConfig.string("DEEPAGENT_CODE_ATTENTION_PROFILE").pipe(
+            EffectConfig.withDefault(""),
+          )
+          const workspaceID = yield* EffectConfig.string("DEEPAGENT_CODE_WORKSPACE_ID").pipe(
+            EffectConfig.withDefault(""),
+          )
+          return Attention.localCapability({ profile, workspaceID, gateway: flags.gateway })
+        }),
+      ),
+    ),
+  )
 
 // `OpenApi.fromApi` is non-trivial; defer until /doc is actually hit so
 // processes that never serve it (CLI, scripts) don't pay at module load.
@@ -348,36 +488,39 @@ const serverRoutes = HttpApiBuilder.layer(Api).pipe(
 // the same Uint8Array instead of re-stringifying the spec.
 const docResponse = lazy(() => HttpServerResponse.jsonUnsafe(OpenApi.fromApi(PublicApi)))
 
-const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effect.succeed(docResponse()))).pipe(
-  Layer.provide(authOnlyRouterLayer),
-)
+const docRoute = () =>
+  HttpRouter.use((router) => router.add("GET", "/doc", () => Effect.succeed(docResponse()))).pipe(
+    Layer.provide(authOnlyRouterLayer),
+  )
 
-const gatewayFallback = HttpRouter.use((router) =>
-  Effect.gen(function* () {
-    const flags = yield* RuntimeFlags.Service
-    const { db } = yield* Database.Service
-    yield* router.add("*", "/v1/*", (request) =>
-      authorizeProxyKey(db, flags.gateway, request).pipe(
-        Effect.map((result) =>
-          result.ok
-            ? proxyError(501, "model_not_supported", "This gateway endpoint is not supported")
-            : result.response,
+const gatewayFallback = () =>
+  HttpRouter.use((router) =>
+    Effect.gen(function* () {
+      const flags = yield* RuntimeFlags.Service
+      const { db } = yield* Database.Service
+      yield* router.add("*", "/v1/*", (request) =>
+        authorizeProxyKey(db, flags.gateway, request).pipe(
+          Effect.map((result) =>
+            result.ok
+              ? proxyError(501, "model_not_supported", "This gateway endpoint is not supported")
+              : result.response,
+          ),
         ),
-      ),
-    )
-  }),
-)
+      )
+    }),
+  )
 
-const uiRoute = HttpRouter.use((router) =>
-  Effect.gen(function* () {
-    const fs = yield* FSUtil.Service
-    const client = yield* HttpClient.HttpClient
-    const flags = yield* RuntimeFlags.Service
-    yield* router.add("*", "/*", (request) =>
-      serveUIEffect(request, { fs, client, disableEmbeddedWebUi: flags.disableEmbeddedWebUi }),
-    )
-  }),
-).pipe(Layer.provide(authOnlyRouterLayer))
+const uiRoute = () =>
+  HttpRouter.use((router) =>
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const client = yield* HttpClient.HttpClient
+      const flags = yield* RuntimeFlags.Service
+      yield* router.add("*", "/*", (request) =>
+        serveUIEffect(request, { fs, client, disableEmbeddedWebUi: flags.disableEmbeddedWebUi }),
+      )
+    }),
+  ).pipe(Layer.provide(authOnlyRouterLayer))
 
 type RouteRequirements =
   | HttpRouter.HttpRouter
@@ -386,22 +529,31 @@ type RouteRequirements =
   | HttpRouter.Request<"Requires", unknown>
   | HttpRouter.Request<"GlobalRequires", never>
 
-export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = RuntimeFlags.defaultLayer) {
+export function createRoutes(
+  corsOptions?: CorsOptions,
+  runtimeFlagsLayer = RuntimeFlags.defaultLayer,
+  composition?: { readonly imFacade?: IMFacade.Options },
+) {
+  // One construction-time transport choice; HTTP, WS and the outbox retain the
+  // same facade generation. This is never derived from a request or Config.
+  const imRuntime = composition?.imFacade ? createIMRuntimeLayer(composition.imFacade) : imRuntimeLayer
   const baseRoutes = Layer.mergeAll(
-    rootApiRoutes,
-    gatewayApiRoutes,
-    gatewayAdminRoutes,
+    rootApiRoutes(),
+    browserApiRoutes(),
+    eventValidationApiRoutes(),
+    gatewayApiRoutes(),
+    gatewayAdminRoutes(),
     proxyStartupGate,
     gatewayServiceSubsetGate,
-    eventApiRoutes,
-    ptyConnectApiRoutes,
-    imWebSocketApiRoutes,
-    maintenanceApiRoutes,
-    instanceRoutes,
-    serverRoutes,
-    docRoute,
-    gatewayFallback,
-    uiRoute,
+    eventApiRoutes(),
+    ptyConnectApiRoutes(),
+    imWebSocketApiRoutes(imRuntime),
+    maintenanceApiRoutes(),
+    instanceRoutes(imRuntime),
+    serverRoutes(),
+    docRoute(),
+    gatewayFallback(),
+    uiRoute(),
     // §A4/§C — start the V4 event-runtime daemons with the server (inert unless V4 flags are on). Draws
     // the session stack + RuntimeFlags from the provide stack below.
     ...([v4EventRuntimeLayer, v2StartupRecovery, V2OutboxRuntime.layer] as const),
@@ -496,7 +648,8 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       EffectFlock.defaultLayer,
       FileLock.layer,
       FetchHttpClient.layer,
-      HttpServer.layerServices,
+      // Multipart persistence needs a real filesystem; HttpServer.layerServices is a no-op test layer.
+      NodeHttpServer.layerHttpServices,
     ]),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provide(InstanceLayer.layer),
@@ -510,6 +663,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
     .pipe(
       // The public Core handlers, legacy adapters, status surface, and every location drain share one
       // open V2 runtime. Its augmented map captures the production sources supplied immediately below.
+      Layer.provide(GoalTickExecution.runtimeLayer),
       Layer.provide(Root.layer),
       // W3.7 — the ProductionV2Sources VALUE seam (same context-flow mechanism as the PromptEpoch
       // seam below): the route graph's location-layer runner subtree forwards it into the four-graph
@@ -561,19 +715,30 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       // production key). The layer carries its own mint-first ordering, so a fresh-state first
       // boot qualifies instead of capturing the production key before the mint writes the keypair.
       Layer.provideMerge(Root.routesProvideStack.ownerReferences),
+      // Registration belongs to this listener. Effect's built-in serve/toWebHandler otherwise
+      // memoize HttpRouter.layer across the shared app root: later routes either retain the first
+      // listener's options or register twice. Only the router and registration layers are new;
+      // Database, LocationServiceMap, PTY tickets, Session execution and daemons keep their layers.
+      Layer.provideMerge(Layer.effect(HttpRouter.HttpRouter)(HttpRouter.make)),
     )
-    .pipe(Layer.orDie)
+    .pipe(Layer.provideMerge(Root.windowsStorageLayer), Layer.orDie)
 }
 
 /**
  * Pre-business incident shell. It opens the store physically read-only and serves only the
  * authenticated maintenance contract; no Session/provider/tool/event runtime is constructed.
  */
-export function createMaintenanceRoutes(filename: string, state: BootstrapState, corsOptions?: CorsOptions, onRestored?: () => void) {
+export function createMaintenanceRoutes(
+  filename: string,
+  state: BootstrapState,
+  corsOptions?: CorsOptions,
+  onRestored?: () => void,
+) {
   return HttpApiBuilder.layer(MaintenanceApi).pipe(
     Layer.provide(maintenanceOnlyHandlersFor(filename, state, onRestored)),
     Layer.provide([httpApiAuthLayer, schemaErrorLayer]),
     Layer.provide([errorLayer, compressionLayer, corsVaryFix, cors(corsOptions)]),
+    Layer.provideMerge(Layer.effect(HttpRouter.HttpRouter)(HttpRouter.make)),
     Layer.orDie,
   )
 }
@@ -587,7 +752,7 @@ export const routes = createRoutes()
 // LocationServiceMap / disposal authority instead of forming a second root.
 // Default is a private per-handler root, which keeps test-built handlers isolated.
 export const webHandler = (memoMap: Layer.MemoMap = makeMemoMap()) =>
-  HttpRouter.toWebHandler(routes, {
+  HttpRouter.toWebHandler(createRoutes(), {
     disableLogger: true,
     memoMap,
     middleware: disposeMiddleware,

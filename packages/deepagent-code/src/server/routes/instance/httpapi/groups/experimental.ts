@@ -15,6 +15,7 @@ import {
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
 import { described } from "./metadata"
+import { ServiceUnavailableError } from "../errors"
 import { QueryBoolean } from "./query"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
@@ -306,6 +307,7 @@ export const ExperimentalApi = HttpApi.make("experimental")
         HttpApiEndpoint.get("resource", ExperimentalPaths.resource, {
           query: WorkspaceRoutingQuery,
           success: described(Schema.Record(Schema.String, MCP.Resource), "MCP resources"),
+          error: ServiceUnavailableError,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "experimental.resource.list",

@@ -5,6 +5,10 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstanceDisposed } from "@/server/event"
 import { Question } from "@/question"
 import { ConfigApi } from "./groups/config"
+import { BrowserApi } from "./groups/browser"
+import { EventValidationApi } from "./groups/event-validation"
+import { EventInvestigationApi } from "./groups/event-investigation"
+import { EventWorkApi } from "./groups/event-work"
 import { ControlApi } from "./groups/control"
 import { ControlPlaneApi } from "./groups/control-plane"
 import { DeepAgentApi } from "./groups/deepagent"
@@ -30,6 +34,7 @@ import { TuiApi } from "./groups/tui"
 import { WorkspaceApi } from "./groups/workspace"
 import { WorkspaceConfigApi } from "./groups/workspace-config"
 import { IMApi } from "./groups/im"
+import { WorkRecoveryApi } from "./groups/work-recovery"
 import { IMWebSocketApi } from "./groups/im-websocket"
 import { Api } from "@deepagent-code/server/api"
 // GlobalEventSchema snapshots the registry after event-producing groups register their variants.
@@ -65,7 +70,19 @@ const EventSchema = Schema.Union([
 export const RootHttpApi = HttpApi.make("deepagent-code-root")
   .addHttpApi(ControlApi)
   .addHttpApi(ControlPlaneApi)
+  .addHttpApi(WorkRecoveryApi)
   .addHttpApi(GlobalApi)
+  .middleware(SchemaErrorMiddleware)
+  .middleware(Authorization)
+
+export const BrowserHttpApi = HttpApi.make("deepagent-code-browser")
+  .addHttpApi(BrowserApi)
+  .middleware(SchemaErrorMiddleware)
+  .middleware(Authorization)
+
+export const EventValidationHttpApi = HttpApi.make("deepagent-code-event-validation")
+  .addHttpApi(EventValidationApi)
+  .addHttpApi(EventInvestigationApi)
   .middleware(SchemaErrorMiddleware)
   .middleware(Authorization)
 
@@ -79,6 +96,7 @@ export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
   .addHttpApi(ExperimentalApi)
   .addHttpApi(FileApi)
   .addHttpApi(IMApi)
+  .addHttpApi(EventWorkApi)
   .addHttpApi(InstanceApi)
   .addHttpApi(CapabilityApi)
   .addHttpApi(ContextApi)
@@ -100,6 +118,8 @@ export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
 
 export const DeepAgentCodeHttpApi = HttpApi.make("deepagent-code")
   .addHttpApi(RootHttpApi)
+  .addHttpApi(BrowserHttpApi)
+  .addHttpApi(EventValidationHttpApi)
   .addHttpApi(GatewayHttpApi)
   .addHttpApi(GatewayAdminApi)
   .addHttpApi(EventApi)

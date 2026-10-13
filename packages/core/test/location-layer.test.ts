@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import os from "os"
 import path from "path"
 import { afterAll, beforeAll, describe, expect } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, RcMap, Schema } from "effect"
 import { Tool } from "@deepagent-code/core/public"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Catalog } from "@deepagent-code/core/catalog"
@@ -11,6 +11,8 @@ import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { PluginBoot } from "@deepagent-code/core/plugin/boot"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { AbsolutePath } from "@deepagent-code/core/schema"
+import { Location } from "@deepagent-code/core/location"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { tmpRoot, tmpdir, tmpRootShared } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { toolDefinitions } from "./lib/tool"
@@ -79,6 +81,65 @@ describe("LocationServiceMap", () => {
   })
 
   it.live(
+    "reuses semantic Location identity across SQL-shaped refs and invalidates the same tree",
+    () =>
+      Effect.acquireRelease(
+        Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+        (dirs) =>
+          Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
+      ).pipe(
+        Effect.flatMap(([first, second]) =>
+          Effect.gen(function* () {
+            const locations = yield* LocationServiceMap
+            const directory = AbsolutePath.make(first.path)
+            const ref = { directory }
+            const sqlRef = { directory, workspaceID: undefined }
+            const read = (ref: Location.Ref) => AgentV2.Service.pipe(Effect.provide(locations.get(ref)), Effect.scoped)
+            const original = yield* read(ref)
+            expect(yield* read(sqlRef)).toBe(original)
+            expect(yield* read({ ...ref })).toBe(original)
+            const mutable = { directory }
+            const captured = locations.get(mutable)
+            mutable.directory = AbsolutePath.make(second.path)
+            expect(yield* AgentV2.Service.pipe(Effect.provide(captured), Effect.scoped)).toBe(original)
+            expect(yield* Effect.all([read(ref), read(sqlRef)], { concurrency: "unbounded" })).toEqual([
+              original,
+              original,
+            ])
+            expect(
+              yield* locations.contextEffect(sqlRef).pipe(
+                Effect.map((context) => Context.get(context, AgentV2.Service)),
+                Effect.scoped,
+              ),
+            ).toBe(original)
+            expect(yield* AgentV2.Service.pipe(Effect.provide(LocationServiceMap.get(sqlRef)), Effect.scoped)).toBe(
+              original,
+            )
+            expect(yield* read({ directory: AbsolutePath.make(second.path) })).not.toBe(original)
+            const workspaceID = WorkspaceV2.ID.make("wrk_location_map_first")
+            const explicit = yield* read({ directory, workspaceID })
+            expect(explicit).not.toBe(original)
+            expect(yield* read({ workspaceID, directory })).toBe(explicit)
+            expect(yield* read({ directory, workspaceID: WorkspaceV2.ID.make("wrk_location_map_second") })).not.toBe(
+              explicit,
+            )
+            const keys = [...(yield* RcMap.keys(locations.rcMap))]
+            expect(keys).toHaveLength(4)
+            expect(keys.every((key) => Object.isFrozen(key))).toBe(true)
+            yield* locations.invalidate(sqlRef)
+            const replacement = yield* read(ref)
+            expect(replacement).not.toBe(original)
+            expect(yield* read(sqlRef)).toBe(replacement)
+            expect(yield* read({ directory, workspaceID })).toBe(explicit)
+            yield* LocationServiceMap.invalidate(ref)
+            expect(yield* read(sqlRef)).not.toBe(replacement)
+          }),
+        ),
+      ),
+    15000,
+  )
+
+  it.live(
     "isolates location state while sharing location policy with catalog",
     () =>
       Effect.acquireRelease(
@@ -131,15 +192,22 @@ describe("LocationServiceMap", () => {
             expect(blockedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(false)
             const expectedTools = [
               "application_context",
-              ...[...BuiltInTools.builtinToolNames].filter((name) => name !== "code_intel" && name !== "context_query"),
+              // This Core fixture has neither BrowserHost nor the graph runtime.
+              ...[...BuiltInTools.builtinToolNames].filter(
+                (name) => name !== "browser" && name !== "code_intel" && name !== "context_query",
+              ),
             ].sort()
             expect(blockedState.tools.map((tool) => tool.name).sort()).toEqual(expectedTools)
+            expect(blockedState.tools.some((tool) => tool.name === "browser")).toBe(false)
             expect(blockedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
             const allowedState = yield* update(allowed.path)
             // The V1 default-plugin kill switch must not remove the Core models-dev catalog producer.
-            expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("deepagent"))).toBe(true)
+            expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("deepagent"))).toBe(
+              true,
+            )
             expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
             expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual(expectedTools)
+            expect(allowedState.tools.some((tool) => tool.name === "browser")).toBe(false)
             expect(allowedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
           }),
         ),

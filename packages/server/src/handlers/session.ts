@@ -44,6 +44,15 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 // RI-04 admission validation surfaces as a 400: the agent is unknown to the Location
                 // roster or not directly selectable (subagent/hidden).
                 Effect.catchTags({
+                  "GoalChild.Error": (error) => Effect.fail(new InvalidRequestError({ message: error.message, kind: error.code, field: "id" })),
+                  "WorkAuthority.Error": (error) =>
+                    Effect.fail(
+                      new InvalidRequestError({
+                        message: error.message,
+                        kind: error.code,
+                        field: "id",
+                      }),
+                    ),
                   "AgentV2.NotFoundError": (error) =>
                     Effect.fail(
                       new InvalidRequestError({
@@ -139,6 +148,15 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 revertEpoch: ctx.payload.revertEpoch,
               })
               .pipe(
+                Effect.catchTag("GoalChild.Error", (error) => Effect.fail(new ConflictError({ message: error.message, resource: error.code }))),
+                Effect.catchTag("WorkAuthority.Error", (error) =>
+                  Effect.fail(
+                    new ServiceUnavailableError({
+                      message: error.message,
+                      service: error.code,
+                    }),
+                  ),
+                ),
                 Effect.catchTag("Session.NotFoundError", (error) =>
                   Effect.fail(
                     new SessionNotFoundError({
@@ -165,17 +183,21 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 ),
                 Effect.catchTags({
                   "AgentV2.NotFoundError": (error) =>
-                    Effect.fail(new InvalidRequestError({
-                      message: `Unknown agent: ${error.id}`,
-                      kind: "unknown_agent",
-                      field: "prompt.agent",
-                    })),
+                    Effect.fail(
+                      new InvalidRequestError({
+                        message: `Unknown agent: ${error.id}`,
+                        kind: "unknown_agent",
+                        field: "prompt.agent",
+                      }),
+                    ),
                   "Session.AgentNotSelectableError": (error) =>
-                    Effect.fail(new InvalidRequestError({
-                      message: `Agent is not selectable for a Session: ${error.id}`,
-                      kind: "agent_not_selectable",
-                      field: "prompt.agent",
-                    })),
+                    Effect.fail(
+                      new InvalidRequestError({
+                        message: `Agent is not selectable for a Session: ${error.id}`,
+                        kind: "agent_not_selectable",
+                        field: "prompt.agent",
+                      }),
+                    ),
                 }),
                 Effect.catchTag("SessionInput.StaleRevertEpoch", (error) =>
                   Effect.fail(
@@ -200,6 +222,15 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               model: { providerID: ctx.payload.providerID, modelID: ctx.payload.modelID },
             })
             .pipe(
+              Effect.catchTag("GoalChild.Error", (error) => Effect.fail(new ConflictError({ message: error.message, resource: error.code }))),
+                Effect.catchTag("WorkAuthority.Error", (error) =>
+                Effect.fail(
+                  new ServiceUnavailableError({
+                    message: error.message,
+                    service: error.code,
+                  }),
+                ),
+              ),
               Effect.catchTag("Session.NotFoundError", (error) =>
                 Effect.fail(
                   new SessionNotFoundError({

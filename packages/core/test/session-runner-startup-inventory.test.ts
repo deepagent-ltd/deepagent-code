@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { Effect } from "effect"
-import { sql } from "drizzle-orm"
+import { getTableColumns, getTableName, sql } from "drizzle-orm"
 import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { EffectDrizzleSqlite as EffectDrizzleSqliteValue } from "@deepagent-code/effect-drizzle-sqlite"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { RecoveryCommandContract } from "../src/contract/recovery-command"
 import { SessionProviderRecovery } from "../src/session/runner/recovery"
+import workAuthorityMigration from "../src/database/migration/20261006185449_work_execution_authority"
 import { StartupInventory } from "../src/session/runner/startup-inventory"
+import { McpAppInvocationTable, McpAppEffectTable } from "../src/session/mcp-app-invocation.sql"
 
 const makeDb = EffectDrizzleSqliteValue.makeWithDefaults()
 
@@ -88,7 +90,12 @@ const fiveDescriptorRows = (): readonly {
 // on the classification logic.
 const createTables = (db: Db) =>
   Effect.gen(function* () {
+    yield* db.transaction((tx) => workAuthorityMigration.up(tx))
     yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, execution_claim_token INTEGER)`)
+    for (const table of [McpAppInvocationTable, McpAppEffectTable])
+      yield* db.run(sql`CREATE TABLE ${sql.identifier(getTableName(table))} (${sql.join(
+        Object.values(getTableColumns(table)).map((column) => sql`${sql.identifier(column.name)} TEXT`), sql`,`,
+      )})`)
     yield* db.run(sql`INSERT INTO session VALUES ('fixture-session', 1), ('sess-1', 1), ('sess_inv', 1)`)
     yield* db.run(sql`
       CREATE TABLE session_provider_attempt (

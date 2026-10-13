@@ -7,8 +7,27 @@ import { SessionSchema } from "./schema"
 
 export type Mode = "run" | "wake"
 
+const ownedReceiptTypeId = Symbol("SessionRunCoordinator.OwnedReceipt")
+
+/** Process-local evidence of one Entry, never a serializable execution authorization. */
+export interface OwnedReceipt<Key> {
+  readonly [ownedReceiptTypeId]: Key
+}
+
+export type OwnedStart<Key> =
+  | { readonly status: "started" | "joined"; readonly receipt: OwnedReceipt<Key> }
+  | { readonly status: "busy" | "not-local" | "obsolete" | "closed" }
+
+export type OwnedInterruption =
+  | { readonly status: "matched" | "not-local" }
+  | { readonly status: "obsolete"; readonly reason: "closed" | "entry" | "predicate" | "boundary" }
+
+export type OwnedSettlement<A, E> =
+  | { readonly status: "not-local" }
+  | { readonly status: "settled"; readonly exit: Exit.Exit<A, E> }
+
 /** Why one drain generation should run. Explicit runs dominate advisory wakes when demands coalesce. */
-type Demand = { readonly _tag: "run" } | { readonly _tag: "wake"; readonly seq?: number }
+type Demand = { readonly _tag: "run"; readonly activityID?: string } | { readonly _tag: "wake"; readonly seq?: number }
 
 /**
  * Runs at most one drain chain per key while allowing different keys to drain concurrently.
@@ -30,7 +49,22 @@ export interface Coordinator<Key, A, E, Reason = never> {
   /** Snapshots keys with an ownership chain active in this process. */
   readonly active: Effect.Effect<ReadonlySet<Key>>
   /** Starts or joins one explicit drain generation. */
-  readonly run: (key: Key) => Effect.Effect<A, E>
+  readonly run: (key: Key, options?: { readonly activityID?: string }) => Effect.Effect<A, E>
+  /** Starts a new owned chain or joins only the exact receipt; never waits for another owner. */
+  readonly runOwned: (
+    key: Key,
+    receipt?: OwnedReceipt<Key>,
+    registered?: (receipt: OwnedReceipt<Key>) => void,
+  ) => Effect.Effect<OwnedStart<Key>>
+  /** Stops only the captured Entry after a pure synchronous current-control check. */
+  readonly interruptIf: (
+    receipt: OwnedReceipt<Key>,
+    predicate: () => boolean,
+    seq?: number,
+    reason?: Reason,
+  ) => Effect.Effect<OwnedInterruption>
+  /** Waits for this receipt's Entry, including cleanup, without following successor Entries. */
+  readonly awaitOwned: (receipt: OwnedReceipt<Key>) => Effect.Effect<OwnedSettlement<A, E>>
   /** Coalesces one wake-up after durable work is recorded. */
   readonly wake: (key: Key, seq?: number) => Effect.Effect<void>
   /** Waits until the current ownership chain settles. */
@@ -40,12 +74,16 @@ export interface Coordinator<Key, A, E, Reason = never> {
 }
 
 /** One Session's process-local execution lane: one active demand and at most one coalesced follow-up. */
-type Entry<A, E, Reason> = {
+type RunScope = (effect: Effect.Effect<void>) => Effect.Effect<void>
+
+type Entry<Key, A, E, Reason> = {
+  readonly runScope?: RunScope
   // `done`/`explicitWaiter` carry their Exit on the SUCCESS channel (same as `settled`): a Deferred
   // completed with an interrupt-only cause wakes only ONE awaiter under the v4 runtime, so a second
   // joined caller would strand here on interrupt. Each awaiter re-raises the Exit in its own fiber.
   readonly done: Deferred.Deferred<Exit.Exit<A, E>>
   readonly settled: Deferred.Deferred<Exit.Exit<A, E>>
+  readonly receipt?: OwnedReceipt<Key>
   current: Demand
   pending?: Demand
   explicitWaiter?: Deferred.Deferred<Exit.Exit<A, E>>
@@ -59,7 +97,9 @@ type Entry<A, E, Reason> = {
 
 /** Combines follow-up demand: runs dominate, while wakes retain the newest durable admission sequence. */
 const coalesce = (left: Demand | undefined, right: Demand): Demand => {
-  if (left?._tag === "run" || right._tag === "run") return { _tag: "run" }
+  if (left?._tag === "run" && left.activityID === undefined) return left
+  if (right._tag === "run") return right
+  if (left?._tag === "run") return left
   return { _tag: "wake", seq: maxSeq(left?.seq, right.seq) }
 }
 
@@ -71,15 +111,24 @@ const maxSeq = (left: number | undefined, right: number | undefined) => {
 
 /** Constructs a scoped coordinator. Every in-memory transition is synchronous. */
 export const make = <Key, A, E, Reason = never>(options: {
-  readonly drain: (key: Key, mode: Mode) => Effect.Effect<A, E>
+  readonly drain: (key: Key, mode: Mode, receipt?: OwnedReceipt<Key>, activityID?: string) => Effect.Effect<A, E>
   readonly onFailure?: (key: Key, cause: Cause.Cause<E>) => Effect.Effect<void>
+  /** Trusted construction hook, never caller-supplied Context. Advisory wakes cannot capture it. */
+  readonly captureRunScope?: (key: Key) => Effect.Effect<RunScope | undefined>
   /** Runs once before the first drain in one process-local ownership chain. */
-  readonly started?: (key: Key) => Effect.Effect<void, E>
+  readonly started?: (key: Key, receipt?: OwnedReceipt<Key>) => Effect.Effect<void, E>
   /** Runs once after the final drain in one process-local ownership chain. */
-  readonly settled?: (key: Key, exit: Exit.Exit<A, E>, reason?: Reason) => Effect.Effect<void>
+  readonly settled?: (
+    key: Key,
+    exit: Exit.Exit<A, E>,
+    reason?: Reason,
+    receipt?: OwnedReceipt<Key>,
+  ) => Effect.Effect<void>
 }): Effect.Effect<Coordinator<Key, A, E, Reason>, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const active = new Map<Key, Entry<A, E, Reason>>()
+    const active = new Map<Key, Entry<Key, A, E, Reason>>()
+    // Exact object membership, not the brand/key or a persisted digest, grants local control.
+    const receipts = new WeakMap<OwnedReceipt<Key>, { readonly key: Key; readonly entry: Entry<Key, A, E, Reason> }>()
     const report = yield* FiberSet.makeRuntime<never, void, never>()
     const fork = yield* FiberSet.makeRuntime<never, void, never>()
     const shutdown = Deferred.makeUnsafe<void>()
@@ -92,9 +141,16 @@ export const make = <Key, A, E, Reason = never>(options: {
       }),
     )
 
-    const makeEntry = (current: Demand, explicitWaiter?: Deferred.Deferred<Exit.Exit<A, E>>): Entry<A, E, Reason> => ({
+    const makeEntry = (
+      current: Demand,
+      explicitWaiter?: Deferred.Deferred<Exit.Exit<A, E>>,
+      receipt?: OwnedReceipt<Key>,
+      runScope?: RunScope,
+    ): Entry<Key, A, E, Reason> => ({
+      runScope,
       done: Deferred.makeUnsafe<Exit.Exit<A, E>>(),
       settled: Deferred.makeUnsafe<Exit.Exit<A, E>>(),
+      receipt,
       current,
       explicitWaiter,
       stopping: false,
@@ -102,38 +158,52 @@ export const make = <Key, A, E, Reason = never>(options: {
       terminalizing: false,
     })
 
-    const start = (key: Key, entry: Entry<A, E, Reason>, demand: Demand, successor = false) => {
+    const start = (
+      key: Key,
+      entry: Entry<Key, A, E, Reason>,
+      demand: Demand,
+      successor = false,
+      registered?: (receipt: OwnedReceipt<Key>) => void,
+    ) => {
       const ready = Deferred.makeUnsafe<void>()
-      const drain = Effect.suspend(() => options.drain(key, demand._tag))
+      const drain = Effect.suspend(() => options.drain(key, demand._tag, entry.receipt, demand._tag === "run" ? demand.activityID : undefined))
       const started = Effect.suspend(() => {
         if (entry.started) return Effect.void
         entry.started = true
-        return options.started?.(key) ?? Effect.void
+        return options.started?.(key, entry.receipt) ?? Effect.void
       })
-      // Initial work retains immediate-start behavior but cannot run before ownership is published.
+      // Receipt registration, active publication and owner assignment must precede even Started:
+      // its transactional hook can race with a synchronous cancellation from another fiber.
       // Observer-started successors yield once so synchronous drains cannot recurse on the JS stack.
-      const owner = fork(
-        started.pipe(
-          Effect.andThen(
-            successor ? Effect.yieldNow.pipe(Effect.andThen(drain)) : Deferred.await(ready).pipe(Effect.andThen(drain)),
-          ),
-          Effect.onExit((exit) => {
-            if (exit._tag === "Success" && !entry.stopping && entry.pending !== undefined)
-              return Effect.sync(() => settle(key, entry, demand, exit))
-            entry.terminalizing = true
-            return (options.settled?.(key, exit, entry.interruptionReason) ?? Effect.void).pipe(
-              Effect.ensuring(Effect.sync(() => settle(key, entry, demand, exit))),
-            )
+      const lifecycle = Deferred.await(ready).pipe(
+        Effect.andThen(started),
+        Effect.andThen(successor ? Effect.yieldNow.pipe(Effect.andThen(drain)) : drain),
+        Effect.onExit((exit) => {
+          if (exit._tag === "Success" && !entry.stopping && entry.pending !== undefined)
+            return Effect.sync(() => settle(key, entry, demand, exit))
+          entry.terminalizing = true
+          return (options.settled?.(key, exit, entry.interruptionReason, entry.receipt) ?? Effect.void).pipe(
+            Effect.ensuring(Effect.sync(() => settle(key, entry, demand, exit))),
+          )
+        }),
+        Effect.exit,
+        Effect.asVoid,
+      )
+      const owner = fork(entry.runScope ? entry.runScope(lifecycle) : lifecycle)
+      entry.owner = owner
+      // A registration defect belongs to this Entry and must use its normal cleanup path.
+      // It cannot escape after publication and leave an owner waiting forever on ready.
+      Deferred.doneUnsafe(
+        ready,
+        Effect.runSyncExit(
+          Effect.sync(() => {
+            if (entry.receipt) registered?.(entry.receipt)
           }),
-          Effect.exit,
-          Effect.asVoid,
         ),
       )
-      entry.owner = owner
-      if (!successor) Deferred.doneUnsafe(ready, Effect.void)
     }
 
-    const settle = (key: Key, entry: Entry<A, E, Reason>, demand: Demand, exit: Exit.Exit<A, E>) => {
+    const settle = (key: Key, entry: Entry<Key, A, E, Reason>, demand: Demand, exit: Exit.Exit<A, E>) => {
       if (closed) {
         Deferred.doneUnsafe(entry.done, Effect.succeed(exit))
         Deferred.doneUnsafe(entry.settled, Effect.succeed(exit))
@@ -240,34 +310,107 @@ export const make = <Key, A, E, Reason = never>(options: {
         return Fiber.interrupt(entry.owner)
       })
 
+    const runOwned = (
+      key: Key,
+      receipt?: OwnedReceipt<Key>,
+      registered?: (receipt: OwnedReceipt<Key>) => void,
+    ): Effect.Effect<OwnedStart<Key>> =>
+      Effect.sync(() => {
+        if (closed) return { status: "closed" }
+        if (receipt !== undefined) {
+          const owned = receipts.get(receipt)
+          if (owned === undefined) return { status: "not-local" }
+          if (active.get(key) !== owned.entry) return { status: "obsolete" }
+          return { status: "joined", receipt }
+        }
+        if (active.has(key)) return { status: "busy" }
+        const nextReceipt = Object.freeze({ [ownedReceiptTypeId]: key })
+        const entry = makeEntry({ _tag: "run" }, undefined, nextReceipt)
+        receipts.set(nextReceipt, { key, entry })
+        active.set(key, entry)
+        start(key, entry, entry.current, false, registered)
+        return { status: "started", receipt: nextReceipt }
+      })
+
+    const interruptIf = (
+      receipt: OwnedReceipt<Key>,
+      predicate: () => boolean,
+      seq?: number,
+      reason?: Reason,
+    ): Effect.Effect<OwnedInterruption> =>
+      Effect.suspend((): Effect.Effect<OwnedInterruption> => {
+        const owned = receipts.get(receipt)
+        if (owned === undefined) return Effect.succeed({ status: "not-local" } as const)
+        if (closed) return Effect.succeed({ status: "obsolete", reason: "closed" } as const)
+        const entry = owned.entry
+        if (active.get(owned.key) !== entry || entry.owner === undefined)
+          return Effect.succeed({ status: "obsolete", reason: "entry" } as const)
+        // No Promise, SQL or other Effect is allowed in this predicate. Strict true also rejects
+        // accidental async callbacks at runtime; there is no yield before capturing the owner.
+        if (predicate() !== true) return Effect.succeed({ status: "obsolete", reason: "predicate" } as const)
+        if (closed || active.get(owned.key) !== entry)
+          return Effect.succeed({ status: "obsolete", reason: "entry" } as const)
+        if (
+          seq !== undefined &&
+          ((entry.interruptSeq !== undefined && seq < entry.interruptSeq) ||
+            (entry.current._tag === "wake" && entry.current.seq !== undefined && entry.current.seq > seq))
+        )
+          return Effect.succeed({ status: "obsolete", reason: "boundary" } as const)
+        const owner = entry.owner
+        entry.stopping = true
+        if (reason !== undefined) entry.interruptionReason = reason
+        entry.interruptSeq = maxSeq(entry.interruptSeq, seq)
+        suppressPendingAtOrBefore(entry, seq)
+        // Never reread by key after yielding: a later Entry may already own that Session.
+        return Fiber.interrupt(owner).pipe(Effect.as({ status: "matched" } as const))
+      })
+
+    const awaitOwned = (receipt: OwnedReceipt<Key>): Effect.Effect<OwnedSettlement<A, E>> =>
+      Effect.suspend((): Effect.Effect<OwnedSettlement<A, E>> => {
+        const owned = receipts.get(receipt)
+        if (owned === undefined) return Effect.succeed({ status: "not-local" } as const)
+        // Shutdown is not evidence of cleanup. The captured Entry settles only after its owner
+        // and lifecycle hook finish, even when this coordinator is closed or a successor runs.
+        return Deferred.await(owned.entry.settled).pipe(Effect.map((exit) => ({ status: "settled", exit }) as const))
+      })
+
     return {
       active: Effect.sync(() => new Set(active.keys())),
       run,
+      runOwned,
+      interruptIf,
+      awaitOwned,
       wake,
       awaitIdle,
       interrupt,
     }
 
-    function run(key: Key): Effect.Effect<A, E> {
+    function run(key: Key, request?: { readonly activityID?: string }): Effect.Effect<A, E> {
       return Effect.uninterruptibleMask((restore) => {
         if (closed) return Effect.interrupt
         const entry = active.get(key)
         if (entry !== undefined) {
           if (entry.stopping) {
-            return restore(Deferred.await(entry.settled).pipe(Effect.andThen(run(key))))
+            return restore(Deferred.await(entry.settled).pipe(Effect.andThen(run(key, request))))
           }
           if (entry.current._tag === "wake") {
-            entry.pending = coalesce(entry.pending, { _tag: "run" })
+            entry.pending = coalesce(entry.pending, { _tag: "run", activityID: request?.activityID })
             entry.explicitWaiter ??= Deferred.makeUnsafe<Exit.Exit<A, E>>()
             return restore(awaitRun(entry.explicitWaiter))
           }
           return restore(awaitRun(entry.done))
         }
 
-        const next = makeEntry({ _tag: "run" })
-        active.set(key, next)
-        start(key, next, next.current)
-        return restore(awaitRun(next.done))
+        return (options.captureRunScope?.(key) ?? Effect.succeed(undefined)).pipe(Effect.flatMap((runScope) => {
+          // The trusted capture may yield; publication still checks the actual Entry atomically.
+          // A concurrent owner gets no scope from this caller, and an unused capture is inert.
+          if (closed) return Effect.interrupt
+          if (active.has(key)) return restore(run(key, request))
+          const next = makeEntry({ _tag: "run", activityID: request?.activityID }, undefined, undefined, runScope)
+          active.set(key, next)
+          start(key, next, next.current)
+          return restore(awaitRun(next.done))
+        }))
       })
     }
 
@@ -278,11 +421,11 @@ export const make = <Key, A, E, Reason = never>(options: {
       )
     }
 
-    function acceptsWake(entry: Entry<A, E, Reason>, seq: number | undefined) {
+    function acceptsWake(entry: Entry<Key, A, E, Reason>, seq: number | undefined) {
       return !entry.stopping || (entry.interruptSeq !== undefined && seq !== undefined && seq > entry.interruptSeq)
     }
 
-    function suppressPendingAtOrBefore(entry: Entry<A, E, Reason>, seq: number | undefined) {
+    function suppressPendingAtOrBefore(entry: Entry<Key, A, E, Reason>, seq: number | undefined) {
       if (
         entry.pending?._tag === "wake" &&
         seq !== undefined &&
@@ -303,7 +446,7 @@ export const layer = Layer.effect(
   SessionRunner.Service.pipe(
     Effect.flatMap((runner) =>
       make<SessionSchema.ID, void, SessionRunner.RunError>({
-        drain: (sessionID, mode) => runner.run({ sessionID, force: mode === "run" }),
+        drain: (sessionID, mode, _receipt, activityID) => runner.run({ sessionID, force: mode === "run", activityID }),
         onFailure: (sessionID, cause) => logFailure("Failed to drain Session", sessionID, cause),
       }),
     ),

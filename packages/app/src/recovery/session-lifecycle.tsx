@@ -1,4 +1,14 @@
-import { createContext, createEffect, createMemo, createSignal, onCleanup, untrack, useContext, type Accessor, type JSX } from "solid-js"
+import {
+  createContext,
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  untrack,
+  useContext,
+  type Accessor,
+  type JSX,
+} from "solid-js"
 import { useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
 import { useServerSync } from "@/context/server-sync"
@@ -33,23 +43,53 @@ export function SessionLifecycle(props: { children: JSX.Element }) {
   const [lifecycle] = createSignal(createRecoveryLifecycle())
   const refreshPending = new Set<string>()
   let statusRevision = 0
+  const owner = {
+    disposed: false,
+    client: sdk.client,
+    scope: sdk.scope,
+    directory: sdk.directory,
+    statusAbort: new AbortController(),
+  }
+  const current = () =>
+    !owner.disposed && sdk.client === owner.client && sdk.scope === owner.scope && sdk.directory === owner.directory
+  onCleanup(() => {
+    owner.disposed = true
+    statusRevision++
+    owner.statusAbort.abort()
+  })
   const refreshMessages = (sessionID: string) => {
-    if (sessionID !== params.id || refreshPending.has(sessionID)) return
+    if (!current() || sessionID !== params.id || refreshPending.has(sessionID)) return
     refreshPending.add(sessionID)
     queueMicrotask(() => {
       refreshPending.delete(sessionID)
-      if (sessionID !== params.id) return
-      void sync.session.sync(sessionID, { force: true }).catch((error) =>
-        console.error("Failed to refresh V2 session messages", error),
-      )
+      if (!current() || sessionID !== params.id) return
+      void sync.session
+        .sync(sessionID, { force: true })
+        .catch((error) => console.error("Failed to refresh V2 session messages", error))
     })
   }
   const refreshStatus = (sessionID: string) => {
+    if (!current()) return
     const revision = ++statusRevision
-    void sdk.client.session.status().then((result) => {
-      if (revision !== statusRevision || sessionID !== params.id) return
-      sync.set("session_status", sessionID, result.data?.[sessionID] ?? { type: "idle" })
-    }).catch((error) => console.error("Failed to refresh V2 session status", error))
+    const previous = JSON.stringify(sync.data.session_status[sessionID])
+    owner.statusAbort.abort()
+    owner.statusAbort = new AbortController()
+    const abort = owner.statusAbort
+    void owner.client.session
+      .status(undefined, { signal: abort.signal })
+      .then((result) => {
+        if (
+          !current() ||
+          revision !== statusRevision ||
+          sessionID !== params.id ||
+          JSON.stringify(sync.data.session_status[sessionID]) !== previous
+        )
+          return
+        if (result.data) sync.set("session_status", sessionID, result.data[sessionID] ?? { type: "idle" })
+      })
+      .catch((error) => {
+        if (current() && !abort.signal.aborted) console.error("Failed to refresh V2 session status", error)
+      })
   }
   const snapshot = createMemo(() => {
     void tick()
@@ -60,58 +100,79 @@ export function SessionLifecycle(props: { children: JSX.Element }) {
     // Durable journal (SOLE source — W9.6 removed the SSE fallback that double-delivered under
     // admission OFF): poll every known session of the directory plus the active one, anchor each
     // at its watermark on first subscribe, resume from the last seen seq afterwards.
-    const journal = untrack(() => createExecutionJournalSubscription({
-      client: sdk.client,
-      lifecycle: lifecycle(),
-      sessionIDs: () => {
-        const ids = new Set<string>()
-        if (params.id) ids.add(params.id)
-        for (const session of serverSync.child(sdk.directory, { bootstrap: false })[0].session) ids.add(session.id)
-        return [...ids]
-      },
-      handlers: {
-        onAnchor: (sessionID) => {
-          if (sessionID !== params.id) return
-          refreshMessages(sessionID)
-          refreshStatus(sessionID)
+    const journal = untrack(() =>
+      createExecutionJournalSubscription({
+        client: owner.client,
+        lifecycle: lifecycle(),
+        active: (sessionID) => sync.data.session_status[sessionID]?.type === "busy",
+        // Hints only wake the durable drain; event payloads never feed its reducer.
+        subscribeHint: (hint) =>
+          sdk.event.listen((event) => {
+            if (!current()) return
+            const properties = event.details.properties
+            if (!("sessionID" in properties) || typeof properties.sessionID !== "string") return
+            const type = eventBaseType(event.name)
+            if (
+              properties.sessionID === params.id &&
+              (type === "session.execution.started" || type === "session.status")
+            )
+              statusRevision++
+            hint(properties.sessionID)
+          }),
+        sessionIDs: () => {
+          const ids = new Set<string>()
+          if (params.id) ids.add(params.id)
+          for (const session of serverSync.child(sdk.directory, { bootstrap: false })[0].session) ids.add(session.id)
+          return [...ids]
         },
-        onJournalEvent: (sessionID, row) => {
-          if (sessionID !== params.id) return
-          const type = eventBaseType(row.type)
-          if (type === "session.execution.started") {
-            statusRevision++
-            sync.set("session_status", sessionID, { type: "busy" })
-          }
-          if (type === "session.execution.succeeded" || type === "session.execution.interrupted") {
-            statusRevision++
-            sync.set("session_status", sessionID, { type: "idle" })
-          }
-          if (type === "session.execution.failed") refreshStatus(sessionID)
-          if (
-            type === "session.next.text.ended" ||
-            type === "session.next.reasoning.ended" ||
-            type === "session.next.tool.success" ||
-            type === "session.next.tool.failed" ||
-            type === "session.execution.succeeded" ||
-            type === "session.execution.failed" ||
-            type === "session.execution.interrupted"
-          ) refreshMessages(sessionID)
+        handlers: {
+          onAnchor: (sessionID) => {
+            if (!current() || sessionID !== params.id) return
+            refreshMessages(sessionID)
+            refreshStatus(sessionID)
+          },
+          onJournalEvent: (sessionID, row) => {
+            if (!current() || sessionID !== params.id) return
+            const type = eventBaseType(row.type)
+            if (type === "session.execution.started") {
+              statusRevision++
+              sync.set("session_status", sessionID, { type: "busy" })
+            }
+            if (
+              type === "session.execution.succeeded" ||
+              type === "session.execution.interrupted" ||
+              type === "session.execution.failed"
+            )
+              refreshStatus(sessionID)
+            if (
+              type === "session.next.text.ended" ||
+              type === "session.next.reasoning.ended" ||
+              type === "session.next.tool.success" ||
+              type === "session.next.tool.failed" ||
+              type === "session.execution.succeeded" ||
+              type === "session.execution.failed" ||
+              type === "session.execution.interrupted"
+            )
+              refreshMessages(sessionID)
+          },
+          onEvent: () => setTick((value) => value + 1),
+          onConnectionChange: (connected) => {
+            // The reducer already owns the disconnect/reconnect vocabulary: the aggregate journal
+            // connectivity flips it, and the poll itself resumes from the last cursor (seq-resume).
+            lifecycle().onEvent(connected ? { type: "reconnect" } : { type: "disconnect" })
+          },
+          onResync: ({ sessionID, fromSeq, floor }) => {
+            // W9.6 — bounded resync: the journal compacted rows while the drain held its anchor, so
+            // the window (fromSeq, floor] is archivally gone and the execution summary for this
+            // session resumes from the retained floor. Log-only for now (no UI string burden); the
+            // typed notice is the seam a future "history compressed" UI would consume.
+            console.warn(
+              `[recovery] execution journal resync (history compacted): session=${sessionID} dropped=(#${fromSeq ?? "?"}, #${floor}]`,
+            )
+          },
         },
-        onEvent: () => setTick((value) => value + 1),
-        onConnectionChange: (connected) => {
-          // The reducer already owns the disconnect/reconnect vocabulary: the aggregate journal
-          // connectivity flips it, and the poll itself resumes from the last cursor (seq-resume).
-          lifecycle().onEvent(connected ? { type: "reconnect" } : { type: "disconnect" })
-        },
-        onResync: ({ sessionID, fromSeq, floor }) => {
-          // W9.6 — bounded resync: the journal compacted rows while the drain held its anchor, so
-          // the window (fromSeq, floor] is archivally gone and the execution summary for this
-          // session resumes from the retained floor. Log-only for now (no UI string burden); the
-          // typed notice is the seam a future "history compressed" UI would consume.
-          console.warn(`[recovery] execution journal resync (history compacted): session=${sessionID} dropped=(#${fromSeq ?? "?"}, #${floor}]`)
-        },
-      },
-    }))
+      }),
+    )
     onCleanup(journal.dispose)
 
     let activeSessionID: string | undefined
@@ -132,5 +193,9 @@ export function SessionLifecycle(props: { children: JSX.Element }) {
     })
   })
 
-  return <SessionLifecycleContext.Provider value={{ lifecycle, snapshot }}>{props.children}</SessionLifecycleContext.Provider>
+  return (
+    <SessionLifecycleContext.Provider value={{ lifecycle, snapshot }}>
+      {props.children}
+    </SessionLifecycleContext.Provider>
+  )
 }

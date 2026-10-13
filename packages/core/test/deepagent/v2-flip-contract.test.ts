@@ -2,10 +2,9 @@ import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { EVENT_V2_ADMISSION_ENV, isEventV2AdmissionEnabled } from "../../src/deepagent/event-admission"
-import { IM_SINGLE_WRITE_ENV, isEventV2ImSingleWriteEnabled } from "../../src/deepagent/im-single-write"
 import { createRuntimeFeatureRegistry } from "../../src/flag/runtime-features"
 
-// C7-05 contract: the V2 admission + IM single-write authorities ship ON through the PRODUCTION
+// C7-05 contract: the V2 event admission authority ship ON through the PRODUCTION
 // runtime entrypoint and in direct server/embedded compositions. `applyRuntimeDefaults()` makes the
 // effective values observable in the process environment, while the gates themselves use the same
 // default. `=false`/`=0` remains the explicit kill switch. The shared flag table is `core/deepagent/flip-flag`
@@ -22,8 +21,6 @@ describe("C7-05 flip contract (production-entry ON + explicit kill-switch)", () 
     expect(isEventV2AdmissionEnabled(features({}))).toBe(true)
     expect(isEventV2AdmissionEnabled(features({ [EVENT_V2_ADMISSION_ENV]: "true" }))).toBe(true)
     expect(isEventV2AdmissionEnabled(features({ [EVENT_V2_ADMISSION_ENV]: "1" }))).toBe(true)
-    expect(isEventV2ImSingleWriteEnabled(features({}))).toBe(true)
-    expect(isEventV2ImSingleWriteEnabled(features({ [IM_SINGLE_WRITE_ENV]: "true" }))).toBe(true)
   })
 
   test("defined values follow the shared flip-flag table (W0.1 semantic convergence)", () => {
@@ -34,20 +31,14 @@ describe("C7-05 flip contract (production-entry ON + explicit kill-switch)", () 
       expect(isEventV2AdmissionEnabled(features({ [EVENT_V2_ADMISSION_ENV]: value }))).toBe(true)
     // W0.5 (audit 9): only /^(false|0)$/ (plus "") are OFF by the table — "off"/"no" are NOT off
     // values and must stay ON; do not "fix" them into OFF.
-    for (const value of ["", "false "])
-      expect(isEventV2ImSingleWriteEnabled(features({ [IM_SINGLE_WRITE_ENV]: value }))).toBe(false)
-    for (const value of ["yes", "off", "no"])
-      expect(isEventV2ImSingleWriteEnabled(features({ [IM_SINGLE_WRITE_ENV]: value }))).toBe(true)
   })
 
   test("kill-switch =false / =0 restores the legacy authority", () => {
     expect(isEventV2AdmissionEnabled(features({ [EVENT_V2_ADMISSION_ENV]: "false" }))).toBe(false)
     expect(isEventV2AdmissionEnabled(features({ [EVENT_V2_ADMISSION_ENV]: "0" }))).toBe(false)
-    expect(isEventV2ImSingleWriteEnabled(features({ [IM_SINGLE_WRITE_ENV]: "false" }))).toBe(false)
-    expect(isEventV2ImSingleWriteEnabled(features({ [IM_SINGLE_WRITE_ENV]: "0" }))).toBe(false)
   })
 
-  test("the production entrypoints enable both authorities via runtime-defaults", () => {
+  test("the production entrypoints enable event admission via runtime-defaults", () => {
     const entry = readFileSync(
       fileURLToPath(new URL("../../../deepagent-code/src/index.ts", import.meta.url)),
       "utf8",
@@ -67,14 +58,8 @@ describe("C7-05 flip contract (production-entry ON + explicit kill-switch)", () 
     // deleted — @mention work can no longer be silently dropped via a missing pairing.
     expect(entry).toContain("applyRuntimeDefaults(")
     expect(node).toContain("applyRuntimeDefaults(")
-    // both authorities' env constants are covered by the default-ON runtime defaults
+    // event admission env constant are covered by the default-ON runtime defaults
     expect(defaults).toContain('= "DEEPAGENT_CODE_EVENT_V2_ADMISSION"')
-    expect(defaults).toContain('= "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"')
   })
 
-  test("the two switches are independent", () => {
-    const snapshot = features({ [EVENT_V2_ADMISSION_ENV]: "false", [IM_SINGLE_WRITE_ENV]: "true" })
-    expect(isEventV2AdmissionEnabled(snapshot)).toBe(false)
-    expect(isEventV2ImSingleWriteEnabled(snapshot)).toBe(true)
-  })
 })

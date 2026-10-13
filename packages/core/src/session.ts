@@ -36,6 +36,10 @@ import { SessionInput } from "./session/input"
 import { PermissionV2 } from "./permission"
 import { PluginBoot } from "./plugin/boot"
 import { LocationServiceMap } from "./location-layer"
+import { WorkSessionGuard } from "./session/work-session-guard"
+import { WorkAuthoritySchema } from "./session/work-authority.schema"
+import { GoalChild } from "./deepagent/goal-child"
+import { GoalChildSchema } from "./deepagent/goal-child.schema"
 
 // get project -> project.locations
 //
@@ -378,18 +382,18 @@ export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
   readonly create: (
     input: CreateInput,
-  ) => Effect.Effect<SessionSchema.Info, AgentV2.NotFoundError | AgentNotSelectableError>
+  ) => Effect.Effect<SessionSchema.Info, AgentV2.NotFoundError | AgentNotSelectableError | WorkAuthoritySchema.Error | GoalChildSchema.Error>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly requireWritable: (
     sessionID: SessionSchema.ID,
-  ) => Effect.Effect<SessionSchema.Info, NotFoundError | LegacySessionRequiresAdoption>
+  ) => Effect.Effect<SessionSchema.Info, NotFoundError | LegacySessionRequiresAdoption | WorkAuthoritySchema.Error | GoalChildSchema.Error>
   readonly update: (input: {
     sessionID: SessionSchema.ID
     title?: string
     metadata?: SessionSchema.Metadata | null
     permissions?: PermissionV2.Ruleset
     archived?: number | null
-  }) => Effect.Effect<SessionSchema.Info, NotFoundError | LegacySessionRequiresAdoption>
+  }) => Effect.Effect<SessionSchema.Info, NotFoundError | LegacySessionRequiresAdoption | WorkAuthoritySchema.Error | GoalChildSchema.Error>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
     limit?: number
@@ -415,19 +419,24 @@ export interface Interface {
     agent: string
   }) => Effect.Effect<
     void,
-    NotFoundError | LegacySessionRequiresAdoption | AgentV2.NotFoundError | AgentNotSelectableError
+    | NotFoundError
+    | LegacySessionRequiresAdoption
+    | AgentV2.NotFoundError
+    | AgentNotSelectableError
+    | WorkAuthoritySchema.Error | GoalChildSchema.Error
   >
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
-  }) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption>
+  }) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption | WorkAuthoritySchema.Error | GoalChildSchema.Error>
   readonly setPermissions: (input: {
     sessionID: SessionSchema.ID
     permissions: PermissionV2.Ruleset
-  }) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption>
-  readonly setArchived: (
-    input: { sessionID: SessionSchema.ID; archived: boolean },
-  ) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption>
+  }) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption | WorkAuthoritySchema.Error | GoalChildSchema.Error>
+  readonly setArchived: (input: {
+    sessionID: SessionSchema.ID
+    archived: boolean
+  }) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption | WorkAuthoritySchema.Error | GoalChildSchema.Error>
   readonly prompt: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
@@ -443,30 +452,57 @@ export interface Interface {
     | SessionInput.StaleRevertEpoch
     | AgentV2.NotFoundError
     | AgentNotSelectableError
+    | WorkAuthoritySchema.Error | GoalChildSchema.Error
   >
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
     command: string
     resume?: boolean
-  }) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption | OperationUnavailableError>
+  }) => Effect.Effect<
+    void,
+    NotFoundError | LegacySessionRequiresAdoption | OperationUnavailableError | WorkAuthoritySchema.Error | GoalChildSchema.Error
+  >
   readonly skill: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
     skill: string
     resume?: boolean
-  }) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption | OperationUnavailableError>
+  }) => Effect.Effect<
+    void,
+    NotFoundError | LegacySessionRequiresAdoption | OperationUnavailableError | WorkAuthoritySchema.Error | GoalChildSchema.Error
+  >
   readonly compact: (
     input: CompactInput,
-  ) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption | OperationUnavailableError>
+  ) => Effect.Effect<
+    void,
+    NotFoundError | LegacySessionRequiresAdoption | OperationUnavailableError | WorkAuthoritySchema.Error | GoalChildSchema.Error
+  >
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly resume: (
     sessionID: SessionSchema.ID,
+    options?: { readonly activityID?: string },
   ) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption | SessionRunner.RunError>
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void, LegacySessionRequiresAdoption | Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/Session") {}
+
+const taskResumers = new WeakMap<object, { active: boolean; db: Database.Interface["db"]; execution: SessionExecution.Interface }>()
+
+/** Internal TaskRun seam. Public resume/prompt keep their ordinary writable gate. */
+export const resumeTaskChild = Effect.fn("V2Session.resumeTaskChild")(function* (sessions: Interface, input: {
+  readonly sessionID: SessionSchema.ID; readonly runID: string; readonly ownerToken: string; readonly claimGeneration: number
+}) {
+  const captured = taskResumers.get(sessions)
+  if (!captured?.active) return yield* new WorkAuthoritySchema.Error({ code: "PROFILE_UNAVAILABLE",
+    message: "The original Session execution service is unavailable" })
+  const { WorkChildAuthority } = yield* Effect.promise(() => import("./session/work-child-authority"))
+  yield* WorkChildAuthority.requireTaskResume(captured.db, input)
+  if (!captured.active) return yield* new WorkAuthoritySchema.Error({ code: "PROFILE_UNAVAILABLE",
+    message: "The original Session execution service ended" })
+  yield* captured.execution.resume(input.sessionID)
+})
 
 /** RI-18: bounded await for a manual compaction request's terminal state. */
 const MANUAL_COMPACTION_DEADLINE_MS = 10 * 60_000
@@ -623,6 +659,8 @@ export const layer = Layer.effect(
 
     const result = Service.of({
       create: Effect.fn("V2Session.create")(function* (input) {
+        yield* WorkSessionGuard.requireCreation(db, input)
+        yield* GoalChild.requireCreate(db, input)
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)
         if (recorded) return recorded
@@ -657,12 +695,15 @@ export const layer = Layer.effect(
           subpath: subpath ? RelativePath.make(subpath) : undefined,
         })
         const projected = yield* events
-          .publish(
+          .publishChecked(
             SessionEvent.Created,
             { sessionID, info, slug: Slug.create(), version: InstallationVersion },
-            { location: input.location },
+            { location: input.location, commit: (seq) => GoalChild.recordCreation(db, input, seq) },
           )
           .pipe(
+            Effect.catch((error) =>
+              error.cause instanceof GoalChildSchema.Error ? Effect.fail(error.cause) : Effect.die(error),
+            ),
             Effect.as({ type: "created" } as const),
             Effect.catchDefect((defect) => {
               if (!(defect instanceof SessionProjector.SessionAlreadyProjected)) {
@@ -678,6 +719,7 @@ export const layer = Layer.effect(
                 )
             }),
           )
+        yield* GoalChild.requireCreate(db, input)
         if (projected.type === "existing") return projected.session
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
         return yield* result.get(sessionID).pipe(Effect.orDie)
@@ -688,6 +730,8 @@ export const layer = Layer.effect(
         return session
       }),
       requireWritable: Effect.fn("V2Session.requireWritable")(function* (sessionID) {
+        yield* WorkSessionGuard.requireOrdinary(db, sessionID)
+        yield* GoalChild.requireOrdinary(db, sessionID)
         const row = yield* db
           .select({ v2Authority: SessionTable.v2_authority })
           .from(SessionTable)
@@ -829,7 +873,8 @@ export const layer = Layer.effect(
       prompt: Effect.fn("V2Session.prompt")((input) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
-            const writable = yield* result.requireWritable(input.sessionID)
+            const managed = yield* GoalChild.requirePrompt(db, input)
+            const writable = yield* (managed ? result.get(input.sessionID) : result.requireWritable(input.sessionID))
             const returnPrompt = Effect.fnUntraced(function* (admitted: SessionInput.Admitted) {
               if (input.resume !== false) yield* enqueueWake(admitted)
               return admitted
@@ -849,6 +894,7 @@ export const layer = Layer.effect(
             if (prior !== undefined) {
               if (!SessionInput.equivalent(prior, expected))
                 return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
+              if (managed) yield* GoalChild.reconcileInput(db, input, prior.admittedSeq)
               return yield* returnPrompt(prior)
             }
             // The admitted event projects selection in the same transaction as the inbox row.
@@ -861,6 +907,7 @@ export const layer = Layer.effect(
               prompt: input.prompt,
               delivery,
               revertEpoch: input.revertEpoch,
+              ...(managed ? { commit: (seq: number) => GoalChild.recordInput(db, input, seq) } : {}),
             }).pipe(
               Effect.catchDefect((defect) =>
                 defect instanceof SessionInput.LifecycleConflict
@@ -870,6 +917,8 @@ export const layer = Layer.effect(
             )
             if (!SessionInput.equivalent(admitted, expected))
               return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
+            // admit may reconcile a concurrent input winner without invoking its event hook.
+            if (managed) yield* GoalChild.reconcileInput(db, input, admitted.admittedSeq)
             return yield* returnPrompt(admitted)
           }),
         ),
@@ -951,13 +1000,23 @@ export const layer = Layer.effect(
         const row = yield* db.select({ slug: SessionTable.slug, version: SessionTable.version })
           .from(SessionTable).where(eq(SessionTable.id, input.sessionID)).get().pipe(Effect.orDie)
         if (!row) return yield* new NotFoundError({ sessionID: input.sessionID })
-        yield* events.publish(SessionEvent.Updated, {
-          sessionID: input.sessionID,
-          info: SessionSchema.Info.make({ ...info, time: { ...info.time,
-            updated: yield* DateTime.now, archived: input.archived ? yield* DateTime.now : undefined } }),
-          slug: row.slug,
-          version: row.version,
-        }, { location: info.location })
+        yield* events.publish(
+          SessionEvent.Updated,
+          {
+            sessionID: input.sessionID,
+            info: SessionSchema.Info.make({
+              ...info,
+              time: {
+                ...info.time,
+                updated: yield* DateTime.now,
+                archived: input.archived ? yield* DateTime.now : undefined,
+              },
+            }),
+            slug: row.slug,
+            version: row.version,
+          },
+          { location: info.location },
+        )
       }),
       // RI-18 native manual compaction: admit a durable request (fixing the summary model and the
       // history fence), wake the drain — the summary provider turn runs inside SessionCompaction
@@ -1011,16 +1070,23 @@ export const layer = Layer.effect(
         yield* result.get(sessionID)
         yield* execution.awaitIdle(sessionID)
       }),
-      resume: Effect.fn("V2Session.resume")(function* (sessionID) {
+      resume: Effect.fn("V2Session.resume")(function* (sessionID, options) {
         yield* result.requireWritable(sessionID)
-        yield* execution.resume(sessionID)
+        yield* execution.resume(sessionID, options)
       }),
       interrupt: Effect.fn("V2Session.interrupt")((sessionID) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
             const session = yield* store.get(sessionID)
             if (!session) return yield* execution.interrupt(sessionID).pipe(Effect.orDie)
-            yield* result.requireWritable(sessionID)
+            const row = yield* db
+              .select({ v2Authority: SessionTable.v2_authority })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, sessionID))
+              .get()
+              .pipe(Effect.orDie)
+            if (!row?.v2Authority)
+              return yield* new LegacySessionRequiresAdoption({ sessionID, code: "legacy_session_requires_adoption" })
             const event = yield* events
               .publish(SessionEvent.InterruptRequested, {
                 sessionID,
@@ -1035,6 +1101,9 @@ export const layer = Layer.effect(
       ),
     })
 
+    const captured = { active: true, db, execution }
+    taskResumers.set(result, captured)
+    yield* Effect.addFinalizer(() => Effect.sync(() => { captured.active = false; taskResumers.delete(result) }))
     return result
   }),
 )

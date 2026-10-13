@@ -227,6 +227,7 @@ export const noopPorts: GoalDriverPorts = {
 }
 
 export type StartGoalInput = {
+  readonly goalId?: string
   readonly deps: ControllerDeps
   readonly planDocId: string
   readonly criteria: readonly GoalCriterion[]
@@ -243,7 +244,7 @@ export const startGoal = (input: StartGoalInput) => {
     limits: input.limits,
     stallThreshold: input.stallThreshold ?? 3,
   }
-  return Effect.map(loop.start(spec), (handle) => ({ loop, handle }))
+  return Effect.map(loop.start(spec, input.goalId), (handle) => ({ loop, handle }))
 }
 
 /** Whether an outcome is terminal (the loop is done / escalated / rolled back — not "continue"). */

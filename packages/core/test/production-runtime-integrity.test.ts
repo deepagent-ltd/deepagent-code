@@ -100,9 +100,27 @@ describe("production runtime integrity", () => {
 
   test("the production runner oracle cannot bypass SessionExecution ownership", async () => {
     const source = await Bun.file(path.join(repository, "packages/core/test/session-runner.test.ts")).text()
-    expect(source).not.toContain("SessionRunner.Service")
-    expect(source).not.toContain("SessionRunCoordinator.Service")
-    expect(source).not.toMatch(/\.run\(\{\s*sessionID,\s*force:/)
+    const parsed = createSourceFile("session-runner.test.ts", source, ScriptTarget.Latest, true, ScriptKind.TS)
+    const refusals: Node[] = []
+    const visit = (node: Node) => {
+      if (isCallExpression(node) && isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === "effect" && node.arguments[0] && isStringLiteral(node.arguments[0]) &&
+        node.arguments[0].text === "refuses a bound Work before direct runner Context/model loading or physical dispatch")
+        refusals.push(node)
+      forEachChild(node, visit)
+    }
+    forEachChild(parsed, visit)
+    expect(refusals).toHaveLength(1)
+    const refusal = refusals[0]!
+    const negative = refusal.getText(parsed)
+    expect(negative).toContain('code: "PROFILE_UNAVAILABLE"')
+    expect(negative).toContain("expect(requests).toHaveLength(0)")
+    expect(negative).toContain("expect(contextLoads).toBe(0)")
+    expect(negative).toContain("expect(modelLoads).toBe(0)")
+    const production = source.slice(0, refusal.getStart(parsed)) + source.slice(refusal.end)
+    expect(production).not.toContain("SessionRunner.Service")
+    expect(production).not.toContain("SessionRunCoordinator.Service")
+    expect(production).not.toMatch(/\.run\(\{\s*sessionID,\s*force:/)
     expect(source).toContain("SessionExecutionLocal.layer")
   })
 
@@ -425,7 +443,7 @@ describe("production runtime integrity", () => {
     expect(http).toContain("Effect.promise(gateway.ensureKnowledgeSeeded)")
     expect(http).not.toContain("configureGateway")
     expect(http).not.toContain("AgentGateway.flushKnowledgeSeed")
-    expect(server).toContain("deepagentHandlers.pipe(Layer.provide(V2RunnerFrame.gatewayRuntimeLayer))")
+    expect(server).toMatch(/deepagentHandlers\.pipe\(Layer\.provide\(\[\s*V2RunnerFrame\.gatewayRuntimeLayer,\s*currentServerAuthLayer,?\s*\]\)\)/)
   })
 
   test("profile observations cannot escape their HTTP root or routed workspace", async () => {
@@ -618,33 +636,23 @@ describe("production runtime integrity", () => {
       ["packages/deepagent-code/src/permission/index.ts:closure@136:190.allPending", "safe_bounded"],
     ] as const
     for (const [key, verdict] of reanchored) {
-      const candidate = candidates.find((item) => item.key === key)
+      const matches = candidates.filter(
+        (item) => item.key.replace(/@\d+(?::\d+)?/g, "@owner") === key.replace(/@\d+(?::\d+)?/g, "@owner"),
+      )
+      expect(matches).toHaveLength(1)
+      const candidate = matches[0]
       expect(candidate?.verdict).toBe(verdict)
       expect(candidate?.owner).not.toBe("unresolved")
       expect(candidate?.finalizer).not.toBe("unresolved")
     }
 
-    // `review_required` is the explicit adjudication backlog: process-lifetime bindings whose
-    // owner/bound/finalizer a human has to rule on. RI-94's terminal state is an empty backlog, and
-    // the recorded clearing (5fc382979, 269 -> 0) has since drifted back to the entries below.
-    // The gate pins the currently identified backlog: a NEW unadjudicated binding fails here instead
-    // of arriving silently. To lower the ceiling, adjudicate entries and update this number — never
-    // raise it without an entry in the review.
-    // The remaining three are process-global session/turn budget maps without a production
-    // finalizer or durable owner: domain_pack_load (two) and knowledge_propose (one).
-    const REVIEW_REQUIRED_CEILING = 3
+    // RI-94 is closed only when every discovered owner has an explicit lifetime/current
+    // classification. The three former Session quota maps now use original durable Event facts.
+    // New unreviewed bindings fail this gate; capacity is never raised to hide a backlog.
+    const REVIEW_REQUIRED_CEILING = 0
     const backlog = candidates.filter((candidate) => candidate.verdict === "review_required")
     expect(backlog.length).toBeLessThanOrEqual(REVIEW_REQUIRED_CEILING)
-    expect(backlog.map((candidate) => candidate.key)).toEqual([
-      "packages/core/src/system-context/domain-pack-load-tool.ts:sessionLoaded",
-      "packages/core/src/system-context/domain-pack-load-tool.ts:turnCharged",
-      "packages/core/src/tool/knowledge-propose.ts:sessionProposals",
-    ])
-    if (backlog.length > 0)
-      console.warn(
-        `[RI-94] ${backlog.length} binding(s) await adjudication (ceiling ${REVIEW_REQUIRED_CEILING}): ` +
-          backlog.map((candidate) => `${candidate.file}:${candidate.line}`).join(", "),
-      )
+    expect(backlog.map((candidate) => candidate.key)).toEqual([])
 
     // Optional cross-check against a regenerated manifest, when one exists locally.
     const manifestPath = path.join(repository, "docs/core-v2.0-beta/runtime-state-inventory.tsv")

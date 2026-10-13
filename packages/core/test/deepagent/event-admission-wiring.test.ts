@@ -8,7 +8,7 @@ import { createRuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-
 import { eventAdmissionMigration } from "@deepagent-code/core/deepagent/event-admission-sql"
 import type { RegisteredEventEnvelope } from "@deepagent-code/core/deepagent/event-registry"
 import { assertPublishable } from "@deepagent-code/core/deepagent/event-registry"
-import { decodeEventEnvelope } from "@deepagent-code/core/contract/event-envelope"
+import { decodeEventEnvelope, decodeEventWorkEnvelope } from "@deepagent-code/core/contract/event-envelope"
 import { commandReg, makeRegistry, verifiedCommand, commandEnvelope, HASH } from "./event-fixture"
 
 // C5-04 — the event→envelope→admit production wiring (the mapping E4a deferred). Design §8.4 (§8.4 maps
@@ -178,12 +178,95 @@ describe("C5-04 event→envelope→admit wiring", () => {
     expect(r.reason).toBe("unbounded_payload")
   })
 
-  test("an over-budget declared intent is refused (over_budget)", () => {
-    const over = verifiedScope({ declared: { maxTokens: EventAdmissionWiring.DEFAULT_WORK_BUDGET.maxTokens + 1 } })
-    const r = resolve(verifiedCommand(registry), over)
-    expect(r.ok).toBe(false)
-    if (r.ok) throw new Error("expected refusal")
-    expect(r.reason).toBe("over_budget")
+  test.each([EventAdmissionWiring.DEFAULT_WORK_BUDGET.maxTokens + 1, Number.POSITIVE_INFINITY])(
+    "an over-budget declared intent %d is refused (over_budget)",
+    (maxTokens) => {
+      const over = verifiedScope({ declared: { maxTokens } })
+      const r = resolve(verifiedCommand(registry), over)
+      expect(r.ok).toBe(false)
+      if (r.ok) throw new Error("expected refusal")
+      expect(r.reason).toBe("over_budget")
+    },
+  )
+
+  test.each([0, 1, 8_000, EventAdmissionWiring.DEFAULT_WORK_BUDGET.maxTokens])(
+    "declared maxTokens %d survives the production envelope builder",
+    (maxTokens) => {
+      const result = resolve(verifiedCommand(registry), verifiedScope({ declared: { maxTokens } }))
+      expect(result.ok).toBe(true)
+      if (!result.ok) throw new Error(result.message)
+      expect(result.envelope.budget).toEqual({
+        ...EventAdmissionWiring.DEFAULT_WORK_BUDGET,
+        maxTokens,
+        eventRoot: "ag-1",
+      })
+    },
+  )
+
+  test.each([-1, 0.5, Number.NaN, Number.NEGATIVE_INFINITY])(
+    "invalid declared maxTokens %d is refused before adapter or receipt writes",
+    async (maxTokens) => {
+      await run(
+        Effect.gen(function* () {
+          const db = (yield* Database.Service).db
+          const calls: Array<Record<string, unknown>> = []
+          const error = yield* wiringFailureOf(
+            EventAdmissionWiring.admitWork(db, {
+              event: verifiedCommand(registry),
+              registration: commandReg,
+              scope: verifiedScope({ declared: { maxTokens } }),
+              adapter: recorder(calls),
+              now: 10,
+            }),
+          )
+          expect(error).toBeInstanceOf(EventAdmissionWiring.EventAdmissionWiringError)
+          if (!(error instanceof EventAdmissionWiring.EventAdmissionWiringError)) return
+          expect(error.reason).toBe("invalid_envelope")
+          expect(calls).toHaveLength(0)
+          expect(yield* EventAdmission.forSession(db, SESSION)).toHaveLength(0)
+        }),
+      )
+    },
+  )
+
+  test("a smaller declared budget binds the adapter prompt, persisted receipt, and exact retry identity", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const calls: Array<Record<string, unknown>> = []
+        const input = {
+          event: verifiedCommand(registry),
+          registration: commandReg,
+          scope: verifiedScope({ declared: { maxTokens: 8_000 } }),
+          adapter: recorder(calls),
+          now: 10,
+        }
+        const first = yield* EventAdmissionWiring.admitWork(db, input)
+        expect(first.kind).toBe("admitted")
+        if (first.kind !== "admitted") throw new Error("expected admission")
+        expect(first.row.envelope.budget.maxTokens).toBe(8_000)
+        expect(decodeEventWorkEnvelope(JSON.parse(String(calls[0]?.promptText))).budget.maxTokens).toBe(8_000)
+        expect((yield* EventAdmission.forSession(db, SESSION))[0]?.envelope.budget.maxTokens).toBe(8_000)
+
+        const retry = yield* EventAdmissionWiring.admitWork(db, { ...input, now: 20 })
+        expect(retry.kind).toBe("exact_retry")
+        const changed = yield* wiringFailureOf(
+          EventAdmissionWiring.admitWork(db, {
+            ...input,
+            scope: verifiedScope({ declared: { maxTokens: 8_001 } }),
+            now: 30,
+          }),
+        )
+        expect(changed).toBeInstanceOf(EventAdmission.EventAdmissionError)
+        if (!(changed instanceof EventAdmission.EventAdmissionError)) throw new Error("expected retry conflict")
+        expect(changed.reason).toBe("envelope_digest_mismatch")
+        expect(calls).toHaveLength(1)
+        const rows = yield* EventAdmission.forSession(db, SESSION)
+        expect(rows).toHaveLength(1)
+        expect(rows[0]?.envelopeDigest).toBe(first.row.envelopeDigest)
+        expect(rows[0]?.envelope.budget.maxTokens).toBe(8_000)
+      }),
+    )
   })
 
   test("the messageID is deterministic from the event id + target session", () => {

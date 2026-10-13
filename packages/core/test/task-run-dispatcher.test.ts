@@ -4,7 +4,7 @@ import path from "node:path"
 import { LLMClient, LLMEvent, Model, type LLMClientShape, type LLMRequest } from "@deepagent-code/llm"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
 import { count, eq } from "drizzle-orm"
-import { Context, Deferred, Effect, Layer, LayerMap, Option, Schema, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Layer, LayerMap, Option, Schema, Stream } from "effect"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
@@ -26,6 +26,12 @@ import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { SessionCompaction } from "@deepagent-code/core/session/compaction"
 import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
+import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { TaskContinuation } from "@deepagent-code/core/session/task-continuation"
+import { SessionActivityTable } from "@deepagent-code/core/context-federation/session-sql"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { Tool } from "@deepagent-code/core/tool/tool"
+import { V2ToolEffectAdmissionTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
@@ -36,6 +42,9 @@ import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
 import { V2TaskRunReceiptTable } from "@deepagent-code/core/session/runner/v2-task-run-receipt.sql"
+import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
+import { V2ToolEffectTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
+import { SessionProviderAttemptTable } from "@deepagent-code/core/context-federation/session-sql"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import {
   SessionInputTable,
@@ -76,12 +85,24 @@ let response: LLMEvent[] = []
 let responses: LLMEvent[][] | undefined
 let streamGate: Deferred.Deferred<void> | undefined
 let streamStarted: Deferred.Deferred<void> | undefined
+let streamRequests = 0
+let sealRequests = false
+let holdWakes = false
 const client = Layer.succeed(
   LLMClient.Service,
   LLMClient.Service.of({
     prepare: () => Effect.die("unused"),
     stream: ((_request: LLMRequest) => {
+      streamRequests++
       const events = Stream.fromIterable(responses === undefined ? response : (responses.shift() ?? []))
+      if (sealRequests) return Stream.unwrap(Effect.gen(function* () {
+        const seal = yield* V2ProviderTurn.CurrentRequestSeal
+        if (!seal) return yield* Effect.die("Missing actual canonical provider seal")
+        yield* seal.seal({ wireHash: Hash.sha256("task-continuation-controlled-wire"),
+          bodyHash: Hash.sha256("task-continuation-controlled-body"), bodyLength: 33,
+          contentType: "application/json" })
+        return events
+      }))
       if (streamGate === undefined) return events
       return Stream.unwrap(
         (streamStarted ? Deferred.succeed(streamStarted, undefined) : Effect.void).pipe(
@@ -105,7 +126,7 @@ const textResponse = (text: string, id = "txt_task") => [
 
 // ── Runner composition (trimmed from session-runner.test.ts; one fake text turn per drain) ─────
 
-const database = Database.layerFromPath(":memory:")
+const database = Database.layerFromPath(process.env.DAC_TASK_UNKNOWN_DB ?? ":memory:")
 const selectionSourcesLayer = Layer.succeed(ProductionV2Sources, {})
 const providerTurns = V2ProviderTurn.layer.pipe(
   Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(database))),
@@ -285,12 +306,18 @@ const locations = Layer.effect(
     Effect.map((service) => service as unknown as LocationServiceMap["Service"]),
   ),
 )
-const execution = SessionExecutionLocal.layer.pipe(
+const localExecution = SessionExecutionLocal.layer.pipe(
   Layer.provide(events),
   Layer.provide(store),
   Layer.provide(TaskTool.delegationSlotLayer),
   Layer.provide(locations),
 )
+const execution = Layer.effect(SessionExecution.Service, Effect.gen(function* () {
+  const service = yield* SessionExecution.Service
+  return SessionExecution.Service.of({ ...service,
+    wake: (sessionID, seq) => holdWakes ? Effect.void : service.wake(sessionID, seq),
+  })
+})).pipe(Layer.provide(localExecution))
 const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
@@ -320,9 +347,12 @@ const it = testEffect(
     locations,
     execution,
     sessions,
+    TaskTool.delegationSlotLayer,
     Layer.mergeAll(TaskRunDispatcher.layer({ maxConcurrent: 2 }), TaskOutbox.layer()).pipe(
       Layer.provide(database),
       Layer.provide(sessions),
+      Layer.provide(events),
+      Layer.provide(execution),
     ),
   ),
 )
@@ -446,6 +476,9 @@ const setup = Effect.gen(function* () {
   responses = undefined
   streamGate = undefined
   streamStarted = undefined
+  streamRequests = 0
+  sealRequests = false
+  holdWakes = false
   // The task child session is created with the spec's agent id; admission resolves it against the
   // Location roster, so register it as a selectable primary in the shared AgentV2 registry.
   const agentService = yield* AgentV2.Service
@@ -509,7 +542,331 @@ const settleCompleted = (db: DatabaseService, runID: string) =>
 // ── Tests ──────────────────────────────────────────────────────────────────────────────────────
 
 describe("TaskRunDispatcher + TaskOutbox (Core V2 background runtime)", () => {
-  it.effect("background run end-to-end: claim → resume-join → settle → outbox → ONE parent queue input", () =>
+  it.live("a timed-out real mutation retains unknown custody without a terminal receipt, outbox or replay", () =>
+    Effect.gen(function* () {
+      if (process.env.DAC_TASK_UNKNOWN_ACTUAL !== "1") {
+        const root = yield* Effect.promise(tmpdir)
+        yield* Effect.addFinalizer(() => Effect.promise(() => root[Symbol.asyncDispose]()))
+        const child = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dirname, "fixture/task-run-unknown-effect.ts"), root.path],
+          stdout: "pipe", stderr: "pipe" })
+        const [status, stdout, stderr] = yield* Effect.promise(() => Promise.all([child.exited,
+          new Response(child.stdout).text(), new Response(child.stderr).text()]))
+        expect({ status, failure: status === 0 ? "" : stdout + stderr }).toEqual({ status: 0, failure: "" })
+        expect(stdout).toContain("UNKNOWN_CUSTODY_ACTUAL_OK")
+        return
+      }
+      yield* setup
+      sealRequests = true
+      const db = (yield* Database.Service).db
+      const sessions = yield* SessionV2.Service
+      const scratch = yield* Effect.promise(tmpdir)
+      yield* Effect.addFinalizer(() => Effect.promise(() => scratch[Symbol.asyncDispose]()))
+      const filename = path.join(scratch.path, "original-effect.txt")
+      yield* (yield* ApplicationTools.Service).register({ mutate_once: Tool.make({
+        description: "Make one private fixture mutation then wait for owned interruption",
+        input: Schema.Struct({}), output: Schema.String,
+        execute: () => Effect.promise(() => Bun.write(filename, "original effect\n")).pipe(Effect.andThen(Effect.never)),
+      }) })
+      const parent = yield* sessions.create({ location: { directory } })
+      const submitted = yield* submitBackground(parent.id, "call-unknown-mutating-effect")
+      response = [LLMEvent.stepStart({ index: 0 }), LLMEvent.toolCall({ id: "call-mutate-once", name: "mutate_once", input: {} }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }), LLMEvent.finish({ reason: "tool-calls" })]
+      const result = yield* TaskRunAuthority.execute({ db, run: submitted.run, sessions, timeoutMs: 150 })
+      expect(result.outcome).toBe("recovery_required")
+      expect(yield* Effect.promise(() => Bun.file(filename).text())).toBe("original effect\n")
+      const run = yield* db.select().from(TaskRunTable).where(eq(TaskRunTable.run_id, submitted.run.runID)).get()
+      expect(run?.state).toBe("recovery_required")
+      expect(run?.time_settled).toBeNull()
+      expect(run?.workspace_preflight_state).toBe("ready")
+      expect(run?.execution_owner).toBeNull()
+      expect((yield* receiptCount(db))?.total).toBe(0)
+      expect(yield* outboxRowFor(db, submitted.run.runID)).toBeUndefined()
+      expect((yield* db.select({ total: count() }).from(V2ToolEffectAdmissionTable).where(eq(V2ToolEffectAdmissionTable.session_id, submitted.run.childSessionID)).get())?.total).toBe(1)
+      expect((yield* db.select({ total: count() }).from(V2ToolEffectTable).where(eq(V2ToolEffectTable.session_id, submitted.run.childSessionID)).get())?.total).toBe(0)
+      expect(streamRequests).toBe(1)
+      expect(yield* (yield* TaskRunDispatcher.Service).tick).toBe(0)
+      expect(streamRequests).toBe(1)
+      const retry = yield* submitBackground(parent.id, "call-unknown-mutating-effect")
+      expect(retry.exactRetry).toBe(true)
+      expect(retry.run.state).toBe("recovery_required")
+      expect(streamRequests).toBe(1)
+      expect(yield* Effect.promise(() => Bun.file(filename).text())).toBe("original effect\n")
+      const custody = yield* TaskRunAuthority.resolveRecovery(db, { runID: submitted.run.runID,
+        resolution: "closed", reason: "Do not discard a real unsettled mutation" }).pipe(Effect.exit)
+      expect(Exit.isFailure(custody)).toBe(true)
+      if (Exit.isFailure(custody)) expect(Cause.squash(custody.cause)).toBeInstanceOf(TaskRunAuthority.RecoveryCustodyRequired)
+      expect(yield* TaskRunAuthority.get(db, submitted.run.runID)).toEqual(retry.run)
+      const stranger = yield* sessions.create({ location: { directory } })
+      const foreign = yield* TaskRunAuthority.closeTask(db, { childSessionID: submitted.run.childSessionID,
+        parentSessionID: stranger.id, reason: "Foreign parent must not close this child" }).pipe(Effect.exit)
+      expect(Exit.isFailure(foreign)).toBe(true)
+      expect(yield* TaskRunAuthority.get(db, submitted.run.runID)).toEqual(retry.run)
+      const requested = yield* TaskRunAuthority.closeTask(db, { childSessionID: submitted.run.childSessionID,
+        parentSessionID: parent.id, reason: "Record close intent while retaining unknown custody" })
+      expect(requested.closed).toBe(true)
+      const retained = yield* db.select().from(TaskRunTable).where(eq(TaskRunTable.run_id, submitted.run.runID)).get()
+      expect(retained?.state).toBe("recovery_required")
+      expect(retained?.control_state).toBe("close_requested")
+      expect(retained?.time_settled).toBeNull()
+      expect(retained?.workspace_preflight_state).toBe("ready")
+      expect((yield* receiptCount(db))?.total).toBe(0)
+      expect(yield* outboxRowFor(db, submitted.run.runID)).toBeUndefined()
+      expect(yield* (yield* TaskRunDispatcher.Service).tick).toBe(0)
+      expect(streamRequests).toBe(1)
+      expect(yield* Effect.promise(() => Bun.file(filename).text())).toBe("original effect\n")
+    }),
+  )
+  it.effect("a canonical background wait returns after its launch activity settles, exactly once", () =>
+    Effect.gen(function* () {
+      yield* setup
+      sealRequests = true
+      const db = (yield* Database.Service).db
+      const sessions = yield* SessionV2.Service
+      const agents = yield* AgentV2.Service
+      yield* agents.update((editor) => editor.update(AgentV2.ID.make("explore"), (agent) => {
+        agent.mode = "subagent"
+        agent.permissions = [{ action: "*", resource: "*", effect: "deny" }]
+      }))
+      yield* Layer.build(TaskTool.layer)
+      ;(yield* TaskTool.DelegationSlot).service = sessions
+      const parent = yield* sessions.create({ location: { directory } })
+      const call = { description: "Original task", prompt: "Research and report the answer.", subagent_type: "explore", background: true }
+      responses = [
+        [LLMEvent.stepStart({ index: 0 }), LLMEvent.toolCall({ id: "call-canonical-background", name: "task", input: call }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }), LLMEvent.finish({ reason: "tool-calls" })],
+        textResponse("The registered task is working."), textResponse("The actual child answer: 42"),
+        textResponse("The registered return was consumed."),
+      ]
+      yield* sessions.prompt({ sessionID: parent.id, prompt: new Prompt({ text: "Delegate and report when it returns." }), resume: false })
+      yield* sessions.resume(parent.id)
+      const run = yield* db.select().from(TaskRunTable).where(eq(TaskRunTable.parent_session_id, parent.id)).get()
+      if (!run) return yield* Effect.die(JSON.stringify(yield* sessions.messages({ sessionID: parent.id, order: "asc" })))
+      const registered = TaskContinuation.decode(run?.execution_spec?.continuation)
+      expect(registered).toBeDefined()
+      const launching = yield* db.select().from(SessionActivityTable).where(eq(SessionActivityTable.activity_id, registered!.activityID)).get()
+      expect(launching?.state).toBe("settled")
+      expect(streamRequests).toBe(2)
+      const dispatcher = yield* TaskRunDispatcher.Service
+      expect(yield* dispatcher.tick).toBe(1)
+      yield* dispatcher.awaitIdle
+      expect((yield* TaskRunAuthority.get(db, run!.run_id))?.state).toBe("completed")
+      expect(streamRequests).toBe(3)
+      const outbox = yield* TaskOutbox.Service
+      expect(yield* outbox.tick).toBe(1)
+      yield* sessions.wait(parent.id)
+      const delivered = yield* outboxRowFor(db, run!.run_id)
+      expect(delivered?.status).toBe("delivered")
+      expect(streamRequests).toBe(4)
+      expect((yield* parentInputs(db, parent.id)).filter((input) => String(input.id) === delivered?.message_id)).toHaveLength(1)
+      expect(yield* outbox.tick).toBe(0)
+      expect(streamRequests).toBe(4)
+      expect(TaskContinuation.decode((yield* db.select().from(TaskRunTable).where(eq(TaskRunTable.run_id, run!.run_id)).get())?.execution_spec?.continuation)).toEqual(registered)
+    }),
+  )
+
+  it.effect("a committed late return spends no provider turn and leaves the following user FIFO runnable", () =>
+    Effect.gen(function* () {
+      yield* setup
+      sealRequests = true
+      const db = (yield* Database.Service).db
+      const sessions = yield* SessionV2.Service
+      const agents = yield* AgentV2.Service
+      yield* agents.update((editor) => editor.update(AgentV2.ID.make("explore"), (agent) => {
+        agent.mode = "subagent"
+        agent.permissions = [{ action: "*", resource: "*", effect: "deny" }]
+      }))
+      yield* Layer.build(TaskTool.layer)
+      ;(yield* TaskTool.DelegationSlot).service = sessions
+      const parent = yield* sessions.create({ location: { directory } })
+      responses = [
+        [LLMEvent.stepStart({ index: 0 }), LLMEvent.toolCall({ id: "call-late-background", name: "task", input: {
+          description: "Late task", prompt: "Research and report the answer.", subagent_type: "explore", background: true,
+        } }), LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }), LLMEvent.finish({ reason: "tool-calls" })],
+        textResponse("Waiting for the original registered task."), textResponse("Late child answer"),
+        textResponse("Independent user work finished."), textResponse("Next user queue finished."),
+      ]
+      yield* sessions.prompt({ sessionID: parent.id, prompt: new Prompt({ text: "Launch an asynchronous task." }), resume: false })
+      yield* sessions.resume(parent.id)
+      const run = yield* db.select().from(TaskRunTable).where(eq(TaskRunTable.parent_session_id, parent.id)).get()
+      if (!run) return yield* Effect.die(JSON.stringify(yield* sessions.messages({ sessionID: parent.id, order: "asc" })))
+      expect(TaskContinuation.decode(run.execution_spec?.continuation)).toBeDefined()
+      const dispatcher = yield* TaskRunDispatcher.Service
+      expect(yield* dispatcher.tick).toBe(1)
+      yield* dispatcher.awaitIdle
+      holdWakes = true
+      expect(yield* (yield* TaskOutbox.Service).tick).toBe(1)
+      const result = yield* outboxRowFor(db, run!.run_id)
+      expect(result?.status).toBe("delivered")
+      expect(streamRequests).toBe(3)
+      yield* sessions.prompt({ sessionID: parent.id, prompt: new Prompt({ text: "Change direction and do my independent work." }), resume: false })
+      holdWakes = false
+      yield* sessions.resume(parent.id)
+      expect(streamRequests).toBe(4)
+      const expired = yield* outboxRowFor(db, run!.run_id)
+      expect(expired?.status).toBe("dead")
+      expect(expired?.last_error).toContain("changed")
+      const resultActivity = yield* db.select().from(SessionActivityTable).where(eq(SessionActivityTable.trigger_input_id, result!.message_id)).get()
+      expect(resultActivity?.state).toBe("failed")
+      expect((yield* TaskRunAuthority.get(db, run!.run_id))?.output).toBe("Late child answer")
+      yield* sessions.prompt({ sessionID: parent.id, prompt: new Prompt({ text: "Another independent queued task." }), delivery: "queue", resume: false })
+      yield* sessions.resume(parent.id)
+      expect(streamRequests).toBe(5)
+      expect((yield* parentInputs(db, parent.id)).every((input) => input.promoted_seq !== null)).toBe(true)
+    }),
+  )
+  it.effect(
+    "a real unresolved child execution claim stays recovery_required without terminal settlement or replay",
+    () =>
+      Effect.gen(function* () {
+        yield* setup
+        const db = (yield* Database.Service).db
+        const sessions = yield* SessionV2.Service
+        const store = yield* SessionStore.Service
+        const dispatcher = yield* TaskRunDispatcher.Service
+        const parent = yield* sessions.create({ location: { directory } })
+        const submitted = yield* submitBackground(parent.id, "call-unconfirmed-child")
+        const inputBefore = yield* parentInputs(db, submitted.run.childSessionID)
+        const claim = yield* store.claim(submitted.run.childSessionID)
+        expect(claim).toBeDefined()
+        yield* TaskRunAuthority.claim(db, {
+          runID: submitted.run.runID,
+          ownerToken: "expired-task-owner",
+          leaseMs: 1000,
+          now: Date.now() - 120000,
+        })
+        expect(yield* dispatcher.tick).toBe(1)
+        yield* dispatcher.awaitIdle
+        const current = yield* TaskRunAuthority.get(db, submitted.run.runID)
+        expect(current?.state).toBe("recovery_required")
+        expect(current?.executionOwner).toBeUndefined()
+        expect(yield* store.claimToken(submitted.run.childSessionID)).toBe(claim)
+        expect(yield* parentInputs(db, submitted.run.childSessionID)).toEqual(inputBefore)
+        expect((yield* receiptCount(db))?.total).toBe(0)
+        expect(yield* outboxRowFor(db, submitted.run.runID)).toBeUndefined()
+        expect(streamRequests).toBe(0)
+        expect(
+          (yield* db.select({ total: count() }).from(V2ProviderTurnReceiptTable).get().pipe(Effect.orDie))?.total,
+        ).toBe(0)
+        expect(
+          (yield* db.select({ total: count() }).from(SessionProviderAttemptTable).get().pipe(Effect.orDie))?.total,
+        ).toBe(0)
+        expect((yield* db.select({ total: count() }).from(V2ToolEffectTable).get().pipe(Effect.orDie))?.total).toBe(0)
+        expect(yield* dispatcher.tick).toBe(0)
+        yield* (yield* AgentV2.Service).update((editor) => {
+          editor.update(AgentV2.ID.make("general"), (agent) => {
+            agent.mode = "subagent"
+          })
+        })
+        yield* Layer.build(TaskTool.captureDelegationServiceLayer)
+        yield* Layer.build(TaskTool.layer)
+        const tools = yield* (yield* ToolRegistry.Service).materialize()
+        const retry = yield* tools.settle({
+          sessionID: parent.id,
+          agent: AgentV2.ID.make("general"),
+          assistantMessageID: SessionMessage.ID.make("msg_parent_recovery_retry"),
+          call: {
+            type: "tool-call",
+            name: "task",
+            id: "call-recovery-retry",
+            input: {
+              description: "Resume unconfirmed child",
+              prompt: "Do not replay unknown work.",
+              subagent_type: "general",
+              task_id: submitted.run.childSessionID,
+            },
+          },
+        })
+        expect(retry.result.type).toBe("error")
+        expect(String(retry.result.value)).toContain("the old run requires explicit recovery")
+        expect(yield* parentInputs(db, submitted.run.childSessionID)).toEqual(inputBefore)
+        expect((yield* receiptCount(db))?.total).toBe(0)
+        expect(streamRequests).toBe(0)
+        const denied = yield* TaskRunAuthority.resolveRecovery(db, {
+          runID: submitted.run.runID,
+          resolution: "closed",
+          reason: "A live foreign claim cannot be treated as known execution",
+        }).pipe(Effect.exit)
+        expect(Exit.isFailure(denied)).toBe(true)
+        if (Exit.isFailure(denied)) expect(Cause.squash(denied.cause)).toBeInstanceOf(TaskRunAuthority.RecoveryCustodyRequired)
+        expect((yield* receiptCount(db))?.total).toBe(0)
+        expect(yield* store.claimToken(submitted.run.childSessionID)).toBe(claim)
+        expect(yield* store.release(submitted.run.childSessionID, claim!)).toBe(true)
+        yield* TaskRunAuthority.resolveRecovery(db, {
+          runID: submitted.run.runID,
+          resolution: "closed",
+          reason: "explicit user resolution",
+        })
+        expect((yield* TaskRunAuthority.get(db, submitted.run.runID))?.state).toBe("closed")
+        const closedRetry = yield* tools.settle({
+          sessionID: parent.id,
+          agent: AgentV2.ID.make("general"),
+          assistantMessageID: SessionMessage.ID.make("msg_parent_recovery_closed_retry"),
+          call: {
+            type: "tool-call",
+            name: "task",
+            id: "call-recovery-closed-retry",
+            input: {
+              description: "Resume disposed child",
+              prompt: "Do not replay disposed work.",
+              subagent_type: "general",
+              task_id: submitted.run.childSessionID,
+            },
+          },
+        })
+        expect(closedRetry.result.type).toBe("error")
+        expect(String(closedRetry.result.value)).toContain(
+          "the old unresolved execution was explicitly disposed as closed",
+        )
+        expect(yield* parentInputs(db, submitted.run.childSessionID)).toEqual(inputBefore)
+        expect(yield* store.claimToken(submitted.run.childSessionID)).toBeUndefined()
+        expect(streamRequests).toBe(0)
+        expect(yield* dispatcher.tick).toBe(0)
+        const unstarted = yield* TaskRunAuthority.admitRun(db, specFor(parent.id, "call-before-child-creation"))
+        expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, unstarted.run.childSessionID)).get()).toBeUndefined()
+        yield* TaskRunAuthority.requestClose(db, { rootRunID: unstarted.run.runID, reason: "Known pre-dispatch close" })
+        expect((yield* TaskRunAuthority.get(db, unstarted.run.runID))?.state).toBe("closed")
+        expect((yield* db.select({ total: count() }).from(V2TaskRunReceiptTable).where(eq(V2TaskRunReceiptTable.run_id, unstarted.run.runID)).get())?.total).toBe(1)
+        expect(streamRequests).toBe(0)
+      }),
+  )
+  it.effect("UP-03 preserves two provider text blocks while an unregistered result remains read-only", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const db = (yield* Database.Service).db
+      const sessions = yield* SessionV2.Service
+      const dispatcher = yield* TaskRunDispatcher.Service
+      const outbox = yield* TaskOutbox.Service
+      const parent = yield* sessions.create({ location: { directory } })
+      const submitted = yield* submitBackground(parent.id, "call-up03-blocks")
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "up03_first" }),
+        LLMEvent.textDelta({ id: "up03_first", text: "First finding" }),
+        LLMEvent.textEnd({ id: "up03_first" }),
+        LLMEvent.textStart({ id: "up03_second" }),
+        LLMEvent.textDelta({ id: "up03_second", text: "Second finding" }),
+        LLMEvent.textEnd({ id: "up03_second" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+      expect(yield* dispatcher.tick).toBe(1)
+      yield* dispatcher.awaitIdle
+      const settled = yield* TaskRunAuthority.get(db, submitted.run.runID)
+      expect(settled?.state).toBe("completed")
+      expect(settled?.output).toBe("First finding\n\nSecond finding")
+      expect((yield* outboxRowFor(db, submitted.run.runID))?.payload.text).toBe("First finding\n\nSecond finding")
+      response = textResponse("acknowledged")
+      expect(yield* outbox.tick).toBe(1)
+      const inputs = yield* parentInputs(db, parent.id)
+      expect(inputs).toHaveLength(0)
+      expect((yield* outboxRowFor(db, submitted.run.runID))?.status).toBe("dead")
+      expect((yield* TaskRunAuthority.get(db, submitted.run.runID))?.output).toBe("First finding\n\nSecond finding")
+      expect(yield* outbox.tick).toBe(0)
+      expect(yield* parentInputs(db, parent.id)).toHaveLength(0)
+    }),
+  )
+
+  it.effect("an unregistered background run executes once and retains its result without parent inference", () =>
     Effect.gen(function* () {
       yield* setup
       const db = (yield* Database.Service).db
@@ -530,36 +887,27 @@ describe("TaskRunDispatcher + TaskOutbox (Core V2 background runtime)", () => {
       expect(settled?.executionOwner).toBeUndefined()
       expect((yield* receiptCount(db))?.total).toBe(1)
 
-      // Delivery admits exactly ONE queue-mode session_input with the deterministic id, then the
-      // row is delivered. The parent pickup rides the advisory wake scheduled by SessionV2.prompt.
+      // Programmatic submission has no canonical parent wait. Execution remains real and its
+      // result remains readable; the outbox does not turn the result text into a fresh grant.
       response = textResponse("parent acknowledged")
       expect(yield* outbox.tick).toBe(1)
 
       const row = yield* outboxRowFor(db, submitted.run.runID)
-      expect(row?.status).toBe("delivered")
-      expect(row?.time_delivered).toBeNumber()
-      expect(row?.parent_input_message_id).toBe(row?.message_id)
+      expect(row?.status).toBe("dead")
+      expect(row?.last_error).toContain("unregistered")
+      expect(row?.parent_input_message_id).toBeNull()
 
       const inputs = yield* parentInputs(db, parent.id)
-      expect(inputs).toHaveLength(1)
-      expect(inputs[0]?.id).toBe(SessionMessage.ID.make(row!.message_id))
-      expect(inputs[0]?.delivery).toBe("queue")
-      expect(inputs[0]?.prompt).toEqual(
-        new Prompt({
-          text: TaskOutbox.notificationText({
-            runID: submitted.run.runID,
-            runState: "completed",
-            text: "The child answer: 42",
-          }),
-        }),
-      )
-      // A repeated delivery pass is a no-op: nothing left to claim, still exactly one input.
+      expect(inputs).toHaveLength(0)
+      expect(row?.payload.text).toBe("The child answer: 42")
+      expect(streamRequests).toBe(1)
+      // A repeated pass neither re-executes the child nor admits any parent inference.
       expect(yield* outbox.tick).toBe(0)
-      expect(yield* parentInputs(db, parent.id)).toHaveLength(1)
+      expect(yield* parentInputs(db, parent.id)).toHaveLength(0)
     }),
   )
 
-  it.effect("crash between claim and delivered: re-claim admits exactly one session_input", () =>
+  it.effect("reclaiming a crashed unregistered delivery preserves its result without a parent input", () =>
     Effect.gen(function* () {
       yield* setup
       const db = (yield* Database.Service).db
@@ -585,13 +933,13 @@ describe("TaskRunDispatcher + TaskOutbox (Core V2 background runtime)", () => {
 
       expect(yield* outbox.tick).toBe(1)
       const row = yield* outboxRowFor(db, submitted.run.runID)
-      expect(row?.status).toBe("delivered")
+      expect(row?.status).toBe("dead")
       expect(row?.attempts).toBe(2)
 
-      // Exactly-once: both attempts share the deterministic id, so only ONE session_input exists.
+      // A process boundary cannot mint the parent wait that was absent at original launch.
       const inputs = yield* parentInputs(db, parent.id)
-      expect(inputs).toHaveLength(1)
-      expect(inputs[0]?.id).toBe(SessionMessage.ID.make(row!.message_id))
+      expect(inputs).toHaveLength(0)
+      expect(row?.payload.text).toBe("settled output text")
     }),
   )
 
@@ -809,33 +1157,31 @@ describe("TaskRunDispatcher + TaskOutbox (Core V2 background runtime)", () => {
     }),
   )
 
-  stubIt.effect("a delivery that keeps failing exhausts attempts and dead-letters", () =>
+  stubIt.effect("a missing continuation runtime refuses before an arbitrary Session prompt seam", () =>
     Effect.gen(function* () {
       yield* insertStubFixture
       const db = (yield* Database.Service).db
       const outbox = yield* TaskOutbox.Service
 
-      // Attempt 1 fails transiently: released with backoff (pending, not yet due).
-      const beforeAttempt = Date.now()
+      // An arbitrary prompt seam is not a substitute for the canonical Event/Input/runtime.
       expect(yield* outbox.tick).toBe(1)
       const released = yield* stubOutboxRow(db)
-      expect(released?.status).toBe("pending")
+      expect(released?.status).toBe("dead")
       expect(released?.attempts).toBe(1)
-      expect(released?.available_at).toBeGreaterThanOrEqual(beforeAttempt + 60_000)
-      expect(released?.last_error).toContain("transiently failing")
+      expect(released?.last_error).toContain("authority is unavailable")
 
-      // Backoff elapsed: attempt 2 fails again and the bounded attempts are exhausted.
+      // A later cadence cannot turn an unavailable runtime into a registered parent wait.
       yield* db
         .update(TaskNotificationOutboxTable)
         .set({ available_at: 0 })
         .where(eq(TaskNotificationOutboxTable.id, "job_stub_outbox"))
         .run()
         .pipe(Effect.orDie)
-      expect(yield* outbox.tick).toBe(1)
+      expect(yield* outbox.tick).toBe(0)
       const dead = yield* stubOutboxRow(db)
       expect(dead?.status).toBe("dead")
-      expect(dead?.attempts).toBe(2)
-      expect(dead?.last_error).toContain("transiently failing")
+      expect(dead?.attempts).toBe(1)
+      expect(dead?.last_error).toContain("authority is unavailable")
 
       // Dead rows are never re-claimed, and the row stays visible.
       yield* db

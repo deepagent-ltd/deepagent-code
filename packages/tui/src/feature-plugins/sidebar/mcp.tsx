@@ -1,11 +1,14 @@
 import type { TuiPlugin, TuiPluginApi } from "@deepagent-code/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, For, Match, Show, Switch, createSignal } from "solid-js"
+import { pluginTranslator } from "../../i18n/standalone"
+import { mcpConnectionBlocked, mcpConnectionMessage } from "../../util/mcp-status"
 
 const id = "internal:sidebar-mcp"
 
 function View(props: { api: TuiPluginApi }) {
   const [open, setOpen] = createSignal(true)
+  const t = pluginTranslator(props.api.kv)
   const theme = () => props.api.theme.current
   const list = createMemo(() => props.api.state.mcp())
   const on = createMemo(() => list().filter((item) => item.status === "connected").length)
@@ -13,14 +16,17 @@ function View(props: { api: TuiPluginApi }) {
     () =>
       list().filter(
         (item) =>
-          item.status === "failed" || item.status === "needs_auth" || item.status === "needs_client_registration",
+          item.status === "failed" ||
+          item.status === "needs_auth" ||
+          item.status === "needs_client_registration" ||
+          mcpConnectionBlocked(item),
       ).length,
   )
 
   const dot = (status: string) => {
     if (status === "connected") return theme().success
     if (status === "failed") return theme().error
-    if (status === "disabled") return theme().textMuted
+    if (status === "disabled" || status === "disconnected") return theme().textMuted
     if (status === "needs_auth") return theme().warning
     if (status === "needs_client_registration") return theme().error
     return theme().textMuted
@@ -63,7 +69,11 @@ function View(props: { api: TuiPluginApi }) {
                       <Match when={item.status === "failed"}>
                         <i>{item.error}</i>
                       </Match>
-                      <Match when={item.status === "disabled"}>Disabled</Match>
+                      <Match when={item.status === "disabled"}>{t("tui.mcp.status.disabled")}</Match>
+                      <Match when={item.status === "disconnected"}>
+                        {t("tui.mcp.status.disconnected")}
+                        <Show when={mcpConnectionMessage(item)}>{(key) => ` · ${t(key())}`}</Show>
+                      </Match>
                       <Match when={item.status === "needs_auth"}>Needs auth</Match>
                       <Match when={item.status === "needs_client_registration"}>Needs client ID</Match>
                     </Switch>

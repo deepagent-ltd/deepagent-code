@@ -351,6 +351,140 @@ describe("ContextFederationDiagnostics", () => {
       }).pipe(Effect.provide(diagnostics), Effect.provide(database), Effect.scoped),
     )
   })
+  test("reads V2 selection maps and opaque evidence without changing durable rows", async () => {
+    const database = Database.layerFromPath(":memory:")
+    const diagnostics = ContextFederationDiagnostics.layer.pipe(
+      Layer.provide(SessionProviderAttempt.layer.pipe(Layer.provide(database))),
+      Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(database))),
+      Layer.provide(
+        Layer.succeed(Session.Service, {
+          messages: () => Effect.succeed([]),
+        } as unknown as Session.Interface),
+      ),
+      Layer.provide(
+        Layer.succeed(SessionFederatedContext.Service, {
+          recover: () => Effect.succeed(0),
+          resolve: () => Effect.die("not used"),
+          prepareProviderTurn: () => Effect.die("not used"),
+          settleActivity: () => Effect.void,
+          settleOrphanedActivities: () => Effect.succeed(0),
+          replayIndeterminate: () => Effect.die("not used"),
+          releasedKnowledgeForActiveSession: () => Effect.succeed(undefined),
+        } satisfies SessionFederatedContext.Interface),
+      ),
+      Layer.provide(database),
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        yield* seed(db)
+        const legacy = yield* db.select().from(SessionContextSelectionTable).get()
+        if (!legacy) throw new Error("missing seeded selection")
+        const statuses = Object.fromEntries(
+          ["code", "documents", "knowledge", "memory"].map((graph) => [
+            graph,
+            {
+              graph,
+              status: graph === "code" ? "ready" : graph === "documents" ? "degraded_unavailable" : "empty",
+              revision: `${graph}:v2`,
+              adapterVersion: "v2",
+              observedMutationEpoch: 1,
+              latencyMs: 0,
+              candidateCount: graph === "code" ? 1 : 0,
+              reasonCode: graph === "documents" ? "source_error" : "none",
+            },
+          ]),
+        )
+        yield* db
+          .insert(SessionContextSelectionTable)
+          .values({
+            ...legacy,
+            selection_id: "selection_v2",
+            revision: 1,
+            created_at: 21,
+            graph_statuses: JSON.stringify(statuses),
+            selected_refs: JSON.stringify([
+              {
+                graph: "code",
+                ref: "PRIVATE-CANONICAL-REF",
+                token: "Visible source title",
+                version: "code:v2",
+                provenanceRefs: ["PRIVATE-PROVENANCE-REF"],
+                freshness: "current",
+                sensitivity: "source_code",
+                score: 0.9,
+                reason: "federated_rank",
+              },
+            ]),
+          })
+          .run()
+        const before = yield* db.select().from(SessionContextSelectionTable).all()
+        const service = yield* ContextFederationDiagnostics.Service
+        const result = yield* service.get(sessionId, 50)
+        expect(result.selections[0]).toMatchObject({
+          summary: "partial",
+          evidence: [
+            {
+              token: "Visible source title",
+              graph: "code",
+              revision: "code:v2",
+              relations: [],
+            },
+          ],
+        })
+        expect(result.selections[0]?.evidence[0]?.provenance).toHaveLength(1)
+        expect(JSON.stringify(result)).not.toContain("PRIVATE-CANONICAL-REF")
+        expect(JSON.stringify(result)).not.toContain("PRIVATE-PROVENANCE-REF")
+        expect(result.metrics.alerts).toContainEqual({
+          graph: "documents",
+          state: "unavailable",
+          reasonCode: "source_error",
+        })
+        const cohort = yield* service.cohort({ sinceMs: 0, untilMs: 100 })
+        expect(cohort.readiness).toEqual({ ready: 0, building: 0, degraded: 2, blocked: 0 })
+        expect(cohort.graphs.code).toEqual({ statuses: 2, ready: 2, notReady: 0 })
+        expect(yield* db.select().from(SessionContextSelectionTable).all()).toEqual(before)
+
+        yield* db
+          .insert(SessionContextSelectionTable)
+          .values({
+            ...legacy,
+            selection_id: "selection_v2_denied",
+            revision: 2,
+            created_at: 22,
+            graph_statuses: JSON.stringify({
+              ...statuses,
+              code: { ...statuses.code, status: "denied", reasonCode: "project_scope_denied" },
+              documents: { ...statuses.documents, status: "timeout", reasonCode: "source_timeout" },
+            }),
+            selected_refs: "[]",
+          })
+          .run()
+        const denied = yield* service.get(sessionId, 50)
+        expect(denied.metrics.alerts).toContainEqual({ graph: "code", state: "denied", reasonCode: "scope_denied" })
+        expect(denied.metrics.alerts).toContainEqual({
+          graph: "documents",
+          state: "degraded",
+          reasonCode: "source_timeout",
+        })
+        expect((yield* service.cohort({ sinceMs: 0, untilMs: 100 })).readiness.blocked).toBe(1)
+
+        yield* db
+          .insert(SessionContextSelectionTable)
+          .values({
+            ...legacy,
+            selection_id: "selection_v2_invalid",
+            revision: 3,
+            created_at: 23,
+            graph_statuses: JSON.stringify({ ...statuses, code: { ...statuses.code, graph: "memory" } }),
+          })
+          .run()
+        const invalid = yield* service.get(sessionId, 50).pipe(Effect.exit)
+        expect(invalid._tag).toBe("Failure")
+        expect(JSON.stringify(invalid)).toContain("stored_graph_statuses_invalid")
+      }).pipe(Effect.provide(diagnostics), Effect.provide(database), Effect.scoped),
+    )
+  })
 })
 
 function seed(db: Database.Interface["db"]) {

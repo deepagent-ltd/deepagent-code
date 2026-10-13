@@ -1,9 +1,10 @@
-import fsNode from "fs/promises"
 import path from "path"
-import { randomUUID } from "node:crypto"
 import { Global } from "@deepagent-code/core/global"
 import { OFFICIAL_PROVIDER_ID_SET } from "@deepagent-code/core/provider-official"
-import { Flock } from "@deepagent-code/core/util/flock"
+import { Effect, Option, Schema } from "effect"
+import { ConfigFileWrite } from "../config/file-write"
+import { SettingsPrivateFile } from "./private-file"
+import { SettingsTransaction } from "./transaction"
 
 /**
  * First-party settings store — the single home for settings that must NOT live in the
@@ -19,7 +20,7 @@ import { Flock } from "@deepagent-code/core/util/flock"
  *
  * Stored in the roaming config home (`%APPDATA%\deepagent-code\settings.json` on Windows,
  * `~/.deepagent/code/settings.json` elsewhere — same root as `account.json`), mode 0600,
- * atomic write. Read is cached in-memory and invalidated on write. This module is
+ * bounded current reads and a recoverable cross-store publication receipt. This module is
  * backend-only; the renderer never imports it (it reads/writes through the config overlay).
  */
 export namespace SettingsStore {
@@ -66,11 +67,7 @@ export namespace SettingsStore {
     providers?: Record<string, TransportSettings>
   }
 
-  const FILE = () => path.join(Global.Path.config, "settings.json")
-
-  // Cache is keyed by resolved file path so a mid-process test-root switch doesn't serve a stale
-  // other-home cache.
-  let cache: { path: string; value: Settings } | undefined
+  export const file = () => path.join(Global.Path.config, "settings.json")
 
   const isRecord = (v: unknown): v is Record<string, unknown> =>
     typeof v === "object" && v !== null && !Array.isArray(v)
@@ -170,77 +167,77 @@ export namespace SettingsStore {
     return out
   }
 
-  /** Read + validate the settings file. Cached in-memory; a missing file is empty. */
+  export function decode(text: string | undefined): Settings {
+    if (text === undefined) return {}
+    const parsed = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text)
+    if (Option.isNone(parsed)) throw new globalThis.Error("Cannot read settings: invalid JSON")
+    return normalize(parsed.value)
+  }
+
+  export function encode(settings: Settings) {
+    const text = JSON.stringify(settings, null, 2)
+    if (Buffer.byteLength(text, "utf8") > SettingsPrivateFile.MAX_BYTES) throw new SettingsPrivateFile.Error("capacity")
+    // Verify the encoded document still has exactly the normalized settings fields.
+    if (text !== JSON.stringify(decode(text), null, 2)) throw new SettingsPrivateFile.Error("invalid")
+    return text
+  }
+
+  /** Every read observes the current private file; a partial cross-store update is never
+   * silently served from the preceding process-local cache. No cold writes occur here. */
   export async function read(): Promise<Settings> {
-    const file = FILE()
-    if (cache && cache.path === file) return cache.value
-    const value = await readDisk(file)
-    cache = { path: file, value }
-    return value
+    await SettingsTransaction.requireSettled()
+    const current = await SettingsPrivateFile.read(file())
+    await SettingsTransaction.requireSettled()
+    return decode(current?.text)
   }
 
-  async function readDisk(file: string): Promise<Settings> {
-    return fsNode
-      .readFile(file, "utf8")
-      .then((text) => normalize(JSON.parse(text)))
-      .catch((error: unknown) => {
-        if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return {}
-        throw new Error(`Cannot read settings from ${file}`, { cause: error })
-      })
+  /** Root Effect readers retain the original Windows Native settings port. */
+  export const readEffect = Effect.gen(function* () {
+    yield* SettingsTransaction.requireSettledEffect
+    const current = yield* SettingsPrivateFile.readEffect(file())
+    yield* SettingsTransaction.requireSettledEffect
+    return yield* Effect.try({ try: () => decode(current?.text), catch: (error) => error })
+  })
+
+  /** Kept for callers that previously invalidated the process cache. Reads are now current. */
+  export function invalidate(): void {}
+
+  export function merge(
+    current: Settings,
+    patch: {
+      deepagent?: DeepAgentSettings
+      providers?: Record<string, TransportSettings>
+    },
+  ): Settings {
+    const next: Settings = { ...current }
+    if (patch.deepagent) next.deepagent = normalizeDeepAgent({ ...(current.deepagent ?? {}), ...patch.deepagent })
+    if (patch.providers) {
+      const merged: Record<string, TransportSettings> = { ...(current.providers ?? {}) }
+      for (const [id, value] of Object.entries(patch.providers)) {
+        if (!OFFICIAL_PROVIDER_ID_SET.has(id)) continue
+        const normalized = normalizeTransport({ ...(merged[id] ?? {}), ...value })
+        if (normalized) merged[id] = normalized
+        else delete merged[id]
+      }
+      next.providers = Object.keys(merged).length > 0 ? merged : undefined
+    }
+    if (next.deepagent && Object.keys(next.deepagent).length === 0) delete next.deepagent
+    if (next.providers && Object.keys(next.providers).length === 0) delete next.providers
+    return next
   }
 
-  async function write(file: string, value: Settings): Promise<void> {
-    await fsNode.mkdir(path.dirname(file), { recursive: true }).catch(() => {})
-    const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`
-    await fsNode.writeFile(tmp, JSON.stringify(value, null, 2), { mode: 0o600 })
-    await fsNode.rename(tmp, file).catch(async (error) => {
-      await fsNode.rm(tmp, { force: true }).catch(() => {})
-      throw error
-    })
-    cache = { path: file, value }
-  }
-
-  /** Drop the in-memory cache (tests / after an external mutation). */
-  export function invalidate(): void {
-    cache = undefined
-  }
-
-  /** Merge a partial patch (per family) into the stored settings and persist. Reports whether the
-   * persisted value actually changed so callers can skip disposing running instances on no-op writes. */
+  /** Direct and Config writers share canonical sorted locks and the same durable protocol. */
   export async function update(patch: {
     deepagent?: DeepAgentSettings
     providers?: Record<string, TransportSettings>
   }): Promise<{ settings: Settings; changed: boolean }> {
-    const file = FILE()
-    return Flock.withLock(
-      `settings:${file}`,
-      async () => {
-        // Always re-read under the lock. The in-memory cache cannot observe writes from another
-        // process and using it here would turn an otherwise serialized update into a lost update.
-        const current = await readDisk(file)
-        const next: Settings = { ...current }
-        if (patch.deepagent) {
-          next.deepagent = normalizeDeepAgent({ ...(current.deepagent ?? {}), ...patch.deepagent })
-        }
-        if (patch.providers) {
-          const merged: Record<string, TransportSettings> = { ...(current.providers ?? {}) }
-          for (const [id, value] of Object.entries(patch.providers)) {
-            if (!OFFICIAL_PROVIDER_ID_SET.has(id)) continue
-            const t = normalizeTransport({ ...(merged[id] ?? {}), ...value })
-            if (t) merged[id] = t
-            else delete merged[id]
-          }
-          next.providers = Object.keys(merged).length > 0 ? merged : undefined
-        }
-        // Strip empty families so the file stays tidy.
-        if (next.deepagent && Object.keys(next.deepagent).length === 0) delete next.deepagent
-        if (next.providers && Object.keys(next.providers).length === 0) delete next.providers
-        const changed = JSON.stringify(next) !== JSON.stringify(current)
-        if (changed) await write(file, next)
-        else cache = { path: file, value: next }
-        return { settings: next, changed }
-      },
-      { dir: path.join(path.dirname(file), ".locks") },
+    const result = await ConfigFileWrite.run(
+      SettingsTransaction.apply({
+        files: [],
+        request: { kind: "settings", patch },
+        prepare: (_tx, current) => ({ settings: merge(current, patch), value: undefined }),
+      }),
     )
+    return { settings: result.settings, changed: result.changed }
   }
 }

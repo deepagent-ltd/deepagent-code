@@ -9,9 +9,9 @@ import { useToast } from "../ui/toast"
 import { errorMessage } from "../util/error"
 
 // DeepAgent settings face — the agentMode / self-learning / subagent-intensity / prompt-mode
-// selectors the GUI settings-v2 General tab owns. Writes go through config.update with the same
-// merge shape as the GUI updateDeepAgentOptions (options spread, models preserved); the server
-// recomputes routing from the next config read.
+// selectors the GUI settings-v2 General tab owns. Writes send only the changed options through
+// global.config.update; its SettingsTransaction preserves the other providers, options, and models.
+// The server recomputes routing from the next config read.
 
 type DeepAgentMode = "general" | "high" | "xhigh" | "max" | "ultra"
 type SelfLearning = "manual" | "auto"
@@ -64,17 +64,13 @@ export function DialogDeepAgentSettings() {
     if (busy()) return
     setBusy(true)
     try {
-      const { enabled: _legacyEnabled, ...existing } = options()
-      const result = await sdk.client.config.update({
+      const result = await sdk.client.global.config.update({
         config: {
-          ...current(),
           provider: {
-            ...current().provider,
             deepagent: {
-              name: "DeepAgent",
-              ...deepagent(),
-              options: { ...existing, ...update },
-              models: deepagent().models ?? {},
+              // The read DTO includes facade defaults that Core V2 cannot consume.
+              // The global update routes this option into the authoritative settings store.
+              options: update,
             },
           },
         },
@@ -90,7 +86,11 @@ export function DialogDeepAgentSettings() {
   }
 
   const cycle = {
-    agentMode: (): string => MODES[(MODES.indexOf(agentMode()) + 1) % MODES.length],
+    agentMode: (): string => {
+      // Match the GUI: direct cannot newly select ultra; an existing value remains visible.
+      const modes = MODES.filter((mode) => mode !== "ultra" || promptMode() !== "direct")
+      return modes[(modes.indexOf(agentMode()) + 1) % modes.length]
+    },
     selfLearning: (): string => (selfLearning() === "manual" ? "auto" : "manual"),
     subagentIntensity: (): string => (subagentIntensity() === "inherit" ? "downgrade" : "inherit"),
     promptMode: (): string => (promptMode() === "direct" ? "intelligence" : "direct"),

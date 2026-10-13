@@ -26,7 +26,6 @@ import { testEffect } from "../lib/effect"
 process.env["DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"] = "true"
 process.env["DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"] = "true"
 delete process.env["DEEPAGENT_CODE_EVENT_V2_ADMISSION"]
-delete process.env["DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"]
 
 // C4-07 — capability_search's enabledRuntimeFeatures reconnected to the E2
 // manifest-derived RuntimeFeatures registry (the frozen capability-search.ts is

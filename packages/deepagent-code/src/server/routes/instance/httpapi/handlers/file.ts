@@ -36,8 +36,7 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       rel: string,
     ): Generator<
       Effect.Effect<any, any, any>,
-      | { readonly ok: true; readonly abs: string }
-      | { readonly ok: false; readonly error: "path_escape" }
+      { readonly ok: true; readonly abs: string } | { readonly ok: false; readonly error: "path_escape" }
     > {
       const abs = path.resolve(directory, rel)
       if (!FSUtil.contains(directory, abs)) {
@@ -106,7 +105,7 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       ).pipe(
         Effect.map((item) => ({
           type: item.type,
-          content: item.type === "text" ? item.content.trim() : item.content,
+          content: item.content,
           ...(item.type === "binary" ? { encoding: item.encoding, mimeType: item.mime } : {}),
         })),
       )
@@ -121,25 +120,28 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
     // LocationMutation path-escape checking (resolveSafe above).
 
     type MutOk = { readonly ok: true; readonly path: string; readonly existed?: boolean }
-    type MutErr = { readonly ok: false; readonly path: string; readonly error: "stale_content" | "already_exists" | "path_escape" | "locked_by_human" }
+    type MutErr = {
+      readonly ok: false
+      readonly path: string
+      readonly error: "stale_content" | "already_exists" | "path_escape" | "locked_by_human"
+    }
     type MutResult = MutOk | MutErr
 
     /**
      * Overwrite a file. When `expected` (base64 snapshot) is provided the write
      * is a compare-and-swap: returns error:"stale_content" if on-disk bytes
      * changed since the snapshot was taken (conflict-safe save, see F4).
-     * V3.7: returns error:"locked_by_human" if a human editor holds the lock.
+     * Other human editors are protected; the original live file lease may save.
      */
     const write = Effect.fn("FileHttpApi.write")(function* (ctx: {
-      payload: { path: string; content: string; expected?: string | undefined }
+      payload: { path: string; content: string; expected?: string | undefined; lockId?: string | undefined }
     }): Generator<Effect.Effect<any, any, any>, MutResult> {
       const directory = (yield* InstanceState.context).directory
       const resolved = yield* resolveSafe(directory, ctx.payload.path)
       if (!resolved.ok) return { ok: false, path: ctx.payload.path, error: resolved.error }
 
-      // V3.7 Phase 4.1C: block writes when a human editor holds the lock
       const lock = fileLock.status(resolved.abs)
-      if (lock?.kind === "human") {
+      if (lock?.kind === "human" && (lock.path !== resolved.abs || lock.lockId !== ctx.payload.lockId)) {
         return { ok: false, path: ctx.payload.path, error: "locked_by_human" }
       }
 
@@ -151,8 +153,10 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
           .writeIfUnchanged({ target, content: ctx.payload.content, expected: expectedBytes })
           .pipe(
             Effect.map((res): MutResult => ({ ok: true, path: ctx.payload.path, existed: res.existed })),
-            Effect.catchTag("FileMutation.StaleContentError", (): Effect.Effect<MutResult> =>
-              Effect.succeed({ ok: false, path: ctx.payload.path, error: "stale_content" }),
+            Effect.catchTag(
+              "FileMutation.StaleContentError",
+              (): Effect.Effect<MutResult> =>
+                Effect.succeed({ ok: false, path: ctx.payload.path, error: "stale_content" }),
             ),
           )
         return r
@@ -171,14 +175,14 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       if (!resolved.ok) return { ok: false, path: ctx.payload.path, error: resolved.error }
 
       const target: FileMutation.Target = { canonical: resolved.abs, resource: ctx.payload.path }
-      const r: MutResult = yield* mutation
-        .create({ target, content: ctx.payload.content ?? "" })
-        .pipe(
-          Effect.map((res): MutResult => ({ ok: true, path: ctx.payload.path, existed: res.existed })),
-          Effect.catchTag("FileMutation.TargetExistsError", (): Effect.Effect<MutResult> =>
+      const r: MutResult = yield* mutation.create({ target, content: ctx.payload.content ?? "" }).pipe(
+        Effect.map((res): MutResult => ({ ok: true, path: ctx.payload.path, existed: res.existed })),
+        Effect.catchTag(
+          "FileMutation.TargetExistsError",
+          (): Effect.Effect<MutResult> =>
             Effect.succeed({ ok: false, path: ctx.payload.path, error: "already_exists" }),
-          ),
-        )
+        ),
+      )
       return r
     })
 
@@ -299,8 +303,10 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
     const lspCodeAction = Effect.fn("FileHttpApi.lspCodeAction")(function* (ctx: {
       payload: {
         file: string
-        startLine: number; startCharacter: number
-        endLine: number; endCharacter: number
+        startLine: number
+        startCharacter: number
+        endLine: number
+        endCharacter: number
       }
     }) {
       const directory = (yield* InstanceState.context).directory
@@ -343,51 +349,47 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       return { ok: true as const, lock }
     })
 
-    const lockRenew = Effect.fn("FileHttpApi.lockRenew")(function* (ctx: {
-      payload: { lockId: string }
-    }) {
+    const lockRenew = Effect.fn("FileHttpApi.lockRenew")(function* (ctx: { payload: { lockId: string } }) {
       return { ok: fileLock.renew(ctx.payload.lockId) }
     })
 
-    const lockRelease = Effect.fn("FileHttpApi.lockRelease")(function* (ctx: {
-      payload: { lockId: string }
-    }) {
+    const lockRelease = Effect.fn("FileHttpApi.lockRelease")(function* (ctx: { payload: { lockId: string } }) {
       fileLock.release(ctx.payload.lockId)
       return { ok: true as const }
     })
 
-    const lockStatus = Effect.fn("FileHttpApi.lockStatus")(function* (ctx: {
-      query: { path: string }
-    }) {
+    const lockStatus = Effect.fn("FileHttpApi.lockStatus")(function* (ctx: { query: { path: string } }) {
       const directory = (yield* InstanceState.context).directory
       const abs = LockKeys.fileLockKey(directory, ctx.query.path)
       return fileLock.status(abs)
     })
 
-    return handlers
-      .handle("findText", findText)
-      .handle("findFile", findFile)
-      .handle("findSymbol", findSymbol)
-      .handle("list", list)
-      .handle("content", content)
-      .handle("status", status)
-      // V3.6 Phase 1A mutation handlers
-      .handle("write", write)
-      .handle("createFile", createFile)
-      .handle("deleteFile", deleteFile)
-      .handle("rename", rename)
-      .handle("mkdir", mkdir)
-      // V3.6 Phase 2 LSP handlers
-      .handle("lspDiagnostics", lspDiagnostics)
-      .handle("lspHover", lspHover)
-      .handle("lspDefinition", lspDefinition)
-      .handle("lspCompletion", lspCompletion)
-      .handle("lspCodeAction", lspCodeAction)
-      .handle("lspRename", lspRename)
-      // V3.7 Phase 4.1C lock handlers
-      .handle("lockAcquire", lockAcquire)
-      .handle("lockRenew", lockRenew)
-      .handle("lockRelease", lockRelease)
-      .handle("lockStatus", lockStatus)
+    return (
+      handlers
+        .handle("findText", findText)
+        .handle("findFile", findFile)
+        .handle("findSymbol", findSymbol)
+        .handle("list", list)
+        .handle("content", content)
+        .handle("status", status)
+        // V3.6 Phase 1A mutation handlers
+        .handle("write", write)
+        .handle("createFile", createFile)
+        .handle("deleteFile", deleteFile)
+        .handle("rename", rename)
+        .handle("mkdir", mkdir)
+        // V3.6 Phase 2 LSP handlers
+        .handle("lspDiagnostics", lspDiagnostics)
+        .handle("lspHover", lspHover)
+        .handle("lspDefinition", lspDefinition)
+        .handle("lspCompletion", lspCompletion)
+        .handle("lspCodeAction", lspCodeAction)
+        .handle("lspRename", lspRename)
+        // V3.7 Phase 4.1C lock handlers
+        .handle("lockAcquire", lockAcquire)
+        .handle("lockRenew", lockRenew)
+        .handle("lockRelease", lockRelease)
+        .handle("lockStatus", lockStatus)
+    )
   }),
 ).pipe(Layer.provide(Search.defaultLayer), Layer.provide(FileMutation.layer), Layer.provide(FileLock.layer))

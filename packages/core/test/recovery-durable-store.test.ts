@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { Effect } from "effect"
-import { sql } from "drizzle-orm"
+import { getTableColumns, getTableName, sql } from "drizzle-orm"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import path from "node:path"
@@ -9,6 +9,8 @@ import { RecoveryCommandContract } from "../src/contract/recovery-command"
 import { SessionProviderRecoveryDurable } from "../src/session/runner/recovery-durable-store"
 import { SessionProviderRecovery } from "../src/session/runner/recovery"
 import { StartupInventory } from "../src/session/runner/startup-inventory"
+import workAuthorityMigration from "../src/database/migration/20261006185449_work_execution_authority"
+import { McpAppInvocationTable, McpAppEffectTable } from "../src/session/mcp-app-invocation.sql"
 import { V2ProviderTurn } from "../src/session/runner/v2-provider-turn"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -578,6 +580,11 @@ describe("SessionProviderRecoveryDurable store (W2)", () => {
       Effect.gen(function* () {
         const db = yield* makeDb
         yield* createTables(db)
+        yield* db.transaction((tx) => workAuthorityMigration.up(tx))
+        for (const table of [McpAppInvocationTable, McpAppEffectTable])
+          yield* db.run(sql`CREATE TABLE ${sql.identifier(getTableName(table))} (${sql.join(
+            Object.values(getTableColumns(table)).map((column) => sql`${sql.identifier(column.name)} TEXT`), sql`,`,
+          )})`)
         // Crash-left durable state: one indeterminate attempt + its recovery descriptors.
         // The startup-inventory read surface mirrors the tracked schema's columns; empty tables
         // classify to no items and the seeded sync authority keeps the inventory total.

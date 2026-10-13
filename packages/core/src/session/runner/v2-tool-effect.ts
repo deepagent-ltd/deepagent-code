@@ -3,6 +3,11 @@ export * as V2ToolEffect from "./v2-tool-effect"
 import { and, eq, isNull } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../../database/database"
+import { GoalChildExecution } from "../../deepagent/goal-child-execution"
+import { WorkChildAuthority } from "../work-child-authority"
+import { WorkAuthority } from "../work-authority"
+import { WorkToolPolicy } from "../work-tool-policy"
+import { WorkTaskKnownProof } from "../work-task-known-proof"
 import { Identifier } from "../../id/id"
 import { V2ToolEffectAdmissionTable, V2ToolEffectTable } from "./v2-tool-effect.sql"
 
@@ -98,7 +103,19 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/ToolEffect") {}
 
-function fromRow(row: typeof V2ToolEffectTable.$inferSelect): ToolEffect {
+// Public/history callers never materialize the sealed native proof. It is read only by the
+// fixed-purpose host verifier with a SQL byte preflight.
+const publicColumns = {
+  effect_id: V2ToolEffectTable.effect_id, session_id: V2ToolEffectTable.session_id,
+  provider_attempt_id: V2ToolEffectTable.provider_attempt_id, receipt_id: V2ToolEffectTable.receipt_id,
+  tool_call_id: V2ToolEffectTable.tool_call_id, tool_name: V2ToolEffectTable.tool_name,
+  effect_kind: V2ToolEffectTable.effect_kind, state: V2ToolEffectTable.state,
+  outcome_hash: V2ToolEffectTable.outcome_hash, error_code: V2ToolEffectTable.error_code,
+  grant_receipt_id: V2ToolEffectTable.grant_receipt_id, grant_owner_id: V2ToolEffectTable.grant_owner_id,
+  grant_state: V2ToolEffectTable.grant_state, grant_version: V2ToolEffectTable.grant_version,
+  owner_token: V2ToolEffectTable.owner_token, time_created: V2ToolEffectTable.time_created,
+}
+function fromRow(row: Pick<typeof V2ToolEffectTable.$inferSelect, keyof typeof publicColumns>): ToolEffect {
   return {
     effectId: row.effect_id,
     sessionId: row.session_id,
@@ -147,6 +164,8 @@ export const layer = Layer.effect(
 
     const admitInTransaction = (tx: Transaction, input: Parameters<Interface["admit"]>[0]) =>
       Effect.gen(function* () {
+        yield* GoalChildExecution.requireTool(tx, input).pipe(Effect.orDie)
+        yield* WorkToolPolicy.requireAdmission(tx, input).pipe(Effect.orDie)
         const existing = yield* tx
           .select()
           .from(V2ToolEffectAdmissionTable)
@@ -203,7 +222,7 @@ export const layer = Layer.effect(
         Effect.catchIf((error) => !(error instanceof ConflictError), (error) => Effect.die(error)),
       )
 
-    const recordInTransaction = (tx: Transaction, input: Parameters<Interface["record"]>[0]) =>
+    const recordInTransaction = (tx: Transaction, input: Parameters<Interface["record"]>[0], taskSettlements: object[]) =>
       Effect.gen(function* () {
         const admission = yield* tx
           .select()
@@ -226,7 +245,7 @@ export const layer = Layer.effect(
         )
           return yield* new ConflictError({ reason: "tool_effect_admission_divergence" })
         const existing = yield* tx
-          .select()
+          .select(publicColumns)
           .from(V2ToolEffectTable)
           .where(
             and(eq(V2ToolEffectTable.receipt_id, input.receiptId), eq(V2ToolEffectTable.tool_call_id, input.toolCallId)),
@@ -256,6 +275,25 @@ export const layer = Layer.effect(
             return yield* new ConflictError({ reason: "tool_effect_outcome_divergence" })
           return fromRow(existing)
         }
+        const work = yield* WorkAuthority.lookupSession(tx, input.sessionId)
+        const task = work.kind === "bound" && work.work.binding.schemaVersion === "work-execution.v2" &&
+          input.toolName === "task" && input.effectKind === "mutating" && input.state === "settled" && input.errorCode === undefined
+          ? yield* WorkChildAuthority.requireTaskSettlement(tx, { admissionID: admission.admission_id,
+            sessionID: input.sessionId, receiptID: input.receiptId, attemptID: input.providerAttemptId,
+            toolCallID: input.toolCallId, ownerToken: input.ownerToken, outcomeHash: input.outcomeHash }).pipe(
+              Effect.catchTag("EffectDrizzleQueryError", Effect.die),
+              Effect.mapError(() => new ConflictError({ reason: "project_native_outcome_required" })),
+            )
+          : undefined
+        if (task) taskSettlements.push(task)
+        const knownProof = work.kind === "bound" && work.work.binding.schemaVersion === "work-execution.v2" && !task
+          ? yield* WorkToolPolicy.sealCurrent(input.outcomeHash).pipe(Effect.orDie)
+          : undefined
+        const kind = yield* WorkToolPolicy.currentKind
+        const nativeTool = yield* WorkToolPolicy.currentTool
+        if (work.kind === "bound" && work.work.binding.schemaVersion === "work-execution.v2" && !task &&
+          (knownProof === undefined || input.effectKind !== kind || input.state !== "settled" || input.errorCode !== undefined))
+          return yield* new ConflictError({ reason: "project_native_outcome_required" })
         const effect: ToolEffect = {
           effectId: Identifier.ascending("tool"),
           sessionId: input.sessionId,
@@ -271,6 +309,9 @@ export const layer = Layer.effect(
           ownerToken: input.ownerToken,
           timeCreated: input.now,
         }
+        if (task) yield* WorkTaskKnownProof.seal(tx, task, effect.effectId).pipe(
+          Effect.mapError(() => new ConflictError({ reason: "project_native_task_proof_required" })),
+        )
         yield* tx
           .insert(V2ToolEffectTable)
           .values({
@@ -283,6 +324,9 @@ export const layer = Layer.effect(
             effect_kind: effect.effectKind,
             state: effect.state,
             outcome_hash: effect.outcomeHash,
+            known_read_proof: kind === "read_only" ? knownProof ?? null : null,
+            known_write_proof: nativeTool === "write" ? knownProof ?? null : null,
+            known_command_proof: nativeTool === "managed_command" ? knownProof ?? null : null,
             error_code: effect.errorCode ?? null,
             grant_receipt_id: effect.grant?.receiptId ?? null,
             grant_owner_id: effect.grant?.ownerId ?? null,
@@ -296,10 +340,27 @@ export const layer = Layer.effect(
         return effect
       })
 
-    const record: Interface["record"] = (input) =>
-      db.transaction((tx) => recordInTransaction(tx, input), { behavior: "immediate" }).pipe(
+    const record: Interface["record"] = (input) => Effect.gen(function* () {
+      const taskSettlements: object[] = []
+      const existing = yield* db.select({ id: V2ToolEffectTable.effect_id }).from(V2ToolEffectTable)
+        .where(and(eq(V2ToolEffectTable.receipt_id, input.receiptId), eq(V2ToolEffectTable.tool_call_id, input.toolCallId)))
+        .get().pipe(Effect.orDie)
+      if (!existing) {
+        const work = yield* WorkAuthority.lookupSession(db, input.sessionId)
+        if (work.kind === "bound" && work.work.binding.schemaVersion === "work-execution.v2") {
+          // Native permission/result work has already finished. Reobserve its original source
+          // outside SQL; the sealer only consumes current authority in this atomic INSERT.
+          const { WorkExecutionProfile } = yield* Effect.promise(() => import("../work-execution-profile"))
+          yield* WorkExecutionProfile.prepareSource(work.work, { fresh: true }).pipe(
+            Effect.mapError(() => new ConflictError({ reason: "project_native_outcome_required" })),
+          )
+        }
+      }
+      return yield* db.transaction((tx) => recordInTransaction(tx, input, taskSettlements), { behavior: "immediate" }).pipe(
+        Effect.tap(() => Effect.sync(() => taskSettlements.forEach(WorkChildAuthority.consumeTaskSettlement))),
         Effect.catchIf((error) => !(error instanceof ConflictError), (error) => Effect.die(error)),
       )
+    })
 
     const listAdmissionsForSession: Interface["listAdmissionsForSession"] = (sessionId) =>
       db
@@ -326,7 +387,7 @@ export const layer = Layer.effect(
 
     const listForSession: Interface["listForSession"] = (sessionId) =>
       db
-        .select()
+        .select(publicColumns)
         .from(V2ToolEffectTable)
         .where(eq(V2ToolEffectTable.session_id, sessionId))
         .all()

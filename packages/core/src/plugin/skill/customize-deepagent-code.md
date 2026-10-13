@@ -40,18 +40,21 @@ already-loaded config until then.
 | Scope                         | Path                                                                                                                      |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Project config                | `./deepagent-code.json`, `./deepagent-code.jsonc`, or `.deepagent-code/deepagent-code.json` (deepagent-code walks up from the cwd to the worktree root) |
-| Global config                 | `<config-home>/config.jsonc` (or `config.json`)                                                                       |
+| Global config                 | `<config-home>/config.jsonc` (canonical); `config.json`, `deepagent-code.json`, and `deepagent-code.jsonc` are also recognized |
 | Project agents                | `.deepagent-code/agent/<name>.md` or `.deepagent-code/agents/<name>.md`                                                               |
-| Global agents                 | `<config-home>/agent(s)/<name>.md`                                                                                    |
+| Global agents                 | `<config-home>/agent(s)/<name>.md` |
+| Project commands              | `.deepagent-code/command/<name>.md` or `.deepagent-code/commands/<name>.md`                                                           |
+| Global commands               | `<config-home>/command(s)/<name>.md` |
 | Project skills                | `.deepagent-code/skill(s)/<name>/SKILL.md`                                                                                      |
-| Global skills                 | `<config-home>/skill(s)/<name>/SKILL.md`                                                                              |
+| Global skills                 | `<config-home>/skill(s)/<name>/SKILL.md` |
 | External skills (auto-loaded) | `~/.claude/skills/<name>/SKILL.md`, `~/.agents/skills/<name>/SKILL.md`                                                    |
 
 On macOS and Linux, `<config-home>` is `~/.deepagent/code`. On Windows,
 it is `%APPDATA%\deepagent-code` (normally
 `%USERPROFILE%\AppData\Roaming\deepagent-code`). Windows stores machine-local
 data separately under `%LOCALAPPDATA%\deepagent-code`. Do not write global
-configuration or credentials into the data directory.
+configuration or credentials into the data directory. The config home is
+provided by DAC's platform path implementation; it is not OpenCode's XDG path.
 
 Configs from each scope are deep-merged. Project overrides global. Unknown
 top-level keys in `deepagent-code.json` are rejected with `ConfigInvalidError`.
@@ -79,6 +82,19 @@ Every field is optional.
     "urls": ["https://example.com/.well-known/skills/"]
   },
 
+  "references": {
+    "docs": {
+      "path": "../docs",
+      "description": "Use for product behavior and documentation conventions"
+    },
+    "sdk": {
+      "repository": "owner/sdk",
+      "branch": "main",
+      "description": "Use for SDK implementation details",
+      "hidden": true
+    }
+  },
+
   "agent": {
     "my-agent": {
       "model": "anthropic/claude-sonnet-4-6",
@@ -89,7 +105,7 @@ Every field is optional.
   },
 
   "command": {
-    "deploy": { "description": "...", "prompt": "..." }
+    "deploy": { "description": "...", "template": "..." }
   },
 
   "provider": {
@@ -103,7 +119,7 @@ Every field is optional.
       "type": "local",
       "command": ["npx", "-y", "@playwright/mcp"],
       "enabled": true,
-      "env": {}
+      "environment": {}
     },
     "remote-thing": {
       "type": "remote",
@@ -142,7 +158,9 @@ Shape notes worth being explicit about:
 
 - `model` always carries a provider prefix: `"anthropic/claude-sonnet-4-6"`.
 - `skills` is an object with `paths` and/or `urls`, not an array.
+- `references` is an object keyed by alias. Each value is a local path, Git repository, or string shorthand.
 - `agent` is an object keyed by agent name, not an array.
+- `command` is an object keyed by command name, not an array.
 - `plugin` is an array of strings or `[name, options]` tuples, not an object.
 - `mcp[name].command` is an array of strings, never a single string. `type` is required.
 - `permission` is either a string action or an object keyed by tool name.
@@ -177,6 +195,38 @@ description: One sentence covering what this skill does AND when to trigger it. 
 Register skills from non-default locations via `skills.paths` (scanned
 recursively for `**/SKILL.md`) and `skills.urls` (each URL serves a list of
 skills).
+
+## References
+
+References make local directories and Git repositories outside the active
+project available as supporting context. Configure them under `references`,
+keyed by the alias used in `@` autocomplete:
+
+```json
+{
+  "references": {
+    "docs": {
+      "path": "../product-docs",
+      "description": "Use for product behavior and terminology"
+    },
+    "effect": {
+      "repository": "Effect-TS/effect",
+      "branch": "main",
+      "description": "Use for Effect implementation details"
+    }
+  }
+}
+```
+
+Local `path` values may be relative to the declaring config, absolute, or use
+`~/`. Git `repository` values accept Git URLs, host/path references, and GitHub
+`owner/repo` shorthand; `branch` is optional. Both forms support optional
+`description` and `hidden` fields.
+
+- Only references with a `description` are advertised to agents in system context.
+- `hidden: true` removes a reference from TUI `@` autocomplete only. It remains available to agents and by direct path.
+- Reference directories are automatically allowed through the external-directory boundary; normal read/edit/tool permissions still apply.
+- String shorthand is supported: use `"docs": "../docs"` for local paths or `"effect": "Effect-TS/effect"` for Git repositories.
 
 ## Agents
 
@@ -236,6 +286,31 @@ file, `disable: true` in frontmatter.
 deepagent-code ships with `build`, `plan`, `general`, `explore`. Hidden internal agents:
 `compaction`, `title`, `summary`. To override a built-in's fields, define the
 same key in `agent: { <name>: { ... } }`.
+
+## Commands
+
+deepagent-code's command loader scans for `**/*.md` inside command directories. The
+file is named after the command, and lives directly inside the `command` folder:
+
+```
+.deepagent-code/command/deploy.md
+```
+
+Frontmatter:
+
+```markdown
+---
+description: One sentence describing what the command does.
+agent: build
+model: anthropic/claude-sonnet-4-6
+---
+
+(command body in markdown: the prompt deepagent-code runs, with $ARGUMENTS for the user's input)
+```
+
+- `template` is the command body — everything below the frontmatter — and is required: it is the prompt deepagent-code runs when the command is invoked. Do not also put a `template:` key in the frontmatter.
+- `$ARGUMENTS` is replaced with everything the user typed after the command; `$1`, `$2`, … pull individual positional arguments.
+- Optional: `description`, `agent`, `model`, `variant`, `subtask`.
 
 ## Plugins
 
@@ -303,7 +378,7 @@ Special object-shaped (not callbacks): `tool: { my_tool: { ... } }`,
       "type": "local",
       "command": ["npx", "-y", "@playwright/mcp"],
       "enabled": true,
-      "env": { "BROWSER": "chromium" }
+      "environment": { "BROWSER": "chromium" }
     },
     "github": {
       "type": "remote",
@@ -316,10 +391,13 @@ Special object-shaped (not callbacks): `tool: { my_tool: { ... } }`,
 }
 ```
 
-`command` is an array of strings. `type` is required. Use `enabled: false` to
-disable a server inherited from a parent config. String values such as header
-tokens support `{env:VAR}` interpolation (and `{file:path}`); the shell-style
-`${VAR}` is not substituted.
+`command` is an array of strings. `environment` sets environment variables for
+a local MCP server. `type` is required. Use `enabled: false` to
+disable a server inherited from a parent config. General configuration supports
+`{env:VAR}` and `{file:path}` substitutions. MCP `environment` and `headers`
+also accept `${VAR}`, `${VAR:-default}`, and `secret://<account>` references
+resolved at connection time. Prefer environment or keychain references to
+writing credentials into a configuration file.
 
 ## Permissions
 
@@ -375,8 +453,8 @@ When a user's config is broken and deepagent-code won't start, these env vars he
   exact shape, or the field is not covered in this skill, fetch
   `https://ai.deepagent.ltd/config.schema.json` and read the schema rather than guessing.
 - Preserve `$schema` and any existing fields the user did not ask to change.
-- For agent, skill, and plugin definitions, prefer creating new files in the
-  correct location over inlining everything in `deepagent-code.json`.
+- For agent, command, skill, and plugin definitions, prefer creating new files
+  in the correct location over inlining everything in `deepagent-code.json`.
 - If the user's existing config is malformed, point them at the env-var escape
   hatches above so they can edit from inside deepagent-code without breaking their
   session.

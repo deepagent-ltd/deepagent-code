@@ -1,4 +1,6 @@
 import { Schema } from "effect"
+import { GoalControlSchema } from "@deepagent-code/core/deepagent/goal-control.schema"
+import { GoalPlanRebaseSchema } from "@deepagent-code/core/deepagent/goal-plan-rebase.schema"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
@@ -12,10 +14,27 @@ import { NonNegativeInt, PositiveInt } from "@deepagent-code/core/schema"
 
 const root = "/deepagent"
 
-export class DeepAgentProjectSwitchError extends Schema.ErrorClass<DeepAgentProjectSwitchError>("DeepAgentProjectSwitchError")(
-  { message: Schema.String },
-  { httpApiStatus: 503 },
-) {}
+export class DeepAgentGoalRebaseUnauthorized extends Schema.ErrorClass<DeepAgentGoalRebaseUnauthorized>(
+  "DeepAgentGoalRebaseUnauthorized",
+)({ code: Schema.String, message: Schema.String }, { httpApiStatus: 401 }) {}
+
+export class DeepAgentGoalRebaseError extends Schema.ErrorClass<DeepAgentGoalRebaseError>(
+  "DeepAgentGoalRebaseError",
+)({ code: Schema.String, message: Schema.String }, { httpApiStatus: 409 }) {}
+
+export class DeepAgentGoalControlConflict extends Schema.ErrorClass<DeepAgentGoalControlConflict>(
+  "DeepAgentGoalControlConflict",
+)({ code: Schema.String, message: Schema.String }, { httpApiStatus: 409 }) {}
+export class DeepAgentGoalControlMissing extends Schema.ErrorClass<DeepAgentGoalControlMissing>(
+  "DeepAgentGoalControlMissing",
+)({ code: Schema.String, message: Schema.String }, { httpApiStatus: 404 }) {}
+export class DeepAgentGoalControlUnavailable extends Schema.ErrorClass<DeepAgentGoalControlUnavailable>(
+  "DeepAgentGoalControlUnavailable",
+)({ code: Schema.String, message: Schema.String }, { httpApiStatus: 503 }) {}
+
+export class DeepAgentProjectSwitchError extends Schema.ErrorClass<DeepAgentProjectSwitchError>(
+  "DeepAgentProjectSwitchError",
+)({ message: Schema.String }, { httpApiStatus: 503 }) {}
 
 export class DeepAgentPromotionError extends Schema.ErrorClass<DeepAgentPromotionError>("DeepAgentPromotionError")(
   {
@@ -441,6 +460,7 @@ export const DeepAgentPanelStatusResult = Schema.Struct({
 /** POST /deepagent/goal/start */
 export const DeepAgentGoalStartInput = Schema.Struct({
   sessionID: Schema.String,
+  requestID: Schema.NonEmptyString,
   // Optional free-text objective (CLI `/goal <objective>`); seeds a plan when the session has none.
   objective: Schema.optional(Schema.String),
   criteria: Schema.optional(
@@ -464,8 +484,8 @@ export const DeepAgentGoalStartInput = Schema.Struct({
   stallThreshold: Schema.optional(Schema.Number),
 })
 
-/** Goal lifecycle mutations that only need the session id. */
-export const DeepAgentGoalSessionInput = Schema.Struct({ sessionID: Schema.String })
+/** Goal lifecycle commands bind the exact target, control revision and idempotent request. */
+export const DeepAgentGoalSessionInput = GoalControlSchema.ControlInput
 
 /** POST /deepagent/goal/edit-plan — strict durable plan-edit admission envelope. */
 export const DeepAgentGoalPlanStepInput = Schema.Struct({
@@ -542,14 +562,9 @@ export const DeepAgentGoalPlanEditResult = Schema.Struct({
   failure: Schema.optional(DeepAgentGoalPlanFailure),
 })
 
-export const DeepAgentGoalSnapshot = Schema.Struct({
-  goalId: Schema.String,
-  planDocId: Schema.String,
-  phase: Schema.String,
-  running: Schema.Boolean,
-})
+export const DeepAgentGoalSnapshot = GoalControlSchema.Snapshot
 export const DeepAgentGoalStatusResult = Schema.Struct({ goal: Schema.NullOr(DeepAgentGoalSnapshot) })
-export const DeepAgentGoalMutateResult = Schema.Struct({ ok: Schema.Boolean })
+export const DeepAgentGoalMutateResult = GoalControlSchema.Snapshot
 export const DeepAgentGoalStartableResult = Schema.Struct({
   startable: Schema.Boolean,
   source: Schema.Literals(["plan", "file", "none"]),
@@ -915,14 +930,22 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
       HttpApiEndpoint.post("goalStart", `${root}/goal/start`, {
         query: WorkspaceRoutingQuery,
         payload: DeepAgentGoalStartInput,
-        success: described(DeepAgentGoalSnapshot, "The started goal (goalId + initial phase)"),
-        error: DeepAgentPromotionError,
+        success: described(
+          DeepAgentGoalSnapshot,
+          "Durable Goal acceptance receipt; wake publication is independently recoverable",
+        ),
+        error: [
+          DeepAgentPromotionError,
+          DeepAgentGoalControlConflict,
+          DeepAgentGoalControlMissing,
+          DeepAgentGoalControlUnavailable,
+        ],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "deepagent.goal.start",
           summary: "Start a Goal Loop from the session's plan",
           description:
-            "V3.9 §D: materialize the session plan into the graded doc and drive the autonomous loop as a resident background task. Gated by the goal-loop flag.",
+            "Commit a stable Goal preparation and activation receipt, then enqueue a durable event wake. Requires an idempotent requestID and enabled event Goal control; resident Goals require explicit reconciliation.",
         }),
       ),
     )
@@ -930,26 +953,66 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
       HttpApiEndpoint.post("goalPause", `${root}/goal/pause`, {
         query: WorkspaceRoutingQuery,
         payload: DeepAgentGoalSessionInput,
-        success: described(DeepAgentGoalMutateResult, "Whether the goal was paused"),
-        error: DeepAgentPromotionError,
+        success: described(DeepAgentGoalMutateResult, "Pause control receipt; inFlight remains explicit"),
+        error: [
+          DeepAgentPromotionError,
+          DeepAgentGoalControlConflict,
+          DeepAgentGoalControlMissing,
+          DeepAgentGoalControlUnavailable,
+        ],
       }),
     )
     .add(
       HttpApiEndpoint.post("goalResume", `${root}/goal/resume`, {
         query: WorkspaceRoutingQuery,
         payload: DeepAgentGoalSessionInput,
-        success: described(DeepAgentGoalMutateResult, "Whether the goal was resumed"),
-        error: DeepAgentPromotionError,
+        success: described(DeepAgentGoalMutateResult, "Resume control receipt and durable wake obligation"),
+        error: [
+          DeepAgentPromotionError,
+          DeepAgentGoalControlConflict,
+          DeepAgentGoalControlMissing,
+          DeepAgentGoalControlUnavailable,
+        ],
       }),
     )
     .add(
       HttpApiEndpoint.post("goalStop", `${root}/goal/stop`, {
         query: WorkspaceRoutingQuery,
         payload: DeepAgentGoalSessionInput,
-        success: described(DeepAgentGoalMutateResult, "Whether the goal was stopped"),
-        error: DeepAgentPromotionError,
+        success: described(
+          DeepAgentGoalMutateResult,
+          "Stop request receipt; inFlight does not imply confirmed interruption",
+        ),
+        error: [
+          DeepAgentPromotionError,
+          DeepAgentGoalControlConflict,
+          DeepAgentGoalControlMissing,
+          DeepAgentGoalControlUnavailable,
+        ],
       }),
     )
+    .add(HttpApiEndpoint.post("goalPlanRebaseBegin", `${root}/goal/plan-rebase/begin`, {
+      query: WorkspaceRoutingQuery, payload: GoalPlanRebaseSchema.Begin, success: GoalPlanRebaseSchema.Response,
+      error: [DeepAgentGoalRebaseUnauthorized, DeepAgentGoalRebaseError],
+    }))
+    .add(HttpApiEndpoint.post("goalPlanRebaseApply", `${root}/goal/plan-rebase/apply`, {
+      query: WorkspaceRoutingQuery, payload: GoalPlanRebaseSchema.Apply, success: GoalPlanRebaseSchema.Response,
+      error: [DeepAgentGoalRebaseUnauthorized, DeepAgentGoalRebaseError],
+    }))
+    .add(HttpApiEndpoint.post("goalPlanRebaseCancel", `${root}/goal/plan-rebase/cancel`, {
+      query: WorkspaceRoutingQuery, payload: GoalPlanRebaseSchema.Target, success: GoalPlanRebaseSchema.Response,
+      error: [DeepAgentGoalRebaseUnauthorized, DeepAgentGoalRebaseError],
+    }))
+    .add(HttpApiEndpoint.get("goalPlanRebaseGet", `${root}/goal/plan-rebase/:editID`, {
+      params: { editID: GoalPlanRebaseSchema.Ref },
+      query: Schema.Struct({ ...WorkspaceRoutingQueryFields, sessionID: GoalPlanRebaseSchema.Identity,
+        goalID: GoalPlanRebaseSchema.Identity, requestID: GoalPlanRebaseSchema.Ref }),
+      success: GoalPlanRebaseSchema.Response, error: [DeepAgentGoalRebaseUnauthorized, DeepAgentGoalRebaseError],
+    }))
+    .add(HttpApiEndpoint.post("goalPlanRebaseReconcile", `${root}/goal/plan-rebase/:editID/reconcile`, {
+      params: { editID: GoalPlanRebaseSchema.Ref }, query: WorkspaceRoutingQuery, payload: GoalPlanRebaseSchema.Target,
+      success: GoalPlanRebaseSchema.Response, error: [DeepAgentGoalRebaseUnauthorized, DeepAgentGoalRebaseError],
+    }))
     .add(
       HttpApiEndpoint.post("goalEditPlan", `${root}/goal/edit-plan`, {
         query: WorkspaceRoutingQuery,
@@ -969,7 +1032,12 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
       HttpApiEndpoint.get("goalStatus", `${root}/goal/status`, {
         query: Schema.Struct({ ...WorkspaceRoutingQueryFields, sessionID: Schema.String }),
         success: described(DeepAgentGoalStatusResult, "The active goal for the session, or null"),
-        error: DeepAgentPromotionError,
+        error: [
+          DeepAgentPromotionError,
+          DeepAgentGoalControlConflict,
+          DeepAgentGoalControlMissing,
+          DeepAgentGoalControlUnavailable,
+        ],
       }),
     )
     .add(

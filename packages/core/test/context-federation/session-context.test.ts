@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { randomBytes } from "node:crypto"
+import { mkdtemp, rm } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { eq } from "drizzle-orm"
 import { Effect, Exit, Layer } from "effect"
 import { ContextArtifactStore, type Limits } from "../../src/context-federation/artifact-store"
@@ -20,7 +23,7 @@ import {
   SecurityNamespaceID,
   type ContextRef,
 } from "../../src/context-federation/reference"
-import { ContextArtifactTable, SessionContextSelectionTable } from "../../src/context-federation/session-sql"
+import { ContextArtifactTable, SessionContextSelectionTable, SessionContextValidationTable } from "../../src/context-federation/session-sql"
 import { Database } from "../../src/database/database"
 import { DeepAgentReleasedSnapshot } from "../../src/deepagent/released-snapshot"
 import { ProjectV2 } from "../../src/project"
@@ -276,6 +279,102 @@ describe("durable activity and context selection", () => {
 })
 
 describe("provider attempt safety", () => {
+  test("exact validation retries at the same millisecond reuse one row after file DB reopen", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "dac-context-validation-retry-"))
+    const filename = path.join(directory, "authority.sqlite")
+    const harness = makeHarness(defaultLimits, "required", filename)
+    const validation = {
+      providerTurnSeq: 1,
+      authorizationEpoch: 2,
+      egressEpoch: 3,
+      observedLocationMutationEpoch: 9,
+      selectedSourceFingerprint: "sources-v1",
+      validatedAt: 100,
+      validUntil: 500,
+      outcome: "valid" as const,
+      reasonCode: "current",
+    }
+    try {
+      const committed = await harness.run(
+        Effect.gen(function* () {
+          yield* seed()
+          const context = yield* SessionContext.Service
+          const activity = yield* context.openActivity({ sessionId, triggerInputId: triggerId, now: 10 })
+          const selection = yield* context.commitSelection(
+            selectionInput(activity.activityId, harness.codec, [triggerId]),
+          )
+          const input = { ...validation, selectionId: selection.selectionId }
+          const first = yield* context.appendValidation(input)
+          const repeats = yield* Effect.all([context.appendValidation(input), context.appendValidation(input)], {
+            concurrency: "unbounded",
+          })
+          expect(repeats).toEqual([first, first])
+          expect(yield* (yield* Database.Service).db.select().from(SessionContextValidationTable).all()).toHaveLength(1)
+          return { input, first }
+        }),
+      )
+      await makeHarness(
+        defaultLimits,
+        "required",
+        filename,
+        `provider-owner-reopen-${randomBytes(8).toString("hex")}`,
+      ).run(
+        Effect.gen(function* () {
+          expect(yield* (yield* SessionContext.Service).appendValidation(committed.input)).toBe(committed.first)
+          expect(yield* (yield* Database.Service).db.select().from(SessionContextValidationTable).all()).toHaveLength(1)
+        }),
+      )
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("validation retry with conflicting authority does not replace the observation", async () => {
+    const harness = makeHarness()
+    await harness.run(
+      Effect.gen(function* () {
+        yield* seed()
+        const context = yield* SessionContext.Service
+        const db = (yield* Database.Service).db
+        const activity = yield* context.openActivity({ sessionId, triggerInputId: triggerId, now: 10 })
+        const selection = yield* context.commitSelection(
+          selectionInput(activity.activityId, harness.codec, [triggerId]),
+        )
+        const input: SessionContext.ValidationInput = {
+          selectionId: selection.selectionId,
+          providerTurnSeq: 1,
+          authorizationEpoch: 2,
+          egressEpoch: 3,
+          observedLocationMutationEpoch: 9,
+          selectedSourceFingerprint: "sources-v1",
+          validatedAt: 100,
+          validUntil: 500,
+          outcome: "valid",
+          reasonCode: "current",
+        }
+        yield* context.appendValidation(input)
+        const original = yield* db.select().from(SessionContextValidationTable).all()
+        yield* Effect.forEach(
+          [
+            { ...input, authorizationEpoch: 3 },
+            { ...input, egressEpoch: 4 },
+            { ...input, observedLocationMutationEpoch: 10 },
+            { ...input, validUntil: 501 },
+            { ...input, reasonCode: "changed" },
+            { ...input, outcome: "denied" as const },
+            { ...input, outcome: "denied" as const, selectedSourceFingerprint: "other-source" },
+          ],
+          (candidate) =>
+            context.appendValidation(candidate).pipe(
+              Effect.flip,
+              Effect.tap((error) => Effect.sync(() => expect(error._tag).toBe("SessionContext.ValidationError"))),
+            ),
+        )
+        expect(yield* db.select().from(SessionContextValidationTable).all()).toEqual(original)
+      }),
+    )
+  })
+
   test("binds a V2 receipt to one exact canonical provider attempt", async () => {
     const harness = makeHarness()
     await harness.run(
@@ -661,8 +760,8 @@ const defaultLimits: Limits = {
   tokenLifetimeMs: 5_000,
 }
 
-function makeHarness(limits = defaultLimits, policy: "required" | "best_effort" = "required") {
-  const database = Database.layerFromPath(":memory:")
+function makeHarness(limits = defaultLimits, policy: "required" | "best_effort" = "required", filename = ":memory:", providerOwnerToken = v2OwnerToken) {
+  const database = Database.layerFromPath(filename)
   const codec = ContextTokenCodec.make({
     activeKeyId: "context-test",
     keys: [{ id: "context-test", secret: randomBytes(32) }],
@@ -678,7 +777,7 @@ function makeHarness(limits = defaultLimits, policy: "required" | "best_effort" 
   const context = SessionContext.layer.pipe(Layer.provide(Layer.merge(database, artifacts)))
   const attempts = SessionProviderAttempt.layer.pipe(Layer.provide(database))
   const owners = SessionProviderOwner.layer.pipe(Layer.provide(database))
-  const turns = V2ProviderTurn.layerWith({ ownerToken: v2OwnerToken }).pipe(
+  const turns = V2ProviderTurn.layerWith({ ownerToken: providerOwnerToken }).pipe(
     Layer.provide(owners),
     Layer.provide(database),
   )

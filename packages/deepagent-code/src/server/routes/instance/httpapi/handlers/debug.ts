@@ -12,6 +12,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
 import { DebugService } from "@/debug/service"
 import { DebugAdapter } from "@/debug/adapter"
+import { InitializeError } from "@/debug/client"
 import { RuntimeBase } from "@/runtime/base"
 import * as Log from "@deepagent-code/core/util/log"
 import { Cause, Effect, Layer, Queue } from "effect"
@@ -73,7 +74,7 @@ export const debugHandlers = HttpApiBuilder.group(InstanceHttpApi, "debug", (han
       // HTTP counts as approval (recorded, not re-prompted), but the privilege
       // probe (ptrace / perf_event / gpu counters declared by the adapter) still
       // hard-blocks unsupported platforms.
-      const state = yield* base
+      return yield* base
         .withIsolation({ name: `debug-${spec.id}` }, (workdir) =>
           debug.start({
             spec,
@@ -87,9 +88,15 @@ export const debugHandlers = HttpApiBuilder.group(InstanceHttpApi, "debug", (han
             requestApproval: () => Effect.void,
           }),
         )
-        .pipe(Effect.orDie)
-
-      return { sessionId: resolvedId, state }
+        .pipe(
+          Effect.map((state) => ({ sessionId: resolvedId, state })),
+          // Initialization has already stopped the failed adapter and isolation has
+          // unwound. Keep its known failure actionable without exposing raw causes.
+          Effect.catchIf((error) => error instanceof InitializeError && error.adapterID === spec.id, () =>
+            Effect.succeed({ error: "adapter_unavailable" as const,
+              message: `Debug adapter "${spec.id}" could not initialize. ${adapterRegistry.get(spec.id)?.install ?? "Check the adapter installation and configuration before retrying."}` })),
+          Effect.orDie,
+        )
     })
 
     // ── breakpoints ──────────────────────────────────────────────────────────

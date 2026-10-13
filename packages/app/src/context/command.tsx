@@ -48,13 +48,28 @@ function normalizeKey(key: string) {
   return key.toLowerCase()
 }
 
+export function keyFromEvent(event: KeyboardEvent, mac = IS_MAC) {
+  // macOS Option changes letter keys to symbols; shortcut labels still name the letter.
+  if (
+    mac &&
+    event.altKey &&
+    (event.ctrlKey || event.metaKey) &&
+    !event.isComposing &&
+    !event.getModifierState("AltGraph") &&
+    /^[^\x00-\x7f]$/.test(event.key) &&
+    /^Key[A-Z]$/.test(event.code)
+  )
+    return event.code.slice(3).toLowerCase()
+  return normalizeKey(event.key)
+}
+
 function signature(key: string, ctrl: boolean, meta: boolean, shift: boolean, alt: boolean) {
   const mask = (ctrl ? 1 : 0) | (meta ? 2 : 0) | (shift ? 4 : 0) | (alt ? 8 : 0)
   return `${key}:${mask}`
 }
 
-function signatureFromEvent(event: KeyboardEvent) {
-  return signature(normalizeKey(event.key), event.ctrlKey, event.metaKey, event.shiftKey, event.altKey)
+function signatureFromEvent(event: KeyboardEvent, key = normalizeKey(event.key)) {
+  return signature(key, event.ctrlKey, event.metaKey, event.shiftKey, event.altKey)
 }
 
 function isAllowedEditableKeybind(id: string | undefined) {
@@ -156,7 +171,7 @@ export function matchKeybind(keybinds: Keybind[], event: KeyboardEvent): boolean
   const eventKey = normalizeKey(event.key)
 
   for (const kb of keybinds) {
-    const keyMatch = kb.key === eventKey
+    const keyMatch = kb.key === eventKey || kb.key === keyFromEvent(event)
     const ctrlMatch = kb.ctrl === (event.ctrlKey || false)
     const metaMatch = kb.meta === (event.metaKey || false)
     const shiftMatch = kb.shift === (event.shiftKey || false)
@@ -361,7 +376,9 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
     const handleKeyDown = (event: KeyboardEvent) => {
       if (suspended() || dialog.active) return
 
-      const sig = signatureFromEvent(event)
+      const logical = signatureFromEvent(event)
+      const sig =
+        palette().has(logical) || keymap().has(logical) ? logical : signatureFromEvent(event, keyFromEvent(event))
       const isPalette = palette().has(sig)
       const option = keymap().get(sig)
       const modified = event.ctrlKey || event.metaKey || event.altKey

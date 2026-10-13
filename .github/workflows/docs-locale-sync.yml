@@ -94,6 +94,7 @@ jobs:
             echo "No locale docs changes to commit"
             exit 0
           fi
+          bun script/check-public-source-boundary.ts --worktree
           git add -A
           git commit -m "docs(i18n): sync locale docs from english changes"
           git pull --rebase --autostash origin "$GITHUB_REF_NAME"

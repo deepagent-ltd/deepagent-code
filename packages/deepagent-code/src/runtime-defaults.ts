@@ -6,7 +6,7 @@
 // REPO-WIDE SEMANTICS: one flag table lives in `@deepagent-code/core/deepagent/flip-flag`
 // (`flipFlagValueOn`). Every boolean below ships ON by default (`unsetDefault = true`) on both
 // sides of the repo boundary — this entry table and its gates. Since the W3.8 M1 single-point
-// closure the core gates no longer parse these keys themselves: admission / IM single-write /
+// closure the core gates no longer parse these keys themselves: event admission /
 // federation resolve through the manifest-derived `RuntimeFeatures` registry
 // (`core/flag/runtime-features.ts`, all `unsetDefault = true`), and `productionAdaptersEnabled`
 // delegates to it. The owner flag is consumed app-side (`RuntimeFlags.coreV2ExecutionOwner`) with
@@ -19,7 +19,6 @@
 import { flipFlagValueOn } from "@deepagent-code/core/deepagent/flip-flag"
 
 export const EVENT_V2_ADMISSION_ENV = "DEEPAGENT_CODE_EVENT_V2_ADMISSION"
-export const IM_SINGLE_WRITE_ENV = "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"
 export const CORE_V2_EXECUTION_OWNER_ENV = "DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER"
 export const V2_OWNER_CAMPAIGN_ENV = "DEEPAGENT_CODE_V2_OWNER_CAMPAIGN"
 export const V2_BUILD_IDENTITY_ENV = "DEEPAGENT_CODE_V2_BUILD_IDENTITY"
@@ -40,7 +39,6 @@ export const RUNTIME_DEFAULTS_SNAPSHOT_ENV = "DEEPAGENT_CODE_RUNTIME_DEFAULTS_SN
  * resolution in core session runner). */
 export interface RuntimeDefaults {
   eventV2Admission: boolean
-  imSingleWrite: boolean
   coreV2ExecutionOwner: boolean
   ownerCampaign?: string
   buildIdentity?: string
@@ -49,7 +47,6 @@ export interface RuntimeDefaults {
 
 const DEFAULT_ON_ENV_KEYS = [
   EVENT_V2_ADMISSION_ENV,
-  IM_SINGLE_WRITE_ENV,
   CORE_V2_EXECUTION_OWNER_ENV,
   CONTEXT_FEDERATION_PRODUCTION_ENV,
 ] as const
@@ -64,7 +61,6 @@ const optionalString = (value: string | undefined): string | undefined => {
 export function runtimeDefaultsFromEnv(env: NodeJS.ProcessEnv): RuntimeDefaults {
   return {
     eventV2Admission: isOn(env[EVENT_V2_ADMISSION_ENV]),
-    imSingleWrite: isOn(env[IM_SINGLE_WRITE_ENV]),
     coreV2ExecutionOwner: isOn(env[CORE_V2_EXECUTION_OWNER_ENV]),
     ownerCampaign: optionalString(env[V2_OWNER_CAMPAIGN_ENV]),
     buildIdentity: optionalString(env[V2_BUILD_IDENTITY_ENV]),
@@ -85,7 +81,6 @@ export function applyRuntimeDefaults(env: NodeJS.ProcessEnv = process.env): void
 export function runtimeDefaultsEnvSnapshot(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
   return {
     [EVENT_V2_ADMISSION_ENV]: env[EVENT_V2_ADMISSION_ENV],
-    [IM_SINGLE_WRITE_ENV]: env[IM_SINGLE_WRITE_ENV],
     [CORE_V2_EXECUTION_OWNER_ENV]: env[CORE_V2_EXECUTION_OWNER_ENV],
     [V2_OWNER_CAMPAIGN_ENV]: env[V2_OWNER_CAMPAIGN_ENV],
     [V2_BUILD_IDENTITY_ENV]: env[V2_BUILD_IDENTITY_ENV],

@@ -49,7 +49,13 @@ function registerWithDaemon(url: string, shutdown: () => void) {
 export const ServeCommand = effectCmd({
   command: "serve",
   builder: (yargs) =>
-    withNetworkOptions(yargs).option("register", {
+    withNetworkOptions(yargs).option("tls-cert", {
+      type: "string", describe: "PEM certificate file for the HTTPS listener",
+    }).option("tls-key", {
+      type: "string", describe: "PEM private key file for the HTTPS listener",
+    }).option("tls-origin", {
+      type: "string", describe: "exact public HTTPS origin for task authorization",
+    }).option("register", {
       type: "boolean" as const,
       default: false,
       describe: "register this server with the local CLI daemon (writes state/server.json)",
@@ -64,6 +70,16 @@ export const ServeCommand = effectCmd({
   handler: Effect.fn("Cli.serve")(function* (args) {
     const { Server } = yield* Effect.promise(() => import("../../server/server"))
     const opts = yield* resolveNetworkOptions(args)
+    if (Boolean(args["tls-cert"]) !== Boolean(args["tls-key"]) ||
+      (args["tls-origin"] !== undefined && !args["tls-cert"]))
+      return yield* new CliError({ message: "HTTPS requires both --tls-cert and --tls-key; --tls-origin requires HTTPS", exitCode: 2 })
+    const tls = args["tls-cert"] && args["tls-key"] ? {
+      cert: yield* Effect.tryPromise({ try: () => Bun.file(args["tls-cert"]!).text(),
+        catch: () => new CliError({ message: "Unable to read TLS certificate file", exitCode: 2 }) }),
+      key: yield* Effect.tryPromise({ try: () => Bun.file(args["tls-key"]!).text(),
+        catch: () => new CliError({ message: "Unable to read TLS private key file", exitCode: 2 }) }),
+      origin: args["tls-origin"],
+    } : undefined
     if (!Flag.DEEPAGENT_CODE_SERVER_PASSWORD) {
       // G7i security F1: never serve unauthenticated on a non-loopback bind.
       if (!isLoopbackHost(opts.hostname)) {
@@ -77,8 +93,8 @@ export const ServeCommand = effectCmd({
       }
       console.log("Warning: DEEPAGENT_CODE_SERVER_PASSWORD is not set; server is unsecured (loopback only).")
     }
-    const server = yield* Effect.promise(() => Server.listen(opts))
-    console.log(`deepagent-code server listening on http://${server.hostname}:${server.port}`)
+    const server = yield* Effect.promise(() => Server.listen({ ...opts, tls }))
+    console.log(`deepagent-code server listening on ${server.url.href}`)
 
     // Effect.callback's canceler only runs on interruption; the graceful
     // SIGTERM/SIGINT path resumes normally and would skip it. Keep the canceler
@@ -93,7 +109,7 @@ export const ServeCommand = effectCmd({
         resume(Effect.void)
       }
       const unregister = args.register
-        ? registerWithDaemon(`http://${server.hostname}:${server.port}`, shutdown)
+        ? registerWithDaemon(server.url.href, shutdown)
         : () => {}
       cleanup = () => {
         process.off("SIGTERM", shutdown)

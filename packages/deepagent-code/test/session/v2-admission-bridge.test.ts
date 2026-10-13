@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test"
-import { Context, Effect, Exit, Layer } from "effect"
+import { Cause, Context, Effect, Exit, Layer } from "effect"
 import { MultiAgentRuntime } from "../../src/session/multi-agent-runtime"
 import { parentSessionIDFor } from "../../src/session/multi-agent-runtime"
 import {
@@ -32,10 +32,10 @@ import { EventRegistry } from "@deepagent-code/core/deepagent/event-registry"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import type { EventDispatcher } from "../../src/session/event-dispatcher"
 
-// C5-12 — the production V2 admission bridge provider (STEP 2). Verifies the provider itself: V4 → C5
-// translation + registry validation + `EventAdmissionWiring.admitWork` + the SessionV2 adapter. Also
-// proves the production wiring claim: the REAL provider (not the fake bridge TECH1 used) drives the V2
-// admission path when the flag is ON and skips §C coordination.
+// The adapter retains exact prompt retry semantics, and DAG receipt-only ingress remains observable.
+// Routing flags and legacy V4 records cannot grant execution: the production bridge requires the
+// reviewed EventWork source/controller port before admitting model work. These refusal cases do not
+// replace the installed EventWork/DAG production qualification tests.
 
 let clock = 0
 const now = () => clock
@@ -262,65 +262,97 @@ describe("C5-12 V2 admission bridge provider", () => {
     )
   })
 
-  test("provider.admit translates V4 → validated C5 envelope and drives the SessionV2 adapter", async () => {
+  test("provider.admit refuses routing-only authority without a Session prompt", async () => {
     const req = request()
-    const v2Calls: V2PromptCall[] = []
+    const calls: V2PromptCall[] = []
     await runWithDb((db) =>
       Effect.gen(function* () {
-        const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(v2Calls) })
-        yield* provider.admit({ request: req, scope: scope(req.event) })
+        const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(calls) })
+        const outcome = yield* provider.admit({ request: req, scope: scope(req.event) }).pipe(Effect.exit)
+        expect(Exit.isFailure(outcome)).toBe(true)
+        if (outcome._tag === "Failure")
+          expect(Cause.squash(outcome.cause)).toMatchObject({ code: "EVENT_WORK_AUTH_REQUIRED" })
+        expect(calls).toEqual([])
       }),
     )
-    expect(v2Calls.length).toBe(1)
-    const admitted = v2Calls[0]
-    expect(admitted.sessionID).toBe(parentSessionIDFor(req.event.id))
-    expect(admitted.delivery).toBe("steer")
-    // The prompt is the bounded envelope (never the raw payload): it references the event id + the
-    // contract event version, and does NOT embed the raw payload.
-    expect(admitted.prompt.text).toContain("event://dae_")
-    expect(admitted.prompt.text).toContain('"eventType":"ci.failure"')
-    expect(admitted.prompt.text).not.toContain('"repo":"acme/app"')
-    expect(admitted.prompt.text).not.toContain('"branch":"main"')
   })
 
-  test("provider.admit writes a durable admission receipt row", async () => {
+  test.each(["default", "custom"] as const)("%s registry cannot revive automatic IM admission", async (kind) => {
+    expect(V4_EVENT_REGISTRY.lookup("im.message.created")).toBeUndefined()
+    const registration = V4_EVENT_REGISTRY.lookup("ci.failure")
+    if (!registration) throw new Error("Missing current Event registration")
+    const custom = EventRegistry.createEventRegistry([
+      { ...registration, eventType: "im.message.created", execution: "single" },
+    ])
+    expect(custom.lookup("im.message.created")).toBeDefined()
+    const calls: V2PromptCall[] = []
+    const req = {
+      ...request(),
+      event: event({
+        type: "im.message.created",
+        source: "im",
+        payload: {
+          groupID: "conversation",
+          messageID: "ordinary",
+          content: "@auto /dac unauthorized received text",
+          mentions: ["auto"],
+        },
+      }),
+    }
+    await runWithDb((db) =>
+      Effect.gen(function* () {
+        const provider = makeV2AdmissionBridge({
+          db,
+          v2Session: fakeV2Session(calls),
+          ...(kind === "custom" ? { registry: custom } : {}),
+        })
+        for (const admit of [provider.admit, provider.admitReceiptOnly!]) {
+          const outcome = yield* admit({ request: req, scope: scope(req.event) }).pipe(Effect.exit)
+          expect(Exit.isFailure(outcome)).toBe(true)
+          if (outcome._tag === "Failure") expect(String(Cause.squash(outcome.cause))).toContain("is not registered")
+        }
+        expect(calls).toEqual([])
+        expect(yield* EventAdmission.forSession(db, parentSessionIDFor(req.event.id))).toEqual([])
+        expect(yield* db.all("SELECT count(*) count FROM session_input")).toEqual([{ count: 0 }])
+      }),
+    )
+  })
+
+  test("a routing-only refusal creates no successful durable admission receipt", async () => {
     const req = request()
     await runWithDb((db) =>
       Effect.gen(function* () {
         const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session([]) })
-        yield* provider.admit({ request: req, scope: scope(req.event) })
-        const rows = yield* EventAdmission.forSession(db, parentSessionIDFor(req.event.id))
-        expect(rows.length).toBe(1)
-        expect(rows[0].envelope.eventType).toBe("ci.failure")
-        // W5 receipts honesty: the receipt is written AFTER the effect completed → the terminal state
-        // of a successful admission is `resolved` (never the old pre-effect "admitted" claim).
-        expect(rows[0].status).toBe("resolved")
+        const outcome = yield* provider.admit({ request: req, scope: scope(req.event) }).pipe(Effect.exit)
+        expect(Exit.isFailure(outcome)).toBe(true)
+        expect(yield* EventAdmission.forSession(db, parentSessionIDFor(req.event.id))).toEqual([])
       }),
     )
   })
 
-  test("registered DAG event types retain ordinary admission when explicitly requested", async () => {
-    for (const [type, source, execution] of [
-      ["schedule.scan", "schedule", "single"],
-      ["ci.repair.requested", "schedule", "dag"],
-      ["ci.failure", "ci", "dag"],
-      ["pr.comment", "pr", "dag"],
-      ["monitor.alert", "monitor", "dag"],
-    ] as const) {
-      expect(V4_EVENT_REGISTRY.lookup(type)?.execution ?? "single").toBe(execution)
-      const req = { ...request(), event: event({ type, source }) }
-      const v2Calls: V2PromptCall[] = []
-      await runWithDb((db) =>
-        Effect.gen(function* () {
-          const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(v2Calls) })
-          yield* provider.admit({ request: req, scope: scope(req.event) })
-          const rows = yield* EventAdmission.forSession(db, parentSessionIDFor(req.event.id))
-          expect(rows).toHaveLength(1)
-          expect(rows[0].envelope.eventType).toBe(type)
-        }),
-      )
-      expect(v2Calls).toHaveLength(1)
-    }
+  test("registered event routing never substitutes for reviewed Work authority", async () => {
+    await runWithDb((db) =>
+      Effect.gen(function* () {
+        for (const [type, source, execution] of [
+          ["schedule.scan", "schedule", "single"],
+          ["ci.repair.requested", "schedule", "dag"],
+          ["ci.failure", "ci", "dag"],
+          ["pr.comment", "pr", "dag"],
+          ["monitor.alert", "monitor", "dag"],
+        ] as const) {
+          expect(V4_EVENT_REGISTRY.lookup(type)?.execution ?? "single").toBe(execution)
+          const req = { ...request(), event: event({ type, source }) }
+          const calls: V2PromptCall[] = []
+          const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(calls) })
+          const outcome = yield* provider.admit({ request: req, scope: scope(req.event) }).pipe(Effect.exit)
+          expect(Exit.isFailure(outcome)).toBe(true)
+          if (outcome._tag === "Failure")
+            expect(Cause.squash(outcome.cause)).toMatchObject({ code: "EVENT_WORK_AUTH_REQUIRED" })
+          expect(yield* EventAdmission.forSession(db, parentSessionIDFor(req.event.id))).toEqual([])
+          expect(calls).toEqual([])
+        }
+      }),
+    )
   })
 
   test("DAG ingress for each registered type resolves one receipt without prompting the parent", async () => {
@@ -348,41 +380,49 @@ describe("C5-12 V2 admission bridge provider", () => {
     }
   })
 
-  test("provider.admit fails closed on an unregistered event type", async () => {
+  test("receipt-only ingress fails closed on an unregistered event type", async () => {
     const req = request()
     await runWithDb((db) =>
       Effect.gen(function* () {
-        const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session([]) })
+        const calls: V2PromptCall[] = []
+        const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(calls) })
         const badRequest = { ...req, event: { ...req.event, type: "some.unknown.type" } }
-        const outcome = yield* provider.admit({ request: badRequest, scope: scope(req.event) }).pipe(Effect.exit)
+        const outcome = yield* provider.admitReceiptOnly!({ request: badRequest, scope: scope(req.event) }).pipe(
+          Effect.exit,
+        )
         expect(Exit.isFailure(outcome)).toBe(true)
         expect(String(outcome)).toContain("is not registered")
+        expect(calls).toEqual([])
+        expect(yield* EventAdmission.forSession(db, parentSessionIDFor(req.event.id))).toEqual([])
       }),
     )
   })
 
-  test("provider.admit fails closed when the SessionV2 stack is absent", async () => {
+  test("a missing SessionV2 stack cannot bypass reviewed Work authority", async () => {
     const req = request()
     await runWithDb((db) =>
       Effect.gen(function* () {
         const provider = makeV2AdmissionBridge({ db })
         const outcome = yield* provider.admit({ request: req, scope: scope(req.event) }).pipe(Effect.exit)
         expect(Exit.isFailure(outcome)).toBe(true)
-        expect(String(outcome)).toContain("requires the SessionV2 stack")
+        if (outcome._tag === "Failure")
+          expect(Cause.squash(outcome.cause)).toMatchObject({ code: "EVENT_WORK_AUTH_REQUIRED" })
       }),
     )
   })
 
-  test("flag ON + production provider: the runtime routes through the V2 admission path and skips §C", async () => {
+  test("flag ON cannot fall back to ordinary model execution after authority refusal", async () => {
     setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
     resetRunner()
     const v2Calls: V2PromptCall[] = []
-    await runWithDb((db) => {
+    const outcome = await runWithDb((db) => {
       const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(v2Calls) })
-      return providerRuntimeEffect(provider)
+      return providerRuntimeEffect(provider).pipe(Effect.exit)
     })
-    // The production provider admitted exactly one bounded prompt; §C coordination never ran.
-    expect(v2Calls.length).toBe(1)
+    expect(Exit.isFailure(outcome)).toBe(true)
+    if (outcome._tag === "Failure")
+      expect(Cause.squash(outcome.cause)).toMatchObject({ code: "EVENT_WORK_AUTH_REQUIRED" })
+    expect(v2Calls.length).toBe(0)
     expect(runnerRan.length).toBe(0)
   })
 })

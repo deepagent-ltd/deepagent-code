@@ -4,10 +4,10 @@ import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { InstanceRef } from "@/effect/instance-ref"
 import { disposeInstanceState, InstanceRegistry } from "@/effect/instance-registry"
 import { FSUtil } from "@deepagent-code/core/fs-util"
-import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
+import { Context, Deferred, Duration, Effect, Exit, Layer, Option, Scope } from "effect"
 import { assertSafeInstanceRoot, isFilesystemRoot, type InstanceContext } from "./instance-context"
 import { InstanceBootstrap } from "./bootstrap-service"
-import * as Project from "./project"
+import { Project } from "./project"
 
 export interface LoadInput {
   directory: string
@@ -16,6 +16,7 @@ export interface LoadInput {
 }
 
 export interface Interface {
+  readonly peek: (directory: string) => Effect.Effect<InstanceContext | undefined>
   readonly load: (input: LoadInput) => Effect.Effect<InstanceContext>
   readonly reload: (input: LoadInput) => Effect.Effect<InstanceContext>
   readonly dispose: (ctx: InstanceContext) => Effect.Effect<void>
@@ -44,6 +45,7 @@ export const layer: Layer.Layer<
     const registry = yield* InstanceRegistry.Service
     const scope = yield* Scope.Scope
     const cache = new Map<string, Entry>()
+    const retiring = new WeakSet<InstanceContext>()
 
     const boot = (input: LoadInput & { directory: string }) =>
       Effect.gen(function* () {
@@ -110,6 +112,9 @@ export const layer: Layer.Layer<
       )
 
     const disposeContext = Effect.fn("InstanceStore.disposeContext")(function* (ctx: InstanceContext) {
+      // Native disposers can remain in flight. The cached object must stop
+      // proving current ownership before any asynchronous teardown begins.
+      yield* Effect.sync(() => retiring.add(ctx))
       yield* Effect.logInfo("disposing instance").pipe(Effect.annotateLogs("directory", ctx.directory))
       yield* registry.dispose(ctx.directory).pipe(Effect.ensuring(disposeInstanceState(ctx)))
       yield* emitDisposed({ directory: ctx.directory, project: ctx.project.id })
@@ -121,6 +126,15 @@ export const layer: Layer.Layer<
       if (cache.get(directory) !== entry) return false
       cache.delete(directory)
       return true
+    })
+
+    const peek = Effect.fn("InstanceStore.peek")(function* (directory: string) {
+      const entry = cache.get(FSUtil.resolve(directory))
+      if (!entry) return undefined
+      const completed = yield* Deferred.poll(entry.deferred)
+      if (Option.isNone(completed)) return undefined
+      const result = yield* Effect.exit(completed.value)
+      return Exit.isSuccess(result) && !retiring.has(result.value) && cache.get(FSUtil.resolve(directory)) === entry ? result.value : undefined
     })
 
     const load = (input: LoadInput): Effect.Effect<InstanceContext> => {
@@ -152,6 +166,7 @@ export const layer: Layer.Layer<
             yield* Effect.logInfo("reloading instance").pipe(Effect.annotateLogs("directory", directory))
             if (previous) {
               const previousContext = yield* Deferred.await(previous.deferred)
+              yield* Effect.sync(() => retiring.add(previousContext))
               yield* registry.dispose(directory).pipe(Effect.ensuring(disposeInstanceState(previousContext)))
               yield* emitDisposed({ directory, project: input.project?.id })
             }
@@ -212,6 +227,7 @@ export const layer: Layer.Layer<
     yield* Effect.addFinalizer(() => disposeAll().pipe(Effect.ignore))
 
     return Service.of({
+      peek,
       load,
       reload,
       dispose,

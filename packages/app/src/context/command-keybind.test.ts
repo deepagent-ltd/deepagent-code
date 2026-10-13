@@ -1,7 +1,33 @@
 import { describe, expect, test } from "bun:test"
-import { formatKeybind, matchKeybind, parseKeybind } from "./command"
+import { formatKeybind, keyFromEvent, matchKeybind, parseKeybind } from "./command"
+
+// Happy DOM reports any Alt press as AltGraph; model the macOS event separately.
+class MacKeyboardEvent extends KeyboardEvent {
+  override getModifierState(key: string) {
+    if (key === "AltGraph") return false
+    return super.getModifierState(key)
+  }
+}
 
 describe("command keybind helpers", () => {
+  test("macOS Option letter symbols retain their shortcut letter without changing other keyboards", () => {
+    const close = new MacKeyboardEvent("keydown", { key: "∑", code: "KeyW", ctrlKey: true, altKey: true })
+    expect(keyFromEvent(close, true)).toBe("w")
+    expect(keyFromEvent(close, false)).toBe("∑")
+    expect(
+      keyFromEvent(new MacKeyboardEvent("keydown", { key: "¥", code: "KeyY", metaKey: true, altKey: true }), true),
+    ).toBe("y")
+    expect(keyFromEvent(new KeyboardEvent("keydown", { key: "¥", code: "KeyY", altKey: true }), true)).toBe("¥")
+    expect(
+      keyFromEvent(new KeyboardEvent("keydown", { key: "∑", code: "KeyW", ctrlKey: true, altKey: true }), true),
+    ).toBe("∑") // An event reporting AltGraph must never be rewritten.
+    expect(keyFromEvent(new KeyboardEvent("keydown", { key: "∑", code: "KeyW" }), true)).toBe("∑")
+    expect(
+      keyFromEvent(new KeyboardEvent("keydown", { key: "∑", code: "KeyW", altKey: true, isComposing: true }), true),
+    ).toBe("∑")
+    expect(keyFromEvent(new KeyboardEvent("keydown", { key: "[", code: "BracketLeft", altKey: true }), true)).toBe("[")
+  })
+
   test("parseKeybind handles aliases and multiple combos", () => {
     const keybinds = parseKeybind("control+option+k, mod+shift+comma")
 

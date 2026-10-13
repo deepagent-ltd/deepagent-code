@@ -2,6 +2,7 @@ import { afterAll, expect, mock, beforeEach } from "bun:test"
 import { EventEmitter } from "events"
 import { Deferred, Effect, Layer, Option } from "effect"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
+import { oauthHttp } from "../fixture/mcp-oauth-http"
 import type { MCP as MCPNS } from "../../src/mcp/index"
 
 // Release the mock.module registrations below when this file finishes so
@@ -32,86 +33,10 @@ void mock.module("open", () => ({
   },
 }))
 
-// Mock UnauthorizedError
-class MockUnauthorizedError extends Error {
-  constructor() {
-    super("Unauthorized")
-    this.name = "UnauthorizedError"
-  }
-}
-
-// Track what options were passed to each transport constructor
-const transportCalls: Array<{
-  type: "streamable" | "sse"
-  url: string
-  options: { authProvider?: unknown }
-}> = []
-
-// Mock the transport constructors
-void mock.module("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: class MockStreamableHTTP {
-    url: string
-    authProvider: { redirectToAuthorization?: (url: URL) => Promise<void> } | undefined
-    constructor(url: URL, options?: { authProvider?: { redirectToAuthorization?: (url: URL) => Promise<void> } }) {
-      this.url = url.toString()
-      this.authProvider = options?.authProvider
-      transportCalls.push({
-        type: "streamable",
-        url: url.toString(),
-        options: options ?? {},
-      })
-    }
-    async start() {
-      // Simulate OAuth redirect by calling the authProvider's redirectToAuthorization
-      if (this.authProvider?.redirectToAuthorization) {
-        await this.authProvider.redirectToAuthorization(new URL("https://auth.example.com/authorize?client_id=test"))
-      }
-      throw new MockUnauthorizedError()
-    }
-    async finishAuth(_code: string) {
-      // Mock successful auth completion
-    }
-  },
-}))
-
-void mock.module("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: class MockSSE {
-    constructor(url: URL) {
-      transportCalls.push({
-        type: "sse",
-        url: url.toString(),
-        options: {},
-      })
-    }
-    async start() {
-      throw new Error("Mock SSE transport cannot connect")
-    }
-  },
-}))
-
-// Mock the MCP SDK Client to trigger OAuth flow
-void mock.module("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: class MockClient {
-    async connect(transport: { start: () => Promise<void> }) {
-      await transport.start()
-    }
-
-    getServerCapabilities() {
-      return { tools: {} }
-    }
-  },
-}))
-
-// Mock UnauthorizedError in the auth module
-void mock.module("@modelcontextprotocol/sdk/client/auth.js", () => ({
-  UnauthorizedError: MockUnauthorizedError,
-}))
-
 beforeEach(() => {
   openShouldFail = false
   openCalledWith = undefined
   openDeferred = undefined
-  transportCalls.length = 0
 })
 
 // Import modules after mocking
@@ -119,6 +44,7 @@ const { MCP } = await import("../../src/mcp/index")
 const { EventV2Bridge } = await import("../../src/event-v2-bridge")
 const { Config } = await import("../../src/config/config")
 const { McpAuth } = await import("../../src/mcp/auth")
+const { McpAuthScope } = await import("../../src/mcp/auth-scope")
 const { SecretStore } = await import("../../src/mcp/secret-store")
 const { McpOAuthCallback } = await import("../../src/mcp/oauth-callback")
 const { FSUtil } = await import("@deepagent-code/core/fs-util")
@@ -126,6 +52,7 @@ const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spa
 const mcpTest = testEffect(
   MCP.layer.pipe(
     Layer.provide(McpAuth.defaultLayer),
+    Layer.provide(McpAuthScope.defaultLayer),
     Layer.provide(SecretStore.testLayer()),
     Layer.provideMerge(EventV2Bridge.defaultLayer),
     Layer.provide(Config.defaultLayer),
@@ -134,15 +61,6 @@ const mcpTest = testEffect(
   ),
 )
 const service = MCP.Service as unknown as Effect.Effect<MCPNS.Interface, never, never>
-
-const config = (name: string) => ({
-  mcp: {
-    [name]: {
-      type: "remote" as const,
-      url: "https://example.com/mcp",
-    },
-  },
-})
 
 const withCallbackStop = Effect.addFinalizer(() => Effect.promise(() => McpOAuthCallback.stop()).pipe(Effect.ignore))
 
@@ -180,6 +98,8 @@ mcpTest.instance(
   () =>
     Effect.gen(function* () {
       yield* withCallbackStop
+      const f = yield* oauthHttp
+      yield* (yield* service).add("test-oauth-server", f.config)
       openShouldFail = true
 
       const event = yield* trackBrowserOpenFailed
@@ -192,9 +112,9 @@ mcpTest.instance(
       )
 
       expect(failure.mcpName).toBe("test-oauth-server")
-      expect(failure.url).toContain("https://")
+      expect(new URL(failure.url).origin).toBe(new URL(f.config.url).origin)
     }),
-  { config: config("test-oauth-server") },
+  { config: { mcp: {} } },
 )
 
 mcpTest.instance(
@@ -202,6 +122,8 @@ mcpTest.instance(
   () =>
     Effect.gen(function* () {
       yield* withCallbackStop
+      const f = yield* oauthHttp
+      yield* (yield* service).add("test-oauth-server-2", f.config)
       openShouldFail = false
 
       const opened = yield* trackBrowserOpen
@@ -214,7 +136,7 @@ mcpTest.instance(
       expect(failure).toEqual(Option.none())
       expect(openCalledWith).toBeDefined()
     }),
-  { config: config("test-oauth-server-2") },
+  { config: { mcp: {} } },
 )
 
 mcpTest.instance(
@@ -222,6 +144,8 @@ mcpTest.instance(
   () =>
     Effect.gen(function* () {
       yield* withCallbackStop
+      const f = yield* oauthHttp
+      yield* (yield* service).add("test-oauth-server-3", f.config)
       openShouldFail = false
       openCalledWith = undefined
 
@@ -234,7 +158,7 @@ mcpTest.instance(
 
       expect(failure).toEqual(Option.none())
       expect(typeof url).toBe("string")
-      expect(url).toContain("https://")
+      expect(new URL(url).origin).toBe(new URL(f.config.url).origin)
     }),
-  { config: config("test-oauth-server-3") },
+  { config: { mcp: {} } },
 )

@@ -1,8 +1,8 @@
-import { InvalidRequestReason, LLMError } from "@deepagent-code/llm"
+import { InvalidRequestReason, LLMError, ToolResultValue, ToolTextContent } from "@deepagent-code/llm"
 import { Buffer } from "node:buffer"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { Effect } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { FSUtil } from "../../fs-util"
 import { SessionMessage } from "../message"
 import { FileAttachment } from "../prompt"
@@ -57,8 +57,15 @@ const modalityOf = (mime: string) => {
 }
 
 // Exact legacy degrade wording (provider/transform.ts unsupportedParts).
-const unsupportedModalityText = (file: FileAttachment, modality: string) =>
+const unsupportedModalityText = (file: Pick<FileAttachment, "name">, modality: string) =>
   `ERROR: Cannot read ${file.name !== undefined ? `"${file.name}"` : modality} (this model does not support ${modality} input). Inform the user.`
+
+const unsupportedToolInput = (mime: string, name: string | undefined, input: readonly string[]) => {
+  const modality = modalityOf(mime)
+  return modality !== undefined && !input.includes(modality)
+    ? `${unsupportedModalityText({ name }, modality)} The tool attachment remains available to the user; rely on the tool's text and metadata instead.`
+    : undefined
+}
 
 const DIRECTORY_PAGE_LIMIT = 2_000
 
@@ -149,6 +156,55 @@ export const normalizeAttachments = Effect.fn("SessionRunner.normalizeAttachment
   input: readonly string[] | undefined,
 ) {
   return yield* Effect.forEach(messages, (message): Effect.Effect<SessionMessage.Message, LLMError, FSUtil.Service> => {
+    if (message.type === "assistant" && input !== undefined) {
+      // This is only the wire-bound history copy, after artifact verification. Keep the durable
+      // tool output (including its PNG and identity) intact for display, audit, and vision models.
+      return Effect.succeed(
+        SessionMessage.Assistant.make({
+          ...message,
+          content: message.content.map((part) => {
+            if (part.type !== "tool" || part.state.status !== "completed") return part
+            const result = Option.getOrUndefined(Schema.decodeUnknownOption(ToolResultValue)(part.state.result))
+            if (
+              !part.state.content.some(
+                (item) => item.type === "file" && unsupportedToolInput(item.mime, item.name, input) !== undefined,
+              ) &&
+              !(
+                result?.type === "content" &&
+                result.value.some(
+                  (item) =>
+                    item.type === "media" && unsupportedToolInput(item.mediaType, item.filename, input) !== undefined,
+                )
+              )
+            )
+              return part
+            return SessionMessage.AssistantTool.make({
+              ...part,
+              state: SessionMessage.ToolStateCompleted.make({
+                ...part.state,
+                content: part.state.content.map((item) => {
+                  if (item.type !== "file") return item
+                  const text = unsupportedToolInput(item.mime, item.name, input)
+                  return text === undefined ? item : ToolTextContent.make({ type: "text", text })
+                }),
+                // Provider-executed tools replay their settled result rather than content.
+                result:
+                  result?.type === "content"
+                    ? {
+                        ...result,
+                        value: result.value.map((item) => {
+                          if (item.type !== "media") return item
+                          const text = unsupportedToolInput(item.mediaType, item.filename, input)
+                          return text === undefined ? item : { type: "text", text }
+                        }),
+                      }
+                    : part.state.result,
+              }),
+            })
+          }),
+        }),
+      )
+    }
     if (message.type !== "user" || (message.files ?? []).length === 0) return Effect.succeed(message)
     return Effect.map(
       Effect.forEach(message.files ?? [], (file) => normalizeFile(file, input)),

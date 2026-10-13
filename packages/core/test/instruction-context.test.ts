@@ -16,6 +16,52 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(Layer.empty)
 
 describe("InstructionContext", () => {
+  it.live("UP-02 ignores project and global AGENTS.md directories without losing valid instructions", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const global = path.join(tmp.path, "global")
+          const project = path.join(tmp.path, "project")
+          const directory = path.join(project, "nested")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(global, "AGENTS.md"), { recursive: true })
+            await fs.mkdir(path.join(directory, "AGENTS.md"), { recursive: true })
+            await fs.writeFile(path.join(project, "AGENTS.md"), "valid parent instructions")
+          })
+          const load = SystemContextRegistry.Service.pipe(
+            Effect.flatMap((service) => service.load()),
+            Effect.provide(InstructionContext.layer.pipe(Layer.provideMerge(SystemContextRegistry.layer))),
+            Effect.provide(FSUtil.defaultLayer),
+            Effect.provide(Global.layerWith({ config: global })),
+            Effect.provide(
+              Layer.succeed(
+                Location.Service,
+                Location.Service.of(
+                  location(
+                    { directory: AbsolutePath.make(directory) },
+                    { projectDirectory: AbsolutePath.make(project) },
+                  ),
+                ),
+              ),
+            ),
+          )
+          const initialized = yield* SystemContext.initialize(yield* load)
+          expect(initialized.baseline).toBe(
+            `Instructions from: ${path.join(project, "AGENTS.md")}\nvalid parent instructions`,
+          )
+          yield* Effect.promise(() => fs.writeFile(path.join(project, "AGENTS.md"), "updated parent instructions"))
+          expect(yield* SystemContext.reconcile(yield* load, initialized.snapshot)).toMatchObject({
+            _tag: "Updated",
+            text: expect.stringContaining("updated parent instructions"),
+          })
+        }),
+      ),
+    ),
+  )
+
   it.live("loads global and upward project AGENTS.md files as one aggregate context", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -153,6 +199,55 @@ describe("InstructionContext", () => {
         }),
       ).toEqual({ _tag: "Unchanged" })
     }),
+  )
+
+  it.live("UP-02 preserves admitted context on a file read error instead of treating it as a directory", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const file = path.join(tmp.path, "AGENTS.md")
+          yield* Effect.promise(() => fs.writeFile(file, "existing instructions"))
+          let unreadable = false
+          const failingRead = Layer.effect(
+            FSUtil.Service,
+            FSUtil.Service.pipe(
+              Effect.map((fs) =>
+                FSUtil.Service.of({
+                  ...fs,
+                  readFileStringSafe: (target) =>
+                    unreadable && target === file
+                      ? Effect.fail(new FSUtil.FileSystemError({ method: "readFileString" }))
+                      : fs.readFileStringSafe(target),
+                }),
+              ),
+            ),
+          ).pipe(Layer.provide(FSUtil.defaultLayer))
+          const load = SystemContextRegistry.Service.pipe(
+            Effect.flatMap((service) => service.load()),
+            Effect.provide(InstructionContext.layer.pipe(Layer.provideMerge(SystemContextRegistry.layer))),
+            Effect.provide(failingRead),
+            Effect.provide(Global.layerWith({ config: path.join(tmp.path, "global") })),
+            Effect.provide(
+              Layer.succeed(
+                Location.Service,
+                Location.Service.of(location({ directory: AbsolutePath.make(tmp.path) })),
+              ),
+            ),
+          )
+          const initialized = yield* SystemContext.initialize(yield* load)
+          expect(initialized.baseline).toContain("existing instructions")
+          unreadable = true
+          expect(yield* SystemContext.reconcile(yield* load, initialized.snapshot)).toEqual({ _tag: "Unchanged" })
+          expect(yield* SystemContext.initialize(yield* load).pipe(Effect.flip)).toMatchObject({
+            _tag: "SystemContext.InitializationBlocked",
+            keys: ["core/instructions"],
+          })
+        }),
+      ),
+    ),
   )
 
   it.effect("preserves admitted instructions when a discovered file disappears before read", () =>

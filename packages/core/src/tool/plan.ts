@@ -21,8 +21,17 @@ export * as PlanWriteTool from "./plan"
 
 import { ToolFailure } from "@deepagent-code/llm"
 import { Effect, Layer, Schema } from "effect"
+import { eq } from "drizzle-orm"
 import * as controller from "../deepagent/plan-controller"
-import * as store from "../deepagent/plan-store"
+import { DeepAgentPlanStore } from "../deepagent/plan-store"
+import { Database } from "../database/database"
+import { GoalChild } from "../deepagent/goal-child"
+import { GoalChildSchema } from "../deepagent/goal-child.schema"
+import { GoalChildUnitTable } from "../deepagent/goal-child.sql"
+import { GoalTickCheckpointV2 } from "../deepagent/goal-tick-checkpoint-v2"
+import { GoalTickProgram } from "../deepagent/goal-tick-program"
+import { GoalChildPolicy } from "../deepagent/goal-child-policy"
+import type { GoalTickCheckpoint } from "../deepagent/goal-tick-checkpoint"
 import * as sessionState from "../deepagent/session-state"
 import { PermissionV2 } from "../permission"
 import { NonNegativeInt } from "../schema"
@@ -87,6 +96,7 @@ const Output = Schema.Struct({
   output: Schema.String,
   plan_protocol: Schema.optional(Schema.Literals(["success", "invalid", "conflict", "no_progress"])),
   plan_error_code: Schema.optional(Schema.String),
+  owned_proposal: Schema.optional(GoalChildSchema.PlanProposal),
 })
 
 export const name = "plan"
@@ -95,6 +105,8 @@ export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
     const permission = yield* PermissionV2.Service
+    const storage = yield* sessionState.CurrentStorage
+    const db = (yield* Database.Service).db
     yield* tools
       .register({
         [name]: Tool.withPermission(
@@ -102,17 +114,44 @@ export const layer = Layer.effectDiscard(
             description: DESCRIPTION,
             input: Parameters,
             output: Output,
-            toModelOutput: ({ output }) => [{ type: "text" as const, text: output.output }],
+            toModelOutput: ({ output }) =>
+              output.owned_proposal ? [] : [{ type: "text" as const, text: output.output }],
             execute: (params, context) =>
               Effect.gen(function* () {
+                const owner = yield* GoalChild.owner(db, context.sessionID).pipe(
+                  Effect.mapError(() => new ToolFailure({ message: "Plan authority could not be read." })),
+                )
+                const managed = owner?.binding.version === 3 ? owner : undefined
+                const resource = managed?.binding.version === 3 ? managed.binding.policy.planResource : "*"
+                const current = (reader: GoalTickCheckpoint.Reader) =>
+                  Effect.gen(function* () {
+                    if (!managed) return
+                    if (managed.child_session_id !== context.sessionID || managed.binding.agent !== context.agent)
+                      return yield* new ToolFailure({ message: "Plan target does not belong to this role." })
+                    yield* GoalChildPolicy.requireCurrent(reader, managed.binding).pipe(
+                      Effect.mapError(() => new ToolFailure({ message: "Plan authority is no longer current." })),
+                    )
+                    const checkpoint = yield* GoalTickCheckpointV2.read(reader, managed.permit_id).pipe(
+                      Effect.mapError(() => new ToolFailure({ message: "Frozen plan authority could not be read." })),
+                    )
+                    const role = checkpoint?.journal.program.roles.find((item) => item.key === managed.role_key)
+                    if (!role?.scratch) return
+                    const payload = Schema.decodeUnknownSync(Schema.fromJsonString(GoalTickProgram.DocumentPayload))(
+                      role.scratch.payload,
+                    )
+                    const plan = DeepAgentPlanStore.decodePlanDoc(payload.body)
+                    if (!plan) return yield* new ToolFailure({ message: "Frozen scratch source is invalid." })
+                    return plan
+                  })
+                yield* current(db)
                 // V1-parity plan permission gate: the declared action must actually be asserted
                 // (bash.ts pattern), or `plan: "ask"` silently behaves as allow. Refusals lower to
                 // ToolFailure so the model sees the coached denial instead of a runtime defect.
                 yield* permission
                   .assert({
                     action: "plan",
-                    resources: ["*"],
-                    save: ["*"],
+                    resources: [resource],
+                    save: [resource],
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source: {
@@ -128,13 +167,15 @@ export const layer = Layer.effectDiscard(
                         new ToolFailure({ message: "Plan write was not authorized." }),
                     ),
                   )
+                const frozenPlan = yield* current(db)
                 const sid = context.sessionID
-                const previous = store.getPlanDoc(sid)
-                const ref = store.planDocRef(sid)
+                const exact = storage.run(() => managed ? DeepAgentPlanStore.readExactPlan(sid, resource) : undefined)
+                const previous = storage.run(() => exact ? exact.plan : DeepAgentPlanStore.getPlanDoc(sid))
+                const ref = storage.run(() => exact ? exact.ref : DeepAgentPlanStore.planDocRef(sid))
                 const expectedRef =
                   previous && ref ? { plan_id: previous.plan_id, doc_id: ref.id, version: ref.version } : null
-                const attempt = yield* Effect.try({
-                  try: () => {
+                const commit = Effect.try({
+                  try: () => storage.run(() => {
                     const built = controller.buildPlanFromWriteInput(
                       sid,
                       normalizeModelPlanWrite(params, previous, expectedRef),
@@ -146,23 +187,73 @@ export const layer = Layer.effectDiscard(
                       built,
                       sessionState.lastValidationSummary(sid),
                     )
-                    const committed = store.compareAndCommitPlan({
+                    if (frozenPlan) {
+                      const structure = (value: controller.PlanDoc) => ({
+                        goal: value.goal,
+                        assumptions: value.assumptions,
+                        steps: value.steps.map((step) => ({
+                          id: step.step_id,
+                          title: step.title,
+                          acceptance: step.acceptance ?? null,
+                        })),
+                      })
+                      if (GoalTickProgram.hash(structure(plan)) !== GoalTickProgram.hash(structure(frozenPlan)))
+                        throw new ToolFailure({
+                          message: "Owned scratch proposals must preserve the frozen steps and acceptance criteria.",
+                        })
+                    }
+                    const input = {
                       sessionId: sid,
                       expected: expectedRef,
                       candidate: plan,
-                      origin: "model_tool",
-                    })
+                      origin: "model_tool" as const,
+                    }
+                    const committed = managed
+                      ? DeepAgentPlanStore.compareAndCommitExactPlan({ ...input, documentID: resource })
+                      : DeepAgentPlanStore.compareAndCommitPlan(input)
                     sessionState.bindPlan(sid, committed.plan, previous, committed.changed)
+                    const doc = managed && frozenPlan ? DeepAgentPlanStore.readExactPlan(sid, resource).doc : undefined
+                    const proposal: GoalChildSchema.PlanProposal | undefined = doc
+                      ? {
+                          version: 1,
+                          documentID: doc.id,
+                          documentVersion: doc.version,
+                          documentHash: doc.hash.replace(/^sha256:/, ""),
+                          toolCallID: context.toolCallID,
+                          messageID: context.assistantMessageID,
+                        }
+                      : undefined
                     return {
+                      proposal,
                       previous,
                       plan: committed.plan,
                       version: committed.version,
                       changed: committed.changed,
                       changes: controller.diffStepStatuses(previous, committed.plan),
                     }
-                  },
+                  }),
                   catch: (error) => error,
-                }).pipe(
+                })
+                // The completed approval and the immutable four-rule policy are rechecked inside
+                // the same control transaction as the exact file CAS. No ask is held under this lock.
+                const attempt = yield* (
+                  managed
+                    ? db.transaction((tx) => Effect.gen(function* () {
+                        yield* current(tx)
+                        const value = yield* commit
+                        if (value.proposal) {
+                          const unit = yield* GoalChild.read(tx, managed.unit_id).pipe(Effect.orDie)
+                          if (!unit || unit.binding.version !== 3 || unit.inputs.length !== 1 || unit.inputs[0].stage !== "plain")
+                            return yield* new ToolFailure({ message: "Owned Plan proposal has no exact worker input." })
+                          yield* tx.update(GoalChildUnitTable).set({
+                            inputs: [{ ...unit.inputs[0], proposal: value.proposal }],
+                            updated_at: Date.now(),
+                          }).where(eq(GoalChildUnitTable.unit_id, unit.unit_id)).run().pipe(Effect.orDie)
+                        }
+                        return value
+                      }), { behavior: "immediate" })
+                    : commit
+                ).pipe(
                   Effect.match({
                     onFailure: (error) => ({ ok: false as const, error }),
                     onSuccess: (value) => ({ ok: true as const, value }),
@@ -172,8 +263,9 @@ export const layer = Layer.effectDiscard(
                 if (!attempt.ok) {
                   const error = attempt.error
                   if (error instanceof controller.PlanConflictError) {
-                    const current = store.getPlanDoc(sid)
-                    const currentRef = store.planDocRef(sid)
+                    const currentExact = storage.run(() => managed ? DeepAgentPlanStore.readExactPlan(sid, resource) : undefined)
+                    const current = storage.run(() => currentExact ? currentExact.plan : DeepAgentPlanStore.getPlanDoc(sid))
+                    const currentRef = storage.run(() => currentExact ? currentExact.ref : DeepAgentPlanStore.planDocRef(sid))
                     const currentProgress = current ? controller.planProgress(current) : { done: 0, total: 0 }
                     return {
                       output:
@@ -203,6 +295,7 @@ export const layer = Layer.effectDiscard(
                       plan_error_code: error.code,
                     }
                   }
+                  if (error instanceof ToolFailure) return yield* error
                   return yield* Effect.die(error)
                 }
 
@@ -225,6 +318,7 @@ export const layer = Layer.effectDiscard(
                     : "")
                 return {
                   output: renderModelPlanSuccess(plan, version, summary, changed),
+                  ...(attempt.value.proposal ? { owned_proposal: attempt.value.proposal } : {}),
                   plan_protocol: changed ? ("success" as const) : ("no_progress" as const),
                 }
               }),
@@ -241,7 +335,7 @@ export const layer = Layer.effectDiscard(
 // or reconstruct authority fields omitted from compact context.
 const normalizeModelPlanWrite = (
   params: Schema.Schema.Type<typeof Parameters>,
-  previous: ReturnType<typeof store.getPlanDoc>,
+  previous: ReturnType<typeof DeepAgentPlanStore.getPlanDoc>,
   expected: controller.PlanExpected | null,
 ) => {
   // Provider-tolerant normalization (GLM 5.x): the literal "null" string and stringified
@@ -406,8 +500,8 @@ const matchPlanStepByIdentity = (
 const renderModelPlanCorrection = (
   params: Schema.Schema.Type<typeof Parameters>,
   code: controller.PlanValidationCode,
-  previous: ReturnType<typeof store.getPlanDoc>,
-  ref: ReturnType<typeof store.planDocRef>,
+  previous: ReturnType<typeof DeepAgentPlanStore.getPlanDoc>,
+  ref: ReturnType<typeof DeepAgentPlanStore.planDocRef>,
 ): string => {
   if (params.operation === "advance") return renderPlanRetryBase(previous, ref)
   if (code === "plan_already_exists") {
@@ -475,8 +569,8 @@ const renderModelPlanSuccess = (
 }
 
 const renderPlanRetryBase = (
-  previous: ReturnType<typeof store.getPlanDoc>,
-  ref: ReturnType<typeof store.planDocRef>,
+  previous: ReturnType<typeof DeepAgentPlanStore.getPlanDoc>,
+  ref: ReturnType<typeof DeepAgentPlanStore.planDocRef>,
 ): string => {
   if (previous == null) return ""
   if (ref == null) {

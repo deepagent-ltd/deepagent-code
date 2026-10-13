@@ -1007,3 +1007,25 @@ describe("SessionProjector", () => {
     }),
   )
 })
+
+
+it.effect("wire metadata carries canonical promotion sequence without changing original message time or ID", () => Effect.gen(function* () {
+  const db = (yield* Database.Service).db
+  const events = yield* EventV2.Service
+  yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run().pipe(Effect.orDie)
+  yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, slug: "canonical", directory: "/project", title: "canonical", version: "test" }).run().pipe(Effect.orDie)
+  const first = SessionMessage.ID.make("msg_canonical_first")
+  const queued = SessionMessage.ID.make("msg_canonical_queue")
+  yield* events.publish(SessionEvent.PromptLifecycle.Admitted, { messageID: first, sessionID, timestamp: DateTime.makeUnsafe(2000), prompt: new Prompt({ text: "first" }), delivery: "queue" })
+  yield* events.publish(SessionEvent.PromptLifecycle.Admitted, { messageID: queued, sessionID, timestamp: DateTime.makeUnsafe(1000), prompt: new Prompt({ text: "admitted earlier, promoted later" }), delivery: "queue" })
+  yield* events.publish(SessionEvent.PromptLifecycle.Promoted, { sessionID, messageID: first, timestamp: DateTime.makeUnsafe(2000), timeCreated: DateTime.makeUnsafe(2000), prompt: new Prompt({ text: "first" }) })
+  yield* events.publish(SessionEvent.PromptLifecycle.Promoted, { sessionID, messageID: queued, timestamp: DateTime.makeUnsafe(1000), timeCreated: DateTime.makeUnsafe(1000), prompt: new Prompt({ text: "admitted earlier, promoted later" }) })
+  const canonical = yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, sessionID)).orderBy(asc(SessionMessageTable.seq)).all().pipe(Effect.orDie)
+  const wire = yield* db.select().from(MessageTable).where(eq(MessageTable.session_id, sessionID)).all().pipe(Effect.orDie)
+  expect(canonical.map((row) => row.id)).toEqual([first, queued])
+  expect(wire.find((row) => String(row.id) === String(first))?.data).toMatchObject({ canonicalSeq: canonical[0]!.seq, time: { created: 2000 } })
+  expect(wire.find((row) => String(row.id) === String(queued))?.data).toMatchObject({ canonicalSeq: canonical[1]!.seq, time: { created: 1000 } })
+  expect(canonical[1]!.seq).toBeGreaterThan(canonical[0]!.seq)
+  const messages = yield* db.select().from(EventTable).where(eq(EventTable.type, EventV2.durableType(SessionV1.Event.MessageUpdated))).all().pipe(Effect.orDie)
+  expect(messages.map((row) => (row.data as { info: { canonicalSeq?: number } }).info.canonicalSeq)).toEqual(canonical.map((row) => row.seq))
+}))

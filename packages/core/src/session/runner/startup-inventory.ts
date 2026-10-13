@@ -20,6 +20,8 @@ export * as StartupInventory from "./startup-inventory"
 //   event_outbox     (deepagent_event_outbox publisher ledger)
 //   event_delivery   (deepagent_event_consumer_delivery consumer ledger)
 //   sync_projection  (event_sync_backfill + event_sync_sequence authority)
+//   work_execution   (work_execution source/profile/input binding)
+//   work_dispatch    (work_dispatch_reservation escrow and exact provider binding)
 //
 // Vocabulary (design §10.7 / design §2.2):
 //   safe_before_dispatch — provably pre-dispatch (requeue-eligible; NEVER auto-replayed
@@ -43,12 +45,30 @@ export * as StartupInventory from "./startup-inventory"
 // real implementation is provided here and the MAIN AGENT wires the one-line call. See the
 // module report for the exact wiring (this module is importable from database/post-verify.ts).
 
-import { sql } from "drizzle-orm"
-import { Effect } from "effect"
+import { eq, sql } from "drizzle-orm"
+import { Effect, Option, Schema } from "effect"
 import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { decodeDescriptorRow } from "./recovery-durable-store"
 import { decodeCommandRow } from "./recovery-durable-store"
 import type { DescriptorDbRow, DescriptorRow } from "./recovery-durable-store"
+
+import { EventTaskWorkspaceTable, SessionInputTable, SessionTable } from "../sql"
+import { WorkAuthorityPolicy } from "../work-authority-policy"
+import { WorkAuthoritySchema } from "../work-authority.schema"
+import { WorkExecutionTable, WorkDispatchReservationTable } from "../work-authority.sql"
+import { WorkChildAuthorityTable } from "../work-child-authority.sql"
+import { WorkChildAuthoritySchema } from "../work-child-authority.schema"
+import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
+import { SessionContextSelectionTable, SessionProviderAttemptTable } from "../../context-federation/session-sql"
+import { Hash } from "../../util/hash"
+import { CanonicalJson } from "../../util/canonical-json"
+import { McpAppEffectTable, McpAppInvocationTable } from "../mcp-app-invocation.sql"
+import { McpAppInvocationSchema } from "../mcp-app-invocation.schema"
+import { EventWorkDagPolicy } from "../../deepagent/event-work-dag.policy"
+import { EventWorkDagSchema } from "../../deepagent/event-work-dag.schema"
+import { EventWorkRuleSchema } from "../../deepagent/event-work-rule.schema"
+import { EventWorkControllerTable } from "../../deepagent/event-work-controller.sql"
+import { EventWorkNodeAuthorityTable, EventWorkReceiptTable } from "../../deepagent/event-work-rule.sql"
 
 type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 
@@ -66,6 +86,9 @@ export type StartupCategory =
   | "event_outbox"
   | "event_delivery"
   | "sync_projection"
+  | "work_execution"
+  | "work_dispatch"
+  | "mcp_app"
 
 export const StartupCategories: readonly StartupCategory[] = [
   "provider_attempt",
@@ -80,6 +103,9 @@ export const StartupCategories: readonly StartupCategory[] = [
   "event_outbox",
   "event_delivery",
   "sync_projection",
+  "work_execution",
+  "work_dispatch",
+  "mcp_app",
 ]
 
 /** The deterministic classification bucket for one durable item. */
@@ -172,6 +198,7 @@ const providerAttempt: Readonly<Record<string, InventoryClassification>> = {
 }
 
 type ProviderAttemptRow = CategoryRow & {
+  readonly session_id: string
   readonly execution_claim_token: number
   readonly current_session_claim_token: number | null
   readonly resolution_decision: string | null
@@ -781,6 +808,483 @@ function classifySyncProjectionItem(
   }
 }
 
+type WorkInventoryRow = {
+  work: typeof WorkExecutionTable.$inferSelect
+  session: typeof SessionTable.$inferSelect | null
+  input: typeof SessionInputTable.$inferSelect | null
+  derived?: typeof WorkChildAuthorityTable.$inferSelect | null
+  parent?: typeof WorkExecutionTable.$inferSelect
+  event?: {
+    authority: typeof EventWorkNodeAuthorityTable.$inferSelect
+    controller?: typeof EventWorkControllerTable.$inferSelect
+    receipt?: typeof EventWorkReceiptTable.$inferSelect
+    workspace?: typeof EventTaskWorkspaceTable.$inferSelect
+  }
+  controller?: {
+    record: typeof EventWorkControllerTable.$inferSelect
+    receipt?: typeof EventWorkReceiptTable.$inferSelect
+    authorities: readonly typeof EventWorkNodeAuthorityTable.$inferSelect[]
+    children: readonly WorkInventoryRow[]
+    providers: ReadonlyMap<string, number>
+    dispatches: ReadonlyMap<string, readonly StartupInventoryItem[]>
+  }
+}
+
+type WorkDispatchInventoryRow = WorkInventoryRow & {
+  dispatch: typeof WorkDispatchReservationTable.$inferSelect
+  receipt: typeof V2ProviderTurnReceiptTable.$inferSelect | null
+  attempt: typeof SessionProviderAttemptTable.$inferSelect | null
+  selection: typeof SessionContextSelectionTable.$inferSelect | null
+}
+
+function workBindingProblem(row: WorkInventoryRow): string | undefined {
+  const validation = WorkAuthorityPolicy.validateBinding(row.work.binding, {
+    allowLoopbackHTTP: row.work.loopback_http,
+  })
+  if (!validation.ok) return "work binding schema or frozen profile is invalid"
+  const binding = validation.value
+  if (row.work.parent_work_id !== null) {
+    const problem = binding.profile.id === WorkAuthorityPolicy.EVENT_DAG_PROFILE.id
+      ? eventBindingProblem(row) : derivedBindingProblem(row)
+    if (problem) return problem
+    if (binding.profile.id !== WorkAuthorityPolicy.EVENT_DAG_PROFILE.id && row.event)
+      return "ordinary derived work mixes event and shared authority domains"
+  }
+  if (row.work.parent_work_id === null && row.event)
+    return "event node authority cannot classify a root Work"
+  if (
+    WorkAuthorityPolicy.fingerprint(binding) !== row.work.binding_hash ||
+    binding.workID !== row.work.work_id ||
+    binding.rootWorkID !== row.work.root_work_id ||
+    (row.work.parent_work_id === null ? binding.parentWorkID !== undefined : binding.parentWorkID !== row.work.parent_work_id) ||
+    binding.sessionID !== row.work.session_id ||
+    binding.inputID !== row.work.input_id ||
+    binding.agentID !== row.work.agent_id ||
+    binding.scope.securityNamespaceID !== row.work.security_namespace_id ||
+    binding.source.kind !== row.work.source_kind ||
+    binding.source.authorityID !== row.work.authority_id ||
+    binding.source.authorityRevision !== row.work.source_revision ||
+    binding.source.requestID !== row.work.source_request_id ||
+    !Schema.is(WorkAuthoritySchema.Digest)(row.work.source_record_hash) ||
+    row.work.route_evidence_hash !== binding.provider.evidenceHash ||
+    !Number.isSafeInteger(row.work.control_revision) ||
+    row.work.control_revision < 1 ||
+    !Schema.is(WorkAuthoritySchema.AdmissionState)(row.work.admission_state) ||
+    !Schema.is(WorkAuthoritySchema.ControlState)(row.work.control_state) ||
+    !Schema.is(WorkAuthoritySchema.Outcome)(row.work.outcome)
+  )
+    return "work fingerprint, proof identity or durable state is inconsistent"
+  if (
+    row.session &&
+    (!row.session.v2_authority ||
+      row.session.agent !== binding.agentID ||
+      row.session.directory !== binding.location.directory ||
+      row.session.workspace_id !== (binding.location.workspaceID ?? null) ||
+      row.session.model?.providerID !== binding.provider.providerID ||
+      row.session.model.id !== binding.provider.modelID ||
+      row.session.model.variant !== undefined)
+  )
+    return "work Session placement, Agent or model differs from its binding"
+  if (row.work.admission_state !== "ready")
+    return row.input || row.work.admitted_seq !== null
+      ? "non-ready work has a committed input without its atomic ready binding"
+      : undefined
+  if (
+    !row.session ||
+    !row.input ||
+    row.input.session_id !== row.work.session_id ||
+    row.input.admitted_seq !== row.work.admitted_seq ||
+    row.input.delivery !== "queue" ||
+    !row.input.prompt ||
+    typeof row.input.prompt.text !== "string" ||
+    Hash.sha256(row.input.prompt.text) !== binding.auditedText.hash ||
+    Buffer.byteLength(row.input.prompt.text, "utf8") !== binding.auditedText.utf8Bytes ||
+    Object.keys(row.input.prompt).some((key) => !["text", "agent", "model"].includes(key)) ||
+    (row.input.prompt.agent !== undefined && row.input.prompt.agent !== binding.agentID) ||
+    (row.input.prompt.model !== undefined &&
+      (row.input.prompt.model.providerID !== binding.provider.providerID ||
+        row.input.prompt.model.id !== binding.provider.modelID ||
+        row.input.prompt.model.variant !== undefined))
+  )
+    return "ready work lacks its exact restricted Session and queue input"
+}
+
+/** Startup reads historical lineage only. It neither renews a child deadline nor turns
+ * a grant/proof record into permission to claim or wake the original task. */
+function derivedBindingProblem(row: WorkInventoryRow): string | undefined {
+  const decoded = row.derived && Schema.decodeUnknownOption(WorkChildAuthoritySchema.Record, { onExcessProperty: "error" })(row.derived.record)
+  if (!row.derived || !row.parent || !decoded || Option.isNone(decoded)) return "derived work lacks its exact durable parent grant"
+  const grant = decoded.value
+  const parent = row.parent
+  const hash = (value: unknown) => Hash.sha256(CanonicalJson.stringify(value))
+  if (hash(grant)!==row.derived.record_hash || row.derived.child_work_id!==grant.childWorkID || row.derived.root_work_id!==grant.rootWorkID ||
+    row.derived.parent_work_id!==grant.parentWorkID || row.derived.task_run_id!==grant.taskRunID || row.derived.admission_id!==grant.admissionID ||
+    row.derived.child_session_id!==grant.childSessionID || row.derived.child_input_id!==grant.childInputID ||
+    row.derived.child_binding_hash!==grant.childBindingHash || row.derived.parent_binding_hash!==grant.parentBindingHash ||
+    row.derived.root_binding_hash!==grant.rootBindingHash || row.derived.parent_revision!==grant.parentRevision ||
+    row.derived.root_revision!==grant.rootRevision || row.derived.expires_at!==grant.expiresAt || row.derived.created_at!==grant.createdAt ||
+    grant.childWorkID!==row.work.work_id || grant.childSessionID!==row.work.session_id || grant.childInputID!==row.work.input_id ||
+    grant.childBindingHash!==row.work.binding_hash || grant.parentWorkID!==parent.work_id || grant.rootWorkID!==parent.root_work_id ||
+    parent.work_id!==parent.root_work_id || parent.parent_work_id!==null || grant.parentSessionID!==parent.session_id ||
+    grant.parentBindingHash!==parent.binding_hash || grant.rootBindingHash!==parent.binding_hash ||
+    hash(grant.parentBinding)!==parent.binding_hash || hash(grant.rootBinding)!==parent.binding_hash ||
+    grant.parentRevision<1 || grant.rootRevision<1 || grant.parentRevision>parent.control_revision || grant.rootRevision>parent.control_revision ||
+    row.work.root_work_id!==parent.root_work_id || row.work.parent_work_id!==parent.work_id ||
+    row.work.source_record_hash!==parent.source_record_hash || row.work.route_evidence_hash!==parent.route_evidence_hash ||
+    row.work.binding.schemaVersion!=="work-execution.v2" || parent.binding.schemaVersion!=="work-execution.v2" ||
+    parent.binding.profile.id!==WorkAuthorityPolicy.SHARED_ROOT_PROFILE.id || row.work.binding.childPolicy!=="deny_all" ||
+    row.work.binding.budget.maxChildren!==0 || row.work.binding.location.directory!==parent.binding.location.directory ||
+    row.work.binding.location.workspaceID!==parent.binding.location.workspaceID ||
+    !WorkAuthorityPolicy.validateBinding(parent.binding,{allowLoopbackHTTP:parent.loopback_http}).ok ||
+    !WorkAuthorityPolicy.checkChild(parent.binding,row.work.binding).ok)
+    return "derived work lineage, immutable binding or depth-one scope is inconsistent"
+}
+
+/** Durable lineage classification is not a live permission, placement witness or dispatch
+ * permit. Historical revisions may precede current control; no deadline is renewed and no
+ * Native/configuration producer or Session wake is invoked by this read-only inventory. */
+function eventBindingProblem(row: WorkInventoryRow): string | undefined {
+  const facts = row.event
+  if (row.derived || !row.parent || !facts?.controller || !facts.receipt)
+    return "event node lacks its separate durable lineage or mixes shared authority"
+  const hash = EventWorkDagPolicy.hash
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(EventWorkDagSchema.Authority), { onExcessProperty: "error" })(facts.authority.record)
+  const controllerDecoded = Schema.decodeUnknownOption(Schema.fromJsonString(EventWorkDagSchema.Controller), { onExcessProperty: "error" })(facts.controller.record)
+  const receiptDecoded = Schema.decodeUnknownOption(Schema.fromJsonString(EventWorkRuleSchema.Receipt), { onExcessProperty: "error" })(facts.receipt.record)
+  if (Option.isNone(decoded) || Option.isNone(controllerDecoded) || Option.isNone(receiptDecoded))
+    return "event lineage has an invalid exact record schema"
+  const authority = decoded.value
+  const controller = controllerDecoded.value
+  const receipt = receiptDecoded.value
+  const root = row.parent
+  const child = row.work
+  const ids = EventWorkDagPolicy.identities(authority.receiptID, authority.nodeID)
+  if (!("authorityID" in ids) || hash(authority) !== facts.authority.record_hash ||
+    Buffer.byteLength(facts.authority.record, "utf8") !== facts.authority.record_bytes ||
+    authority.authorityID !== facts.authority.authority_id || authority.childWorkID !== facts.authority.work_id ||
+    authority.receiptID !== facts.authority.receipt_id || authority.nodeID !== facts.authority.node_id ||
+    authority.authorityID !== ids.authorityID || authority.childWorkID !== ids.workID ||
+    authority.childSessionID !== ids.sessionID || authority.childInputID !== ids.inputID ||
+    !["pending", "bound", "terminal"].includes(facts.authority.state) ||
+    (facts.authority.state === "terminal") !== (authority.terminal !== undefined) ||
+    hash(authority.rootBinding) !== authority.rootBindingHash || hash(authority.childBinding) !== authority.childBindingHash ||
+    hash(controller) !== facts.controller.record_hash || Buffer.byteLength(facts.controller.record, "utf8") !== facts.controller.record_bytes ||
+    controller.controllerID !== facts.controller.controller_id || controller.receiptID !== facts.controller.receipt_id ||
+    controller.rootWorkID !== facts.controller.root_work_id || controller.revision !== facts.controller.revision ||
+    controller.state !== facts.controller.state || hash(controller.plan) !== controller.planHash ||
+    EventWorkDagPolicy.identities(controller.receiptID).controllerID !== controller.controllerID)
+    return "event authority/controller stable identity, hash or mirrors differ"
+  const occurrence = hash(["event-work-occurrence.v1", receipt.ruleID, receipt.source.sessionID, receipt.source.activityID, receipt.source.activityOrdinal])
+  if (hash(receipt) !== facts.receipt.record_hash || Buffer.byteLength(facts.receipt.record, "utf8") !== facts.receipt.record_bytes ||
+    receipt.receiptID !== facts.receipt.receipt_id || receipt.ruleID !== facts.receipt.rule_id || receipt.instanceID !== facts.receipt.instance_id ||
+    receipt.occurrenceKey !== facts.receipt.occurrence_key || receipt.eventID !== facts.receipt.event_id ||
+    receipt.workID !== facts.receipt.work_id || receipt.sessionID !== facts.receipt.session_id || receipt.inputID !== facts.receipt.input_id ||
+    receipt.occurrenceKey !== occurrence || receipt.receiptID !== `evwork_${occurrence}` || receipt.eventID !== `dae_evwork_${occurrence}` ||
+    receipt.workID !== `work_ev_${occurrence.slice(0, 40)}` || receipt.sessionID !== `ses_ev_${occurrence.slice(0, 40)}` ||
+    receipt.inputID !== `msg_ev_${occurrence.slice(0, 40)}` || receipt.sourceHash !== hash(receipt.source) ||
+    receipt.auditedTextHash !== Hash.sha256(receipt.auditedText) ||
+    receipt.authorityHash !== hash(Object.fromEntries(Object.entries(receipt).filter(([key]) => key !== "authorityHash"))) ||
+    facts.receipt.phase !== "ready" || facts.receipt.binding_hash !== root.binding_hash)
+    return "event receipt identity, source or original binding differs"
+  const node = controller.plan.nodes.find((value) => value.id === authority.nodeID)
+  if (!node || root.parent_work_id !== null || root.work_id !== root.root_work_id || root.execution_role !== "dag_controller" ||
+    root.binding.schemaVersion !== "work-execution.v2" || child.binding.schemaVersion !== "work-execution.v2" ||
+    !EventWorkDagPolicy.profileMatches(root.binding.profile) || !EventWorkDagPolicy.profileMatches(child.binding.profile) ||
+    !WorkAuthorityPolicy.validateBinding(root.binding, { allowLoopbackHTTP: root.loopback_http }).ok ||
+    !EventWorkDagPolicy.validatePlan(controller.plan, root.binding).ok || hash(root.binding) !== root.binding_hash ||
+    controller.rootWorkID !== root.work_id || controller.rootSessionID !== root.session_id || controller.rootInputID !== root.input_id ||
+    controller.rootBindingHash !== root.binding_hash || controller.receiptID !== receipt.receiptID || controller.ruleHash !== receipt.ruleHash ||
+    controller.epoch !== receipt.epoch || controller.createdAt !== receipt.createdAt || controller.expiresAt !== receipt.deadline ||
+    receipt.workID !== root.work_id || receipt.sessionID !== root.session_id || receipt.inputID !== root.input_id ||
+    root.source_record_hash !== receipt.authorityHash || root.binding.source.authorityID !== receipt.receiptID ||
+    root.binding.source.authorityRevision !== receipt.epoch || root.binding.source.requestID !== occurrence ||
+    root.binding.source.requestHash !== receipt.authorityHash || root.binding.auditedText.hash !== receipt.auditedTextHash ||
+    root.binding.deadline !== receipt.deadline || authority.controllerID !== controller.controllerID ||
+    authority.receiptID !== receipt.receiptID || authority.planHash !== controller.planHash ||
+    authority.rootWorkID !== root.work_id || authority.parentWorkID !== root.work_id || authority.rootSessionID !== root.session_id ||
+    authority.parentSessionID !== root.session_id || authority.rootBindingHash !== root.binding_hash ||
+    authority.rootRevision > root.control_revision || authority.createdAt < controller.createdAt || authority.expiresAt !== root.binding.deadline ||
+    authority.childWorkID !== child.work_id || authority.childSessionID !== child.session_id || authority.childInputID !== child.input_id ||
+    authority.childBindingHash !== child.binding_hash || child.parent_work_id !== root.work_id || child.root_work_id !== root.work_id ||
+    child.execution_role !== "agent" || child.source_record_hash !== root.source_record_hash || child.route_evidence_hash !== root.route_evidence_hash ||
+    node.agentID !== child.agent_id || hash(node.budget) !== hash(child.binding.budget) ||
+    Hash.sha256(authority.inputText) !== child.binding.auditedText.hash || Buffer.byteLength(authority.inputText, "utf8") !== child.binding.auditedText.utf8Bytes ||
+    child.binding.source.requestID !== ids.requestID || child.binding.source.requestHash !== hash([controller.planHash, node.id, child.binding.auditedText.hash]) ||
+    hash(child.binding.toolPolicy.capabilities) !== hash(root.binding.toolPolicy.capabilities.filter((capability) => node.toolIDs.includes(capability.toolID))) ||
+    authority.predecessorRefs.length !== node.dependencies.length || authority.predecessorRefs.some((terminal, index) =>
+      terminal.nodeID !== node.dependencies[index] || terminal.controllerID !== controller.controllerID || terminal.outcome !== "succeeded") ||
+    EventWorkDagPolicy.requiresPlacement(controller.plan, node) !== (authority.placement !== undefined))
+    return "event root, child, approved node or shared ceiling is inconsistent"
+  const placement = authority.placement
+  if (placement) {
+    const workspace = facts.workspace
+    if (!workspace || workspace.generation !== 0 || placement.controllerID !== controller.controllerID ||
+      placement.receiptID !== receipt.receiptID || placement.eventID !== receipt.eventID || placement.nodeID !== node.id ||
+      placement.rootWorkID !== root.work_id || placement.rootBindingHash !== root.binding_hash || placement.planHash !== controller.planHash ||
+      placement.rootRevision !== authority.rootRevision || placement.controllerRevision > controller.revision ||
+      placement.childWorkID !== child.work_id || placement.childSessionID !== child.session_id || placement.childInputID !== child.input_id ||
+      placement.workspace.repositoryRoot !== root.binding.projectScope.canonicalRoot ||
+      hash(placement.parentRootIdentity) !== hash(root.binding.projectScope.rootIdentity) ||
+      placement.helperHash !== root.binding.projectScope.helperHash || placement.projectID !== root.binding.projectScope.projectID ||
+      placement.expiresAt !== authority.expiresAt || workspace.event_id !== receipt.eventID || workspace.task_id !== node.id ||
+      workspace.operation_key !== placement.workspace.operationKey || workspace.repository_root !== placement.workspace.repositoryRoot ||
+      workspace.base_commit !== placement.workspace.baseCommit || workspace.branch !== placement.workspace.branch ||
+      workspace.directory !== placement.workspace.directory || !["ready", "retained", "reclaimed"].includes(workspace.state) ||
+      hash({ eventID: workspace.event_id, nodeID: workspace.task_id, generation: workspace.generation, operationKey: workspace.operation_key,
+        repositoryRoot: workspace.repository_root, baseCommit: workspace.base_commit, branch: workspace.branch,
+        directory: workspace.directory, createdAt: workspace.time_created }) !== placement.workspace.immutableRowHash)
+      return "event placement differs from its immutable workspace custody"
+  }
+  if (!WorkAuthorityPolicy.checkChild(root.binding, child.binding, placement ? { eventPlacement: placement } : undefined).ok)
+    return "event child exceeds the original placement, scope or budget ceiling"
+}
+
+function classifyWorkDispatchItem(row: WorkDispatchInventoryRow): StartupInventoryItem {
+  const item = (classification: InventoryClassification, reason: string): StartupInventoryItem => ({
+    category: "work_dispatch",
+    id: row.dispatch.reservation_id,
+    state: row.dispatch.state,
+    classification,
+    reason,
+  })
+  const problem = workBindingProblem(row)
+  if (problem) return item("unclassified", problem)
+  const dispatch = row.dispatch
+  const binding = row.work.binding
+  if (
+    dispatch.reservation_id !== `wdr_${Hash.sha256(CanonicalJson.stringify([dispatch.work_id, dispatch.dispatch_key]))}` ||
+    dispatch.request_hash !==
+      Hash.sha256(CanonicalJson.stringify({
+        workID: dispatch.work_id,
+        dispatchKey: dispatch.dispatch_key,
+        receiptID: dispatch.receipt_id,
+        attemptID: dispatch.attempt_id,
+        sessionClaimToken: dispatch.session_claim_token,
+        ownerToken: dispatch.owner_token,
+        contextSelectionID: dispatch.context_selection_id,
+        contextProjectionHash: dispatch.context_projection_hash,
+        inputUpperBound: dispatch.input_bound,
+        completionTokens: dispatch.reserved_completion_tokens,
+        expectedRevision: dispatch.control_revision,
+      }))
+  )
+    return item("unclassified", "dispatch stable identity or admitted request fingerprint differs")
+  if (
+    row.work.admission_state !== "ready" ||
+    dispatch.root_work_id !== row.work.root_work_id ||
+    dispatch.kind !== "provider" ||
+    dispatch.control_revision > row.work.control_revision ||
+    !Schema.is(WorkAuthoritySchema.InputBound)(dispatch.input_bound) ||
+    dispatch.reserved_input_tokens !== dispatch.input_bound.tokens ||
+    dispatch.reserved_total_tokens !== dispatch.reserved_input_tokens + dispatch.reserved_completion_tokens ||
+    !WorkAuthorityPolicy.providerReservation(binding.budget, dispatch.input_bound, dispatch.reserved_completion_tokens)
+      .ok ||
+    !Schema.is(WorkAuthoritySchema.DispatchState)(dispatch.state)
+  )
+    return item("unclassified", "dispatch identity, escrow or control revision is inconsistent")
+  if (
+    !row.receipt ||
+    !row.attempt ||
+    !row.selection ||
+    !row.session ||
+    row.receipt.session_id !== row.work.session_id ||
+    row.receipt.user_message_id !== row.work.input_id ||
+    row.receipt.provider_attempt_id !== dispatch.attempt_id ||
+    row.receipt.owner_token !== dispatch.owner_token ||
+    row.receipt.provider_id !== binding.provider.providerID ||
+    row.receipt.model_id !== binding.provider.modelID ||
+    row.receipt.protocol !== binding.provider.protocol ||
+    row.attempt.session_id !== row.work.session_id ||
+    row.attempt.activity_id !== row.receipt.activity_id ||
+    row.attempt.provider_turn_seq !== row.receipt.provider_turn_seq ||
+    row.attempt.request_hash !== row.receipt.request_input_hash ||
+    row.attempt.owner_token !== dispatch.owner_token ||
+    row.attempt.provider_id !== binding.provider.providerID ||
+    row.attempt.execution_claim_token !== dispatch.session_claim_token ||
+    dispatch.session_claim_token <= 0 ||
+    row.attempt.selection_id !== dispatch.context_selection_id ||
+    row.attempt.projection_hash !== dispatch.context_projection_hash ||
+    row.selection.session_id !== row.work.session_id ||
+    row.selection.activity_id !== row.receipt.activity_id ||
+    row.selection.trigger_input_id !== row.work.input_id ||
+    row.selection.projection_hash !== dispatch.context_projection_hash ||
+    row.selection.security_namespace_id !== binding.scope.securityNamespaceID ||
+    row.selection.project_scope_key !== binding.scope.projectScopeKey
+  )
+    return item("unclassified", "dispatch lacks exact Session/input/Context/provider receipt and attempt identities")
+  if (["reserved", "released"].includes(dispatch.state)) {
+    if (
+      dispatch.wire_hash !== null ||
+      dispatch.endpoint !== null ||
+      dispatch.dispatching_at !== null ||
+      row.receipt.dispatching_at !== null ||
+      !(
+        (row.receipt.state === "preparing" && row.attempt.state === "prepared") ||
+        (row.receipt.state === "failed" && row.attempt.state === "failed")
+      )
+    )
+      return item("unclassified", "predispatch escrow conflicts with physical dispatch evidence")
+    if (
+      dispatch.charged_tokens !== (dispatch.state === "released" ? 0 : dispatch.reserved_total_tokens) ||
+      dispatch.actual_usage !== null
+    )
+      return item("unclassified", "predispatch escrow has unexplained charge or usage")
+    return item(
+      dispatch.state === "released" ? "resolved" : "safe_before_dispatch",
+      "physical permit was never issued; classification does not release or requeue work",
+    )
+  }
+  if (
+    !Schema.is(WorkAuthoritySchema.Digest)(dispatch.wire_hash) ||
+    dispatch.endpoint !== binding.provider.endpoint ||
+    dispatch.dispatching_at === null ||
+    row.receipt.wire_request_hash !== dispatch.wire_hash ||
+    row.attempt.wire_request_hash !== dispatch.wire_hash ||
+    row.receipt.dispatching_at === null ||
+    row.receipt.prepared_turn_hash === null ||
+    row.receipt.prepared_turn_hash !== row.attempt.prepared_turn_hash ||
+    !["dispatching", "streaming", "settled", "failed", "indeterminate_after_crash"].includes(row.receipt.state) ||
+    row.receipt.state !== row.attempt.state
+  )
+    return item("unclassified", "issued work permit has no matching sealed provider state pair")
+  if (dispatch.state === "settled") {
+    const usage = dispatch.actual_usage && WorkAuthorityPolicy.usageTotal(dispatch.actual_usage)
+    if (
+      !["settled", "failed"].includes(row.receipt.state) ||
+      row.receipt.outcome_hash === null ||
+      row.receipt.terminal_at === null ||
+      dispatch.settled_at === null ||
+      !usage ||
+      !usage.ok ||
+      usage.value !== dispatch.charged_tokens ||
+      dispatch.actual_usage!.inputTokens > dispatch.reserved_input_tokens ||
+      dispatch.actual_usage!.completionTokens > dispatch.reserved_completion_tokens
+    )
+      return item("unclassified", "settled work lacks exact terminal provider and non-overlapping usage evidence")
+    return item("resolved", "work and provider receipt have matching terminal evidence")
+  }
+  const unknownUsage = dispatch.actual_usage ? WorkAuthorityPolicy.usageTotal(dispatch.actual_usage) : undefined
+  if (
+    (unknownUsage && (!unknownUsage.ok || dispatch.charged_tokens < unknownUsage.value)) ||
+    dispatch.charged_tokens < dispatch.reserved_total_tokens ||
+    dispatch.settled_at !== null
+  )
+    return item("unclassified", "unsettled dispatch has lost its escrow or invented settlement")
+  return item("recovery", "physical permit was issued; escrow remains held and explicit recovery is required")
+}
+
+function classifyWorkItem(row: WorkInventoryRow, dispatches: readonly StartupInventoryItem[]): StartupInventoryItem {
+  const item = (classification: InventoryClassification, reason: string): StartupInventoryItem => ({
+    category: "work_execution",
+    id: row.work.work_id,
+    state: `${row.work.admission_state}:${row.work.control_state}:${row.work.outcome}`,
+    classification,
+    reason,
+  })
+  const problem = workBindingProblem(row)
+  if (problem) return item("unclassified", problem)
+  if (row.work.execution_role === "dag_controller" && (row.work.outcome === "succeeded" || row.work.outcome === "failed")) {
+    const problem = terminalControllerProblem(row, dispatches)
+    return problem ? item("unclassified", problem) : item("resolved", "event controller has original known node terminals and never executes a provider")
+  }
+  if (dispatches.filter((entry) => entry.state !== "released").length > row.work.binding.budget.maxProviderDispatches)
+    return item("unclassified", "work has more physical reservations than its frozen dispatch ceiling")
+  if (dispatches.some((entry) => entry.classification === "unclassified"))
+    return item("unclassified", "work has an unverifiable dispatch reservation")
+  if (dispatches.some((entry) => entry.classification === "recovery"))
+    return item("recovery", "work has an issued unsettled permit; no automatic provider replay")
+  if (
+    row.work.outcome === "unknown" ||
+    ((row.work.outcome === "succeeded" || row.work.outcome === "failed") &&
+      !dispatches.some((entry) => entry.state === "settled"))
+  )
+    return item("unclassified", "work outcome has no matching durable dispatch evidence")
+  if (
+    row.work.admission_state === "rejected" ||
+    ["revoked", "cancelled", "expired"].includes(row.work.control_state)
+  )
+    return item("resolved", "work is terminal; classification performs no execution or budget release")
+  if (dispatches.some((entry) => entry.state === "settled"))
+    return row.work.outcome === "pending"
+      ? item("recovery", "physical dispatch is settled but result authority is pending; never replay provider work")
+      : item("resolved", "work has terminal result authority and a settled physical dispatch")
+  if (row.work.parent_work_id !== null)
+    return item("recovery", "derived child requires its original opaque Task owner; startup never requeues or revives it")
+  return item(
+    "safe_before_dispatch",
+    "work has no issued physical permit; fresh authority validation is required before any continuation",
+  )
+}
+
+/** A controller's terminal evidence is its original node graph, never an invented provider
+ * dispatch. This historical classification grants no current source, wake or custody release. */
+function terminalControllerProblem(row: WorkInventoryRow, dispatches: readonly StartupInventoryItem[]): string | undefined {
+  const facts = row.controller
+  if (!facts?.receipt || row.derived || row.event || row.work.parent_work_id !== null || row.work.work_id !== row.work.root_work_id ||
+    row.work.binding.schemaVersion !== "work-execution.v2" || !EventWorkDagPolicy.profileMatches(row.work.binding.profile) ||
+    dispatches.length !== 0 || (facts.providers.get(row.work.session_id) ?? 0) !== 0)
+    return "event controller lacks its distinct original graph or has provider/dispatch authority"
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(EventWorkDagSchema.Controller), { onExcessProperty: "error" })(facts.record.record)
+  if (Option.isNone(decoded)) return "event controller has an invalid exact record schema"
+  const controller = decoded.value
+  const hash = EventWorkDagPolicy.hash
+  if (hash(controller) !== facts.record.record_hash || Buffer.byteLength(facts.record.record, "utf8") !== facts.record.record_bytes ||
+    controller.controllerID !== facts.record.controller_id || controller.receiptID !== facts.record.receipt_id ||
+    controller.rootWorkID !== facts.record.root_work_id || controller.state !== facts.record.state || controller.revision !== facts.record.revision ||
+    EventWorkDagPolicy.identities(controller.receiptID).controllerID !== controller.controllerID ||
+    controller.rootWorkID !== row.work.work_id || controller.rootSessionID !== row.work.session_id || controller.rootInputID !== row.work.input_id ||
+    controller.rootBindingHash !== row.work.binding_hash || hash(controller.plan) !== controller.planHash ||
+    !EventWorkDagPolicy.validatePlan(controller.plan, row.work.binding).ok || controller.state !== row.work.outcome || controller.activeNodeID !== null ||
+    facts.receipt.receipt_id !== controller.receiptID || facts.receipt.work_id !== row.work.work_id ||
+    facts.authorities.length !== facts.children.length || facts.children.length === 0 ||
+    facts.children.some((child) => child.event?.authority.receipt_id !== controller.receiptID ||
+      child.event.controller?.record_hash !== facts.record.record_hash || child.event.receipt?.record_hash !== facts.receipt!.record_hash ||
+      !controller.plan.nodes.some((node) => node.id === child.event!.authority.node_id)))
+    return "event controller terminal graph, stable mirrors or original children are inconsistent"
+  const baseline = controller.baseline
+  if (baseline && (baseline.sourceHash !== row.work.source_record_hash || baseline.scopeHash !== hash(row.work.binding.toolPolicy.fileScope) ||
+    hash(baseline.rootIdentity) !== hash(row.work.binding.projectScope.rootIdentity) ||
+    !controller.plan.nodes.some((node) => node.id === baseline.nodeID) || baseline.startedAt < controller.createdAt ||
+    (baseline.gitDirectory === undefined) !== (baseline.gitRootIdentity === undefined) || baseline.state !== "sealed" ||
+    baseline.sealedAt < baseline.startedAt || baseline.settledRetentionAt !== undefined && baseline.settledRetentionAt < baseline.sealedAt) ||
+    controller.plan.nodes.some((node) => EventWorkDagPolicy.requiresPlacement(controller.plan, node)) && (!baseline || baseline.state !== "sealed"))
+    return "event controller terminal baseline differs from original scope and immutable custody"
+  const terminals = new Map<string, EventWorkDagSchema.Terminal>()
+  const records = new Map<string, EventWorkDagSchema.Authority>()
+  for (const child of facts.children) {
+    const problem = workBindingProblem(child)
+    if (problem) return problem
+    const authority = Schema.decodeUnknownOption(Schema.fromJsonString(EventWorkDagSchema.Authority), { onExcessProperty: "error" })(child.event!.authority.record)
+    if (Option.isNone(authority)) return "event controller child has an invalid original authority"
+    records.set(authority.value.nodeID, authority.value)
+    const terminal = authority.value.terminal
+    if (!terminal) {
+      if (controller.state !== "failed" || child.event!.authority.state !== "pending" || child.work.admission_state === "ready" ||
+        child.work.outcome !== "pending" || (facts.providers.get(child.work.session_id) ?? 0) !== 0 ||
+        (facts.dispatches.get(child.work.work_id)?.length ?? 0) !== 0)
+        return "event controller terminal has an admitted or physically issued child without a known result"
+      continue
+    }
+    if (terminal.controllerID !== controller.controllerID || terminal.nodeID !== authority.value.nodeID ||
+      terminal.workID !== child.work.work_id || terminal.sessionID !== child.work.session_id || terminal.inputID !== child.work.input_id ||
+      terminal.bindingHash !== child.work.binding_hash || terminal.sourceHash !== row.work.source_record_hash || terminal.outcome !== child.work.outcome ||
+      terminal.controlRevision > child.work.control_revision || terminal.settledAt < authority.value.createdAt ||
+      terminal.chargedTokens > child.work.binding.budget.maxTotalTokens || terminals.has(terminal.nodeID) ||
+      authority.value.placement && (!authority.value.artifactCustody || terminal.workspaceCommit !== authority.value.artifactCustody.commit ||
+        terminal.workspaceRef !== authority.value.artifactCustody.commit || child.event!.workspace?.error !== null ||
+        child.event!.workspace.continuation_ref !== terminal.workspaceRef ||
+        child.event!.workspace.state !== "retained" && !(child.event!.workspace.state === "reclaimed" && authority.value.artifactCustody.cleanup?.state === "collected")))
+      return "event controller child terminal differs from original Work or sealed artifact"
+    terminals.set(terminal.nodeID, terminal)
+  }
+  if (controller.state === "succeeded" && (terminals.size !== controller.plan.nodes.length || [...terminals.values()].some((value) => value.outcome !== "succeeded")) ||
+    controller.state === "failed" && ![...terminals.values()].some((value) => value.outcome === "failed"))
+    return "event controller outcome has no complete success graph or original failed node"
+  if ([...records.values()].some((authority) => authority.predecessorRefs.some((terminal) =>
+    hash(terminal) !== hash(terminals.get(terminal.nodeID)))))
+    return "event controller predecessor references differ from their original known terminals"
+}
+
 // W2 — the durable C1B recovery descriptor surface (design §W2). Every row of the
 // descriptor table is a classified five-class object; kind `resolved` is terminal
 // (resolved), the other four classes are past-dispatch recoveries (never an automatic
@@ -854,6 +1358,9 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
     event_outbox: emptyCounts(),
     event_delivery: emptyCounts(),
     sync_projection: emptyCounts(),
+    work_execution: emptyCounts(),
+    work_dispatch: emptyCounts(),
+    mcp_app: emptyCounts(),
   }
   const unclassifiedItems: StartupInventoryItem[] = []
   const clock = yield* db.get<{ observed_at: number }>(sql`
@@ -869,7 +1376,7 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
 
   // Provider attempts.
   const attempts = yield* db.all<ProviderAttemptRow>(sql`
-    SELECT attempt.attempt_id AS id, attempt.state, attempt.execution_claim_token,
+    SELECT attempt.attempt_id AS id, attempt.session_id, attempt.state, attempt.execution_claim_token,
            session.execution_claim_token AS current_session_claim_token,
            resolution.decision AS resolution_decision,
            bridge.attempt_id AS bridge_attempt_id,
@@ -1074,6 +1581,77 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
     LEFT JOIN event_sync_sequence sequence ON sequence.id = authority.id
   `)
   projections.forEach((row) => accept(classifySyncProjectionItem(row)))
+
+  // These tables are required after the current migration; never silently skip a missing
+  // durable surface. Read-only inventory does not renew proofs, refund escrow or wake work.
+  const workRows = yield* db.select().from(WorkExecutionTable).all()
+  const dispatchRows = yield* db.select().from(WorkDispatchReservationTable).all()
+  if (workRows.length > 0 || dispatchRows.length > 0) {
+    const parents = new Map(workRows.map((row) => [row.work_id,row]))
+    const eventAuthorities = yield* db.select().from(EventWorkNodeAuthorityTable).all()
+    const eventControllers = new Map((yield* db.select().from(EventWorkControllerTable).all()).map((row) => [row.controller_id, row]))
+    const eventReceipts = new Map((yield* db.select().from(EventWorkReceiptTable).all()).map((row) => [row.receipt_id, row]))
+    const eventWorkspaces = new Map((yield* db.select().from(EventTaskWorkspaceTable).all()).filter((row) => row.generation === 0)
+      .map((row) => [CanonicalJson.stringify([row.event_id, row.task_id]), row]))
+    const events = new Map(eventAuthorities.map((authority) => {
+      const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(EventWorkDagSchema.Authority), { onExcessProperty: "error" })(authority.record)
+      const record = Option.getOrUndefined(decoded)
+      const receipt = eventReceipts.get(authority.receipt_id)
+      return [authority.work_id, { authority, controller: record ? eventControllers.get(record.controllerID) : undefined, receipt,
+        workspace: receipt ? eventWorkspaces.get(CanonicalJson.stringify([receipt.event_id, authority.node_id])) : undefined }] as const
+    }))
+    const works = yield* db.select({ work: WorkExecutionTable, session: SessionTable, input: SessionInputTable, derived: WorkChildAuthorityTable })
+      .from(WorkExecutionTable).leftJoin(SessionTable, eq(SessionTable.id, WorkExecutionTable.session_id))
+      .leftJoin(WorkChildAuthorityTable,eq(WorkChildAuthorityTable.child_work_id,WorkExecutionTable.work_id))
+      .leftJoin(SessionInputTable, eq(SessionInputTable.id, WorkExecutionTable.input_id)).all()
+    const dispatches = yield* db.select({ dispatch: WorkDispatchReservationTable, work: WorkExecutionTable, session: SessionTable, input: SessionInputTable, derived: WorkChildAuthorityTable,
+      receipt: V2ProviderTurnReceiptTable, attempt: SessionProviderAttemptTable, selection: SessionContextSelectionTable })
+      .from(WorkDispatchReservationTable).leftJoin(WorkExecutionTable, eq(WorkExecutionTable.work_id, WorkDispatchReservationTable.work_id))
+      .leftJoin(WorkChildAuthorityTable,eq(WorkChildAuthorityTable.child_work_id,WorkExecutionTable.work_id))
+      .leftJoin(SessionTable, eq(SessionTable.id, WorkExecutionTable.session_id)).leftJoin(SessionInputTable, eq(SessionInputTable.id, WorkExecutionTable.input_id))
+      .leftJoin(V2ProviderTurnReceiptTable, eq(V2ProviderTurnReceiptTable.receipt_id, WorkDispatchReservationTable.receipt_id))
+      .leftJoin(SessionProviderAttemptTable, eq(SessionProviderAttemptTable.attempt_id, WorkDispatchReservationTable.attempt_id))
+      .leftJoin(SessionContextSelectionTable, eq(SessionContextSelectionTable.selection_id, WorkDispatchReservationTable.context_selection_id)).all()
+    const byWork = new Map<string, StartupInventoryItem[]>()
+    for (const row of dispatches) {
+      const item = row.work ? classifyWorkDispatchItem({ ...row, event: events.get(row.work.work_id), work: row.work, parent: row.work.parent_work_id ? parents.get(row.work.parent_work_id) : undefined }) : { category: "work_dispatch" as const, id: row.dispatch.reservation_id, state: row.dispatch.state, classification: "unclassified" as const, reason: "dispatch has no durable Work authority" }
+      accept(item)
+      byWork.set(row.dispatch.work_id, [...(byWork.get(row.dispatch.work_id) ?? []), item])
+    }
+    const workContexts: WorkInventoryRow[] = works.map((row) => ({ ...row, event: events.get(row.work.work_id),
+      parent: row.work.parent_work_id ? parents.get(row.work.parent_work_id) : undefined }))
+    const children = new Map<string, WorkInventoryRow[]>()
+    workContexts.forEach((row) => { if (row.work.parent_work_id) children.set(row.work.parent_work_id,
+      [...children.get(row.work.parent_work_id) ?? [], row]) })
+    const authorities = new Map<string, typeof eventAuthorities>()
+    eventAuthorities.forEach((row) => authorities.set(row.receipt_id, [...authorities.get(row.receipt_id) ?? [], row]))
+    const controllers = new Map([...eventControllers.values()].map((row) => [row.root_work_id, row]))
+    const providers = new Map<string, number>()
+    attempts.forEach((row) => providers.set(row.session_id, (providers.get(row.session_id) ?? 0) + 1))
+    bindings.forEach((row) => providers.set(row.receipt_session_id, (providers.get(row.receipt_session_id) ?? 0) + 1))
+    workContexts.forEach((row) => {
+      const controller = controllers.get(row.work.work_id)
+      accept(classifyWorkItem({ ...row, ...(controller ? { controller: { record: controller,
+        receipt: eventReceipts.get(controller.receipt_id), authorities: authorities.get(controller.receipt_id) ?? [],
+        children: children.get(row.work.work_id) ?? [], providers, dispatches: byWork } } : {}) }, byWork.get(row.work.work_id) ?? []))
+    })
+  }
+
+  // External App effects have their own admission/source ledger, not provider/tool receipts.
+  // Cold views are never reconstructed; safe-before-dispatch is a fact, not automatic replay.
+  const apps = yield* db.select({ invocation: McpAppInvocationTable, effect: McpAppEffectTable }).from(McpAppInvocationTable)
+    .leftJoin(McpAppEffectTable, eq(McpAppEffectTable.invocation_id, McpAppInvocationTable.invocation_id)).all()
+  for (const row of apps) {
+    const valid = row.effect !== null && Schema.is(McpAppInvocationSchema.Source)(row.invocation.source) &&
+      Hash.sha256(CanonicalJson.stringify(row.invocation.source)) === row.invocation.source_hash &&
+      row.invocation.source.sessionID === row.invocation.session_id && row.invocation.source.viewID === row.invocation.view_id
+    const state = row.effect?.state ?? "missing"
+    const classification = !valid ? "unclassified" : state === "queued" || state === "awaiting_permission" ? "safe_before_dispatch"
+      : state === "dispatching" || state === "unknown" ? "recovery" : state === "settled" || state === "failed" || state === "cancelled_before_dispatch" ? "resolved" : "unclassified"
+    accept({ category: "mcp_app", id: row.invocation.invocation_id, state, classification,
+      reason: !valid ? "App effect/source identity is invalid" : classification === "safe_before_dispatch" ? "App admitted before dispatch; original live view required"
+        : classification === "recovery" ? "App dispatch may have reached the original server; never replay" : "App terminal receipt retained" })
+  }
 
   const total = StartupCategories.reduce(
     (sum, category) => sum + InventoryClassifications.reduce((categorySum, classification) => categorySum + byCategory[category][classification], 0),

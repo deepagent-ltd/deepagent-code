@@ -40,6 +40,7 @@ import { or } from "drizzle-orm"
 import { sql } from "drizzle-orm"
 import {
   MessageTable,
+  SessionMessageTable,
   PartTable,
   SessionForkAdmissionTable,
   SessionForkIntentTable,
@@ -224,16 +225,7 @@ export const Event = {
   Updated: SessionV1.Event.MessageUpdated,
   Removed: SessionV1.Event.MessageRemoved,
   PartUpdated: SessionV1.Event.PartUpdated,
-  PartDelta: EventV2.define({
-    type: "message.part.delta",
-    schema: {
-      sessionID: SessionID,
-      messageID: MessageID,
-      partID: PartID,
-      field: Schema.String,
-      delta: Schema.String,
-    },
-  }),
+  PartDelta: SessionV1.Event.PartDelta,
   PartRemoved: SessionV1.Event.PartRemoved,
 }
 
@@ -376,9 +368,10 @@ function hydrate(db: DatabaseExecutor, rows: (typeof MessageTable.$inferSelect)[
   const ids = rows.map((row) => row.id)
   const partByMessage = new Map<string, Part[]>()
   const progressByMessage = new Map<MessageID, SessionV1.ActivityProgress>()
+  const canonicalByMessage = new Map<string, number>()
   return Effect.gen(function* () {
     if (ids.length > 0) {
-      const [partRows, progressRows] = yield* Effect.all([
+      const [partRows, progressRows, canonicalRows] = yield* Effect.all([
         db
           .select({ part: PartTable })
           .from(PartTable)
@@ -416,7 +409,11 @@ function hydrate(db: DatabaseExecutor, rows: (typeof MessageTable.$inferSelect)[
           .where(inArray(SessionActivityProgressTable.assistant_message_id, ids))
           .all()
           .pipe(Effect.orDie),
+        db.select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq }).from(SessionMessageTable)
+          .innerJoin(MessageTable, and(eq(MessageTable.id, SessionMessageTable.id), eq(MessageTable.session_id, SessionMessageTable.session_id)))
+          .where(inArray(MessageTable.id, ids)).all().pipe(Effect.orDie),
       ])
+      for (const row of canonicalRows) canonicalByMessage.set(row.id, row.seq)
       for (const row of partRows) {
         const next = part(row.part)
         const list = partByMessage.get(row.part.message_id)
@@ -452,7 +449,9 @@ function hydrate(db: DatabaseExecutor, rows: (typeof MessageTable.$inferSelect)[
     }
 
     return rows.map((row) => {
-      const message = info(row)
+      const { canonicalSeq: _, ...legacy } = info(row)
+      const seq = canonicalByMessage.get(row.id)
+      const message: Info = seq === undefined ? legacy : { ...legacy, canonicalSeq: seq }
       const activityProgress = progressByMessage.get(MessageID.make(row.id))
       return {
         info: message.role === "assistant" && activityProgress ? { ...message, activityProgress } : message,

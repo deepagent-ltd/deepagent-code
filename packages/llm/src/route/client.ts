@@ -19,6 +19,7 @@ import {
   Model,
   ModelLimits,
   LLMError as LLMErrorClass,
+  InvalidRequestReason,
   PreparedRequest,
   ProviderID,
   mergeGenerationOptions,
@@ -216,10 +217,22 @@ const streamError = (route: string, message: string, cause: Cause.Cause<unknown>
   return ProviderShared.eventError(route, message, Cause.pretty(cause))
 }
 
+const routeIntegrity = new WeakMap<object, () => boolean>()
+const hasRouteIntegrity = (route: AnyRoute) => routeIntegrity.get(route)?.() === true
+
 function makeFromTransport<Body, Prepared, Frame, Event, State>(
   input: MakeTransportInput<Body, Prepared, Frame, Event, State>,
 ): Route<Body, Prepared> {
   const protocol = input.protocol
+  const protocolFunctions = [
+    protocol.body.from,
+    protocol.body.schema,
+    protocol.stream.event,
+    protocol.stream.initial,
+    protocol.stream.step,
+    protocol.stream.terminal,
+    protocol.stream.onHalt,
+  ]
   const encodeBody = Schema.encodeSync(Schema.fromJsonString(protocol.body.schema))
   const decodeEventEffect = Schema.decodeUnknownEffect(protocol.stream.event)
   const decodeEvent = (route: string) => (frame: Frame) =>
@@ -287,6 +300,66 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
         )
       },
     } satisfies Route<Body, Prepared>
+    const members = [
+      route.body,
+      route.auth,
+      route.endpoint,
+      route.transport,
+      route.prepareTransport,
+      route.streamPrepared,
+      route.transport.prepare,
+      route.transport.frames,
+      route.auth.apply,
+      route.endpoint.path,
+    ]
+    const value = JSON.stringify({
+      id: route.id,
+      provider: route.provider,
+      protocol: route.protocol,
+      endpoint: route.endpoint,
+      defaults: route.defaults,
+    })
+    routeIntegrity.set(
+      route,
+      () =>
+        members.every(
+          (member, index) =>
+            member ===
+            [
+              route.body,
+              route.auth,
+              route.endpoint,
+              route.transport,
+              route.prepareTransport,
+              route.streamPrepared,
+              route.transport.prepare,
+              route.transport.frames,
+              route.auth.apply,
+              route.endpoint.path,
+            ][index],
+        ) &&
+        protocolFunctions.every(
+          (member, index) =>
+            member ===
+            [
+              protocol.body.from,
+              protocol.body.schema,
+              protocol.stream.event,
+              protocol.stream.initial,
+              protocol.stream.step,
+              protocol.stream.terminal,
+              protocol.stream.onHalt,
+            ][index],
+        ) &&
+        value ===
+          JSON.stringify({
+            id: route.id,
+            provider: route.provider,
+            protocol: route.protocol,
+            endpoint: route.endpoint,
+            defaults: route.defaults,
+          }),
+    )
     return route
   }
 
@@ -334,13 +407,16 @@ export function make<Body, Prepared, Frame, Event, State>(
 // `compile` is the important boundary: it turns a common `LLMRequest` into a
 // validated provider body plus transport-private prepared data, but does not
 // execute transport.
-const compile = Effect.fn("LLM.compile")(function* (request: LLMRequest) {
+const compile = Effect.fn("LLM.compile")(function* (request: LLMRequest, native?: NativeLease) {
   const resolved = applyCachePolicy(resolveRequestOptions(request))
   const route = resolved.model.route
 
   const body = yield* route.body
     .from(resolved)
     .pipe(Effect.flatMap(ProviderShared.validateWith(Schema.decodeUnknownEffect(route.body.schema))))
+  // The single real protocol lowering owns this snapshot. HTTP overlays run later;
+  // project Work can reject a changed body without constructing a second encoded request.
+  if (native) native.body = canonicalBody(body)
   const prepared = yield* route.prepareTransport(body, resolved)
 
   return {
@@ -364,10 +440,10 @@ const prepareWith = Effect.fn("LLMClient.prepare")(function* (request: LLMReques
   })
 })
 
-const streamRequestWith = (runtime: TransportRuntime) => (request: LLMRequest) =>
+const streamRequestWith = (runtime: TransportRuntime, native?: NativeLease) => (request: LLMRequest) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const compiled = yield* compile(request)
+      const compiled = yield* compile(request, native)
       return compiled.route.streamPrepared(compiled.prepared, compiled.request, runtime)
     }),
   )
@@ -453,13 +529,157 @@ export const managedLayer: Layer.Layer<Service, never, RequestExecutor.Service |
   }),
 )
 
-export const Route = { make } as const
+type NativeLease = { active: boolean; consumed: boolean; body?: string }
+type NativeClient = {
+  active: boolean
+  live: number
+  readonly executor: RequestExecutor.Interface
+  readonly requests: WeakMap<LLMRequest, NativeLease>
+}
+const nativeClients = new WeakMap<Interface, NativeClient>()
+const nativeLimit = 32
+const nativeError = () =>
+  new LLMErrorClass({
+    module: "LLMClient",
+    method: "stream",
+    reason: new InvalidRequestReason({ message: "Native client binding is unavailable" }),
+  })
+
+/** Same client service, ordinary middleware by default, explicit scoped native requests only.
+ * Native requests do not enter mutable middleware. There is still one compile/transport stream. */
+export const nativeManagedLayer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const ordinary = managed(yield* service, yield* Middleware)
+    const executor = Context.get(yield* Layer.build(process.versions.bun ?
+      RequestExecutor.builtinBunLayer : RequestExecutor.builtinNodeLayer), RequestExecutor.Service)
+    const state: NativeClient = { active: true, live: 0, executor, requests: new WeakMap() }
+    const stream: Interface["stream"] = (request) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const lease = state.requests.get(request)
+          if (!lease) return ordinary.stream(request)
+          if (!state.active || !lease.active || lease.consumed || !hasRouteIntegrity(request.model.route))
+            return yield* nativeError()
+          const http = RequestExecutor.forBuiltinRequest(executor, request)
+          if (!http) return yield* nativeError()
+          lease.consumed = true
+          return streamRequestWith({ http }, lease)(request)
+        }),
+      )
+    const client = Object.freeze(Service.of({ prepare: ordinary.prepare, stream, generate: generateWith(stream) }))
+    nativeClients.set(client, state)
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        state.active = false
+        state.live = 0
+      }),
+    )
+    return client
+  }),
+)
+
+/** Construction evidence only. A signed host must additionally bind this exact client to its
+ * Location, catalog result and approved installation; a copy or injected service has no entry. */
+export const nativeDescription = (client: Interface) => {
+  const state = nativeClients.get(client)
+  const description = state?.active ? RequestExecutor.builtinDescription(state.executor) : undefined
+  return description ? Object.freeze({ ...description, liveRequests: state!.live, limit: nativeLimit }) : undefined
+}
+
+/** The lease is deliberately scoped, bounded and single-use. Replaying a consumed/closed request
+ * fails rather than falling through to the ordinary executor. No request body or credential is stored. */
+export const bindNativeRequest = Effect.fn("LLMClient.bindNativeRequest")(function* (
+  client: Interface,
+  request: LLMRequest,
+) {
+  const state = nativeClients.get(client)
+  if (
+    !state?.active ||
+    !RequestExecutor.builtinDescription(state.executor) ||
+    state.live >= nativeLimit ||
+    state.requests.has(request)
+  )
+    return yield* nativeError()
+  const lease: NativeLease = { active: true, consumed: false }
+  state.requests.set(request, lease)
+  state.live++
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      if (!lease.active) return
+      lease.active = false
+      lease.body = undefined
+      if (state.active) state.live--
+    }),
+  )
+})
+
+export const observesNative = (
+  client: Interface,
+  request: LLMRequest,
+  observation: RequestExecutor.RequestSealInput,
+) => {
+  const state = nativeClients.get(client)
+  const lease = state?.requests.get(request)
+  return (
+    !!state?.active &&
+    !!lease?.active &&
+    lease.consumed &&
+    RequestExecutor.observesBuiltin(state.executor, request, observation)
+  )
+}
+
+/** Fixed native identity check, not a public body/hash attestation. JSON copies of the
+ * request or observation cannot inherit the captured protocol lowering. */
+export const observesCanonicalNativeBody = (client: Interface, request: LLMRequest,
+  observation: RequestExecutor.RequestSealInput,
+) => {
+  if (!observesNative(client, request, observation) || observation.bodyText === undefined) return false
+  const lease = nativeClients.get(client)?.requests.get(request)
+  if (lease?.body === undefined || observation.bodyText.length > 524_288) return false
+  const body = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(observation.bodyText)
+  return Option.isSome(body) && canonicalBody(body.value) === lease.body
+}
+
+function canonicalBody(value: unknown) {
+  return JSON.stringify(value, (_, item: unknown) => item !== null && typeof item === "object" && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) : item)
+}
+
+/** Fixed-purpose counter shares the exact native generation request lease and executor. */
+export const countNativeInput = Effect.fn("LLMClient.countNativeInput")(function* (
+  client: Interface,
+  request: LLMRequest,
+  observation: RequestExecutor.RequestSealInput,
+  deadline: number,
+) {
+  const state = nativeClients.get(client)
+  if (!state || !observesNative(client, request, observation)) return yield* nativeError()
+  return yield* RequestExecutor.countBuiltinResponses(state.executor, request, observation, deadline)
+})
+
+export const boundNativeDeepSeekInput = Effect.fn("LLMClient.boundNativeDeepSeekInput")(function* (
+  client: Interface, request: LLMRequest, observation: RequestExecutor.RequestSealInput, deadline: number,
+) {
+  const state = nativeClients.get(client)
+  if (!state || !observesNative(client, request, observation)) return yield* nativeError()
+  return yield* RequestExecutor.boundBuiltinDeepSeekResponses(state.executor, request, observation, deadline)
+})
+
+export const Route = { make, hasIntegrity: hasRouteIntegrity } as const
 
 export const LLMClient = {
   Service,
   Middleware,
   layer,
   managedLayer,
+  nativeManagedLayer,
+  nativeDescription,
+  bindNativeRequest,
+  observesNative,
+  observesCanonicalNativeBody,
+  countNativeInput,
+  boundNativeDeepSeekInput,
   prepare,
   stream,
   generate,

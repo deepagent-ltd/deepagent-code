@@ -36,6 +36,7 @@ describe("IM Integration Tests", () => {
         type TEXT NOT NULL,
         project_id TEXT,
         created_by TEXT NOT NULL,
+        kernel_conv_id TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         deleted_at INTEGER
@@ -66,6 +67,8 @@ describe("IM Integration Tests", () => {
         reply_to_id TEXT,
         event_id TEXT,
         delivery_status TEXT,
+        kernel_msg_id TEXT,
+        client_request_id TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         deleted_at INTEGER,

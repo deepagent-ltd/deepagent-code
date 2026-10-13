@@ -1,3 +1,4 @@
+import { NativeBootstrap } from "./runtime/native-bootstrap"
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import { RunCommand } from "./cli/cmd/run"
@@ -17,6 +18,8 @@ import { FormatError } from "./cli/error"
 import { ServeCommand } from "./cli/cmd/serve"
 import { DebugCommand } from "./cli/cmd/debug"
 import { StatsCommand } from "./cli/cmd/stats"
+import { OperatorCommand } from "./cli/cmd/operator"
+import { ImCommand } from "./cli/cmd/im"
 import { McpCommand } from "./cli/cmd/mcp"
 import { GithubCommand } from "./cli/cmd/github"
 import { ExportCommand } from "./cli/cmd/export"
@@ -45,31 +48,9 @@ import { Heap } from "./cli/heap"
 import { ensureProcessMetadata } from "@deepagent-code/core/util/deepagent-code-process"
 import { isRecord } from "@/util/record"
 import { applyRuntimeDefaults, RUNTIME_DEFAULTS_SNAPSHOT_ENV, runtimeDefaultsEnvSnapshot } from "./runtime-defaults"
-import { ProxyEnv } from "@/util/proxy-env"
-
-// Bun's fetch does not honor HTTP(S)_PROXY environment variables (plugin/openai/ws.ts documents
-// the same gap for WebSockets), so behind a corporate or harness proxy every outbound request
-// must pass the proxy explicitly. Wrap the global fetch once: the LLM transport, model-catalog
-// fetches, and background installs all resolve the proxy through ProxyEnv (which also honors
-// no_proxy).
-const nativeFetch = globalThis.fetch
-globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
-  const proxy = ProxyEnv.getProxyForUrl(url)
-  if (!proxy || (init as RequestInit & { proxy?: string } | undefined)?.proxy !== undefined) {
-    return nativeFetch(input, init)
-  }
-  return nativeFetch(input, { ...init, proxy })
-}) as typeof globalThis.fetch
+NativeBootstrap.install()
 import { ProcessLifecycle } from "./effect/process-lifecycle"
 import * as mechanismBeacon from "@deepagent-code/core/deepagent/mechanism-beacon"
-
-// Bun's fetch treats a set-but-empty HTTP(S)_PROXY value as a proxy with an empty URL and
-// fails every request ("proxy.url must be a non-empty string"), killing the first provider
-// turn and background installs. Drop empties so an unset-in-spirit variable cannot do that.
-for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]) {
-  if (process.env[key] === "") delete process.env[key]
-}
 
 // Normalize the environment inherited by subprocesses and compatibility readers. Core V2 feature
 // registries capture their own immutable value at construction; their canonical unset defaults are
@@ -174,13 +155,6 @@ const cli = yargs(args)
     }
     process.env.DEEPAGENT_CODE = "1"
     process.env.DEEPAGENT_CODE_PID = String(process.pid)
-    // C7-05/W0.1: the V2 event-admission defaults live in src/runtime-defaults.ts (applied at the top
-    // of this module). The former DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM pairing default is removed with
-    // the V2 IM durable-only migration: @mentions are admitted directly as durable SessionV2 work by
-    // the IM handler (src/im/im-agent-execution.ts) and replies return through the im_reply_outbox
-    // daemon — there is no bus-mediated IM path left to pair with, and the v4EventDrivenIm flag itself
-    // is deleted from runtime-flags.ts.
-
     Log.Default.info(scriptName, {
       version: InstallationVersion,
       args: process.argv.slice(2),
@@ -192,6 +166,8 @@ const cli = yargs(args)
   .completion("completion", "generate shell completion script")
   .command(AcpCommand)
   .command(McpCommand)
+  .command(OperatorCommand)
+  .command(ImCommand)
   .command(TuiThreadCommand)
   .command(AttachCommand)
   .command(RunCommand)

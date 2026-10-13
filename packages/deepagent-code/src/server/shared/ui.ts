@@ -1,3 +1,4 @@
+import { McpAppSandbox } from "@deepagent-code/core/mcp/app-sandbox"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Effect, Stream } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
@@ -10,7 +11,7 @@ export const UI_UPSTREAM = "https://ai.deepagent.ltd"
 const UI_UPSTREAM_HOST = new URL(UI_UPSTREAM).host
 
 export const csp = (hash = "") =>
-  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src * data:`
+  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src * data:; frame-src 'self' http: https:; object-src 'none'; base-uri 'self'`
 export const DEFAULT_CSP = csp()
 
 export function themePreloadHash(body: string) {
@@ -81,8 +82,22 @@ export function serveUIEffect(
   services: { fs: FSUtil.Interface; client: HttpClient.HttpClient; disableEmbeddedWebUi: boolean },
 ) {
   return Effect.gen(function* () {
-    const embeddedWebUI = yield* Effect.promise(() => embeddedUI(services.disableEmbeddedWebUi))
     const path = new URL(request.url, "http://localhost").pathname
+    // Unmatched API calls and request bodies must remain local even when the UI bundle is absent.
+    if (path === "/api" || path.startsWith("/api/") || (request.method !== "GET" && request.method !== "HEAD")) return notFound()
+    if (path === McpAppSandbox.path) {
+      if (request.method !== "GET") return notFound()
+      // Fixed public markup only: no instance, resource, credential or user data is interpolated.
+      return HttpServerResponse.text(McpAppSandbox.html(), { headers: {
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy": McpAppSandbox.csp,
+        "permissions-policy": "camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), payment=(), usb=(), serial=(), hid=()",
+        "referrer-policy": "no-referrer",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      } })
+    }
+    const embeddedWebUI = yield* Effect.promise(() => embeddedUI(services.disableEmbeddedWebUi))
 
     if (embeddedWebUI) return yield* serveEmbeddedUIEffect(path, services.fs, embeddedWebUI)
 

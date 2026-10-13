@@ -1,7 +1,7 @@
 export * as LocationIdentity from "./identity"
 
 import { randomBytes } from "node:crypto"
-import { and, eq, isNull } from "drizzle-orm"
+import { and, eq, isNull, or, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { AbsolutePath } from "../schema"
 import { Database } from "../database/database"
@@ -15,6 +15,7 @@ import {
   SecurityNamespaceTable,
 } from "./sql"
 import { IndexSpaceID, LocationKey, ProjectScopeKey, SecurityNamespaceID } from "./reference"
+import { WorkDispatchReservationTable, WorkExecutionTable } from "../session/work-authority.sql"
 
 export const SecurityBoundary = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("implicit_local") }),
@@ -37,6 +38,15 @@ export type Identity = {
   readonly observedProjectId?: string
 }
 
+/** A read-only observation of the old binding, not permission to adopt it. */
+export type ObservedProjectBinding = Identity & {
+  readonly locationCreatedAt: number
+  readonly projectCreatedAt: number
+  readonly projectIdentityHash: string
+  readonly locationObservedProjectId: string | null
+  readonly projectObservedProjectId: string | null
+}
+
 export class RootUnavailableError extends Schema.TaggedErrorClass<RootUnavailableError>()(
   "LocationIdentity.RootUnavailableError",
   { directory: Schema.String },
@@ -54,10 +64,21 @@ export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()("Loc
   kind: Schema.Literals(["location_root", "project_identity", "alias"]),
 }) {}
 
-export type Error = RootUnavailableError | NotFoundError | RetiredError | ConflictError
+export class WorkUnsettledError extends Schema.TaggedErrorClass<WorkUnsettledError>()(
+  "LocationIdentity.WorkUnsettledError",
+  {},
+) {}
+
+export type Error = RootUnavailableError | NotFoundError | RetiredError | ConflictError | WorkUnsettledError
 
 export interface Interface {
   readonly resolveNamespace: (boundary: SecurityBoundary) => Effect.Effect<SecurityNamespaceID, Error>
+  /** Observe the exact current root without creating identities or adopting an old alias. */
+  readonly lookup: (input: {
+    readonly boundary: SecurityBoundary
+    readonly directory: AbsolutePath
+    readonly project: ProjectBinding
+  }) => Effect.Effect<Identity, Error>
   readonly resolve: (input: {
     readonly boundary: SecurityBoundary
     readonly directory: AbsolutePath
@@ -75,6 +96,17 @@ export interface Interface {
     readonly nextObservedProjectId: string
     readonly reason: string
   }) => Effect.Effect<void, Error>
+  readonly inspectObservedProjectBinding: (input: {
+    readonly boundary: SecurityBoundary
+    readonly directory: AbsolutePath
+  }) => Effect.Effect<ObservedProjectBinding, Error>
+  /** Explicit host confirmation only. The host must obtain nextObservedProjectId from Project.observeDirectory. */
+  readonly repairObservedProjectBinding: (input: {
+    readonly boundary: SecurityBoundary
+    readonly directory: AbsolutePath
+    readonly expected: ObservedProjectBinding
+    readonly nextObservedProjectId: string
+  }) => Effect.Effect<Identity, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/ContextLocationIdentity") {}
@@ -120,6 +152,52 @@ export const layer = Layer.effect(
       const info = yield* fs.stat(root).pipe(Effect.mapError(() => new RootUnavailableError({ directory })))
       if (info.type !== "Directory") return yield* new RootUnavailableError({ directory })
       return AbsolutePath.make(root)
+    })
+
+    const lookup = Effect.fn("LocationIdentity.lookup")(function* (input: {
+      readonly boundary: SecurityBoundary
+      readonly directory: AbsolutePath
+      readonly project: ProjectBinding
+    }) {
+      const root = yield* canonicalRoot(input.directory)
+      // One SELECT observes all three durable bindings together; a read must not run
+      // resolveNamespace/resolve and silently manufacture missing authority.
+      const row = yield* db
+        .select({
+          namespace: SecurityNamespaceTable,
+          location: LocationIdentityTable,
+          project: ProjectScopeIdentityTable,
+        })
+        .from(SecurityNamespaceTable)
+        .innerJoin(LocationIdentityTable, eq(LocationIdentityTable.security_namespace_id, SecurityNamespaceTable.id))
+        .innerJoin(
+          ProjectScopeIdentityTable,
+          and(
+            eq(ProjectScopeIdentityTable.security_namespace_id, SecurityNamespaceTable.id),
+            eq(ProjectScopeIdentityTable.project_scope_key, LocationIdentityTable.project_scope_key),
+          ),
+        )
+        .where(
+          and(
+            eq(SecurityNamespaceTable.kind, input.boundary.kind),
+            eq(SecurityNamespaceTable.binding_hash, namespaceBindingHash(input.boundary)),
+            eq(LocationIdentityTable.canonical_root, root),
+          ),
+        )
+        .get()
+        .pipe(preserveErrors)
+      if (!row) return yield* new NotFoundError({ kind: "location" })
+      if (row.namespace.retired_at !== null) return yield* new RetiredError({ kind: "namespace" })
+      if (row.location.retired_at !== null) return yield* new RetiredError({ kind: "location" })
+      if (row.project.retired_at !== null) return yield* new RetiredError({ kind: "project_scope" })
+      if (
+        row.project.project_identity_hash !== projectBindingHash(input.project, root) ||
+        row.location.observed_project_id !== (input.project.observedProjectId ?? null) ||
+        row.location.workspace_binding !==
+          (input.boundary.kind === "workspace" ? namespaceBindingHash(input.boundary) : null)
+      )
+        return yield* new ConflictError({ kind: "project_identity" })
+      return identity(row.location)
     })
 
     const resolve = Effect.fn("LocationIdentity.resolve")(function* (input: {
@@ -428,7 +506,197 @@ export const layer = Layer.effect(
         .pipe(preserveErrors)
     })
 
-    return Service.of({ resolveNamespace, resolve, migrateLocation, migrateProjectIdentity })
+    const inspectBinding = (
+      tx: Pick<Database.Interface["db"], "select">,
+      input: { readonly boundary: SecurityBoundary; readonly directory: AbsolutePath },
+    ) =>
+      Effect.gen(function* () {
+        const root = yield* canonicalRoot(input.directory)
+        // Repair never follows a symlink spelling or an old migrated-root alias.
+        if (root !== input.directory) return yield* new ConflictError({ kind: "location_root" })
+        const rows = yield* tx
+          .select({
+            namespace: SecurityNamespaceTable,
+            location: LocationIdentityTable,
+            project: ProjectScopeIdentityTable,
+          })
+          .from(SecurityNamespaceTable)
+          .innerJoin(LocationIdentityTable, eq(LocationIdentityTable.security_namespace_id, SecurityNamespaceTable.id))
+          .innerJoin(
+            ProjectScopeIdentityTable,
+            and(
+              eq(ProjectScopeIdentityTable.security_namespace_id, SecurityNamespaceTable.id),
+              eq(ProjectScopeIdentityTable.project_scope_key, LocationIdentityTable.project_scope_key),
+            ),
+          )
+          .where(
+            and(
+              eq(SecurityNamespaceTable.kind, input.boundary.kind),
+              eq(SecurityNamespaceTable.binding_hash, namespaceBindingHash(input.boundary)),
+              eq(LocationIdentityTable.canonical_root, root),
+            ),
+          )
+          .limit(2)
+        if (rows.length !== 1) return yield* new NotFoundError({ kind: "location" })
+        const current = rows[0]!
+        if (current.namespace.retired_at !== null) return yield* new RetiredError({ kind: "namespace" })
+        if (current.location.retired_at !== null) return yield* new RetiredError({ kind: "location" })
+        if (current.project.retired_at !== null) return yield* new RetiredError({ kind: "project_scope" })
+        if (
+          current.project.project_kind !== "registered_root" ||
+          current.project.project_identity_hash !== projectBindingHash({ kind: "registered_root" }, root) ||
+          current.location.workspace_binding !==
+            (input.boundary.kind === "workspace" ? namespaceBindingHash(input.boundary) : null)
+        )
+          return yield* new ConflictError({ kind: "project_identity" })
+        const locations = yield* tx
+          .select({ key: LocationIdentityTable.location_key })
+          .from(LocationIdentityTable)
+          .where(
+            and(
+              eq(LocationIdentityTable.security_namespace_id, current.namespace.id),
+              eq(LocationIdentityTable.project_scope_key, current.project.project_scope_key),
+            ),
+          )
+          .limit(2)
+        if (locations.length !== 1) return yield* new ConflictError({ kind: "project_identity" })
+        const locationAlias = yield* tx
+          .select({ key: LocationIdentityAliasTable.location_key })
+          .from(LocationIdentityAliasTable)
+          .where(
+            and(
+              eq(LocationIdentityAliasTable.security_namespace_id, current.namespace.id),
+              or(
+                eq(LocationIdentityAliasTable.location_key, current.location.location_key),
+                eq(LocationIdentityAliasTable.old_canonical_root, root),
+              ),
+            ),
+          )
+          .get()
+        const projectAlias = yield* tx
+          .select({ key: ProjectScopeIdentityAliasTable.project_scope_key })
+          .from(ProjectScopeIdentityAliasTable)
+          .where(
+            and(
+              eq(ProjectScopeIdentityAliasTable.security_namespace_id, current.namespace.id),
+              or(
+                eq(ProjectScopeIdentityAliasTable.project_scope_key, current.project.project_scope_key),
+                eq(ProjectScopeIdentityAliasTable.old_project_identity_hash, current.project.project_identity_hash),
+              ),
+            ),
+          )
+          .get()
+        if (locationAlias || projectAlias) return yield* new ConflictError({ kind: "alias" })
+        return {
+          ...identity(current.location),
+          locationCreatedAt: current.location.created_at,
+          projectCreatedAt: current.project.created_at,
+          projectIdentityHash: current.project.project_identity_hash,
+          locationObservedProjectId: current.location.observed_project_id,
+          projectObservedProjectId: current.project.observed_project_id,
+        }
+      })
+    const inspectObservedProjectBinding = Effect.fn("LocationIdentity.inspectObservedProjectBinding")(function* (
+      input: Parameters<Interface["inspectObservedProjectBinding"]>[0],
+    ) {
+      return yield* db.transaction((tx) => inspectBinding(tx, input)).pipe(preserveErrors)
+    })
+    const repairObservedProjectBinding = Effect.fn("LocationIdentity.repairObservedProjectBinding")(function* (
+      input: Parameters<Interface["repairObservedProjectBinding"]>[0],
+    ) {
+      if (
+        !input.nextObservedProjectId ||
+        input.nextObservedProjectId.length > 512 ||
+        /[\u0000-\u001f\u007f]/.test(input.nextObservedProjectId)
+      )
+        return yield* new ConflictError({ kind: "project_identity" })
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const current = yield* inspectBinding(tx, input)
+              if (
+                Object.keys(current).length !== Object.keys(input.expected).length ||
+                Object.entries(current).some(
+                  ([key, value]) => input.expected[key as keyof ObservedProjectBinding] !== value,
+                )
+              )
+                return yield* new ConflictError({ kind: "project_identity" })
+              // Unconfirmed work keeps its old authority. Repair never turns a pending or
+              // unknown attempt into a fresh project execution or refunds its reservation.
+              const blocked = yield* tx
+                .select({ id: WorkExecutionTable.work_id })
+                .from(WorkExecutionTable)
+                .where(
+                  and(
+                    eq(WorkExecutionTable.security_namespace_id, current.securityNamespaceId),
+                    sql`(json_extract(${WorkExecutionTable.binding}, '$.scope.projectScopeKey') IS NULL OR json_extract(${WorkExecutionTable.binding}, '$.scope.projectScopeKey') = ${current.projectScopeKey})`,
+                    sql`(${WorkExecutionTable.outcome} IN ('pending','unknown') OR EXISTS (SELECT 1 FROM ${WorkDispatchReservationTable} WHERE ${WorkDispatchReservationTable.work_id} = ${WorkExecutionTable.work_id} AND ${WorkDispatchReservationTable.state} IN ('reserved','dispatching','unknown')))`,
+                  ),
+                )
+                .get()
+              if (blocked) return yield* new WorkUnsettledError()
+              const location = yield* tx
+                .update(LocationIdentityTable)
+                .set({ observed_project_id: input.nextObservedProjectId })
+                .where(
+                  and(
+                    eq(LocationIdentityTable.security_namespace_id, current.securityNamespaceId),
+                    eq(LocationIdentityTable.location_key, current.locationKey),
+                    eq(LocationIdentityTable.project_scope_key, current.projectScopeKey),
+                    eq(LocationIdentityTable.canonical_root, current.canonicalRoot),
+                    eq(LocationIdentityTable.created_at, current.locationCreatedAt),
+                    isNull(LocationIdentityTable.retired_at),
+                    current.locationObservedProjectId === null
+                      ? isNull(LocationIdentityTable.observed_project_id)
+                      : eq(LocationIdentityTable.observed_project_id, current.locationObservedProjectId),
+                  ),
+                )
+                .returning({ key: LocationIdentityTable.location_key })
+                .get()
+              const project = yield* tx
+                .update(ProjectScopeIdentityTable)
+                .set({ observed_project_id: input.nextObservedProjectId })
+                .where(
+                  and(
+                    eq(ProjectScopeIdentityTable.security_namespace_id, current.securityNamespaceId),
+                    eq(ProjectScopeIdentityTable.project_scope_key, current.projectScopeKey),
+                    eq(ProjectScopeIdentityTable.project_kind, "registered_root"),
+                    eq(ProjectScopeIdentityTable.project_identity_hash, current.projectIdentityHash),
+                    eq(ProjectScopeIdentityTable.created_at, current.projectCreatedAt),
+                    isNull(ProjectScopeIdentityTable.retired_at),
+                    current.projectObservedProjectId === null
+                      ? isNull(ProjectScopeIdentityTable.observed_project_id)
+                      : eq(ProjectScopeIdentityTable.observed_project_id, current.projectObservedProjectId),
+                  ),
+                )
+                .returning({ key: ProjectScopeIdentityTable.project_scope_key })
+                .get()
+              if (!location || !project) return yield* new ConflictError({ kind: "project_identity" })
+              return {
+                ...identity({
+                  security_namespace_id: current.securityNamespaceId,
+                  location_key: current.locationKey,
+                  project_scope_key: current.projectScopeKey,
+                  canonical_root: current.canonicalRoot,
+                  observed_project_id: input.nextObservedProjectId,
+                }),
+              }
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(preserveErrors)
+    })
+
+    return Service.of({
+      resolveNamespace,
+      resolve,
+      lookup,
+      migrateLocation,
+      migrateProjectIdentity,
+      inspectObservedProjectBinding,
+      repairObservedProjectBinding,
+    })
   }),
 )
 
@@ -486,5 +754,6 @@ function isError(value: unknown): value is Error {
     "LocationIdentity.NotFoundError",
     "LocationIdentity.RetiredError",
     "LocationIdentity.ConflictError",
+    "LocationIdentity.WorkUnsettledError",
   ].includes(String(value._tag))
 }

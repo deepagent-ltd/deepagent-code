@@ -1,5 +1,8 @@
 import * as http from "node:http"
 import * as tls from "node:tls"
+import { createSidecarShutdown } from "./sidecar-shutdown"
+import { receiveWindowsNativeSidecar } from "./windows-native-sidecar-child"
+import { rendererOrigin } from "./renderer-origin"
 
 type NodeHttpWithEnvProxy = typeof http & {
   setGlobalProxyFromEnv: () => void
@@ -15,6 +18,7 @@ type StartCommand = {
   hostname: string
   port: number
   password: string
+  rendererOrigin?: string
 }
 
 type StopCommand = { type: "stop" }
@@ -22,12 +26,15 @@ type SidecarCommand = StartCommand | StopCommand
 
 type SidecarMessage =
   | { type: "ready" }
+  | { type: "managed-browser-bootstrap-ready-v1" }
+  | { type: "managed-browser-ready-v1" }
   | { type: "stopped" }
   | { type: "error"; error: { message: string; stack?: string } }
 
 type ParentPort = {
-  postMessage(message: SidecarMessage): void
+  postMessage(message: SidecarMessage | { type: "dac-native-preload-challenge-v1"; birth: string }): void
   on(event: "message", listener: (event: { data: unknown }) => void): void
+  off(event: "message", listener: (event: { data: unknown }) => void): void
 }
 
 type Listener = {
@@ -36,13 +43,38 @@ type Listener = {
 
 const parentPort = getParentPort()
 let listener: Listener | undefined
+const stop = createSidecarShutdown({
+  stop: () => listener?.stop(),
+  clear: () => { listener = undefined },
+  report: (message) => parentPort.postMessage(message),
+  exit: (code) => { setImmediate(() => process.exit(code)) },
+})
+
+// The sealed Node entry captures its startup transport before Root/plugin loading.
+// Complete trusted host preparation first so later start() does not retire that snapshot.
+ensureLoopbackNoProxy()
+useSystemCertificates()
+useEnvProxy()
 
 // Eagerly start loading the server module the instant the sidecar process
 // starts — before the {type:"start"} message arrives from the main process.
 // Module loading (parsing + JIT) takes 1-2 s; starting it here lets that
 // work overlap with the main process's loadShellEnv + window creation, so
 // by the time start() is called the import is already done or nearly done.
-const serverModulePromise = import("virtual:deepagent-code-server")
+// Load the physical unpacked entry. Its signed bytes and adjacent assets must be
+// verifiable through actual file descriptors, rather than Electron's virtual ASAR FS.
+const serverURL = new URL("./chunks/node.js", import.meta.url)
+serverURL.pathname = serverURL.pathname.replace("/app.asar/", "/app.asar.unpacked/")
+const serverModulePromise = receiveWindowsNativeSidecar(parentPort).then(async (preloaded) => {
+  const server = await import(/* @vite-ignore */ serverURL.href) as typeof import("virtual:deepagent-code-server")
+  if (preloaded) await server.NativeWindowsBootstrap.installFixedEntry()
+  return server
+})
+// The parent port must be installed before any Root or cached Location is constructed.
+const nativeReady = serverModulePromise.then(({ BrowserNativeHost }) => BrowserNativeHost.prepare())
+// Eager preparation can reject before the start message arrives. Keep the original rejection
+// for start() to report, while avoiding an unhandled-rejection window during module loading.
+void nativeReady.catch(() => {})
 
 parentPort.on("message", (event) => {
   const command = parseCommand(event.data)
@@ -57,11 +89,9 @@ parentPort.on("message", (event) => {
 async function start(command: StartCommand) {
   try {
     prepareSidecarEnv(command.password)
-    ensureLoopbackNoProxy()
-    useSystemCertificates()
-    useEnvProxy()
     // Await the eagerly-started import — usually already done by now.
     const { Log, Server } = await serverModulePromise
+    await nativeReady
     await Log.init({ level: "WARN" })
 
     listener = await Server.listen({
@@ -69,22 +99,12 @@ async function start(command: StartCommand) {
       hostname: command.hostname,
       username: "deepagent-code",
       password: command.password,
-      cors: ["oc://renderer"],
+      cors: command.rendererOrigin ? ["oc://renderer", command.rendererOrigin] : ["oc://renderer"],
     })
     parentPort.postMessage({ type: "ready" })
   } catch (error) {
     parentPort.postMessage({ type: "error", error: serializeError(error) })
     setImmediate(() => process.exit(1))
-  }
-}
-
-async function stop() {
-  try {
-    await listener?.stop()
-  } finally {
-    listener = undefined
-    parentPort.postMessage({ type: "stopped" })
-    setImmediate(() => process.exit(0))
   }
 }
 
@@ -142,11 +162,16 @@ function parseCommand(value: unknown): SidecarCommand | undefined {
   if (typeof command.hostname !== "string") return
   if (typeof command.port !== "number") return
   if (typeof command.password !== "string") return
+  if (
+    command.rendererOrigin !== undefined &&
+    (typeof command.rendererOrigin !== "string" || rendererOrigin(command.rendererOrigin) !== command.rendererOrigin)
+  ) return
   return {
     type: "start",
     hostname: command.hostname,
     port: command.port,
     password: command.password,
+    rendererOrigin: command.rendererOrigin,
   }
 }
 

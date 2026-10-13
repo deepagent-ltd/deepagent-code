@@ -16,7 +16,7 @@ const goalEnvironment = {
   DEEPAGENT_ENABLED: "true",
   DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP: "true",
   DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "false",
-  DEEPAGENT_CODE_V4_GOAL_TICK_EVENT_DRIVEN: "false",
+  DEEPAGENT_CODE_V4_GOAL_TICK_EVENT_DRIVEN: "true",
 }
 
 const completeCurrentPlan = (hit: { body: Record<string, unknown> }) => {
@@ -401,21 +401,23 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
-    "runs a scriptable goal through the production Goal lifecycle and orders JSON events",
-    ({ llm, deepagentCode }) =>
+    "scriptable Goal without checked diagnostic references needs human verification and orders JSON events",
+    ({ llm, home, deepagentCode }) =>
       Effect.gen(function* () {
         const objective = "Complete the deterministic CLI goal"
-        yield* llm.toolFrom(completeCurrentPlan)
-        yield* llm.text("Goal step completed")
+        const databasePath = path.join(home, "goal-current-first.db")
+        // Owned Goal results require every provider turn's complete, non-overlapping usage.
+        yield* llm.toolFrom(completeCurrentPlan, { usage: { input: 20, output: 5, cacheRead: 0 } })
+        yield* llm.text("Goal step completed", { usage: { input: 25, output: 3, cacheRead: 0 } })
 
         const result = yield* deepagentCode.run(objective, {
           agent: "loop",
           format: "json",
           extraArgs: ["--goal"],
-          env: goalEnvironment,
+          env: { ...goalEnvironment, DEEPAGENT_CODE_DB: databasePath },
           timeoutMs: 30_000,
         })
-        deepagentCode.expectExit(result, 0)
+        deepagentCode.expectExit(result, 1)
 
         const events = deepagentCode.parseJsonEvents(result.stdout)
         const start = events.findIndex((event) => event.type === "goal_start")
@@ -427,21 +429,37 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
             "phase" in event.goal &&
             event.goal.phase === "running",
         )
-        const done = events.findIndex(
+        const needsHuman = events.findIndex(
           (event) =>
             event.type === "goal" &&
             typeof event.goal === "object" &&
             event.goal !== null &&
             "phase" in event.goal &&
-            event.goal.phase === "done",
+            event.goal.phase === "needs_human",
         )
-        const terminal = events.findIndex((event) => event.type === "session_terminal" && event.phase === "done")
+        const terminal = events.findIndex((event) => event.type === "session_terminal" && event.phase === "needs_human")
 
         expect(start).toBeGreaterThanOrEqual(0)
         expect(running).toBeGreaterThan(start)
-        expect(done).toBeGreaterThan(running)
-        expect(terminal).toBeGreaterThan(done)
+        expect(needsHuman).toBeGreaterThan(running)
+        expect(terminal).toBeGreaterThan(needsHuman)
+        expect(events.some((event) => event.type === "session_terminal" && event.phase === "done")).toBe(false)
         expect(events.some((event) => event.type === "permission" || event.type === "question")).toBe(false)
+        using database = new Database(databasePath, { readonly: true })
+        expect(database.query("SELECT v2_authority FROM session").all()).toEqual([
+          { v2_authority: 1 }, { v2_authority: 1 },
+        ])
+        expect(database.query("SELECT state,error_code FROM goal_tick_checkpoint").all()).toEqual([
+          { state: "committed", error_code: null },
+        ])
+        const turns = database.query("SELECT outcome_artifact FROM session_v2_provider_turn_receipt ORDER BY provider_turn_seq")
+          .all() as { outcome_artifact: string }[]
+        expect(turns.flatMap((turn) => (JSON.parse(turn.outcome_artifact) as { type: string; usage?: unknown }[])
+          .filter((event) => event.type === "step-finish").map((event) => event.usage))).toEqual([
+          expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadInputTokens: 0, nonCachedInputTokens: 20 }),
+          expect.objectContaining({ inputTokens: 25, outputTokens: 3, cacheReadInputTokens: 0, nonCachedInputTokens: 25 }),
+        ])
+        expect((yield* llm.hits).length).toBe(2)
         expect(yield* llm.pending).toBe(0)
         expect(yield* llm.misses).toEqual([])
       }),
@@ -457,13 +475,19 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         yield* Effect.promise(() =>
           Bun.write(
             path.join(home, ".deepagent-code/plans/goal+plan.md"),
-            ["## Goal", objective, "", "## Criteria", "- plan complete", "", "## Plan", `- [>] ${objective}`, ""].join(
+            ["## Goal", objective, "", "## Criteria", "- plan complete", "- reviewer clean", "", "## Plan", `- [>] ${objective}`, ""].join(
               "\n",
             ),
           ),
         )
-        yield* llm.toolFrom(completeCurrentPlan)
-        yield* llm.text("Plan-file goal completed")
+        yield* llm.toolFrom(completeCurrentPlan, { usage: { input: 20, output: 5, cacheRead: 0 } })
+        yield* llm.text("Plan-file goal completed", { usage: { input: 25, output: 3, cacheRead: 0 } })
+        yield* llm.text("Independent review found no changed executable code or blocking findings", {
+          usage: { input: 30, output: 4, cacheRead: 0 },
+        })
+        yield* llm.text(JSON.stringify({ findings: [], verdict: "approve" }), {
+          usage: { input: 15, output: 2, cacheRead: 0 },
+        })
 
         const result = yield* deepagentCode.spawn(
           ["run", "--goal", "--agent", "loop", "--model", "test/test-model", "--format", "json"],
@@ -471,32 +495,57 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         )
         deepagentCode.expectExit(result, 0)
         const events = deepagentCode.parseJsonEvents(result.stdout)
-        expect(events.some((event) => event.type === "goal_start")).toBe(true)
-        expect(events.some((event) => event.type === "session_terminal" && event.phase === "done")).toBe(true)
+        const start = events.findIndex((event) => event.type === "goal_start")
+        const done = events.findIndex((event) => event.type === "goal" &&
+          typeof event.goal === "object" && event.goal !== null && "phase" in event.goal && event.goal.phase === "done")
+        const terminal = events.findIndex((event) => event.type === "session_terminal" && event.phase === "done")
+        expect(start).toBeGreaterThanOrEqual(0)
+        expect(done).toBeGreaterThan(start)
+        expect(terminal).toBeGreaterThan(done)
+        expect((yield* llm.hits).length).toBe(4)
+        expect(yield* llm.pending).toBe(0)
+        expect(yield* llm.misses).toEqual([])
       }),
     60_000,
   )
 
   cliIt.live(
-    "returns nonzero when a goal-worker provider turn fails",
-    ({ llm, deepagentCode }) =>
+    "transport-failed Goal stays recoverable without admitting a replacement provider turn",
+    ({ llm, home, deepagentCode }) =>
       Effect.gen(function* () {
+        const databasePath = path.join(home, "goal-provider-failure.db")
         yield* llm.fail("goal worker provider failure")
         const result = yield* deepagentCode.run("Exercise the Goal failure path", {
           agent: "loop",
           format: "json",
           extraArgs: ["--goal"],
-          env: goalEnvironment,
+          env: { ...goalEnvironment, DEEPAGENT_CODE_DB: databasePath },
           timeoutMs: 30_000,
         })
         expect(result.exitCode).not.toBe(0)
         const events = deepagentCode.parseJsonEvents(result.stdout)
-        expect(
-          events.some(
-            (event) =>
-              event.type === "session_terminal" && ["rolled_back", "needs_human"].includes(String(event.phase)),
-          ),
-        ).toBe(true)
+        using database = new Database(databasePath, { readonly: true })
+        expect(events).toContainEqual(expect.objectContaining({
+          type: "goal_recovery",
+          goal: expect.objectContaining({ recoveryRequired: true, running: false }),
+        }))
+        expect(events.some((event) => event.type === "session_terminal" && event.phase === "done")).toBe(false)
+        expect(database.query("SELECT state,error_code FROM goal_tick_checkpoint").all()).toEqual([
+          { state: "recovery_required", error_code: "CHECKPOINT_RECOVERY_REQUIRED" },
+        ])
+        expect(database.query("SELECT status,last_error FROM deepagent_consumer_receipt").all()).toEqual([
+          { status: "pending", last_error: "Goal result does not belong to its exact promoted input and settled activity" },
+        ])
+        const receipt = database.query("SELECT state,outcome_artifact FROM session_v2_provider_turn_receipt").get() as {
+          state: string; outcome_artifact: string
+        }
+        expect(receipt.state).toBe("settled")
+        // This peer ends the HTTP stream; it cannot manufacture a successful provider finish.
+        expect((JSON.parse(receipt.outcome_artifact) as { type: string; reason?: string }[])
+          .some((event) => event.type === "step-finish" && event.reason === "stop")).toBe(false)
+        expect((yield* llm.hits).length).toBe(1)
+        expect(yield* llm.pending).toBe(0)
+        expect(yield* llm.misses).toEqual([])
       }),
     60_000,
   )

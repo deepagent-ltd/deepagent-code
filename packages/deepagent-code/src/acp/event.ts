@@ -165,12 +165,12 @@ export class Subscription {
     const version = event.type === "permission.v2.asked" ? ("v2" as const) : ("v1" as const)
     let properties = event.properties
     if (version === "v2") {
-      const source = properties.source as { callID?: string } | undefined
+      const source = properties.source as { type?: string; callID?: string } | undefined
       properties = {
         ...properties,
         permission: String(properties.action ?? "unknown"),
         patterns: Array.isArray(properties.resources) ? properties.resources.map(String) : [],
-        ...(source?.callID ? { tool: { callID: source.callID } } : {}),
+        ...(source?.type === "tool" && source.callID ? { tool: { callID: source.callID } } : {}),
       }
     }
     this.permission.handle({ type: "permission.asked", properties } as never, version)

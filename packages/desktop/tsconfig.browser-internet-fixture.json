@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.browser-public-fixture.json",
+  "include": [
+    "src/main/fixture/managed-browser-internet.ts",
+    "src/main/managed-browser-internet.test.ts",
+    "../deepagent-code/src/audio.d.ts"
+  ]
+}

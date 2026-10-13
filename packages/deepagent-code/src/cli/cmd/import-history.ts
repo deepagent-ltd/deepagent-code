@@ -2,21 +2,13 @@ import { Effect } from "effect"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { EOL } from "node:os"
-import { effectCmd, fail } from "../effect-cmd"
-import { runImport } from "@/import"
+import { CliError, effectCmd, fail } from "../effect-cmd"
+import { ImportJobSchema } from "@deepagent-code/core/import-job/schema"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { ALL_SCOPES, type ImportScope, type ImportSource } from "@/import/types"
 
-/**
- * `deepagentcode import-history --from codex|claude`
- *
- * Hot-imports chat history (event-sourced, idempotent), memories (staged as
- * knowledge candidates for Agent review), and skills from a Codex or Claude
- * Code installation into the running deepagent-code database. Re-runnable: the
- * same source always converges on the same target sessions.
- *
- * This is the standalone equivalent of the desktop "Import history" settings
- * panel — both funnel into `runImport`.
- */
+/** CLI and GUI use the same durable import job, private copy target and explicit cancellation.
+ * Imported conversation history never admits model or tool execution. */
 export const ImportHistoryCommand = effectCmd({
   command: "import-history",
   aliases: ["importHistory"],
@@ -47,73 +39,65 @@ export const ImportHistoryCommand = effectCmd({
       })
       .option("copy-live-db", {
         type: "boolean",
-        default: false,
-        describe: "snapshot the live DB and write into the copy (safe pre-validation)",
+        default: true,
+        describe: "write into a private database copy (default); disabling requires explicit live-merge confirmation",
+      })
+      .option("confirm-live-merge", {
+        type: "boolean", default: false,
+        describe: "explicitly confirm live session merge; memory and skills require a private copy",
+      })
+      .option("request-id", {
+        type: "string", describe: "stable request identity for exact retries",
       })
       .option("cwd-filter", {
         type: "string",
         describe: "only import sessions whose cwd starts with this prefix",
       }),
   handler: Effect.fn("Cli.importHistory")(function* (args) {
+    const { ImportJobs } = yield* Effect.promise(() => import("@/import/job"))
     const source = args.from as ImportSource
-    const sourcePath = (args.path as string) || defaultSourcePath(source)
+    const sourcePath = args.path || defaultSourcePath(source)
     const scopes = (args.scope as ImportScope[]) ?? ALL_SCOPES
-
     process.stdout.write(`Importing from ${source} (${sourcePath}) — scopes: ${scopes.join(",")}${args.dryRun ? " [dry-run]" : ""}${EOL}`)
-
-    const report = yield* Effect.promise(() =>
-      runImport({
-        source,
-        sourcePath,
-        scopes,
-        dryRun: !!args.dryRun,
-        copyLiveDb: !!args.copyLiveDb,
-        cwdFilter: args.cwdFilter as string | undefined,
-        onProgress: (event) => {
-          switch (event.phase) {
-            case "discover":
-              process.stdout.write(`  discovered ${event.count} session(s)${EOL}`)
-              break
-            case "write-session":
-              process.stdout.write(`  [session] ${event.sessionId} (${event.turns} turns${event.reimport ? ", re-imported" : ""})${EOL}`)
-              break
-            case "write-memory":
-              process.stdout.write(`  [memory] staged ${event.staged} candidate(s) for review${EOL}`)
-              break
-            case "write-skill":
-              process.stdout.write(`  [skill] wrote ${event.written}${EOL}`)
-              break
-            case "warn":
-              process.stdout.write(`  [warn] ${event.label ?? ""} ${event.message}${EOL}`)
-              break
-          }
-        },
-      }),
-    )
-
-    const imported = report.sessions.length
-    process.stdout.write(
-      [
-        `Done in ${report.elapsedMs}ms.`,
-        `sessions=${imported}`,
-        report.memory ? `memories_staged=${report.memory.staged}` : "",
-        report.skills ? `skills=${report.skills.written}` : "",
-        report.warnings.length ? `warnings=${report.warnings.length}` : "",
-        report.dryRun ? "(dry-run, nothing written)" : "",
-      ]
-        .filter(Boolean)
-        .join("  ") + EOL,
-    )
-
-    if (report.warnings.length > 0 && !report.dryRun) {
-      for (const w of report.warnings.slice(0, 20)) process.stdout.write(`  ! ${w}${EOL}`)
-      if (report.warnings.length > 20) process.stdout.write(`  ... and ${report.warnings.length - 20} more${EOL}`)
-    }
-
-    if (imported === 0 && report.warnings.length > 0) {
-      return yield* fail("import produced no sessions; see warnings above")
-    }
-  }),
+    const jobs = yield* ImportJobs.make
+    const admitted = yield* jobs.create({
+      requestID: args.requestId ?? crypto.randomUUID(), source, sourcePath, scopes,
+      dryRun: args.dryRun, copyLiveDb: args.copyLiveDb,
+      mode: args.copyLiveDb ? "copy_to_new_db" : "merge_into_live",
+      confirmLiveMerge: args.confirmLiveMerge, cwdFilter: args.cwdFilter,
+    })
+    process.stdout.write(`job=${admitted.id}  request=${admitted.requestID}${EOL}`)
+    const stopping = { requested: false }
+    const shutdown = () => { stopping.requested = true }
+    yield* Effect.acquireRelease(Effect.sync(() => {
+      process.on("SIGINT", shutdown)
+      process.on("SIGTERM", shutdown)
+    }), () => Effect.sync(() => {
+      process.off("SIGINT", shutdown)
+      process.off("SIGTERM", shutdown)
+    }))
+    const settled = yield* Effect.gen(function* () {
+      for (;;) {
+        const current = yield* (stopping.requested ? jobs.cancel(admitted.id) : jobs.get(admitted.id))
+        if (ImportJobSchema.terminal(current.state)) return current
+        yield* Effect.sleep("250 millis")
+      }
+    })
+    const report = yield* jobs.report(admitted.id)
+    process.stdout.write([
+      `state=${settled.state}`, `elapsed=${report.elapsedMs}ms`, `sessions=${report.sessions.length}`,
+      report.memory ? `memories_staged=${report.memory.staged}` : "",
+      report.skills ? `skills=${report.skills.written}` : "",
+      report.warnings.length ? `warnings=${report.warnings.length}` : "",
+      report.dryRun ? "(dry-run, nothing written)" : "",
+      report.target ? `target=${report.target.dbPath}` : "",
+    ].filter(Boolean).join("  ") + EOL)
+    for (const warning of report.warnings.slice(0, 20)) process.stdout.write(`  ! ${warning}${EOL}`)
+    if (report.warnings.length > 20) process.stdout.write(`  ... and ${report.warnings.length - 20} more${EOL}`)
+    if (settled.state !== "completed")
+      return yield* fail(`Import ${settled.id} ended in ${settled.state}${settled.error ? ` (${settled.error.code})` : ""}; the durable job remains available for inspection`)
+  }, Effect.provide(EffectFlock.defaultLayer), Effect.scoped, Effect.mapError((error) => error instanceof CliError ? error :
+    new CliError({ message: error.message, exitCode: 1 }))),
 })
 
 function defaultSourcePath(source: ImportSource): string {

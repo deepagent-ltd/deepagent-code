@@ -19,7 +19,7 @@ import { GitHubAgentExecution } from "@/github/github-agent-execution"
 import { testEffect } from "../lib/effect"
 
 // v2w-j4 durable-only GitHub ingress — the admission half (src/github/github-agent-execution.ts),
-// mirroring test/im/im-agent-execution.test.ts. The durable execution record for a GitHub event
+// mirroring the current /dac Session admission tests. The durable execution record for a GitHub event
 // delivery IS the `session_input` row: keyed by the deterministic prompt message id for
 // (delivery, agent, turn), so a duplicate delivery of the same event reconciles as a SessionV2 exact
 // retry (ONE row, never two) and a conflicting prompt under the same id fails typed. Session identity

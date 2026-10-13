@@ -116,6 +116,37 @@ Recent work
     ])
   })
 
+  test("omits a contentless failed assistant turn so the wire history carries no null", async () => {
+    // Regression: a provider-error turn persists an assistant row with empty content (Step.Started
+    // folds the row, Step.Failed only marks the error). The durable row stays for audit/usage, but
+    // serializing it lowered `content: null` into the next request — providers reject that, and the
+    // rejection failed every later turn the same way, poisoning the session.
+    const failed = new SessionMessage.Assistant({
+      id: id("failed"),
+      type: "assistant",
+      agent: "build",
+      model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+      content: [],
+      finish: "error",
+      error: { type: "unknown", message: "Provider unavailable" },
+      time: { created, completed: created },
+    })
+    const messages = toLLMMessages(
+      [
+        new SessionMessage.User({ id: id("before"), type: "user", text: "first", time: { created } }),
+        failed,
+        new SessionMessage.User({ id: id("after"), type: "user", text: "second", time: { created } }),
+      ],
+      model,
+    )
+    expect(messages.map((message) => message.role)).toEqual(["user", "user"])
+    const prepared = await Effect.runPromise(
+      LLMClient.prepare(LLM.request({ id: "req_failed_turn", model, messages })),
+    )
+    expect(JSON.stringify(prepared.body)).not.toContain('"role":"assistant"')
+    expect(JSON.stringify(prepared.body)).not.toContain('"content":null')
+  })
+
   test("renders durable agent and reference attachments in OpenAI and Anthropic request bodies", async () => {
     const user = new SessionMessage.User({
       id: id("wire-attachments"),

@@ -8,7 +8,9 @@ import {
   SessionProviderAttemptTable,
 } from "@deepagent-code/core/context-federation/session-sql"
 import { GraphKind } from "@deepagent-code/core/context-federation/contract"
-import { GraphQueryStatus } from "@deepagent-code/core/context-federation/federation"
+import { GraphQueryReasonCode, GraphQueryStatus } from "@deepagent-code/core/context-federation/federation"
+import { SelectionContract } from "@deepagent-code/core/contract/selection"
+import { contentDigest } from "@deepagent-code/core/contract/digest"
 import { Sensitivity } from "@deepagent-code/core/context-federation/authorization"
 import { SessionProviderAttempt } from "@deepagent-code/core/context-federation/provider-attempt"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
@@ -41,6 +43,20 @@ const StoredSelectedRef = Schema.Struct({
   score: Schema.Finite,
   reason: Schema.String,
 })
+
+const StoredGraphStatuses = Schema.Union([
+  Schema.Array(GraphQueryStatus),
+  Schema.Struct({
+    code: SelectionContract.GraphStatus,
+    documents: SelectionContract.GraphStatus,
+    knowledge: SelectionContract.GraphStatus,
+    memory: SelectionContract.GraphStatus,
+  }),
+])
+const StoredEvidence = Schema.Union([
+  StoredSelectedRef,
+  Schema.Struct({ ...SelectionContract.SelectionRef.fields, sensitivity: Sensitivity }),
+])
 
 export type ResolutionDecision = "abandoned" | "settled" | "replayed"
 
@@ -339,7 +355,7 @@ export const layer = Layer.effect(
         for (const row of rows) {
           sessions.add(row.sessionId)
           tokens += row.tokenCount
-          const statuses = parse(Schema.Array(GraphQueryStatus), row.graphStatuses, "graph_statuses")
+          const statuses = graphStatuses(row.graphStatuses)
           // Selection-level bucket = the WORST graph state (blocked > degraded > building > ready),
           // so a single cold/blocked graph keeps the whole selection out of the "ready" cohort.
           let worst: ReadinessBucket = "ready"
@@ -419,8 +435,8 @@ function selectionView(input: {
   readonly artifact?: typeof ContextArtifactTable.$inferSelect
   readonly now: number
 }) {
-  const statuses = parse(Schema.Array(GraphQueryStatus), input.row.graph_statuses, "graph_statuses")
-  const selected = parse(Schema.Array(StoredSelectedRef), input.row.selected_refs, "selected_refs")
+  const statuses = graphStatuses(input.row.graph_statuses)
+  const selected = parse(Schema.Array(StoredEvidence), input.row.selected_refs, "selected_refs")
   return {
     selectionId: input.row.selection_id,
     activityId: input.row.activity_id,
@@ -432,23 +448,107 @@ function selectionView(input: {
         ? ("complete" as const)
         : ("empty" as const),
     statuses,
-    evidence: selected.map((item) => ({
-      token: item.token,
-      graph: item.ref.graph,
-      revision: item.ref.revision,
-      sensitivity: item.sensitivity,
-      freshness: item.freshness,
-      score: item.score,
-      reason: item.reason,
-      provenance: item.provenanceTokens,
-      relations: item.relations,
-    })),
+    evidence: selected.map((item) => {
+      if ("provenanceTokens" in item)
+        return {
+          token: item.token,
+          graph: item.ref.graph,
+          revision: item.ref.revision,
+          sensitivity: item.sensitivity,
+          freshness: item.freshness,
+          score: item.score,
+          reason: item.reason,
+          provenance: item.provenanceTokens,
+          relations: item.relations,
+        }
+      const revision = item.version ?? statuses.find((status) => status.graph === item.graph)?.revisions[0]?.revision
+      if (revision === undefined) throw new DiagnosticsError({ reason: "stored_selected_refs_invalid" })
+      // V2 stores canonical provenance refs, not the legacy opaque tokens or relation edges.
+      // Scoped digests retain the provenance count without exposing canonical source identities.
+      return {
+        token: item.token,
+        graph: item.graph,
+        revision,
+        sensitivity: item.sensitivity,
+        freshness: item.freshness,
+        score: item.score,
+        reason: item.reason,
+        provenance: (item.provenanceRefs ?? []).map((ref) =>
+          contentDigest({
+            domain: "context-diagnostics-provenance",
+            selectionID: input.row.selection_id,
+            ref,
+          }),
+        ),
+        relations: [],
+      }
+    }),
     tokenCount: input.row.token_count,
     stale: input.row.next_revalidation_at <= input.now,
     nextRevalidationAt: input.row.next_revalidation_at,
     artifact: artifactView(input.row, input.artifact, input.now),
     createdAt: input.row.created_at,
   }
+}
+
+function graphStatuses(value: string): readonly GraphQueryStatus[] {
+  const statuses = parse(StoredGraphStatuses, value, "graph_statuses")
+  if (!("code" in statuses)) return statuses
+  return GraphKind.literals.map((graph): GraphQueryStatus => {
+    const status = statuses[graph]
+    if (!status || status.graph !== graph) throw new DiagnosticsError({ reason: "stored_graph_statuses_invalid" })
+    if (status.status === "ready" || status.status === "empty")
+      return {
+        graph,
+        kind: "complete",
+        state: "ready",
+        outcome: status.status === "ready" ? "matched" : "empty",
+        revisions: [{ source: graph, revision: status.revision, state: "ready" }],
+      }
+    const reasonCode =
+      GraphQueryReasonCode.literals.find((reason) => reason === status.reasonCode) ??
+      (status.status === "denied" ? "scope_denied" : "source_error")
+    if (status.status === "denied")
+      return {
+        graph,
+        kind: "blocked",
+        state: "denied",
+        outcome: "not_queried",
+        reasonCode,
+        revisions: [{ source: graph, revision: status.revision, state: "denied", reasonCode }],
+      }
+    if (reasonCode === "source_disabled")
+      return {
+        graph,
+        kind: "not_queried",
+        state: "not_queried",
+        outcome: "not_queried",
+        reasonCode,
+        revisions: [],
+      }
+    if (
+      status.status === "timeout" ||
+      ["cold_start", "bootstrap_budget_exhausted", "bootstrap_timeout", "partial_sources"].includes(reasonCode)
+    ) {
+      const state = reasonCode === "cold_start" ? "cold" : reasonCode.startsWith("bootstrap_") ? "indexing" : "degraded"
+      return {
+        graph,
+        kind: "partial",
+        state,
+        outcome: "partial",
+        reasonCode,
+        revisions: [{ source: graph, revision: status.revision, state, reasonCode }],
+      }
+    }
+    return {
+      graph,
+      kind: "blocked",
+      state: "unavailable",
+      outcome: "not_queried",
+      reasonCode,
+      revisions: [{ source: graph, revision: status.revision, state: "unavailable", reasonCode }],
+    }
+  })
 }
 
 function artifactView(

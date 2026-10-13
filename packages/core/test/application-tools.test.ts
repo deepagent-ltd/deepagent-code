@@ -1,6 +1,11 @@
 import { describe, expect } from "bun:test"
 import { Tool } from "@deepagent-code/core/public"
+import { settle } from "@deepagent-code/core/tool/tool"
+import { ToolCallID } from "@deepagent-code/llm"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
+import { AbsolutePath } from "@deepagent-code/core/schema"
+import { Location } from "@deepagent-code/core/location"
+import { Project } from "@deepagent-code/core/project"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
@@ -43,6 +48,86 @@ const contextual = (contexts: Tool.Context[]) =>
   })
 
 describe("ApplicationTools", () => {
+  it.effect("materializes and executes independent registries for two Locations", () =>
+    Effect.gen(function* () {
+      const applications = yield* ApplicationTools.Service
+      const contextsA: Tool.Context[] = []
+      const contextsB: Tool.Context[] = []
+      const a = { directory: AbsolutePath.make("/registry-a") }
+      const b = { directory: AbsolutePath.make("/registry-b") }
+      yield* applications.register({ same: contextual(contextsA) }, a)
+      yield* applications.register({ same: contextual(contextsB) }, b)
+      const materializations = yield* Effect.forEach([a, b], (location) =>
+        ToolRegistry.Service.use((registry) => registry.materialize()).pipe(
+          Effect.provide(
+            Layer.fresh(ToolRegistry.layer).pipe(
+              Layer.provide(ToolOutputStore.defaultLayer),
+              Layer.provide(Layer.succeed(ApplicationTools.Service, applications)),
+              Layer.provide(
+                Layer.succeed(Location.Service, {
+                  ...location,
+                  project: { id: Project.ID.make("project-placement"), directory: location.directory },
+                }),
+              ),
+            ),
+          ),
+        ),
+      )
+      expect(materializations.map((entry) => entry.registeredIDs)).toEqual([["same"], ["same"]])
+      const input = {
+        sessionID,
+        agent,
+        assistantMessageID,
+        call: {
+          type: "tool-call" as const,
+          id: ToolCallID.make("call-location-registry"),
+          name: "same",
+          input: { query: "ok" },
+        },
+      }
+      yield* materializations[0].settle(input)
+      expect(contextsA).toHaveLength(1)
+      expect(contextsB).toHaveLength(0)
+      yield* materializations[1].settle(input)
+      expect(contextsA).toHaveLength(1)
+      expect(contextsB).toHaveLength(1)
+    }),
+  )
+
+  it.effect("isolates same-name application registrations by placement and retains global fallback", () =>
+    Effect.gen(function* () {
+      const applications = yield* ApplicationTools.Service
+      const contextsA: Tool.Context[] = []
+      const contextsB: Tool.Context[] = []
+      const toolA = contextual(contextsA)
+      const toolB = contextual(contextsB)
+      const global = contextual([])
+      const a = { directory: AbsolutePath.make("/a") }
+      const b = { directory: AbsolutePath.make("/b") }
+      const scope = yield* Scope.make()
+      yield* applications.register({ same: global })
+      yield* applications.register({ same: toolA }, a)
+      yield* applications.register({ same: toolB }, b).pipe(Scope.provide(scope))
+      expect(applications.entries(a).get("same")?.tool).toBe(toolA)
+      expect(applications.entries(b).get("same")?.tool).toBe(toolB)
+      expect(applications.entries().get("same")?.tool).toBe(global)
+      const call = {
+        type: "tool-call" as const,
+        id: ToolCallID.make("call-placement"),
+        name: "same",
+        input: { query: "ok" },
+      }
+      const context = { sessionID, agent, assistantMessageID, toolCallID: call.id }
+      yield* settle(applications.entries(a).get("same")!.tool, call, context)
+      yield* settle(applications.entries(b).get("same")!.tool, call, context)
+      expect(contextsA).toEqual([context])
+      expect(contextsB).toEqual([context])
+      yield* Scope.close(scope, Exit.void)
+      expect(applications.entries(a).get("same")?.tool).toBe(toolA)
+      expect(applications.entries(b).get("same")?.tool).toBe(global)
+    }),
+  )
+
   it.effect("keeps the Core carrier opaque and executes its single handler", () =>
     Effect.gen(function* () {
       const applications = yield* ApplicationTools.Service

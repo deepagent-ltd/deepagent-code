@@ -1,6 +1,8 @@
 export * as GoalStatusPublisher from "./goal-status-publisher"
 
 import { Effect } from "effect"
+import { GoalControl } from "@deepagent-code/core/deepagent/goal-control"
+import type { Database } from "@deepagent-code/core/database/database"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import { decodePlanDoc, planScope } from "@deepagent-code/core/deepagent/plan-store"
@@ -32,6 +34,7 @@ import { PlanEvent } from "../tool/plan-write"
  */
 
 export type GoalStatusPublisherDeps = {
+  readonly controlDB?: Database.Interface["db"]
   /** The SSE bridge (goal.updated / plan.updated) — production: EventV2Bridge; cold path: same. */
   readonly events: EventV2.Interface
   /** Session lookup (to derive the Approval-Queue workspace key from directory/workspaceID). */
@@ -52,7 +55,11 @@ export type GoalStatusPublisherDeps = {
    */
   readonly cacheStatus?: (
     sessionID: string,
-    cached: { ledger: { ticks: number; tokens: number; cost: number; wallclockMs: number }; stallCount: number; gaps: readonly string[] },
+    cached: {
+      ledger: { ticks: number; tokens: number; cost: number; wallclockMs: number }
+      stallCount: number
+      gaps: readonly string[]
+    },
   ) => Effect.Effect<void>
 }
 
@@ -188,7 +195,11 @@ export const makeGoalStatusPublisher = (deps: GoalStatusPublisherDeps): GoalStat
   // optional cacheStatus) the caller's cached last-known status.
   const publishStatus: GoalStatusPublisher["publishStatus"] = (sessionID, status) =>
     Effect.gen(function* () {
-      const phase = status.phase as string
+      const control = deps.controlDB
+        ? yield* GoalControl.current(deps.controlDB, sessionID).pipe(Effect.orDie)
+        : undefined
+      if (deps.controlDB && (!control || control.goal_id !== status.goalId)) return
+      const phase = control?.requested_phase ?? (status.phase as string)
       AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, phase as never)
       yield* mirrorGoalPlanToSession(sessionID, status.planDocId)
       const ledger = {

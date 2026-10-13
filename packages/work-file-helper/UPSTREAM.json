@@ -1,0 +1,33 @@
+{
+  "repository": "https://github.com/openai/codex",
+  "commit": "1fc8d548077fc72c4e3d048a78173af07385217f",
+  "license": "Apache-2.0",
+  "files": [
+    {
+      "path": "codex-rs/exec-server/src/no_follow/mod.rs",
+      "sha256": "794903e71dec9f63e130e48a0cb73b05339154f81b7b998dc5a1ff039cf28be2",
+      "bytes": 1703
+    },
+    {
+      "path": "codex-rs/exec-server/src/no_follow/unix.rs",
+      "sha256": "5dc4f301ae785da27782046df33499e79118e346f705a77fa5b593ad32ee9945",
+      "bytes": 11161
+    },
+    {
+      "path": "codex-rs/exec-server/src/no_follow/windows.rs",
+      "sha256": "eed1a0ebd5b7935fede8cd73c35c3209a95ef316274ad6e21a4cad34461a076f",
+      "bytes": 11728
+    },
+    {
+      "path": "codex-rs/exec-server/src/regular_file.rs",
+      "sha256": "2b1c569fd85f5bf726706fbe67f778941e910ff8a36857645d55670be12459c9",
+      "bytes": 2506
+    }
+  ],
+  "changes": [
+    "Use one owned project-root handle and only relative component traversal for subsequent reads.",
+    "Use private framed stdio with bounded operations, bytes and deadlines; expose no filesystem descriptor.",
+    "Keep same-FD observed-byte hashes distinct from atomic filesystem snapshots.",
+    "Do not port upstream truncate/write operations as mutation authority."
+  ]
+}

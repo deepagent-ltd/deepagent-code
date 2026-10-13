@@ -181,11 +181,11 @@ export function SessionSidePanel(props: {
   const interruptedSubagentCount = createMemo(() => subagentChildren().filter(isSubagentInterrupted).length)
   const subagentAttentionCount = createMemo(() => runningSubagentCount() + interruptedSubagentCount())
 
-  // T3.1: the active panel mode (desktop only), derived once from the layout store instead of one memo
-  // per panel. `isActive(mode)` and `open()` fall out of it.
+  // Narrow windows share the same IM panel and selection as the desktop rail.
+  // Other tools retain their existing desktop layout.
   const activeMode = createMemo<PanelMode | undefined>(() => {
-    if (!isDesktop()) return undefined
     const mode = view().rightPanel.mode()
+    if (!isDesktop() && mode !== "im") return undefined
     return mode && panels().some((p) => p.mode === mode) ? (mode as PanelMode) : undefined
   })
   const isActive = (mode: PanelMode) => activeMode() === mode
@@ -195,7 +195,7 @@ export function SessionSidePanel(props: {
     () => panels().find((p) => p.mode === activeMode())?.bucket ?? "wide",
   )
   const contentWidth = createMemo(() => layout.rightPanel.width(activeBucket()))
-  const panelWidth = createMemo(() => (open() ? `${contentWidth()}px` : "0px"))
+  const panelWidth = createMemo(() => (!isDesktop() ? "100%" : open() ? `${contentWidth()}px` : "0px"))
 
   const diffs = createMemo(() => props.diffs().filter(renderDiff))
   const diffFiles = createMemo(() => diffs().map((d) => d.file))
@@ -430,25 +430,25 @@ export function SessionSidePanel(props: {
   })
 
   return (
-    // T3.4 — the entire right panel (rail + content) is DESKTOP-ONLY (≥768px). This is a deliberate
-    // simplification, not an oversight: on a narrow window the session/composer takes the full width and
-    // the panel's functions are reached other ways (titlebar toggles, commands). No mobile drawer is
-    // provided. Revisit only if the product targets tablet/phone widths as a first-class surface.
-    <Show when={isDesktop()}>
+    <Show when={isDesktop() || isActive("im")}>
       {/* T3.2 — aside = a fixed, always-on icon RAIL + an animated CONTENT region. The rail is always
           interactive (it's the switcher); only the content region collapses to 0 width when closed. */}
       <aside
         id="review-panel"
-        aria-label={language.t("session.panel.reviewAndFiles")}
-        class="relative min-w-0 h-full flex shrink-0"
-        style={{ gap: open() ? "var(--workbench-gap)" : undefined }}
+        aria-label={language.t(isDesktop() ? "session.panel.reviewAndFiles" : "session.tab.im")}
+        data-prevent-autofocus
+        class="relative min-w-0 min-h-0 h-full flex shrink-0"
+        classList={{ "flex-1 w-full": !isDesktop() }}
+        style={{ gap: isDesktop() && open() ? "var(--workbench-gap)" : undefined }}
       >
-        <SidePanelRail
-          items={railItems}
-          groupOrder={GROUP_ORDER}
-          onSelect={openPanel}
-          collapseLabel={language.t("common.close")}
-        />
+        <Show when={isDesktop()}>
+          <SidePanelRail
+            items={railItems}
+            groupOrder={GROUP_ORDER}
+            onSelect={openPanel}
+            collapseLabel={language.t("common.close")}
+          />
+        </Show>
         <div
           class="workbench-panel relative min-w-0 h-full overflow-hidden"
           aria-hidden={!open()}
@@ -456,25 +456,27 @@ export function SessionSidePanel(props: {
           classList={{
             "pointer-events-none": !open(),
             "transition-[width] duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
-              !props.size.active() && !props.reviewSnap,
+              isDesktop() && !props.size.active() && !props.reviewSnap,
           }}
           style={{ width: panelWidth() }}
         >
           <Show when={open()}>
             <div class="size-full flex">
-              <div onPointerDown={() => props.size.start()}>
-                <ResizeHandle
-                  direction="horizontal"
-                  edge="start"
-                  size={contentWidth()}
-                  min={layout.rightPanel.minWidth}
-                  max={layout.rightPanel.maxWidth()}
-                  onResize={(width) => {
-                    props.size.touch()
-                    layout.rightPanel.resize(width, activeBucket())
-                  }}
-                />
-              </div>
+              <Show when={isDesktop()}>
+                <div onPointerDown={() => props.size.start()}>
+                  <ResizeHandle
+                    direction="horizontal"
+                    edge="start"
+                    size={contentWidth()}
+                    min={layout.rightPanel.minWidth}
+                    max={layout.rightPanel.maxWidth()}
+                    onResize={(width) => {
+                      props.size.touch()
+                      layout.rightPanel.resize(width, activeBucket())
+                    }}
+                  />
+                </div>
+              </Show>
               <Switch>
                 <Match when={isActive("review")}>
                   <div class="h-full w-full min-w-0 overflow-hidden bg-background-base">{props.reviewPanel()}</div>

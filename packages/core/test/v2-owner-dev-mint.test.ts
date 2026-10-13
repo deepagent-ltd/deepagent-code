@@ -165,10 +165,13 @@ describe("V2OwnerDevMint.ensureDevOwnerAuthorization", () => {
         )
       })
     const results = await Promise.all([run(), run()])
-    expect(results.map((result) => ({ code: result.code, stderr: result.stderr }))).toEqual([
-      { code: 0, stderr: "" },
-      { code: 0, stderr: "" },
-    ])
+    expect(results.map((result) => result.code)).toEqual([0, 0])
+    for (const result of results) {
+      // The real cross-process migration lease may report contention. Accept
+      // only its exact owned DB path; every other warning or error still fails.
+      expect(result.stderr.split("\n").filter(Boolean).every((line) =>
+        line === `[db-runtime-lock] waiting for ${database}.runtime.lock (held by another process)`)).toBe(true)
+    }
     expect(results.map((result) => JSON.parse(result.stdout).minted)).toEqual([true, true])
 
     const pair = JSON.parse(readFileSync(join(stateDir, "v2-owner-dev", "keypair.json"), "utf8")) as {

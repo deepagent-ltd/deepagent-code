@@ -2,10 +2,11 @@ import "./init-projectors"
 
 import { NodeHttpServer } from "@effect/platform-node"
 import * as Log from "@deepagent-code/core/util/log"
-import { Cause, ConfigProvider, Context, Effect, Exit, Layer, Option, Scope } from "effect"
+import { Cause, ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { OpenApi } from "effect/unstable/httpapi"
 import { createServer } from "node:http"
+import https from "node:https"
 import type { Duplex } from "node:stream"
 import { MDNS } from "./mdns"
 import { HttpApiApp } from "./routes/instance/httpapi/server"
@@ -18,6 +19,9 @@ import { builtAppRuntimeRoot, embeddedServerMemoMap } from "@/effect/app-runtime
 import { Database } from "@deepagent-code/core/database/database"
 import { DatabaseBootstrapError, type BootstrapState } from "@deepagent-code/core/database/bootstrap"
 import { ProcessLifecycle } from "@/effect/process-lifecycle"
+import { ServerAuth } from "./auth"
+import { ListenerTransport } from "./listener-transport"
+import { ListenerStop } from "./listener-stop"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -27,6 +31,29 @@ const log = Log.create({ service: "server" })
 // Tracks whether this process has already completed a successful Server.listen.
 // First call is cold start; subsequent calls are hot restarts.
 let serverHasListened = false
+
+const pendingGoalListeners = new Set<object>()
+const goalListeners = new Set<{
+  ready: boolean
+  configs: (ServerAuth.Info | undefined)[]
+}>()
+
+/** Process-local observation only; neither request DTOs nor environment reads grant access. */
+export function privateLocalWritesAvailable() {
+  return (
+    pendingGoalListeners.size === 0 &&
+    [...goalListeners].every(
+      (listener) =>
+        listener.ready &&
+        listener.configs.length > 0 &&
+        listener.configs.every((config) => config !== undefined && ServerAuth.required(config)),
+    )
+  )
+}
+
+export function privateGoalWritesAvailable() {
+  return privateLocalWritesAvailable()
+}
 
 export type Listener = {
   hostname: string
@@ -45,6 +72,8 @@ type ListenOptions = CorsOptions & {
   hostname: string
   mdns?: boolean
   mdnsDomain?: string
+  /** PEM credentials for the actual listener; forwarding headers never enable TLS. */
+  tls?: { key: string | Buffer; cert: string | Buffer; origin?: string }
   /** Failure injection after the post-restore warm build; production never sets this. */
   restorePrepare?: () => Promise<void>
   /** Failure injection after the old listener closes; production never sets this. */
@@ -60,6 +89,7 @@ type ListenerState = {
 interface ListenerServer {
   readonly closeAll: Effect.Effect<void>
   readonly close: Effect.Effect<void>
+  readonly privateGoalReady: () => void
 }
 
 class ListenerServerService extends Context.Service<ListenerServerService, ListenerServer>()(
@@ -108,7 +138,14 @@ export async function openapi() {
 }
 
 export async function listen(opts: ListenOptions): Promise<Listener> {
-  return Effect.runPromise(listenEffect(opts))
+  // Register synchronously, before bootstrap or layer construction can yield.
+  const pending = {}
+  pendingGoalListeners.add(pending)
+  try {
+    return await Effect.runPromise(listenEffect(opts))
+  } finally {
+    pendingGoalListeners.delete(pending)
+  }
 }
 
 const listenEffect: (opts: ListenOptions) => Effect.Effect<Listener, unknown> = Effect.fn("Server.listen")(function* (
@@ -127,7 +164,7 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<Listener, unknown> = 
     serverHasListened = true
   })
   const address = yield* tcpAddress(state)
-  const listenerUrl = makeURL(opts.hostname, address.port)
+  const listenerUrl = makeURL(opts.hostname, address.port, opts.tls ? "https:" : "http:")
 
   const unpublishMdns = yield* setupMdns(opts, address.port, state.scope)
   control.install(state, unpublishMdns, address.port)
@@ -150,7 +187,7 @@ function listenerLayer(opts: ListenOptions, port: number) {
     // must never reuse a memoized instance built by a previous (now stopped) listener's scope
     // when the memo map is shared with the AppRuntime root.
     Layer.provideMerge(Layer.fresh(WebSocketTracker.layer)),
-    Layer.provideMerge(serverLayer({ port, hostname: opts.hostname })),
+    Layer.provideMerge(serverLayer({ ...opts, port }, Object.values(HttpApiApp.listenerAuthConfigLayers))),
     // Install a fresh `ConfigProvider` per listener so `Config.string(...)`
     // reads reflect the current `process.env`. Effect's default
     // `ConfigProvider` snapshots `process.env` on first read and caches the
@@ -167,7 +204,7 @@ function maintenanceListenerLayer(opts: ListenOptions, port: number, filename: s
     disableListenLog: true,
   }).pipe(
     Layer.provideMerge(Layer.fresh(WebSocketTracker.layer)),
-    Layer.provideMerge(serverLayer({ port, hostname: opts.hostname })),
+    Layer.provideMerge(serverLayer({ ...opts, port }, [HttpApiApp.listenerAuthConfigLayers.http])),
     Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
   )
 }
@@ -214,7 +251,7 @@ function startListener(
       Effect.provide(HttpApiApp.context),
       Effect.exit,
     )
-    if (Exit.isSuccess(built))
+    if (Exit.isSuccess(built)) {
       return {
         scope,
         server: Context.get(built.value, HttpServer.HttpServer),
@@ -222,6 +259,7 @@ function startListener(
         websockets: Context.get(built.value, WebSocketTracker.Service),
         maintenanceState: state && !state.ready ? state : undefined,
       } satisfies ListenerState
+    }
 
     yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
     // A post-restore candidate must either be a fully ready business listener or fail back to
@@ -266,6 +304,7 @@ function makeRestoreControl(opts: ListenOptions) {
     active = { state, stop: makeStop(state, unpublish) }
     maintenanceState = state.maintenanceState
     port = addressPort
+    state.http.privateGoalReady()
   }
 
   const schedule = (delayMs: number) => {
@@ -280,6 +319,8 @@ function makeRestoreControl(opts: ListenOptions) {
 
   const reopen = async () => {
     if (closed || !maintenanceState) return
+    const pending = {}
+    pendingGoalListeners.add(pending)
     const scope = Scope.makeUnsafe()
     const memoMap = Layer.makeMemoMapUnsafe()
     try {
@@ -333,6 +374,7 @@ function makeRestoreControl(opts: ListenOptions) {
       if (!closed) schedule(2_000)
     } finally {
       await Effect.runPromise(Scope.close(scope, Exit.void).pipe(Effect.ignore))
+      pendingGoalListeners.delete(pending)
     }
   }
 
@@ -362,8 +404,8 @@ function tcpAddress(state: ListenerState) {
   })
 }
 
-function makeURL(hostname: string, port: number) {
-  const result = new URL("http://localhost")
+function makeURL(hostname: string, port: number, protocol = "http:") {
+  const result = new URL(`${protocol}//localhost`)
   result.hostname = hostname
   result.port = String(port)
   return result
@@ -385,51 +427,53 @@ function setupMdns(opts: ListenOptions, port: number, scope: Scope.Scope) {
 }
 
 function makeStop(state: ListenerState, unpublishMdns: Effect.Effect<void>) {
-  const run = <A>(effect: Effect.Effect<A>) => Effect.runPromise(effect)
-  let unpublishPromise: Promise<void> | undefined
-  let closeWebsocketsPromise: Promise<void> | undefined
-  let forceClosePromise: Promise<void> | undefined
-  let closeServerPromise: Promise<void> | undefined
-  let closeScopePromise: Promise<void> | undefined
-  let forceRequested = false
+  return ListenerStop.make({
+    ...state,
+    unpublish: unpublishMdns,
+    onTimeout: () => log.warn("listener scope close exceeded shutdown budget", { budgetMs: 2_000 }),
+  })
+}
 
-  return (close?: boolean) => {
-    if (close) forceRequested = true
-    unpublishPromise ??= run(unpublishMdns)
-    closeWebsocketsPromise ??= unpublishPromise.then(() => run(state.websockets.closeAll))
-    if (close) forceClosePromise ??= closeWebsocketsPromise.then(() => run(forceClose(state)))
-    closeServerPromise ??= closeWebsocketsPromise.then(() => {
-      if (forceRequested) {
-        forceClosePromise ??= run(forceClose(state))
-        return forceClosePromise.then(() => run(state.http.close))
-      }
-      return run(state.http.close)
-    })
-    closeScopePromise ??= closeServerPromise.then(() =>
-      run(
-        Scope.close(state.scope, Exit.void).pipe(
-          Effect.timeoutOption("2 seconds"),
-          Effect.tap((result) =>
-            Option.isNone(result)
-              ? Effect.sync(() => log.warn("listener scope close exceeded shutdown budget", { budgetMs: 2_000 }))
-              : Effect.void,
-          ),
-          Effect.asVoid,
-          Effect.catchCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : Effect.failCause(cause))),
-        ),
-      ),
-    )
-
-    return Promise.all([closeScopePromise, close ? forceClosePromise : undefined]).then(() => undefined)
+function serverLayer(
+  opts: Pick<ListenOptions, "port" | "hostname" | "tls">,
+  authLayers: readonly (typeof HttpApiApp.listenerAuthConfigLayers.http)[],
+) {
+  if (opts.tls?.origin !== undefined && (!URL.canParse(opts.tls.origin) ||
+    new URL(opts.tls.origin).protocol !== "https:" || new URL(opts.tls.origin).origin !== opts.tls.origin))
+    throw new Error("TLS origin must be an exact HTTPS origin")
+  const server = opts.tls
+    ? https.createServer({ key: opts.tls.key, cert: opts.tls.cert, minVersion: "TLSv1.2" })
+    : createServer()
+  // Bun's node:https emits an IncomingMessage with a plain Socket facade.
+  // Capture original requests from this TLS factory instead of trusting an
+  // `encrypted` property or a request URL supplied by callers.
+  const tlsRequests = new WeakSet<object>()
+  if (opts.tls) server.on("request", (request) => tlsRequests.add(request))
+  const authority = { ready: false, configs: authLayers.map((): ServerAuth.Info | undefined => undefined) }
+  goalListeners.add(authority)
+  const binding = { evaluated: false, started: false, bound: false }
+  const abandonUnbound = () => {
+    // A layer that never evaluated its server factory cannot have attempted listen.
+    if (!binding.evaluated) goalListeners.delete(authority)
   }
-}
-
-function forceClose(state: ListenerState) {
-  return state.http.closeAll
-}
-
-function serverLayer(opts: { port: number; hostname: string }) {
-  const server = createServer()
+  server.once("listening", () => { binding.bound = true })
+  server.once("close", () => goalListeners.delete(authority))
+  server.on("error", () => {
+    if (binding.started && !binding.bound && !server.listening && server.address() === null)
+      goalListeners.delete(authority)
+  })
+  const listen = server.listen.bind(server)
+  // Observe synchronous bind rejection as well as the asynchronous error event.
+  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- preserve Node's overloaded listen method.
+  server.listen = ((...args: Parameters<typeof server.listen>) => {
+    binding.started = true
+    try {
+      return Reflect.apply(listen, server, args)
+    } catch (error) {
+      if (!binding.bound && !server.listening && server.address() === null) goalListeners.delete(authority)
+      throw error
+    }
+  }) as typeof server.listen
   server.maxConnections = 2048
   const upgradedSockets = new Set<Duplex>()
   const activeSockets = new Set<Duplex>()
@@ -472,9 +516,28 @@ function serverLayer(opts: { port: number; hostname: string }) {
   }) as typeof server.close
 
   return Layer.mergeAll(
-    NodeHttpServer.layer(() => server, { port: opts.port, host: opts.hostname, gracefulShutdownTimeout: "1 second" }),
+    Layer.succeed(ListenerTransport)({ secure: opts.tls !== undefined,
+      ownsTLSRequest: (source) => opts.tls !== undefined && server.listening &&
+        typeof source === "object" && source !== null && tlsRequests.has(source),
+      tlsOrigin: () => {
+      const address = server.address()
+      if (!opts.tls || address === null || typeof address === "string" || !server.listening) return undefined
+      const origin = opts.tls.origin ?? makeURL(opts.hostname, address.port, "https:").origin
+      // A fixed public origin must still identify this listener's actual port.
+      return Number(new URL(origin).port || "443") === address.port ? origin : undefined
+    } }),
+    Layer.effectDiscard(Effect.addFinalizer(() => Effect.sync(abandonUnbound))),
+    NodeHttpServer.layer(
+      () => { binding.evaluated = true; return server },
+      { port: opts.port, host: opts.hostname, gracefulShutdownTimeout: "1 second" },
+    ),
+    ...authLayers.map((layer, index) =>
+      Layer.effectDiscard(Effect.map(ServerAuth.Config, (config) => { authority.configs[index] = config }))
+        .pipe(Layer.provide(layer)),
+    ),
     Layer.succeed(ListenerServerService)(
       ListenerServerService.of({
+        privateGoalReady: () => { authority.ready = true },
         closeAll: Effect.sync(() => {
           serverRef.forceStop = true
           destroyConnections()

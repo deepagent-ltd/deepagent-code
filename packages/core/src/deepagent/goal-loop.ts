@@ -162,11 +162,11 @@ export class InvalidGoalError extends Schema.TaggedErrorClass<InvalidGoalError>(
  * panel_approves → `runPanel`); tests wire deterministic stubs. All ports live on the `never` error
  * channel — a port must resolve to a concrete result, never fail the loop.
  */
-export type GraderPorts = {
+export type GraderPorts<E = never, R = never> = {
   /** Run the given validation commands; `pass` iff ALL succeeded. */
   readonly runTests: (
     commands: readonly string[],
-  ) => Effect.Effect<{ readonly pass: boolean; readonly results?: readonly ValidationResult[] }>
+  ) => Effect.Effect<{ readonly pass: boolean; readonly results?: readonly ValidationResult[] }, E, R>
   /**
    * Highest diagnostic severity currently present, or null when there are none. `checked` MUST be false
    * when the port could not actually compute diagnostics (LSP crashed/timed out, no client covered the
@@ -175,11 +175,11 @@ export type GraderPorts = {
    * passed), so a broken/absent LSP can never vacuously satisfy `no_diagnostics`. `checked` defaults to
    * true only for an explicit, truthful result. See goal-loop-wiring.ts.
    */
-  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null; readonly checked?: boolean }>
+  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null; readonly checked?: boolean }, E, R>
   /** Reviewer subagent verdict: `pass` iff no finding exceeds `maxSeverity`. */
-  readonly reviewerClean: (maxSeverity: string) => Effect.Effect<{ readonly pass: boolean }>
+  readonly reviewerClean: (maxSeverity: string) => Effect.Effect<{ readonly pass: boolean }, E, R>
   /** Expert Panel verdict (§D.7 key decision point) — `decision` is approve/revise/block/needs_human. */
-  readonly panelApproves: () => Effect.Effect<{ readonly decision: string }>
+  readonly panelApproves: () => Effect.Effect<{ readonly decision: string }, E, R>
 }
 
 // Severity ordering shared by no_diagnostics (LSP severities) and reviewer (review severities). Higher
@@ -202,11 +202,11 @@ const rankSeverity = (s: string): number => SEVERITY_RANK[s.trim().toLowerCase()
 
 // Evaluate ONE criterion. `plan` is supplied for the pure plan_complete branch. Returns a gap string
 // when unmet (null when met). Kept small + total: no throws, no clock, no randomness.
-const evaluateOne = (
+const evaluateOne = <E, R>(
   criterion: CompletionCriterion,
-  ports: GraderPorts,
+  ports: GraderPorts<E, R>,
   plan: PlanDoc | null,
-): Effect.Effect<string | null> =>
+): Effect.Effect<string | null, E, R> =>
   Effect.gen(function* () {
     switch (criterion.kind) {
       case "tests_pass": {
@@ -225,8 +225,7 @@ const evaluateOne = (
         if (maxSeverity == null) return null // genuinely checked and no diagnostics at all → met
         // With no severityAtMost, ANY diagnostic is a gap (strict "no diagnostics"). With a bound, a
         // diagnostic is a gap only when it is strictly more severe than the allowed ceiling.
-        if (criterion.severityAtMost == null)
-          return `no_diagnostics: diagnostics present (highest: ${maxSeverity})`
+        if (criterion.severityAtMost == null) return `no_diagnostics: diagnostics present (highest: ${maxSeverity})`
         return rankSeverity(maxSeverity) <= rankSeverity(criterion.severityAtMost)
           ? null
           : `no_diagnostics: highest severity ${maxSeverity} exceeds allowed ${criterion.severityAtMost}`
@@ -247,15 +246,12 @@ const evaluateOne = (
         // true when every step is done-or-blocked. But a blocked step never finishes on its own — the
         // goal is NOT cleanly complete, it needs a human. Guard blocked steps explicitly here rather
         // than trusting report.complete, so a blocked plan surfaces a gap instead of a silent "done".
-        if (hasBlockedSteps(plan))
-          return `plan_complete: blocked steps need a human [${report.blocked.join(", ")}]`
+        if (hasBlockedSteps(plan)) return `plan_complete: blocked steps need a human [${report.blocked.join(", ")}]`
         // A step that declared acceptance but carries no runtime evidence is `done` on the model's word
         // alone. Naming it here is what stops "the model said so" from closing the goal.
         if (report.unverified.length > 0)
           return `plan_complete: steps marked done without validation [${report.unverified.join(", ")}]`
-        return report.complete
-          ? null
-          : `plan_complete: outstanding steps [${report.outstanding.join(", ")}]`
+        return report.complete ? null : `plan_complete: outstanding steps [${report.outstanding.join(", ")}]`
       }
     }
   })
@@ -296,11 +292,11 @@ export type GraderDecision = {
 // decision point when everything cheaper passes. It ALSO flags an active panel rejection for immediate
 // escalation: only `panel_approves` can escalate (the human-in-the-loop decision point, §D.7); a
 // `revise` verdict stays a soft gap.
-export const evaluateForController = (
+export const evaluateForController = <E, R>(
   criteria: readonly CompletionCriterion[],
-  ports: GraderPorts,
+  ports: GraderPorts<E, R>,
   plan: PlanDoc | null,
-): Effect.Effect<GraderDecision> =>
+): Effect.Effect<GraderDecision, E, R> =>
   Effect.gen(function* () {
     const ordered = [...criteria].sort((a, b) => CRITERION_COST_RANK[a.kind] - CRITERION_COST_RANK[b.kind])
     const gaps: string[] = []
@@ -479,7 +475,11 @@ const stateSlug = (goalId: string): string => `goal-state-${goalId}`
 
 // The plan doc body is the JSON-serialized PlanDoc (the goal carrier). Parse defensively — a malformed
 // / absent body yields null so plan_complete reports a gap rather than crashing the loop.
-const readPlan = (store: DocumentStore, planDocId: string, version?: number): { plan: PlanDoc | null; version: number } => {
+const readPlan = (
+  store: DocumentStore,
+  planDocId: string,
+  version?: number,
+): { plan: PlanDoc | null; version: number } => {
   const doc = store.get(planDocId, version)
   if (!doc) return { plan: null, version: 0 }
   return { plan: decodePlanDoc(doc.body), version: doc.version }
@@ -506,7 +506,8 @@ const doneStepCount = (plan: PlanDoc | null): number =>
 const evidenceCount = (plan: PlanDoc | null): number =>
   plan == null ? 0 : plan.steps.reduce((n, s) => n + (s.evidence?.length ?? 0), 0)
 
-const persistState = (deps: ControllerDeps, state: GoalRuntimeState): void => writeState(deps.store, state)
+const persistState = (deps: Pick<ControllerDeps, "store">, state: GoalRuntimeState): void =>
+  writeState(deps.store, state)
 
 const writeState = (store: DocumentStore, state: GoalRuntimeState): void => {
   store.upsert({
@@ -527,7 +528,7 @@ const writeState = (store: DocumentStore, state: GoalRuntimeState): void => {
   })
 }
 
-const loadState = (deps: ControllerDeps, handle: GoalHandle): GoalRuntimeState | null =>
+const loadState = (deps: Pick<ControllerDeps, "store">, handle: GoalHandle): GoalRuntimeState | null =>
   loadStateFromStore(deps.store, handle)
 
 const loadStateFromStore = (store: DocumentStore, handle: GoalHandle): GoalRuntimeState | null => {
@@ -592,8 +593,7 @@ export const readGoalTickCursor = (
     if (doc.extensions?.goal_id !== goalId) continue
     try {
       const state = JSON.parse(doc.body) as GoalRuntimeState
-      const stallThreshold =
-        state.spec?.stallThreshold && state.spec.stallThreshold > 0 ? state.spec.stallThreshold : 3
+      const stallThreshold = state.spec?.stallThreshold && state.spec.stallThreshold > 0 ? state.spec.stallThreshold : 3
       const seq = (state.ledger?.ticks ?? 0) * (stallThreshold + 1) + (state.stallCount ?? 0)
       const planVersion = readPlan(store, state.planDocId).version
       return { seq, planVersion, phase: state.phase }
@@ -755,7 +755,7 @@ const isTerminalPhase = (phase: GoalPhase): boolean => phase !== "running"
 // ---------------------------------------------------------------------------------------------------
 
 export interface GoalLoop {
-  readonly start: (spec: GoalSpec) => Effect.Effect<GoalHandle, InvalidGoalError>
+  readonly start: (spec: GoalSpec, goalId?: string) => Effect.Effect<GoalHandle, InvalidGoalError>
   readonly tick: (handle: GoalHandle) => Effect.Effect<TickOutcome>
   readonly status: (handle: GoalHandle) => Effect.Effect<GoalStatus>
   readonly stop: (handle: GoalHandle) => Effect.Effect<void>
@@ -776,7 +776,10 @@ export interface GoalLoop {
   readonly applyPlanEdit: (
     handle: GoalHandle,
     command: PlanEditCommand,
-  ) => Effect.Effect<{ readonly plan_id: string; readonly doc_id: string; readonly version: number; readonly changed: boolean }, unknown>
+  ) => Effect.Effect<
+    { readonly plan_id: string; readonly doc_id: string; readonly version: number; readonly changed: boolean },
+    unknown
+  >
 }
 
 // §D.4 start validation — HARD, no defaults that bypass. criteria empty → not objectively decidable;
@@ -792,8 +795,7 @@ const validateSpec = (spec: GoalSpec): string | null => {
   const { maxTicks, maxTokens, maxWallclockMs } = spec.limits
   if (!Number.isFinite(maxTicks) || maxTicks <= 0) return "limits.maxTicks must be a positive integer"
   if (!Number.isFinite(maxTokens) || maxTokens <= 0) return "limits.maxTokens must be a positive integer"
-  if (!Number.isFinite(maxWallclockMs) || maxWallclockMs <= 0)
-    return "limits.maxWallclockMs must be a positive integer"
+  if (!Number.isFinite(maxWallclockMs) || maxWallclockMs <= 0) return "limits.maxWallclockMs must be a positive integer"
   if (spec.limits.maxCost != null && (!Number.isFinite(spec.limits.maxCost) || spec.limits.maxCost < 0))
     return "limits.maxCost must be a non-negative number when present"
   if (!Number.isFinite(spec.stallThreshold) || spec.stallThreshold <= 0)
@@ -801,43 +803,84 @@ const validateSpec = (spec: GoalSpec): string | null => {
   return null
 }
 
-export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
-  const start: GoalLoop["start"] = (spec) =>
-    Effect.gen(function* () {
-      const invalid = validateSpec(spec)
-      if (invalid != null) return yield* Effect.fail(new InvalidGoalError({ reason: invalid }))
+/** Cold scheduling validates the legacy state carrier against SQL-frozen initialization before wiring. */
+export const matchesGoalInitialization = (
+  store: DocumentStore,
+  handle: GoalHandle,
+  spec: GoalSpec,
+  netTokenBudget: boolean,
+): boolean => {
+  const state = loadStateFromStore(store, handle)
+  return (
+    state !== null &&
+    state.goalId === handle.goalId &&
+    state.sessionId === handle.sessionId &&
+    state.planDocId === handle.planDocId &&
+    JSON.stringify(state.spec) === JSON.stringify(spec) &&
+    state.budgetTokenScope === (netTokenBudget ? "net" : "gross")
+  )
+}
 
-      // sessionId is derived from the plan doc's scope ("run:<sessionId>") so all goal docs co-locate.
-      const planDoc = deps.store.get(spec.planDocId)
-      const sessionId = planDoc?.scope.startsWith("run:") ? planDoc.scope.slice("run:".length) : spec.planDocId
-      const goalId = `goal_${randomUUID()}`
-      // Seed the no-progress baseline with the plan's CURRENT step-status fingerprint so the FIRST tick
-      // that changes nothing counts as no-progress (stall accrues from tick 1, not from tick 2).
-      const initial = readPlan(deps.store, spec.planDocId)
-      const state: GoalRuntimeState = {
-        goalId,
-        spec,
-        planDocId: spec.planDocId,
-        sessionId,
-        phase: "running",
-        ledger: { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0, startedAtMs: deps.now() },
-        stallCount: 0,
-        lastFingerprint: planFingerprint(initial.plan),
-        lastDoneCount: doneStepCount(initial.plan),
-        lastEvidenceCount: evidenceCount(initial.plan),
-        lastMetCount: 0,
-        lastProcessedVersion: null,
-        lastOutcome: null,
-        gaps: [],
-        lastDeliveredFeedback: [],
-        pendingSteers: [],
-        // P2 §4.5: stamp the accounting convention ONCE, from the flag, at creation. tick() reads this
-        // marker (never the live flag) so a later flag flip never re-interprets this goal's ledger.
-        budgetTokenScope: deps.netTokenBudget === true ? "net" : "gross",
+export const initializeGoal = (
+  deps: Pick<ControllerDeps, "store" | "now" | "netTokenBudget">,
+  spec: GoalSpec,
+  identity?: string,
+): Effect.Effect<GoalHandle, InvalidGoalError> =>
+  Effect.gen(function* () {
+    const invalid = validateSpec(spec)
+    if (invalid != null) return yield* Effect.fail(new InvalidGoalError({ reason: invalid }))
+
+    // sessionId is derived from the plan doc's scope ("run:<sessionId>") so all goal docs co-locate.
+    const planDoc = deps.store.get(spec.planDocId)
+    const sessionId = planDoc?.scope.startsWith("run:") ? planDoc.scope.slice("run:".length) : spec.planDocId
+    const goalId = identity ?? `goal_${randomUUID()}`
+    if (identity) {
+      const existing = loadState(deps, { goalId, planDocId: spec.planDocId, sessionId })
+      if (existing) {
+        if (
+          !matchesGoalInitialization(
+            deps.store,
+            { goalId, planDocId: spec.planDocId, sessionId },
+            spec,
+            deps.netTokenBudget === true,
+          )
+        )
+          return yield* new InvalidGoalError({
+            reason: "Stable Goal initialization identity conflicts with existing state",
+          })
+        return { goalId, planDocId: spec.planDocId, sessionId }
       }
-      persistState(deps, state)
-      return { goalId, planDocId: spec.planDocId, sessionId }
-    })
+    }
+    // Seed the no-progress baseline with the plan's CURRENT step-status fingerprint so the FIRST tick
+    // that changes nothing counts as no-progress (stall accrues from tick 1, not from tick 2).
+    const initial = readPlan(deps.store, spec.planDocId)
+    const state: GoalRuntimeState = {
+      goalId,
+      spec,
+      planDocId: spec.planDocId,
+      sessionId,
+      phase: "running",
+      ledger: { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0, startedAtMs: deps.now() },
+      stallCount: 0,
+      lastFingerprint: planFingerprint(initial.plan),
+      lastDoneCount: doneStepCount(initial.plan),
+      lastEvidenceCount: evidenceCount(initial.plan),
+      lastMetCount: 0,
+      lastProcessedVersion: null,
+      lastOutcome: null,
+      gaps: [],
+      lastDeliveredFeedback: [],
+      pendingSteers: [],
+      // P2 §4.5: stamp the accounting convention ONCE, from the flag, at creation. tick() reads this
+      // marker (never the live flag) so a later flag flip never re-interprets this goal's ledger.
+      budgetTokenScope: deps.netTokenBudget === true ? "net" : "gross",
+    }
+    persistState(deps, state)
+    return { goalId, planDocId: spec.planDocId, sessionId }
+  })
+
+export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
+  const start: GoalLoop["start"] = (spec, identity) => initializeGoal(deps, spec, identity)
 
   const tick: GoalLoop["tick"] = (handle) =>
     Effect.gen(function* () {
@@ -879,7 +922,12 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       // guard would otherwise short-circuit a tick that still owes the executor its guidance. The
       // steers are delivered to the executor below and cleared once the tick actually ran.
       const hasUndeliveredSteers = state.pendingSteers.length > 0
-      if (state.lastProcessedVersion === version && state.lastOutcome != null && !hasUndeliveredFeedback && !hasUndeliveredSteers) {
+      if (
+        state.lastProcessedVersion === version &&
+        state.lastOutcome != null &&
+        !hasUndeliveredFeedback &&
+        !hasUndeliveredSteers
+      ) {
         // 幂等: a replay at the SAME version with already-delivered feedback has NO side effects — never re-execute, never re-accrue
         // budget (ticks/tokens/cost). BUT a replay at an unchanged version is by definition a
         // NO-PROGRESS tick: if we just returned the recorded (non-terminal) outcome forever, an
@@ -927,9 +975,7 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
           activeStepId: plan?.active_step_id ?? null,
           activeStep,
           graderFeedback: deliveredFeedback,
-          ...(deliveredSteers.length > 0
-            ? { steerGuidance: deliveredSteers.map((steer) => steer.text) }
-            : {}),
+          ...(deliveredSteers.length > 0 ? { steerGuidance: deliveredSteers.map((steer) => steer.text) } : {}),
           // P2 §4.4: the budget-so-far (prior ticks) + limits, so the wiring can thread a tiered cost
           // soft-notice into THIS tick's step-prompt tail (budgetNotice). Read-only for the executor.
           ledger: state.ledger,
@@ -1098,59 +1144,59 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
   const applyPlanEdit: GoalLoop["applyPlanEdit"] = (handle, command) =>
     Effect.try({
       try: () => {
-      const state = loadState(deps, handle)
-      if (state == null) throw new PlanEditTargetUnavailableError("goal state not found")
-      if (isTerminalPhase(state.phase)) throw new PlanEditTargetUnavailableError(`goal is ${state.phase}`)
-      if (command.session_id !== handle.sessionId || command.goal_id !== handle.goalId) {
-        throw new PlanEditTargetUnavailableError("command identity does not match the goal handle")
-      }
+        const state = loadState(deps, handle)
+        if (state == null) throw new PlanEditTargetUnavailableError("goal state not found")
+        if (isTerminalPhase(state.phase)) throw new PlanEditTargetUnavailableError(`goal is ${state.phase}`)
+        if (command.session_id !== handle.sessionId || command.goal_id !== handle.goalId) {
+          throw new PlanEditTargetUnavailableError("command identity does not match the goal handle")
+        }
 
-      const expectedVersion = command.plan_write.expected_version
-      if (expectedVersion != null) {
-        const recovered = readPlan(deps.store, state.planDocId, expectedVersion + 1)
-        if (recovered.plan?.last_write_activity_id === command.activity_id) {
-          const current = readPlan(deps.store, state.planDocId)
-          if (current.plan == null) throw new PlanEditTargetUnavailableError("authoritative plan is malformed")
-          persistPlanEditBaseline(deps, state, current.plan)
-          return {
-            plan_id: recovered.plan.plan_id,
-            doc_id: state.planDocId,
-            version: recovered.version,
-            changed: true,
+        const expectedVersion = command.plan_write.expected_version
+        if (expectedVersion != null) {
+          const recovered = readPlan(deps.store, state.planDocId, expectedVersion + 1)
+          if (recovered.plan?.last_write_activity_id === command.activity_id) {
+            const current = readPlan(deps.store, state.planDocId)
+            if (current.plan == null) throw new PlanEditTargetUnavailableError("authoritative plan is malformed")
+            persistPlanEditBaseline(deps, state, current.plan)
+            return {
+              plan_id: recovered.plan.plan_id,
+              doc_id: state.planDocId,
+              version: recovered.version,
+              changed: true,
+            }
           }
         }
-      }
 
-      const existing = deps.store.get(state.planDocId)
-      if (existing == null) throw new PlanEditTargetUnavailableError("authoritative plan document not found")
-      const previous = readPlan(deps.store, state.planDocId).plan
-      if (previous == null) throw new PlanEditTargetUnavailableError("authoritative plan is malformed")
-      const editedPlan = buildPlanFromWriteInput(
-        state.sessionId,
-        command.plan_write,
-        previous,
-        { plan_id: previous.plan_id, doc_id: existing.id, version: existing.version },
-        { allowQualityRegression: command.confirmed_challenge_id != null },
-      )
-      if (
-        planProgressFingerprint({ ...editedPlan, last_write_activity_id: null }) ===
-        planProgressFingerprint({ ...previous, last_write_activity_id: null })
-      ) {
-        persistPlanEditBaseline(deps, state, previous)
-        return { plan_id: previous.plan_id, doc_id: existing.id, version: existing.version, changed: false }
-      }
-      const committed = compareAndCommitPlanDocument(deps.store, {
-        sessionId: state.sessionId,
-        expected: {
-          plan_id: command.plan_write.expected_plan_id ?? previous.plan_id,
-          doc_id: existing.id,
-          version: command.plan_write.expected_version ?? existing.version,
-        },
-        candidate: { ...editedPlan, last_write_activity_id: command.activity_id },
-        origin: "human_goal_edit",
-      })
-      persistPlanEditBaseline(deps, state, committed.plan)
-      return { plan_id: committed.plan.plan_id, doc_id: committed.doc_id, version: committed.version, changed: true }
+        const existing = deps.store.get(state.planDocId)
+        if (existing == null) throw new PlanEditTargetUnavailableError("authoritative plan document not found")
+        const previous = readPlan(deps.store, state.planDocId).plan
+        if (previous == null) throw new PlanEditTargetUnavailableError("authoritative plan is malformed")
+        const editedPlan = buildPlanFromWriteInput(
+          state.sessionId,
+          command.plan_write,
+          previous,
+          { plan_id: previous.plan_id, doc_id: existing.id, version: existing.version },
+          { allowQualityRegression: command.confirmed_challenge_id != null },
+        )
+        if (
+          planProgressFingerprint({ ...editedPlan, last_write_activity_id: null }) ===
+          planProgressFingerprint({ ...previous, last_write_activity_id: null })
+        ) {
+          persistPlanEditBaseline(deps, state, previous)
+          return { plan_id: previous.plan_id, doc_id: existing.id, version: existing.version, changed: false }
+        }
+        const committed = compareAndCommitPlanDocument(deps.store, {
+          sessionId: state.sessionId,
+          expected: {
+            plan_id: command.plan_write.expected_plan_id ?? previous.plan_id,
+            doc_id: existing.id,
+            version: command.plan_write.expected_version ?? existing.version,
+          },
+          candidate: { ...editedPlan, last_write_activity_id: command.activity_id },
+          origin: "human_goal_edit",
+        })
+        persistPlanEditBaseline(deps, state, committed.plan)
+        return { plan_id: committed.plan.plan_id, doc_id: committed.doc_id, version: committed.version, changed: true }
       },
       catch: (error) => error,
     })

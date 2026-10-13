@@ -122,7 +122,14 @@ function appendAssistant(
   for (let blockIndex = 0; blockIndex < turn.blocks.length; blockIndex++) {
     const block = turn.blocks[blockIndex]
     const bid = blockID(session.sourceId, turnIndex, blockIndex)
+    // Replay creates each fragment at Started; final-value events only update that same identity.
     if (block.type === "text") {
+      b.push("session.next.text.started.1", {
+        timestamp: ts,
+        sessionID: aggregateID,
+        assistantMessageID,
+        textID: bid,
+      })
       b.push("session.next.text.ended.1", {
         timestamp: ts,
         sessionID: aggregateID,
@@ -131,6 +138,12 @@ function appendAssistant(
         text: block.text,
       })
     } else if (block.type === "reasoning") {
+      b.push("session.next.reasoning.started.1", {
+        timestamp: ts,
+        sessionID: aggregateID,
+        assistantMessageID,
+        reasoningID: bid,
+      })
       b.push("session.next.reasoning.ended.1", {
         timestamp: ts,
         sessionID: aggregateID,
@@ -139,6 +152,13 @@ function appendAssistant(
         text: block.text,
       })
     } else {
+      b.push("session.next.tool.input.started.1", {
+        timestamp: ts,
+        sessionID: aggregateID,
+        assistantMessageID,
+        callID: block.callID,
+        name: block.name,
+      })
       b.push("session.next.tool.called.1", {
         timestamp: ts,
         sessionID: aggregateID,

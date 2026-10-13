@@ -1,3 +1,5 @@
+import { McpReadModel } from "@/mcp/read-model"
+import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 import { Agent } from "@/agent/agent"
 import { Command } from "@/command"
 import * as InstanceState from "@/effect/instance-state"
@@ -9,7 +11,7 @@ import { Vcs } from "@/project/vcs"
 import { Skill } from "@/skill"
 import { V2AgentRoster } from "@/session/v2-agent-roster"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { ApiVcsApplyError, ApiVcsRawDiffError } from "../groups/instance"
@@ -19,6 +21,7 @@ import { snapshotGateway } from "@/deepagent/config"
 
 export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance", (handlers) =>
   Effect.gen(function* () {
+    const reads = yield* McpReadModel.Service
     const agent = yield* Agent.Service
     const command = yield* Command.Service
     const format = yield* Format.Service
@@ -132,7 +135,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     })
 
     const getCommand = Effect.fn("InstanceHttpApi.command")(function* () {
-      return yield* command.list()
+      return yield* reads.commands(yield* WorkspaceRouteContext)
     })
 
     const getAgent = Effect.fn("InstanceHttpApi.agent")(function* () {
@@ -178,4 +181,4 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       .handle("lsp", getLsp)
       .handle("formatter", getFormatter)
   }),
-)
+).pipe(Layer.provide(McpReadModel.layer))
