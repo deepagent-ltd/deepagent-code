@@ -258,10 +258,20 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     },
     stdio: ["ignore", "pipe", "pipe"],
   })
-  let output = ""
-  child.stdout?.on("data", (data: Buffer) => { output = (output + data.toString()).slice(-65536) })
-  child.stderr?.on("data", (data: Buffer) => { output = (output + data.toString()).slice(-65536) })
-  const exited = new Promise<number | null>((resolve) => child.once("exit", resolve))
+  let stdout = ""
+  let stderr = ""
+  let spawnError: string | undefined
+  let bodyFailure: { error: unknown } | undefined
+  child.stdout?.on("data", (data: Buffer) => { stdout = (stdout + data.toString()).slice(-65536) })
+  child.stderr?.on("data", (data: Buffer) => { stderr = (stderr + data.toString()).slice(-65536) })
+  child.once("error", (error) => { spawnError = error.message })
+  const exited = new Promise<number | null>((resolve) => child.once("close", resolve))
+  const diagnostic = () => JSON.stringify({
+    root, pid: child.pid, exitCode: child.exitCode, signal: child.signalCode, spawnError,
+    bodyError: bodyFailure ? String(bodyFailure.error) : null,
+    readyPath: path.join(root, "ready.json"), inspectPath: path.join(root, "inspect.json"),
+    proofPath: path.join(root, "proof.json"), stdout, stderr,
+  })
   const deadline = setTimeout(() => child.kill("SIGTERM"), 25000)
   try {
     await fs.mkdir(path.join(root, "home"), { recursive: true })
@@ -345,17 +355,26 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
         ...proof, request: original.importJobRequest, job: retried.data,
       }, null, 2))
     }
+  } catch (error) {
+    bodyFailure = { error }
+    throw error
   } finally {
-    cleanup()
-    surface.happyDOM.setURL(origin)
-    clearTimeout(deadline)
-    child.kill("SIGTERM")
-    const forced = setTimeout(() => child.kill("SIGKILL"), 2000)
-    const code = await exited
-    clearTimeout(forced)
-    await fs.rm(root, { recursive: true, force: true })
-    expect(output).not.toMatch(/Unexpected observer/)
-    expect(code).toBe(0)
+    try {
+      cleanup()
+      surface.happyDOM.setURL(origin)
+      clearTimeout(deadline)
+      child.kill("SIGTERM")
+      const forced = setTimeout(() => child.kill("SIGKILL"), 2000)
+      const code = await exited
+      clearTimeout(forced)
+      await fs.rm(root, { recursive: true, force: true })
+      expect(stdout + stderr, diagnostic()).not.toMatch(/Unexpected observer/)
+      expect(code, diagnostic()).toBe(0)
+    } catch (error) {
+      // Cleanup failure must not replace the original HTTP/import assertion.
+      if (bodyFailure) throw new AggregateError([bodyFailure.error, error], `Private GUI import body and cleanup failed: ${diagnostic()}`)
+      throw error
+    }
   }
 }, 30000)
 
