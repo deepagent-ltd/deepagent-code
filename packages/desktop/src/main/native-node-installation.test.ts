@@ -1,14 +1,16 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { createHash, generateKeyPairSync } from "node:crypto"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { NativeInstallationSchema } from "../../../deepagent-code/src/installation/native-installation.schema"
 import { signNativeNodeArtifact } from "../../../deepagent-code/script/sign-native-node"
 import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
+import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
 test("actual Electron utility interpreter verifies a sealed physical Node entry and adjacent assets", async () => {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-native-node-electron-"))
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-native-node-electron-")))
   await fs.chmod(root, 0o700)
   const key = generateKeyPairSync("ed25519")
   const fixture = path.join(import.meta.dir, "../../../deepagent-code/test/installation/fixture/native-node-installation-process.ts")
@@ -16,8 +18,8 @@ test("actual Electron utility interpreter verifies a sealed physical Node entry 
     outdir: root, target: "node", external: ["electron"], naming: "main.mjs" })
   expect(main.success).toBe(true)
   const run = async (entry: string) => {
-    const child = Bun.spawn([process.env.DAC_BROWSER_INPUT_ELECTRON_EXECUTABLE ?? path.join(import.meta.dir, "../../node_modules/.bin/electron"), main.outputs[0]!.path], {
-      env: { PATH: process.env.PATH, HOME: root, TMPDIR: root, XDG_DATA_HOME: root, XDG_CONFIG_HOME: root,
+    const child = Bun.spawn([managedBrowserInputFixtureExecutable, main.outputs[0]!.path], {
+      env: { ...managedBrowserInputFixtureEnvironment, PATH: process.env.PATH, HOME: root, TMPDIR: root, XDG_DATA_HOME: root, XDG_CONFIG_HOME: root,
         XDG_CACHE_HOME: root, DAC_NATIVE_NODE_ROOT: root, DAC_NATIVE_NODE_ENTRY: entry }, stdout: "pipe", stderr: "pipe",
     })
     const timer = setTimeout(() => child.kill(), 20_000)

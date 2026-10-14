@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { Database } from "bun:sqlite"
 import { managedBrowserInputFixtureDefine } from "./fixture/managed-browser-input-build"
+import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
 async function run(mode: "identity" | "interaction-redirect-denied" | "interaction-path-denied" | "interaction-body-denied" | "interaction" | "happy" | "unknown" | "permission" | "wrong-root" | "wrong-session" | "retired" | "selection-drift" | "cancel" | "crash" | "control-tamper") {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-managed-browser-runner-"))
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-managed-browser-runner-")))
   await fs.chmod(root, 0o700)
   await Promise.all(["home", "tmp", "config", "data", "cache", "state", "project", "chunks"].map((name) => fs.mkdir(path.join(root, name), { mode: 0o700 })))
   await fs.symlink(path.resolve(import.meta.dir, "../../node_modules"), path.join(root, "node_modules"), "dir")
@@ -19,8 +21,8 @@ async function run(mode: "identity" | "interaction-redirect-denied" | "interacti
   await Bun.write(path.join(root, "build.json"), JSON.stringify([...server.logs, ...sidecar.logs, ...main.logs].map(String)))
   console.log("MANAGED_BROWSER_RUNNER_EVIDENCE", root)
   expect(server.success && sidecar.success && main.success).toBe(true)
-  const child = Bun.spawn([path.join(import.meta.dir, "../../node_modules/.bin/electron"), main.outputs[0]!.path], {
-    cwd: path.join(root, "project"), env: { PATH: process.env.PATH, HOME: path.join(root, "home"), TMPDIR: path.join(root, "tmp"),
+  const child = Bun.spawn([managedBrowserInputFixtureExecutable, main.outputs[0]!.path], {
+    cwd: path.join(root, "project"), env: { ...managedBrowserInputFixtureEnvironment, PATH: process.env.PATH, HOME: path.join(root, "home"), TMPDIR: path.join(root, "tmp"),
       XDG_DATA_HOME: path.join(root, "data"), XDG_CONFIG_HOME: path.join(root, "config"), XDG_CACHE_HOME: path.join(root, "cache"), XDG_STATE_HOME: path.join(root, "state"),
       DEEPAGENT_CODE_HOME: path.join(root, "data"), DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"), DEEPAGENT_CODE_DB: path.join(root, "authority.sqlite"),
       DEEPAGENT_CODE_V2_OWNER_DEV_MINT: "1", DEEPAGENT_CODE_V2_OWNER_CAMPAIGN: "", DEEPAGENT_CODE_V2_OWNER_PUBLIC_KEY: "",

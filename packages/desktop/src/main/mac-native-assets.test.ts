@@ -5,14 +5,16 @@ import path from "node:path"
 import { createHash } from "node:crypto"
 import { verifyMacNativeAssets } from "../../scripts/mac-native-assets"
 
-test.each(["darwin-arm64", "darwin-x64"] as const)("publisher verifies complete same-target %s physical images", async (target) => {
+// Mac executable verification requires real POSIX mode bits. Metadata rejection
+// below remains portable and continues to run on Windows.
+test.skipIf(process.platform === "win32").each(["darwin-arm64", "darwin-x64"] as const)("publisher verifies complete same-target %s physical images", async (target) => {
   await using fixture = await images(target)
   const verified = await verifyMacNativeAssets(fixture.directory, fixture.runtime)
   expect(verified.target).toBe(target)
   expect(verified.files.toSorted()).toEqual(fixture.assets.map((entry) => path.join(fixture.directory, path.basename(entry.path))).toSorted())
 })
 
-test("publisher rejects mislabeled, mixed, repeated, missing and changed Mac assets before sealing", async () => {
+test("publisher rejects mislabeled, mixed, repeated and missing Mac asset metadata before sealing", async () => {
   await using fixture = await images("darwin-x64")
   await fixture.metadata("darwin-arm64", fixture.assets)
   await expect(verifyMacNativeAssets(fixture.directory, fixture.runtime)).rejects.toThrow("same target")
@@ -23,7 +25,10 @@ test("publisher rejects mislabeled, mixed, repeated, missing and changed Mac ass
   await expect(verifyMacNativeAssets(fixture.directory, fixture.runtime)).rejects.toThrow("same target")
   await fixture.metadata("darwin-x64", fixture.assets.slice(0, 2))
   await expect(verifyMacNativeAssets(fixture.directory, fixture.runtime)).rejects.toThrow("same target")
-  await fixture.metadata("darwin-x64", fixture.assets)
+})
+
+test.skipIf(process.platform === "win32")("publisher rejects changed Mac physical images before sealing", async () => {
+  await using fixture = await images("darwin-x64")
   await fs.writeFile(fixture.runtime, image("darwin-arm64"))
   await expect(verifyMacNativeAssets(fixture.directory, fixture.runtime)).rejects.toThrow("architecture")
   await fs.writeFile(fixture.runtime, image("darwin-x64"))

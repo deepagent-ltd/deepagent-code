@@ -62,7 +62,7 @@ function admit(root: string, baseCommit: string, commit: string) {
       `
     import { ensureReleaseCandidateRef } from ${JSON.stringify(path.join(import.meta.dir, "release-candidate-ref.ts"))};
     try {
-      console.log(ensureReleaseCandidateRef(${JSON.stringify({ repository: root, version: "2.0.4", baseCommit, commit })}));
+      console.log(await ensureReleaseCandidateRef(${JSON.stringify({ repository: root, version: "2.0.4", baseCommit, commit })}));
     } catch (error) {
       console.error(error.message);
       process.exitCode = 1;
@@ -90,7 +90,7 @@ test("candidate push retains actual hook diagnostics and refuses the remote ref"
     await chmod(hook, 0o700)
     const result = admit(root, base, candidate)
     expect(result.exitCode).toBe(1)
-    expect(result.stderr.toString()).toContain("TYPECHECK_STDOUT_DIAGNOSTIC")
+    expect(result.stdout.toString()).toContain("TYPECHECK_STDOUT_DIAGNOSTIC")
     expect(result.stderr.toString()).toContain("TYPECHECK_STDERR_DIAGNOSTIC")
     expect(git(root, ["ls-remote", "origin", "refs/heads/release-candidates/v2.0.4"])).toBe("")
   })

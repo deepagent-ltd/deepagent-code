@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { managedBrowserInputFixtureDefine } from "./fixture/managed-browser-input-build"
+import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
 test("actual approved readonly planner mutates only native current leaves, submits once and keeps partial cancellation unknown", async () => {
-  const root = await fs.mkdtemp("/tmp/dac-managed-browser-program-")
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-managed-browser-program-"))
   await fs.chmod(root, 0o700)
   const main = await Bun.build({
     entrypoints: [path.join(import.meta.dir, "fixture/managed-browser-program.ts")],
@@ -24,8 +26,9 @@ test("actual approved readonly planner mutates only native current leaves, submi
   expect(main.logs).toEqual([])
   expect(child.logs).toEqual([])
   expect(main.success && child.success).toBe(true)
-  const process = Bun.spawn([path.join(import.meta.dir, "../../node_modules/.bin/electron"), main.outputs[0]!.path], {
+  const process = Bun.spawn([managedBrowserInputFixtureExecutable, main.outputs[0]!.path], {
     env: {
+      ...managedBrowserInputFixtureEnvironment,
       PATH: globalThis.process.env.PATH,
       HOME: root,
       TMPDIR: root,

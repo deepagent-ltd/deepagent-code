@@ -855,7 +855,7 @@ describe("applyDirectoryEvent", () => {
     })
 
     expect(store.permission[sessionID]?.map((x) => x.id)).toEqual(["perm_1", "perm_2"])
-    expect(store.permission[sessionID]?.find((x) => x.id === "perm_2")).toMatchObject({
+    expect(unwrap(store.permission[sessionID]?.find((x) => x.id === "perm_2"))).toMatchObject({
       sessionID,
       permission: "bash",
       patterns: ["git status"],

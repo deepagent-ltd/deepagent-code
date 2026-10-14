@@ -1,2 +1,4 @@
 packages/core/migration/**/snapshot.json linguist-generated
 packages/core/src/database/migration.gen.ts linguist-generated
+# Reviewed SDK declaration digests must survive Windows checkout unchanged.
+packages/im-kernel-sdk/**/*.d.ts text eol=lf

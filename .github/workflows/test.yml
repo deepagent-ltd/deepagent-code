@@ -129,9 +129,24 @@ jobs:
       - name: Install locked IM SDK build tools
         run: npm ci --ignore-scripts --prefix packages/im-kernel-sdk/upstream
 
+      - name: Prepare the locked Linux Electron sandbox
+        if: runner.os == 'Linux'
+        run: |
+          dac_electron_sandbox=$(node -p 'require("node:path").join(require("node:path").dirname(require("./packages/desktop/node_modules/electron")), "chrome-sandbox")')
+          test -f "$dac_electron_sandbox"
+          sudo chown root:root "$dac_electron_sandbox"
+          sudo chmod 4755 "$dac_electron_sandbox"
+          test "$(stat -c '%U:%G:%a' "$dac_electron_sandbox")" = 'root:root:4755'
+          command -v xvfb-run
+
       - name: Run unit tests
         timeout-minutes: ${{ matrix.settings.timeout }}
-        run: bun run test:ci --log-order=stream --log-prefix=task
+        run: |
+          if [[ "$RUNNER_OS" == 'Linux' ]]; then
+            xvfb-run -a --server-args='-screen 0 1920x1080x24' bun run test:ci --log-order=stream --log-prefix=task
+          else
+            bun run test:ci --log-order=stream --log-prefix=task
+          fi
         env:
           DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 

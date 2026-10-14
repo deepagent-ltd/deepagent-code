@@ -1,9 +1,9 @@
-export function ensureReleaseCandidateRef(input: {
+export async function ensureReleaseCandidateRef(input: {
   repository: string
   version: string
   baseCommit: string
   commit: string
-}): string {
+}) {
   const git = (...args: string[]) => {
     const result = Bun.spawnSync(["git", ...args], { cwd: input.repository, stdout: "pipe", stderr: "pipe" })
     if (result.exitCode !== 0)
@@ -20,7 +20,15 @@ export function ensureReleaseCandidateRef(input: {
   const ref = `refs/heads/release-candidates/v${input.version}`
   const existing = git("ls-remote", "origin", ref).split("\t")[0]
   if (!existing) {
-    git("push", "origin", `HEAD:${ref}`)
+    // The pre-push checks can run for minutes. Stream their diagnostics rather
+    // than retaining them inside a synchronous subprocess until push exits.
+    const push = Bun.spawn(["git", "push", "origin", `HEAD:${ref}`], {
+      cwd: input.repository,
+      stdout: "inherit",
+      stderr: "inherit",
+    })
+    const code = await push.exited
+    if (code !== 0) throw new Error(`git push failed with exit code ${code}`)
     return input.commit
   }
   if (existing === input.commit) return input.commit

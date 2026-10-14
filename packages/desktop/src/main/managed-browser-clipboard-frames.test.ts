@@ -1,17 +1,17 @@
 import { expect, test } from "bun:test"
 import { mkdtemp, realpath, symlink } from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
+import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
 test("actual first party cross-origin frame keeps clipboard policy and normal Chinese editing", async () => {
-  const root = await realpath(await mkdtemp("/tmp/dac-browser-clipboard-frames-"))
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "dac-browser-clipboard-frames-")))
   const build = await Bun.build({ entrypoints: [path.join(import.meta.dir, "fixture/managed-browser-clipboard-frames.ts")],
     outdir: root, target: "node", external: ["electron"] })
   expect(build.success).toBe(true)
   await symlink(path.resolve(import.meta.dir, "../../node_modules"), path.join(root, "node_modules"), "dir")
-  const executable = path.join(import.meta.dir, "../../node_modules/electron/dist",
-    process.platform === "darwin" ? "Electron.app/Contents/MacOS/Electron" : process.platform === "win32" ? "electron.exe" : "electron")
-  const child = Bun.spawn([executable, build.outputs[0]!.path, root], {
-    cwd: root, env: { PATH: process.env.PATH, HOME: root, TMPDIR: root }, stdout: "pipe", stderr: "pipe",
+  const child = Bun.spawn([managedBrowserInputFixtureExecutable, build.outputs[0]!.path, root], {
+    cwd: root, env: { ...managedBrowserInputFixtureEnvironment, PATH: process.env.PATH, HOME: root, TMPDIR: root }, stdout: "pipe", stderr: "pipe",
   })
   const timer = setTimeout(() => child.kill(), 10_000)
   const code = await child.exited

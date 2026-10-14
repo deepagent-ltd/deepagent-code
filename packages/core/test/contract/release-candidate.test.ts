@@ -122,21 +122,21 @@ test("candidate ref rerun reuses identical prepared tree and rejects drift", asy
   git(repository, "commit", "-m", "chore(release): first candidate")
   const commit = git(repository, "rev-parse", "HEAD")
   const input = { repository, version: "2.0.2", baseCommit, commit }
-  expect(ensureReleaseCandidateRef(input)).toBe(commit)
-  expect(ensureReleaseCandidateRef(input)).toBe(commit)
+  expect(await ensureReleaseCandidateRef(input)).toBe(commit)
+  expect(await ensureReleaseCandidateRef(input)).toBe(commit)
 
   git(repository, "checkout", "--detach", baseCommit)
   await Bun.write(join(repository, "package.json"), '{"version":"2.0.2"}')
   git(repository, "add", "-A")
   git(repository, "commit", "-m", "chore(release): retried candidate")
-  expect(ensureReleaseCandidateRef({ ...input, commit: git(repository, "rev-parse", "HEAD") })).toBe(commit)
+  expect(await ensureReleaseCandidateRef({ ...input, commit: git(repository, "rev-parse", "HEAD") })).toBe(commit)
   expect(git(repository, "rev-parse", "HEAD")).toBe(commit)
 
   git(repository, "checkout", "--detach", baseCommit)
   await Bun.write(join(repository, "package.json"), '{"version":"2.0.3"}')
   git(repository, "add", "-A")
   git(repository, "commit", "-m", "chore(release): drifted candidate")
-  expect(() => ensureReleaseCandidateRef({ ...input, commit: git(repository, "rev-parse", "HEAD") })).toThrow(
+  await expect(ensureReleaseCandidateRef({ ...input, commit: git(repository, "rev-parse", "HEAD") })).rejects.toThrow(
     "release candidate ref drifted",
   )
 
@@ -146,7 +146,7 @@ test("candidate ref rerun reuses identical prepared tree and rejects drift", asy
   await Bun.write(join(repository, "package.json"), '{"version":"2.0.2"}')
   git(repository, "add", "-A")
   git(repository, "commit", "-m", "chore(release): same tree from changed base")
-  expect(() =>
+  await expect(
     ensureReleaseCandidateRef({ ...input, baseCommit: changedBase, commit: git(repository, "rev-parse", "HEAD") }),
-  ).toThrow("release candidate ref drifted")
+  ).rejects.toThrow("release candidate ref drifted")
 })

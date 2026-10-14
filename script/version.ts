@@ -30,7 +30,7 @@ if (!Script.preview) {
     await $`git commit -m ${`chore(release): prepare v${Script.version}`}`
   if ((await $`git status --porcelain --untracked-files=all`.text()).trim())
     throw new Error("release candidate source tree is dirty after preparation")
-  candidateSha = ensureReleaseCandidateRef({
+  candidateSha = await ensureReleaseCandidateRef({
     repository: process.cwd(),
     version: Script.version,
     baseCommit: baseSha,

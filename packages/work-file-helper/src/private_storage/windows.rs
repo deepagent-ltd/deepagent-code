@@ -444,7 +444,12 @@ fn rename(file: &File, parent: &File, name: &str, replace: bool) -> io::Result<(
 mod tests {
     use super::*;
     fn root() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("dac-private-storage-{}-{}", std::process::id(),
+        // GetTempPath may expose an 8.3 ancestor alias on Windows CI. These
+        // fixtures need the physical long-name parent before appending a new
+        // leaf; production LockedPath must still refuse mismatched aliases.
+        let directory = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let directory = directory.to_str().unwrap();
+        Path::new(directory.strip_prefix(r"\\?\").unwrap_or(directory)).join(format!("dac-private-storage-{}-{}", std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))
     }
     fn id(value: u8) -> String { format!("{value:032x}") }

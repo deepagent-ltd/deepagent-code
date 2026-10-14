@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { fileURLToPath } from "node:url"
 
 import config from "../../electron-builder.config"
 
@@ -56,7 +57,7 @@ describe("electron-builder Windows packaging config", () => {
         process.env.DEEPAGENT_CODE_CHANNEL = channel
         const module = await import(`../../electron-builder.config.ts?linux=${channel}`)
         const { LinuxPackager, Packager } = await import("electron-builder")
-        const info = new Packager({ projectDir: new URL("../..", import.meta.url).pathname, config: module.default })
+        const info = new Packager({ projectDir: fileURLToPath(new URL("../..", import.meta.url)), config: module.default })
         await info.validateConfig()
         const packager = new LinuxPackager(info)
         expect(packager.executableName).toBe(executable)
