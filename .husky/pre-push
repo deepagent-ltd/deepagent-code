@@ -18,9 +18,9 @@ if (process.versions.bun !== expectedBunVersion) {
 }
 '
 # Hosted CI runners have less memory than development machines. Preserve every
-# package check while limiting simultaneous compiler processes there.
+# package check while avoiding concurrent cold compiler graphs there.
 if [ "${CI:-}" = "true" ]; then
-  bun turbo typecheck --concurrency=2
+  bun turbo typecheck --concurrency=1
 else
   bun typecheck
 fi
