@@ -27,7 +27,10 @@ on:
         required: false
         type: string
 
-concurrency: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.version || inputs.bump }}
+# main, tag and manual runs share the same release draft and refs.
+concurrency:
+  group: publish-${{ github.repository }}
+  cancel-in-progress: false
 
 permissions:
   actions: read
