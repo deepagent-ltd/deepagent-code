@@ -491,7 +491,7 @@ describe("Task/Goal attention original-source read model", () => {
             .run()
             .pipe(Effect.orDie)
           yield* db
-            .insert(SessionActivityTable)
+            .insert(SessionActivityTable) // fixture-exempt: failed child crash history tests source aggregation without inventing a terminal receipt.
             .values({
               activity_id: "activity_original_task",
               session_id: original.run.childSessionID,

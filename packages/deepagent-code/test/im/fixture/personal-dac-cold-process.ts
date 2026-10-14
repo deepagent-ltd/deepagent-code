@@ -11,6 +11,7 @@ import { ProjectV2 } from "@deepagent-code/core/project"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionMessage } from "@deepagent-code/core/session/message"
@@ -18,7 +19,7 @@ import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionInputTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
-import { SessionActivityInputTable, SessionActivityTable } from "@deepagent-code/core/context-federation/session-sql"
+import { SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
 import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
 import { IMDacSession } from "@deepagent-code/core/im/dac-session"
@@ -27,6 +28,7 @@ import { IMReplyOutboxTable } from "@deepagent-code/core/im/reply-outbox.sql"
 import { ReplyBodyRetirement } from "@deepagent-code/core/im/reply-body-retirement"
 import { ReplyBodyRetirementModel } from "@deepagent-code/core/im/reply-body-retirement.model"
 import { IMReplyOutbox } from "../../../src/im/im-reply-outbox"
+import { openFixtureActivity, settleFixtureActivity } from "../../../../core/test/fixture/open-activity"
 
 export type Marker = {
   cut: "admission" | "collector"
@@ -106,20 +108,20 @@ const result = await Effect.runPromise(Effect.gen(function* () {
     assert.equal(cut, "collector")
     const assistantID = SessionMessage.ID.make(`msg_${crypto.randomUUID()}`)
     const publisher = yield* EventV2.Service
+    yield* SessionInput.promoteNextQueued(db, publisher, SessionV2.ID.make(command.sessionID))
+    const activity = yield* openFixtureActivity({ sessionId: SessionV2.ID.make(command.sessionID), triggerInputId: command.inputID,
+      securityNamespaceId: SecurityNamespaceID.make("sec_im_personal_cold"), now: Date.now() })
     yield* publisher.publish(SessionEvent.Step.Started, { sessionID: SessionV2.ID.make(command.sessionID), timestamp: DateTime.makeUnsafe(Date.now()), assistantMessageID: assistantID,
       agent: "auto", model: { id: ModelV2.ID.make("deepseek-flash"), providerID: ProviderV2.ID.make("deepseek") } })
     yield* publisher.publish(SessionEvent.Text.Started, { sessionID: SessionV2.ID.make(command.sessionID), timestamp: DateTime.makeUnsafe(Date.now()), assistantMessageID: assistantID, textID: "final" })
     const final = "当前个人代理最终回答🙂，私有执行命令不回传。"
     yield* publisher.publish(SessionEvent.Text.Ended, { sessionID: SessionV2.ID.make(command.sessionID), timestamp: DateTime.makeUnsafe(Date.now()), assistantMessageID: assistantID, textID: "final", text: final })
-    const activityID = `activity_${crypto.randomUUID()}`
-    // Exact existing C2 fixture qualification: this is a durable final pointer,
-    // not a provider execution or a physical SessionRunner settlement claim.
-    yield* db.transaction((tx) => Effect.gen(function* () {
-      yield* tx.insert(SessionActivityTable).values({ activity_id: activityID, session_id: command.sessionID, ordinal: 1, trigger_input_id: command.inputID,
-        delivery: "queue", state: "settled", created_at: Date.now(), settled_at: Date.now(), final_message_id: assistantID }).run()
-      yield* tx.insert(SessionActivityInputTable).values({ activity_id: activityID, input_id: command.inputID, ordinal: 1,
-        admitted_seq: (yield* tx.select().from(SessionInputTable).get())!.admitted_seq, role: "trigger", promoted_at: Date.now() }).run()
-    }), { behavior: "immediate" }).pipe(Effect.orDie)
+    yield* publisher.publish(SessionEvent.Step.Ended, { sessionID: SessionV2.ID.make(command.sessionID), timestamp: DateTime.makeUnsafe(Date.now()),
+      assistantMessageID: assistantID, finish: "stop", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
+    const activityID = activity.activityId
+    // Exercise the durable Activity lifecycle with synthetic output, without provider execution.
+    yield* settleFixtureActivity({ activityId: activityID, finalMessageId: assistantID,
+      securityNamespaceId: SecurityNamespaceID.make("sec_im_personal_cold"), now: Date.now() })
     assert.equal((yield* db.select().from(IMReplyOutboxTable).all().pipe(Effect.orDie)).length, 0)
     const input = (yield* db.select().from(SessionInputTable).get().pipe(Effect.orDie))!
     const marker: Marker = { cut, scope, commandID, bindingID: command.bindingID, sessionID: command.sessionID, inputID: command.inputID,
@@ -175,7 +177,7 @@ const result = await Effect.runPromise(Effect.gen(function* () {
     replySHA256: hash(row.reply_text), replyBytes: Buffer.byteLength(row.reply_text), privateCommandExcluded: true,
     custodyKind: custody.record.origin.kind, custodyBindingExact: true, attempts: row.attempts, status: row.status,
     additionalWakeCalls: observations.wakeCalls, transportCreated: false,
-    qualification: "physical process crash after C2 fixture durable Activity final pointer; original cold collector/custody only, not real SessionRunner settlement" }
+    qualification: "physical process crash after actual Activity lifecycle settlement with synthetic output; original cold collector/custody only, not provider execution" }
 }).pipe(Effect.provide(layer)))
 await fs.writeFile(path.join(root, "cold-result-safe.json"), JSON.stringify(result, null, 2) + "\n", { mode: 0o600 })
 console.log(JSON.stringify({ fixture: "personal-dac-physical-cut", ...result }))

@@ -49,6 +49,11 @@ runs:
           echo "DEEPAGENT_CODE_BUILD_LINUX_NATIVE_ASSETS=1" >> "$GITHUB_ENV"
         fi
 
+    - name: Verify Windows private storage preparation
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: cargo test --locked --manifest-path packages/work-file-helper/Cargo.toml --lib windows_private_storage_bridge::storage::tests
+
     # prepare.ts imports prebuild, so this publisher must precede both prepare
     # and bun's prebuild lifecycle. Both builds retain this same job publisher.
     - name: Prepare this job's private Native build publisher

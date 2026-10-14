@@ -213,5 +213,6 @@ export const pixelMockConfig: MockServerConfig = {
   directory: pixelDirectory,
   project: pixelProject,
   sessions: pixelSessions,
+  ordinaryEligible: Object.fromEntries(pixelSessions.map((session) => [session.id, true])),
   pageMessages: pixelPageMessages,
 }

@@ -27,10 +27,13 @@
 //
 // Exemption model: a hit word on a line is skipped only when that word has a
 // line-level marker for this path and the line carries it; other words (or the
-// same word in another file) still fail. The whole-file exemption list below
-// skips entire files.
+// same word in another file) still fail. Reviewed attribution, compatibility
+// and policy lines also require an exact trimmed line match; additions on the
+// same line are not exempt. The whole-file exemption list skips entire files.
 
-const repoRoot = Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], { cwd: import.meta.dir }).stdout.toString().trim()
+const repoRoot = Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], { cwd: import.meta.dir })
+  .stdout.toString()
+  .trim()
 if (!repoRoot) {
   console.error("audit-branding: not inside a git worktree")
   process.exit(2)
@@ -70,9 +73,6 @@ const LINE_EXEMPTIONS: Record<string, Record<string, string[]>> = {
   "design/README.md": { opencode: ["opencode"] },
   // MIT attribution lines in the in-app About panel
   "packages/app/src/components/settings-v2/about.tsx": { opencode: ["opencode"] },
-  // "keeps the opencode runtime foundation" architecture note (same class as
-  // design/README.md foundation note)
-  "packages/deepagent-code/README.md": { opencode: ["opencode"] },
   // Upstream opencode-ecosystem fork URLs (tree-sitter wasm/queries hosted by
   // the upstream org; no deepagent-ltd mirror exists, rewriting would break the
   // runtime download)
@@ -98,6 +98,37 @@ const LINE_EXEMPTIONS: Record<string, Record<string, string[]>> = {
       (locale) => [`packages/web/src/content/docs/${locale}/sdk.mdx`, { opencode: ["createOpencode"] }],
     ),
   ),
+}
+
+// These are approved upstream references, not user-facing product branding.
+// Keep the complete line and word binding so a reviewed path cannot hide new
+// residue elsewhere, or extra brand tokens appended to the approved context.
+const EXACT_LINE_EXEMPTIONS: Record<string, Record<string, string[]>> = {
+  ".github/public-source-policy.json": {
+    opencode: [
+      '"review_scope": "Public product and developer documentation may evolve independently of OpenCode text. Newly added document paths require review. Internal plans, acceptance records and private backend exports remain private.",',
+      '"packages/console/app/.opencode/agent/css.md",',
+      '"specs/storage/remove-opencode-db.md"',
+    ],
+  },
+  "README.md": {
+    opencode: [
+      "DAC builds on [opencode](https://github.com/sst/opencode) and other open-source components. Original license notices and attribution are retained in [NOTICE](NOTICE) and the relevant packages. No endorsement by upstream projects or their contributors is implied.",
+    ],
+  },
+  "packages/deepagent-code/README.md": {
+    opencode: [
+      "The runtime builds on OpenCode and adds persistent task state, event-driven work coordination, document-based context, and domain packs. Tools, MCP integrations, and domain packs extend the existing agent runtime.",
+    ],
+  },
+  "packages/app/test/components/dialog-event-work.test.tsx": {
+    opencode: [
+      '"Content-Type,Authorization,x-opencode-directory,x-opencode-workspace,x-deepagent-code-directory,x-deepagent-code-workspace",',
+    ],
+  },
+  "packages/core/src/plugin/skill/customize-deepagent-code.md": {
+    opencode: ["provided by DAC's platform path implementation; it is not OpenCode's XDG path."],
+  },
 }
 
 const TEXT_EXTS = new Set(["md", "mdx", "sh", "ps1", "yml", "yaml", "json", "txt", "jsonc", "lock"])
@@ -234,7 +265,10 @@ function recordHits(path: string, category: "text" | "source-string", rows: Row[
     for (const word of BRAND_WORDS) {
       let at = window.indexOf(word)
       while (at !== -1) {
-        if (wordMarkers?.[word]?.some((marker) => row.raw.includes(marker))) {
+        if (
+          EXACT_LINE_EXEMPTIONS[path]?.[word]?.includes(row.raw.trim()) ||
+          wordMarkers?.[word]?.some((marker) => row.raw.includes(marker))
+        ) {
           stats.exemptLines += 1
         } else {
           const slice = row.window.slice(Math.max(0, at - 30), at + word.length + 30).replace(/[\r\n\t]/g, " ")
@@ -253,7 +287,11 @@ async function textScan(rel: string) {
     return
   }
   const lines = new TextDecoder().decode(bytes).split("\n")
-  recordHits(rel, "text", lines.map((raw, index) => ({ n: index + 1, raw, window: raw })))
+  recordHits(
+    rel,
+    "text",
+    lines.map((raw, index) => ({ n: index + 1, raw, window: raw })),
+  )
 }
 
 async function sourceScan(rel: string) {

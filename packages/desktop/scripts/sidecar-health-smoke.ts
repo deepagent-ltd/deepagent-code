@@ -102,9 +102,11 @@ export async function readSidecarSmokeDiagnostics(root: string) {
         if (line.length > 2048) continue
         const native = line.match(/dac-native-path-lease:(ancestor_name|leaf_name|disk|singlelink):([A-Za-z]{1,40}):(None|Some\([0-9]{1,10}\))/)
         const first = line.match(/dac-native-first-load:(system-root-lease|system-root-dacl|module-lease|module-dacl|module-private-dacl|original-current):([A-Za-z0-9_.-]{1,128}):([A-Za-z]{1,40}):(None|Some\([0-9]{1,10}\))/)
+        const storage = line.match(/PRIVATE_STORAGE_FAILURE stage=(prepare-outer-owner|prepare-root-owner|prepare-control|prepare-control-owner|prepare-protect|root-owner|open-storage|read-lease|read-storage|read-output|observe-open|publication-rename|publication-observe) kind=([A-Za-z]{1,40}) os=(-?[0-9]{1,10})/)
         const kinds = ["NotFound", "PermissionDenied", "AlreadyExists", "InvalidInput", "InvalidData", "Unsupported", "UnexpectedEof", "Interrupted", "Other", "Uncategorized", "WouldBlock", "TimedOut"]
         if (native && kinds.includes(native[2]!)) diagnostics.push({ log, kind: "native-path-lease", stage: native[1]!, errorClass: native[2]!, errno: native[3] === "None" ? null : Number(native[3]!.slice(5, -1)) })
         if (first && kinds.includes(first[3]!)) diagnostics.push({ log, kind: "native-first-load", stage: first[1]!, basename: first[2]!, errorClass: first[3]!, errno: first[4] === "None" ? null : Number(first[4]!.slice(5, -1)) })
+        if (storage && kinds.includes(storage[2]!)) diagnostics.push({ log, kind: "private-storage", stage: storage[1]!, errorClass: storage[2]!, errno: Number(storage[3]) })
         const bootstrap = line.match(/Windows native sidecar bootstrap unavailable \((parent-current|runtime-preparation|parent-lifetime|child-exited|child-challenge|challenge-timeout|native-transfer|native-entry|receipt-timeout|duplicate-prepare|original-entry|capture|receipt-shape|receipt-current|receipt-native)\)/)
         if (bootstrap) diagnostics.push({ log, kind: "sidecar-bootstrap", stage: bootstrap[1]! })
         for (const identifier of ["WINDOWS_FIRST_LOADER_UNAVAILABLE", "WINDOWS_FIRST_LOADER_CHANGED", "MODULE_NOT_FOUND", "ERR_DLOPEN_FAILED", "Original Windows native image capture is unavailable", "Original Windows native bootstrap is unavailable", "Original Windows native bootstrap changed", "Sidecar parent port unavailable"])

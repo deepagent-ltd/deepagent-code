@@ -6,14 +6,17 @@ use sha2::{Digest, Sha256};
 use std::{ffi::{c_void, OsStr}, fs::File, io::{self, Read, Seek, SeekFrom, Write}, mem::{offset_of, size_of, MaybeUninit},
     os::windows::{ffi::OsStrExt, io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle}},
     path::Path, ptr, time::{Duration, Instant}};
-use windows_sys::Win32::{Foundation::{HANDLE, INVALID_HANDLE_VALUE, NTSTATUS, RtlNtStatusToDosError, UNICODE_STRING},
+use windows_sys::Win32::{Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, NTSTATUS, RtlNtStatusToDosError, UNICODE_STRING},
     Security::{DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
-        EqualSid, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
+        EqualSid, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, GetTokenInformation, TOKEN_OWNER, TOKEN_QUERY, TokenOwner,
+        GetAclInformation, GetAce, ACL_SIZE_INFORMATION, AclSizeInformation, ACCESS_ALLOWED_ACE, INHERIT_ONLY_ACE,
+        IsValidAcl, IsWellKnownSid, WinLocalSystemSid,
         Authorization::{GetSecurityInfo, SetSecurityInfo, SE_FILE_OBJECT}},
     Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
         FILE_RENAME_INFO, FILE_RENAME_INFO_0, FILE_DISPOSITION_INFO, FileDispositionInfo,
         FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE, SetFileInformationByHandle},
-    System::{IO::{IO_STATUS_BLOCK, IO_STATUS_BLOCK_0}, Kernel::{OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE}}};
+    System::{IO::{IO_STATUS_BLOCK, IO_STATUS_BLOCK_0}, Kernel::{OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE},
+        Threading::{GetCurrentProcess, OpenProcessToken}}};
 
 pub enum Failure { BeforePublish, Changed, Unknown }
 
@@ -35,7 +38,7 @@ impl Lease {
             Err(error) if prepare && error.kind() == io::ErrorKind::NotFound => {
                 let outer = LockedPath::open(path.parent().ok_or(io::ErrorKind::InvalidInput)?, true, false)?;
                 outer.current()?;
-                require_owner(&outer.file)?;
+                require_preparation_owner(&outer.file).map_err(|error| diagnostic("prepare-outer-owner", error))?;
                 let name = path.file_name().and_then(OsStr::to_str).ok_or(io::ErrorKind::InvalidInput)?;
                 let created = create(&outer.file, name, true)?;
                 let expected = no_follow::identity(&created)?;
@@ -47,20 +50,26 @@ impl Lease {
             },
             Err(error) => return Err(error),
         };
-        require_owner(&parent.file)?;
         if prepare && private_directory::require_private(&parent.file).is_err() {
-            // Explicit prepare may tighten only this original current-user-owned DAC root.
+            // Windows elevated tokens default newly created directories to their
+            // TokenOwner group. Only explicit preparation may adopt that exact
+            // current-token owner into the user-owned private DAC directory.
             // The trusted installed caller must bind the root/purpose; JSON is not that authority.
+            require_preparation_owner(&parent.file).map_err(|error| diagnostic("prepare-root-owner", error))?;
+            let adopt_owner = require_owner(&parent.file).is_err();
             let outer = LockedPath::open(path.parent().ok_or(io::ErrorKind::InvalidInput)?, true, false)?;
             let name = path.file_name().and_then(OsStr::to_str).ok_or(io::ErrorKind::InvalidInput)?;
-            let control = open(&outer.file, name, true, FILE_READ_ATTRIBUTES | 0x0002_0000 | 0x0004_0000, 1, ptr::null())?;
+            let control = open(&outer.file, name, true, FILE_READ_ATTRIBUTES | 0x0002_0000 | 0x0004_0000 |
+                if adopt_owner { 0x0008_0000 } else { 0 }, 1, ptr::null())
+                .map_err(|error| diagnostic("prepare-control", error))?;
             parent.current()?;
             outer.current()?;
             if no_follow::identity(&control)? != no_follow::identity(&parent.file)? { return Err(io::ErrorKind::PermissionDenied.into()); }
-            require_owner(&control)?;
-            protect(&control)?;
+            require_preparation_owner(&control).map_err(|error| diagnostic("prepare-control-owner", error))?;
+            protect(&control, adopt_owner).map_err(|error| diagnostic("prepare-protect", error))?;
         }
         parent.current()?;
+        require_owner(&parent.file).map_err(|error| diagnostic("root-owner", error))?;
         private_directory::require_private(&parent.file)?;
         let identity = no_follow::identity(&parent.file)?;
         Ok(Self { parent, identity, purpose, deadline: Instant::now() + Duration::from_millis(deadline_ms), installation: None })
@@ -280,13 +289,75 @@ fn require_owner(file: &File) -> io::Result<()> {
     if !valid { return Err(io::ErrorKind::PermissionDenied.into()); } Ok(())
 }
 
-fn protect(file: &File) -> io::Result<()> {
+/// A default owner is a user/group SID from this process's actual token, never
+/// a well-known Administrators allowance. No outer directory is modified.
+fn require_preparation_owner(file: &File) -> io::Result<()> {
+    if require_owner(file).is_ok() { return Ok(()); }
+    let mut token = 0;
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let result = (|| -> io::Result<()> {
+        let mut bytes = 0;
+        unsafe { GetTokenInformation(token, TokenOwner, ptr::null_mut(), 0, &mut bytes); }
+        if bytes < size_of::<TOKEN_OWNER>() as u32 || bytes > 65_536 { return Err(io::ErrorKind::InvalidData.into()); }
+        let mut buffer = vec![0usize; (bytes as usize).div_ceil(size_of::<usize>())];
+        if unsafe { GetTokenInformation(token, TokenOwner, buffer.as_mut_ptr().cast(), bytes, &mut bytes) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let expected = unsafe { (*buffer.as_ptr().cast::<TOKEN_OWNER>()).Owner };
+        if expected.is_null() { return Err(io::ErrorKind::PermissionDenied.into()); }
+        let mut owner = ptr::null_mut(); let mut dacl = ptr::null_mut(); let mut descriptor = ptr::null_mut();
+        let status = unsafe { GetSecurityInfo(file.as_raw_handle() as HANDLE, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner, ptr::null_mut(), &mut dacl, ptr::null_mut(), &mut descriptor) };
+        if status != 0 { return Err(io::Error::from_raw_os_error(status as i32)); }
+        // A shared directory must not become a credential root merely because
+        // its owner happens to equal an elevated token's default group.
+        let valid = (|| -> io::Result<()> {
+            if owner.is_null() || unsafe { EqualSid(owner, expected) } == 0 || dacl.is_null() ||
+                unsafe { IsValidAcl(dacl) } == 0 { return Err(io::ErrorKind::PermissionDenied.into()); }
+            let user_descriptor = Descriptor::current_user()?;
+            let mut user = ptr::null_mut(); let mut defaulted = 0;
+            if unsafe { GetSecurityDescriptorOwner(user_descriptor.pointer().cast_mut(), &mut user, &mut defaulted) } == 0 ||
+                user.is_null() { return Err(io::ErrorKind::PermissionDenied.into()); }
+            let mut information: ACL_SIZE_INFORMATION = unsafe { std::mem::zeroed() };
+            if unsafe { GetAclInformation(dacl, (&raw mut information).cast(), size_of::<ACL_SIZE_INFORMATION>() as u32, AclSizeInformation) } == 0 ||
+                information.AceCount > 128 { return Err(io::ErrorKind::PermissionDenied.into()); }
+            for index in 0..information.AceCount {
+                let mut ace = ptr::null_mut();
+                if unsafe { GetAce(dacl, index, &mut ace) } == 0 || ace.is_null() { return Err(io::ErrorKind::PermissionDenied.into()); }
+                let ace = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
+                if ![0, 1].contains(&ace.Header.AceType) { return Err(io::ErrorKind::PermissionDenied.into()); }
+                if ace.Header.AceType == 1 || ace.Header.AceFlags & INHERIT_ONLY_ACE as u8 != 0 { continue; }
+                // Generic/all and file data, attributes, deletion and security
+                // descriptor writes are all authority over a private namespace.
+                let writes = 0x1000_0000 | 0x4000_0000 | 0x000D_0156;
+                let sid = (&raw const ace.SidStart).cast_mut().cast();
+                if ace.Mask & writes != 0 && unsafe { EqualSid(sid, user) } == 0 &&
+                    unsafe { EqualSid(sid, expected) } == 0 && unsafe { IsWellKnownSid(sid, WinLocalSystemSid) } == 0 {
+                    return Err(io::ErrorKind::PermissionDenied.into());
+                }
+            }
+            Ok(())
+        })();
+        unsafe { windows_sys::Win32::Foundation::LocalFree(descriptor); }
+        valid
+    })();
+    unsafe { CloseHandle(token); }
+    result
+}
+
+fn protect(file: &File, adopt_owner: bool) -> io::Result<()> {
     let descriptor = Descriptor::current_user()?;
     let mut present = 0; let mut defaulted = 0; let mut dacl = ptr::null_mut();
     if unsafe { GetSecurityDescriptorDacl(descriptor.pointer().cast_mut(), &mut present, &mut dacl, &mut defaulted) } == 0 ||
         present == 0 || dacl.is_null() { return Err(io::ErrorKind::PermissionDenied.into()); }
+    let mut owner = ptr::null_mut(); let mut owner_defaulted = 0;
+    if adopt_owner && (unsafe { GetSecurityDescriptorOwner(descriptor.pointer().cast_mut(), &mut owner, &mut owner_defaulted) } == 0 ||
+        owner.is_null()) { return Err(io::ErrorKind::PermissionDenied.into()); }
     let status = unsafe { SetSecurityInfo(file.as_raw_handle() as HANDLE, SE_FILE_OBJECT,
-        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, ptr::null_mut(), ptr::null_mut(), dacl, ptr::null_mut()) };
+        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION |
+            if adopt_owner { OWNER_SECURITY_INFORMATION } else { 0 }, owner, ptr::null_mut(), dacl, ptr::null_mut()) };
     if status != 0 { return Err(io::Error::from_raw_os_error(status as i32)); }
     private_directory::require_private(file)
 }
@@ -378,6 +449,83 @@ mod tests {
     }
     fn id(value: u8) -> String { format!("{value:032x}") }
     fn hash(value: &[u8]) -> String { format!("{:x}", Sha256::digest(value)) }
+
+    #[test]
+    fn explicit_prepare_adopts_only_default_token_owner_and_keeps_outer_directory() {
+        let outer = root();
+        std::fs::create_dir(&outer).unwrap();
+        let path = outer.join("code");
+        std::fs::create_dir(&path).unwrap();
+        {
+            let outer_held = LockedPath::open(&outer, true, false).unwrap();
+            let outer_user_owned = require_owner(&outer_held.file).is_ok();
+            require_preparation_owner(&outer_held.file).unwrap();
+            let original = LockedPath::open(&path, true, false).unwrap();
+            let root_user_owned = require_owner(&original.file).is_ok();
+            let identity = no_follow::identity(&original.file).unwrap();
+            assert!(Lease::open(path.to_str().unwrap(), Purpose::Settings, false, 30_000).is_err());
+            assert_eq!(require_owner(&original.file).is_ok(), root_user_owned);
+            let lease = Lease::open(path.to_str().unwrap(), Purpose::Settings, true, 30_000).unwrap();
+            assert_eq!(lease.identity, identity);
+            require_owner(&original.file).unwrap();
+            private_directory::require_private(&original.file).unwrap();
+            assert_eq!(require_owner(&outer_held.file).is_ok(), outer_user_owned);
+            assert!(lease.read("settings.json").unwrap().is_none());
+            lease.current().unwrap();
+        }
+        std::fs::remove_dir_all(outer).unwrap();
+    }
+
+    #[test]
+    fn default_token_owner_prepare_refuses_other_writers_without_adopting_root_or_leaf() {
+        use windows_sys::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1};
+        let path = root();
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("settings.json"), b"untrusted unchanged bytes").unwrap();
+        {
+            let original = LockedPath::open(&path, true, false).unwrap();
+            // This negative branch requires a distinct default owner, as on the
+            // elevated Windows CI runner. A normal token already owns its root.
+            if require_owner(&original.file).is_err() {
+                let outer = LockedPath::open(path.parent().unwrap(), true, false).unwrap();
+                let control = open(&outer.file, path.file_name().unwrap().to_str().unwrap(), true,
+                    FILE_READ_ATTRIBUTES | 0x0002_0000 | 0x0004_0000, 1, ptr::null()).unwrap();
+                let value = "D:P(A;OICI;FA;;;WD)(A;OICI;FA;;;SY)".encode_utf16().chain([0]).collect::<Vec<_>>();
+                let mut descriptor = ptr::null_mut();
+                assert_ne!(unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(value.as_ptr(), SDDL_REVISION_1,
+                    &mut descriptor, ptr::null_mut()) }, 0);
+                let mut present = 0; let mut defaulted = 0; let mut dacl = ptr::null_mut();
+                assert_ne!(unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted) }, 0);
+                let status = unsafe { SetSecurityInfo(control.as_raw_handle() as HANDLE, SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, ptr::null_mut(), ptr::null_mut(), dacl, ptr::null_mut()) };
+                unsafe { windows_sys::Win32::Foundation::LocalFree(descriptor); }
+                assert_eq!(status, 0);
+                let identity = no_follow::identity(&original.file).unwrap();
+                assert!(require_preparation_owner(&original.file).is_err());
+                assert!(Lease::open(path.to_str().unwrap(), Purpose::Settings, true, 30_000).is_err());
+                assert!(require_owner(&original.file).is_err());
+                assert!(require_preparation_owner(&original.file).is_err());
+                assert_eq!(no_follow::identity(&original.file).unwrap(), identity);
+                assert_eq!(std::fs::read(path.join("settings.json")).unwrap(), b"untrusted unchanged bytes");
+            }
+        }
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn preparing_root_never_adopts_an_existing_nonprivate_settings_leaf() {
+        let path = root();
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("settings.json"), b"untrusted unchanged bytes").unwrap();
+        {
+            let lease = Lease::open(path.to_str().unwrap(), Purpose::Settings, true, 30_000).unwrap();
+            require_owner(&lease.parent.file).unwrap();
+            private_directory::require_private(&lease.parent.file).unwrap();
+            assert!(lease.read("settings.json").is_err());
+            assert_eq!(std::fs::read(path.join("settings.json")).unwrap(), b"untrusted unchanged bytes");
+        }
+        std::fs::remove_dir_all(path).unwrap();
+    }
 
     #[test]
     fn original_installation_pin_holds_leaf_until_lease_close_and_rejects_other_purpose() {

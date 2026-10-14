@@ -692,8 +692,8 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.AUR_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          git config --global user.email "deepagent-code@sst.dev"
-          git config --global user.name "deepagent-code"
+          git config --global user.email "deepagent-ai@deepagent.ltd"
+          git config --global user.name "deepagent-ai"
           ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts || true
 
       # RI-51 authoritative ledger release gate: regenerate the candidate ledger from THIS tree

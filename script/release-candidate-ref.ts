@@ -6,7 +6,13 @@ export function ensureReleaseCandidateRef(input: {
 }): string {
   const git = (...args: string[]) => {
     const result = Bun.spawnSync(["git", ...args], { cwd: input.repository, stdout: "pipe", stderr: "pipe" })
-    if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.toString().trim()}`)
+    if (result.exitCode !== 0)
+      throw new Error(
+        `git ${args[0]} failed: ${[result.stderr, result.stdout]
+          .map((output) => output.toString().trim())
+          .filter(Boolean)
+          .join("\n")}`,
+      )
     return result.stdout.toString().trim()
   }
   if (git("rev-parse", "HEAD") !== input.commit) throw new Error("candidate HEAD changed before ref push")

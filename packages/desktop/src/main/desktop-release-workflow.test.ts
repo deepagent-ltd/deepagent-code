@@ -7,6 +7,7 @@ type Step = {
   name?: string
   uses?: string
   run?: string
+  shell?: string
   if?: string
   env?: Record<string, string>
   with?: Record<string, string>
@@ -48,15 +49,18 @@ test("the shared package action admits one publisher before either prebuild and 
   expect(action.runs.steps.map((step) => step.run?.includes("native-publisher.ts")
     ? step.run.trim().split(" ").at(-1)
     : step.name)).toEqual([
-    "Pin the Desktop build identity", "prepare", "Prepare the release package version",
+    "Pin the Desktop build identity", "Verify Windows private storage preparation", "prepare", "Prepare the release package version",
     "Build renderer and Native assets", "Package", "guard", "cleanup",
   ])
-  expect(action.runs.steps[2].if).toBe("inputs.prepare == 'true'")
-  expect(action.runs.steps[5].if).toBeUndefined()
-  expect(action.runs.steps[6].if).toBe("always()")
+  expect(action.runs.steps[1].if).toBe("runner.os == 'Windows'")
+  expect(action.runs.steps[1].shell).toBe("pwsh")
+  expect(action.runs.steps[1].run).toBe("cargo test --locked --manifest-path packages/work-file-helper/Cargo.toml --lib windows_private_storage_bridge::storage::tests")
+  expect(action.runs.steps[3].if).toBe("inputs.prepare == 'true'")
+  expect(action.runs.steps[6].if).toBeUndefined()
+  expect(action.runs.steps[7].if).toBe("always()")
   expect(action.runs.steps.every((step) => !step["continue-on-error"])).toBe(true)
   expect(action.runs.steps.some((step) => step.uses?.startsWith("actions/upload-artifact@"))).toBe(false)
-  expect(action.runs.steps[4].run).toContain('"${dac_platform_flags[@]}" --publish never')
+  expect(action.runs.steps[5].run).toContain('"${dac_platform_flags[@]}" --publish never')
 })
 
 test("the actual identity step propagates version, channel and Linux assets without running builds", async () => {

@@ -29,6 +29,7 @@ test("selects the entire real PromptInput and clears it with native keyboard eve
     },
     provider: { all: [], connected: [], default: {} },
     sessions: [session],
+    ordinaryEligible: { [sessionID]: true },
     pageMessages: () => ({ items: [] }),
   })
   const mutations: string[] = []
@@ -44,7 +45,7 @@ test("selects the entire real PromptInput and clears it with native keyboard eve
       status: 200,
       contentType: "application/json",
       headers: { "access-control-allow-origin": "*" },
-      body: JSON.stringify({ data: pathname.endsWith(`/session/${sessionID}`) ? session : [] }),
+      body: JSON.stringify({ data: pathname.endsWith(`/session/${sessionID}`) ? { ...session, ordinaryEligible: true } : [] }),
     })
   })
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)

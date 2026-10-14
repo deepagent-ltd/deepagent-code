@@ -12,13 +12,15 @@ import { ProjectV2 } from "@deepagent-code/core/project"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
-import { SessionActivityInputTable, SessionActivityTable } from "@deepagent-code/core/context-federation/session-sql"
+import { SessionActivityTable } from "@deepagent-code/core/context-federation/session-sql"
+import { SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
 import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { IMBroadcasterLive, IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
 import { IMDacSession } from "@deepagent-code/core/im/dac-session"
@@ -29,6 +31,7 @@ import { SessionInputTable } from "@deepagent-code/core/session/sql"
 import { KernelDelivery } from "@deepagent-code/core/im/kernel-delivery"
 import { GroupTable, MessageTable } from "@deepagent-code/core/im/sql"
 import { testEffect } from "../lib/effect"
+import { openFixtureActivity, settleFixtureActivity } from "../../../core/test/fixture/open-activity"
 
 const root = mkdtempSync(path.join(os.tmpdir(), "dac-personal-final-"))
 const database = Layer.suspend(() => Database.layerFromPath(path.join(root, `${crypto.randomUUID()}.sqlite`)))
@@ -81,6 +84,13 @@ const prepare = (text: string) =>
     )
     const assistantID = SessionMessage.ID.make(`msg_${crypto.randomUUID()}`)
     const publisher = yield* EventV2.Service
+    yield* SessionInput.promoteNextQueued(db, publisher, SessionV2.ID.make(command.sessionID))
+    const activity = yield* openFixtureActivity({
+      sessionId: SessionV2.ID.make(command.sessionID),
+      triggerInputId: command.inputID,
+      securityNamespaceId: SecurityNamespaceID.make("sec_im_reply_outbox"),
+      now: Date.now(),
+    })
     yield* publisher.publish(SessionEvent.Step.Started, {
       sessionID: SessionV2.ID.make(command.sessionID),
       timestamp: DateTime.makeUnsafe(Date.now()),
@@ -101,38 +111,24 @@ const prepare = (text: string) =>
       textID: "answer",
       text,
     })
-    return { db, session, repo, command, assistantID, text, scope, groupID: group.id }
+    return { db, session, repo, command, assistantID, activityID: activity.activityId, text, scope, groupID: group.id }
   })
 const settle = (f: Effect.Success<ReturnType<typeof prepare>>) =>
   Effect.gen(function* () {
-    const activityID = `activity_${crypto.randomUUID()}`
-    yield* f.db
-      .insert(SessionActivityTable)
-      .values({
-        activity_id: activityID,
-        session_id: f.command.sessionID,
-        ordinal: 1,
-        trigger_input_id: f.command.inputID,
-        delivery: "queue",
-        state: "settled",
-        created_at: Date.now(),
-        settled_at: Date.now(),
-        final_message_id: f.assistantID,
-      })
-      .run()
-      .pipe(Effect.orDie)
-    yield* f.db
-      .insert(SessionActivityInputTable)
-      .values({
-        activity_id: activityID,
-        input_id: f.command.inputID,
-        ordinal: 1,
-        admitted_seq: 1,
-        role: "trigger",
-        promoted_at: Date.now(),
-      })
-      .run()
-      .pipe(Effect.orDie)
+    yield* (yield* EventV2.Service).publish(SessionEvent.Step.Ended, {
+      sessionID: SessionV2.ID.make(f.command.sessionID),
+      timestamp: DateTime.makeUnsafe(Date.now()),
+      assistantMessageID: f.assistantID,
+      finish: "stop",
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+    yield* settleFixtureActivity({
+      activityId: f.activityID,
+      finalMessageId: f.assistantID,
+      securityNamespaceId: SecurityNamespaceID.make("sec_im_reply_outbox"),
+      now: Date.now(),
+    })
   })
 
 describe("personal final collector / original outbox (file SQLite, no provider)", () => {

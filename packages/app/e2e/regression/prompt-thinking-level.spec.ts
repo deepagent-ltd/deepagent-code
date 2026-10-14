@@ -48,6 +48,7 @@ test("shows the V2 thinking level control while relevant", async ({ page }) => {
         time: { created: 1700000000000, updated: 1700000000000 },
       },
     ],
+    ordinaryEligible: { [sessionID]: true },
     pageMessages: () => ({ items: [] }),
   })
   await page.route("**/api/session/*/prompt", async (route) => {
@@ -75,24 +76,27 @@ test("shows the V2 thinking level control while relevant", async ({ page }) => {
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
   const composer = page.locator('[data-component="session-prompt-dock"]')
   const input = composer.locator('[data-component="prompt-input"]')
-  const control = composer.locator('[data-component="prompt-variant-control"]')
+  const control = composer.locator('[data-component="prompt-model-control"]')
   await expectAppVisible(composer)
 
   await expect(control).toBeVisible()
 
-  await control.locator('[data-action="prompt-model-variant"]').click()
-  const high = page.getByRole("option", { name: "high" })
+  await control.locator('[data-action="prompt-model"]').click()
+  const high = page.locator('[data-action="prompt-model-variant"][data-variant="high"]')
   await expect(high).toBeVisible()
   await page.mouse.move(0, 0)
   await expect(control).toBeVisible()
   await expect(high).toBeVisible()
   await high.click()
+  await expect(high).toHaveAttribute("aria-pressed", "true")
+  await page.keyboard.press("Escape")
+  await expect(control.locator('[data-component="prompt-model-effort-label"]')).toHaveText("High")
 
   await input.focus()
   await expect(control).toBeVisible()
 
   await input.press("!")
-  await expect(control).toHaveCount(0)
+  await expect(control).toBeHidden()
   await input.press("Backspace")
   await expect(control).toBeVisible()
 
@@ -103,7 +107,9 @@ test("shows the V2 thinking level control while relevant", async ({ page }) => {
   await diagnostics.click()
   await expect(diagnostics).toHaveAttribute("aria-expanded", "false")
 
-  await page.getByRole("radio", { name: "Send your prompt directly" }).click()
+  const scenario = composer.locator('[data-action="prompt-scenario-toggle"]')
+  if (await scenario.getAttribute("data-scenario") !== "direct") await scenario.click()
+  await expect(scenario).toHaveAttribute("data-scenario", "direct")
   await input.focus()
   await input.press("ControlOrMeta+A")
   await input.press("Backspace")
