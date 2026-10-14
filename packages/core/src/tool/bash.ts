@@ -15,7 +15,6 @@ import { Policy } from "../policy"
 import { ServerCapabilities } from "../server-capabilities"
 import { tolerantInt } from "../schema"
 import { ShellScan } from "../shell/scan"
-import { which } from "../util/which"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -62,11 +61,7 @@ type Output = typeof Output.Type
 // never the silent default. POSIX keeps the existing /bin/sh default.
 const defaultShell = Effect.fnUntraced(function* () {
   if (process.platform !== "win32") return "/bin/sh"
-  return ShellScan.defaultWindowsChain({
-    pwsh: which("pwsh") ?? undefined,
-    powershell: which("powershell") ?? undefined,
-    comspec: process.env.COMSPEC,
-  })
+  return ShellScan.defaultWindowsChain(ShellScan.windowsShells())
 })
 
 const compactOutput = (stdout: string, stderr: string) => {

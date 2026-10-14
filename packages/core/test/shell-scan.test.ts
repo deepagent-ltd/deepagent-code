@@ -1,5 +1,5 @@
 import path from "path"
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -78,6 +78,25 @@ describe("ShellScan names", () => {
       )
     }),
   )
+
+  test.skipIf(process.platform !== "win32")("discovers built-in Windows shells without Git or PowerShell in PATH", () => {
+    const system = ShellScan.windowsShells({ PATH: "", PATHEXT: ".EXE", SystemRoot: process.env.SystemRoot })
+    expect(system.pwsh).toBeUndefined()
+    expect(system.powershell?.toLowerCase()).toBe(
+      path.win32.join(process.env.SystemRoot!, "System32", "WindowsPowerShell", "v1.0", "powershell.exe").toLowerCase(),
+    )
+    expect(ShellScan.defaultWindowsChain(system)).toBe(system.powershell!)
+    const command = ShellScan.windowsShells({ PATH: "", PATHEXT: ".EXE", COMSPEC: system.comspec })
+    expect(command.pwsh).toBeUndefined()
+    expect(command.powershell).toBeUndefined()
+    expect(ShellScan.defaultWindowsChain(command)).toBe(system.comspec!)
+    const redirected = ShellScan.windowsShells({ PATH: "", PATHEXT: ".EXE", COMSPEC: system.powershell })
+    expect(redirected.comspec).toBeUndefined()
+    expect(ShellScan.defaultWindowsChain(redirected)).toBe("cmd.exe")
+    const missing = ShellScan.windowsShells({ PATH: "", PATHEXT: ".EXE", SystemRoot: "relative", COMSPEC: "missing-dac-cmd.exe" })
+    expect(missing.powershell).toBeUndefined()
+    expect(missing.comspec).toBeUndefined()
+  })
 })
 
 describe("ShellScan collect (bash grammar)", () => {

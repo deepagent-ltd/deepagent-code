@@ -25,6 +25,18 @@ export async function prepareTestNativePublisher(input: {
   return prepareNativePublisher(input)
 }
 
+/** SystemRoot is supplied by the trusted runner environment. Resolve the two
+ * Windows system tools directly; Git Bash's GNU whoami and COMSPEC are unrelated. */
+export function windowsNativePublisherTools(systemRoot = process.env.SystemRoot) {
+  if (!systemRoot || !/^[A-Za-z]:[\\/]/.test(systemRoot) || /[\r\n\0<>"|?*]/.test(systemRoot) ||
+    systemRoot.split(/[\\/]/).some((part) => part === "." || part === ".."))
+    throw new Refused("QA_PUBLISHER_WINDOWS_ROOT_REJECTED")
+  return {
+    owner: path.win32.join(systemRoot, "System32", "whoami.exe"),
+    acl: path.win32.join(systemRoot, "System32", "icacls.exe"),
+  }
+}
+
 export async function prepareNativePublisher(input: {
   runnerTemp: string
   environmentFile: string
@@ -45,19 +57,22 @@ export async function prepareNativePublisher(input: {
   if (!environment.isFile() || environment.isSymbolicLink() || environment.nlink !== 1 ||
     await fs.realpath(input.environmentFile) !== path.resolve(input.environmentFile))
     throw new Refused("QA_PUBLISHER_TEMP_REJECTED")
+  const windows = process.platform === "win32" ? windowsNativePublisherTools() : undefined
   const directory = await fs.mkdtemp(path.join(root, input.release ? "dac-release-native-publisher-" : "dac-test-native-publisher-"))
-  await fs.chmod(directory, 0o700)
-  if (process.platform === "win32") {
-    const owner = await execute("whoami.exe", ["/user", "/fo", "csv", "/nh"], { maxBuffer: 8192 })
-    const sid = /"(S-1-5-[0-9-]+)"/.exec(owner.stdout)?.[1]
-    if (!sid) throw new Refused("QA_PUBLISHER_OWNER_UNAVAILABLE")
-    // This changes only our newly-created directory's ACL, never an OS policy.
-    await execute("icacls.exe", [directory, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`], { maxBuffer: 8192 })
-  }
-  const keys = generateKeyPairSync("ed25519")
   const privateKeyFile = path.join(directory, "publisher-private.pem")
   const publicKeyFile = path.join(directory, "publisher-public.pem")
   try {
+    await fs.chmod(directory, 0o700)
+    if (windows) {
+      const owner = await execute(windows.owner, ["/user", "/fo", "csv", "/nh"], { maxBuffer: 8192 })
+        .catch(() => { throw new Refused("QA_PUBLISHER_OWNER_COMMAND_FAILED") })
+      const sid = /"(S-1-5-[0-9-]+)"/.exec(owner.stdout)?.[1]
+      if (!sid) throw new Refused("QA_PUBLISHER_OWNER_UNAVAILABLE")
+      // This changes only our newly-created directory's ACL, never an OS policy.
+      await execute(windows.acl, [directory, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`], { maxBuffer: 8192 })
+        .catch(() => { throw new Refused("QA_PUBLISHER_ACL_COMMAND_FAILED") })
+    }
+    const keys = generateKeyPairSync("ed25519")
     await fs.writeFile(privateKeyFile, keys.privateKey.export({ type: "pkcs8", format: "pem" }), { flag: "wx", mode: 0o600 })
     await fs.writeFile(publicKeyFile, keys.publicKey.export({ type: "spki", format: "pem" }), { flag: "wx", mode: 0o644 })
     await fs.appendFile(input.environmentFile, [
@@ -72,7 +87,8 @@ export async function prepareNativePublisher(input: {
       signerHash: digest(keys.publicKey.export({ type: "spki", format: "der" })) }
   } catch (error) {
     await Promise.all([privateKeyFile, publicKeyFile].map((name) => fs.rm(name, { force: true })))
-    await fs.rmdir(directory)
+      .then(() => fs.rmdir(directory))
+      .catch(() => { throw new Refused("QA_PUBLISHER_TEMP_CLEANUP_FAILED") })
     throw error
   }
 }

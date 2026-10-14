@@ -9,6 +9,7 @@ import { ChildProcess } from "effect/unstable/process"
 import { FSUtil } from "../fs-util"
 import { Log } from "../util/log"
 import { lazy } from "../util/lazy"
+import { which } from "../util/which"
 import { BashArity } from "./arity"
 
 // Shared shell-command approval scan (D-W2): the tree-sitter bash/PowerShell dual-grammar parse,
@@ -104,6 +105,22 @@ export function isPs(file: string) {
 // find a faithful POSIX interpreter. Probes are injected so the order is pinnable on any host.
 export function defaultWindowsChain(probe: { pwsh?: string; powershell?: string; comspec?: string }): string {
   return probe.pwsh ?? probe.powershell ?? (probe.comspec || "cmd.exe")
+}
+
+/** A GUI launch need not inherit the system PowerShell directory in PATH.
+ * Probe installed system paths as well as PATH; never select Git Bash implicitly. */
+export function windowsShells(env: NodeJS.ProcessEnv = process.env) {
+  const root = env.SystemRoot && /^[A-Za-z]:[\\/]/.test(env.SystemRoot) &&
+    !/[\r\n\0<>"|?*]/.test(env.SystemRoot) && !env.SystemRoot.split(/[\\/]/).some((part) => part === "." || part === "..")
+    ? env.SystemRoot : undefined
+  return {
+    pwsh: which("pwsh.exe", env) ?? undefined,
+    powershell: which("powershell.exe", env) ??
+      (root ? which(path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), env) : null) ?? undefined,
+    comspec: (root ? which(path.win32.join(root, "System32", "cmd.exe"), env) : null) ??
+      (env.COMSPEC && path.win32.basename(env.COMSPEC).toLowerCase() === "cmd.exe" ? which(env.COMSPEC, env) : null) ??
+      which("cmd.exe", env) ?? undefined,
+  }
 }
 
 function kindOf(file: string): "bash" | "pwsh" | "powershell" | "cmd" {

@@ -366,20 +366,30 @@ jobs:
         with:
           ref: ${{ needs.version.outputs.candidate_commit }}
 
+      - name: Validate macOS release signing credentials
+        if: runner.os == 'macOS' && needs.version.outputs.release != ''
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_CSC_NAME: ${{ secrets.APPLE_CSC_NAME }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_CSC_NAME APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing macOS release signing credential: $name"
+              exit 1
+            fi
+          done
+
       - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93 # v2.0.0
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && needs.version.outputs.release != ''
         with:
           keychain: build
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-
-      - name: Setup Apple API Key
-        if: runner.os == 'macOS'
-        env:
-          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_PATH }}
-        run: |
-          umask 077
-          printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/apple-api-key.p8"
 
       - uses: ./.github/actions/setup-bun
         with:
@@ -461,14 +471,12 @@ jobs:
           DEEPAGENT_CODE_CLI_ARTIFACT: ${{ (runner.os == 'Windows' && 'deepagent-code-cli-windows') || 'deepagent-code-cli' }}
           RUST_TARGET: ${{ matrix.settings.target }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
-          # The Native publisher selects this configured imported Developer ID;
-          # Apple API-key notarization remains the formal release signing path.
+          # Match desktop-build: use the imported Developer ID and the existing
+          # Apple ID notarization secrets, without creating an empty API-key file.
           CSC_NAME: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_CSC_NAME || '' }}
-          CSC_LINK: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_CERTIFICATE || '' }}
-          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_API_KEY: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && format('{0}/apple-api-key.p8', runner.temp) || '' }}
-          APPLE_API_KEY_ID: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_API_KEY || '' }}
-          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_TEAM_ID || '' }}
 
       - name: Create macOS .app.tar.gz
         if: runner.os == 'macOS' && needs.version.outputs.release

@@ -33,6 +33,17 @@ const preparePty = (input: Pty.CreateInput) => PtyPreparation.prepareCreate(inpu
 describe("pty shell args", () => {
   if (process.platform !== "win32") return
 
+  it.instance("defaults Windows PTY to a native shell and preserves an explicit command", () =>
+    Effect.gen(function* () {
+      const native = yield* preparePty({ title: "native default" })
+      expect(["pwsh", "powershell", "cmd"]).toContain(Shell.name(native.command))
+      expect(native.args).toEqual([])
+      const explicit = yield* preparePty({ command: "cmd.exe", args: ["/d"], title: "explicit command" })
+      expect(explicit.command).toBe("cmd.exe")
+      expect(explicit.args).toEqual(["/d"])
+    }),
+  )
+
   const ps = Bun.which("pwsh") || Bun.which("powershell")
   if (ps) {
     it.instance(
