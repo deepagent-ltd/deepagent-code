@@ -21,7 +21,8 @@ const action = Bun.YAML.parse(await Bun.file(path.join(root, ".github/actions/pa
 const workflows = await Promise.all(["publish", "desktop-build"].map(async (name) => ({
   name,
   document: Bun.YAML.parse(await Bun.file(path.join(root, `.github/workflows/${name}.yml`)).text()) as {
-    jobs: Record<string, { env?: Record<string, string>; steps: Step[] }>
+    jobs: Record<string, { env?: Record<string, string>; steps: Step[]; needs?: string[];
+      strategy?: { matrix: { include: { host: string; arch: string; rust_target: string }[] } } }>
   },
 })))
 
@@ -134,7 +135,7 @@ test("formal Mac signing rejects incomplete credentials before certificate impor
 test("formal Windows publishing preserves the existing optional Desktop signing policy", () => {
   const release = workflows[0].document.jobs
   const desktop = workflows[1].document.jobs.build
-  for (const name of ["sign-cli-windows", "build-electron"]) {
+  for (const name of ["build-cli-windows", "build-electron"]) {
     expect(release[name].env?.HAS_TRUSTED_SIGNING).toBe(desktop.env?.HAS_TRUSTED_SIGNING)
     expect(release[name].env?.AZURE_CLIENT_ID).toBe("${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}")
     expect(release[name].env?.AZURE_TENANT_ID).toBe("${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}")
@@ -143,8 +144,9 @@ test("formal Windows publishing preserves the existing optional Desktop signing 
       .toContain("env.HAS_TRUSTED_SIGNING == 'true'")
   }
   const cli = release["sign-cli-windows"].steps
-  expect(cli.find((step) => step.uses?.startsWith("azure/artifact-signing-action@"))?.if)
+  expect(release["build-cli-windows"].steps.find((step) => step.uses?.startsWith("azure/artifact-signing-action@"))?.if)
     .toBe("env.HAS_TRUSTED_SIGNING == 'true'")
+  expect(cli.some((step) => step.uses?.startsWith("azure/artifact-signing-action@"))).toBe(false)
   expect(cli.find((step) => step.name === "Verify Windows CLI signatures")?.if)
     .toBe("env.HAS_TRUSTED_SIGNING == 'true'")
   expect(cli.find((step) => step.name === "Repack Windows CLI archives")?.if).toBeUndefined()
@@ -161,6 +163,52 @@ test("formal Windows publishing preserves the existing optional Desktop signing 
   expect(packaging.if).toBeUndefined()
   expect(packaging["continue-on-error"]).toBeUndefined()
   expect([...cli, ...electron].every((step) => !step["continue-on-error"])).toBe(true)
+})
+
+test("all nine release CLI targets retain native host prerequisites and sign before same-job sealing", () => {
+  const release = workflows[0].document.jobs
+  const linux = release["build-cli"].steps
+  const tools = linux.find((step) => step.name === "Prepare Linux CLI Rust targets and musl linker")!
+  const built = linux.find((step) => step.name === "Build (release identity pinned)")!
+  expect(linux.indexOf(tools)).toBeLessThan(linux.indexOf(built))
+  expect(tools.run).toContain("rustup target add x86_64-unknown-linux-gnu x86_64-unknown-linux-musl")
+  expect(tools.run).toContain("musl-tools")
+  expect(built.env?.CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER).toBe("/usr/bin/musl-gcc")
+  expect(built.run).toContain("script/build.ts --exclude-win32 --exclude-darwin")
+  expect(built.run).toContain("./packages/cli/script/build.ts")
+  const mac = release["build-cli-macos"]
+  expect(mac.strategy?.matrix.include).toEqual([
+    { host: "macos-15-intel", arch: "x64", rust_target: "x86_64-apple-darwin" },
+    { host: "macos-26", arch: "arm64", rust_target: "aarch64-apple-darwin" },
+  ])
+  const macSeal = mac.steps.find((step) => step.run?.includes("native-publisher.ts seal-cli"))!
+  expect(macSeal.run).toContain("for file in packages/deepagent-code/dist/deepagent-code-darwin-*/bin/deepagent-code; do")
+  expect(macSeal.run).toContain('dir="${file%/bin/deepagent-code}"')
+  expect(macSeal.run).not.toContain("for dir in packages/deepagent-code/dist/deepagent-code-darwin-*; do")
+  for (const job of [mac, release["build-cli-windows"]]) {
+    const stages = job.steps
+    const prepared = stages.findIndex((step) => step.run?.endsWith("native-publisher.ts prepare"))
+    const build = stages.findIndex((step) => step.run?.includes("script/build.ts --single --baseline"))
+    const sealed = stages.findIndex((step) => step.run?.includes("native-publisher.ts seal-cli"))
+    const cleanup = stages.findIndex((step) => step.run?.endsWith("native-publisher.ts cleanup"))
+    expect(prepared).toBeGreaterThan(0)
+    expect(build).toBeGreaterThan(prepared)
+    expect(sealed).toBeGreaterThan(build)
+    expect(cleanup).toBeGreaterThan(sealed)
+    expect(stages[cleanup].if).toBe("always()")
+    expect(stages[sealed].env?.DEEPAGENT_CODE_CANDIDATE_COMMIT).toContain("outputs.candidate_commit")
+    expect(stages[sealed].env?.DEEPAGENT_CODE_CANDIDATE_TREE).toContain("outputs.candidate_tree")
+    expect(stages[build].env?.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE).toContain("owner-auth/owner-authorization.json")
+    expect(stages[build].env?.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY).toContain("owner-key/release-owner-public-key.pem")
+    const uploads = stages.filter((step) => step.uses?.startsWith("actions/upload-artifact@"))
+    expect(uploads.every((step) => !JSON.stringify(step).includes("publisher-private"))).toBe(true)
+  }
+  const win = release["build-cli-windows"].steps
+  expect(win.findIndex((step) => step.uses?.startsWith("azure/artifact-signing-action@")))
+    .toBeLessThan(win.findIndex((step) => step.run?.includes("native-publisher.ts seal-cli")))
+  expect(release.publish.needs).toContain("build-cli-macos")
+  expect(release.publish.steps.find((step) => step.with?.pattern === "deepagent-code-cli-darwin-*")?.with?.["merge-multiple"])
+    .toBe(true)
 })
 
 test("main distribution binds existing checks before upload and never downgrades reviewed qualification", () => {

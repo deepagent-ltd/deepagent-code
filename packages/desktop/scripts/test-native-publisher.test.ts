@@ -8,7 +8,7 @@ import { NativeInstallationSchema } from "../../deepagent-code/src/installation/
 import { cleanupNativePublisher, cleanupTestNativePublisher, guardTestNativeAssets, prepareNativePublisher, prepareTestNativePublisher,
   sealTestNativeCLI, verifyTestNativeReceipt, verifyTestWindowsPreloader, verifyTestWindowsCLIPreloader,
   windowsNativePublisherTools } from "./test-native-publisher"
-import { guardReleaseNativePackage, prepareReleaseNativePublisher, releaseMacAssetIdentity } from "./native-publisher"
+import { guardReleaseNativePackage, prepareReleaseNativePublisher, releaseMacAssetIdentity, sealReleaseNativeCLI } from "./native-publisher"
 import { sealInstalledNativeNode } from "./native-node-artifact"
 
 async function fixture() {
@@ -36,6 +36,44 @@ async function fixture() {
   await fs.writeFile(`${executable}.native-components.json`, CanonicalJson.stringify(inventory), { mode: 0o600 })
   return { root, target, publisher, executable, environmentFile, inventory }
 }
+
+test.skipIf(process.platform !== "darwin")("release CLI seal binds frozen source and final signed bytes without changing owner material", async () => {
+  const value = await fixture()
+  try {
+    const directory = path.join(value.root, "dist")
+    const prefix = `deepagent-code-${value.target}`
+    const names = process.arch === "x64" ? [prefix, `${prefix}-baseline`] : [prefix]
+    for (const name of names) {
+      await fs.mkdir(path.join(directory, name), { recursive: true })
+      await fs.cp(path.dirname(value.executable), path.join(directory, name, "bin"), { recursive: true })
+      await fs.writeFile(path.join(directory, name, "bin/owner-authorization.json"), "original owner bytes")
+      await fs.writeFile(path.join(directory, name, "package.json"), JSON.stringify({ name, version: "2.0.4",
+        preferUnplugged: true, os: ["darwin"], cpu: [process.arch], deepagentCodeBuild: {
+          sourceCommit: value.inventory.sourceCommit, sourceDirty: false, binarySha256: "pre-sign bytes",
+        } }))
+    }
+    const input = { directory, target: value.target, version: "2.0.4", releaseID: value.publisher.releaseID,
+      sourceCommit: value.inventory.sourceCommit, sourceTree: value.inventory.sourceTree,
+      privateKeyFile: value.publisher.privateKeyFile, publicKeyFile: value.publisher.publicKeyFile }
+    await expect(sealReleaseNativeCLI({ ...input, sourceTree: "c".repeat(40) })).rejects.toThrow("RELEASE_CLI_SOURCE_REJECTED")
+    expect(await Bun.file(path.join(directory, prefix, "bin/deepagent-code.native-installation.json")).exists()).toBe(false)
+    await fs.appendFile(path.join(directory, prefix, "bin/deepagent-code"), "final OS-signing bytes")
+    const receipts = await sealReleaseNativeCLI(input)
+    expect(receipts.map((entry) => entry.name)).toEqual(names)
+    for (const receipt of receipts) {
+      expect(receipt.state).toBe("verified_build_receipt")
+      expect(receipt.privateKeyUploaded).toBe(false)
+      expect(receipt.functionalAcceptance).toBe(false)
+      expect((await Bun.file(path.join(directory, receipt.name, "package.json")).json()).deepagentCodeBuild.binarySha256)
+        .toBe(createHash("sha256").update(await fs.readFile(receipt.executable)).digest("hex"))
+      expect(await fs.readFile(path.join(path.dirname(receipt.executable), "owner-authorization.json"), "utf8"))
+        .toBe("original owner bytes")
+      await fs.appendFile(receipt.executable, "post-seal mutation")
+      await expect(verifyTestNativeReceipt({ ...input, executable: receipt.executable }))
+        .rejects.toThrow("QA_EXECUTABLE_BYTES_REJECTED")
+    }
+  } finally { await fs.rm(value.root, { recursive: true, force: true }) }
+})
 
 test("Windows publisher tools use only the configured local System32 paths", () => {
   expect(windowsNativePublisherTools("C:\\Windows")).toEqual({

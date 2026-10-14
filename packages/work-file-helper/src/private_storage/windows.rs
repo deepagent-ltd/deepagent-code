@@ -443,14 +443,18 @@ fn rename(file: &File, parent: &File, name: &str, replace: bool) -> io::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
     fn root() -> std::path::PathBuf {
         // GetTempPath may expose an 8.3 ancestor alias on Windows CI. These
         // fixtures need the physical long-name parent before appending a new
         // leaf; production LockedPath must still refuse mismatched aliases.
         let directory = std::fs::canonicalize(std::env::temp_dir()).unwrap();
         let directory = directory.to_str().unwrap();
-        Path::new(directory.strip_prefix(r"\\?\").unwrap_or(directory)).join(format!("dac-private-storage-{}-{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))
+        // Parallel Windows clock reads can share a tick; the process-local
+        // sequence keeps each fixture's owner/DACL changes on its own root.
+        Path::new(directory.strip_prefix(r"\\?\").unwrap_or(directory)).join(format!("dac-private-storage-{}-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(), NEXT_ROOT.fetch_add(1, Ordering::Relaxed)))
     }
     fn id(value: u8) -> String { format!("{value:032x}") }
     fn hash(value: &[u8]) -> String { format!("{:x}", Sha256::digest(value)) }
