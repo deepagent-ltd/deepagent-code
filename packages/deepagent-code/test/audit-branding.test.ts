@@ -14,6 +14,31 @@ import { tmpRoot, tmpRootShared } from "./fixture/fixture"
 const scriptRel = "packages/deepagent-code/script/audit-branding.ts"
 const scriptSrc = path.resolve(import.meta.dir, "../script/audit-branding.ts")
 
+const reviewedLines = [
+  {
+    file: ".github/public-source-policy.json",
+    line: '"review_scope": "Public product and developer documentation may evolve independently of OpenCode text. Newly added document paths require review. Internal plans, acceptance records and private backend exports remain private.",',
+  },
+  { file: ".github/public-source-policy.json", line: '"packages/console/app/.opencode/agent/css.md",' },
+  { file: ".github/public-source-policy.json", line: '"specs/storage/remove-opencode-db.md"' },
+  {
+    file: "README.md",
+    line: "DAC builds on [opencode](https://github.com/sst/opencode) and other open-source components. Original license notices and attribution are retained in [NOTICE](NOTICE) and the relevant packages. No endorsement by upstream projects or their contributors is implied.",
+  },
+  {
+    file: "packages/deepagent-code/README.md",
+    line: "The runtime builds on OpenCode and adds persistent task state, event-driven work coordination, document-based context, and domain packs. Tools, MCP integrations, and domain packs extend the existing agent runtime.",
+  },
+  {
+    file: "packages/app/test/components/dialog-event-work.test.tsx",
+    line: '"Content-Type,Authorization,x-opencode-directory,x-opencode-workspace,x-deepagent-code-directory,x-deepagent-code-workspace",',
+  },
+  {
+    file: "packages/core/src/plugin/skill/customize-deepagent-code.md",
+    line: "provided by DAC's platform path implementation; it is not OpenCode's XDG path.",
+  },
+]
+
 const tempDirs: string[] = []
 
 afterEach(() => {
@@ -101,5 +126,19 @@ describe("audit-branding gate", () => {
           'import { createOpencode } from "@deepagent-code/sdk"\nbuild with Opencode today\n',
       }),
     ).toBe(1)
+  })
+
+  test.each(reviewedLines)("passes the exact reviewed line in $file", (entry) => {
+    expect(runAudit({ [entry.file]: `  ${entry.line}\n` })).toBe(0)
+  })
+
+  test.each(reviewedLines)("rejects extra residue next to the reviewed line in $file", (entry) => {
+    expect(runAudit({ [entry.file]: `${entry.line}\n"OpenCode product branding"\n` })).toBe(1)
+    expect(runAudit({ [entry.file]: `${entry.line} "OpenCode product branding"\n` })).toBe(1)
+  })
+
+  test("does not allow reviewed context in another path or an unrelated brand on the same line", () => {
+    expect(runAudit({ "other-policy.json": reviewedLines[0].line })).toBe(1)
+    expect(runAudit({ "README.md": `${reviewedLines[3].line} lessweb\n` })).toBe(1)
   })
 })

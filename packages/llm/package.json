@@ -45,7 +45,8 @@
     "@deepagent-code/http-recorder": "workspace:*",
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
-    "@typescript/native-preview": "catalog:"
+    "@typescript/native-preview": "catalog:",
+    "electron": "41.10.6"
   },
   "dependencies": {
     "@smithy/eventstream-codec": "4.2.14",

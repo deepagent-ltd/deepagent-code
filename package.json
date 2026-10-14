@@ -156,6 +156,7 @@
     "pacote@21.5.0": "patches/pacote@21.5.0.patch",
     "@ai-sdk/google@3.0.73": "patches/@ai-sdk%2Fgoogle@3.0.73.patch",
     "jugglechat-websdk@1.9.17": "patches/jugglechat-websdk@1.9.17.patch",
-    "multipasta@0.2.7": "patches/multipasta@0.2.7.patch"
+    "multipasta@0.2.7": "patches/multipasta@0.2.7.patch",
+    "@electron/notarize@2.5.0": "patches/@electron%2Fnotarize@2.5.0.patch"
   }
 }

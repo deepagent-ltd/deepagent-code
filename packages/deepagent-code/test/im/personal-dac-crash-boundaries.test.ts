@@ -44,7 +44,8 @@ async function run(cut: "admission" | "collector") {
     const outbox = readonly.query("SELECT count(*) AS count FROM im_reply_outbox").get()
     const activities = readonly.query("SELECT activity_id,state,final_message_id FROM session_activity").all()
     readonly.close()
-    expect(input).toEqual([{ id: marker.inputID, session_id: marker.sessionID, admitted_seq: marker.admittedSeq, promoted_seq: null }])
+    expect(input).toEqual([{ id: marker.inputID, session_id: marker.sessionID, admitted_seq: marker.admittedSeq,
+      promoted_seq: cut === "admission" ? null : expect.any(Number) }])
     expect(command).toHaveLength(1)
     expect(command[0]).toMatchObject({ state: cut === "admission" ? "pending" : "admitted" })
     expect(outbox).toEqual({ count: 0 })

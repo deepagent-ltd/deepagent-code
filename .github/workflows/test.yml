@@ -126,6 +126,9 @@ jobs:
             turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-
             turbo-${{ runner.os }}-
 
+      - name: Install locked IM SDK build tools
+        run: npm ci --ignore-scripts --prefix packages/im-kernel-sdk/upstream
+
       - name: Run unit tests
         timeout-minutes: ${{ matrix.settings.timeout }}
         run: bun run test:ci --log-order=stream --log-prefix=task

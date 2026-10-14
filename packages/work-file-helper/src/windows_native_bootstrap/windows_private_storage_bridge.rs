@@ -161,7 +161,8 @@ unsafe extern "C" fn open(env: Env, info: *mut c_void) -> Value {
         if request.version != 1 || request.root.len() > 2048 || request.root.chars().any(char::is_control) ||
             request.deadline_ms == 0 || request.deadline_ms > 30_000 { return Err(io::ErrorKind::InvalidInput.into()); }
         let capture = api.pointer(env,args[0])?;
-        let lease = storage::Lease::open(&request.root,request.purpose,request.prepare,request.deadline_ms)?;
+        let lease = storage::Lease::open(&request.root,request.purpose,request.prepare,request.deadline_ms)
+            .map_err(|error| diagnostic("open-storage", error))?;
         if !napi::current_capture(env,args[0]) { return Err(io::ErrorKind::PermissionDenied.into()); }
         // Hold the original External strongly until this lease retires. Its native
         // address cannot be recycled into a successor capture (the ABA case).

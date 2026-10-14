@@ -16,10 +16,42 @@ export function openFixtureActivity(input: {
   now: number
 }) {
   return Effect.gen(function* () {
+    const context = yield* fixtureContext(input.securityNamespaceId)
+    return yield* Effect.gen(function* () {
+      return yield* (yield* SessionContext.Service).openActivity({
+        sessionId: input.sessionId,
+        triggerInputId: input.triggerInputId,
+        now: input.now,
+      })
+    }).pipe(Effect.provide(context))
+  })
+}
+
+export function settleFixtureActivity(input: {
+  activityId: string
+  finalMessageId: string
+  securityNamespaceId: SecurityNamespaceID
+  now: number
+}) {
+  return Effect.gen(function* () {
+    const context = yield* fixtureContext(input.securityNamespaceId)
+    return yield* Effect.gen(function* () {
+      return yield* (yield* SessionContext.Service).settleActivity({
+        activityId: input.activityId,
+        state: "settled",
+        finalMessageId: input.finalMessageId,
+        now: input.now,
+      })
+    }).pipe(Effect.provide(context))
+  })
+}
+
+function fixtureContext(securityNamespaceId: SecurityNamespaceID) {
+  return Effect.gen(function* () {
     const database = Layer.succeed(Database.Service, yield* Database.Service)
     const secret = randomBytes(32)
     const artifacts = ContextArtifactStore.layer({
-      securityNamespaceId: input.securityNamespaceId,
+      securityNamespaceId,
       policy: "best_effort",
       keyId: "fixture",
       encryptionKey: secret,
@@ -32,13 +64,6 @@ export function openFixtureActivity(input: {
         tokenLifetimeMs: 120_000,
       },
     }).pipe(Layer.provide(database))
-    const context = SessionContext.layer.pipe(Layer.provide(Layer.merge(database, artifacts)))
-    return yield* Effect.gen(function* () {
-      return yield* (yield* SessionContext.Service).openActivity({
-        sessionId: input.sessionId,
-        triggerInputId: input.triggerInputId,
-        now: input.now,
-      })
-    }).pipe(Effect.provide(context))
+    return SessionContext.layer.pipe(Layer.provide(Layer.merge(database, artifacts)))
   })
 }

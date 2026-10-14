@@ -118,9 +118,8 @@ export function seedActivity(
       })
       .run()
       .pipe(Effect.orDie)
-    // fixture-exempt: persisted terminal/crash history is the authority under test.
     yield* database.db
-      .insert(SessionActivityTable)
+      .insert(SessionActivityTable) // fixture-exempt: persisted terminal/crash history is the authority under test.
       .values({
         activity_id: `activity_${name}`,
         session_id: sessionID,

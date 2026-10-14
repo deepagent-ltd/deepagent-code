@@ -16,6 +16,8 @@ test("immediate sidecar failure preserves its error, closes, emits only owned cl
     `password=${secret} credential=${secret} arbitrary unrelated log ${secret}`,
     `dac-native-path-lease:singlelink:PermissionDenied:Some(5) password=${secret}`,
     `dac-native-first-load:module-private-dacl:native-image-factory.node:PermissionDenied:None token=${secret}`,
+    `PRIVATE_STORAGE_FAILURE stage=prepare-root-owner kind=PermissionDenied os=5 password=${secret}`,
+    `PRIVATE_STORAGE_FAILURE stage=${secret} kind=PermissionDenied os=5`,
     `Error: Windows native sidecar bootstrap unavailable (receipt-current) api_key=${secret}`,
     `Error: Cannot find module 'C:\\private\\${secret}\\native-image-factory.node'`,
     `    at capture (C:\\private\\${secret}\\sidecar.js:17:9)`,
@@ -50,6 +52,8 @@ test("immediate sidecar failure preserves its error, closes, emits only owned cl
     expect(state.output).toContain('"stage":"singlelink"')
     expect(state.output).toContain('"errno":5')
     expect(state.output).toContain('"stage":"module-private-dacl"')
+    expect(state.output).toContain('"kind":"private-storage"')
+    expect(state.output).toContain('"stage":"prepare-root-owner"')
     expect(state.output).toContain('"stage":"receipt-current"')
     expect(state.output).toContain('"function":"capture"')
     expect(state.output).toContain('"basename":"native-image-factory.node"')

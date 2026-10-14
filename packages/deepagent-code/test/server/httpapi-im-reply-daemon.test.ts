@@ -29,10 +29,11 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionStore } from "@deepagent-code/core/session/store"
-import { SessionActivityInputTable, SessionActivityTable } from "@deepagent-code/core/context-federation/session-sql"
+import { SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
 import { init } from "@deepagent-code/core/util/log"
 import { Auth } from "@/auth"
 import { InstanceRef } from "@/effect/instance-ref"
@@ -43,6 +44,7 @@ import { InstanceBootstrap } from "@/project/bootstrap"
 import { IMReaderSDKFixture } from "./im-reader-sdk.fixture"
 import { tmpdirScoped } from "../fixture/fixture"
 import { pollWithTimeout, testEffect } from "../lib/effect"
+import { openFixtureActivity, settleFixtureActivity } from "../../../core/test/fixture/open-activity"
 
 void init({ print: false })
 const it = testEffect(NodeServices.layer)
@@ -131,15 +133,17 @@ it.live("the global reply daemon retains an existing real Instance for original 
     const finalID = SessionMessage.ID.make(`msg_${crypto.randomUUID()}`)
     const publisher = yield* EventV2.Service
     const timestamp = DateTime.makeUnsafe(Date.now())
+    yield* SessionInput.promoteNextQueued(db, publisher, SessionV2.ID.make(command.sessionID))
+    const activity = yield* openFixtureActivity({ sessionId: SessionV2.ID.make(command.sessionID), triggerInputId: command.inputID,
+      securityNamespaceId: SecurityNamespaceID.make("sec_im_reply_daemon"), now: Date.now() })
     yield* publisher.publish(SessionEvent.Step.Started, { sessionID: SessionV2.ID.make(command.sessionID), timestamp, assistantMessageID: finalID,
       agent: "build", model: { id: ModelV2.ID.make("deepseek-flash"), providerID: ProviderV2.ID.make("deepseek") } })
     yield* publisher.publish(SessionEvent.Text.Started, { sessionID: SessionV2.ID.make(command.sessionID), timestamp, assistantMessageID: finalID, textID: "answer" })
     yield* publisher.publish(SessionEvent.Text.Ended, { sessionID: SessionV2.ID.make(command.sessionID), timestamp, assistantMessageID: finalID, textID: "answer", text: "原始最终回复🙂" })
-    const activityID = `activity_${crypto.randomUUID()}`
-    yield* db.insert(SessionActivityTable).values({ activity_id: activityID, session_id: command.sessionID, ordinal: 1,
-      trigger_input_id: command.inputID, delivery: "queue", state: "settled", created_at: Date.now(), settled_at: Date.now(), final_message_id: finalID }).run()
-    yield* db.insert(SessionActivityInputTable).values({ activity_id: activityID, input_id: command.inputID, ordinal: 1,
-      admitted_seq: 1, role: "trigger", promoted_at: Date.now() }).run()
+    yield* publisher.publish(SessionEvent.Step.Ended, { sessionID: SessionV2.ID.make(command.sessionID), timestamp,
+      assistantMessageID: finalID, finish: "stop", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
+    yield* settleFixtureActivity({ activityId: activity.activityId, finalMessageId: finalID,
+      securityNamespaceId: SecurityNamespaceID.make("sec_im_reply_daemon"), now: Date.now() })
     // The same production layer runs outside InstanceRef and performs the complete
     // original collect / custody / fixed-entry create / SDK dispatch / ACK path.
     // Both authenticated create/send inspections now take longer than the short

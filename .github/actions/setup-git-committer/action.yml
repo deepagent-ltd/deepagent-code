@@ -12,7 +12,7 @@ outputs:
     description: "Write token (app token or GITHUB_TOKEN)"
     value: ${{ steps.resolve.outputs.token }}
   app-slug:
-    description: "Committer identity slug (app slug or github-actions)"
+    description: "Authentication app slug (source commits use deepagent-ai)"
     value: ${{ steps.resolve.outputs.slug }}
 runs:
   using: "composite"
@@ -37,8 +37,8 @@ runs:
           echo "token=$APP_TOKEN" >> "$GITHUB_OUTPUT"
           echo "slug=$APP_SLUG" >> "$GITHUB_OUTPUT"
         else
-          # No GitHub App configured (this fork never registered one): commit, push refs,
-          # and create releases with the job's GITHUB_TOKEN as github-actions[bot]. The
+          # The job token authenticates candidate/tag writes without changing
+          # the requested deepagent-ai source commit identity. The
           # workflows already carry contents:write, which covers everything the release
           # pipeline does. Only behavioral difference: GITHUB_TOKEN pushes do not trigger
           # other workflows — nothing here relies on that.
@@ -49,9 +49,8 @@ runs:
 
     - name: Configure git user
       run: |
-        slug="${{ steps.resolve.outputs.slug }}"
-        git config --global user.name "${slug}[bot]"
-        git config --global user.email "${slug}[bot]@users.noreply.github.com"
+        git config --global user.name "deepagent-ai"
+        git config --global user.email "deepagent-ai@deepagent.ltd"
       shell: bash
 
     - name: Clear checkout auth
