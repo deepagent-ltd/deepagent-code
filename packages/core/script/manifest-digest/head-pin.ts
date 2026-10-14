@@ -17,7 +17,7 @@
  */
 export const HeadPin = {
   /** Source commit used to prepare the pinned tree. Informational; the digests are the gate. */
-  commit: "6edd81197fe34dbb3048608055c6e2b1f645a84e",
+  commit: "fab6b876",
   setTreeDigest: "38c901835a0565158ca64fcc5a334b6fd2808be06c20b0deb466d330c4aefbd0",
   overallDigest: "fea5ef8f840ae00fffa67533073c0fbf018a8d3053b32109ca14812854f19ffd",
 } as const
