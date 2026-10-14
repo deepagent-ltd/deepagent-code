@@ -42,6 +42,10 @@ vi.mock("@/context/language", () => ({
       Object.entries(values ?? {}).reduce((text, [key, value]) => text.replace(`{{${key}}}`, String(value)), dict[key]),
   }),
 }))
+vi.mock("@/context/command", async (original) => ({
+  ...(await original<typeof import("@/context/command")>()),
+  useCommand: () => ({ register: vi.fn() }),
+}))
 vi.mock("@/context/sdk", () => ({ useSDK: () => ({ client: runtime.sdk!, directory: "/private", url: runtime.client!.scope().url }) }))
 vi.mock("@/context/server", async (original) => ({ ...(await original<typeof import("@/context/server")>()), useServer: () => ({ key: "parent-media-fixture", all: [], projects: () => ({ list: [] }) }) }))
 vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ show() {} }) }))
@@ -145,7 +149,7 @@ async function serve() {
                 enabled: state.enabled,
                 multipleAttachments: true,
                 maxAttachments: 4,
-                maxAttachmentBytes: 52428800,
+                maxAttachmentBytes: 10 * 1024 * 1024,
                 ttlMs: 86400000,
               },
             }
@@ -173,7 +177,8 @@ async function serve() {
         ...(state.protected ? { reader: { displayEpoch: state.epoch, validatedServerNow: Date.now(), nextExpiryAt: null } } : {}) })
       return
     }
-    if (url.pathname.endsWith(`/groups/${groupID}`)) {
+    if (url.pathname.endsWith(`/groups/${groupID}`) ||
+      (request.method === "POST" && url.pathname.endsWith(`/groups/${groupID}/refresh`))) {
       state.groupReads++
       json({
         version: 1,

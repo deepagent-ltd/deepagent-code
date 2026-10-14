@@ -8,6 +8,7 @@ const bridge = vi.hoisted(() => ({
   notify: vi.fn(),
   sound: vi.fn(),
   cursors: [] as string[],
+  hint: undefined as ((event: { name: string; details: { properties: { sessionID: string } } }) => void) | undefined,
 }))
 vi.mock("@solidjs/router", () => ({ useParams: () => ({ dir: btoa("/workspace"), id: "other-session" }) }))
 vi.mock("@/context/server-sdk", () => ({
@@ -22,6 +23,12 @@ vi.mock("@/context/server-sdk", () => ({
         },
       },
     },
+    event: {
+      listen: (hint: NonNullable<typeof bridge.hint>) => {
+        bridge.hint = hint
+        return () => { bridge.hint = undefined }
+      },
+    },
     createClient() {
       return this.client
     },
@@ -29,7 +36,7 @@ vi.mock("@/context/server-sdk", () => ({
 }))
 vi.mock("@/context/server-sync", () => ({
   useServerSync: () => ({
-    child: () => [{ session: [{ id: "session-1", title: "Fixture session" }] }],
+    child: () => [{ session: [{ id: "session-1", title: "Fixture session" }], session_status: {} }],
   }),
 }))
 vi.mock("@/context/platform", () => ({ usePlatform: () => ({ notify: bridge.notify }) }))
@@ -96,6 +103,7 @@ it("consumes every interruption reason silently and notifies only later success 
       data: { sessionID: "session-1", error: { type: "unknown", message: "provider failure" } },
     },
   )
+  bridge.hint?.({ name: "/workspace", details: { properties: { sessionID: "session-1" } } })
   await vi.advanceTimersByTimeAsync(1000)
   expect(screen.getByRole("status").textContent).toBe('["turn-complete","error"]')
   expect(bridge.notify.mock.calls.map((args) => args[0])).toEqual([

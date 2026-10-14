@@ -120,7 +120,7 @@ async function serve() {
                 enabled: state.enabled,
                 multipleAttachments: true,
                 maxAttachments: 4,
-                maxAttachmentBytes: 52428800,
+                maxAttachmentBytes: 10 * 1024 * 1024,
                 ttlMs: 86400000,
               },
             }
@@ -336,7 +336,7 @@ it("oversize selection uploads nothing; canceling an actual pending multipart st
     const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')
     if (!input) throw new Error("Missing original file input")
     fireEvent.change(input, { target: { files: [new File([new Uint8Array(52428801)], "too-large.bin")] } })
-    await screen.findByText(dict["im.media.batch.tooLarge"])
+    await screen.findByText(dict["im.media.batch.tooLarge"].replace("{{size}}", "10"))
     expect(api.state.uploads).toHaveLength(0)
     api.state.uploadGate = gate.promise
     choose(view.container, ["first", "second"])

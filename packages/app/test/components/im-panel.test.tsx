@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library"
 import { MemoryRouter, Route } from "@solidjs/router"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
 import { createIMClient, IMFacadeRequestError } from "@/utils/im-client"
@@ -19,6 +19,10 @@ const client = vi.hoisted(() => ({
 vi.mock("@/utils/im-client", async (original) => ({
   ...(await original<typeof import("@/utils/im-client")>()),
   useIMClient: () => client,
+}))
+vi.mock("@/context/command", async (original) => ({
+  ...(await original<typeof import("@/context/command")>()),
+  useCommand: () => ({ register: vi.fn() }),
 }))
 vi.mock("@/context/sdk", () => ({ useSDK: () => ({ client: {} }) }))
 vi.mock("@/context/server", async (original) => ({
@@ -97,7 +101,7 @@ describe("IM side panel recovery", () => {
     await screen.findByText(dict["im.group.load.failed"])
     expect(screen.queryByText(dict["im.group.empty"])).toBeNull()
     client.listGroups.mockResolvedValue([{ id: "team", name: "Design team", type: "group", kernelConvID: "k:2:team" }])
-    fireEvent.click(screen.getByRole("button", { name: dict["im.facade.retry"] }))
+    fireEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: dict["im.facade.retry"] }))
     await screen.findByRole("button", { name: /Design team/ })
     expect(screen.queryByText(dict["im.group.load.failed"])).toBeNull()
   })

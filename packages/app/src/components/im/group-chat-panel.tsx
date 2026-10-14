@@ -966,8 +966,9 @@ function GroupConversation(
       throw error
     } finally {
       if (!history.disposed && run === mediaGeneration) {
-        setState("sendingAttachment", false)
-        await reloadMedia()
+        await reloadMedia().finally(() => {
+          if (!history.disposed && run === mediaGeneration) setState("sendingAttachment", false)
+        })
       }
     }
   }
@@ -991,8 +992,9 @@ function GroupConversation(
       if (!history.disposed && run === mediaGeneration) setState("mediaFailed", true)
     } finally {
       if (!history.disposed && run === mediaGeneration) {
-        setState("sendingAttachment", false)
-        await reloadMedia()
+        await reloadMedia().finally(() => {
+          if (!history.disposed && run === mediaGeneration) setState("sendingAttachment", false)
+        })
       }
     }
   }
@@ -1058,8 +1060,9 @@ function GroupConversation(
       throw error
     } finally {
       if (!history.disposed && run === mediaGeneration) {
-        setState("sendingAttachment", false)
-        await reloadMedia()
+        await reloadMedia().finally(() => {
+          if (!history.disposed && run === mediaGeneration) setState("sendingAttachment", false)
+        })
       }
     }
   }

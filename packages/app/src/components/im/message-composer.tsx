@@ -85,7 +85,6 @@ export function MessageComposer(props: MessageComposerProps) {
   }
 
   onCleanup(() => {
-    if (delivery.sending) setDelivery({ sending: false, failed: true })
     disposed = true
     stopTyping()
   })
@@ -193,17 +192,14 @@ export function MessageComposer(props: MessageComposerProps) {
     setDelivery({ sending: true, failed: false, requestID, requestContent: sent })
     try {
       await props.onSend(sent, requestID)
-      if (disposed) return
       if (content() === sent) setContent("")
       setDelivery({ requestID: "", requestContent: "" })
-      stopTyping()
+      if (!disposed) stopTyping()
     } catch {
-      if (!disposed) setDelivery("failed", true)
+      setDelivery("failed", true)
     } finally {
-      if (!disposed) {
-        setDelivery("sending", false)
-        textareaRef?.focus()
-      }
+      setDelivery("sending", false)
+      if (!disposed) textareaRef?.focus()
     }
   }
 
