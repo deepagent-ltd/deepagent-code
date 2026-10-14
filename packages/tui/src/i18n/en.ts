@@ -1,6 +1,64 @@
 // W2-7 — TUI locale dictionaries. Keys are namespaced "tui.<area>.<name>"; en is the source of
 // truth for the key union, other locales mirror it with `Keys` enforcing coverage at typecheck.
 export const dict = {
+  "tui.im.activation.retryHint": "Re-enter the original key or code. This resends the same transaction under its original authorization; an already processed transaction is not charged again. Checking its status remains read-only. Alt+C confirms; Enter or Ctrl+R only checks.",
+  "tui.im.activation.retryConsent": "Confirm the original transaction and credential; resend this request without creating another purchase.",
+  "tui.im.activation.retryOriginal": "Resend original request · Alt+S",
+  "tui.im.device.retryHint": "Original voucher and ID only. Alt+C confirms, Alt+S resends; Enter/Ctrl+R only checks. Cost: 0 credits.",
+  "tui.im.device.retryConsent": "Confirm resending this original request · 0 credits.",
+  "tui.im.device.retryOriginal": "Resend original migration · Alt+S",
+
+  "tui.panel.stopHistory": "Stop historical expert-panel trigger",
+  "tui.panel.history":
+    "Historical expert results remain readable and copyable in the conversation. New expert panels are closed.",
+  "tui.panel.stopped": "Historical expert-panel trigger stopped.",
+
+  "tui.im.device.title": "IM device binding",
+  "tui.im.device.notice":
+    "Each purchased IM entitlement binds one device. Existing paid users need a root-reviewed voucher for the first binding; migration costs 0 credits. Device replacement is not available in this version.",
+  "tui.im.device.copy": "Copy public device metadata for root review",
+  "tui.im.device.storeUnavailable":
+    "The OS credential store is unavailable. IM purchase, binding and sign-in are disabled. Local coding remains available.",
+  "tui.im.device.unavailable":
+    "This device operation could not be confirmed. Recover the original request before starting another one.",
+  "tui.im.device.serviceUnavailable": "The IM service is unavailable. Refresh to retry or contact the service administrator. Local coding remains available.",
+  "tui.im.device.observationUnavailable": "Device status could not be read. Refresh to retry. This check did not start a binding request.",
+  "tui.im.device.state": "Migration: {{state}} · charged {{credits}} credits",
+  "tui.im.device.voucher": "Root-reviewed first-binding voucher",
+  "tui.im.device.confirm": "Bind this device to the existing paid entitlement for 0 credits.",
+  "tui.im.device.migrate": "Bind existing paid entitlement · 0 credits",
+  "tui.im.device.pending": "An unresolved migration exists. Only the original request may be recovered.",
+  "tui.im.device.recover": "Recover original migration",
+  "tui.im.device.complete": "Binding confirmed and credentials stored on this device.",
+  "tui.im.device.refresh": "Refresh device observations",
+
+  "tui.mode.queueHint": "Send queues the selected mode for the next activity.",
+  "tui.mode.queued": "Queued for the next activity with the selected mode.",
+  "tui.goal.control.pausePending": "Pause requested; waiting for the current activity to finish.",
+  "tui.goal.control.pauseBeforeMode":
+    "Pause this goal and wait for its current activity before changing execution mode.",
+  "tui.goal.start.title": "Start continuous execution",
+  "tui.goal.start.source": "Plan source",
+  "tui.goal.start.session": "Current conversation plan",
+  "tui.goal.start.workspace-file": "Standard workspace goal+plan.md",
+  "tui.goal.start.criteria": "Completion criteria",
+  "tui.goal.start.default": "Default: plan complete and no diagnostics",
+  "tui.goal.start.custom": "Custom: plan complete and selected checks",
+  "tui.goal.start.commands": "Test commands — one complete command per line",
+  "tui.goal.start.diagnostics": "Diagnostics severity",
+  "tui.goal.start.reviewer": "Independent review severity",
+  "tui.goal.start.omit": "Do not request this check",
+  "tui.goal.start.codeRefs": "Code references — up to 32 lines, 512 characters each",
+  "tui.goal.start.hint": "Check the selected criteria. Commands run during verification, not while entering this form.",
+  "tui.goal.start.start": "Start with these criteria",
+  "tui.goal.start.cancel": "Cancel",
+  "tui.mode.auto": "Auto",
+  "tui.mode.plan": "Design (review before execution)",
+  "tui.mode.loop": "Continuous execution",
+  "tui.mode.design": "Execute existing plan (compatibility)",
+  "tui.mode.default": "New conversation default",
+  "tui.mode.next": "This conversation: next activity",
+  "tui.mode.effective": "Current activity",
   "tui.eventWork.moreRules": "Next page of rules",
   "tui.eventWork.moreRuns": "Next page of runs",
   "tui.eventWork.isolationUnavailable":

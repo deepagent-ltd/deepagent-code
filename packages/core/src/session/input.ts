@@ -14,7 +14,10 @@ import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
-import { SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
+import { SessionContextEpochTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
+import { SessionActivityTable } from "../context-federation/session-sql"
+import { CollaborationMode } from "./collaboration-mode"
+import { GoalControl } from "../deepagent/goal-control"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -67,6 +70,78 @@ export class StaleRevertEpoch extends Schema.TaggedErrorClass<StaleRevertEpoch>(
   actual: NonNegativeInt,
 }) {}
 
+export class ModeChangeRefused extends Schema.TaggedErrorClass<ModeChangeRefused>()("SessionInput.ModeChangeRefused", {
+  sessionID: SessionSchema.ID,
+  currentAgent: Schema.String,
+  requestedAgent: Schema.String,
+  code: Schema.Literals(["MODE_CHANGE_REQUIRES_QUEUE", "GOAL_MODE_CHANGE_BUSY"]),
+}) {
+  override get message() {
+    return this.code === "MODE_CHANGE_REQUIRES_QUEUE"
+      ? "A different agent must be queued for the next activity; the current activity keeps its mode."
+      : "Pause or stop the current Goal and confirm that no Goal work is in flight before changing its execution mode."
+  }
+}
+
+export const requireModeChange = Effect.fn("SessionInput.requireModeChange")(function* (
+  db: DatabaseService | Parameters<Parameters<DatabaseService["transaction"]>[0]>[0],
+  input: { sessionID: SessionSchema.ID; requestedAgent?: string; currentAgent?: string; delivery: Delivery },
+) {
+  if (input.requestedAgent === undefined) return
+  const session = yield* db
+    .select({ agent: SessionTable.agent })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, input.sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  const active = yield* db
+    .select({ id: SessionActivityTable.activity_id })
+    .from(SessionActivityTable)
+    .where(and(eq(SessionActivityTable.session_id, input.sessionID), eq(SessionActivityTable.state, "active")))
+    .get()
+    .pipe(Effect.orDie)
+  // An omitted Session selector can change its config default while a turn is in flight.
+  // The captured ContextEpoch is the actual running identity until this activity settles.
+  const epoch =
+    active && !session?.agent
+      ? yield* db
+          .select({ agent: SessionContextEpochTable.agent })
+          .from(SessionContextEpochTable)
+          .where(eq(SessionContextEpochTable.session_id, input.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+      : undefined
+  const currentAgent = CollaborationMode.configuredCollaborationMode(
+    session?.agent ?? epoch?.agent ?? input.currentAgent,
+  )
+  const requestedAgent = CollaborationMode.configuredCollaborationMode(input.requestedAgent)
+  if (requestedAgent === currentAgent) return
+  const goal = yield* GoalControl.current(db, input.sessionID)
+  if (goal) {
+    const observed = yield* GoalControl.snapshot(db, goal)
+    if (
+      (!GoalControl.isTerminal(goal.requested_phase) && goal.requested_phase !== "paused") ||
+      observed.inFlight ||
+      observed.recoveryRequired ||
+      observed.preparation !== "ready"
+    )
+      return yield* new ModeChangeRefused({
+        sessionID: input.sessionID,
+        currentAgent,
+        requestedAgent,
+        code: "GOAL_MODE_CHANGE_BUSY",
+      })
+  }
+  if (input.delivery !== "steer") return
+  if (active)
+    return yield* new ModeChangeRefused({
+      sessionID: input.sessionID,
+      currentAgent,
+      requestedAgent,
+      code: "MODE_CHANGE_REQUIRES_QUEUE",
+    })
+})
+
 export const admit = Effect.fn("SessionInput.admit")(function* (
   db: DatabaseService,
   events: EventV2.Interface,
@@ -76,6 +151,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly prompt: Prompt
     readonly delivery: Delivery
     readonly revertEpoch?: number
+    readonly currentAgent?: string
     /**
      * In-transaction hook committed atomically with the PromptLifecycle.Admitted event and its
      * `session_input` projection (same contract as `EventV2.publishChecked`'s `{ commit }` option): the
@@ -89,27 +165,30 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
   const existing = yield* find(db, input.id)
   if (existing !== undefined) return existing
   const timestamp = yield* DateTime.now
-  const commit =
-    input.revertEpoch === undefined && input.commit === undefined
-      ? undefined
-      : (seq: number, event: EventV2.Payload) =>
-          Effect.gen(function* () {
-            if (input.revertEpoch !== undefined) {
-              const session = yield* db
-                .select({ mutationEpoch: SessionTable.mutation_epoch })
-                .from(SessionTable)
-                .where(eq(SessionTable.id, input.sessionID))
-                .get()
-                .pipe(Effect.orDie)
-              if (session?.mutationEpoch !== input.revertEpoch)
-                return yield* new StaleRevertEpoch({
-                  sessionID: input.sessionID,
-                  expected: input.revertEpoch,
-                  actual: session?.mutationEpoch ?? 0,
-                })
-            }
-            if (input.commit) yield* input.commit(seq, event)
+  const commit = (seq: number, event: EventV2.Payload) =>
+    Effect.gen(function* () {
+      yield* requireModeChange(db, {
+        sessionID: input.sessionID,
+        requestedAgent: input.prompt.agent,
+        currentAgent: input.currentAgent,
+        delivery: input.delivery,
+      })
+      if (input.revertEpoch !== undefined) {
+        const session = yield* db
+          .select({ mutationEpoch: SessionTable.mutation_epoch })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, input.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (session?.mutationEpoch !== input.revertEpoch)
+          return yield* new StaleRevertEpoch({
+            sessionID: input.sessionID,
+            expected: input.revertEpoch,
+            actual: session?.mutationEpoch ?? 0,
           })
+      }
+      if (input.commit) yield* input.commit(seq, event)
+    })
   return yield* events
     .publishChecked(
       SessionEvent.PromptLifecycle.Admitted,
@@ -121,7 +200,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
         delivery: input.delivery,
         ...(input.revertEpoch === undefined ? {} : { revertEpoch: input.revertEpoch }),
       },
-      commit === undefined ? undefined : { commit },
+      { commit },
     )
     .pipe(
       Effect.flatMap((event) =>
@@ -140,7 +219,9 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
             ),
       ),
       Effect.catch((error) =>
-        error.cause instanceof StaleRevertEpoch || error.cause instanceof GoalChildSchema.Error
+        error.cause instanceof StaleRevertEpoch ||
+        error.cause instanceof GoalChildSchema.Error ||
+        error.cause instanceof ModeChangeRefused
           ? Effect.fail(error.cause)
           : Effect.die(error),
       ),

@@ -63,7 +63,7 @@ export function IMActivationPanel(props: {
                 type="password"
                 value={controller.state.credential}
                 maxlength={4096}
-                disabled={frozen()}
+                disabled={(frozen() && !controller.canRetryOriginal()) || controller.state.busy}
                 autocomplete="off"
                 autocorrect="off"
                 autocapitalize="off"
@@ -75,19 +75,21 @@ export function IMActivationPanel(props: {
               />
             </label>
             <p class="text-12-regular text-text-weak">{language.t("im.facade.name.rule")}</p>
-            <Show
-              when={controller.state.method === "api_key"}
-              fallback={<p class="text-12-regular text-text-weak">{language.t("im.activation.codeHint")}</p>}
-            >
-              <label class="flex items-start gap-2 text-12-regular">
-                <input
-                  type="checkbox"
-                  checked={controller.state.consent}
-                  disabled={frozen()}
-                  onChange={(event) => controller.update({ consent: event.currentTarget.checked })}
-                />
-                {language.t("im.activation.chargeConsent")}
-              </label>
+            <Show when={!controller.state.transactionID}>
+              <Show
+                when={controller.state.method === "api_key"}
+                fallback={<p class="text-12-regular text-text-weak">{language.t("im.activation.codeHint")}</p>}
+              >
+                <label class="flex items-start gap-2 text-12-regular">
+                  <input
+                    type="checkbox"
+                    checked={controller.state.consent}
+                    disabled={frozen()}
+                    onChange={(event) => controller.update({ consent: event.currentTarget.checked })}
+                  />
+                  {language.t("im.activation.chargeConsent")}
+                </label>
+              </Show>
             </Show>
             <Show when={!controller.state.transactionID}>
               <div class="flex items-center gap-2">
@@ -134,6 +136,25 @@ export function IMActivationPanel(props: {
           >
             {language.t("im.activation.check")}
           </ButtonV2>
+          <Show when={controller.canRetryOriginal()}>
+            <p class="text-text-weak">{language.t("im.activation.retryHint")}</p>
+            <label class="flex items-start gap-2">
+              <input
+                type="checkbox"
+                checked={controller.state.consent}
+                disabled={controller.state.busy}
+                onChange={(event) => controller.update({ consent: event.currentTarget.checked })}
+              />
+              {language.t("im.activation.retryConsent")}
+            </label>
+            <ButtonV2
+              variant="contrast"
+              disabled={controller.state.busy || !controller.state.credential || !controller.state.consent}
+              onClick={() => void controller.retryOriginal()}
+            >
+              {language.t("im.activation.retryOriginal")}
+            </ButtonV2>
+          </Show>
         </div>
       </Show>
       <Show when={controller.state.result && controller.state.result.chargedCredits !== null}>

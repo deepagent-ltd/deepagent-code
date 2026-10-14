@@ -2,6 +2,7 @@ export * as IMFacade from "./facade"
 
 import {
   Context,
+  Deferred,
   Effect,
   Exit,
   Layer,
@@ -28,6 +29,9 @@ import { createHash } from "node:crypto"
 import { SERVER_USER_ID } from "@/server/routes/instance/httpapi/utils/workspace-context"
 import { KernelConfig } from "./kernel/config"
 import { IMKernelExchange } from "./kernel/exchange"
+import { IMDeviceStore } from "./device-store"
+import { IMDeviceProof } from "./device-proof"
+import { IMDeviceTransport } from "./device-transport"
 import { Database } from "@deepagent-code/core/database/database"
 import type { IMKernelReader } from "./kernel/reader"
 import { IMKernelSync, kernelConvKey, parseKernelConvKey } from "./kernel/sync"
@@ -92,7 +96,11 @@ export class GroupLookupError extends Schema.TaggedErrorClass<GroupLookupError>(
   message: Schema.String,
 }) {}
 export type ReaderLease = IMKernelSync.ReaderLease
-export interface ReaderContext { readonly workspaceID: string; readonly userID: string; readonly directory?: string }
+export interface ReaderContext {
+  readonly workspaceID: string
+  readonly userID: string
+  readonly directory?: string
+}
 
 export interface Interface {
   readonly state: SubscriptionRef.SubscriptionRef<State>
@@ -100,7 +108,10 @@ export interface Interface {
   readonly engine: Ref.Ref<Option.Option<IMKernelSync.Interface>>
   readonly status: Effect.Effect<StatusSnapshot, KernelReaderSchema.Error>
   readonly acquireReader: (context: ReaderContext) => Effect.Effect<ReaderLease, KernelReaderSchema.Error, Scope.Scope>
-  readonly withReader: <A, E, R>(context: ReaderContext, use: (lease: ReaderLease) => Effect.Effect<A, E, R>) => Effect.Effect<A, E | KernelReaderSchema.Error, Exclude<R, Scope.Scope>>
+  readonly withReader: <A, E, R>(
+    context: ReaderContext,
+    use: (lease: ReaderLease) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | KernelReaderSchema.Error, Exclude<R, Scope.Scope>>
   /** Explicit reconnect recovery waits only for its captured live generation. */
   readonly withCurrentConnectedReader: Interface["withReader"]
   // 门面调用不向外要 HttpClient：构造期从 server 图捕获（FetchHttpClient），调用期由
@@ -136,7 +147,11 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 export type EngineBuilder = (
   config: KernelConfig.Info,
   options?: IMKernelSync.LayerOptions,
-) => Layer.Layer<IMKernelSync.Service, unknown, IMRepository | IMBroadcasterService | AgentListProviderService | Database.Service | InstanceRegistry.Service>
+) => Layer.Layer<
+  IMKernelSync.Service,
+  unknown,
+  IMRepository | IMBroadcasterService | AgentListProviderService | Database.Service | InstanceRegistry.Service
+>
 
 export interface Options {
   /** Credential renewal check interval in milliseconds; defaults to 30 seconds. */
@@ -165,6 +180,7 @@ export const layer = (options?: Options) =>
   Layer.effect(
     Service,
     Effect.gen(function* () {
+      const lifetime = yield* Scope.Scope
       const env = options?.env ?? process.env
       const protectedMedia = KernelConfig.protectedMediaFromEnv(env)
       const buildEngine = options?.buildEngine ?? IMKernelSync.layerFromConfig
@@ -176,6 +192,14 @@ export const layer = (options?: Options) =>
       const instanceStore = yield* InstanceStore.Service
       const instanceRegistry = yield* InstanceRegistry.Service
       const http = Option.getOrUndefined(yield* Effect.serviceOption(HttpClient.HttpClient))
+      const device = Option.getOrUndefined(yield* Effect.serviceOption(IMDeviceStore.Service))
+      const transport = device
+        ? IMDeviceTransport.make({
+            store: device,
+            http,
+            allowLoopback: options?.env?.DEEPAGENT_IM_DEVICE_TEST_LOOPBACK === "true",
+          })
+        : undefined
       const v2Session = Option.getOrUndefined(yield* Effect.serviceOption(SessionV2.Service))
 
       const state = yield* SubscriptionRef.make<State>({ kind: "disabled" })
@@ -189,7 +213,12 @@ export const layer = (options?: Options) =>
       // 引擎构建串行化：并发 claim/retry 不能触发两次 SDK 实例化（进程单例防呆会 defect）。
       const engineLock = yield* Semaphore.make(1)
       const identityLock = yield* Semaphore.make(1)
-      const engineScope = yield* Ref.make<Option.Option<Scope.Closeable>>(Option.none())
+      type OwnedEngine = { scope: Scope.Closeable; closed: Deferred.Deferred<void> }
+      const engineScope = yield* Ref.make<Option.Option<OwnedEngine>>(Option.none())
+      // Scope marks itself Closed before asynchronous finalizers finish. Join
+      // the last finalizer as well when another fiber already began closing it.
+      const closeEngine = (owned: OwnedEngine, exit: Exit.Exit<unknown, unknown>) =>
+        Scope.close(owned.scope, exit).pipe(Effect.ensuring(Deferred.await(owned.closed)), Effect.uninterruptible)
       const owner: { current?: { active: boolean; invalidations: Set<() => void> } } = {}
       const revokeOwner = Effect.sync(() => {
         if (owner.current) {
@@ -205,7 +234,7 @@ export const layer = (options?: Options) =>
           yield* revokeOwner
           yield* Ref.set(engine, Option.none())
           const previous = yield* Ref.getAndSet(engineScope, Option.none())
-          if (Option.isSome(previous)) yield* Scope.close(previous.value, Exit.void)
+          if (Option.isSome(previous)) yield* closeEngine(previous.value, Exit.void)
         }),
       )
       yield* Effect.addFinalizer(() => stopEngine)
@@ -214,61 +243,176 @@ export const layer = (options?: Options) =>
       // 每代引擎独占子 scope；换凭证和 facade 关闭时都先停止旧引擎。
       const startEngine = (config: KernelConfig.Info): Effect.Effect<IMKernelSync.Interface, unknown> =>
         engineLock.withPermits(1)(
-          Effect.gen(function* () {
-            yield* revokeOwner
-            yield* Ref.set(engine, Option.none())
-            const previous = yield* Ref.getAndSet(engineScope, Option.none())
-            if (Option.isSome(previous)) yield* Scope.close(previous.value, Exit.void)
-            const scope = yield* Scope.make()
-            const generation = { active: true, invalidations: new Set<() => void>() }
-            owner.current = generation
-            const depsBase = Context.make(IMRepository, repo).pipe(
-              Context.add(IMBroadcasterService, broadcaster),
-              Context.add(AgentListProviderService, agentListProvider),
-              Context.add(Database.Service, database),
-              Context.add(InstanceRegistry.Service, instanceRegistry),
-            )
-            const deps = v2Session ? depsBase.pipe(Context.add(SessionV2.Service, v2Session)) : depsBase
-            const built = yield* Layer.buildWithScope(
-              Layer.provide(
-                buildEngine({ ...config, protectedMedia }, {
-                  ownerCurrent: () => generation.active && owner.current === generation,
-                  onOwnerRevoked: (invalidate) => {
-                    if (generation.active) generation.invalidations.add(invalidate)
-                    if (!generation.active) invalidate()
-                    return () => { generation.invalidations.delete(invalidate) }
-                  },
-                  inspectConversation: config.identity
-                    ? (input) =>
-                        Effect.gen(function* () {
-                          const source = yield* Ref.get(sourceRef)
-                          if (!http || Option.isNone(source))
-                            return yield* new IMKernelExchange.ExchangeError({
-                              code: "im_unavailable",
-                              message: "Conversation verification is unavailable",
-                              retryable: true,
-                            })
-                          return yield* IMKernelExchange.inspectConversation({ ...source.value, ...input }).pipe(
-                            Effect.provideService(HttpClient.HttpClient, http),
+          Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              yield* revokeOwner
+              yield* Ref.set(engine, Option.none())
+              const previous = yield* Ref.getAndSet(engineScope, Option.none())
+              if (Option.isSome(previous)) yield* closeEngine(previous.value, Exit.void)
+              const source = yield* Ref.get(sourceRef)
+              const bound = Option.isSome(source) ? source.value : undefined
+              const scope = yield* Scope.fork(lifetime)
+              const closed = yield* Deferred.make<void>()
+              yield* Scope.addFinalizer(scope, Deferred.succeed(closed, undefined))
+              const owned = { scope, closed }
+              const generation = { active: true, invalidations: new Set<() => void>() }
+              return yield* Effect.gen(function* () {
+                if (device && bound?.device) {
+                  const lease = yield* device.acquireOwner(bound.facadeURL).pipe(
+                    Effect.mapError(
+                      () =>
+                        new IMKernelExchange.ExchangeError({
+                          code: "im_owner_busy",
+                          message: "This installation already has an IM owner",
+                          status: 409,
+                          retryable: false,
+                        }),
+                    ),
+                  )
+                  yield* Scope.addFinalizer(scope, Effect.promise(() => lease.release()).pipe(Effect.uninterruptible))
+                }
+                owner.current = generation
+                const current = () =>
+                  generation.active &&
+                  owner.current === generation &&
+                  scope.state._tag !== "Closed" &&
+                  lifetime.state._tag !== "Closed"
+                const protectedDeviceAuth: KernelConfig.ProtectedDeviceAuth | undefined =
+                  device && transport && bound?.device
+                    ? {
+                        profile: IMDeviceProof.profile,
+                        publicJwk: bound.device.publicJwk,
+                        jkt: bound.device.deviceJkt,
+                        socketAudience: config.socketAudience ?? "",
+                        allowInsecureLoopbackForTests: options?.env?.DEEPAGENT_IM_DEVICE_TEST_LOOPBACK === "true",
+                        entitlementID: bound.device.entitlementID,
+                        bindingVersion: bound.device.bindingVersion,
+                        signConnect: async (challenge, source) => {
+                          if (!current() || source.token !== config.token || source.audience !== config.socketAudience)
+                            throw new Error("IM source retired")
+                          const result = await Effect.runPromise(
+                            device.socket(challenge, {
+                              audience: source.audience,
+                              appkey: config.appkey,
+                              token: source.token,
+                              entitlementID: bound.device!.entitlementID,
+                              bindingVersion: bound.device!.bindingVersion,
+                              allowLoopback: options?.env?.DEEPAGENT_IM_DEVICE_TEST_LOOPBACK === "true",
+                            }),
                           )
-                        })
-                    : undefined,
-                }),
-                Layer.succeedContext(deps),
-              ),
-              scope,
-            ).pipe(Effect.onExit((exit) => Exit.isFailure(exit) ? Effect.sync(() => {
-              generation.active = false
-              generation.invalidations.forEach((invalidate) => invalidate())
-              generation.invalidations.clear()
-              if (owner.current === generation) owner.current = undefined
-            }).pipe(Effect.andThen(Scope.close(scope, exit))) : Effect.void))
-            yield* Ref.set(engineScope, Option.some(scope))
-            const instance = Context.get(built, IMKernelSync.Service)
-            yield* Ref.set(engine, Option.some(instance))
-            log.info("kernel sync engine started", { userID: config.userID, identity: config.identity?.name })
-            return instance
-          }),
+                          if (!current() || source.token !== config.token || source.audience !== config.socketAudience)
+                            throw new Error("IM source retired")
+                          return result
+                        },
+                        signHttp: async (request) => {
+                          const target = new URL(request.url)
+                          const realm = IMDeviceProof.target(
+                            config.navigator,
+                            options?.env?.DEEPAGENT_IM_DEVICE_TEST_LOOPBACK === "true",
+                          ).replace(/\/$/, "")
+                          if (
+                            !current() ||
+                            request.credential !== config.token ||
+                            target.origin !== new URL(realm).origin ||
+                            !(
+                              IMDeviceProof.target(
+                                target.href,
+                                options?.env?.DEEPAGENT_IM_DEVICE_TEST_LOOPBACK === "true",
+                              ) === realm ||
+                              IMDeviceProof.target(
+                                target.href,
+                                options?.env?.DEEPAGENT_IM_DEVICE_TEST_LOOPBACK === "true",
+                              ).startsWith(`${realm}/`)
+                            )
+                          )
+                            throw new Error("IM target is not owned")
+                          const result = await Effect.runPromise(
+                            transport.headers({
+                              realm: bound.facadeURL,
+                              kernelRealm: realm,
+                              method: request.method,
+                              url: request.url,
+                              purpose: "kernel-http",
+                              credential: request.credential,
+                              requestHash: IMDeviceProof.digest([
+                                "dac.im.kernel-http.v1",
+                                realm,
+                                IMDeviceProof.sha256(config.token),
+                                bound.device!.deviceJkt,
+                              ]),
+                            }),
+                          )
+                          if (!current() || request.credential !== config.token) throw new Error("IM source retired")
+                          return result
+                        },
+                      }
+                    : undefined
+                const depsBase = Context.make(IMRepository, repo).pipe(
+                  Context.add(IMBroadcasterService, broadcaster),
+                  Context.add(AgentListProviderService, agentListProvider),
+                  Context.add(Database.Service, database),
+                  Context.add(InstanceRegistry.Service, instanceRegistry),
+                )
+                const deps = v2Session ? depsBase.pipe(Context.add(SessionV2.Service, v2Session)) : depsBase
+                const built = yield* restore(
+                  Layer.buildWithScope(
+                    Layer.provide(
+                      buildEngine(
+                        { ...config, protectedMedia, protectedDeviceAuth },
+                        {
+                          ownerCurrent: current,
+                          onOwnerRevoked: (invalidate) => {
+                            if (current()) generation.invalidations.add(invalidate)
+                            if (!current()) invalidate()
+                            return () => {
+                              generation.invalidations.delete(invalidate)
+                            }
+                          },
+                          inspectConversation: config.identity
+                            ? (input) =>
+                                Effect.gen(function* () {
+                                  const source = yield* Ref.get(sourceRef)
+                                  if (!http || Option.isNone(source))
+                                    return yield* new IMKernelExchange.ExchangeError({
+                                      code: "im_unavailable",
+                                      message: "Conversation verification is unavailable",
+                                      retryable: true,
+                                    })
+                                  return yield* IMKernelExchange.inspectConversation({
+                                    ...source.value,
+                                    ...input,
+                                  }).pipe(Effect.provideService(HttpClient.HttpClient, http))
+                                })
+                            : undefined,
+                        },
+                      ),
+                      Layer.succeedContext(deps),
+                    ),
+                    scope,
+                  ),
+                )
+                yield* Ref.set(engineScope, Option.some(owned))
+                const instance = Context.get(built, IMKernelSync.Service)
+                yield* Ref.set(engine, Option.some(instance))
+                log.info("kernel sync engine started", { userID: config.userID, identity: config.identity?.name })
+                return instance
+              }).pipe(
+                Effect.onExit((exit) =>
+                  Exit.isFailure(exit)
+                    ? Effect.gen(function* () {
+                        generation.active = false
+                        generation.invalidations.forEach((invalidate) => invalidate())
+                        generation.invalidations.clear()
+                        if (owner.current === generation) owner.current = undefined
+                        yield* Ref.set(engine, Option.none())
+                        yield* Ref.set(engineScope, Option.none())
+                        yield* closeEngine(owned, exit)
+                      })
+                    : Effect.void,
+                ),
+              )
+            }),
+          ),
         )
 
       // 凭据解析：URL 只认 env；key 的优先级 stored(auth.json, rebind 写入——最新已知可用) > env。
@@ -276,9 +420,110 @@ export const layer = (options?: Options) =>
       const facadeURL = env[KernelConfig.facadeEnvKeys.url]
       const resolveSource = Effect.gen(function* () {
         if (!facadeURL) return Option.none<KernelConfig.FacadeSource>()
+        if (!options?.buildEngine || device) {
+          if (!device || !transport)
+            return yield* new IMKernelExchange.ExchangeError({
+              code: "im_device_store_unavailable",
+              message: "IM native custody is unavailable",
+              retryable: false,
+            })
+          const realm = yield* Effect.try({
+            try: () =>
+              IMDeviceProof.target(facadeURL, options?.env?.DEEPAGENT_IM_DEVICE_TEST_LOOPBACK === "true").replace(
+                /\/$/,
+                "",
+              ),
+            catch: () =>
+              new IMKernelExchange.ExchangeError({
+                code: "im_device_target_invalid",
+                message: "IM platform realm is invalid",
+                retryable: false,
+              }),
+          })
+          const saved = yield* device.get(realm, "login").pipe(
+            Effect.mapError(
+              () =>
+                new IMKernelExchange.ExchangeError({
+                  code: "im_device_store_unavailable",
+                  message: "IM native custody is unavailable",
+                  retryable: false,
+                }),
+            ),
+          )
+          if (!saved)
+            return yield* new IMKernelExchange.ExchangeError({
+              code: "im_activation_required",
+              message: "Activate IM or bind an existing paid entitlement on this installation",
+              status: 409,
+              retryable: false,
+            })
+          const decoded = Schema.decodeUnknownOption(
+            Schema.fromJsonString(
+              Schema.Struct({
+                profile: Schema.Literal(IMDeviceProof.profile),
+                imCredential: Schema.String.check(Schema.isPattern(/^iml2\.[a-f0-9]{64}$/)),
+                entitlementID: Schema.String.check(Schema.isPattern(/^[a-f0-9]{32}$/)),
+                deviceJkt: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)),
+                bindingVersion: Schema.Int.check(Schema.isGreaterThan(0)),
+                uuid: Schema.String,
+              }),
+            ),
+          )(saved)
+          const key = yield* device.identity.pipe(
+            Effect.mapError(
+              () =>
+                new IMKernelExchange.ExchangeError({
+                  code: "im_device_store_unavailable",
+                  message: "IM device key is unavailable",
+                  retryable: false,
+                }),
+            ),
+          )
+          if (Option.isNone(decoded) || decoded.value.deviceJkt !== key.jkt)
+            return yield* new IMKernelExchange.ExchangeError({
+              code: "im_device_proof_invalid",
+              message: "IM login does not belong to this installation",
+              retryable: false,
+            })
+          const login = decoded.value
+          yield* Ref.set(keyOriginRef, "stored")
+          return Option.some<KernelConfig.FacadeSource>({
+            facadeURL: realm,
+            key: login.imCredential,
+            device: {
+              profile: login.profile,
+              publicJwk: key.publicJwk,
+              entitlementID: login.entitlementID,
+              deviceJkt: login.deviceJkt,
+              bindingVersion: login.bindingVersion,
+              uuid: login.uuid,
+              headers: (request) =>
+                transport.headers({
+                  ...request,
+                  realm,
+                  purpose: "login",
+                  credential: login.imCredential,
+                  requestHash: IMDeviceProof.digest([
+                    "dac.im.login.v2",
+                    realm,
+                    IMDeviceProof.sha256(login.imCredential),
+                    login.deviceJkt,
+                  ]),
+                }),
+            },
+          })
+        }
         const stored = yield* auth.get(AUTH_KEY).pipe(
-          Effect.map((info) => (info?.type === "api" && (!info.metadata?.imSource || info.metadata.imSource ===
-            createHash("sha256").update(JSON.stringify(new URL(facadeURL).href.replace(/\/+$/, ""))).digest("hex")) ? info.key : undefined)),
+          Effect.map((info) =>
+            info?.type === "api" &&
+            (!info.metadata?.imSource ||
+              info.metadata.imSource ===
+                createHash("sha256")
+                  .update(JSON.stringify(new URL(facadeURL).href.replace(/\/+$/, "")))
+                  .digest("hex"))
+              ? info.key
+              : undefined,
+          ),
           Effect.orElseSucceed(() => undefined),
         )
         const envKey = env[KernelConfig.facadeEnvKeys.key]
@@ -332,14 +577,21 @@ export const layer = (options?: Options) =>
         const identity = toIdentity(payload)
         yield* Ref.set(expiresAt, payload.credential_expires_at)
         yield* SubscriptionRef.set(state, { kind: "active", identity })
-        yield* startEngine(IMKernelExchange.toKernelConfig(payload)).pipe(
-          Effect.catch((error) =>
-            Effect.sync(() =>
+        yield* startEngine({
+          ...IMKernelExchange.toKernelConfig(payload),
+          socketAudience: payload.device?.socketAudience,
+        }).pipe(
+          Effect.catch((error) => {
+            if (error instanceof IMKernelExchange.ExchangeError && error.code === "im_owner_busy")
+              return SubscriptionRef.set(state, { kind: "blocked", code: error.code, message: error.message }).pipe(
+                Effect.andThen(Effect.fail(error)),
+              )
+            return Effect.sync(() =>
               log.error("kernel engine start failed", {
                 message: error instanceof Error ? error.message : String(error),
               }),
-            ),
-          ),
+            )
+          }),
         )
         return identity
       })
@@ -349,7 +601,10 @@ export const layer = (options?: Options) =>
         const sourceOption = yield* resolveSource
         if (Option.isNone(sourceOption)) {
           // B1 PoC 直连 env 注入：无组织身份，门面功能关闭，引擎照跑。
-          const poc = env.DEEPAGENT_IM_ALLOW_UNPAID_DEV_KERNEL === "true" && process.env.NODE_ENV !== "production" ? KernelConfig.fromEnv(env) : undefined
+          const poc =
+            env.DEEPAGENT_IM_ALLOW_UNPAID_DEV_KERNEL === "true" && process.env.NODE_ENV !== "production"
+              ? KernelConfig.fromEnv(env)
+              : undefined
           if (poc)
             yield* startEngine(poc).pipe(
               Effect.catch((error) =>
@@ -447,7 +702,15 @@ export const layer = (options?: Options) =>
             yield* SubscriptionRef.set(state, { kind: "blocked", code: error.code, message: error.message })
             return yield* error
           }
-          const source = yield* resolveSource
+          const source = yield* resolveSource.pipe(
+            Effect.tapError((error) =>
+              Ref.set(sourceRef, Option.none()).pipe(
+                Effect.andThen(
+                  SubscriptionRef.set(state, { kind: "blocked", code: error.code, message: error.message }),
+                ),
+              ),
+            ),
+          )
           yield* Ref.set(sourceRef, source)
           const outcome = yield* Effect.result(
             Option.isSome(source)
@@ -475,52 +738,101 @@ export const layer = (options?: Options) =>
         }),
       )
 
-      yield* boot
+      yield* boot.pipe(
+        Effect.catch((error) =>
+          SubscriptionRef.set(state, { kind: "blocked", code: error.code, message: error.message }),
+        ),
+      )
 
-      const acquireReader = (context: ReaderContext) => Effect.gen(function* () {
-        const actual = yield* InstanceRef
-        if (!actual) return yield* KernelReaderSchema.failure("reader_scope_mismatch", "workspace-lease")
-        const workspaceID = (yield* InstanceState.workspaceID) ?? actual.directory
-        if (context.workspaceID !== workspaceID || context.userID !== SERVER_USER_ID || context.directory !== undefined && context.directory !== actual.directory || (yield* instanceStore.peek(actual.directory)) !== actual) return yield* KernelReaderSchema.failure("reader_scope_mismatch", "workspace-lease")
-        const current = Option.getOrUndefined(yield* Ref.get(engine))
-        if (!current?.acquireReader) return yield* KernelReaderSchema.failure("reader_unavailable", "workspace-lease")
-        return yield* current.acquireReader({ instance: actual, workspaceID, userID: SERVER_USER_ID, instanceCurrent: instanceStore.peek(actual.directory).pipe(Effect.map((value) => value === actual)) })
-      })
-      const withReader: Interface["withReader"] = (context, use) => Effect.scoped(Effect.flatMap(acquireReader(context), use))
-      const withCurrentConnectedReader: Interface["withReader"] = (context, use) => Effect.scoped(Effect.gen(function* () {
-        const generation = owner.current
-        const captured = Option.getOrUndefined(yield* Ref.get(engine))
-        if (!captured || !generation?.active) return yield* KernelReaderSchema.failure("reader_unavailable", "workspace-lease")
-        const assertOwner = Effect.gen(function* () {
-          if (!generation.active || owner.current !== generation || Option.getOrUndefined(yield* Ref.get(engine)) !== captured)
-            return yield* KernelReaderSchema.failure("reader_unavailable", "workspace-lease")
+      const acquireReader = (context: ReaderContext) =>
+        Effect.gen(function* () {
+          const actual = yield* InstanceRef
+          if (!actual) return yield* KernelReaderSchema.failure("reader_scope_mismatch", "workspace-lease")
+          const workspaceID = (yield* InstanceState.workspaceID) ?? actual.directory
+          if (
+            context.workspaceID !== workspaceID ||
+            context.userID !== SERVER_USER_ID ||
+            (context.directory !== undefined && context.directory !== actual.directory) ||
+            (yield* instanceStore.peek(actual.directory)) !== actual
+          )
+            return yield* KernelReaderSchema.failure("reader_scope_mismatch", "workspace-lease")
+          const current = Option.getOrUndefined(yield* Ref.get(engine))
+          if (!current?.acquireReader) return yield* KernelReaderSchema.failure("reader_unavailable", "workspace-lease")
+          return yield* current.acquireReader({
+            instance: actual,
+            workspaceID,
+            userID: SERVER_USER_ID,
+            instanceCurrent: instanceStore.peek(actual.directory).pipe(Effect.map((value) => value === actual)),
+          })
         })
-        yield* assertOwner
-        // Engine creation starts the SDK handshake asynchronously. The original
-        // connect bound applies here; retirement cancels the wait immediately.
-        yield* Effect.raceFirst(
-          SubscriptionRef.changes(captured.state).pipe(
-            Stream.filter((connection) => connection !== "connecting"),
-            Stream.runHead,
-            Effect.flatMap((connection) => Option.isSome(connection) && connection.value === "connected"
-              ? Effect.void : KernelReaderSchema.failure("reader_unavailable", "current")),
-          ),
-          Effect.callback<void, KernelReaderSchema.Error>((resume) => {
-            const invalidate = () => resume(KernelReaderSchema.failure("reader_unavailable", "workspace-lease"))
-            generation.invalidations.add(invalidate)
-            if (!generation.active || owner.current !== generation) invalidate()
-            return Effect.sync(() => { generation.invalidations.delete(invalidate) })
+      const withReader: Interface["withReader"] = (context, use) =>
+        Effect.scoped(Effect.flatMap(acquireReader(context), use))
+      const withCurrentConnectedReader: Interface["withReader"] = (context, use) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const generation = owner.current
+            const captured = Option.getOrUndefined(yield* Ref.get(engine))
+            if (!captured || !generation?.active)
+              return yield* KernelReaderSchema.failure("reader_unavailable", "workspace-lease")
+            const assertOwner = Effect.gen(function* () {
+              if (
+                !generation.active ||
+                owner.current !== generation ||
+                Option.getOrUndefined(yield* Ref.get(engine)) !== captured
+              )
+                return yield* KernelReaderSchema.failure("reader_unavailable", "workspace-lease")
+            })
+            yield* assertOwner
+            // Engine creation starts the SDK handshake asynchronously. The original
+            // connect bound applies here; retirement cancels the wait immediately.
+            yield* Effect.raceFirst(
+              SubscriptionRef.changes(captured.state).pipe(
+                Stream.filter((connection) => connection !== "connecting"),
+                Stream.runHead,
+                Effect.flatMap((connection) =>
+                  Option.isSome(connection) && connection.value === "connected"
+                    ? Effect.void
+                    : KernelReaderSchema.failure("reader_unavailable", "current"),
+                ),
+              ),
+              Effect.callback<void, KernelReaderSchema.Error>((resume) => {
+                const invalidate = () => resume(KernelReaderSchema.failure("reader_unavailable", "workspace-lease"))
+                generation.invalidations.add(invalidate)
+                if (!generation.active || owner.current !== generation) invalidate()
+                return Effect.sync(() => {
+                  generation.invalidations.delete(invalidate)
+                })
+              }),
+            ).pipe(
+              Effect.timeoutOrElse({
+                duration: "20 seconds",
+                orElse: () => KernelReaderSchema.failure("reader_unavailable", "current"),
+              }),
+            )
+            yield* assertOwner
+            return yield* withReader(context, (lease) =>
+              assertOwner.pipe(
+                Effect.andThen(use(lease)),
+                Effect.tap(() => assertOwner),
+              ),
+            )
           }),
-        ).pipe(Effect.timeoutOrElse({ duration: "20 seconds", orElse: () => KernelReaderSchema.failure("reader_unavailable", "current") }))
-        yield* assertOwner
-        return yield* withReader(context, (lease) => assertOwner.pipe(Effect.andThen(use(lease)), Effect.tap(() => assertOwner)))
-      }))
+        )
       const currentReaderContext = Effect.gen(function* () {
         const actual = yield* InstanceRef
         if (!actual) return yield* KernelReaderSchema.failure("reader_scope_mismatch", "workspace-lease")
-        return { workspaceID: (yield* InstanceState.workspaceID) ?? actual.directory, userID: SERVER_USER_ID, directory: actual.directory }
+        return {
+          workspaceID: (yield* InstanceState.workspaceID) ?? actual.directory,
+          userID: SERVER_USER_ID,
+          directory: actual.directory,
+        }
       })
-      const exchangeReaderError = (error: KernelReaderSchema.Error) => new IMKernelExchange.ExchangeError({ code: "im_unavailable", message: "Protected delivery reader is unavailable", retryable: true })
+      const exchangeReaderError = (error: KernelReaderSchema.Error) =>
+        new IMKernelExchange.ExchangeError({
+          code: "im_unavailable",
+          message: "Protected delivery reader is unavailable",
+          retryable: true,
+        })
 
       yield* Effect.gen(function* () {
         const backoff = yield* Ref.get(rateLimitedUntil)
@@ -529,7 +841,14 @@ export const layer = (options?: Options) =>
         if (expiration === undefined && backoff === 0) return
         const running = yield* Ref.get(engine)
         const connection = Option.isSome(running) ? yield* SubscriptionRef.get(running.value.state) : undefined
-        if (backoff === 0 && expiration !== undefined && Date.now() < expiration * 1_000 - 60_000 && connection !== "failed" && connection !== "disconnected") return
+        if (
+          backoff === 0 &&
+          expiration !== undefined &&
+          Date.now() < expiration * 1_000 - 60_000 &&
+          connection !== "failed" &&
+          connection !== "disconnected"
+        )
+          return
         yield* retryExchange.pipe(
           Effect.catch((error) =>
             Effect.sync(() =>
@@ -549,7 +868,10 @@ export const layer = (options?: Options) =>
           const current = yield* SubscriptionRef.get(state)
           const running = yield* Ref.get(engine)
           const actual = yield* InstanceRef
-          const observed = actual && Option.isSome(running) ? yield* withReader(yield* currentReaderContext, (lease) => SubscriptionRef.get(lease.reader.state)) : undefined
+          const observed =
+            actual && Option.isSome(running)
+              ? yield* withReader(yield* currentReaderContext, (lease) => SubscriptionRef.get(lease.reader.state))
+              : undefined
           const kernel = Option.isSome(running)
             ? Option.some(yield* SubscriptionRef.get(running.value.state))
             : Option.none()
@@ -561,7 +883,17 @@ export const layer = (options?: Options) =>
                 ? Option.some({ code: current.code, message: current.message })
                 : Option.none(),
             kernel,
-            ...(observed ? { reader: observed, recovery: observed.state === "ready" ? { status: "ready" as const } : observed.state === "unavailable" ? { status: "failed" as const, message: "Remote conversation is currently unavailable" } : { status: "pending" as const } } : {}),
+            ...(observed
+              ? {
+                  reader: observed,
+                  recovery:
+                    observed.state === "ready"
+                      ? { status: "ready" as const }
+                      : observed.state === "unavailable"
+                        ? { status: "failed" as const, message: "Remote conversation is currently unavailable" }
+                        : { status: "pending" as const },
+                }
+              : {}),
             keyOrigin: yield* Ref.get(keyOriginRef),
           } satisfies StatusSnapshot
         }),
@@ -570,6 +902,13 @@ export const layer = (options?: Options) =>
             Effect.gen(function* () {
               const source = yield* requireSource
               const name = yield* validatedName(raw)
+              if (source.device)
+                return yield* new IMKernelExchange.ExchangeError({
+                  code: "im_activation_required",
+                  message: "Use explicit paid activation",
+                  status: 409,
+                  retryable: false,
+                })
               return yield* activate(yield* withClient(IMKernelExchange.claim({ ...source, name })))
             }),
           ),
@@ -601,6 +940,13 @@ export const layer = (options?: Options) =>
                   status: 400,
                   retryable: false,
                 })
+              if (source.device)
+                return yield* new IMKernelExchange.ExchangeError({
+                  code: "im_device_binding_immutable",
+                  message: "This release does not transfer device bindings",
+                  status: 409,
+                  retryable: false,
+                })
               const payload = yield* withClient(IMKernelExchange.rebind({ ...source, newKey: key }))
               // 身份已在门面侧迁移 ⇒ 后续门面调用立即改用新 key；持久化（auth.json，0o600）供下次
               // 启动优先于 env。server mode 禁写 auth.json（gateway 托管 key）——记日志后继续。
@@ -622,51 +968,125 @@ export const layer = (options?: Options) =>
             const name = yield* validatedName(raw)
             return yield* withClient(IMKernelExchange.resolve({ ...source, name }))
           }),
-        createGroup: (input) => withReader({ workspaceID: input.workspaceID, userID: SERVER_USER_ID }, (lease) =>
+        createGroup: (input) =>
+          withReader({ workspaceID: input.workspaceID, userID: SERVER_USER_ID }, (lease) =>
+            Effect.gen(function* () {
+              const active = yield* requireActive
+              const name = yield* validatedName(input.name)
+              const memberNames = input.memberNames.flatMap((raw) => {
+                const validated = validateIMName(raw)
+                return validated.ok ? [validated.name] : []
+              })
+              yield* lease.assertCurrent
+              yield* lease.reader.verifyScope
+              const created = yield* withClient(IMKernelExchange.createGroup({ ...active.source, name, memberNames }))
+              yield* lease.assertCurrent
+              const groupID = yield* lease.reader.pending({
+                conversationType: 2,
+                conversationID: created.group_id,
+                name: created.name,
+              })
+              return yield* lease.reader
+                .withOutput(
+                  { workspaceID: lease.workspaceID, userID: lease.userID, groupIDs: [groupID] },
+                  repo.getGroup({ groupID, userID: lease.userID }),
+                )
+                .pipe(
+                  Effect.flatMap((group) =>
+                    group
+                      ? Effect.succeed(group)
+                      : Effect.fail(new GroupLookupError({ message: "Protected conversation is unavailable" })),
+                  ),
+                )
+            }),
+          ).pipe(
+            Effect.catchIf(
+              (error) => error instanceof KernelReaderSchema.Error,
+              (error) => Effect.fail(exchangeReaderError(error)),
+            ),
+          ),
+        openDirect: (input) =>
+          withReader({ workspaceID: input.workspaceID, userID: SERVER_USER_ID }, (lease) =>
+            Effect.gen(function* () {
+              const active = yield* requireActive
+              const name = yield* validatedName(input.name)
+              yield* lease.assertCurrent
+              yield* lease.reader.verifyScope
+              const peer = yield* withClient(IMKernelExchange.resolve({ ...active.source, name }))
+              yield* lease.assertCurrent
+              if (peer.uuid === active.identity.uuid)
+                return yield* new IMKernelExchange.ExchangeError({
+                  code: "invalid_request",
+                  message: "cannot open a direct chat with yourself",
+                  status: 400,
+                  retryable: false,
+                })
+              const groupID = yield* lease.reader.pending({
+                conversationType: 1,
+                conversationID: peer.uuid,
+                name: peer.name,
+              })
+              return yield* lease.reader
+                .withOutput(
+                  { workspaceID: lease.workspaceID, userID: lease.userID, groupIDs: [groupID] },
+                  repo.getGroup({ groupID, userID: lease.userID }),
+                )
+                .pipe(
+                  Effect.flatMap((group) =>
+                    group
+                      ? Effect.succeed(group)
+                      : Effect.fail(new GroupLookupError({ message: "Protected conversation is unavailable" })),
+                  ),
+                )
+            }),
+          ).pipe(
+            Effect.catchIf(
+              (error) => error instanceof KernelReaderSchema.Error,
+              (error) => Effect.fail(exchangeReaderError(error)),
+            ),
+          ),
+        invite: (input) =>
           Effect.gen(function* () {
-            const active = yield* requireActive
-            const name = yield* validatedName(input.name)
-            const memberNames = input.memberNames.flatMap((raw) => {
-              const validated = validateIMName(raw)
-              return validated.ok ? [validated.name] : []
-            })
-            yield* lease.assertCurrent
-            yield* lease.reader.verifyScope
-            const created = yield* withClient(IMKernelExchange.createGroup({ ...active.source, name, memberNames }))
-            yield* lease.assertCurrent
-            const groupID = yield* lease.reader.pending({ conversationType: 2, conversationID: created.group_id, name: created.name })
-            return yield* lease.reader.withOutput({ workspaceID: lease.workspaceID, userID: lease.userID, groupIDs: [groupID] }, repo.getGroup({ groupID, userID: lease.userID })).pipe(Effect.flatMap((group) => group ? Effect.succeed(group) : Effect.fail(new GroupLookupError({ message: "Protected conversation is unavailable" }))))
-          })).pipe(Effect.catchIf((error) => error instanceof KernelReaderSchema.Error, (error) => Effect.fail(exchangeReaderError(error)))),
-        openDirect: (input) => withReader({ workspaceID: input.workspaceID, userID: SERVER_USER_ID }, (lease) =>
-          Effect.gen(function* () {
-            const active = yield* requireActive
-            const name = yield* validatedName(input.name)
-            yield* lease.assertCurrent
-            yield* lease.reader.verifyScope
-            const peer = yield* withClient(IMKernelExchange.resolve({ ...active.source, name }))
-            yield* lease.assertCurrent
-            if (peer.uuid === active.identity.uuid) return yield* new IMKernelExchange.ExchangeError({ code: "invalid_request", message: "cannot open a direct chat with yourself", status: 400, retryable: false })
-            const groupID = yield* lease.reader.pending({ conversationType: 1, conversationID: peer.uuid, name: peer.name })
-            return yield* lease.reader.withOutput({ workspaceID: lease.workspaceID, userID: lease.userID, groupIDs: [groupID] }, repo.getGroup({ groupID, userID: lease.userID })).pipe(Effect.flatMap((group) => group ? Effect.succeed(group) : Effect.fail(new GroupLookupError({ message: "Protected conversation is unavailable" }))))
-          })).pipe(Effect.catchIf((error) => error instanceof KernelReaderSchema.Error, (error) => Effect.fail(exchangeReaderError(error)))),
-        invite: (input) => Effect.gen(function* () {
-          const context = yield* currentReaderContext
-          return yield* withReader(context, (lease) => Effect.gen(function* () {
-            const active = yield* requireActive
-            const name = yield* validatedName(input.name)
-            const group = yield* repo.getGroupByID(input.groupID)
-            if (!group || group.workspaceID !== lease.workspaceID) return yield* new GroupLookupError({ message: "Protected conversation is unavailable" })
-            const conversation = group.kernelConvID?.startsWith("kr1:") ? yield* lease.reader.conversation(group.id) : undefined
-            if (!conversation || conversation.conversationType !== 2) return yield* new GroupLookupError({ message: "Protected conversation is unavailable" })
-            yield* lease.assertCurrent
-            yield* lease.reader.verifyScope
-            const peer = yield* withClient(IMKernelExchange.resolve({ ...active.source, name }))
-            yield* lease.assertCurrent
-            yield* withClient(IMKernelExchange.inviteToGroup({ ...active.source, groupID: conversation.conversationID, name: peer.name }))
-            yield* lease.assertCurrent
-            yield* repo.addMember({ groupID: group.id, memberID: peer.uuid, memberType: "user", role: "member" }).pipe(Effect.catch((error) => Effect.sync(() => log.warn("local member row insert skipped", { message: error.message }))))
-          }))
-        }).pipe(Effect.catchIf((error) => error instanceof KernelReaderSchema.Error, (error) => Effect.fail(exchangeReaderError(error)))),
+            const context = yield* currentReaderContext
+            return yield* withReader(context, (lease) =>
+              Effect.gen(function* () {
+                const active = yield* requireActive
+                const name = yield* validatedName(input.name)
+                const group = yield* repo.getGroupByID(input.groupID)
+                if (!group || group.workspaceID !== lease.workspaceID)
+                  return yield* new GroupLookupError({ message: "Protected conversation is unavailable" })
+                const conversation = group.kernelConvID?.startsWith("kr1:")
+                  ? yield* lease.reader.conversation(group.id)
+                  : undefined
+                if (!conversation || conversation.conversationType !== 2)
+                  return yield* new GroupLookupError({ message: "Protected conversation is unavailable" })
+                yield* lease.assertCurrent
+                yield* lease.reader.verifyScope
+                const peer = yield* withClient(IMKernelExchange.resolve({ ...active.source, name }))
+                yield* lease.assertCurrent
+                yield* withClient(
+                  IMKernelExchange.inviteToGroup({
+                    ...active.source,
+                    groupID: conversation.conversationID,
+                    name: peer.name,
+                  }),
+                )
+                yield* lease.assertCurrent
+                yield* repo
+                  .addMember({ groupID: group.id, memberID: peer.uuid, memberType: "user", role: "member" })
+                  .pipe(
+                    Effect.catch((error) =>
+                      Effect.sync(() => log.warn("local member row insert skipped", { message: error.message })),
+                    ),
+                  )
+              }),
+            )
+          }).pipe(
+            Effect.catchIf(
+              (error) => error instanceof KernelReaderSchema.Error,
+              (error) => Effect.fail(exchangeReaderError(error)),
+            ),
+          ),
       })
     }),
   )

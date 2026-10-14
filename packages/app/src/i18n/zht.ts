@@ -3,6 +3,15 @@ import { dict as en } from "./en"
 type Keys = keyof typeof en
 
 export const dict = {
+  "im.device.serviceUnavailable": "IM 服務暫時無法使用。請重新整理後重試；若持續失敗，請聯絡服務管理員。本機編碼仍可使用。",
+  "im.device.observationUnavailable": "無法讀取裝置狀態。請重新整理後重試；本次查詢沒有建立綁定請求。",
+  "im.activation.retryHint": "重新輸入原 key 或啟用碼，依原授權重送同一交易。已處理的交易不會重複扣費；查詢狀態仍然唯讀。",
+  "im.activation.retryConsent": "確認原交易和原材料，依原授權重送，不建立新購買。",
+  "im.activation.retryOriginal": "重送原請求",
+  "im.device.retryHint": "重新輸入原遷移憑證，重送同一原 ID 的遷移，扣費 0 credits；查詢狀態仍然唯讀。",
+  "im.device.retryConsent": "確認原憑證和原遷移，重送此請求，扣費 0 credits。",
+  "im.device.retryOriginal": "重送原遷移",
+
   "im.dac.recent": "近期命令（最多 8 筆）",
   "im.dac.reply.retry": "重試傳送最終回答",
   "im.dac.reply.unknown": "最終回答的回傳狀態尚未確認。請核對原命令，任務不會重新執行。",

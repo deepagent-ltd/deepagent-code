@@ -22,6 +22,8 @@ import { formatServerError } from "@/utils/server-errors"
 import { ScopedKey } from "@/utils/server-scope"
 import { deepAgentPromptModeFromConfig } from "@/utils/deepagent-settings"
 import { resolveScenarioOverride, resetScenarioOnStop } from "./scenario-override"
+import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
+import { createGoalStop } from "@/utils/goal-stop"
 
 type PendingPrompt = {
   abort: AbortController
@@ -29,6 +31,7 @@ type PendingPrompt = {
 }
 
 const pending = new Map<string, PendingPrompt>()
+const pauseGoalFromComposer = createGoalStop()
 
 // D1: idle deadline for the prepare SSE stream (see prepareDeepAgentPromptDraft). Exported
 // mutable so tests can shrink it instead of waiting the real 90s.
@@ -43,6 +46,7 @@ export type FollowupDraft = {
   prompt: Prompt
   context: (ContextItem & { key: string })[]
   agent: string
+  delivery?: "steer" | "queue"
   model: { providerID: string; modelID: string }
   variant?: string
   metadata?: {
@@ -84,6 +88,7 @@ type SessionPromptAsyncInput = Parameters<ReturnType<typeof useSDK>["client"]["s
 type AdmissionRetry = {
   promptInput: SessionPromptAsyncInput & { messageID: string; intentID: string }
   optimisticParts: Part[]
+  delivery?: "steer" | "queue"
 }
 
 type SubmissionIdentity = {
@@ -156,6 +161,7 @@ const submissionFingerprint = (draft: FollowupDraft) =>
       }))
       .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
     agent: draft.agent,
+    delivery: draft.delivery,
     model: draft.model,
     variant: draft.variant,
     metadata: draft.metadata,
@@ -497,10 +503,15 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       variant: input.draft.variant,
       metadata,
     }
-    input.onPromptInput?.({ promptInput, optimisticParts: submittedParts.optimisticParts })
+    input.onPromptInput?.({
+      promptInput,
+      optimisticParts: submittedParts.optimisticParts,
+      delivery: input.retry ? input.retry.delivery : input.draft.delivery,
+    })
     const admission = await input.client.v2.session.prompt({
       sessionID: promptInput.sessionID,
       id: promptInput.messageID,
+      delivery: input.retry ? input.retry.delivery : input.draft.delivery,
       prompt: toV2Prompt(promptInput),
     })
     if (!admission.data?.data.id) throw new Error("Prompt admission returned no durable receipt")
@@ -619,6 +630,40 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     resetScenarioOnStop(pendingKey(sessionID), ScopedKey.from(sdk.scope, sdk.directory))
 
     input.onAbort?.()
+    const captured = { client: sdk.client, directory: sdk.directory, scope: sdk.scope, sessionID }
+    const observed = serverSync.data.session_goal[sessionID]
+    if (observed && (!observed.control || !GoalClient.confirmedTerminal(observed.control))) {
+      try {
+        const result = await pauseGoalFromComposer({
+          client: captured.client as unknown as GoalClient.Client,
+          scope: { server: JSON.stringify([captured.scope, sdk.url]), directory: captured.directory, sessionID },
+          goalID: observed.goalId,
+          current: () =>
+            sdk.client === captured.client &&
+            sdk.scope === captured.scope &&
+            sdk.directory === captured.directory &&
+            params.id === sessionID,
+        })
+        if (
+          sdk.client !== captured.client ||
+          sdk.scope !== captured.scope ||
+          sdk.directory !== captured.directory ||
+          params.id !== sessionID
+        )
+          return
+        await serverSync.goal.sync(captured.directory, sessionID)
+        showToast({
+          title: language.t(
+            result.inFlight || result.recoveryRequired || result.preparation !== "ready"
+              ? "goal.control.pausePending"
+              : "composer.goal.phase.paused",
+          ),
+        })
+      } catch (error) {
+        showToast({ title: language.t("goal.control.failed"), description: errorMessage(error), variant: "error" })
+      }
+      return
+    }
 
     const submission = await cancelPending({ preserveDraft: true })
     if (recoveryRequired(sessionID)) return
@@ -700,6 +745,23 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     const currentModel = local.model.current()
     const currentAgent = local.agent.current()
+    const effectiveAgent = local.agent.effective?.()?.name
+    const goal = params.id ? serverSync.data.session_goal[params.id] : undefined
+    if (
+      goal &&
+      currentAgent?.name !== effectiveAgent &&
+      (!goal.control ||
+        (!GoalClient.confirmedTerminal(goal.control) &&
+          !(
+            goal.control.requestedPhase === "paused" &&
+            !goal.control.inFlight &&
+            !goal.control.recoveryRequired &&
+            goal.control.preparation === "ready"
+          )))
+    ) {
+      showToast({ title: language.t("goal.control.pauseBeforeMode") })
+      return
+    }
     const variant = local.model.variant.current()
     if (!currentModel || !currentAgent) {
       showToast({
@@ -800,6 +862,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       prompt: currentPrompt,
       context,
       agent,
+      delivery: !isNewSession && input.working() && currentAgent?.name !== effectiveAgent ? "queue" : undefined,
       model,
       variant,
     }

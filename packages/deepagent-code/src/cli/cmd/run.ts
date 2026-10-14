@@ -30,6 +30,7 @@ import { backgroundTask, createBackgroundSessions, createSessionTree, questionAn
 import { PERMISSION_MODES, permissionReplyFor, resolvePermissionMode, type PermissionMode } from "./run/permission-mode"
 import { Identifier } from "@deepagent-code/core/util/identifier"
 import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
+import { GoalOptions } from "./run/goal-options"
 
 type ModelInput = Parameters<OpencodeClient["session"]["prompt"]>[0]["model"]
 
@@ -159,6 +160,32 @@ export const RunCommand = effectCmd({
       .option("request-id", {
         describe: "retry the same Goal start with --goal --session and the original message",
         type: "string",
+      })
+      .option("goal-test", {
+        describe: "explicit Goal acceptance test command (repeat for multiple commands)",
+        type: "string",
+        array: true,
+        nargs: 1,
+      })
+      .option("goal-diagnostics", {
+        describe: "Goal diagnostics acceptance threshold",
+        type: "string",
+        choices: ["error", "warning", "info", "hint"],
+      })
+      .option("goal-reviewer", {
+        describe: "Goal independent review acceptance threshold",
+        type: "string",
+        choices: ["high", "medium", "low"],
+      })
+      .option("goal-code-ref", {
+        describe: "code reference for Goal diagnostics and review (repeat, at most 32)",
+        type: "string",
+        array: true,
+        nargs: 1,
+      })
+      .option("goal-plan", {
+        describe: "require the standard workspace goal+plan.md as the Goal source",
+        type: "boolean",
       })
       .option("continue", {
         alias: ["c"],
@@ -294,6 +321,16 @@ export const RunCommand = effectCmd({
 
         throw error
       }
+      const goalOptions = GoalOptions.parse({
+        goal: args.goal,
+        agent: args.agent,
+        tests: args["goal-test"],
+        diagnostics: args["goal-diagnostics"],
+        reviewer: args["goal-reviewer"],
+        codeRefs: args["goal-code-ref"],
+        workspacePlan: args["goal-plan"],
+        objective: rawMessage,
+      })
 
       let message = [...args.message, ...(args["--"] || [])]
         .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
@@ -447,6 +484,7 @@ export const RunCommand = effectCmd({
       const piped = process.stdin.isTTY ? undefined : await Bun.stdin.text()
       message = resolveRunInput(message, piped) ?? ""
       const initialInput = resolveRunInput(rawMessage, piped)
+      if (goalOptions.planSource && initialInput?.trim()) die("--goal-plan cannot be combined with an objective or piped message")
       const forkIntentID = `fork_${Identifier.ascending()}`
 
       if (message.trim().length === 0 && !args.command && !args.interactive && !args.goal) {
@@ -1118,6 +1156,7 @@ export const RunCommand = effectCmd({
                 {
                   sessionID,
                   requestID: args["request-id"] ?? crypto.randomUUID(),
+                  ...goalOptions,
                   ...(initialInput?.trim() ? { objective: initialInput.trim() } : {}),
                 },
               )

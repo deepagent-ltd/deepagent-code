@@ -17,6 +17,7 @@ import {
 import { described } from "./metadata"
 import { IMDacSessionSchema } from "@deepagent-code/core/im/dac-session.schema"
 import { IMActivationSchema } from "@deepagent-code/core/im/activation.schema"
+import { IMDeviceSchema } from "@deepagent-code/core/im/device.schema"
 
 const root = "/api/v1/im"
 
@@ -419,6 +420,10 @@ export const IMPaths = {
   activation: `${root}/activation`,
   activationQuote: `${root}/activation/quote`,
   activationStatus: `${root}/activation/:transactionID`,
+  deviceInfo: `${root}/device/info`,
+  migrationPending: `${root}/device/migrations`,
+  migration: `${root}/device/migrate`,
+  migrationStatus: `${root}/device/migrations/:migrationID`,
   dacBinding: `${root}/groups/:groupId/dac`,
   dacSubmit: `${root}/groups/:groupId/dac/commands`,
   dacCommand: `${root}/groups/:groupId/dac/commands/:commandID`,
@@ -454,6 +459,22 @@ export const IMApi = HttpApi.make("im")
   .add(
     HttpApiGroup.make("im")
       .add(
+        HttpApiEndpoint.get("deviceInfo", IMPaths.deviceInfo, {
+          query: WorkspaceRoutingQuery, success: IMDeviceSchema.Info,
+          error: [IMFacadeBadRequestError, IMFacadeConflictError, IMFacadeUnavailableError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.deviceInfo", summary: "Read public IM device identity and verify native custody" })),
+        HttpApiEndpoint.get("migrationPending", IMPaths.migrationPending, {
+          query: WorkspaceRoutingQuery, success: IMDeviceSchema.Pending,
+          error: [IMFacadeBadRequestError, IMFacadeConflictError, IMFacadeUnavailableError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.migrationPending", summary: "Read the original unfinished device binding" })),
+        HttpApiEndpoint.get("migrationStatus", IMPaths.migrationStatus, {
+          params: { migrationID: IMDeviceSchema.Migrate.fields.migrationID }, query: WorkspaceRoutingQuery, success: IMDeviceSchema.Migration,
+          error: [IMFacadeBadRequestError, IMFacadeConflictError, IMFacadeUnavailableError],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.migrationStatus", summary: "Recover the original zero-credit legacy binding" })),
+        HttpApiEndpoint.post("migrate", IMPaths.migration, {
+          query: WorkspaceRoutingQuery, payload: IMDeviceSchema.Migrate, success: IMDeviceSchema.Migration,
+          error: [IMFacadeBadRequestError, IMFacadeConflictError, IMFacadeUnavailableError, HttpApiError.BadRequest],
+        }).annotateMerge(OpenApi.annotations({ identifier: "im.migrate", summary: "Explicitly bind an existing paid entitlement without charging" })),
         HttpApiEndpoint.get("activationQuote", IMPaths.activationQuote, {
           query: WorkspaceRoutingQuery, success: IMActivationSchema.Quote,
           error: [IMFacadeBadRequestError, IMFacadeConflictError, IMFacadeUnavailableError],

@@ -463,6 +463,8 @@ export const DeepAgentGoalStartInput = Schema.Struct({
   requestID: Schema.NonEmptyString,
   // Optional free-text objective (CLI `/goal <objective>`); seeds a plan when the session has none.
   objective: Schema.optional(Schema.String),
+  codeRefs: Schema.optional(Schema.Array(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512))).check(Schema.isMaxLength(32))),
+  planSource: Schema.optional(Schema.Literal("workspace-file")),
   criteria: Schema.optional(
     Schema.Array(
       Schema.Struct({

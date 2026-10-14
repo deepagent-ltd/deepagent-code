@@ -9,6 +9,12 @@ afterAll(() => mock.module("@deepagent-code/sdk/client", () => sdkClient))
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 
 const statuses: Record<string, SessionStatus> = {}
+const goals: Record<
+  string,
+  { goalId: string; control?: import("@deepagent-code/core/deepagent/goal-client").GoalClient.Snapshot }
+> = {}
+let selectedAgent = "agent"
+let effectiveAgent = "agent"
 const abortedSessions: string[] = []
 const createdClients: string[] = []
 const createdSessions: string[] = []
@@ -38,6 +44,7 @@ const preparedDrafts: Array<{
 const preparedIntents: Array<{ intentID?: string; source?: string }> = []
 const sentPromptAsync: Array<{
   directory: string
+  delivery?: "queue" | "steer"
   metadata?: unknown
   text?: string
   parts?: unknown[]
@@ -82,41 +89,60 @@ const clientFor = (directory: string) => {
         return { data: undefined }
       },
       prompt: async () => ({ data: undefined }),
-      promptAsync: async () => { throw new Error("legacy prompt path") },
-      command: async () => ({ data: undefined }),
-      abort: async (input: { sessionID: string }) => { abortedSessions.push(input.sessionID); return { data: undefined } },
-    },
-    v2: { session: {
-      prompt: async (payload: {
-        id?: string
-        prompt: { text: string; metadata?: unknown; files?: unknown[]; agents?: unknown[]; intent?: { id?: string; source?: string; variant?: string } }
-      }) => {
-        const sent = {
-          directory,
-          metadata: payload.prompt.metadata,
-          text: payload.prompt.text,
-          parts: [{ type: "text", text: payload.prompt.text }, ...(payload.prompt.files ?? []), ...(payload.prompt.agents ?? [])],
-          messageID: payload.id,
-          intentID: payload.prompt.intent?.id,
-          intentSource: payload.prompt.intent?.source,
-          intentVariant: payload.prompt.intent?.variant,
-        }
-        sentPromptAsync.push(sent)
-        if (
-          (sent.text?.includes("receipt lost") || sent.text?.includes("Edited retry goal")) &&
-          !rejectedAdmissionReceipts.has(sent.text ?? "")
-        ) {
-          rejectedAdmissionReceipts.add(sent.text ?? "")
-          throw new Error("connection closed after durable admission")
-        }
-        if (sent.text === "prompt waits after admission") {
-          await new Promise<void>((resolve) => {
-            releaseDelayedPrompt = resolve
-          })
-        }
-        return { data: { data: { id: "msg_server_admitted", delivery: "steer" } } }
+      promptAsync: async () => {
+        throw new Error("legacy prompt path")
       },
-    } },
+      command: async () => ({ data: undefined }),
+      abort: async (input: { sessionID: string }) => {
+        abortedSessions.push(input.sessionID)
+        return { data: undefined }
+      },
+    },
+    v2: {
+      session: {
+        prompt: async (payload: {
+          id?: string
+          delivery?: "queue" | "steer"
+          prompt: {
+            text: string
+            metadata?: unknown
+            files?: unknown[]
+            agents?: unknown[]
+            intent?: { id?: string; source?: string; variant?: string }
+          }
+        }) => {
+          const sent = {
+            directory,
+            delivery: payload.delivery,
+            metadata: payload.prompt.metadata,
+            text: payload.prompt.text,
+            parts: [
+              { type: "text", text: payload.prompt.text },
+              ...(payload.prompt.files ?? []),
+              ...(payload.prompt.agents ?? []),
+            ],
+            messageID: payload.id,
+            intentID: payload.prompt.intent?.id,
+            intentSource: payload.prompt.intent?.source,
+            intentVariant: payload.prompt.intent?.variant,
+          }
+          sentPromptAsync.push(sent)
+          if (
+            (sent.text?.includes("receipt lost") || sent.text?.includes("Edited retry goal")) &&
+            !rejectedAdmissionReceipts.has(sent.text ?? "")
+          ) {
+            rejectedAdmissionReceipts.add(sent.text ?? "")
+            throw new Error("connection closed after durable admission")
+          }
+          if (sent.text === "prompt waits after admission") {
+            await new Promise<void>((resolve) => {
+              releaseDelayedPrompt = resolve
+            })
+          }
+          return { data: { data: { id: "msg_server_admitted", delivery: payload.delivery ?? "steer" } } }
+        },
+      },
+    },
     client: {
       request: async (payload: {
         url?: string
@@ -176,7 +202,9 @@ const clientFor = (directory: string) => {
               start(controller) {
                 // Emit one progress delta, then never the terminal event and never close:
                 // the exact hung-stream shape the D1 timeout must recover from.
-                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: "progress", preview: "Partial" })}\n\n`))
+                controller.enqueue(
+                  new TextEncoder().encode(`data: ${JSON.stringify({ type: "progress", preview: "Partial" })}\n\n`),
+                )
                 payload.signal?.addEventListener("abort", () => controller.close(), { once: true })
               },
             }),
@@ -264,7 +292,8 @@ beforeAll(async () => {
         variant: { current: () => variant },
       },
       agent: {
-        current: () => ({ name: "agent" }),
+        current: () => ({ name: selectedAgent }),
+        effective: () => ({ name: effectiveAgent }),
       },
       session: {
         promote(directory: string, sessionID: string) {
@@ -345,13 +374,16 @@ beforeAll(async () => {
           },
         },
       },
-      set: (key: string, sessionID: string, value: SessionStatus) => { if (key === "session_status") statuses[sessionID] = value },
+      set: (key: string, sessionID: string, value: SessionStatus) => {
+        if (key === "session_status") statuses[sessionID] = value
+      },
     }),
   }))
 
   mock.module("@/context/server-sync", () => ({
     useServerSync: () => ({
       data: {
+        session_goal: goals,
         config: {
           provider: {
             deepagent: {
@@ -368,7 +400,10 @@ beforeAll(async () => {
         return [
           { session: storedSessions[directory], session_status: statuses },
           (...args: unknown[]) => {
-            if (args[0] === "session_status") { statuses[args[1] as string] = args[2] as SessionStatus; return }
+            if (args[0] === "session_status") {
+              statuses[args[1] as string] = args[2] as SessionStatus
+              return
+            }
             if (args[0] !== "session") return
             const next = args[1]
             if (typeof next === "function") {
@@ -403,6 +438,9 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  selectedAgent = "agent"
+  effectiveAgent = "agent"
+  for (const key of Object.keys(goals)) delete goals[key]
   for (const key of Object.keys(statuses)) delete statuses[key]
   abortedSessions.length = 0
   createdClients.length = 0
@@ -434,12 +472,43 @@ beforeEach(() => {
 })
 
 describe("prompt submit worktree selection", () => {
-  const guardedSubmit = (options: Partial<Parameters<typeof createPromptSubmit>[0]> = {}) => createPromptSubmit({
-    info: () => ({ id: "session-1" }), imageAttachments: () => [], commentCount: () => 0,
-    autoAccept: () => false, mode: () => "normal", working: () => false,
-    editor: () => undefined, queueScroll: () => undefined, promptLength: () => 2,
-    addToHistory: () => undefined, resetHistoryNavigation: () => undefined,
-    setMode: () => undefined, setPopover: () => undefined, ...options,
+  const guardedSubmit = (options: Partial<Parameters<typeof createPromptSubmit>[0]> = {}) =>
+    createPromptSubmit({
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: () => 2,
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      ...options,
+    })
+
+  test("a changed mode while busy queues the next activity and leaves the active mode unchanged", async () => {
+    params = { id: "session-1" }
+    selectedAgent = "plan"
+    statuses["session-1"] = { type: "busy" }
+    await guardedSubmit({ working: () => true }).handleSubmit(new Event("submit", { cancelable: true }))
+    await flushAsyncSubmit()
+    expect(sentPromptAsync).toHaveLength(1)
+    expect(sentPromptAsync[0].delivery).toBe("queue")
+    expect(optimistic[0].message.agent).toBe("plan")
+    expect(effectiveAgent).toBe("agent")
+  })
+
+  test("same-mode follow-up keeps the existing steer contract", async () => {
+    params = { id: "session-1" }
+    statuses["session-1"] = { type: "busy" }
+    await guardedSubmit({ working: () => true }).handleSubmit(new Event("submit", { cancelable: true }))
+    await flushAsyncSubmit()
+    expect(sentPromptAsync).toHaveLength(1)
+    expect(sentPromptAsync[0].delivery).toBeUndefined()
   })
 
   test("typed recovery blocks direct submit and abort callbacks without changing the draft or status", async () => {
@@ -465,10 +534,12 @@ describe("prompt submit worktree selection", () => {
     params = { id: "session-1" }
     promptMode = "intelligence"
     const status: SessionStatus = { type: "recovery_required", message: "opaque", blockedReason: "recovery_required" }
-    const submit = guardedSubmit({ confirmPromptDraft: async () => {
-      statuses["session-1"] = status
-      return { editedGoal: "Reviewed goal" }
-    } })
+    const submit = guardedSubmit({
+      confirmPromptDraft: async () => {
+        statuses["session-1"] = status
+        return { editedGoal: "Reviewed goal" }
+      },
+    })
     await submit.handleSubmit(new Event("submit", { cancelable: true }))
     await flushAsyncSubmit()
     expect(preparedDrafts).toHaveLength(1)

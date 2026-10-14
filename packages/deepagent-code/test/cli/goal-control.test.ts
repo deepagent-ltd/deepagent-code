@@ -1,8 +1,40 @@
-import { expect } from "bun:test"
+import { expect, test } from "bun:test"
 import { Effect } from "effect"
 import { createServer, type ServerResponse } from "node:http"
 import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
 import { cliIt } from "../lib/cli-process"
+import { GoalOptions } from "../../src/cli/cmd/run/goal-options"
+
+test("Goal options preserve selected criteria and reject invalid input before admission", () => {
+  expect(GoalOptions.parse({ goal: true, agent: "loop" })).toEqual({})
+  expect(GoalOptions.parse({ goal: true, agent: "loop", tests: ["bun test", "git diff --check"], reviewer: "medium", codeRefs: ["src/main.ts"] })).toEqual({
+    criteria: [{ kind: "plan_complete" }, { kind: "tests_pass", commands: ["bun test", "git diff --check"] }, { kind: "reviewer_clean", maxSeverity: "medium" }],
+    codeRefs: ["src/main.ts"],
+  })
+  expect(GoalOptions.parse({ goal: true, agent: "loop", workspacePlan: true })).toEqual({ planSource: "workspace-file" })
+  for (const input of [
+    { tests: ["bun test"] },
+    { goal: true, agent: "auto", diagnostics: "error" },
+    { goal: true, agent: "loop", workspacePlan: true, objective: "another objective" },
+    { goal: true, agent: "loop", tests: [" "] },
+    { goal: true, agent: "loop", diagnostics: "fatal" },
+    { goal: true, agent: "loop", reviewer: "critical" },
+    { goal: true, agent: "loop", codeRefs: [""] },
+    { goal: true, agent: "loop", codeRefs: ["x".repeat(513)] },
+    { goal: true, agent: "loop", codeRefs: Array.from({ length: 33 }, () => "src/main.ts") },
+  ]) expect(() => GoalOptions.parse(input)).toThrow(GoalClient.RequestError)
+})
+
+test("Goal captured start preserves criteria and references across later draft changes", () => {
+  const criteria = [{ kind: "tests_pass", commands: ["bun test"] }]
+  const codeRefs = ["src/main.ts"]
+  const request = GoalClient.capture({ client: { request: async () => ({}) } },
+    { server: "local", directory: "/project", sessionID: "session" }, "start",
+    { sessionID: "session", requestID: "original", criteria, codeRefs, planSource: "workspace-file" })
+  criteria[0].commands.push("another test")
+  codeRefs.push("another.ts")
+  expect(request.body).toEqual({ sessionID: "session", requestID: "original", criteria: [{ kind: "tests_pass", commands: ["bun test"] }], codeRefs: ["src/main.ts"], planSource: "workspace-file" })
+})
 
 const running: GoalClient.Snapshot = {
   goalId: "goal_cli_contract",
@@ -214,7 +246,8 @@ cliIt.live(
       const result = yield* deepagentCode.run("observe the existing task", {
         agent: "loop",
         format: "json",
-        extraArgs: ["--goal", "--attach", server.url, "--dir", home],
+        extraArgs: ["--goal", "--attach", server.url, "--dir", home,
+          "--goal-test", "bun test", "--goal-test", "git diff --check", "--goal-reviewer", "medium", "--goal-code-ref", "src/main.ts"],
         env: { DEEPAGENT_CODE_RUN_TIMEOUT_MS: "10000" },
         timeoutMs: 30000,
       })
@@ -223,6 +256,8 @@ cliIt.live(
       expect(state.creates).toBe(1)
       expect(state.reads).toBeGreaterThanOrEqual(2)
       expect(state.body).toMatchObject({ sessionID: "ses_cli_observe", objective: "observe the existing task" })
+      expect(state.body.criteria).toEqual([{ kind: "plan_complete" }, { kind: "tests_pass", commands: ["bun test", "git diff --check"] }, { kind: "reviewer_clean", maxSeverity: "medium" }])
+      expect(state.body.codeRefs).toEqual(["src/main.ts"])
       expect(typeof state.body.requestID).toBe("string")
       expect(events.filter((event) => event.type === "session_terminal")).toEqual([
         expect.objectContaining({ phase: "done" }),

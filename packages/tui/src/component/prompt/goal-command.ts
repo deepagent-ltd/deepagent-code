@@ -6,7 +6,13 @@ export function createGoalCommands() {
   const pending = new Map<string, GoalClient.Descriptor>()
   const busy = new Set<string>()
   return {
-    async run(input: { client: GoalClient.Client; scope: GoalClient.Scope; command: string; current(): boolean }) {
+    async run(input: {
+      client: GoalClient.Client
+      scope: GoalClient.Scope
+      command: string
+      start?: Omit<GoalClient.StartInput, "sessionID" | "requestID">
+      current(): boolean
+    }) {
       const key = GoalClient.scopeKey(input.scope)
       if (busy.has(key))
         throw new GoalClient.RequestError("Goal command is already awaiting acknowledgement", "busy", 409, false)
@@ -34,6 +40,7 @@ export function createGoalCommands() {
                 sessionID: input.scope.sessionID,
                 requestID: crypto.randomUUID(),
                 ...(input.command ? { objective: input.command } : {}),
+                ...input.start,
               })
             const snapshot = await GoalClient.status(input.client, input.scope.sessionID)
             if (!input.current())

@@ -18,14 +18,14 @@ const PROTECT_SCRIPT = `$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
 $in = [Console]::In.ReadToEnd()
 $bytes = [Convert]::FromBase64String($in)
-$out = [Security.Cryptography.ProtectedData]::Protect($bytes, $null, [Security.Cryptography.DataScope]::CurrentUser)
+$out = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
 [Convert]::ToBase64String($out)`
 
 const UNPROTECT_SCRIPT = `$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
 $in = [Console]::In.ReadToEnd()
 $bytes = [Convert]::FromBase64String($in)
-$out = [Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, [Security.Cryptography.DataScope]::CurrentUser)
+$out = [System.Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
 [Convert]::ToBase64String($out)`
 
 const runScript = async (script: string, stdinBase64: string) => {
@@ -33,6 +33,7 @@ const runScript = async (script: string, stdinBase64: string) => {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
+    abort: AbortSignal.timeout(10000),
   })
   if (!proc.stdin || !proc.stdout || !proc.stderr) throw new Error("powershell process pipes are unavailable")
   proc.stdin.end(stdinBase64)
@@ -51,7 +52,7 @@ export const dpapiCodec: Codec = {
     // consulted on every backend selection.
     probed ??= Process.run(
       ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Add-Type -AssemblyName System.Security; Write-Output ok"],
-      { nothrow: true },
+      { nothrow: true, abort: AbortSignal.timeout(10000) },
     )
       .catch(() => undefined)
       .then((res) => !!res && res.code === 0 && res.stdout.toString().includes("ok"))

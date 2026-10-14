@@ -342,6 +342,8 @@ import type {
   ImDacReplyRetryResponses,
   ImDacSubmitErrors,
   ImDacSubmitResponses,
+  ImDeviceInfoErrors,
+  ImDeviceInfoResponses,
   ImFacadeClaimErrors,
   ImFacadeClaimResponses,
   ImFacadeDirectErrors,
@@ -382,6 +384,12 @@ import type {
   ImMessagesSearchResponses,
   ImMessagesThreadErrors,
   ImMessagesThreadResponses,
+  ImMigrateErrors,
+  ImMigrateResponses,
+  ImMigrationPendingErrors,
+  ImMigrationPendingResponses,
+  ImMigrationStatusErrors,
+  ImMigrationStatusResponses,
   ImportJobRequest,
   ImportRequest,
   ImWebsocketConnectResponses,
@@ -5061,6 +5069,8 @@ export class Goal extends HeyApiClient {
       sessionID: string
       requestID: string
       objective?: string
+      codeRefs?: Array<string>
+      planSource?: "workspace-file"
       criteria?: Array<{
         kind: "tests_pass" | "no_diagnostics" | "reviewer_clean" | "panel_approves" | "plan_complete"
         commands?: Array<string>
@@ -5087,6 +5097,8 @@ export class Goal extends HeyApiClient {
             { in: "body", key: "sessionID" },
             { in: "body", key: "requestID" },
             { in: "body", key: "objective" },
+            { in: "body", key: "codeRefs" },
+            { in: "body", key: "planSource" },
             { in: "body", key: "criteria" },
             { in: "body", key: "limits" },
             { in: "body", key: "stallThreshold" },
@@ -8586,6 +8598,131 @@ export class Websocket extends HeyApiClient {
 
 export class Im extends HeyApiClient {
   /**
+   * Read public IM device identity and verify native custody
+   */
+  public deviceInfo<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImDeviceInfoResponses, ImDeviceInfoErrors, ThrowOnError>({
+      url: "/api/v1/im/device/info",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read the original unfinished device binding
+   */
+  public migrationPending<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImMigrationPendingResponses, ImMigrationPendingErrors, ThrowOnError>({
+      url: "/api/v1/im/device/migrations",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Recover the original zero-credit legacy binding
+   */
+  public migrationStatus<ThrowOnError extends boolean = false>(
+    parameters: {
+      migrationID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "migrationID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImMigrationStatusResponses, ImMigrationStatusErrors, ThrowOnError>({
+      url: "/api/v1/im/device/migrations/{migrationID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Explicitly bind an existing paid entitlement without charging
+   */
+  public migrate<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      migrationID: string
+      voucher: string
+      retryOriginal?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "migrationID" },
+            { in: "body", key: "voucher" },
+            { in: "body", key: "retryOriginal" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImMigrateResponses, ImMigrateErrors, ThrowOnError>({
+      url: "/api/v1/im/device/migrate",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Get explicit IM activation terms without spending credit
    */
   public activationQuote<ThrowOnError extends boolean = false>(
@@ -8653,6 +8790,7 @@ export class Im extends HeyApiClient {
       method: "api_key" | "activation_code"
       credential: string
       quoteID: string
+      retryOriginal?: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -8668,6 +8806,7 @@ export class Im extends HeyApiClient {
             { in: "body", key: "method" },
             { in: "body", key: "credential" },
             { in: "body", key: "quoteID" },
+            { in: "body", key: "retryOriginal" },
           ],
         },
       ],

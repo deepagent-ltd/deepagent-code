@@ -187,7 +187,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
     const activationError = <A, R>(effect: Effect.Effect<A, IMActivationSchema.Error, R>) => effect.pipe(Effect.mapError((error) => {
       const data = { code: error.code, message: "IM activation is not complete. Check the original transaction status before paying again." }
       if (error.code === "im_activation_invalid") return new IMFacadeBadRequestError({ name: "IM_FACADE_BAD_REQUEST", data })
-      if (["im_activation_conflict", "im_activation_pending"].includes(error.code)) return new IMFacadeConflictError({ name: "IM_FACADE_CONFLICT", data })
+      if (["im_activation_conflict", "im_activation_pending", "im_device_migration_pending", "im_device_binding_exists", "im_migration_conflict"].includes(error.code)) return new IMFacadeConflictError({ name: "IM_FACADE_CONFLICT", data })
       return new IMFacadeUnavailableError({ name: "IM_FACADE_UNAVAILABLE", data })
     }))
     const requireActivation = activation ? Effect.succeed(activation) : Effect.fail(new IMActivationSchema.Error({ code: "im_activation_unavailable" }))
@@ -279,6 +279,18 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
       ? new IMDacCommandError({ name: "IM_DAC_COMMAND_REJECTED", data: { code: error.code, ...(error.code === "reference_unavailable" ? { admitted: false as const } : {}) } }) : error))
 
     return handlers
+      .handle("deviceInfo", () => activationError(Effect.flatMap(requireActivation, (value) => value.deviceInfo)))
+      .handle("migrationPending", () => activationError(Effect.flatMap(requireActivation, (value) => value.migrationPending)))
+      .handle("migrationStatus", ({ params }) => activationError(Effect.gen(function* () {
+        const result = yield* (yield* requireActivation).migrationStatus(params.migrationID)
+        if (result.state === "succeeded" && result.credentialStored && facade) yield* facade.retryExchange.pipe(Effect.ignore)
+        return result
+      })))
+      .handle("migrate", ({ payload }) => activationError(Effect.gen(function* () {
+        const result = yield* (yield* requireActivation).migrate(payload)
+        if (result.state === "succeeded" && result.credentialStored && facade) yield* facade.retryExchange.pipe(Effect.ignore)
+        return result
+      })))
       .handle("activationQuote", () => activationError(Effect.flatMap(requireActivation, (value) => value.quote)))
       .handle("activationPending", () => activationError(Effect.flatMap(requireActivation, (value) => value.pending)))
       .handle("activationStatus", ({ params }) => activationError(Effect.gen(function* () {

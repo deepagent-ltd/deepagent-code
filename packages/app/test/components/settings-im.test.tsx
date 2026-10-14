@@ -16,7 +16,26 @@ vi.mock("@/context/server", () => ({
   useServer: () => ({ scope: wiring.scope }),
   ServerConnection: { local: wiring.local },
 }))
-vi.mock("@/context/server-sdk", () => ({ useServerSDK: () => ({ scope: "original" }) }))
+vi.mock("@/context/server-sdk", () => ({
+  useServerSDK: () => ({
+    scope: "original",
+    client: {
+      client: {
+        request: async (input: { url: string }) => ({
+          data:
+            input.url === "/api/v1/im/device/info"
+              ? {
+                  profile: "dac-im-device-v1",
+                  storeAvailable: true,
+                  deviceJkt: "a".repeat(43),
+                  publicJwk: { kty: "EC", crv: "P-256", x: "b".repeat(43), y: "c".repeat(43) },
+                }
+              : { migration: null },
+        }),
+      },
+    },
+  }),
+}))
 vi.mock("@/context/server-sync", () => ({
   useServerSync: () => ({
     data: {

@@ -74,7 +74,8 @@ export function createIMActivation(input: {
       result.name !== owner.transaction.name ||
       result.method !== owner.transaction.method ||
       result.quoteID !== owner.transaction.quoteID ||
-      ((result.state === "pending" || result.state === "unknown") && result.chargedCredits !== null) ||
+      (state.result?.chargedCredits === 1 && result.chargedCredits !== 1) ||
+      (result.method === "activation_code" && result.chargedCredits === 1) ||
       (result.state === "succeeded" &&
         (result.chargedCredits === null || (result.method === "activation_code" && result.chargedCredits !== 0)))
     ) {
@@ -192,8 +193,32 @@ export function createIMActivation(input: {
       if (current()) setState("busy", false)
     }
   }
+  const canRetryOriginal = () =>
+    current() &&
+    !!owner.transaction &&
+    !!state.transactionID &&
+    state.result?.state === "unknown" &&
+    state.result.chargedCredits === null
+  const retryOriginal = async () => {
+    if (!canRetryOriginal() || state.busy || !owner.transaction || !state.credential || !state.consent) return
+    const request = Object.freeze({ ...owner.transaction, credential: state.credential, retryOriginal: true })
+    if (!Schema.is(IMActivationSchema.Submit)(request)) {
+      setState("error", "invalid_input")
+      return
+    }
+    setState({ busy: true, error: "" })
+    try {
+      receive(await input.client.activate(request, signal()), request.transactionID)
+    } catch (error) {
+      // A failed retry does not disprove a previous payment or replace the original intent.
+      failure(error)
+    } finally {
+      if (current()) setState({ busy: false, credential: "", consent: false })
+    }
+  }
   const update = (patch: Partial<Pick<typeof state, "name" | "method" | "credential" | "consent">>) => {
-    if (!current() || state.busy || state.transactionID) return
+    if (!current() || state.busy) return
+    if (state.transactionID && (!canRetryOriginal() || patch.name !== undefined || patch.method !== undefined)) return
     setState(patch)
     if (patch.name !== undefined || patch.method !== undefined || patch.credential !== undefined)
       setState("consent", false)
@@ -204,5 +229,5 @@ export function createIMActivation(input: {
     owner.requests.abort()
     setState({ credential: "", consent: false })
   }
-  return { state, update, load, submit, check, current, dispose }
+  return { state, update, load, submit, check, canRetryOriginal, retryOriginal, current, dispose }
 }

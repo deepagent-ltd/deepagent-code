@@ -225,6 +225,8 @@ const getBase = (): Configuration => ({
     target: ["deb"],
   },
   deb: {
+    // Preserve electron-builder's default runtime libraries and add the CLI used by strict IM custody.
+    depends: ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0", "libsecret-tools"],
     afterInstall: "resources/linux-work-provisioning/after-install.tpl",
     afterRemove: "resources/linux-work-provisioning/after-remove.tpl",
   },

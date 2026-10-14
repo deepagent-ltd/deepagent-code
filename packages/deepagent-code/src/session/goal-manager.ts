@@ -1,6 +1,7 @@
 import { Effect, Layer, Context, SynchronizedRef, Option, Schedule } from "effect"
 import { GoalControl } from "@deepagent-code/core/deepagent/goal-control"
 import { GoalControlSchema } from "@deepagent-code/core/deepagent/goal-control.schema"
+import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
 import { initializeGoal } from "@deepagent-code/core/deepagent/goal-loop"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { Hash } from "@deepagent-code/core/util/hash"
@@ -175,6 +176,8 @@ export type StartGoalInput = {
    * on the first tick. Ignored when a plan already exists (the existing plan is the goal carrier).
    */
   readonly objective?: string
+  readonly codeRefs?: readonly string[]
+  readonly planSource?: "workspace-file"
   /** Objective completion criteria (AND). Defaults to plan_complete + no_diagnostics when omitted. */
   readonly criteria?: readonly CompletionCriterion[]
   /** Hard bounds; a goal with no bounds is rejected by the core (InvalidGoalError). */
@@ -513,6 +516,12 @@ export const layer = Layer.effect(
 
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
+        yield* Effect.try({
+          try: () => GoalClient.validateStartInput(input),
+          catch: (error) => new GoalControlSchema.Error({
+            code: "invalid_request", message: error instanceof Error ? error.message : "Invalid Goal start",
+          }),
+        })
         if (!input.requestID)
           return yield* new GoalControlSchema.Error({
             code: "invalid_request",
@@ -571,7 +580,14 @@ export const layer = Layer.effect(
         // Only fall back to the repo goal+plan.md (design mode) when there is NEITHER a session-state
         // plan (loop mode) NOR an explicit free-text objective. An explicit objective is a direct user
         // intent for THIS start and must win over a stale/leftover file in the workspace.
-        const fromFile = existing == null && !objective ? readGoalPlanFile(cwd, sessionID) : null
+        const fromFile = input.planSource === "workspace-file" || existing == null && !objective
+          ? readGoalPlanFile(cwd, sessionID) : null
+        if (input.planSource === "workspace-file" && !fromFile)
+          return yield* new InvalidGoalError({ reason: "The required workspace goal+plan.md is missing, unsafe or malformed" })
+        if (input.planSource === "workspace-file" && existing && fromFile &&
+          GoalControl.fingerprint([existing.goal, existing.assumptions, existing.steps, existing.active_step_id]) !==
+          GoalControl.fingerprint([fromFile.plan.goal, fromFile.plan.assumptions, fromFile.plan.steps, fromFile.plan.active_step_id]))
+          return yield* new GoalControlSchema.Error({ code: "target_conflict", message: "Workspace file conflicts with the existing Session plan" })
         const plan =
           existing ??
           (objective
@@ -600,11 +616,14 @@ export const layer = Layer.effect(
           },
           model: yield* resolveGoalModel(session),
           netTokenBudget: flags.goalNetTokenBudget,
-          panel: input.panelQuestion ?? {
+          panel: {
+            ...(input.panelQuestion ?? {
             question: "Is the current change safe and correct enough to complete this goal?",
             codeRefs: [],
             lenses: ["correctness", "security", "architecture"],
             maxRounds: 3,
+            }),
+            ...(input.codeRefs !== undefined ? { codeRefs: [...input.codeRefs] } : {}),
           },
         })
         const planDocId = initialization.spec.planDocId

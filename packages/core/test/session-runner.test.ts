@@ -7825,3 +7825,113 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 })
+
+it.effect("planning ceiling filters provider definitions and refuses a late mutating call in the actual runner", () =>
+  Effect.gen(function* () {
+    yield* setup
+    const sessions = yield* SessionV2.Service
+    const agents = yield* AgentV2.Service
+    const registry = yield* ToolRegistry.Service
+    yield* agents.update((editor) =>
+      editor.update(AgentV2.ID.make("plan"), (agent) => {
+        agent.mode = "primary"
+        agent.hidden = false
+        agent.permissions = [{ action: "*", resource: "*", effect: "allow" }]
+      }),
+    )
+    const forbidden: string[] = []
+    yield* registry.register({
+      read: Tool.make({
+        description: "Read",
+        input: Schema.Struct({}),
+        output: Schema.String,
+        execute: () => Effect.succeed("source"),
+        toModelOutput: ({ output }) => [{ type: "text", text: output }],
+      }),
+      browser: Tool.withPermission(
+        Tool.make({
+          description: "Disguised mutation",
+          input: Schema.Struct({}),
+          output: Schema.String,
+          execute: () =>
+            Effect.sync(() => {
+              forbidden.push("browser")
+              return "changed"
+            }),
+          toModelOutput: ({ output }) => [{ type: "text", text: output }],
+        }),
+        "read",
+      ),
+    })
+    yield* sessions.prompt({ sessionID, prompt: new Prompt({ text: "Design only", agent: "plan" }), resume: false })
+    requests.length = 0
+    responses = [
+      [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolCall({ id: "call-forbidden-browser", name: "browser", input: {} }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ],
+      fragmentFixture("text", "planned", ["Design complete"]).completeEvents,
+    ]
+    yield* sessions.resume(sessionID)
+    expect(requests.length).toBeGreaterThanOrEqual(1)
+    expect(
+      requests.every((request) =>
+        request.tools.every((tool) =>
+          ["read", "grep", "glob", "git_read", "question", "plan", "plan_exit"].includes(tool.name),
+        ),
+      ),
+    ).toBeTrue()
+    expect(requests[0]?.tools.map((tool) => tool.name)).toContain("read")
+    expect(forbidden).toEqual([])
+    expect(JSON.stringify(yield* sessions.context(sessionID))).toContain("Unknown tool: browser")
+  }),
+)
+
+it.effect("approved snapshot scope stays explicit in runner context after later plan drafts", () =>
+  Effect.gen(function* () {
+    yield* setup
+    const sessions = yield* SessionV2.Service
+    const db = (yield* Database.Service).db
+    const root = mkdtempSync(tmpRootShared())
+    yield* Effect.addFinalizer(() => Effect.sync(() => {
+      AgentGateway.configure({ enabled: false, agentMode: "high" })
+      rmSync(root, { recursive: true, force: true })
+    }))
+    configureSessionState(root)
+    AgentGateway.configure({ enabled: true, agentMode: "general", baseDir: root })
+    const original = createPlanDoc(sessionID, "Approved original scope", [{
+      step_id: "approved-step", title: "Implement the original bounded scope", status: "pending",
+      acceptance: null, assigned_agent: null, evidence: [], note: null,
+    }])
+    DeepAgentPlanStore.setPlanDoc(sessionID, original)
+    const snapshot = DeepAgentPlanStore.approvalSnapshot(sessionID)!
+    yield* sessions.prompt({
+      sessionID,
+      prompt: new Prompt({
+        text: `Execute the approved original scope.\n${snapshot.body}`,
+        metadata: {
+          dac_plan_approval: {
+            documentID: snapshot.documentID,
+            planID: snapshot.planID,
+            version: snapshot.version,
+            hash: snapshot.hash,
+          },
+        },
+      }),
+      resume: false,
+    })
+    DeepAgentPlanStore.setPlanDoc(sessionID, { ...original, goal: "Unapproved expanded later scope" })
+    requests.length = 0
+    response = fragmentFixture("text", "approved", ["Approved scope executed"]).completeEvents
+    yield* sessions.resume(sessionID)
+    expect(requests).toHaveLength(1)
+    expect(JSON.stringify({ system: requests[0]?.system, messages: requests[0]?.messages })).toContain(
+      "later draft shown below are observations of progress, not a replacement authorization",
+    )
+    expect(JSON.stringify(requests[0]?.messages)).toContain("Unapproved expanded later scope")
+    expect(JSON.stringify(requests[0]?.messages)).toContain(snapshot.body.replaceAll('"', '\\"'))
+    expect((yield* db.select().from(SessionActivityTable).all().pipe(Effect.orDie))[0]?.trigger_input_id).toBeTruthy()
+  }),
+)

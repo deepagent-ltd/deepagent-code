@@ -1,3 +1,4 @@
+import { deviceConfig, deviceError, initialConnectExt, signConnect, signHttp } from "../delivery/device-auth";
 import LiveRead from "../delivery/live-read";
 import Emitter from "../common/emmit";
 import utils from "../utils";
@@ -31,6 +32,9 @@ import NetworkWatcher from "../common/network-watcher";
 */
 export default function IO(config){
   const protectedReader = config.protectedDeliveryReader === true;
+  const deviceAuth = deviceConfig(config.protectedDeviceAuth);
+  let deviceHandshake;
+  let pendingConnect;
   let emitter = Emitter();
   let { appkey, navList, serverList = [], isSync = true, reconnectCount = 100, logger } = config;
   if(!utils.isArray(navList)){
@@ -67,7 +71,11 @@ export default function IO(config){
   let deliveryIndex = 65535;
   const deliveryPending = new Map();
   const invalidateDelivery = () => {
+    const retainedConnect = pendingConnect;
+    pendingConnect = undefined;
+    retainedConnect?.finish({ error: ErrorType.COMMAND_FAILED });
     deliveryEpoch++;
+    deviceHandshake = undefined;
     deliveryLiveCapability = false;
     deliveryReceiverCapability = false;
     if (liveRead) liveRead.clear();
@@ -87,6 +95,7 @@ export default function IO(config){
     ErrorType.CONNECT_USER_BLOCKED.code,
     ErrorType.CONNECT_USER_KICKED.code,
     ErrorType.CONNECT_USER_LOGOUT.code,
+    11025, 11026, 11027, 11028,
   ]
   let updateState = (result) => {
     connectionState = result.state;
@@ -175,6 +184,15 @@ export default function IO(config){
     clearTimeout(reconnectTimer);
     invalidateDelivery();
     const deliveryConnectEpoch = deliveryEpoch;
+    const originalCallback = callback;
+    let settled = false;
+    callback = (result) => {
+      if (settled) return;
+      settled = true;
+      if (pendingConnect?.finish === callback) pendingConnect = undefined;
+      originalCallback(result);
+    };
+    pendingConnect = { epoch: deliveryConnectEpoch, finish: callback };
     if(utils.isEmpty(cache.get(STORAGE.CRYPTO_RANDOM))){
       cache.set(STORAGE.CRYPTO_RANDOM, utils.getRandoms(8));
     }
@@ -234,6 +252,10 @@ export default function IO(config){
         domain = domain.replace(/http:\/\/|https:\/\/|file:\/\/|wss:\/\/|ws:\/\//g, '');
         let { ws: protocol } = utils.getProtocol(currentDomain);
         let url = `${protocol}//${domain}/im`;
+        if (deviceAuth && url !== deviceAuth.socketAudience) {
+          updateState({ state: CONNECT_STATE.CONNECT_FAILED, code: 11025 });
+          return callback({ error: deviceError(11025) });
+        }
         ws = new JWebSocket(url);
         const openedSocket = ws;
         wsPools.push(ws);
@@ -246,7 +268,9 @@ export default function IO(config){
             platform = PLATFORM.DESKTOP;
           }
           let clientSession = common.getClientSession();
-          sendCommand(SIGNAL_CMD.CONNECT, { appkey, token, deviceId, platform, clientSession, sdkVersion: VERSION });
+          if (deviceAuth) deviceHandshake = { socket: openedSocket, epoch: deliveryConnectEpoch, token, platform, clientSession, phase: "requested" };
+          sendCommand(SIGNAL_CMD.CONNECT, { appkey, token, deviceId, platform, clientSession, sdkVersion: VERSION,
+            ...(deviceAuth ? { ext: initialConnectExt() } : {}) });
           wsPools = utils.filter(wsPools, (_ws) => {
             return _ws.readyState != 3;
           });
@@ -263,21 +287,21 @@ export default function IO(config){
           if (ws !== openedSocket || deliveryEpoch !== deliveryConnectEpoch) return;
           // 需要修改在适配层处理
           if(common.isUni()){
-            bufferHandler(data);
+            bufferHandler(data, openedSocket, deliveryConnectEpoch);
           }else{
             let reader = new FileReader();
             reader.onload = function() {
-              if (ws === openedSocket && deliveryEpoch === deliveryConnectEpoch) bufferHandler(this.result);
+              if (ws === openedSocket && deliveryEpoch === deliveryConnectEpoch) bufferHandler(this.result, openedSocket, deliveryConnectEpoch);
             }
             reader.readAsArrayBuffer(data);
           }
         };
-      }, options);
+      }, deviceAuth ? {} : options);
     }
     if(!utils.isEmpty(serverList)){
       return smack({ servers: serverList })
     }
-    return Network.getNavis(navList, { appkey, token, logger }, (result) => {
+    return Network.getNavis(navList, { appkey, token, logger, deviceAuth, sourceEpoch: deliveryConnectEpoch, current: () => deliveryEpoch === deliveryConnectEpoch }, (result) => {
       let { code, servers, userId, url } = result;
 
       if(!utils.isEqual(code, ErrorType.COMMAND_SUCCESS.code)){
@@ -368,7 +392,7 @@ export default function IO(config){
     const protectedCall = cmd === SIGNAL_CMD.QUERY && topics[data.topic] || cmd === SIGNAL_CMD.PUBLISH && data.deliveryVersion === 1;
     const operation = cmd === SIGNAL_CMD.PUBLISH ? "send" : topics[data.topic]?.[0];
     const openedSocket = ws, generation = deliveryEpoch;
-    const counter = Counter({ cmd, ...(protectedCall ? { timeout: 15000 } : {}) });
+    const counter = Counter({ cmd, ...(protectedCall ? { timeout: 15000 } : deviceAuth && cmd === SIGNAL_CMD.CONNECT ? { timeout: 10000 } : {}) });
     if (protectedCall) {
       if (deliveryPending.size + liveRead.pending() >= 8 || deliveryIndex >= 2147483647) return callback({ code: 30001,
         deliveryError: deliveryError(operation, "capacity") });
@@ -390,6 +414,7 @@ export default function IO(config){
       callback({ code: 30001, deliveryError: deliveryError(operation, "invalid_request") });
       return;
     }
+    if (deviceAuth && (generation !== deliveryEpoch || ws !== openedSocket)) { if (cache.get(index).counter === counter) cache.remove(index); return; }
     if (protectedCall && (!deliveryPending.has(index) || generation !== deliveryEpoch || ws !== openedSocket)) {
       cache.remove(index);
       callback({ code: 30001, deliveryError: deliveryError(operation, "disconnected") });
@@ -411,7 +436,7 @@ export default function IO(config){
     if(_data.user){
       _data.user = { id: _data.user.id };
     }
-    logger.info(protectedCall ? { tag: LOG_MODULE.WS_SEND, cmd, topic: data.topic, bytes: buffer.length } : { tag: LOG_MODULE.WS_SEND, cmd, ..._data });
+    logger.info(protectedCall || cmd === SIGNAL_CMD.CONNECT ? { tag: LOG_MODULE.WS_SEND, cmd, topic: data.topic, bytes: buffer.length } : { tag: LOG_MODULE.WS_SEND, cmd, ..._data });
 
     if(!protectedCall && !utils.isEqual(SIGNAL_CMD.PUBLISH_ACK, cmd)){
       // 请求发出后开始计时，一定时间内中未响应认为连接异常，断开连接，counter 定时器在收到 ack 后清除
@@ -431,7 +456,8 @@ export default function IO(config){
   let chatroomAttrSyncer = ChatroomAttrSyncer(sendCommand, emitter, io, { logger });
   let tagSyncer = TagSyncer(sendCommand, emitter, io, { logger });
 
-  let bufferHandler = async (buffer) => {
+  let bufferHandler = async (buffer, openedSocket = ws, sourceEpoch = deliveryEpoch) => {
+    if (openedSocket !== ws || sourceEpoch !== deliveryEpoch) return;
     let decoded;
     try {
       // Legacy publish decoders may perform lookups before producing events.
@@ -451,6 +477,7 @@ export default function IO(config){
       disconnect();
       return;
     }
+    if (openedSocket !== ws || sourceEpoch !== deliveryEpoch) return;
     let { cmd, result, name } = decoded;
     let { index } = result;
     // Protected indices never wrap or overlap the legacy 16-bit range. A late
@@ -548,10 +575,47 @@ export default function IO(config){
 
       let { ack: { code, userId, timestamp: ackTime, mentionClearType } } = result;
 
+      if (!deviceAuth && code === 11024) {
+        isUserDisconnected = true; disconnect(); updateState({ state: CONNECT_STATE.CONNECT_FAILED, code: 11025 });
+        _callback({ user: currentUserInfo, error: deviceError(11025) }); return;
+      }
+      if (deviceAuth) {
+        const handshake = deviceHandshake;
+        const current = () => handshake && deviceHandshake === handshake && handshake.socket === ws &&
+          handshake.epoch === deliveryEpoch && handshake.token === currentUserInfo.token && ws.readyState === 1;
+        if (code === 11024) {
+          if (!current() || handshake.phase !== "requested") {
+            isUserDisconnected = true; disconnect(); updateState({ state: CONNECT_STATE.CONNECT_FAILED, code: 11026 });
+            _callback({ user: currentUserInfo, error: deviceError() }); return;
+          }
+          handshake.phase = "signing";
+          try {
+            const ext = await signConnect(deviceAuth, result.ack.ext, { audience: handshake.socket.url, appkey,
+              token: handshake.token, connectionEpoch: handshake.epoch }, current);
+            if (!current() || handshake.phase !== "signing") return;
+            handshake.phase = "submitted";
+            await sendCommand(SIGNAL_CMD.CONNECT, { appkey, token: handshake.token, deviceId: deviceAuth.jkt,
+              platform: handshake.platform, clientSession: handshake.clientSession, sdkVersion: VERSION, ext });
+          } catch (error) {
+            if (!current()) return;
+            const code = [11025, 11026, 11027, 11028].includes(error?.code) ? error.code : 11026;
+            isUserDisconnected = true; disconnect(); updateState({ state: CONNECT_STATE.CONNECT_FAILED, code });
+            _callback({ user: currentUserInfo, error: deviceError(code) });
+          }
+          return;
+        }
+        if (code === ErrorType.CONNECT_SUCCESS.code && (!current() || handshake.phase !== "submitted")) {
+          isUserDisconnected = true; disconnect(); updateState({ state: CONNECT_STATE.CONNECT_FAILED, code: 11025 });
+          _callback({ user: currentUserInfo, error: deviceError(11025) }); return;
+        }
+        if (code === ErrorType.CONNECT_SUCCESS.code) handshake.phase = "verified";
+      }
+
       mentionClearType = mentionClearType || 0;
    
       let state = CONNECT_STATE.CONNECT_FAILED;
-      let error = common.getError(code);
+      let error = deviceAuth && code >= 11025 && code <= 11028 ? deviceError(code) : common.getError(code);
+      if (deviceAuth && code !== ErrorType.CONNECT_SUCCESS.code) { isUserDisconnected = true; disconnect(); }
       if(utils.isEqual(code, ErrorType.CONNECT_SUCCESS.code)){
         // 会话列表 IM Server 维护，Web 端首次连接，不拉取离线消息，开发者只需要获取最新的会话列表即可
         if(isCurrentFirstConnect && !config.isPC){
@@ -718,6 +782,8 @@ export default function IO(config){
     isNeedConnect,
     getCurrentUser,
     deliveryGeneration: () => deliveryEpoch,
+    deviceHttpHeaders: (input) => signHttp(deviceAuth, input, () => input.currentSourceEpoch === deliveryEpoch &&
+      input.credential === currentUserInfo.token && isConnected()),
     deliveryLiveReadAvailable: () => !!(protectedReader && deliveryLiveCapability && isConnected()),
     deliveryReceiverBaselineAvailable: () => !!(protectedReader && deliveryReceiverCapability && isConnected()),
     acceptDeliveryLiveRead: liveRead.accept,

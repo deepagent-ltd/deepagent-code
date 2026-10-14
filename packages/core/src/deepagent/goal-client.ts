@@ -9,7 +9,9 @@ export type StartInput = {
   sessionID: string
   requestID: string
   objective?: string
-  criteria?: { kind: string; commands?: string[]; maxSeverity?: string; severityAtMost?: string }[]
+  criteria?: readonly { kind: string; commands?: readonly string[]; maxSeverity?: string; severityAtMost?: string }[]
+  codeRefs?: readonly string[]
+  planSource?: "workspace-file"
   limits?: { maxTicks?: number; maxTokens?: number; maxWallclockMs?: number; maxCost?: number }
   stallThreshold?: number
 }
@@ -52,6 +54,7 @@ export function capture(
   action: Action | "start",
   body: ControlInput | StartInput,
 ): Descriptor {
+  if (action === "start") validateStartInput(body as StartInput)
   if (
     scope.sessionID !== body.sessionID ||
     !body.requestID ||
@@ -62,11 +65,53 @@ export function capture(
         body.expectedRevision < 1))
   )
     throw new RequestError("Goal request target is incomplete", "invalid_request", 400, false)
+  const captured = structuredClone(body)
+  if (action === "start") {
+    const start = captured as StartInput
+    start.criteria?.forEach((criterion) => {
+      if (criterion.commands) Object.freeze(criterion.commands)
+      Object.freeze(criterion)
+    })
+    if (start.criteria) Object.freeze(start.criteria)
+    if (start.codeRefs) Object.freeze(start.codeRefs)
+    if (start.limits) Object.freeze(start.limits)
+  }
   return Object.freeze({
     client,
     scope: Object.freeze({ ...scope }),
     action,
-    body: Object.freeze(structuredClone(body)),
+    body: Object.freeze(captured),
+  })
+}
+
+/** Validate before admission or client side effects; commands are criteria, never executed here. */
+export function validateStartInput(input: StartInput) {
+  const invalid = (message: string): never => {
+    throw new RequestError(message, "invalid_request", 400, false)
+  }
+  if (!input.sessionID || !input.requestID) invalid("Goal start requires a Session and stable request ID")
+  if (input.planSource !== undefined && input.planSource !== "workspace-file") invalid("Unsupported Goal plan source")
+  if (input.planSource && input.objective?.trim()) invalid("Workspace plan and objective cannot be combined")
+  if (input.codeRefs && (input.codeRefs.length > 32 || input.codeRefs.some((ref) => !ref.trim() || ref.length > 512)))
+    invalid("Goal code references must contain at most 32 nonempty values of at most 512 characters")
+  if (input.criteria?.length === 0) invalid("Goal requires at least one completion criterion")
+  input.criteria?.forEach((criterion) => {
+    if (criterion.kind === "tests_pass") {
+      if (!criterion.commands?.length || criterion.commands.some((command) => !command.trim()))
+        invalid("Test criteria require nonempty test commands")
+      return
+    }
+    if (criterion.kind === "no_diagnostics") {
+      if (criterion.severityAtMost !== undefined && !["error", "warning", "info", "hint"].includes(criterion.severityAtMost))
+        invalid("Unsupported diagnostics severity")
+      return
+    }
+    if (criterion.kind === "reviewer_clean") {
+      if (!criterion.maxSeverity || !["high", "medium", "low"].includes(criterion.maxSeverity))
+        invalid("Unsupported reviewer severity")
+      return
+    }
+    if (!["plan_complete", "panel_approves"].includes(criterion.kind)) invalid("Unsupported completion criterion")
   })
 }
 
@@ -76,7 +121,10 @@ export async function send(request: Descriptor): Promise<Snapshot> {
   return mutate(request.client, request.action, request.body)
 }
 
-export const start = (client: Client, input: StartInput) => mutate(client, "start", input)
+export const start = (client: Client, input: StartInput) => {
+  validateStartInput(input)
+  return mutate(client, "start", input)
+}
 export const control = (client: Client, action: Action, input: ControlInput) => mutate(client, action, input)
 
 async function mutate(client: Client, action: Action | "start", body: ControlInput | StartInput) {

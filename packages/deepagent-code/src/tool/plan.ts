@@ -1,79 +1,52 @@
-import path from "path"
-import { SessionV1 } from "@deepagent-code/core/v1/session"
-import { Effect, Schema } from "effect"
-import * as Tool from "./tool"
-import { Question } from "../question"
-import { Session } from "@/session/session"
-import { MessageV2 } from "../session/message-v2"
-import { Provider } from "@/provider/provider"
-import { InstanceState } from "@/effect/instance-state"
-import { MessageID, PartID } from "../session/schema"
-import EXIT_DESCRIPTION from "./plan-exit.txt"
+import { Effect, Option, Schema } from "effect"
+import { AgentV2 } from "@deepagent-code/core/agent"
+import { Database } from "@deepagent-code/core/database/database"
+import { PermissionV2 } from "@deepagent-code/core/permission"
+import { QuestionV2 } from "@deepagent-code/core/question"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { Tool } from "./tool"
 
 export const Parameters = Schema.Struct({})
 
+// V2 has one canonical plan approval leaf. The legacy tool surface is only an
+// adapter; it must never fabricate projected user messages to start execution.
 export const PlanExitTool = Tool.define(
   "plan_exit",
-  Effect.gen(function* () {
-    const session = yield* Session.Service
-    const question = yield* Question.Service
-    const provider = yield* Provider.Service
-
-    return {
-      description: EXIT_DESCRIPTION,
-      parameters: Parameters,
-      execute: (_params: {}, ctx: Tool.Context) =>
-        Effect.gen(function* () {
-          const instance = yield* InstanceState.context
-          const info = yield* session.get(ctx.sessionID)
-          const plan = path.relative(instance.worktree, Session.plan(info, instance))
-          const answers = yield* question.ask({
-            sessionID: ctx.sessionID,
-            questions: [
-              {
-                question: `Plan at ${plan} is complete. Would you like to switch to the build agent and start implementing?`,
-                header: "Build Agent",
-                custom: false,
-                options: [
-                  { label: "Yes", description: "Switch to build agent and start implementing the plan" },
-                  { label: "No", description: "Stay with plan agent to continue refining the plan" },
-                ],
-              },
-            ],
-            tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
-          })
-
-          if (answers[0]?.[0] === "No") yield* new Question.RejectedError()
-
-          const messages = yield* session.messages({ sessionID: ctx.sessionID }).pipe(Effect.orDie)
-          const lastUser = messages.findLast((item) => item.info.role === "user" && item.info.model)
-          const model =
-            lastUser?.info.role === "user" && lastUser.info.model ? lastUser.info.model : yield* provider.defaultModel()
-
-          const msg: SessionV1.User = {
-            id: MessageID.ascending(),
-            sessionID: ctx.sessionID,
-            role: "user",
-            time: { created: Date.now() },
-            agent: "auto",
-            model,
-          }
-          yield* session.updateMessage(msg)
-          yield* session.updatePart({
-            id: PartID.ascending(),
-            messageID: msg.id,
-            sessionID: ctx.sessionID,
-            type: "text",
-            text: `The plan at ${plan} has been approved, you can now edit files. Execute the plan`,
-            synthetic: true,
-          } satisfies SessionV1.TextPart)
-
+  Effect.succeed({
+    description: "Display the current plan version and explicitly approve queued execution in the same Session.",
+    parameters: Parameters,
+    execute: (_params: {}, context: Tool.Context) =>
+      Effect.gen(function* () {
+        const { PlanExitTool } = yield* Effect.promise(() => import("@deepagent-code/core/tool/plan-exit"))
+        const permission = yield* Effect.serviceOption(PermissionV2.Service)
+        const question = yield* Effect.serviceOption(QuestionV2.Service)
+        const database = yield* Effect.serviceOption(Database.Service)
+        if (!context.callID || Option.isNone(permission) || Option.isNone(question) || Option.isNone(database))
           return {
-            title: "Switching to build agent",
-            output: "User approved switching to build agent. Wait for further instructions.",
-            metadata: {},
+            title: "Plan execution unavailable",
+            output: "Plan approval requires the current V2 runtime; no execution was admitted.",
+            metadata: { queued: false },
           }
-        }).pipe(Effect.orDie),
-    }
+        return yield* PlanExitTool.approve({
+          sessionID: context.sessionID,
+          agent: AgentV2.ID.make(context.agent),
+          assistantMessageID: SessionMessage.ID.make(context.messageID),
+          toolCallID: context.callID,
+        }).pipe(
+          Effect.provideService(PermissionV2.Service, permission.value),
+          Effect.provideService(QuestionV2.Service, question.value),
+          Effect.provideService(Database.Service, database.value),
+          Effect.map((output) => ({
+            title: output.queued ? "Approved plan queued" : "Continue designing",
+            output: output.queued
+              ? "The approved plan is queued for the next activity in this Session."
+              : "No execution was admitted.",
+            metadata: output,
+          })),
+          Effect.catchTag("LLM.ToolFailure", (error) =>
+            Effect.succeed({ title: "Plan execution unavailable", output: error.message, metadata: { queued: false } }),
+          ),
+        )
+      }),
   }),
 )

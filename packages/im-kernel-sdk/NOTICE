@@ -12,7 +12,14 @@ DeepAgent Code modifications add durable delivery receipts, bounded protected
 reader queries, exact decimal int64 decoding, immutable protected reader mode,
 and typed error handling. Protected mode suppresses legacy body-bearing APIs
 and notifications. It does not grant authority to execute agent tasks.
+Device-bound modifications add two-step Connect challenge proofs, fixed socket
+audience verification, host-signed Navigator/media HTTP requests, asynchronous
+source fences, and token/proof redaction in Connect logs. The host retains
+private-key custody; the SDK receives only public metadata and narrow callbacks.
 
 The runtime is built from the readable source. Its bytes and declaration hash
 are pinned in build-manifest.json. The original banner year is fixed at 2026
 only during reproducible builds; the product runtime clock is unchanged.
+Generated JavaScript comment whitespace is normalized before hashing. The
+locked minifier retains compression with name mangling disabled to avoid its
+older asynchronous scope-tracker failure.

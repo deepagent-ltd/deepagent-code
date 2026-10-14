@@ -64,7 +64,7 @@ export default function(io, emitter, logger){
   let getDevice = () => {
     return utils.deferred((resolve, reject) => {
       let device = Storage.get(STORAGE.APP_DEVICE);
-      let id = device.id || '';
+      let id = io.getConfig().protectedDeviceAuth?.jkt || device.id || '';
       if(utils.isEmpty(id)){
         id = utils.getDeviceID();
         Storage.set(STORAGE.APP_DEVICE, { id });

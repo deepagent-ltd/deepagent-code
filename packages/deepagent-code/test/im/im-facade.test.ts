@@ -1,4 +1,7 @@
 import { describe, expect } from "bun:test"
+import { mkdtempSync, rmSync } from "node:fs"
+import path from "node:path"
+import os from "node:os"
 import { Deferred, Effect, Fiber, Layer, Option, Ref, Stream, SubscriptionRef } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { Database } from "@deepagent-code/core/database/database"
@@ -12,6 +15,8 @@ import { WorkspaceRef } from "@/effect/instance-ref"
 import { ReaderInstanceFixture } from "./reader-instance-fixture"
 import { Auth } from "@/auth"
 import { IMFacade } from "@/im/facade"
+import { IMDeviceStore } from "@/im/device-store"
+import { SecretStore } from "@/mcp/secret-store"
 import { IMKernelExchange } from "@/im/kernel/exchange"
 import { IMKernelSync } from "@/im/kernel/sync"
 import { IMKernelReader } from "@/im/kernel/reader"
@@ -108,6 +113,7 @@ const makeHarness = (options: {
   buildEngine?: IMFacade.EngineBuilder
   protectedReader?: boolean
   readerUnavailable?: boolean
+  device?: ReturnType<typeof IMDeviceStore.make>
 }): Effect.Effect<Harness, never, never> =>
   Effect.gen(function* () {
     const engineStarts: KernelConfig.Info[] = []
@@ -120,7 +126,7 @@ const makeHarness = (options: {
           yield* Effect.addFinalizer(() => Effect.sync(() => void engineStops.push(config)))
           if (options.engineBehavior) yield* options.engineBehavior(config)
           if (options.protectedReader) return IMKernelSync.layer(config, layerOptions).pipe(Layer.provide(Layer.mock(KernelClient.Service, {
-            state: engineState, messages: Stream.empty,
+            state: engineState, messages: Stream.empty, disconnect: Effect.void,
             getDeliveryReader: () => options.readerUnavailable ? Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryReader", message: "Actual reader API is unavailable" })) : Effect.succeed({ version: 1, scopeKey: "a".repeat(64), currentCursor: "0", serverNow: Date.now(), maxPageItems: 32, maxChangeBytes: 65536, maxMessageBytes: 4194304, maxWindowPages: 100000 }),
             getDeliveryChanges: (request) => Effect.succeed({ version: 1, scopeKey: request.scopeKey, after: request.after, upper: "0", scanCursor: "0", scanProjectionKey: "", pageToken: "", windowComplete: true, caughtUp: true, serverNow: Date.now(), items: [] }),
           })))
@@ -152,6 +158,7 @@ const makeHarness = (options: {
       Layer.provide(Layer.succeed(HttpClient.HttpClient, options.http)),
       Layer.provide(ReaderInstanceFixture.layer),
       Layer.provide(ReaderInstanceFixture.registry),
+      Layer.provide(options.device ? Layer.succeed(IMDeviceStore.Service, options.device) : Layer.empty),
     )
     return { layer: Layer.mergeAll(facade, repo, ReaderInstanceFixture.layer), engineStarts, engineStops, engineState }
   })
@@ -162,6 +169,65 @@ const exchangeFail =
     fail(code, message, status)
 
 describe("IMFacade", () => {
+  it.live("releases the actual device owner lease when engine construction is interrupted", () => Effect.gen(function* () {
+    const directory = yield* Effect.acquireRelease(
+      Effect.sync(() => mkdtempSync(path.join(os.tmpdir(), "dac-im-owner-cancel-"))),
+      (value) => Effect.sync(() => rmSync(value, { recursive: true, force: true })),
+    )
+    const native = IMDeviceStore.make({ directory, backend: SecretStore.inMemoryBackend() })
+    const leases = { acquired: 0, released: 0 }
+    const device = { ...native, acquireOwner: (realm: string) => native.acquireOwner(realm).pipe(Effect.map((lease) => {
+      leases.acquired++
+      return { ...lease, release: async () => {
+        await lease.release()
+        leases.released++
+      } }
+    })) }
+    const key = yield* device.identity
+    const realm = "https://facade.example"
+    const uuid = "f".repeat(32)
+    yield* device.put(realm, "login", JSON.stringify({ profile: "dac-im-device-v1", imCredential: `iml2.${"a".repeat(64)}`,
+      entitlementID: "e".repeat(32), deviceJkt: key.jkt, bindingVersion: 1, uuid }))
+    const started = yield* Deferred.make<void>()
+    const counts = { builds: 0 }
+    const harness = yield* makeHarness({ env: { DEEPAGENT_IM_FACADE_URL: realm }, device,
+      engineBehavior: () => Effect.gen(function* () {
+        if (++counts.builds === 1) return
+        yield* Deferred.succeed(started, undefined)
+        yield* Effect.never
+      }),
+      http: httpStub((request) => request.url.endsWith("/device/challenges") ? ok({
+        profile: "dac-im-device-v1", challengeID: "c".repeat(32), nonce: "n".repeat(43), expiresAt: Date.now() + 59000,
+        deviceJkt: key.jkt, purpose: (request.body as { purpose: string }).purpose,
+      }) : ok({ profile: "dac-im-device-v1", entitlementID: "e".repeat(32), deviceJkt: key.jkt, bindingVersion: 1,
+        identity: { uuid, name: "alice", org_id: 7, org_all_group_id: "org7" },
+        kernel: { appkey: "appkey_1", navigator: "https://kernel.example", socket_audience: "wss://kernel.example/im",
+          token: "daim2.fixture", user_id: uuid, credential_expires_at: Math.floor(Date.now() / 1000) + 600,
+          credential_generation: 1, device_profile: "dac-im-device-v1" },
+      }), []),
+    })
+    // Keep credential refresh idle so the second build belongs to the fork below.
+    yield* SubscriptionRef.set(harness.engineState, "connected")
+    yield* Effect.gen(function* () {
+      const facade = yield* IMFacade.Service
+      expect(Option.isSome(yield* Ref.get(facade.engine))).toBe(true)
+      expect((yield* device.acquireOwner(realm).pipe(Effect.result))._tag).toBe("Failure")
+      const switching = yield* Effect.forkChild(facade.retryExchange)
+      yield* Deferred.await(started)
+      expect((yield* device.acquireOwner(realm).pipe(Effect.result))._tag).toBe("Failure")
+      yield* Fiber.interrupt(switching)
+      expect(Option.isNone(yield* Ref.get(facade.engine))).toBe(true)
+      const recovered = yield* pollWithTimeout(device.acquireOwner(realm).pipe(
+        Effect.result, Effect.map((result) => result._tag === "Success" ? result.success : undefined),
+      ), "Interrupted engine did not release its actual owner lease", "2 seconds")
+      expect(leases).toEqual({ acquired: 3, released: 2 })
+      yield* Effect.promise(() => recovered.release())
+      expect(leases).toEqual({ acquired: 3, released: 3 })
+      expect(harness.engineStarts).toHaveLength(2)
+      expect(harness.engineStops).toHaveLength(2)
+    }).pipe(Effect.provide(harness.layer))
+  }), 10000)
+
   it.live("revokes the captured reader owner before an old native request settles during a credential switch", () => Effect.gen(function* () {
     const started = yield* Deferred.make<void>()
     const release = { native: () => {} }
@@ -178,7 +244,7 @@ describe("IMFacade", () => {
       generations.push(options.ownerCurrent)
       if (generations.length > 1) return yield* Effect.fail("fixture build failure")
       const reader = yield* IMKernelReader.make(config, { workspaceID: "workspace", ownerCurrent: options.ownerCurrent, onOwnerRevoked: options.onOwnerRevoked, inspectConversation: options.inspectConversation }).pipe(Effect.provide(Layer.merge(Layer.mock(IMBroadcasterService, { ...broadcaster, broadcast: (groupID, event) => { if (event.type === "reader_invalidated") invalidations.push(groupID) } }), Layer.mock(KernelClient.Service, {
-        state,
+        state, disconnect: Effect.void,
         getDeliveryReadCut: (request) => Effect.gen(function* () {
           calls.cut++
           yield* Deferred.succeed(started, undefined)
@@ -249,6 +315,7 @@ describe("IMFacade", () => {
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         env: {
+          DEEPAGENT_IM_ALLOW_UNPAID_DEV_KERNEL: "true",
           DEEPAGENT_IM_KERNEL_APPKEY: "appkey",
           DEEPAGENT_IM_KERNEL_NAVIGATOR: "http://127.0.0.1:9002",
           DEEPAGENT_IM_KERNEL_TOKEN: "tok",
@@ -279,7 +346,7 @@ describe("IMFacade", () => {
         expect(status.keyOrigin).toBe("env")
       }).pipe(Effect.provide(harness.layer))
       expect(seen).toEqual([
-        { method: "POST", url: "http://facade.local/api/im/exchange", authorization: "Bearer sk-alice", body: {} },
+        { method: "POST", url: "http://facade.local/api/im/login", authorization: "Bearer sk-alice", body: {} },
       ])
       expect(harness.engineStarts.length).toBe(1)
       expect(harness.engineStarts[0]).toMatchObject({ token: "kt_uuid-alice", userID: "uuid-alice" })
@@ -326,7 +393,7 @@ describe("IMFacade", () => {
       const seen: Seen[] = []
       let claimed = false
       const http = httpStub((req) => {
-        if (req.url.endsWith("/api/im/exchange"))
+        if (req.url.endsWith("/api/im/login"))
           return fail("im_not_claimed", "im identity not claimed for this key", 409)
         if (req.url.endsWith("/api/im/claim")) {
           claimed = true
@@ -361,7 +428,7 @@ describe("IMFacade", () => {
     Effect.gen(function* () {
       const seen: Seen[] = []
       const http = httpStub(
-        (req) => (req.url.endsWith("/api/im/exchange") ? fail("im_not_claimed", "unclaimed", 409) : ok(payload())),
+        (req) => (req.url.endsWith("/api/im/login") ? fail("im_not_claimed", "unclaimed", 409) : ok(payload())),
         seen,
       )
       const harness = yield* makeHarness({ env: FACADE_ENV, http })
@@ -379,7 +446,7 @@ describe("IMFacade", () => {
     Effect.gen(function* () {
       const http = httpStub(
         (req) =>
-          req.url.endsWith("/api/im/exchange")
+          req.url.endsWith("/api/im/login")
             ? fail("im_not_claimed", "unclaimed", 409)
             : fail("im_name_taken", "name taken in org", 409),
         [],
@@ -399,7 +466,7 @@ describe("IMFacade", () => {
     Effect.gen(function* () {
       let healed = false
       const http = httpStub((req) => {
-        if (!req.url.endsWith("/api/im/exchange")) return fail("http_error", "unexpected", 500)
+        if (!req.url.endsWith("/api/im/login")) return fail("http_error", "unexpected", 500)
         return healed ? ok(payload()) : fail("im_key_invalid", "key deleted", 403)
       }, [])
       const harness = yield* makeHarness({ env: FACADE_ENV, http })
@@ -424,7 +491,7 @@ describe("IMFacade", () => {
     }),
   )
 
-  it.live("retry re-reads a replaced stored key, closes the old connection, and exposes recovery state", () =>
+  it.live("retry re-reads a replaced stored key and closes the old connection; an engine without a reader exposes no recovery claim", () =>
     Effect.gen(function* () {
       const auth = makeAuth({ [IMFacade.AUTH_KEY]: new Auth.Api({ type: "api", key: "sk-old" }) })
       const seen: Seen[] = []
@@ -440,7 +507,7 @@ describe("IMFacade", () => {
         expect(seen.map((request) => request.authorization)).toEqual(["Bearer sk-old", "Bearer sk-recovered"])
         expect(harness.engineStarts).toHaveLength(2)
         expect(harness.engineStops).toHaveLength(1)
-        expect((yield* facade.status).recovery).toEqual({ status: "ready" })
+        expect((yield* facade.status).recovery).toBeUndefined()
       }).pipe(Effect.provide(harness.layer))
     }),
   )
@@ -537,7 +604,7 @@ describe("IMFacade", () => {
   it.live("rename replaces the engine with the new name and retires the prior credential", () =>
     Effect.gen(function* () {
       const http = httpStub((req) => {
-        if (req.url.endsWith("/api/im/exchange")) return ok(payload())
+        if (req.url.endsWith("/api/im/login")) return ok(payload())
         if (req.url.endsWith("/api/im/rename")) return ok(payload("alice2", "uuid-alice"))
         return fail("http_error", "unexpected", 500)
       }, [])

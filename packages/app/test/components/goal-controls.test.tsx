@@ -17,7 +17,23 @@ vi.mock("@/context/language", () => ({
       Object.entries(values ?? {}).reduce((text, [key, value]) => text.replace(`{{${key}}}`, String(value)), dict[key]),
   }),
 }))
-vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ show: vi.fn(), close: vi.fn() }) }))
+let goalDialog: ReturnType<typeof render> | undefined
+vi.mock("@deepagent-code/ui/context/dialog", () => ({
+  useDialog: () => ({
+    show: (content: () => unknown) => {
+      goalDialog?.unmount()
+      goalDialog = render(content as () => import("solid-js").JSX.Element)
+    },
+    close: () => {
+      goalDialog?.unmount()
+      goalDialog = undefined
+    },
+  }),
+}))
+vi.mock("@deepagent-code/ui/v2/dialog-v2", () => ({
+  Dialog: (props: { children: import("solid-js").JSX.Element }) => <section>{props.children}</section>,
+  DialogFooter: (props: { children: import("solid-js").JSX.Element }) => <footer>{props.children}</footer>,
+}))
 vi.mock("@/components/deepagent/goal-plan-edit-dialog", () => ({ GoalPlanEditDialog: () => null }))
 vi.mock("@/utils/toast", () => ({ showToast: (...args: unknown[]) => wiring.toast(...args) }))
 
@@ -90,6 +106,8 @@ const postCalls = (request: ReturnType<typeof vi.fn>) =>
   request.mock.calls.map(([value]) => value).filter((value) => value.method === "POST")
 beforeEach(() => wiring.toast.mockReset())
 afterEach(() => {
+  goalDialog?.unmount()
+  goalDialog = undefined
   cleanup()
   vi.useRealTimers()
 })
@@ -221,6 +239,7 @@ it("start unknown has an explicit same-request retry and retains its exact targe
   )
   render(() => <GoalStartButton sessionID={f.first} />)
   fireEvent.click(await screen.findByRole("button", { name: dict["goal.start.button"] }))
+  fireEvent.click(screen.getAllByRole("button", { name: dict["goal.start.button"] }).at(-1)!)
   fireEvent.click(await screen.findByRole("button", { name: dict["goal.control.retry"] }))
   await waitFor(() => expect(f.set).toHaveBeenCalledTimes(1))
   expect(postCalls(f.request)).toHaveLength(2)
@@ -235,10 +254,11 @@ it("old start callback does not install its Goal or success toast in a new targe
   f.request.mockImplementation((input) => (input.method !== "POST" ? original(input) : response.promise))
   render(() => <GoalStartButton sessionID={f.target.sessionID} />)
   fireEvent.click(await screen.findByRole("button", { name: dict["goal.start.button"] }))
+  fireEvent.click(screen.getAllByRole("button", { name: dict["goal.start.button"] }).at(-1)!)
   f.setTarget({ sessionID: "other-session", server: "http://other-server", directory: "/other-directory" })
   response.resolve(success(snapshot()))
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: dict["goal.start.button"] }).hasAttribute("disabled")).toBe(false),
+    expect(screen.getAllByRole("button", { name: dict["goal.start.button"] })[0].hasAttribute("disabled")).toBe(false),
   )
   expect(f.set).not.toHaveBeenCalled()
   expect(wiring.toast).not.toHaveBeenCalled()
@@ -269,4 +289,30 @@ it("an initial failed status read is retried read-only, then an authoritative nu
   expect(f.sync).toHaveBeenCalledTimes(2)
   expect(postCalls(f.request)).toHaveLength(0)
   view.unmount()
+})
+
+it("start form captures only selected acceptance criteria and owned code references", async () => {
+  const f = setup(null)
+  render(() => <GoalStartButton sessionID={f.first} />)
+  fireEvent.click(await screen.findByRole("button", { name: dict["goal.start.button"] }))
+  fireEvent.change(screen.getByRole("combobox", { name: dict["goal.start.form.source"] }), {
+    target: { value: "workspace-file" },
+  })
+  fireEvent.change(screen.getByRole("combobox", { name: dict["goal.start.form.criteria"] }), {
+    target: { value: "custom" },
+  })
+  fireEvent.input(screen.getByRole("textbox", { name: dict["goal.start.form.commands"] }), {
+    target: { value: "bun test affected.test.ts" },
+  })
+  fireEvent.input(screen.getByRole("textbox", { name: dict["goal.start.form.codeRefs"] }), {
+    target: { value: "src/affected.ts:12" },
+  })
+  expect(postCalls(f.request)).toHaveLength(0)
+  fireEvent.click(screen.getAllByRole("button", { name: dict["goal.start.button"] }).at(-1)!)
+  await waitFor(() => expect(postCalls(f.request)).toHaveLength(1))
+  expect(postCalls(f.request)[0].body).toMatchObject({
+    planSource: "workspace-file",
+    codeRefs: ["src/affected.ts:12"],
+    criteria: [{ kind: "plan_complete" }, { kind: "tests_pass", commands: ["bun test affected.test.ts"] }],
+  })
 })

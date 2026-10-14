@@ -173,6 +173,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     }),
                   ),
                 ),
+                Effect.catchTag("SessionInput.ModeChangeRefused", (error) =>
+                  Effect.fail(new ConflictError({ message: error.message, resource: error.code })),
+                ),
                 Effect.catchTag("Session.LegacySessionRequiresAdoption", (error) =>
                   Effect.fail(
                     new ConflictError({

@@ -1,7 +1,43 @@
 export const dict = {
+  "im.activation.retryHint": "Re-enter the original key or code. This resends the same transaction under its original authorization; an already processed transaction is not charged again. Checking its status remains read-only.",
+  "im.activation.retryConsent": "Confirm the original transaction and credential; resend this request without creating another purchase.",
+  "im.activation.retryOriginal": "Resend original request",
+  "im.device.retryHint": "Re-enter the original voucher to resend this exact migration. It keeps the original ID and costs 0 credits. Checking its status remains read-only.",
+  "im.device.retryConsent": "Confirm the original voucher and migration; resend this exact request for 0 credits.",
+  "im.device.retryOriginal": "Resend original migration",
+
+  "im.device.title": "IM device binding",
+  "im.device.notice":
+    "Each purchased IM entitlement binds one device. Existing paid users need a root-reviewed voucher for the first binding; migration costs 0 credits. Device replacement is not available in this version.",
+  "im.device.copy": "Copy public device metadata for root review",
+  "im.device.storeUnavailable":
+    "The OS credential store is unavailable. IM purchase, binding and sign-in are disabled. Local coding remains available.",
+  "im.device.unavailable":
+    "This device operation could not be confirmed. Recover the original request before starting another one.",
+  "im.device.serviceUnavailable": "The IM service is unavailable. Refresh to retry or contact the service administrator. Local coding remains available.",
+  "im.device.observationUnavailable": "Device status could not be read. Refresh to retry. This check did not start a binding request.",
+  "im.device.state": "Migration: {{state}} · charged {{credits}} credits",
+  "im.device.voucher": "Root-reviewed first-binding voucher",
+  "im.device.confirm": "Bind this device to the existing paid entitlement for 0 credits.",
+  "im.device.migrate": "Bind existing paid entitlement · 0 credits",
+  "im.device.pending": "An unresolved migration exists. Only the original request may be recovered.",
+  "im.device.recover": "Recover original migration",
+  "im.device.complete": "Binding confirmed and credentials stored on this device.",
+  "im.device.refresh": "Refresh device observations",
+
+  "composer.panel.disarmHistory": "Disable historical automatic review",
+  "composer.panel.copyHistory": "Copy historical review",
+  "composer.panel.copyUnavailable": "Clipboard writing is unavailable in this view.",
+  "prompt.action.queue": "Queue next activity",
+  "prompt.action.queueHint": "Different mode: this message will run as the next activity.",
+  "composer.panel.history":
+    "Historical expert review. New expert panel calls and automatic convening are unavailable in this version.",
+  "goal.control.pausePending": "Pause requested; waiting for the current activity to finish.",
+  "goal.control.pauseBeforeMode": "Pause this goal and wait for its current activity before changing execution mode.",
   "im.dac.recent": "Recent commands (up to 8)",
   "im.dac.reply.retry": "Retry sending the final answer",
-  "im.dac.reply.unknown": "The final reply outcome is not confirmed. Check the original command; the task will not run again.",
+  "im.dac.reply.unknown":
+    "The final reply outcome is not confirmed. Check the original command; the task will not run again.",
   "eventWork.moreRules": "Next page of rules",
   "eventWork.moreRuns": "Next page of runs",
   "eventWork.isolationUnavailable":
@@ -133,7 +169,8 @@ export const dict = {
   "im.dac.resultTitle": "DAC result",
   "im.dac.resultStatus": "Status",
   "im.dac.returnToChat": "Return to chat",
-  "im.dac.scopeChanged": "The connection or project changed. Return to the current chat and open your work session again.",
+  "im.dac.scopeChanged":
+    "The connection or project changed. Return to the current chat and open your work session again.",
   "eventValidation.command": "Installed command",
   "eventValidation.outputs": "Output files",
   "eventValidation.timeout": "Per-run timeout (ms)",
@@ -994,12 +1031,17 @@ export const dict = {
   "composer.approval.request": "Request approval",
   "composer.approval.readOnly": "Read-only",
   "composer.approval.fullAccess": "Full access",
+  "composer.mode.plan": "Design (review before execution)",
+  "composer.mode.plan.desc":
+    "Explore and prepare a plan within a read-only tool boundary. Explicit approval queues the displayed plan for execution.",
+  "settings.general.row.collaborationMode.effective": "Current activity: {{mode}}",
   "composer.mode.auto": "Auto",
-  "composer.mode.loop": "Loop",
-  "composer.mode.design": "Design",
+  "composer.mode.loop": "Continuous execution",
+  "composer.mode.design": "Execute existing plan (compatibility)",
   "composer.mode.auto.desc": "Agent decides how to plan and act on your request",
   "composer.mode.loop.desc": "Agent works autonomously toward a goal, iterating until done",
-  "composer.mode.design.desc": "Agent explores the problem and proposes a design before building",
+  "composer.mode.design.desc":
+    "Execute your existing goal and plan using the supervised loop; preserves previous design-mode behavior.",
   "composer.panel.label": "Expert Panel",
   "composer.panel.off": "Off",
   "composer.panel.single": "Single-round review",
@@ -1833,6 +1875,20 @@ export const dict = {
   "sidebar.help": "Help",
   "sidebar.review": "Knowledge Governance",
   "sidebar.wiki": "Repo & Wiki",
+  "goal.start.form.title": "Start continuous execution",
+  "goal.start.form.source": "Plan source",
+  "goal.start.form.sessionPlan": "Current conversation plan",
+  "goal.start.form.workspacePlan": "Standard workspace goal+plan.md",
+  "goal.start.form.criteria": "Completion criteria",
+  "goal.start.form.default": "Default: plan complete and no diagnostics",
+  "goal.start.form.custom": "Custom: plan complete and selected checks",
+  "goal.start.form.commands": "Test commands — one complete command per line",
+  "goal.start.form.diagnostics": "Diagnostics severity",
+  "goal.start.form.reviewer": "Independent review severity",
+  "goal.start.form.omit": "Do not request this check",
+  "goal.start.form.codeRefs": "Code references — one per line, up to 32 × 512 characters",
+  "goal.start.form.hint":
+    "These inputs define what must be checked. Commands run during verification, not while entering this form. Missing evidence will require your attention.",
   "goal.start.hint": "Plan ready — run it as a supervised goal",
   "goal.start.button": "Run as goal",
   "goal.start.success": "Goal started — running in the background",
@@ -2206,12 +2262,12 @@ export const dict = {
   "settings.general.row.showSessionProgressBar.title": "Show session progress bar",
   "settings.general.row.showSessionProgressBar.description":
     "Display the animated progress bar at the top of the session when the agent is working",
-  "settings.general.row.collaborationMode.title": "Default conversation mode",
-  "settings.general.row.collaborationMode.currentTitle": "Current conversation mode and new conversation default",
+  "settings.general.row.collaborationMode.title": "New conversation default",
+  "settings.general.row.collaborationMode.currentTitle": "This conversation: next activity",
   "settings.general.row.collaborationMode.currentDescription":
-    "Apply to subsequent messages in this conversation and set the default for new conversations. Running tasks stay as they are.",
+    "Choose the mode for the next activity only. A running goal must be paused and have no activity in flight before changing execution type.",
   "settings.general.row.collaborationMode.description":
-    "Choose Auto, Loop, or Design for new conversations. Existing conversation choices and running tasks stay as they are.",
+    "Choose the default for new conversations. Existing conversations and running activities keep their own mode.",
   "settings.general.row.expertPanelDefault.title": "Arm expert panel by default",
   "settings.general.row.expertPanelDefault.description":
     "Start new conversations with the expert panel armed, so its button convenes a review of the current context on demand",

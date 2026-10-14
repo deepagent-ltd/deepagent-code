@@ -1041,6 +1041,8 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           sessionID: ctx.payload.sessionID,
           requestID: ctx.payload.requestID,
           ...(ctx.payload.objective != null ? { objective: ctx.payload.objective } : {}),
+          ...(ctx.payload.codeRefs !== undefined ? { codeRefs: [...ctx.payload.codeRefs] } : {}),
+          ...(ctx.payload.planSource !== undefined ? { planSource: ctx.payload.planSource } : {}),
           ...(criteria ? { criteria } : {}),
           ...(ctx.payload.limits ? { limits: ctx.payload.limits } : {}),
           ...(ctx.payload.stallThreshold != null ? { stallThreshold: ctx.payload.stallThreshold } : {}),

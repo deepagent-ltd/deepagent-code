@@ -171,7 +171,7 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
       // shims 必须先于 SDK bundle 求值（SDK 在 import 时捕获浏览器全局）。
       yield* Effect.promise(() => import("./shims"))
       const JuggleIM = (yield* Effect.promise(() => import("@deepagent-code/im-kernel-sdk"))).default
-      const im = JuggleIM.init({ appkey: config.appkey, navList: [config.navigator], isSync: false, protectedDeliveryReader: true, protectedMedia: config.protectedMedia === true })
+      const im = JuggleIM.init({ appkey: config.appkey, navList: [config.navigator], isSync: false, protectedDeliveryReader: true, protectedMedia: config.protectedMedia === true, protectedDeviceAuth: config.protectedDeviceAuth })
       const { ProtectedLiveOrigin } = yield* Effect.promise(() => import("./protected-live-origin"))
       const releaseLiveObserver = ProtectedLiveOrigin.subscribe(im, (handle) => offer({ tag: "protected_live_observed", handle }))
       yield* Effect.addFinalizer(() => Effect.sync(releaseLiveObserver))

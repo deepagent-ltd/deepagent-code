@@ -73,12 +73,13 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     return sync.session.get(id)
   }
   const hasReview = () => !!params.id
-  const currentControls = () => sessionControls({
-    sessionID: params.id,
-    directory: sdk.directory,
-    session: info(),
-    goal: serverSync.data.session_goal[params.id ?? ""],
-  })
+  const currentControls = () =>
+    sessionControls({
+      sessionID: params.id,
+      directory: sdk.directory,
+      session: info(),
+      goal: serverSync.data.session_goal[params.id ?? ""],
+    })
   const normalizeTab = (tab: string) => {
     if (!tab.startsWith("file://")) return tab
     return file.tab(tab)
@@ -116,12 +117,14 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     return sync.data.message[id] ?? []
   }
   const userMessages = () =>
-    displayMessages(messages().filter((m): m is UserMessage => {
-      if (m.role !== "user") return false
-      const parts = sync.data.part[m.id] ?? []
-      // Revert publishes a synthetic user notice, which is not another prompt turn.
-      return parts.length === 0 || parts.some((part) => part.type !== "text" || !part.synthetic)
-    }))
+    displayMessages(
+      messages().filter((m): m is UserMessage => {
+        if (m.role !== "user") return false
+        const parts = sync.data.part[m.id] ?? []
+        // Revert publishes a synthetic user notice, which is not another prompt turn.
+        return parts.length === 0 || parts.some((part) => part.type !== "text" || !part.synthetic)
+      }),
+    )
   const visibleUserMessages = () => {
     const revert = info()?.revert?.messageID
     if (!revert) return userMessages()
@@ -309,9 +312,13 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     const captured = { sessionID: params.id, directory: sdk.directory, scope: sdk.scope, client: sdk.client }
     void import("@/components/dialog-select-model").then((x) => {
       if (
-        currentControls() !== "editable" || params.id !== captured.sessionID ||
-        sdk.directory !== captured.directory || sdk.scope !== captured.scope || sdk.client !== captured.client
-      ) return
+        currentControls() !== "editable" ||
+        params.id !== captured.sessionID ||
+        sdk.directory !== captured.directory ||
+        sdk.scope !== captured.scope ||
+        sdk.client !== captured.client
+      )
+        return
       dialog.show(() => <x.DialogSelectModel model={local.model} />)
     })
   }
@@ -399,11 +406,14 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     }
 
     await sdk.client.session
-      .summarize({
-        sessionID,
-        modelID: model.id,
-        providerID: model.provider.id,
-      }, { throwOnError: true })
+      .summarize(
+        {
+          sessionID,
+          modelID: model.id,
+          providerID: model.provider.id,
+        },
+        { throwOnError: true },
+      )
       .catch((err) => {
         // The V2-only profile refuses manual compaction with a typed 503 whose message carries
         // the reason — surface it instead of failing silently (fork uses the same pattern).
@@ -838,11 +848,25 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         const client = sdk.client
         const scope = sdk.scope
         const workspaceID = info()?.workspaceID ?? undefined
-        dialog.show(() => <DialogEventWork sessionID={sessionID} workspaceID={workspaceID}
-          active={() => eventWorkOwner() && server.scope() === scope && sdk.client === client &&
-            sdk.scope === scope && params.dir === directory && params.id === sessionID &&
-            (info()?.workspaceID ?? undefined) === workspaceID}
-          onOpenSession={(id, placementDirectory) => { dialog.close(); navigate(`/${base64Encode(placementDirectory)}/session/${id}`) }} />)
+        dialog.show(() => (
+          <DialogEventWork
+            sessionID={sessionID}
+            workspaceID={workspaceID}
+            active={() =>
+              eventWorkOwner() &&
+              server.scope() === scope &&
+              sdk.client === client &&
+              sdk.scope === scope &&
+              params.dir === directory &&
+              params.id === sessionID &&
+              (info()?.workspaceID ?? undefined) === workspaceID
+            }
+            onOpenSession={(id, placementDirectory) => {
+              dialog.close()
+              navigate(`/${base64Encode(placementDirectory)}/session/${id}`)
+            }}
+          />
+        ))
       },
     }),
     mcpCommand({
@@ -881,14 +905,33 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         const client = sdk.client
         const scope = sdk.scope
         const directory = params.dir
-        dialog.show(() => <DialogBrowserControl sessionID={sessionID} onUse={(controlID, script) => {
-          if (!validationOwner() || server.scope() !== scope || sdk.client !== client || sdk.scope !== scope || params.dir !== directory || params.id !== sessionID) return
-          const content = `\nbrowser controlID: ${controlID}` + (script
-            ? `\n${script.mode === "program" ? "Bounded browser program approved; use program with a fresh snapshot/frame and current AX refs bound to target names" : "Read-only page validation approved; use evaluate with a fresh snapshot and frame"}:\n${JSON.stringify(script)}` : "")
-          const start = prompt.current().reduce((end, part) => "end" in part ? Math.max(end, part.end) : end, 0)
-          prompt.set([...prompt.current(), { type: "text", content, start, end: start + content.length }], start + content.length)
-          actions.focusInput()
-        }} />)
+        dialog.show(() => (
+          <DialogBrowserControl
+            sessionID={sessionID}
+            onUse={(controlID, script) => {
+              if (
+                !validationOwner() ||
+                server.scope() !== scope ||
+                sdk.client !== client ||
+                sdk.scope !== scope ||
+                params.dir !== directory ||
+                params.id !== sessionID
+              )
+                return
+              const content =
+                `\nbrowser controlID: ${controlID}` +
+                (script
+                  ? `\n${script.mode === "program" ? "Bounded browser program approved; use program with a fresh snapshot/frame and current AX refs bound to target names" : "Read-only page validation approved; use evaluate with a fresh snapshot and frame"}:\n${JSON.stringify(script)}`
+                  : "")
+              const start = prompt.current().reduce((end, part) => ("end" in part ? Math.max(end, part.end) : end), 0)
+              prompt.set(
+                [...prompt.current(), { type: "text", content, start, end: start + content.length }],
+                start + content.length,
+              )
+              actions.focusInput()
+            }}
+          />
+        ))
       },
     }),
     mcpCommand({
@@ -947,7 +990,15 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
             if (session?.id !== sessionID || session.directory !== directory || session.ordinaryEligible !== true)
               return false
             const goal = serverSync.data.session_goal[sessionID]
-            return !goal || (!!goal.control && GoalClient.confirmedTerminal(goal.control))
+            return (
+              !goal ||
+              (!!goal.control &&
+                (GoalClient.confirmedTerminal(goal.control) ||
+                  (goal.control.requestedPhase === "paused" &&
+                    !goal.control.inFlight &&
+                    !goal.control.recoveryRequired &&
+                    goal.control.preparation === "ready")))
+            )
           }
           dialog.show(() => (
             <DialogSettings
@@ -956,6 +1007,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
                 current,
                 editable,
                 mode: () => (current() ? local.agent.current()?.name : undefined),
+                id: () => (current() ? sessionID : undefined),
+                effective: () => (current() ? local.agent.effective()?.name : undefined),
                 select: (name) => {
                   if (editable()) local.agent.set(name)
                 },

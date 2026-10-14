@@ -11,6 +11,7 @@ import { Agent } from "@/agent/agent"
 import { InstanceStore } from "@/project/instance-store"
 import { Auth } from "@/auth"
 import { IMActivation } from "@/im/activation"
+import { IMDeviceStore } from "@/im/device-store"
 import { BackgroundJob } from "@/background/job"
 import { Config } from "@/config/config"
 import { Command } from "@/command"
@@ -258,12 +259,13 @@ const oversightServicesLayer = Layer.mergeAll(
 // so it stays declared here WITHOUT those deps and resolved against that graph.
 function createIMRuntimeLayer(options?: IMFacade.Options) {
   const facade = IMFacade.layer(options).pipe(
+    Layer.provide(IMDeviceStore.layer),
     Layer.provide(imRepositoryLayer),
     Layer.provide(IMBroadcasterLive),
     Layer.provide(ServerAgentListProviderLive),
   )
   return Layer.mergeAll(
-    IMActivation.layer(options?.env),
+    IMActivation.layer(options?.env).pipe(Layer.provide(IMDeviceStore.layer)),
     imRepositoryLayer,
     IMBroadcasterLive,
     ServerAgentListProviderLive,

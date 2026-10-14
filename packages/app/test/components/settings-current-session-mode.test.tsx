@@ -55,8 +55,12 @@ function fixture(withSession = true) {
       }
     />
   ))
-  const choose = async (name: string) => {
-    const trigger = screen.getByRole("button")
+  const choose = async (name: string, defaultOnly = false) => {
+    const trigger = document.querySelector<HTMLButtonElement>(
+      defaultOnly
+        ? '[data-action="settings-collaboration-default"] [role="button"]'
+        : '[data-action="settings-collaboration-mode"] [role="button"]',
+    )!
     trigger.focus()
     fireEvent.keyDown(trigger, { key: "ArrowDown" })
     fireEvent.click(await screen.findByRole("option", { name }))
@@ -69,7 +73,9 @@ function fixture(withSession = true) {
 
 it("the setting changes the captured conversation even when the chosen mode already is the default", async () => {
   const test = fixture()
-  expect(screen.getByRole("button").textContent).toContain(dict["composer.mode.design"])
+  expect(document.querySelector('[data-action="settings-collaboration-mode"]')!.textContent).toContain(
+    dict["composer.mode.design"],
+  )
   await test.choose(dict["composer.mode.auto"])
   expect(test.state.mode).toBe("auto")
   expect(test.selections).toEqual(["auto"])
@@ -80,17 +86,17 @@ it("a retired conversation cannot apply a late settings selection to another con
   const test = fixture()
   await test.choose(dict["composer.mode.loop"])
   expect(test.state.mode).toBe("loop")
-  expect(test.updates).toEqual(["loop"])
+  expect(test.updates).toEqual([])
   test.setState({ sessionID: "another", scope: "another-server" })
-  await test.choose(dict["composer.mode.design"])
+  await test.choose(dict["composer.mode.design"], true)
   expect(test.state.mode).toBe("loop")
   expect(test.selections).toEqual(["loop"])
-  expect(test.updates).toEqual(["loop", "design"])
+  expect(test.updates).toEqual(["design"])
 })
 
 it("settings without a selected conversation retain the default-only behavior", async () => {
   const test = fixture(false)
-  await test.choose(dict["composer.mode.loop"])
+  await test.choose(dict["composer.mode.loop"], true)
   expect(test.state.default_agent).toBe("loop")
   expect(test.state.mode).toBe("design")
   expect(test.selections).toEqual([])
@@ -100,10 +106,26 @@ it("settings without a selected conversation retain the default-only behavior", 
 it("a controlled or unconfirmed conversation keeps current mode frozen while preserving default settings", async () => {
   const test = fixture()
   test.setState("editable", false)
-  await test.choose(dict["composer.mode.loop"])
+  expect(
+    document
+      .querySelector('[data-action="settings-collaboration-mode"] [role="button"]')!
+      .getAttribute("aria-disabled") === "true",
+  ).toBe(true)
+  await test.choose(dict["composer.mode.loop"], true)
   expect(test.state.mode).toBe("design")
   expect(test.selections).toEqual([])
   expect(test.updates).toEqual(["loop"])
   expect(screen.getByText(dict["settings.general.row.collaborationMode.title"])).toBeDefined()
-  expect(screen.queryByText(dict["settings.general.row.collaborationMode.currentTitle"])).toBeNull()
+  expect(screen.getByText(dict["settings.general.row.collaborationMode.currentTitle"])).toBeDefined()
+})
+
+it("a new conversation default never changes the selected conversation draft", async () => {
+  const test = fixture()
+  await test.choose(dict["composer.mode.loop"], true)
+  expect(test.state.mode).toBe("design")
+  expect(test.selections).toEqual([])
+  expect(test.updates).toEqual(["loop"])
+  await test.choose(dict["composer.mode.auto"])
+  expect(test.state.default_agent).toBe("loop")
+  expect(test.selections).toEqual(["auto"])
 })

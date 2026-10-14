@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import DeliveryClient from "../upstream/src/delivery/client";
 import MediaClient from "../upstream/src/delivery/media-client";
+import { signHttp } from "../upstream/src/delivery/device-auth";
 import { mediaContent, mediaWireContent, protectedMediaInput } from "../upstream/src/delivery/media-contract";
 import { encodeQuery, decodeQuery } from "../upstream/src/delivery/codec";
 import { validateResult } from "../upstream/src/delivery/contract";
@@ -22,6 +23,7 @@ const transport = fetch => {
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch }); servers.push(server);
   const state = { generation: 1, token: "private-unit-current", user: "alice", navigator: server.url.origin };
   const io = { isConnected: () => true, deliveryMediaContext: () => state, deliveryGeneration: () => state.generation,
+    deviceHttpHeaders: input => signHttp(undefined, input, () => true),
     getCurrentUser: () => ({ id: state.user }), deliveryReceiverBaselineAvailable: () => false,
     sendCommand: () => Promise.resolve() };
   return { state, io, client: MediaClient(io, true) };

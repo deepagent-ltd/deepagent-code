@@ -630,6 +630,21 @@ interface InitOptions {
   /** Independent default-off typed media profile. Requires protected reader mode;
    * opts into reader-v2 and authenticated Navigator requests. No legacy fallback. */
   protectedMedia?: boolean;
+  /** Backend-owned callbacks and a fixed operator-configured socket audience. No private key leaves custody. */
+  protectedDeviceAuth?: {
+    readonly profile: "dac-im-device-v1";
+    readonly publicJwk: { readonly kty: "EC"; readonly crv: "P-256"; readonly x: string; readonly y: string };
+    readonly jkt: string;
+    readonly socketAudience: string;
+    readonly allowInsecureLoopbackForTests?: boolean;
+    readonly entitlementID: string;
+    readonly bindingVersion: number;
+    readonly signConnect: (challenge: { readonly profile: "dac-im-connect-proof-v1"; readonly nonce: string;
+      readonly socketSession: string; readonly audience: string; readonly appkey: string; readonly credentialDigest: string;
+      readonly expiresAt: number }, source: { readonly audience: string; readonly token: string; readonly connectionEpoch: number }) => Promise<string>;
+    readonly signHttp: (input: { readonly method: "GET" | "POST" | "PUT" | "DELETE"; readonly url: string;
+      readonly credential: string; readonly currentSourceEpoch: number }) => Promise<Record<string, string>>;
+  };
   upload?: Object;
 }
 

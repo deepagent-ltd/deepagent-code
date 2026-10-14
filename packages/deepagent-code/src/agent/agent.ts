@@ -188,28 +188,24 @@ export const layer = Layer.effect(
             mode: "primary",
             native: true,
           },
-          // PLAN — hidden from the mode switcher in the redesign (auto/loop/design are the visible
-          // collaboration modes). Retained as the read-only "produce a plan, don't edit" permission
-          // set, reused internally by loop mode's plan-generation phase and still selectable via config
-          // / API for callers that want a pure planning turn.
+          // The visible Design choice uses plan; legacy design retains execute-existing-plan semantics.
           plan: {
             name: "plan",
-            description: "Plan mode. Disallows all edit tools.",
+            description: "Design a plan without implementing it; explicitly approve the displayed plan before queued execution.",
+            prompt: "Inspect the project with read tools, clarify the requirements, and save the proposed plan with the plan tool. Do not implement the plan or change project files. Call plan_exit only when the design is ready to display its exact version for the user's approval of a separate execution activity.",
             options: {},
-            hidden: true,
+            hidden: false,
             permission: Permission.merge(
               defaults,
               Permission.fromConfig({
+                "*": "deny",
+                read: { "*": "allow", "*.env": "ask", "*.env.*": "ask", "*.env.example": "allow" },
+                grep: "allow",
+                glob: "allow",
+                git_read: "allow",
+                plan: "allow",
                 question: "allow",
                 plan_exit: "allow",
-                external_directory: {
-                  [path.join(Global.Path.data, "plans", "*")]: "allow",
-                },
-                edit: {
-                  "*": "deny",
-                  [path.join(".deepagent-code", "plans", "*.md")]: "allow",
-                  [path.relative(ctx.worktree, path.join(Global.Path.data, path.join("plans", "*.md")))]: "allow",
-                },
               }),
               user,
             ),

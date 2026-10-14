@@ -2047,6 +2047,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 blank={blank()}
                 stopping={stopping()}
                 recovery={recoveryRequired()}
+                queue={working() && local.agent.current()?.name !== local.agent.effective?.()?.name}
                 selectionRequired={!local.model.current() || !local.agent.current()}
                 mode={store.mode}
                 tip={tip()}

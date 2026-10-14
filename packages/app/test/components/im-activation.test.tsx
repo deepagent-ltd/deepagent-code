@@ -141,7 +141,7 @@ it("an ambiguous POST retains one ID, clears the secret, and a mismatched status
   expect(screen.queryByText(dict["im.activation.state.activated"])).toBeNull()
 })
 
-it("payment success without credential custody stays locked and a malformed unknown charge never displays zero", async () => {
+it("payment success without credential custody stays locked and a later receipt cannot erase its observed credit", async () => {
   const api = client()
   const controller = createRoot(() => createIMActivation({ client: api, current: () => true, activated: vi.fn() }))
   await controller.load()
@@ -151,7 +151,9 @@ it("payment success without credential custody stays locked and a malformed unkn
     chargedCredits: 1,
     credentialStored: false,
   }))
-  controller.update({ name: "Alice", credential: "code" })
+  controller.update({ method: "api_key" })
+  controller.update({ name: "Alice", credential: "paid-key" })
+  controller.update({ consent: true })
   await controller.submit()
   const id = controller.state.transactionID
   expect(id).toBeTruthy()

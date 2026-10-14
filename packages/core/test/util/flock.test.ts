@@ -460,3 +460,27 @@ describe("util.flock", () => {
     }
   })
 })
+
+
+test("IM strict ownership never steals a live suspended owner and reclaims only its dead child PID", async () => {
+  await using directory = await tmpdir()
+  const ready = path.join(directory.path, "owner-ready")
+  const child = Bun.spawn([process.execPath, worker, JSON.stringify({
+    key: "strict-owner", dir: directory.path, ready, holdMs: 60000, reclaimDeadProcess: true,
+  })], { cwd: root, stdout: "ignore", stderr: "pipe" })
+  try {
+    await wait(ready)
+    const heartbeat = path.join(lock(directory.path, "strict-owner"), "heartbeat")
+    await fs.utimes(heartbeat, new Date(0), new Date(0))
+    await expect(Flock.acquire("strict-owner", { dir: directory.path, staleMs: 1, timeoutMs: 0, reclaimDeadProcess: true }))
+      .rejects.toThrow("Timed out")
+    child.kill("SIGKILL")
+    await child.exited
+    const recovered = await Flock.acquire("strict-owner", { dir: directory.path, timeoutMs: 0, reclaimDeadProcess: true })
+    await recovered.release()
+    expect(await exists(lock(directory.path, "strict-owner"))).toBeFalse()
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL")
+    await child.exited
+  }
+})

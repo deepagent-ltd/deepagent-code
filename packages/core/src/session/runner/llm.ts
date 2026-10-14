@@ -92,6 +92,7 @@ import { toLLMMessages } from "./to-llm-message"
 import { SessionHistoryProjection } from "./session-history-projection"
 import { ModelPromptProfile } from "../../deepagent/model-prompt-profile"
 import { forgetSessionStageMarker } from "../../deepagent/prompt-policy"
+import { PlanningPermissions } from "../planning-permissions"
 import { SessionRunnerCanonical } from "./canonical-turn"
 import { RestrictedWorkTurn } from "./restricted-work-turn"
 import { productionAdaptersEnabled, ProductionV2Sources } from "../../context-federation/production-adapters"
@@ -775,11 +776,11 @@ export const layer = Layer.effect(
       modelSupportsTools: boolean | undefined,
     ) =>
       Effect.gen(function* () {
-        const rulesets = [agent.info?.permissions ?? [], session.permissions]
+        const rulesets = [agent.info?.permissions ?? [], session.permissions, PlanningPermissions.forAgent(agent.id)]
         const availableToolNames = new Set(
           modelSupportsTools === false
             ? []
-            : (yield* tools.materialize({ rulesets })).definitions.map((definition) => definition.name),
+            : (yield* tools.materialize({ rulesets, allowedToolIDs: agent.id === "plan" ? PlanningPermissions.allowedTools : undefined })).definitions.map((definition) => definition.name),
         )
         return yield* Effect.all([systemContext.load(), skillGuidance.load(agent)], { concurrency: 2 }).pipe(
           Effect.map(SystemContext.combine),
@@ -961,7 +962,8 @@ export const layer = Layer.effect(
       const receiptUserMessageID = currentUserMessageID ?? latestReceipt?.userMessageID
       if (!receiptUserMessageID) return { needsContinuation: false, step: currentStep }
       const toolMaterialization = yield* tools.materialize({
-        rulesets: [agent.info?.permissions ?? [], session.permissions],
+        rulesets: [agent.info?.permissions ?? [], session.permissions, PlanningPermissions.forAgent(agent.id)],
+        allowedToolIDs: agent.id === "plan" ? PlanningPermissions.allowedTools : undefined,
       })
       // The task tool's bounded schema-conversion turn has a durable prompt marker. Remove
       // tools from the provider request itself; an instruction alone cannot prevent an LLM
@@ -1079,6 +1081,21 @@ export const layer = Layer.effect(
         [system.baseline],
       )
       const volatileSystemParts: string[] = []
+      const approvedActivity = yield* db.select({ trigger: SessionActivityTable.trigger_input_id })
+        .from(SessionActivityTable)
+        .where(and(eq(SessionActivityTable.session_id, session.id), eq(SessionActivityTable.state, "active")))
+        .get().pipe(Effect.orDie)
+      const approvedInput = yield* SessionInput.find(db, SessionMessage.ID.make(
+        approvedActivity?.trigger ?? promoted[0] ?? receiptUserMessageID,
+      ))
+      const approval = Schema.decodeUnknownOption(Schema.Struct({
+        documentID: Schema.String,
+        planID: Schema.String,
+        version: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+        hash: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+      }))(approvedInput?.prompt.metadata?.dac_plan_approval)
+      if (Option.isSome(approval))
+        volatileSystemParts.push(`This activity executes the exact user-approved plan ${approval.value.planID}, document ${approval.value.documentID}, version ${approval.value.version}, SHA256 ${approval.value.hash}, carried in its original execution request. Current plan-status and any later draft shown below are observations of progress, not a replacement authorization. Do not expand the approved scope from a later draft; ask the user for a separate approval if scope changes.`)
       // G3 history projection — durable rows lower to the model-facing view with bounded
       // tool-output budgets (pure function of content ⇒ byte-stable projection ⇒ prompt cache
       // holds). The result carries THIS call's truncation stats (no module-global counters —
@@ -1638,6 +1655,10 @@ export const layer = Layer.effect(
       }
       const settleTool: ToolRegistry.Materialization["settle"] = (input) =>
         Effect.gen(function* () {
+          // A filtered or unadvertised local call cannot enter an effect/browser/task frame.
+          // Refuse it durably as a result before recording any side-effect admission.
+          if (!stepLimitReached && !toolDefinitions.some((tool) => tool.name === input.call.name))
+            return { result: { type: "error" as const, value: `Unknown tool: ${input.call.name}` } }
           // A third identical call is a V1-compatible doom-loop stop. Refuse it before effect
           // admission: there is no side effect to recover, and the tool result remains durable.
           const repeated = stepLimitReached

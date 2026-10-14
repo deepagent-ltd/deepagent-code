@@ -17345,6 +17345,8 @@ export type DeepagentGoalStartData = {
     sessionID: string
     requestID: string
     objective?: string
+    codeRefs?: Array<string>
+    planSource?: "workspace-file"
     criteria?: Array<{
       kind: "tests_pass" | "no_diagnostics" | "reviewer_clean" | "panel_approves" | "plan_complete"
       commands?: Array<string>
@@ -20302,6 +20304,208 @@ export type FileLockStatusResponses = {
 
 export type FileLockStatusResponse = FileLockStatusResponses[keyof FileLockStatusResponses]
 
+export type ImDeviceInfoData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/device/info"
+}
+
+export type ImDeviceInfoErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImDeviceInfoError = ImDeviceInfoErrors[keyof ImDeviceInfoErrors]
+
+export type ImDeviceInfoResponses = {
+  /**
+   * Success
+   */
+  200: {
+    profile: "dac-im-device-v1"
+    storeAvailable: true
+    deviceJkt: string
+    publicJwk: {
+      kty: "EC"
+      crv: "P-256"
+      x: string
+      y: string
+    }
+  }
+}
+
+export type ImDeviceInfoResponse = ImDeviceInfoResponses[keyof ImDeviceInfoResponses]
+
+export type ImMigrationPendingData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/device/migrations"
+}
+
+export type ImMigrationPendingErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImMigrationPendingError = ImMigrationPendingErrors[keyof ImMigrationPendingErrors]
+
+export type ImMigrationPendingResponses = {
+  /**
+   * Success
+   */
+  200: {
+    migration: {
+      migrationID: string
+      state: "pending" | "unknown" | "succeeded" | "rejected"
+      chargedCredits: 0
+      credentialStored: boolean
+      code?: string
+      entitlementID?: string
+      uuid?: string
+    }
+  }
+}
+
+export type ImMigrationPendingResponse = ImMigrationPendingResponses[keyof ImMigrationPendingResponses]
+
+export type ImMigrationStatusData = {
+  body?: never
+  path: {
+    migrationID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/device/migrations/{migrationID}"
+}
+
+export type ImMigrationStatusErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImMigrationStatusError = ImMigrationStatusErrors[keyof ImMigrationStatusErrors]
+
+export type ImMigrationStatusResponses = {
+  /**
+   * Success
+   */
+  200: {
+    migrationID: string
+    state: "pending" | "unknown" | "succeeded" | "rejected"
+    chargedCredits: 0
+    credentialStored: boolean
+    code?: string
+    entitlementID?: string
+    uuid?: string
+  }
+}
+
+export type ImMigrationStatusResponse = ImMigrationStatusResponses[keyof ImMigrationStatusResponses]
+
+export type ImMigrateData = {
+  body: {
+    migrationID: string
+    voucher: string
+    retryOriginal?: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/device/migrate"
+}
+
+export type ImMigrateErrors = {
+  /**
+   * IMFacadeBadRequestError | BadRequest | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImMigrateError = ImMigrateErrors[keyof ImMigrateErrors]
+
+export type ImMigrateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    migrationID: string
+    state: "pending" | "unknown" | "succeeded" | "rejected"
+    chargedCredits: 0
+    credentialStored: boolean
+    code?: string
+    entitlementID?: string
+    uuid?: string
+  }
+}
+
+export type ImMigrateResponse = ImMigrateResponses[keyof ImMigrateResponses]
+
 export type ImActivationQuoteData = {
   body?: never
   path?: never
@@ -20406,6 +20610,7 @@ export type ImActivateData = {
     method: "api_key" | "activation_code"
     credential: string
     quoteID: string
+    retryOriginal?: boolean
   }
   path?: never
   query?: {

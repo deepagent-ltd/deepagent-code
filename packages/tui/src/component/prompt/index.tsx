@@ -1,5 +1,6 @@
 import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
 import { createGoalCommands } from "./goal-command"
+import { openGoalStart } from "../dialog-goal-start"
 import {
   BoxRenderable,
   RGBA,
@@ -11,7 +12,18 @@ import {
   type Renderable,
 } from "@opentui/core"
 import type { CommandContext } from "@opentui/keymap"
-import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  onMount,
+  createSignal,
+  onCleanup,
+  on,
+  Show,
+  Switch,
+  Match,
+} from "solid-js"
 import "opentui-spinner/solid"
 import path from "path"
 import { fileURLToPath } from "url"
@@ -173,6 +185,18 @@ export function Prompt(props: PromptProps) {
     (sdk.client as unknown as { client: { request<D>(o: typeof options): Promise<{ data?: D }> } }).client.request<T>(
       options,
     )
+  const [capabilities] = createResource(
+    () => sdk.client,
+    async (client) => {
+      const result = await (client as unknown as GoalClient.Client).client.request<{
+        features?: { expertPanel?: boolean; goalLoop?: boolean }
+      }>({
+        method: "GET",
+        url: "/global/capabilities",
+      })
+      return result.data?.features
+    },
+  )
   const editor = useEditorContext()
   const route = useRoute()
   const project = useProject()
@@ -186,7 +210,10 @@ export function Prompt(props: PromptProps) {
   // /session/:id/prompt_prepare_stream (SSE), then shows the prepared draft in an editable review.
   // Returns the send metadata (confirmed draft, or direct_override on degrade), or false when the
   // user dismissed the review. Mirrors submit.ts prepareDeepAgentPromptDraft + W1-3 fallback.
-  const prepareIntelligenceDraft = async (sessionID: string, text: string): Promise<Record<string, unknown> | false> => {
+  const prepareIntelligenceDraft = async (
+    sessionID: string,
+    text: string,
+  ): Promise<Record<string, unknown> | false> => {
     const intentID = `int_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
     const direct: Record<string, unknown> = {
       deepagent: { agent_mode_override: "general", prompt_pipeline: { mode: "direct_override" } },
@@ -221,7 +248,9 @@ export function Prompt(props: PromptProps) {
       const reader = streamResult.data.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
-      let result: { route?: string; prompt_draft_id?: string; goal?: string; preview?: string; intent_id?: string } | undefined
+      let result:
+        | { route?: string; prompt_draft_id?: string; goal?: string; preview?: string; intent_id?: string }
+        | undefined
       const readEvent = (block: string) => {
         const data = block
           .split("\n")
@@ -297,15 +326,13 @@ export function Prompt(props: PromptProps) {
     const text = queue?.[0]
     if (!text) return
     setFollowups(sessionID, queue.slice(1))
-    void sdk.client.v2.session
-      .prompt({ sessionID, prompt: { text } }, { throwOnError: true })
-      .catch((error) => {
-        toast.show({
-          message: error instanceof Error ? error.message : "Failed to send followup",
-          variant: "error",
-          duration: 5000,
-        })
+    void sdk.client.v2.session.prompt({ sessionID, prompt: { text } }, { throwOnError: true }).catch((error) => {
+      toast.show({
+        message: error instanceof Error ? error.message : "Failed to send followup",
+        variant: "error",
+        duration: 5000,
       })
+    })
   })
   const history = usePromptHistory()
   const stash = usePromptStash()
@@ -551,9 +578,40 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
-            })
+            const sessionID = props.sessionID
+            const client = sdk.client
+            const scope = { server: sdk.url, directory: project.instance.path().directory, sessionID }
+            const current = () =>
+              props.sessionID === sessionID &&
+              sdk.client === client &&
+              sdk.url === scope.server &&
+              project.instance.path().directory === scope.directory
+            const goal = sync.data.session_goal[sessionID]
+            if (goal && (!goal.control || !GoalClient.confirmedTerminal(goal.control))) {
+              void goalCommands
+                .run({ client: client as unknown as GoalClient.Client, scope, command: "pause", current })
+                .then(({ snapshot }) => {
+                  if (!current()) return
+                  sync.goal.set(sessionID, snapshot)
+                  toast.show({
+                    variant: "info",
+                    message: i18n.t(
+                      snapshot.inFlight || snapshot.recoveryRequired || snapshot.preparation !== "ready"
+                        ? "tui.goal.control.pausePending"
+                        : "tui.goal.control.accepted",
+                    ),
+                    duration: 4000,
+                  })
+                })
+                .catch((error: unknown) => {
+                  if (current())
+                    toast.show({
+                      variant: "error",
+                      message: error instanceof Error ? error.message : i18n.t("tui.goal.control.failed"),
+                      duration: 6000,
+                    })
+                })
+            } else void client.session.abort({ sessionID })
             setStore("interrupt", 0)
           }
           dialog.clear()
@@ -688,10 +746,10 @@ export function Prompt(props: PromptProps) {
         name: "deepagent.panel",
         category: "Session",
         slashName: "panel",
-        enabled: Flag.DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL,
+        enabled: capabilities()?.expertPanel === true,
         run: async () => {
           const sessionID = props.sessionID
-          if (!sessionID) return
+          if (!sessionID || capabilities()?.expertPanel !== true) return
           toast.show({ variant: "info", message: i18n.t("tui.prompt.conveningExpertPanel"), duration: 3000 })
           try {
             const res = await rawRequest<{ decision: string; confidence: number; rounds: number }>({
@@ -719,7 +777,7 @@ export function Prompt(props: PromptProps) {
         name: "deepagent.goal",
         category: "Session",
         slashName: "goal",
-        enabled: Flag.DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP,
+        enabled: capabilities()?.goalLoop === true,
         run: async () => {
           const sessionID = props.sessionID
           if (!sessionID) return
@@ -734,10 +792,19 @@ export function Prompt(props: PromptProps) {
             sdk.url === scope.server &&
             project.instance.path().directory === scope.directory
           try {
+            const start = command
+              ? undefined
+              : await openGoalStart({
+                  dialog,
+                  current,
+                  text: (key) => i18n.t(`tui.goal.start.${key}` as Parameters<typeof i18n.t>[0]),
+                })
+            if (!command && !start) return
             const { snapshot } = await goalCommands.run({
               client: client as unknown as GoalClient.Client,
               scope,
               command,
+              start,
               current,
             })
             if (!current()) return
@@ -1156,7 +1223,12 @@ export function Prompt(props: PromptProps) {
       target: inputTarget,
       enabled: inputTarget() !== undefined && store.mode === "shell",
       bindings: [
-        { key: "escape", desc: i18n.t("tui.prompt.exitShellMode"), group: "Prompt", cmd: () => setStore("mode", "normal") },
+        {
+          key: "escape",
+          desc: i18n.t("tui.prompt.exitShellMode"),
+          group: "Prompt",
+          cmd: () => setStore("mode", "normal"),
+        },
       ],
     }
   })
@@ -1169,7 +1241,12 @@ export function Prompt(props: PromptProps) {
         return inputTarget() !== undefined && store.mode === "shell" && input?.visualCursor.offset === 0
       })(),
       bindings: [
-        { key: "backspace", desc: i18n.t("tui.prompt.exitShellMode"), group: "Prompt", cmd: () => setStore("mode", "normal") },
+        {
+          key: "backspace",
+          desc: i18n.t("tui.prompt.exitShellMode"),
+          group: "Prompt",
+          cmd: () => setStore("mode", "normal"),
+        },
       ],
     }
   })
@@ -1275,6 +1352,24 @@ export function Prompt(props: PromptProps) {
     if (!store.prompt.input) return false
     const agent = local.agent.current()
     if (!agent) return false
+    const effectiveAgent = local.agent.effective?.()?.name
+    const goal = props.sessionID ? sync.data.session_goal[props.sessionID] : undefined
+    if (
+      goal &&
+      agent.name !== effectiveAgent &&
+      (!goal.control ||
+        (!GoalClient.confirmedTerminal(goal.control) &&
+          !(
+            goal.control.requestedPhase === "paused" &&
+            !goal.control.inFlight &&
+            !goal.control.recoveryRequired &&
+            goal.control.preparation === "ready"
+          )))
+    ) {
+      toast.show({ variant: "info", message: i18n.t("tui.goal.control.pauseBeforeMode"), duration: 4000 })
+      return false
+    }
+    const queueMode = status().type !== "idle" && agent.name !== effectiveAgent
     const trimmed = store.prompt.input.trim()
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
       destroyRenderer(renderer)
@@ -1335,6 +1430,7 @@ export function Prompt(props: PromptProps) {
         return true
       }
 
+      local.agent.promote(res.data)
       sessionID = res.data.id
     }
 
@@ -1442,26 +1538,32 @@ export function Prompt(props: PromptProps) {
         metadata = prepared
       }
       sdk.client.v2.session
-        .prompt({
-          sessionID,
-          prompt: toV2Prompt({
-            agent: agent.name,
-            model: selectedModel,
-            variant,
-            metadata,
-            parts: [
-              ...editorParts,
-              {
-                type: "text",
-                text: inputText,
-              },
-              ...nonTextParts,
-            ],
-          }),
-        }, { throwOnError: true })
+        .prompt(
+          {
+            sessionID,
+            delivery: queueMode ? "queue" : undefined,
+            prompt: toV2Prompt({
+              agent: agent.name,
+              model: selectedModel,
+              variant,
+              metadata,
+              parts: [
+                ...editorParts,
+                {
+                  type: "text",
+                  text: inputText,
+                },
+                ...nonTextParts,
+              ],
+            }),
+          },
+          { throwOnError: true },
+        )
         .then((result) => {
           // V4.1 §S1.2 steer ack: a message sent mid-turn is absorbed as a steer and delivered
           // at the next step boundary — keep that visible instead of appearing dropped.
+          if (result.data.data.delivery === "queue")
+            toast.show({ message: i18n.t("tui.mode.queued"), variant: "info", duration: 4000 })
           if (status().type !== "idle" && result.data.data.delivery === "steer")
             toast.show({
               message: i18n.t("tui.prompt.steered"),
@@ -1646,6 +1748,8 @@ export function Prompt(props: PromptProps) {
     setStore("extmarkToPartIndex", new Map())
   }
 
+  const queueNextMode = () => working() && local.agent.current()?.name !== local.agent.effective()?.name
+
   const highlight = createMemo(() => {
     if (leader()) return theme.border
     if (store.mode === "shell") return theme.primary
@@ -1681,10 +1785,9 @@ export function Prompt(props: PromptProps) {
   })
 
   const spinnerDef = createMemo(() => {
-    const agent =
-      working()
-        ? (local.agent.list().find((a) => a.name === lastUserMessage()?.agent) ?? local.agent.current())
-        : local.agent.current()
+    const agent = working()
+      ? (local.agent.list().find((a) => a.name === lastUserMessage()?.agent) ?? local.agent.current())
+      : local.agent.current()
     const color = agent ? local.agent.color(agent.name) : theme.border
     return {
       frames: createFrames({
@@ -1806,7 +1909,9 @@ export function Prompt(props: PromptProps) {
                   {(agent) => (
                     <>
                       <text fg={fadeColor(highlight(), agentMetaAlpha())}>
-                        {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
+                        {store.mode === "shell"
+                          ? "Shell"
+                          : `${i18n.t("tui.mode.next")}: ${Locale.titlecase(agent().name)}`}
                       </text>
                       <Show when={store.mode === "normal"}>
                         <box flexDirection="row" gap={1}>
@@ -1832,6 +1937,9 @@ export function Prompt(props: PromptProps) {
                   )}
                 </Show>
               </box>
+              <Show when={queueNextMode()}>
+                <text fg={theme.warning}>{i18n.t("tui.mode.queueHint")}</text>
+              </Show>
               <Show when={hasRightContent()}>
                 <box flexDirection="row" gap={1} alignItems="center">
                   {props.right}

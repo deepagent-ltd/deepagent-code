@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "e2014d4d-4aff-47a1-a914-120138501fbd",
+  "id": "27ca4d8a-a35a-4ada-832a-4163895a3d83",
   "prevIds": [
-    "463e3603-0775-473c-b7f7-2a6bbb6f7fc9"
+    "e2014d4d-4aff-47a1-a914-120138501fbd"
   ],
   "ddl": [
     {
@@ -32,6 +32,34 @@
     },
     {
       "name": "data_migration",
+      "entityType": "tables"
+    },
+    {
+      "name": "im_local_origin_receipt",
+      "entityType": "tables"
+    },
+    {
+      "name": "deepagent_im_single_write",
+      "entityType": "tables"
+    },
+    {
+      "name": "im_local_task_conversation",
+      "entityType": "tables"
+    },
+    {
+      "name": "im_task_grant",
+      "entityType": "tables"
+    },
+    {
+      "name": "im_task_request",
+      "entityType": "tables"
+    },
+    {
+      "name": "im_task_source",
+      "entityType": "tables"
+    },
+    {
+      "name": "im_task_status_notice",
       "entityType": "tables"
     },
     {
@@ -207,6 +235,18 @@
       "entityType": "tables"
     },
     {
+      "name": "im_activation",
+      "entityType": "tables"
+    },
+    {
+      "name": "im_dac_binding",
+      "entityType": "tables"
+    },
+    {
+      "name": "im_dac_command",
+      "entityType": "tables"
+    },
+    {
       "name": "im_kernel_delivery",
       "entityType": "tables"
     },
@@ -247,14 +287,6 @@
       "entityType": "tables"
     },
     {
-      "name": "im_local_origin_receipt",
-      "entityType": "tables"
-    },
-    {
-      "name": "im_local_task_conversation",
-      "entityType": "tables"
-    },
-    {
       "name": "im_media_cleanup_cursor",
       "entityType": "tables"
     },
@@ -280,22 +312,6 @@
     },
     {
       "name": "im_reply_outbox",
-      "entityType": "tables"
-    },
-    {
-      "name": "im_task_grant",
-      "entityType": "tables"
-    },
-    {
-      "name": "im_task_request",
-      "entityType": "tables"
-    },
-    {
-      "name": "im_task_source",
-      "entityType": "tables"
-    },
-    {
-      "name": "im_task_status_notice",
       "entityType": "tables"
     },
     {
@@ -1641,6 +1657,1086 @@
       "name": "time_completed",
       "entityType": "columns",
       "table": "data_migration"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "message_id",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "instance_id",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "operator_id",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "operator_revision",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "credential_generation",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "group_id",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "conversation_revision",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "raw_snapshot",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "raw_snapshot_hash",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "proof",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "receipt_hash",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "received_at",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "expires_at",
+      "entityType": "columns",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "im_message_id",
+      "entityType": "columns",
+      "table": "deepagent_im_single_write"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "event_ref",
+      "entityType": "columns",
+      "table": "deepagent_im_single_write"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_id",
+      "entityType": "columns",
+      "table": "deepagent_im_single_write"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "deepagent_im_single_write"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "receipt_ref",
+      "entityType": "columns",
+      "table": "deepagent_im_single_write"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "deepagent_im_single_write"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "deepagent_im_single_write"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "deepagent_im_single_write"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "group_id",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "instance_id",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "operator_id",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "operator_revision",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_id",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "mode",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_hash",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "location_key",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "namespace_binding_hash",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "grant_id",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ordinal",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "instance_id",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "actor_id",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "principal",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_proof",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_proof_hash",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_snapshot_hash",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_hash",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "binding",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record_hash",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "work_id",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input_id",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "result_key",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "accept_request_id",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "accept_expected_revision",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revoke_request_id",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revoke_expected_revision",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revoked_at",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "expires_at",
+      "entityType": "columns",
+      "table": "im_task_grant"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "client_request_id",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_id",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "instance_id",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "actor_id",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_hash",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "audited_text",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "audited_text_hash",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "result_key",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "expires_at",
+      "entityType": "columns",
+      "table": "im_task_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_id",
+      "entityType": "columns",
+      "table": "im_task_source"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "message_id",
+      "entityType": "columns",
+      "table": "im_task_source"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "instance_id",
+      "entityType": "columns",
+      "table": "im_task_source"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "proof",
+      "entityType": "columns",
+      "table": "im_task_source"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "proof_hash",
+      "entityType": "columns",
+      "table": "im_task_source"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "snapshot",
+      "entityType": "columns",
+      "table": "im_task_source"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "snapshot_hash",
+      "entityType": "columns",
+      "table": "im_task_source"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "im_task_source"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "notice_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "instance_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "actor_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_revision",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_hash",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_message_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_proof_hash",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_snapshot_hash",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "occurrence_key",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "basis_hash",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "grant_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "grant_revision",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "work_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "control_revision",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "group_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "outbox_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "delivery_message_id",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record_hash",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record_bytes",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "im_task_status_notice"
     },
     {
       "type": "text",
@@ -7418,6 +8514,416 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "transaction_id",
+      "entityType": "columns",
+      "table": "im_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_hash",
+      "entityType": "columns",
+      "table": "im_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_hash",
+      "entityType": "columns",
+      "table": "im_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "im_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "method",
+      "entityType": "columns",
+      "table": "im_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "quote_id",
+      "entityType": "columns",
+      "table": "im_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "im_activation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "charged_credits",
+      "entityType": "columns",
+      "table": "im_activation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "credential_stored",
+      "entityType": "columns",
+      "table": "im_activation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "code",
+      "entityType": "columns",
+      "table": "im_activation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "im_activation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "im_activation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "identity_key",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_id",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "account_key",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "executor_id",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "conversation_key",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "group_id",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "current_session_id",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "im_dac_binding"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "command_id",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "binding_id",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_hash",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "text",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reference_ids",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "references",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "new_session",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input_id",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "delivery",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "admitted_at",
+      "entityType": "columns",
+      "table": "im_dac_command"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "message_id",
       "entityType": "columns",
       "table": "im_kernel_delivery"
@@ -9088,276 +10594,6 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "message_id",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "instance_id",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "operator_id",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "operator_revision",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "credential_generation",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "group_id",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "conversation_revision",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "raw_snapshot",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "raw_snapshot_hash",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "proof",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "receipt_hash",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "origin",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "received_at",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "expires_at",
-      "entityType": "columns",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "group_id",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "instance_id",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "operator_id",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "operator_revision",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "target_id",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "revision",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "mode",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "target",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "target_hash",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "location_key",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "namespace_binding_hash",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
       "name": "workspace_id",
       "entityType": "columns",
       "table": "im_media_cleanup_cursor"
@@ -10381,736 +11617,6 @@
       "name": "time_delivered",
       "entityType": "columns",
       "table": "im_reply_outbox"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "grant_id",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "request_id",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "ordinal",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "instance_id",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "actor_id",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "principal",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "target_proof",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "source_proof_hash",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "source_snapshot_hash",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "request_hash",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "binding",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "record_hash",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "work_id",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "session_id",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "input_id",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "result_key",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "state",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "revision",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "accept_request_id",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "accept_expected_revision",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "revoke_request_id",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "revoke_expected_revision",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "revoked_at",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "expires_at",
-      "entityType": "columns",
-      "table": "im_task_grant"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "request_id",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "client_request_id",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "source_id",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "instance_id",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "actor_id",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "request_hash",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "audited_text",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "audited_text_hash",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "target",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "result_key",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "state",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "revision",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "expires_at",
-      "entityType": "columns",
-      "table": "im_task_request"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "source_id",
-      "entityType": "columns",
-      "table": "im_task_source"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "message_id",
-      "entityType": "columns",
-      "table": "im_task_source"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "instance_id",
-      "entityType": "columns",
-      "table": "im_task_source"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "proof",
-      "entityType": "columns",
-      "table": "im_task_source"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "proof_hash",
-      "entityType": "columns",
-      "table": "im_task_source"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "snapshot",
-      "entityType": "columns",
-      "table": "im_task_source"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "snapshot_hash",
-      "entityType": "columns",
-      "table": "im_task_source"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "table": "im_task_source"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "notice_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "instance_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "actor_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "request_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "request_revision",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "request_hash",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "source_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "source_message_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "source_proof_hash",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "source_snapshot_hash",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "kind",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "occurrence_key",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "basis_hash",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "grant_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "grant_revision",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "work_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "session_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "control_revision",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "group_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "agent_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "outbox_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "delivery_message_id",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "record",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "record_hash",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "record_bytes",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "table": "im_task_status_notice"
     },
     {
       "type": "text",
@@ -24779,6 +25285,21 @@
     },
     {
       "columns": [
+        "request_id"
+      ],
+      "tableTo": "im_task_request",
+      "columnsTo": [
+        "request_id"
+      ],
+      "onUpdate": "RESTRICT",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_im_task_status_notice_request_id_im_task_request_request_id_fk",
+      "entityType": "fks",
+      "table": "im_task_status_notice"
+    },
+    {
+      "columns": [
         "session_id"
       ],
       "tableTo": "session",
@@ -25531,6 +26052,21 @@
     },
     {
       "columns": [
+        "binding_id"
+      ],
+      "tableTo": "im_dac_binding",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_im_dac_command_binding_id_im_dac_binding_id_fk",
+      "entityType": "fks",
+      "table": "im_dac_command"
+    },
+    {
+      "columns": [
         "meter_id"
       ],
       "tableTo": "im_kernel_media_meter",
@@ -25887,21 +26423,6 @@
       "name": "fk_im_reply_body_receipt_message_id_im_kernel_delivery_message_id_fk",
       "entityType": "fks",
       "table": "im_reply_body"
-    },
-    {
-      "columns": [
-        "request_id"
-      ],
-      "tableTo": "im_task_request",
-      "columnsTo": [
-        "request_id"
-      ],
-      "onUpdate": "RESTRICT",
-      "onDelete": "RESTRICT",
-      "nameExplicit": false,
-      "name": "fk_im_task_status_notice_request_id_im_task_request_request_id_fk",
-      "entityType": "fks",
-      "table": "im_task_status_notice"
     },
     {
       "columns": [
@@ -27410,6 +27931,69 @@
     },
     {
       "columns": [
+        "message_id"
+      ],
+      "nameExplicit": false,
+      "name": "im_local_origin_receipt_pk",
+      "table": "im_local_origin_receipt",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "im_message_id"
+      ],
+      "nameExplicit": false,
+      "name": "deepagent_im_single_write_pk",
+      "table": "deepagent_im_single_write",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "group_id"
+      ],
+      "nameExplicit": false,
+      "name": "im_local_task_conversation_pk",
+      "table": "im_local_task_conversation",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "grant_id"
+      ],
+      "nameExplicit": false,
+      "name": "im_task_grant_pk",
+      "table": "im_task_grant",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "request_id"
+      ],
+      "nameExplicit": false,
+      "name": "im_task_request_pk",
+      "table": "im_task_request",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "source_id"
+      ],
+      "nameExplicit": false,
+      "name": "im_task_source_pk",
+      "table": "im_task_source",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "notice_id"
+      ],
+      "nameExplicit": false,
+      "name": "im_task_status_notice_pk",
+      "table": "im_task_status_notice",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "decision_id"
       ],
       "nameExplicit": false,
@@ -27725,6 +28309,33 @@
     },
     {
       "columns": [
+        "transaction_id"
+      ],
+      "nameExplicit": false,
+      "name": "im_activation_pk",
+      "table": "im_activation",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "im_dac_binding_pk",
+      "table": "im_dac_binding",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "im_dac_command_pk",
+      "table": "im_dac_command",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "message_id"
       ],
       "nameExplicit": false,
@@ -27797,24 +28408,6 @@
     },
     {
       "columns": [
-        "message_id"
-      ],
-      "nameExplicit": false,
-      "name": "im_local_origin_receipt_pk",
-      "table": "im_local_origin_receipt",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "group_id"
-      ],
-      "nameExplicit": false,
-      "name": "im_local_task_conversation_pk",
-      "table": "im_local_task_conversation",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
         "workspace_id"
       ],
       "nameExplicit": false,
@@ -27874,42 +28467,6 @@
       "nameExplicit": false,
       "name": "im_reply_outbox_pk",
       "table": "im_reply_outbox",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "grant_id"
-      ],
-      "nameExplicit": false,
-      "name": "im_task_grant_pk",
-      "table": "im_task_grant",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "request_id"
-      ],
-      "nameExplicit": false,
-      "name": "im_task_request_pk",
-      "table": "im_task_request",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "source_id"
-      ],
-      "nameExplicit": false,
-      "name": "im_task_source_pk",
-      "table": "im_task_source",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "notice_id"
-      ],
-      "nameExplicit": false,
-      "name": "im_task_status_notice_pk",
-      "table": "im_task_status_notice",
       "entityType": "pks"
     },
     {
@@ -28855,6 +29412,256 @@
       "name": "browser_control_state_idx",
       "entityType": "indexes",
       "table": "browser_control"
+    },
+    {
+      "columns": [
+        {
+          "value": "event_ref",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "deepagent_im_single_write_event_idx",
+      "entityType": "indexes",
+      "table": "deepagent_im_single_write"
+    },
+    {
+      "columns": [
+        {
+          "value": "owner_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "deepagent_im_single_write_owner_idx",
+      "entityType": "indexes",
+      "table": "deepagent_im_single_write"
+    },
+    {
+      "columns": [
+        {
+          "value": "request_id",
+          "isExpression": false
+        },
+        {
+          "value": "ordinal",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_task_grant_request_idx",
+      "entityType": "indexes",
+      "table": "im_task_grant"
+    },
+    {
+      "columns": [
+        {
+          "value": "work_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_task_grant_work_idx",
+      "entityType": "indexes",
+      "table": "im_task_grant"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_task_grant_session_idx",
+      "entityType": "indexes",
+      "table": "im_task_grant"
+    },
+    {
+      "columns": [
+        {
+          "value": "input_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_task_grant_input_idx",
+      "entityType": "indexes",
+      "table": "im_task_grant"
+    },
+    {
+      "columns": [
+        {
+          "value": "result_key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_task_grant_result_idx",
+      "entityType": "indexes",
+      "table": "im_task_grant"
+    },
+    {
+      "columns": [
+        {
+          "value": "instance_id",
+          "isExpression": false
+        },
+        {
+          "value": "actor_id",
+          "isExpression": false
+        },
+        {
+          "value": "client_request_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_task_request_client_idx",
+      "entityType": "indexes",
+      "table": "im_task_request"
+    },
+    {
+      "columns": [
+        {
+          "value": "instance_id",
+          "isExpression": false
+        },
+        {
+          "value": "message_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "im_task_source_message_idx",
+      "entityType": "indexes",
+      "table": "im_task_source"
+    },
+    {
+      "columns": [
+        {
+          "value": "instance_id",
+          "isExpression": false
+        },
+        {
+          "value": "request_id",
+          "isExpression": false
+        },
+        {
+          "value": "occurrence_key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_task_notice_occurrence_idx",
+      "entityType": "indexes",
+      "table": "im_task_status_notice"
+    },
+    {
+      "columns": [
+        {
+          "value": "request_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"im_task_status_notice\".\"kind\"='refused'",
+      "origin": "manual",
+      "name": "im_task_notice_refused_idx",
+      "entityType": "indexes",
+      "table": "im_task_status_notice"
+    },
+    {
+      "columns": [
+        {
+          "value": "outbox_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_task_notice_outbox_idx",
+      "entityType": "indexes",
+      "table": "im_task_status_notice"
+    },
+    {
+      "columns": [
+        {
+          "value": "delivery_message_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_task_notice_delivery_idx",
+      "entityType": "indexes",
+      "table": "im_task_status_notice"
+    },
+    {
+      "columns": [
+        {
+          "value": "instance_id",
+          "isExpression": false
+        },
+        {
+          "value": "created_at",
+          "isExpression": false
+        },
+        {
+          "value": "notice_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "im_task_notice_instance_idx",
+      "entityType": "indexes",
+      "table": "im_task_status_notice"
+    },
+    {
+      "columns": [
+        {
+          "value": "request_id",
+          "isExpression": false
+        },
+        {
+          "value": "created_at",
+          "isExpression": false
+        },
+        {
+          "value": "notice_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "im_task_notice_request_idx",
+      "entityType": "indexes",
+      "table": "im_task_status_notice"
     },
     {
       "columns": [
@@ -30519,6 +31326,102 @@
     {
       "columns": [
         {
+          "value": "source_hash",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"im_activation\".\"state\" IN ('pending','unknown') OR (\"im_activation\".\"state\" = 'succeeded' AND \"im_activation\".\"credential_stored\" = 0) OR (\"im_activation\".\"state\" = 'rejected' AND \"im_activation\".\"charged_credits\" = 1)",
+      "origin": "manual",
+      "name": "im_activation_pending_idx",
+      "entityType": "indexes",
+      "table": "im_activation"
+    },
+    {
+      "columns": [
+        {
+          "value": "source_hash",
+          "isExpression": false
+        },
+        {
+          "value": "created_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "im_activation_source_idx",
+      "entityType": "indexes",
+      "table": "im_activation"
+    },
+    {
+      "columns": [
+        {
+          "value": "identity_key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_dac_binding_identity_idx",
+      "entityType": "indexes",
+      "table": "im_dac_binding"
+    },
+    {
+      "columns": [
+        {
+          "value": "input_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_dac_command_input_idx",
+      "entityType": "indexes",
+      "table": "im_dac_command"
+    },
+    {
+      "columns": [
+        {
+          "value": "binding_id",
+          "isExpression": false
+        },
+        {
+          "value": "command_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "im_dac_command_exact_idx",
+      "entityType": "indexes",
+      "table": "im_dac_command"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "created_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "im_dac_command_pending_idx",
+      "entityType": "indexes",
+      "table": "im_dac_command"
+    },
+    {
+      "columns": [
+        {
           "value": "wire_id",
           "isExpression": false
         }
@@ -31363,228 +32266,6 @@
       "name": "im_reply_outbox_delivery_message_idx",
       "entityType": "indexes",
       "table": "im_reply_outbox"
-    },
-    {
-      "columns": [
-        {
-          "value": "request_id",
-          "isExpression": false
-        },
-        {
-          "value": "ordinal",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "origin": "manual",
-      "name": "im_task_grant_request_idx",
-      "entityType": "indexes",
-      "table": "im_task_grant"
-    },
-    {
-      "columns": [
-        {
-          "value": "work_id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "origin": "manual",
-      "name": "im_task_grant_work_idx",
-      "entityType": "indexes",
-      "table": "im_task_grant"
-    },
-    {
-      "columns": [
-        {
-          "value": "session_id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "origin": "manual",
-      "name": "im_task_grant_session_idx",
-      "entityType": "indexes",
-      "table": "im_task_grant"
-    },
-    {
-      "columns": [
-        {
-          "value": "input_id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "origin": "manual",
-      "name": "im_task_grant_input_idx",
-      "entityType": "indexes",
-      "table": "im_task_grant"
-    },
-    {
-      "columns": [
-        {
-          "value": "result_key",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "origin": "manual",
-      "name": "im_task_grant_result_idx",
-      "entityType": "indexes",
-      "table": "im_task_grant"
-    },
-    {
-      "columns": [
-        {
-          "value": "instance_id",
-          "isExpression": false
-        },
-        {
-          "value": "actor_id",
-          "isExpression": false
-        },
-        {
-          "value": "client_request_id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "origin": "manual",
-      "name": "im_task_request_client_idx",
-      "entityType": "indexes",
-      "table": "im_task_request"
-    },
-    {
-      "columns": [
-        {
-          "value": "instance_id",
-          "isExpression": false
-        },
-        {
-          "value": "message_id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "im_task_source_message_idx",
-      "entityType": "indexes",
-      "table": "im_task_source"
-    },
-    {
-      "columns": [
-        {
-          "value": "instance_id",
-          "isExpression": false
-        },
-        {
-          "value": "request_id",
-          "isExpression": false
-        },
-        {
-          "value": "occurrence_key",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "origin": "manual",
-      "name": "im_task_notice_occurrence_idx",
-      "entityType": "indexes",
-      "table": "im_task_status_notice"
-    },
-    {
-      "columns": [
-        {
-          "value": "request_id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": "\"im_task_status_notice\".\"kind\"='refused'",
-      "origin": "manual",
-      "name": "im_task_notice_refused_idx",
-      "entityType": "indexes",
-      "table": "im_task_status_notice"
-    },
-    {
-      "columns": [
-        {
-          "value": "outbox_id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "origin": "manual",
-      "name": "im_task_notice_outbox_idx",
-      "entityType": "indexes",
-      "table": "im_task_status_notice"
-    },
-    {
-      "columns": [
-        {
-          "value": "delivery_message_id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "origin": "manual",
-      "name": "im_task_notice_delivery_idx",
-      "entityType": "indexes",
-      "table": "im_task_status_notice"
-    },
-    {
-      "columns": [
-        {
-          "value": "instance_id",
-          "isExpression": false
-        },
-        {
-          "value": "created_at",
-          "isExpression": false
-        },
-        {
-          "value": "notice_id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "im_task_notice_instance_idx",
-      "entityType": "indexes",
-      "table": "im_task_status_notice"
-    },
-    {
-      "columns": [
-        {
-          "value": "request_id",
-          "isExpression": false
-        },
-        {
-          "value": "created_at",
-          "isExpression": false
-        },
-        {
-          "value": "notice_id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "im_task_notice_request_idx",
-      "entityType": "indexes",
-      "table": "im_task_status_notice"
     },
     {
       "columns": [
@@ -35419,6 +36100,108 @@
       "table": "browser_control"
     },
     {
+      "value": "length(\"raw_snapshot_hash\") = 64 AND \"raw_snapshot_hash\" NOT GLOB '*[^0-9a-f]*' AND length(\"receipt_hash\") = 64 AND \"receipt_hash\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "im_local_origin_hash_check",
+      "entityType": "checks",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "value": "\"operator_revision\" > 0 AND \"credential_generation\" > 0 AND \"conversation_revision\" > 0",
+      "name": "im_local_origin_revision_check",
+      "entityType": "checks",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "value": "\"origin\" = 'authenticated_local_text' AND \"expires_at\" > \"received_at\"",
+      "name": "im_local_origin_kind_check",
+      "entityType": "checks",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "value": "json_valid(\"raw_snapshot\") AND json_type(\"raw_snapshot\") = 'object' AND json_valid(\"proof\") AND json_type(\"proof\") = 'object'",
+      "name": "im_local_origin_json_check",
+      "entityType": "checks",
+      "table": "im_local_origin_receipt"
+    },
+    {
+      "value": "length(\"target_hash\") = 64 AND \"target_hash\" NOT GLOB '*[^0-9a-f]*' AND length(\"namespace_binding_hash\") = 64 AND \"namespace_binding_hash\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "im_local_task_conversation_hash_check",
+      "entityType": "checks",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "value": "\"mode\" = 'explicit_task' AND \"revision\" > 0 AND \"operator_revision\" > 0",
+      "name": "im_local_task_conversation_mode_check",
+      "entityType": "checks",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "value": "json_valid(\"target\") AND json_type(\"target\") = 'object'",
+      "name": "im_local_task_conversation_target_check",
+      "entityType": "checks",
+      "table": "im_local_task_conversation"
+    },
+    {
+      "value": "\"state\" IN ('active','revoked') AND \"revision\" > 0 AND \"ordinal\" = 1",
+      "name": "im_task_grant_state_check",
+      "entityType": "checks",
+      "table": "im_task_grant"
+    },
+    {
+      "value": "json_valid(\"principal\") AND json_valid(\"target_proof\") AND json_valid(\"binding\")",
+      "name": "im_task_grant_json_check",
+      "entityType": "checks",
+      "table": "im_task_grant"
+    },
+    {
+      "value": "\"state\" != 'revoked' OR (\"revoke_request_id\" IS NOT NULL AND \"revoked_at\" IS NOT NULL)",
+      "name": "im_task_grant_revoke_check",
+      "entityType": "checks",
+      "table": "im_task_grant"
+    },
+    {
+      "value": "\"state\" IN ('proposed','accepted') AND \"revision\" > 0",
+      "name": "im_task_request_state_check",
+      "entityType": "checks",
+      "table": "im_task_request"
+    },
+    {
+      "value": "json_valid(\"target\") AND \"expires_at\" > \"created_at\"",
+      "name": "im_task_request_json_check",
+      "entityType": "checks",
+      "table": "im_task_request"
+    },
+    {
+      "value": "json_valid(\"proof\") AND json_valid(\"snapshot\")",
+      "name": "im_task_source_json_check",
+      "entityType": "checks",
+      "table": "im_task_source"
+    },
+    {
+      "value": "\"kind\" IN ('cancel_requested','recovery_required','refused')",
+      "name": "im_task_notice_kind_check",
+      "entityType": "checks",
+      "table": "im_task_status_notice"
+    },
+    {
+      "value": "json_valid(\"record\") AND typeof(\"record_bytes\")='integer' AND \"record_bytes\" BETWEEN 2 AND 32768 AND \"record_bytes\"=length(CAST(\"record\" AS BLOB))",
+      "name": "im_task_notice_record_check",
+      "entityType": "checks",
+      "table": "im_task_status_notice"
+    },
+    {
+      "value": "\"request_revision\">0 AND \"created_at\">=0 AND (\"grant_revision\" IS NULL OR \"grant_revision\">0) AND (\"control_revision\" IS NULL OR \"control_revision\">0)",
+      "name": "im_task_notice_revision_check",
+      "entityType": "checks",
+      "table": "im_task_status_notice"
+    },
+    {
+      "value": "\"kind\"!='refused' OR (\"grant_id\" IS NULL AND \"grant_revision\" IS NULL AND \"work_id\" IS NULL AND \"session_id\" IS NULL AND \"control_revision\" IS NULL)",
+      "name": "im_task_notice_refused_check",
+      "entityType": "checks",
+      "table": "im_task_status_notice"
+    },
+    {
       "value": "typeof(\"receipt_id\")='text' AND length(CAST(\"receipt_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"receipt_id\",char(0))=0 AND typeof(\"instance_id\")='text' AND length(CAST(\"instance_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"instance_id\",char(0))=0 AND typeof(\"rule_id\")='text' AND length(CAST(\"rule_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"rule_id\",char(0))=0 AND typeof(\"security_namespace_id\")='text' AND length(CAST(\"security_namespace_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"security_namespace_id\",char(0))=0 AND typeof(\"run_id\")='text' AND length(CAST(\"run_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"run_id\",char(0))=0 AND typeof(\"work_id\")='text' AND length(CAST(\"work_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"work_id\",char(0))=0 AND typeof(\"root_work_id\")='text' AND length(CAST(\"root_work_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"root_work_id\",char(0))=0 AND typeof(\"session_id\")='text' AND length(CAST(\"session_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"session_id\",char(0))=0 AND typeof(\"input_id\")='text' AND length(CAST(\"input_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"input_id\",char(0))=0 AND typeof(\"source_request_id\")='text' AND length(CAST(\"source_request_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"source_request_id\",char(0))=0 AND \"root_work_id\"=\"work_id\" AND \"source_request_id\"=\"failure_key\"",
       "name": "event_investigation_receipt_ids",
       "entityType": "checks",
@@ -36403,6 +37186,42 @@
       "table": "released_knowledge_snapshot"
     },
     {
+      "value": "\"state\" IN ('pending','unknown','succeeded','rejected')",
+      "name": "im_activation_state_check",
+      "entityType": "checks",
+      "table": "im_activation"
+    },
+    {
+      "value": "\"method\" IN ('api_key','activation_code')",
+      "name": "im_activation_method_check",
+      "entityType": "checks",
+      "table": "im_activation"
+    },
+    {
+      "value": "(\"state\" IN ('pending','unknown','rejected') AND (\"charged_credits\" IS NULL OR \"charged_credits\" IN (0,1))) OR (\"state\" = 'succeeded' AND \"charged_credits\" IN (0,1))",
+      "name": "im_activation_charge_check",
+      "entityType": "checks",
+      "table": "im_activation"
+    },
+    {
+      "value": "\"generation\" >= 1",
+      "name": "im_dac_binding_generation_check",
+      "entityType": "checks",
+      "table": "im_dac_binding"
+    },
+    {
+      "value": "\"state\" IN ('pending','admitted','rejected')",
+      "name": "im_dac_command_state_check",
+      "entityType": "checks",
+      "table": "im_dac_command"
+    },
+    {
+      "value": "\"delivery\" IN ('queue','steer')",
+      "name": "im_dac_command_delivery_check",
+      "entityType": "checks",
+      "table": "im_dac_command"
+    },
+    {
       "value": "\"message_id\" IS NOT NULL AND length(\"message_id\") BETWEEN 1 AND 2048 AND length(\"wire_id\") BETWEEN 1 AND 2048 AND (\"dispatch_owner\" IS NULL OR length(\"dispatch_owner\") BETWEEN 1 AND 2048) AND (\"kernel_message_id\" IS NULL OR length(\"kernel_message_id\") BETWEEN 1 AND 2048)",
       "name": "im_kernel_delivery_identity_check",
       "entityType": "checks",
@@ -36769,48 +37588,6 @@
       "table": "local_operator_command"
     },
     {
-      "value": "length(\"raw_snapshot_hash\") = 64 AND \"raw_snapshot_hash\" NOT GLOB '*[^0-9a-f]*' AND length(\"receipt_hash\") = 64 AND \"receipt_hash\" NOT GLOB '*[^0-9a-f]*'",
-      "name": "im_local_origin_hash_check",
-      "entityType": "checks",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "value": "\"operator_revision\" > 0 AND \"credential_generation\" > 0 AND \"conversation_revision\" > 0",
-      "name": "im_local_origin_revision_check",
-      "entityType": "checks",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "value": "\"origin\" = 'authenticated_local_text' AND \"expires_at\" > \"received_at\"",
-      "name": "im_local_origin_kind_check",
-      "entityType": "checks",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "value": "json_valid(\"raw_snapshot\") AND json_type(\"raw_snapshot\") = 'object' AND json_valid(\"proof\") AND json_type(\"proof\") = 'object'",
-      "name": "im_local_origin_json_check",
-      "entityType": "checks",
-      "table": "im_local_origin_receipt"
-    },
-    {
-      "value": "length(\"target_hash\") = 64 AND \"target_hash\" NOT GLOB '*[^0-9a-f]*' AND length(\"namespace_binding_hash\") = 64 AND \"namespace_binding_hash\" NOT GLOB '*[^0-9a-f]*'",
-      "name": "im_local_task_conversation_hash_check",
-      "entityType": "checks",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "value": "\"mode\" = 'explicit_task' AND \"revision\" > 0 AND \"operator_revision\" > 0",
-      "name": "im_local_task_conversation_mode_check",
-      "entityType": "checks",
-      "table": "im_local_task_conversation"
-    },
-    {
-      "value": "json_valid(\"target\") AND json_type(\"target\") = 'object'",
-      "name": "im_local_task_conversation_target_check",
-      "entityType": "checks",
-      "table": "im_local_task_conversation"
-    },
-    {
       "value": "typeof(\"workspace_id\") = 'text' AND length(CAST(\"workspace_id\" AS BLOB)) BETWEEN 1 AND 16384 AND instr(\"workspace_id\", char(0)) = 0",
       "name": "im_media_cleanup_cursor_workspace_check",
       "entityType": "checks",
@@ -36929,66 +37706,6 @@
       "name": "im_reply_outbox_body_check",
       "entityType": "checks",
       "table": "im_reply_outbox"
-    },
-    {
-      "value": "\"state\" IN ('active','revoked') AND \"revision\" > 0 AND \"ordinal\" = 1",
-      "name": "im_task_grant_state_check",
-      "entityType": "checks",
-      "table": "im_task_grant"
-    },
-    {
-      "value": "json_valid(\"principal\") AND json_valid(\"target_proof\") AND json_valid(\"binding\")",
-      "name": "im_task_grant_json_check",
-      "entityType": "checks",
-      "table": "im_task_grant"
-    },
-    {
-      "value": "\"state\" != 'revoked' OR (\"revoke_request_id\" IS NOT NULL AND \"revoked_at\" IS NOT NULL)",
-      "name": "im_task_grant_revoke_check",
-      "entityType": "checks",
-      "table": "im_task_grant"
-    },
-    {
-      "value": "\"state\" IN ('proposed','accepted') AND \"revision\" > 0",
-      "name": "im_task_request_state_check",
-      "entityType": "checks",
-      "table": "im_task_request"
-    },
-    {
-      "value": "json_valid(\"target\") AND \"expires_at\" > \"created_at\"",
-      "name": "im_task_request_json_check",
-      "entityType": "checks",
-      "table": "im_task_request"
-    },
-    {
-      "value": "json_valid(\"proof\") AND json_valid(\"snapshot\")",
-      "name": "im_task_source_json_check",
-      "entityType": "checks",
-      "table": "im_task_source"
-    },
-    {
-      "value": "\"kind\" IN ('cancel_requested','recovery_required','refused')",
-      "name": "im_task_notice_kind_check",
-      "entityType": "checks",
-      "table": "im_task_status_notice"
-    },
-    {
-      "value": "json_valid(\"record\") AND typeof(\"record_bytes\")='integer' AND \"record_bytes\" BETWEEN 2 AND 32768 AND \"record_bytes\"=length(CAST(\"record\" AS BLOB))",
-      "name": "im_task_notice_record_check",
-      "entityType": "checks",
-      "table": "im_task_status_notice"
-    },
-    {
-      "value": "\"request_revision\">0 AND \"created_at\">=0 AND (\"grant_revision\" IS NULL OR \"grant_revision\">0) AND (\"control_revision\" IS NULL OR \"control_revision\">0)",
-      "name": "im_task_notice_revision_check",
-      "entityType": "checks",
-      "table": "im_task_status_notice"
-    },
-    {
-      "value": "\"kind\"!='refused' OR (\"grant_id\" IS NULL AND \"grant_revision\" IS NULL AND \"work_id\" IS NULL AND \"session_id\" IS NULL AND \"control_revision\" IS NULL)",
-      "name": "im_task_notice_refused_check",
-      "entityType": "checks",
-      "table": "im_task_status_notice"
     },
     {
       "value": "length(\"source_digest\") = 64 AND \"source_digest\" NOT GLOB '*[^0-9a-f]*'",
@@ -38989,7 +39706,7 @@
       "table": "work_storage_cleanup"
     },
     {
-      "value": "typeof(\"manifest\")='text' AND length(CAST(\"manifest\" AS BLOB)) BETWEEN 1 AND 65536 AND json_valid(\"manifest\")\n    AND json_type(\"manifest\",'$.version') IS 'integer'\n    AND (json_extract(\"manifest\",'$.version') IS 1 OR (json_extract(\"manifest\",'$.version') IS 2\n      AND \"kind\"='command' AND json_extract(\"manifest\",'$.captureKind') IS 'native_live'\n      AND json_type(\"manifest\",'$.target') IS 'text' AND json_extract(\"manifest\",'$.target') IN ('win32-x64','win32-arm64')\n      AND (json_type(\"manifest\",'$.security') IS 'object'\n    AND json_type(\"manifest\",'$.security.leaseSetHash') IS 'text' AND length(json_extract(\"manifest\",'$.security.leaseSetHash'))=64\n    AND json_extract(\"manifest\",'$.security.leaseSetHash') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.security.appContainerSID') IS 'text' AND length(json_extract(\"manifest\",'$.security.appContainerSID'))<=184\n    AND json_extract(\"manifest\",'$.security.appContainerSID') LIKE 'S-1-15-2-%'\n    AND json_type(\"manifest\",'$.security.restrictionSID') IS 'text' AND length(json_extract(\"manifest\",'$.security.restrictionSID'))<=184\n    AND json_extract(\"manifest\",'$.security.restrictionSID') LIKE 'S-1-15-3-%')\n      AND (json_type(\"manifest\",'$.projectIdentity') IS 'object'\n    AND json_type(\"manifest\",'$.projectIdentity.kind') IS 'text' AND json_extract(\"manifest\",'$.projectIdentity.kind') IS 'windows'\n    AND json_type(\"manifest\",'$.projectIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"manifest\",'$.projectIdentity.volumeSerial'))=16 AND json_extract(\"manifest\",'$.projectIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.projectIdentity.fileID') IS 'text'\n    AND length(json_extract(\"manifest\",'$.projectIdentity.fileID'))=32 AND json_extract(\"manifest\",'$.projectIdentity.fileID') NOT GLOB '*[^0-9a-f]*') AND (json_type(\"manifest\",'$.dataIdentity') IS 'object'\n    AND json_type(\"manifest\",'$.dataIdentity.kind') IS 'text' AND json_extract(\"manifest\",'$.dataIdentity.kind') IS 'windows'\n    AND json_type(\"manifest\",'$.dataIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"manifest\",'$.dataIdentity.volumeSerial'))=16 AND json_extract(\"manifest\",'$.dataIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.dataIdentity.fileID') IS 'text'\n    AND length(json_extract(\"manifest\",'$.dataIdentity.fileID'))=32 AND json_extract(\"manifest\",'$.dataIdentity.fileID') NOT GLOB '*[^0-9a-f]*') AND (json_type(\"manifest\",'$.baseIdentity') IS 'object'\n    AND json_type(\"manifest\",'$.baseIdentity.kind') IS 'text' AND json_extract(\"manifest\",'$.baseIdentity.kind') IS 'windows'\n    AND json_type(\"manifest\",'$.baseIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"manifest\",'$.baseIdentity.volumeSerial'))=16 AND json_extract(\"manifest\",'$.baseIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.baseIdentity.fileID') IS 'text'\n    AND length(json_extract(\"manifest\",'$.baseIdentity.fileID'))=32 AND json_extract(\"manifest\",'$.baseIdentity.fileID') NOT GLOB '*[^0-9a-f]*') AND (json_type(\"manifest\",'$.containerIdentity') IS 'object'\n    AND json_type(\"manifest\",'$.containerIdentity.kind') IS 'text' AND json_extract(\"manifest\",'$.containerIdentity.kind') IS 'windows'\n    AND json_type(\"manifest\",'$.containerIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"manifest\",'$.containerIdentity.volumeSerial'))=16 AND json_extract(\"manifest\",'$.containerIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.containerIdentity.fileID') IS 'text'\n    AND length(json_extract(\"manifest\",'$.containerIdentity.fileID'))=32 AND json_extract(\"manifest\",'$.containerIdentity.fileID') NOT GLOB '*[^0-9a-f]*')))\n    AND json_type(\"manifest\",'$.admissionID') IS 'text' AND json_extract(\"manifest\",'$.admissionID') IS \"admission_id\"\n    AND json_type(\"manifest\",'$.instanceID') IS 'text' AND json_extract(\"manifest\",'$.instanceID') IS \"instance_id\"\n    AND json_type(\"manifest\",'$.workID') IS 'text' AND json_extract(\"manifest\",'$.workID') IS \"work_id\"\n    AND json_type(\"manifest\",'$.kind') IS 'text' AND json_extract(\"manifest\",'$.kind') IS \"kind\"\n    AND json_type(\"manifest\",'$.custodyID') IS 'text' AND json_extract(\"manifest\",'$.custodyID') IS \"custody_id\"\n    AND json_type(\"manifest\",'$.createdAt') IS 'integer' AND json_extract(\"manifest\",'$.createdAt') IS \"created_at\"",
+      "value": "typeof(\"manifest\")='text' AND length(CAST(\"manifest\" AS BLOB)) BETWEEN 1 AND 65536 AND json_valid(\"manifest\")\n    AND json_type(\"manifest\",'$.version') IS 'integer'\n    AND (json_extract(\"manifest\",'$.version') IS 1 OR (json_extract(\"manifest\",'$.version') IS 2\n      AND json_extract(\"manifest\",'$.captureKind') IS 'native_live'\n      AND json_type(\"manifest\",'$.target') IS 'text' AND json_extract(\"manifest\",'$.target') IN ('win32-x64','win32-arm64')\n      AND ((\"kind\"='command' AND (json_type(\"manifest\",'$.security') IS 'object'\n    AND json_type(\"manifest\",'$.security.leaseSetHash') IS 'text' AND length(json_extract(\"manifest\",'$.security.leaseSetHash'))=64\n    AND json_extract(\"manifest\",'$.security.leaseSetHash') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.security.appContainerSID') IS 'text' AND length(json_extract(\"manifest\",'$.security.appContainerSID'))<=184\n    AND json_extract(\"manifest\",'$.security.appContainerSID') LIKE 'S-1-15-2-%'\n    AND json_type(\"manifest\",'$.security.restrictionSID') IS 'text' AND length(json_extract(\"manifest\",'$.security.restrictionSID'))<=184\n    AND (json_extract(\"manifest\",'$.security.restrictionSID') LIKE 'S-1-15-3-%' OR\n      (substr(json_extract(\"manifest\",'$.security.restrictionSID'),1,9) IS 'S-1-5-21-'\n        AND substr(json_extract(\"manifest\",'$.security.restrictionSID'),10) NOT GLOB '*[^0-9-]*' AND\n        CASE WHEN json_valid('['||replace(substr(json_extract(\"manifest\",'$.security.restrictionSID'),10),'-',',')||']') THEN\n          json_array_length('['||replace(substr(json_extract(\"manifest\",'$.security.restrictionSID'),10),'-',',')||']')=4\n          AND \n            json_type('['||replace(substr(json_extract(\"manifest\",'$.security.restrictionSID'),10),'-',',')||']','$[0]') IS 'integer'\n            AND json_extract('['||replace(substr(json_extract(\"manifest\",'$.security.restrictionSID'),10),'-',',')||']','$[0]') BETWEEN 0 AND 4294967295 AND \n            json_type('['||replace(substr(json_extract(\"manifest\",'$.security.restrictionSID'),10),'-',',')||']','$[1]') IS 'integer'\n            AND json_extract('['||replace(substr(json_extract(\"manifest\",'$.security.restrictionSID'),10),'-',',')||']','$[1]') BETWEEN 0 AND 4294967295 AND \n            json_type('['||replace(substr(json_extract(\"manifest\",'$.security.restrictionSID'),10),'-',',')||']','$[2]') IS 'integer'\n            AND json_extract('['||replace(substr(json_extract(\"manifest\",'$.security.restrictionSID'),10),'-',',')||']','$[2]') BETWEEN 0 AND 4294967295 AND \n            json_type('['||replace(substr(json_extract(\"manifest\",'$.security.restrictionSID'),10),'-',',')||']','$[3]') IS 'integer'\n            AND json_extract('['||replace(substr(json_extract(\"manifest\",'$.security.restrictionSID'),10),'-',',')||']','$[3]') BETWEEN 0 AND 4294967295\n        ELSE 0 END)))) OR (\"kind\"='write' AND (json_type(\"manifest\",'$.purpose') IS 'text' AND json_extract(\"manifest\",'$.purpose') IS 'work_write'\n    AND json_type(\"manifest\",'$.security') IS NULL AND json_type(\"manifest\",'$.snapshotHash') IS 'null'\n    AND json_type(\"manifest\",'$.basename') IS 'text' AND length(json_extract(\"manifest\",'$.basename'))=32\n    AND json_extract(\"manifest\",'$.basename') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.files') IS 'array' AND json_type(\"manifest\",'$.stagePhase') IS 'text'\n    AND ((json_extract(\"manifest\",'$.stagePhase') IS 'refused_empty' AND json_array_length(\"manifest\",'$.files')=0)\n      OR (json_extract(\"manifest\",'$.stagePhase') IN ('prepared_payload','refused_payload') AND json_array_length(\"manifest\",'$.files')=1\n        AND json_extract(\"manifest\",'$.files[0].relative') IS 'payload' AND json_type(\"manifest\",'$.files[0].retainedUnlinked') IS 'false'\n        AND (json_type(\"manifest\",'$.files[0].identity') IS 'object'\n    AND json_type(\"manifest\",'$.files[0].identity.kind') IS 'text' AND json_extract(\"manifest\",'$.files[0].identity.kind') IS 'windows'\n    AND json_type(\"manifest\",'$.files[0].identity.volumeSerial') IS 'text'\n    AND length(json_extract(\"manifest\",'$.files[0].identity.volumeSerial'))=16 AND json_extract(\"manifest\",'$.files[0].identity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.files[0].identity.fileID') IS 'text'\n    AND length(json_extract(\"manifest\",'$.files[0].identity.fileID'))=32 AND json_extract(\"manifest\",'$.files[0].identity.fileID') NOT GLOB '*[^0-9a-f]*')\n        AND json_type(\"manifest\",'$.files[0].sha256') IS 'text' AND length(json_extract(\"manifest\",'$.files[0].sha256'))=64\n        AND json_extract(\"manifest\",'$.files[0].sha256') NOT GLOB '*[^0-9a-f]*'\n        AND json_type(\"manifest\",'$.files[0].bytes') IS 'integer' AND json_extract(\"manifest\",'$.files[0].bytes') BETWEEN 0 AND 51200\n        AND json_extract(\"manifest\",'$.files[0].identity.volumeSerial') IS json_extract(\"manifest\",'$.projectIdentity.volumeSerial')))\n    AND json_type(\"manifest\",'$.directories') IS 'array' AND json_array_length(\"manifest\",'$.directories')=1\n    AND json_extract(\"manifest\",'$.directories[0].relative') IS ''\n    AND (json_type(\"manifest\",'$.directories[0].identity') IS 'object'\n    AND json_type(\"manifest\",'$.directories[0].identity.kind') IS 'text' AND json_extract(\"manifest\",'$.directories[0].identity.kind') IS 'windows'\n    AND json_type(\"manifest\",'$.directories[0].identity.volumeSerial') IS 'text'\n    AND length(json_extract(\"manifest\",'$.directories[0].identity.volumeSerial'))=16 AND json_extract(\"manifest\",'$.directories[0].identity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.directories[0].identity.fileID') IS 'text'\n    AND length(json_extract(\"manifest\",'$.directories[0].identity.fileID'))=32 AND json_extract(\"manifest\",'$.directories[0].identity.fileID') NOT GLOB '*[^0-9a-f]*')\n    AND json_extract(\"manifest\",'$.directories[0].identity.fileID') IS json_extract(\"manifest\",'$.containerIdentity.fileID')\n    AND json_extract(\"manifest\",'$.dataIdentity.volumeSerial') IS json_extract(\"manifest\",'$.projectIdentity.volumeSerial') AND json_extract(\"manifest\",'$.baseIdentity.volumeSerial') IS json_extract(\"manifest\",'$.projectIdentity.volumeSerial') AND json_extract(\"manifest\",'$.containerIdentity.volumeSerial') IS json_extract(\"manifest\",'$.projectIdentity.volumeSerial') AND json_extract(\"manifest\",'$.directories[0].identity.volumeSerial') IS json_extract(\"manifest\",'$.projectIdentity.volumeSerial'))))\n      AND (json_type(\"manifest\",'$.projectIdentity') IS 'object'\n    AND json_type(\"manifest\",'$.projectIdentity.kind') IS 'text' AND json_extract(\"manifest\",'$.projectIdentity.kind') IS 'windows'\n    AND json_type(\"manifest\",'$.projectIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"manifest\",'$.projectIdentity.volumeSerial'))=16 AND json_extract(\"manifest\",'$.projectIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.projectIdentity.fileID') IS 'text'\n    AND length(json_extract(\"manifest\",'$.projectIdentity.fileID'))=32 AND json_extract(\"manifest\",'$.projectIdentity.fileID') NOT GLOB '*[^0-9a-f]*') AND (json_type(\"manifest\",'$.dataIdentity') IS 'object'\n    AND json_type(\"manifest\",'$.dataIdentity.kind') IS 'text' AND json_extract(\"manifest\",'$.dataIdentity.kind') IS 'windows'\n    AND json_type(\"manifest\",'$.dataIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"manifest\",'$.dataIdentity.volumeSerial'))=16 AND json_extract(\"manifest\",'$.dataIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.dataIdentity.fileID') IS 'text'\n    AND length(json_extract(\"manifest\",'$.dataIdentity.fileID'))=32 AND json_extract(\"manifest\",'$.dataIdentity.fileID') NOT GLOB '*[^0-9a-f]*') AND (json_type(\"manifest\",'$.baseIdentity') IS 'object'\n    AND json_type(\"manifest\",'$.baseIdentity.kind') IS 'text' AND json_extract(\"manifest\",'$.baseIdentity.kind') IS 'windows'\n    AND json_type(\"manifest\",'$.baseIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"manifest\",'$.baseIdentity.volumeSerial'))=16 AND json_extract(\"manifest\",'$.baseIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.baseIdentity.fileID') IS 'text'\n    AND length(json_extract(\"manifest\",'$.baseIdentity.fileID'))=32 AND json_extract(\"manifest\",'$.baseIdentity.fileID') NOT GLOB '*[^0-9a-f]*') AND (json_type(\"manifest\",'$.containerIdentity') IS 'object'\n    AND json_type(\"manifest\",'$.containerIdentity.kind') IS 'text' AND json_extract(\"manifest\",'$.containerIdentity.kind') IS 'windows'\n    AND json_type(\"manifest\",'$.containerIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"manifest\",'$.containerIdentity.volumeSerial'))=16 AND json_extract(\"manifest\",'$.containerIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"manifest\",'$.containerIdentity.fileID') IS 'text'\n    AND length(json_extract(\"manifest\",'$.containerIdentity.fileID'))=32 AND json_extract(\"manifest\",'$.containerIdentity.fileID') NOT GLOB '*[^0-9a-f]*')))\n    AND json_type(\"manifest\",'$.admissionID') IS 'text' AND json_extract(\"manifest\",'$.admissionID') IS \"admission_id\"\n    AND json_type(\"manifest\",'$.instanceID') IS 'text' AND json_extract(\"manifest\",'$.instanceID') IS \"instance_id\"\n    AND json_type(\"manifest\",'$.workID') IS 'text' AND json_extract(\"manifest\",'$.workID') IS \"work_id\"\n    AND json_type(\"manifest\",'$.kind') IS 'text' AND json_extract(\"manifest\",'$.kind') IS \"kind\"\n    AND json_type(\"manifest\",'$.custodyID') IS 'text' AND json_extract(\"manifest\",'$.custodyID') IS \"custody_id\"\n    AND json_type(\"manifest\",'$.createdAt') IS 'integer' AND json_extract(\"manifest\",'$.createdAt') IS \"created_at\"",
       "name": "work_storage_cleanup_manifest_mirror",
       "entityType": "checks",
       "table": "work_storage_cleanup"
@@ -39097,13 +39814,13 @@
       "table": "work_storage_cleanup"
     },
     {
-      "value": "(\"phase\"='retained' AND \"journal\" IS NULL AND \"journal_hash\" IS NULL AND \"journal_mac\" IS NULL AND \"cleanup_id\" IS NULL AND \"request_hash\" IS NULL AND \"proof\" IS NULL AND \"proof_hash\" IS NULL AND \"proof_mac\" IS NULL AND \"released_bytes\"=0)\n    OR (\"phase\"!='retained' AND typeof(\"journal\")='text' AND length(CAST(\"journal\" AS BLOB)) BETWEEN 1 AND 131072 AND json_valid(\"journal\")\n      AND \"journal_hash\" IS NOT NULL AND \"journal_mac\" IS NOT NULL AND typeof(\"cleanup_id\")='text' AND length(CAST(\"cleanup_id\" AS BLOB)) BETWEEN 1 AND 512 AND \"request_hash\" IS NOT NULL\n      AND json_type(\"journal\",'$.version') IS 'integer' AND json_extract(\"journal\",'$.version') IS json_extract(\"manifest\",'$.version')\n      AND (json_extract(\"manifest\",'$.version') IS 1 OR (json_type(\"journal\",'$.target') IS 'text' AND json_extract(\"journal\",'$.target') IS json_extract(\"manifest\",'$.target')\n    AND (json_type(\"journal\",'$.security') IS 'object'\n    AND json_type(\"journal\",'$.security.leaseSetHash') IS 'text' AND length(json_extract(\"journal\",'$.security.leaseSetHash'))=64\n    AND json_extract(\"journal\",'$.security.leaseSetHash') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"journal\",'$.security.appContainerSID') IS 'text' AND length(json_extract(\"journal\",'$.security.appContainerSID'))<=184\n    AND json_extract(\"journal\",'$.security.appContainerSID') LIKE 'S-1-15-2-%'\n    AND json_type(\"journal\",'$.security.restrictionSID') IS 'text' AND length(json_extract(\"journal\",'$.security.restrictionSID'))<=184\n    AND json_extract(\"journal\",'$.security.restrictionSID') LIKE 'S-1-15-3-%') AND json_extract(\"journal\",'$.security.leaseSetHash') IS json_extract(\"manifest\",'$.security.leaseSetHash') AND json_extract(\"journal\",'$.security.appContainerSID') IS json_extract(\"manifest\",'$.security.appContainerSID') AND json_extract(\"journal\",'$.security.restrictionSID') IS json_extract(\"manifest\",'$.security.restrictionSID')))\n      AND json_type(\"journal\",'$.cleanupID') IS 'text' AND json_extract(\"journal\",'$.cleanupID') IS \"cleanup_id\"\n      AND json_type(\"journal\",'$.request.admissionID') IS 'text' AND json_extract(\"journal\",'$.request.admissionID') IS \"admission_id\"\n      AND json_type(\"journal\",'$.requestHash') IS 'text' AND json_extract(\"journal\",'$.requestHash') IS \"request_hash\"\n      AND json_type(\"journal\",'$.manifestHash') IS 'text' AND json_extract(\"journal\",'$.manifestHash') IS \"manifest_hash\"\n      AND json_type(\"journal\",'$.instanceID') IS 'text' AND json_extract(\"journal\",'$.instanceID') IS \"instance_id\")",
+      "value": "(\"phase\"='retained' AND \"journal\" IS NULL AND \"journal_hash\" IS NULL AND \"journal_mac\" IS NULL AND \"cleanup_id\" IS NULL AND \"request_hash\" IS NULL AND \"proof\" IS NULL AND \"proof_hash\" IS NULL AND \"proof_mac\" IS NULL AND \"released_bytes\"=0)\n    OR (\"phase\"!='retained' AND typeof(\"journal\")='text' AND length(CAST(\"journal\" AS BLOB)) BETWEEN 1 AND 131072 AND json_valid(\"journal\")\n      AND \"journal_hash\" IS NOT NULL AND \"journal_mac\" IS NOT NULL AND typeof(\"cleanup_id\")='text' AND length(CAST(\"cleanup_id\" AS BLOB)) BETWEEN 1 AND 512 AND \"request_hash\" IS NOT NULL\n      AND json_type(\"journal\",'$.version') IS 'integer' AND json_extract(\"journal\",'$.version') IS json_extract(\"manifest\",'$.version')\n      AND (json_extract(\"manifest\",'$.version') IS 1 OR (json_type(\"journal\",'$.target') IS 'text' AND json_extract(\"journal\",'$.target') IS json_extract(\"manifest\",'$.target')\n    AND ((json_extract(\"manifest\",'$.kind') IS 'write' AND json_extract(\"manifest\",'$.purpose') IS 'work_write'\n      AND json_type(\"journal\",'$.purpose') IS 'text' AND json_extract(\"journal\",'$.purpose') IS 'work_write'\n      AND json_type(\"journal\",'$.security') IS NULL) OR (json_extract(\"manifest\",'$.kind') IS 'command'\n      AND (json_type(\"journal\",'$.security') IS 'object'\n    AND json_type(\"journal\",'$.security.leaseSetHash') IS 'text' AND length(json_extract(\"journal\",'$.security.leaseSetHash'))=64\n    AND json_extract(\"journal\",'$.security.leaseSetHash') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"journal\",'$.security.appContainerSID') IS 'text' AND length(json_extract(\"journal\",'$.security.appContainerSID'))<=184\n    AND json_extract(\"journal\",'$.security.appContainerSID') LIKE 'S-1-15-2-%'\n    AND json_type(\"journal\",'$.security.restrictionSID') IS 'text' AND length(json_extract(\"journal\",'$.security.restrictionSID'))<=184\n    AND (json_extract(\"journal\",'$.security.restrictionSID') LIKE 'S-1-15-3-%' OR\n      (substr(json_extract(\"journal\",'$.security.restrictionSID'),1,9) IS 'S-1-5-21-'\n        AND substr(json_extract(\"journal\",'$.security.restrictionSID'),10) NOT GLOB '*[^0-9-]*' AND\n        CASE WHEN json_valid('['||replace(substr(json_extract(\"journal\",'$.security.restrictionSID'),10),'-',',')||']') THEN\n          json_array_length('['||replace(substr(json_extract(\"journal\",'$.security.restrictionSID'),10),'-',',')||']')=4\n          AND \n            json_type('['||replace(substr(json_extract(\"journal\",'$.security.restrictionSID'),10),'-',',')||']','$[0]') IS 'integer'\n            AND json_extract('['||replace(substr(json_extract(\"journal\",'$.security.restrictionSID'),10),'-',',')||']','$[0]') BETWEEN 0 AND 4294967295 AND \n            json_type('['||replace(substr(json_extract(\"journal\",'$.security.restrictionSID'),10),'-',',')||']','$[1]') IS 'integer'\n            AND json_extract('['||replace(substr(json_extract(\"journal\",'$.security.restrictionSID'),10),'-',',')||']','$[1]') BETWEEN 0 AND 4294967295 AND \n            json_type('['||replace(substr(json_extract(\"journal\",'$.security.restrictionSID'),10),'-',',')||']','$[2]') IS 'integer'\n            AND json_extract('['||replace(substr(json_extract(\"journal\",'$.security.restrictionSID'),10),'-',',')||']','$[2]') BETWEEN 0 AND 4294967295 AND \n            json_type('['||replace(substr(json_extract(\"journal\",'$.security.restrictionSID'),10),'-',',')||']','$[3]') IS 'integer'\n            AND json_extract('['||replace(substr(json_extract(\"journal\",'$.security.restrictionSID'),10),'-',',')||']','$[3]') BETWEEN 0 AND 4294967295\n        ELSE 0 END))) AND json_extract(\"journal\",'$.security.leaseSetHash') IS json_extract(\"manifest\",'$.security.leaseSetHash') AND json_extract(\"journal\",'$.security.appContainerSID') IS json_extract(\"manifest\",'$.security.appContainerSID') AND json_extract(\"journal\",'$.security.restrictionSID') IS json_extract(\"manifest\",'$.security.restrictionSID')))))\n      AND json_type(\"journal\",'$.cleanupID') IS 'text' AND json_extract(\"journal\",'$.cleanupID') IS \"cleanup_id\"\n      AND json_type(\"journal\",'$.request.admissionID') IS 'text' AND json_extract(\"journal\",'$.request.admissionID') IS \"admission_id\"\n      AND json_type(\"journal\",'$.requestHash') IS 'text' AND json_extract(\"journal\",'$.requestHash') IS \"request_hash\"\n      AND json_type(\"journal\",'$.manifestHash') IS 'text' AND json_extract(\"journal\",'$.manifestHash') IS \"manifest_hash\"\n      AND json_type(\"journal\",'$.instanceID') IS 'text' AND json_extract(\"journal\",'$.instanceID') IS \"instance_id\")",
       "name": "work_storage_cleanup_journal_shape",
       "entityType": "checks",
       "table": "work_storage_cleanup"
     },
     {
-      "value": "(\"phase\" IN ('retained','cleanup_pending','cleanup_recovery') AND \"proof\" IS NULL AND \"proof_hash\" IS NULL AND \"proof_mac\" IS NULL AND \"released_bytes\"=0)\n    OR (\"phase\" IN ('cleanup_verified','released') AND typeof(\"proof\")='text' AND length(CAST(\"proof\" AS BLOB)) BETWEEN 1 AND 16384 AND json_valid(\"proof\") AND \"proof_hash\" IS NOT NULL AND \"proof_mac\" IS NOT NULL\n      AND json_type(\"proof\",'$.version') IS 'integer' AND json_extract(\"proof\",'$.version') IS json_extract(\"manifest\",'$.version')\n      AND (json_extract(\"manifest\",'$.version') IS 1 OR ((json_type(\"proof\",'$.target') IS 'text' AND json_extract(\"proof\",'$.target') IS json_extract(\"manifest\",'$.target')\n    AND (json_type(\"proof\",'$.security') IS 'object'\n    AND json_type(\"proof\",'$.security.leaseSetHash') IS 'text' AND length(json_extract(\"proof\",'$.security.leaseSetHash'))=64\n    AND json_extract(\"proof\",'$.security.leaseSetHash') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"proof\",'$.security.appContainerSID') IS 'text' AND length(json_extract(\"proof\",'$.security.appContainerSID'))<=184\n    AND json_extract(\"proof\",'$.security.appContainerSID') LIKE 'S-1-15-2-%'\n    AND json_type(\"proof\",'$.security.restrictionSID') IS 'text' AND length(json_extract(\"proof\",'$.security.restrictionSID'))<=184\n    AND json_extract(\"proof\",'$.security.restrictionSID') LIKE 'S-1-15-3-%') AND json_extract(\"proof\",'$.security.leaseSetHash') IS json_extract(\"manifest\",'$.security.leaseSetHash') AND json_extract(\"proof\",'$.security.appContainerSID') IS json_extract(\"manifest\",'$.security.appContainerSID') AND json_extract(\"proof\",'$.security.restrictionSID') IS json_extract(\"manifest\",'$.security.restrictionSID'))\n        AND (json_type(\"proof\",'$.dataIdentity') IS 'object'\n    AND json_type(\"proof\",'$.dataIdentity.kind') IS 'text' AND json_extract(\"proof\",'$.dataIdentity.kind') IS 'windows'\n    AND json_type(\"proof\",'$.dataIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"proof\",'$.dataIdentity.volumeSerial'))=16 AND json_extract(\"proof\",'$.dataIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"proof\",'$.dataIdentity.fileID') IS 'text'\n    AND length(json_extract(\"proof\",'$.dataIdentity.fileID'))=32 AND json_extract(\"proof\",'$.dataIdentity.fileID') NOT GLOB '*[^0-9a-f]*') AND (json_type(\"proof\",'$.baseIdentity') IS 'object'\n    AND json_type(\"proof\",'$.baseIdentity.kind') IS 'text' AND json_extract(\"proof\",'$.baseIdentity.kind') IS 'windows'\n    AND json_type(\"proof\",'$.baseIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"proof\",'$.baseIdentity.volumeSerial'))=16 AND json_extract(\"proof\",'$.baseIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"proof\",'$.baseIdentity.fileID') IS 'text'\n    AND length(json_extract(\"proof\",'$.baseIdentity.fileID'))=32 AND json_extract(\"proof\",'$.baseIdentity.fileID') NOT GLOB '*[^0-9a-f]*') AND (json_type(\"proof\",'$.containerIdentity') IS 'object'\n    AND json_type(\"proof\",'$.containerIdentity.kind') IS 'text' AND json_extract(\"proof\",'$.containerIdentity.kind') IS 'windows'\n    AND json_type(\"proof\",'$.containerIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"proof\",'$.containerIdentity.volumeSerial'))=16 AND json_extract(\"proof\",'$.containerIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"proof\",'$.containerIdentity.fileID') IS 'text'\n    AND length(json_extract(\"proof\",'$.containerIdentity.fileID'))=32 AND json_extract(\"proof\",'$.containerIdentity.fileID') NOT GLOB '*[^0-9a-f]*')\n        AND json_type(\"proof\",'$.aclRestoreHash') IS 'text' AND length(json_extract(\"proof\",'$.aclRestoreHash'))=64\n        AND json_extract(\"proof\",'$.aclRestoreHash') NOT GLOB '*[^0-9a-f]*'\n        AND json_type(\"proof\",'$.jobRetired') IS 'true' AND json_type(\"proof\",'$.appContainerRetired') IS 'true'\n        AND json_type(\"proof\",'$.aclRestored') IS 'true'))\n      AND json_type(\"proof\",'$.cleanupID') IS 'text' AND json_extract(\"proof\",'$.cleanupID') IS \"cleanup_id\"\n      AND json_type(\"proof\",'$.manifestHash') IS 'text' AND json_extract(\"proof\",'$.manifestHash') IS \"manifest_hash\"\n      AND json_type(\"proof\",'$.state') IS 'text' AND json_extract(\"proof\",'$.state') IS 'empty_verified')",
+      "value": "(\"phase\" IN ('retained','cleanup_pending','cleanup_recovery') AND \"proof\" IS NULL AND \"proof_hash\" IS NULL AND \"proof_mac\" IS NULL AND \"released_bytes\"=0)\n    OR (\"phase\" IN ('cleanup_verified','released') AND typeof(\"proof\")='text' AND length(CAST(\"proof\" AS BLOB)) BETWEEN 1 AND 16384 AND json_valid(\"proof\") AND \"proof_hash\" IS NOT NULL AND \"proof_mac\" IS NOT NULL\n      AND json_type(\"proof\",'$.version') IS 'integer' AND json_extract(\"proof\",'$.version') IS json_extract(\"manifest\",'$.version')\n      AND (json_extract(\"manifest\",'$.version') IS 1 OR ((json_type(\"proof\",'$.target') IS 'text' AND json_extract(\"proof\",'$.target') IS json_extract(\"manifest\",'$.target')\n    AND ((json_extract(\"manifest\",'$.kind') IS 'write' AND json_extract(\"manifest\",'$.purpose') IS 'work_write'\n      AND json_type(\"proof\",'$.purpose') IS 'text' AND json_extract(\"proof\",'$.purpose') IS 'work_write'\n      AND json_type(\"proof\",'$.security') IS NULL) OR (json_extract(\"manifest\",'$.kind') IS 'command'\n      AND (json_type(\"proof\",'$.security') IS 'object'\n    AND json_type(\"proof\",'$.security.leaseSetHash') IS 'text' AND length(json_extract(\"proof\",'$.security.leaseSetHash'))=64\n    AND json_extract(\"proof\",'$.security.leaseSetHash') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"proof\",'$.security.appContainerSID') IS 'text' AND length(json_extract(\"proof\",'$.security.appContainerSID'))<=184\n    AND json_extract(\"proof\",'$.security.appContainerSID') LIKE 'S-1-15-2-%'\n    AND json_type(\"proof\",'$.security.restrictionSID') IS 'text' AND length(json_extract(\"proof\",'$.security.restrictionSID'))<=184\n    AND (json_extract(\"proof\",'$.security.restrictionSID') LIKE 'S-1-15-3-%' OR\n      (substr(json_extract(\"proof\",'$.security.restrictionSID'),1,9) IS 'S-1-5-21-'\n        AND substr(json_extract(\"proof\",'$.security.restrictionSID'),10) NOT GLOB '*[^0-9-]*' AND\n        CASE WHEN json_valid('['||replace(substr(json_extract(\"proof\",'$.security.restrictionSID'),10),'-',',')||']') THEN\n          json_array_length('['||replace(substr(json_extract(\"proof\",'$.security.restrictionSID'),10),'-',',')||']')=4\n          AND \n            json_type('['||replace(substr(json_extract(\"proof\",'$.security.restrictionSID'),10),'-',',')||']','$[0]') IS 'integer'\n            AND json_extract('['||replace(substr(json_extract(\"proof\",'$.security.restrictionSID'),10),'-',',')||']','$[0]') BETWEEN 0 AND 4294967295 AND \n            json_type('['||replace(substr(json_extract(\"proof\",'$.security.restrictionSID'),10),'-',',')||']','$[1]') IS 'integer'\n            AND json_extract('['||replace(substr(json_extract(\"proof\",'$.security.restrictionSID'),10),'-',',')||']','$[1]') BETWEEN 0 AND 4294967295 AND \n            json_type('['||replace(substr(json_extract(\"proof\",'$.security.restrictionSID'),10),'-',',')||']','$[2]') IS 'integer'\n            AND json_extract('['||replace(substr(json_extract(\"proof\",'$.security.restrictionSID'),10),'-',',')||']','$[2]') BETWEEN 0 AND 4294967295 AND \n            json_type('['||replace(substr(json_extract(\"proof\",'$.security.restrictionSID'),10),'-',',')||']','$[3]') IS 'integer'\n            AND json_extract('['||replace(substr(json_extract(\"proof\",'$.security.restrictionSID'),10),'-',',')||']','$[3]') BETWEEN 0 AND 4294967295\n        ELSE 0 END))) AND json_extract(\"proof\",'$.security.leaseSetHash') IS json_extract(\"manifest\",'$.security.leaseSetHash') AND json_extract(\"proof\",'$.security.appContainerSID') IS json_extract(\"manifest\",'$.security.appContainerSID') AND json_extract(\"proof\",'$.security.restrictionSID') IS json_extract(\"manifest\",'$.security.restrictionSID'))))\n        AND (json_type(\"proof\",'$.dataIdentity') IS 'object'\n    AND json_type(\"proof\",'$.dataIdentity.kind') IS 'text' AND json_extract(\"proof\",'$.dataIdentity.kind') IS 'windows'\n    AND json_type(\"proof\",'$.dataIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"proof\",'$.dataIdentity.volumeSerial'))=16 AND json_extract(\"proof\",'$.dataIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"proof\",'$.dataIdentity.fileID') IS 'text'\n    AND length(json_extract(\"proof\",'$.dataIdentity.fileID'))=32 AND json_extract(\"proof\",'$.dataIdentity.fileID') NOT GLOB '*[^0-9a-f]*') AND (json_type(\"proof\",'$.baseIdentity') IS 'object'\n    AND json_type(\"proof\",'$.baseIdentity.kind') IS 'text' AND json_extract(\"proof\",'$.baseIdentity.kind') IS 'windows'\n    AND json_type(\"proof\",'$.baseIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"proof\",'$.baseIdentity.volumeSerial'))=16 AND json_extract(\"proof\",'$.baseIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"proof\",'$.baseIdentity.fileID') IS 'text'\n    AND length(json_extract(\"proof\",'$.baseIdentity.fileID'))=32 AND json_extract(\"proof\",'$.baseIdentity.fileID') NOT GLOB '*[^0-9a-f]*') AND (json_type(\"proof\",'$.containerIdentity') IS 'object'\n    AND json_type(\"proof\",'$.containerIdentity.kind') IS 'text' AND json_extract(\"proof\",'$.containerIdentity.kind') IS 'windows'\n    AND json_type(\"proof\",'$.containerIdentity.volumeSerial') IS 'text'\n    AND length(json_extract(\"proof\",'$.containerIdentity.volumeSerial'))=16 AND json_extract(\"proof\",'$.containerIdentity.volumeSerial') NOT GLOB '*[^0-9a-f]*'\n    AND json_type(\"proof\",'$.containerIdentity.fileID') IS 'text'\n    AND length(json_extract(\"proof\",'$.containerIdentity.fileID'))=32 AND json_extract(\"proof\",'$.containerIdentity.fileID') NOT GLOB '*[^0-9a-f]*')\n        AND ((\"kind\"='write' AND json_type(\"proof\",'$.originalStageRemoved') IS 'true'\n          AND json_type(\"proof\",'$.retainedHandlesClosed') IS 'true') OR (\"kind\"='command'\n          AND json_type(\"proof\",'$.aclRestoreHash') IS 'text' AND length(json_extract(\"proof\",'$.aclRestoreHash'))=64\n          AND json_extract(\"proof\",'$.aclRestoreHash') NOT GLOB '*[^0-9a-f]*'\n          AND json_type(\"proof\",'$.jobRetired') IS 'true' AND json_type(\"proof\",'$.appContainerRetired') IS 'true'\n          AND json_type(\"proof\",'$.aclRestored') IS 'true'))))\n      AND json_type(\"proof\",'$.cleanupID') IS 'text' AND json_extract(\"proof\",'$.cleanupID') IS \"cleanup_id\"\n      AND json_type(\"proof\",'$.manifestHash') IS 'text' AND json_extract(\"proof\",'$.manifestHash') IS \"manifest_hash\"\n      AND json_type(\"proof\",'$.state') IS 'text' AND json_extract(\"proof\",'$.state') IS 'empty_verified')",
       "name": "work_storage_cleanup_proof_shape",
       "entityType": "checks",
       "table": "work_storage_cleanup"

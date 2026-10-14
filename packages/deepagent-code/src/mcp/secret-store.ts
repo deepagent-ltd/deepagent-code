@@ -198,34 +198,56 @@ export namespace SecretStore {
    * secret on the command line, so it is briefly visible in this user's process table;
    * this is the documented macOS-CLI limitation, not a value that lands in config/logs.
    */
-  export const macOsKeychainBackend = (): Backend => ({
+  export const macOsKeychainBackend = (service = KEYCHAIN_SERVICE, stdinOnly = false): Backend => ({
     id: "macos-keychain",
     available: async () => {
       if (process.platform !== "darwin") return false
-      const res = await Process.run(["security", "list-keychains"], { nothrow: true }).catch(() => undefined)
+      const res = await Process.run(["security", "list-keychains"], { nothrow: true, ...(stdinOnly ? { abort: AbortSignal.timeout(10000) } : {}) }).catch(() => undefined)
       return !!res && res.code === 0
     },
     put: async (account, secret) => {
+      if (stdinOnly) {
+        // security's interactive parser reads stdin, not a shell. Hex preserves arbitrary UTF-8
+        // bytes and prevents newlines in a secret from becoming another command.
+        if (/[\r\n\0]/.test(account + service)) throw new Error("Invalid Keychain account")
+        const quote = (value: string) => '"' + value.replace(/[\\"]/g, (character) => "\\" + character) + '"'
+        // Printable envelope avoids security -w's ambiguous hex output for binary/newline data.
+        const encoded = encodeProtectedSecret(secret)
+        const command = `add-generic-password -a ${quote(account)} -s ${quote(service)} -U -X ${Buffer.from(encoded).toString("hex")}\n`
+        // Apple's parser has a 4096-byte line buffer; truncation must never store partial custody.
+        if (Buffer.byteLength(command) >= 4096) throw new Error("Keychain secret exceeds the protected input limit")
+        const proc = Process.spawn(["/usr/bin/security", "-i", "-q"], { stdin: "pipe", stdout: "ignore", stderr: "ignore", abort: AbortSignal.timeout(10000) })
+        if (!proc.stdin) throw new Error("Keychain protected input is unavailable")
+        proc.stdin.end(command)
+        if (await proc.exited !== 0) throw new Error("Keychain protected write failed")
+        return
+      }
       // -U updates an existing item instead of erroring on a duplicate.
       const res = await Process.run(
-        ["security", "add-generic-password", "-a", account, "-s", KEYCHAIN_SERVICE, "-U", "-w", secret],
-        { nothrow: true },
+        ["security", "add-generic-password", "-a", account, "-s", service, "-U", "-w", secret],
+        { nothrow: true, ...(stdinOnly ? { abort: AbortSignal.timeout(10000) } : {}) },
       )
       if (res.code !== 0) throw new Error(`security add-generic-password failed (code ${res.code})`)
     },
     get: async (account) => {
       const res = await Process.run(
-        ["security", "find-generic-password", "-a", account, "-s", KEYCHAIN_SERVICE, "-w"],
-        { nothrow: true },
+        ["security", "find-generic-password", "-a", account, "-s", service, "-w"],
+        { nothrow: true, ...(stdinOnly ? { abort: AbortSignal.timeout(10000) } : {}) },
       )
-      if (res.code !== 0) return undefined
+      if (res.code !== 0) {
+        if (stdinOnly && res.code !== 44) throw new Error("Keychain protected read failed")
+        return undefined
+      }
       // `-w` prints just the password; strip the trailing newline.
-      return res.stdout.toString().replace(/\n$/, "")
+      const value = res.stdout.toString().replace(/\n$/, "")
+      if (!stdinOnly) return value
+      return decodeProtectedSecret(value)
     },
     remove: async (account) => {
-      await Process.run(["security", "delete-generic-password", "-a", account, "-s", KEYCHAIN_SERVICE], {
-        nothrow: true,
+      const result = await Process.run(["security", "delete-generic-password", "-a", account, "-s", service], {
+        nothrow: true, ...(stdinOnly ? { abort: AbortSignal.timeout(10000) } : {}),
       })
+      if (stdinOnly && result.code !== 0 && result.code !== 44) throw new Error("Keychain protected removal failed")
     },
   })
 
@@ -241,50 +263,54 @@ export namespace SecretStore {
    * Validated on Ubuntu 22.04+ with gnome-keyring. Remote/headless verification: SSH into the
    * target machine (port 5070) and confirm `secret-tool --version` + daemon presence.
    */
-  export const libsecretBackend = (): Backend => ({
+  export const libsecretBackend = (service = KEYCHAIN_SERVICE, strict = false): Backend => ({
     id: "libsecret",
     available: async () => {
       if (process.platform !== "linux") return false
       // Check secret-tool is on PATH.
-      const which = await Process.run(["which", "secret-tool"], { nothrow: true }).catch(() => undefined)
+      const which = await Process.run(["which", "secret-tool"], { nothrow: true, ...(strict ? { abort: AbortSignal.timeout(10000) } : {}) }).catch(() => undefined)
       if (!which || which.code !== 0) return false
       // Probe the Secret Service daemon with a zero-cost attributes query (no I/O expected, only
       // checking the daemon responds). We cannot call `secret-tool --version` reliably across
       // distributions; instead try a `lookup` for an account that should not exist and treat
       // daemon-unavailable (exit 2) as false vs. daemon-present/not-found (exit 1) as true.
       const probe = await Process.run(
-        ["secret-tool", "lookup", "service", KEYCHAIN_SERVICE, "account", "__availability_probe__"],
-        { nothrow: true },
+        ["secret-tool", "lookup", "service", service, "account", "__availability_probe__"],
+        { nothrow: true, ...(strict ? { abort: AbortSignal.timeout(10000) } : {}) },
       ).catch(() => undefined)
       // exit 1 = no matching item (daemon is up, secret not found) → available
       // exit 2+ = daemon not running or other error → not available
-      return !!probe && (probe.code === 0 || probe.code === 1)
+      return !!probe && (probe.code === 0 || probe.code === 1 && (!strict || probe.stderr.length === 0))
     },
     put: async (account, secret) => {
       // secret-tool reads the secret from stdin so it never appears in the process table.
-      const label = `${KEYCHAIN_SERVICE}:${account}`
+      const label = `${service}:${account}`
       const proc = Process.spawn(
-        ["secret-tool", "store", "--label", label, "service", KEYCHAIN_SERVICE, "account", account],
-        { stdin: "pipe", stdout: "ignore", stderr: "pipe" },
+        ["secret-tool", "store", "--label", label, "service", service, "account", account],
+        { stdin: "pipe", stdout: "ignore", stderr: "pipe", ...(strict ? { abort: AbortSignal.timeout(10000) } : {}) },
       )
       if (!proc.stdin || !proc.stderr) throw new Error("secret-tool process pipes are unavailable")
-      proc.stdin.end(secret)
+      proc.stdin.end(strict ? encodeProtectedSecret(secret) : secret)
       const [code, stderr] = await Promise.all([proc.exited, buffer(proc.stderr)])
       if (code !== 0) {
         throw new Error(`secret-tool store failed (code ${code}): ${stderr.toString().trim()}`)
       }
     },
     get: async (account) => {
-      const res = await Process.run(["secret-tool", "lookup", "service", KEYCHAIN_SERVICE, "account", account], {
-        nothrow: true,
+      const res = await Process.run(["secret-tool", "lookup", "service", service, "account", account], {
+        nothrow: true, ...(strict ? { abort: AbortSignal.timeout(10000) } : {}),
       })
-      if (res.code !== 0) return undefined
-      return res.stdout.toString()
+      if (res.code !== 0) {
+        if (strict && (res.code !== 1 || res.stderr.length !== 0)) throw new Error("Secret Service protected read failed")
+        return undefined
+      }
+      return strict ? decodeProtectedSecret(res.stdout.toString().replace(/\n$/, "")) : res.stdout.toString()
     },
     remove: async (account) => {
-      await Process.run(["secret-tool", "clear", "service", KEYCHAIN_SERVICE, "account", account], {
-        nothrow: true,
-      }).catch(() => {})
+      const result = await Process.run(["secret-tool", "clear", "service", service, "account", account], {
+        nothrow: true, ...(strict ? { abort: AbortSignal.timeout(10000) } : {}),
+      }).catch((error: unknown) => { if (strict) throw error; return undefined })
+      if (strict && result && result.code !== 0 && result.code !== 1) throw new Error("Secret Service protected removal failed")
     },
   })
 
@@ -348,6 +374,26 @@ export namespace SecretStore {
       file: defaultFilePath(),
     })
     return fileBackend()
+  }
+
+  function encodeProtectedSecret(secret: string) {
+    return "dac-im-secret-v1:" + Buffer.from(secret).toString("base64")
+  }
+
+  function decodeProtectedSecret(value: string) {
+    if (!value.startsWith("dac-im-secret-v1:")) throw new Error("Protected secret envelope is invalid")
+    const payload = value.slice("dac-im-secret-v1:".length)
+    const bytes = Buffer.from(payload, "base64")
+    if (bytes.toString("base64") !== payload) throw new Error("Protected secret envelope is invalid")
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+  }
+
+  /** Device-bound IM custody cannot use MCP's compatibility plaintext fallback. */
+  export const selectNativeBackend = async (service: string, dpapiFile: string): Promise<Backend> => {
+    const native = process.platform === "darwin" ? macOsKeychainBackend(service, true)
+      : process.platform === "win32" ? dpapiBackend(dpapiFile) : libsecretBackend(service, true)
+    if (!await native.available()) throw new Error("im_device_store_unavailable")
+    return native
   }
 
   // ════════════════════════════════════════════════════════════════════════════

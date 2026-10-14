@@ -11,6 +11,7 @@ import { usePlatform, type DisplayBackend } from "@/context/platform"
 import { ZOOM_LEVELS } from "@/zoom-levels"
 import { useServerSync } from "@/context/server-sync"
 import { useServerSDK } from "@/context/server-sdk"
+import { PanelButton } from "../deepagent/panel-button"
 import { useUpdaterAction } from "../updater-action"
 import {
   monoDefault,
@@ -97,9 +98,11 @@ const playDemoSound = (id: string | undefined) => {
 }
 
 export type SettingsSession = {
+  id?: () => string | undefined
   current: () => boolean
   editable: () => boolean
   mode: () => string | undefined
+  effective?: () => string | undefined
   select: (name: string) => void
 }
 
@@ -111,41 +114,62 @@ export function SettingsCollaborationMode(props: {
   const language = useLanguage()
   const serverSync = useServerSync()
   const modeLabel = useModeLabel()
-  const currentSession = () => props.session?.current() === true && props.session.editable()
-  const currentMode = () =>
-    (currentSession() ? props.session?.mode() : undefined) ??
-    configuredCollaborationMode(serverSync.data.config.default_agent)
+  const currentSession = () => props.session?.current() === true
   return (
-    <SettingsRowV2
-      title={language.t(
-        currentSession()
-          ? "settings.general.row.collaborationMode.currentTitle"
-          : "settings.general.row.collaborationMode.title",
-      )}
-      description={language.t(
-        currentSession()
-          ? "settings.general.row.collaborationMode.currentDescription"
-          : "settings.general.row.collaborationMode.description",
-      )}
-    >
-      <SelectV2
-        appearance="inline"
-        data-action="settings-collaboration-mode"
-        options={props.modes()}
-        placement="bottom-end"
-        gutter={6}
-        current={props.modes().find((mode) => mode.name === currentMode())}
-        value={(mode) => mode.name}
-        label={(mode) => modeLabel(mode.name)}
-        disabled={props.loading || props.modes().length === 0}
-        onSelect={(mode) => {
-          if (!mode) return
-          if (currentSession()) props.session?.select(mode.name)
-          if (mode.name !== configuredCollaborationMode(serverSync.data.config.default_agent))
-            void serverSync.updateConfig({ default_agent: mode.name })
-        }}
-      />
-    </SettingsRowV2>
+    <>
+      <SettingsRowV2
+        title={language.t("settings.general.row.collaborationMode.title")}
+        description={language.t("settings.general.row.collaborationMode.description")}
+      >
+        <SelectV2
+          appearance="inline"
+          data-action="settings-collaboration-default"
+          options={props.modes()}
+          placement="bottom-end"
+          gutter={6}
+          current={props
+            .modes()
+            .find((mode) => mode.name === configuredCollaborationMode(serverSync.data.config.default_agent))}
+          value={(mode) => mode.name}
+          label={(mode) => modeLabel(mode.name)}
+          disabled={props.loading || props.modes().length === 0}
+          onSelect={(mode) => {
+            if (mode && mode.name !== configuredCollaborationMode(serverSync.data.config.default_agent))
+              void serverSync.updateConfig({ default_agent: mode.name })
+          }}
+        />
+      </SettingsRowV2>
+      <Show when={currentSession()}>
+        <SettingsRowV2
+          title={language.t("settings.general.row.collaborationMode.currentTitle")}
+          description={language.t("settings.general.row.collaborationMode.currentDescription")}
+        >
+          <div class="flex flex-col items-end gap-1">
+            <SelectV2
+              appearance="inline"
+              data-action="settings-collaboration-mode"
+              options={props.modes()}
+              placement="bottom-end"
+              gutter={6}
+              current={props.modes().find((mode) => mode.name === props.session?.mode())}
+              value={(mode) => mode.name}
+              label={(mode) => modeLabel(mode.name)}
+              disabled={props.loading || props.modes().length === 0 || !props.session?.editable()}
+              onSelect={(mode) => {
+                if (mode && currentSession() && props.session?.editable()) props.session.select(mode.name)
+              }}
+            />
+            <Show when={props.session?.effective?.()}>
+              <span class="text-11-regular text-text-weak">
+                {language.t("settings.general.row.collaborationMode.effective", {
+                  mode: modeLabel(props.session?.effective?.()),
+                })}
+              </span>
+            </Show>
+          </div>
+        </SettingsRowV2>
+      </Show>
+    </>
   )
 }
 
@@ -168,9 +192,12 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
   const [collaborationModes] = createResource(
     () => serverSdk.client,
     // Agent options are provider configuration, while SelectV2 uses `options` for groups.
-    (client) => client.app.agents().then((result) =>
-      result.data?.filter(isSelectableCollaborationMode).map((mode) => ({ name: mode.name })) ?? [],
-    ),
+    (client) =>
+      client.app
+        .agents()
+        .then(
+          (result) => result.data?.filter(isSelectableCollaborationMode).map((mode) => ({ name: mode.name })) ?? [],
+        ),
     { initialValue: [] },
   )
 
@@ -411,6 +438,9 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
           loading={collaborationModes.loading}
           session={props.session}
         />
+        <Show when={props.session?.current() && props.session.id?.()}>
+          {(id) => <PanelButton sessionID={id() as string} />}
+        </Show>
         <SettingsRowV2
           title={language.t("settings.general.deepagent.mode.title")}
           description={
@@ -565,7 +595,6 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
             }}
           />
         </SettingsRowV2>
-
       </SettingsListV2>
     </div>
   )
@@ -622,7 +651,6 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
             />
           </div>
         </SettingsRowV2>
-
       </SettingsListV2>
     </div>
   )
@@ -1022,7 +1050,6 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
         <NotificationsSection />
 
         <SoundsSection />
-
 
         <UpdatesSection />
 
