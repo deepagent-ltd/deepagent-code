@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { createHash } from "node:crypto"
 import { BrowserClientWindow } from "./fixture/browser-client-window-descriptor"
 
@@ -33,7 +34,7 @@ test("client window accepts independent observations and rejects changed approve
 })
 
 test("client window reads private original credential and refuses broad mode, symlink, or expired live window", async () => {
-  const root = await fs.mkdtemp("/tmp/dac-browser-client-descriptor-")
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-client-descriptor-"))
   await fs.chmod(root, 0o700)
   const authorizationFile = path.join(root, "authorization")
   const file = path.join(root, "descriptor.json")

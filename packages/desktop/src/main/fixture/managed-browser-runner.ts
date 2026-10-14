@@ -303,6 +303,14 @@ async function main() {
     const actions = database.prepare("SELECT action_id FROM browser_action ORDER BY action_id").all()
     for (const action of actions) await call(`/api/v1/browser/actions/${action.action_id}`)
     const afterGet = snapshot()
+    const afterTables = new Map(JSON.parse(afterGet) as [string, unknown[]][])
+    const getChanges = (JSON.parse(beforeGet) as [string, unknown[]][]).flatMap(([name, rows]) => {
+      const next = afterTables.get(name)!
+      const before = JSON.stringify(rows)
+      const after = JSON.stringify(next)
+      return before === after ? [] : [{ table: name, beforeRows: rows.length, afterRows: next.length,
+        beforeHash: createHash("sha256").update(before).digest("hex"), afterHash: createHash("sha256").update(after).digest("hex") }]
+    })
     database.close()
     const forbiddenAction = await fetch(url + "/api/v1/browser/actions", { method: "POST", headers: { authorization, "content-type": "application/json" }, body: JSON.stringify({ effectID: "caller-invented" }) })
     const queryAuth = await fetch(url + `/api/v1/browser/controls/${controlID}?auth_token=untrusted`)
@@ -317,7 +325,7 @@ async function main() {
         beforeRead, afterRead: { provider: bodies.length, preview: previewRequests.length } }
     }
     await writeFile(path.join(root, "result.json"), JSON.stringify({ control, observed, stopped, session, admitted,
-      permissions, previewRequests, posted, outsideRequests, controlRead, getNoWrites: beforeGet === afterGet, forbiddenActionStatus: forbiddenAction.status, queryAuthStatus: queryAuth.status, providerRequests: bodies.length, browserMissing, unauthorizedStatus: denied.status,
+      permissions, previewRequests, posted, outsideRequests, controlRead, getNoWrites: beforeGet === afterGet, getChanges, forbiddenActionStatus: forbiddenAction.status, queryAuthStatus: queryAuth.status, providerRequests: bodies.length, browserMissing, unauthorizedStatus: denied.status,
       coldHistory,
       fixtureDevMint: process.env.DEEPAGENT_CODE_V2_OWNER_DEV_MINT === "1" }, null, 2))
   } finally {

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { createHash } from "node:crypto"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { buildLinuxNativeAssets, inspectLinuxNativeAssets, linuxNativeCargoInvocation, linuxNativeCopyrightCopy, linuxNativeCopyrightMetadata, linuxNativeImageRejection, linuxNativePackageOwnership, linuxNativePackageProvenance, LINUX_NATIVE_DEV_MANIFEST, LINUX_NATIVE_DEV_DOMAIN, type LinuxNativeDevManifest, type LinuxNativeTarget } from "./build-linux-native-assets"
@@ -56,7 +57,7 @@ test("canonical package ownership uses physical metadata and only falls back for
 })
 
 async function fixture(target: LinuxNativeTarget = "linux-x64") {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-linux-dev-asset-core-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-linux-dev-asset-core-")))
   const elf = Buffer.alloc(128)
   elf.writeUInt32LE(0x464c457f, 0)
   elf[4] = 2; elf[5] = 1; elf[6] = 1
@@ -86,7 +87,7 @@ async function fixture(target: LinuxNativeTarget = "linux-x64") {
 
 test("non-Linux host refuses physical build before any output, tool or payload exists", async () => {
   if (process.platform === "linux") return
-  const directory = await fs.mkdtemp("/tmp/dac-linux-dev-asset-guard-")
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-linux-dev-asset-guard-"))
   try {
     await expect(buildLinuxNativeAssets({ destination: path.join(directory, "assets") })).rejects.toThrow("native Linux")
     expect(await fs.readdir(directory)).toEqual([])
@@ -133,7 +134,7 @@ test("copyright metadata requires its canonical package owner and one registered
 })
 
 test("registered writable copyright copies exact bytes privately while generic assets and source changes remain refused", async () => {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-linux-copyright-copy-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-linux-copyright-copy-")))
   const source = path.join(directory, "copyright")
   const destination = path.join(directory, "private.copyright")
   const body = Buffer.from("complete registered copyright\n")

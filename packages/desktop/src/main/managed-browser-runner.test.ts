@@ -54,7 +54,7 @@ test("actual Desktop sidecar HTTP canonical runner delivers native Browser PNG t
   expect(result.unauthorizedStatus).toBe(401)
   expect(result.queryAuthStatus).toBe(401)
   expect(result.forbiddenActionStatus).toBe(404)
-  expect(result.getNoWrites).toBe(true)
+  expect(result.getNoWrites, JSON.stringify({ root, changedTables: result.getChanges })).toBe(true)
   const body = await Bun.file(path.join(root, "provider-6.json")).json()
   const images = body.messages.flatMap((message: { content?: unknown }) => Array.isArray(message.content) ? message.content : [])
     .filter((part: { type?: string }) => part.type === "image_url")

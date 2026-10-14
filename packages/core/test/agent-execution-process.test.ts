@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 
 type WorkerInput = {
@@ -21,8 +21,8 @@ type WorkerInput = {
 }
 
 const runWorker = async (input: WorkerInput) => {
-  const child = Bun.spawn([process.execPath, "test/fixture/agent-execution-worker.ts", JSON.stringify(input)], {
-    cwd: import.meta.dir.replace(/\/test$/, ""),
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "fixture/agent-execution-worker.ts"), JSON.stringify(input)], {
+    cwd: dirname(import.meta.dir),
     stdout: "pipe",
     stderr: "pipe",
   })
