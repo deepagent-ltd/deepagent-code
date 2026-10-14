@@ -139,6 +139,12 @@ export type State = {
   question: {
     [sessionID: string]: QuestionRequest[]
   }
+  // False marks an observed settlement until bootstrap reconciles its pending snapshot.
+  question_v2: {
+    [sessionID: string]: {
+      [requestID: string]: boolean | undefined
+    }
+  }
   mcp_ready: boolean
   mcp: {
     [name: string]: McpStatus

@@ -21,6 +21,7 @@ import { loadMcpQuery } from "../server-sync"
 import { NormalizedProviderListResponse } from "@deepagent-code/ui/context"
 import { ScopedKey, type ServerScope } from "@/utils/server-scope"
 import { permissionRequestFromV2 } from "./permission-v2"
+import { questionWrites } from "./event-reducer"
 
 type GlobalStore = {
   ready: boolean
@@ -323,30 +324,54 @@ export async function bootstrapDirectory(input: {
           )
         }),
       () =>
-        retry(() =>
-          input.sdk.question.list().then((x) => {
-            const ids = (x.data ?? []).map((question) => question?.sessionID).filter((id): id is string => !!id)
-            const grouped = groupBySession((x.data ?? []).filter((q): q is QuestionRequest => !!q?.id && !!q.sessionID))
-            return warmSessions({ ids, store: input.store, setStore: input.setStore, sdk: input.sdk }).then(() =>
-              batch(() => {
-                for (const sessionID of Object.keys(input.store.question)) {
-                  if (grouped[sessionID]) continue
-                  input.setStore("question", sessionID, [])
+        retry(async () => {
+          const writes = questionWrites(input.store)
+          const before = new Map(writes)
+          const hasV2List = typeof input.sdk.v2?.question?.request?.list === "function"
+          const [legacy, v2] = await Promise.all([
+            input.sdk.question.list(),
+            hasV2List
+              ? input.sdk.v2.question.request.list({ location: { directory: input.directory } })
+              : Promise.resolve(undefined),
+          ])
+          if (legacy.error) throw legacy.error
+          if (v2?.error) throw v2.error
+          const grouped = groupBySession(
+            (legacy.data ?? []).filter((q): q is QuestionRequest => !!q?.id && !!q.sessionID),
+          )
+          const v2Grouped = groupBySession(v2?.data?.data ?? [])
+          const ids = [...(legacy.data ?? []), ...(v2?.data?.data ?? [])].map((question) => question.sessionID)
+          return warmSessions({ ids, store: input.store, setStore: input.setStore, sdk: input.sdk }).then(() =>
+            batch(() => {
+              for (const sessionID of new Set([
+                ...Object.keys(input.store.question),
+                ...Object.keys(grouped),
+                ...Object.keys(v2Grouped),
+              ])) {
+                const unchanged = (question: QuestionRequest) => {
+                  const key = JSON.stringify([sessionID, question.id])
+                  return (before.get(key) ?? 0) === (writes.get(key) ?? 0)
                 }
-                for (const [sessionID, questions] of Object.entries(grouped)) {
-                  input.setStore(
-                    "question",
-                    sessionID,
-                    reconcile(
-                      questions.filter((q) => !!q?.id).sort((a, b) => cmp(a.id, b.id)),
-                      { key: "id" },
-                    ),
-                  )
-                }
-              }),
-            )
-          }),
-        ),
+                // Every V1/V2 event during the fetch wins over its older pending snapshot.
+                const live = (input.store.question[sessionID] ?? []).filter((question) => !unchanged(question))
+                const fetchedV2 = (v2Grouped[sessionID] ?? []).filter(unchanged)
+                const merged = [
+                  ...new Map(
+                    [...(grouped[sessionID] ?? []).filter(unchanged), ...fetchedV2, ...live]
+                      .map((question) => [question.id, question]),
+                  ).values(),
+                ].sort((a, b) => cmp(a.id, b.id))
+                const liveV2 = [...fetchedV2, ...live.filter((question) => input.store.question_v2[sessionID]?.[question.id] === true)]
+                input.setStore("question", sessionID, reconcile(merged, { key: "id" }))
+                input.setStore(
+                  "question_v2",
+                  sessionID,
+                  reconcile(Object.fromEntries(liveV2.map((question) => [question.id, true])), { merge: false }),
+                )
+              }
+            }),
+          )
+        }),
       () => Promise.resolve(input.loadSessions(input.directory)),
       input.mcp && (() => input.queryClient.fetchQuery(loadMcpQuery(input.scope, input.directory, input.sdk))),
       () =>

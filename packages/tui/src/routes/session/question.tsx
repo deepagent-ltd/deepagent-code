@@ -9,11 +9,16 @@ import { SplitBorder } from "../../ui/border"
 import { useTuiConfig } from "../../config"
 import { useBindings, useOpencodeModeStack } from "../../keymap"
 import { useTuiI18n } from "../../context/i18n"
+import { useSync } from "../../context/sync"
+import { QuestionClient } from "../../context/question-client"
+import { useToast } from "../../ui/toast"
 
 const QUESTION_MODE = "question"
 
 export function QuestionPrompt(props: { request: QuestionRequest; directory?: string }) {
   const sdk = useSDK()
+  const sync = useSync()
+  const toast = useToast()
   const { theme } = useTheme()
   const renderer = useRenderer()
   const tuiConfig = useTuiConfig()
@@ -47,20 +52,22 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
     return store.answers[store.tab]?.includes(value) ?? false
   })
 
+  const target = () => ({
+    request: props.request,
+    v2: sync.questionV2(props.request.sessionID, props.request.id),
+    directory: props.directory,
+  })
+
   function submit() {
-    const answers = questions().map((_, i) => store.answers[i] ?? [])
-    void sdk.client.question.reply({
-      requestID: props.request.id,
-      directory: props.directory,
-      answers,
-    })
+    void QuestionClient.reply(
+      sdk.client,
+      target(),
+      questions().map((_, i) => store.answers[i] ?? []),
+    ).catch(toast.error)
   }
 
   function reject() {
-    void sdk.client.question.reject({
-      requestID: props.request.id,
-      directory: props.directory,
-    })
+    void QuestionClient.reject(sdk.client, target()).catch(toast.error)
   }
 
   function pick(answer: string, custom: boolean = false) {
@@ -73,11 +80,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
       setStore("custom", inputs)
     }
     if (single()) {
-      void sdk.client.question.reply({
-        requestID: props.request.id,
-        directory: props.directory,
-        answers: [[answer]],
-      })
+      void QuestionClient.reply(sdk.client, target(), [[answer]]).catch(toast.error)
       return
     }
     setStore("tab", store.tab + 1)

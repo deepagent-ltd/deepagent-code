@@ -19,6 +19,7 @@ type SessionCache = {
   permission: Record<string, PermissionRequest[] | undefined>
   permission_v2?: Record<string, Record<string, true | undefined> | undefined>
   question: Record<string, QuestionRequest[] | undefined>
+  question_v2?: Record<string, Record<string, boolean | undefined> | undefined>
   part_text_accum_delta: Record<string, string | undefined>
 }
 
@@ -43,6 +44,7 @@ export function dropSessionCaches(store: SessionCache, sessionIDs: Iterable<stri
     delete store.permission[sessionID]
     if (store.permission_v2) delete store.permission_v2[sessionID]
     delete store.question[sessionID]
+    if (store.question_v2) delete store.question_v2[sessionID]
   }
 }
 

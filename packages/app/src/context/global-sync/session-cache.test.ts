@@ -39,6 +39,7 @@ describe("app session cache", () => {
       part: Record<string, Part[] | undefined>
       permission: Record<string, PermissionRequest[] | undefined>
       question: Record<string, QuestionRequest[] | undefined>
+      question_v2: Record<string, Record<string, boolean | undefined> | undefined>
       part_text_accum_delta: Record<string, string | undefined>
     } = {
       session_status: { ses_1: { type: "busy" } as SessionStatus },
@@ -48,6 +49,7 @@ describe("app session cache", () => {
       part: { msg_1: [part("prt_1", "ses_1", "msg_1")] },
       permission: { ses_1: [] as PermissionRequest[] },
       question: { ses_1: [] as QuestionRequest[] },
+      question_v2: { ses_1: { que_settled: false } },
       part_text_accum_delta: { prt_1: "streamed text" },
     }
 
@@ -61,6 +63,7 @@ describe("app session cache", () => {
     expect(store.session_status.ses_1).toBeUndefined()
     expect(store.permission.ses_1).toBeUndefined()
     expect(store.question.ses_1).toBeUndefined()
+    expect(store.question_v2.ses_1).toBeUndefined()
   })
 
   test("dropSessionCaches clears message-backed parts", () => {

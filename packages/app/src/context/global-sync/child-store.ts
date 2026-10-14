@@ -254,6 +254,7 @@ export function createChildStoreManager(input: {
             permission: {},
             permission_v2: {},
             question: {},
+            question_v2: {},
             get mcp_ready() {
               return !mcpQuery.isLoading
             },

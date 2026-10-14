@@ -109,6 +109,16 @@ function cleanupSessionCaches(setStore: SetStoreFunction<State>, sessionID: stri
   )
 }
 
+const questionWritesByStore = new WeakMap<Store<State>, Map<string, number>>()
+
+export function questionWrites(store: Store<State>) {
+  const existing = questionWritesByStore.get(store)
+  if (existing) return existing
+  const writes = new Map<string, number>()
+  questionWritesByStore.set(store, writes)
+  return writes
+}
+
 export function cleanupDroppedSessionCaches(store: Store<State>, setStore: SetStoreFunction<State>, next: Session[]) {
   const keep = new Set(next.map((item) => item.id))
   const stale = [
@@ -117,6 +127,7 @@ export function cleanupDroppedSessionCaches(store: Store<State>, setStore: SetSt
     ...Object.keys(store.todo),
     ...Object.keys(store.permission),
     ...Object.keys(store.question),
+    ...Object.keys(store.question_v2),
     ...Object.keys(store.session_status),
     ...Object.values(store.part)
       .map((parts) => parts?.find((part) => !!part?.sessionID)?.sessionID)
@@ -489,8 +500,21 @@ export function applyDirectoryEvent(input: {
       )
       break
     }
-    case "question.asked": {
+    case "question.asked":
+    case "question.v2.asked": {
       const question = event.properties as QuestionRequest
+      const writes = questionWrites(input.store)
+      const key = JSON.stringify([question.sessionID, question.id])
+      writes.set(key, (writes.get(key) ?? 0) + 1)
+      input.setStore(
+        produce((draft) => {
+          if (event.type === "question.v2.asked") {
+            ;(draft.question_v2[question.sessionID] ??= {})[question.id] = true
+            return
+          }
+          delete draft.question_v2[question.sessionID]?.[question.id]
+        }),
+      )
       const questions = input.store.question[question.sessionID]
       if (!questions) {
         input.setStore("question", question.sessionID, [question])
@@ -511,8 +535,20 @@ export function applyDirectoryEvent(input: {
       break
     }
     case "question.replied":
-    case "question.rejected": {
+    case "question.rejected":
+    case "question.v2.replied":
+    case "question.v2.rejected": {
       const props = event.properties as { sessionID: string; requestID: string }
+      const writes = questionWrites(input.store)
+      const key = JSON.stringify([props.sessionID, props.requestID])
+      writes.set(key, (writes.get(key) ?? 0) + 1)
+      if (event.type.startsWith("question.v2.")) {
+        input.setStore(
+          produce((draft) => {
+            ;(draft.question_v2[props.sessionID] ??= {})[props.requestID] = false
+          }),
+        )
+      }
       const questions = input.store.question[props.sessionID]
       if (!questions) break
       const result = Binary.search(questions, props.requestID, (q) => q.id)
