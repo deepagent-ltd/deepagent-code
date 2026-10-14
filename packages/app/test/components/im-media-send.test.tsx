@@ -1,44 +1,20 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
 import { createSignal } from "solid-js"
 import { GroupChatPanel } from "@/components/im/group-chat-panel"
 import { dict } from "@/i18n/en"
+import { createBrowserMediaStoreFixture } from "./fixture/browser-media-store"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { File } from "node:buffer"
 import { createHash } from "node:crypto"
 
-const fixture = vi.hoisted(() => ({ directory: "", pending: new Set<Promise<unknown>>() }))
-vi.mock("@/utils/im-media-intent", async () => {
-  // Load the actual sibling disk store at test runtime without adding TUI source to
-  // the app's composite build. Browser IndexedDB is verified separately in Chrome.
-  const sibling = "../../../tui/src/util/im-media-intent"
-  const { createMediaIntentStore, createMediaBatchStore } = (await import(/* @vite-ignore */ sibling)) as {
-    createMediaIntentStore(
-      directory: string,
-    ): Pick<ReturnType<typeof import("@/utils/im-media-intent").createMediaIntentStore>, "list" | "put" | "discard">
-    createMediaBatchStore(
-      directory: string,
-    ): Pick<ReturnType<typeof import("@/utils/im-media-intent").createMediaBatchStore>, "list" | "put" | "discard">
-  }
-  return {
-    createMediaBatchStore: () => ({ ...createMediaBatchStore(fixture.directory), close() {} }),
-    createMediaIntentStore: () => {
-      const store = createMediaIntentStore(fixture.directory)
-      return {
-        ...store,
-        put: (...args: Parameters<typeof store.put>) => {
-          const operation = store.put(...args)
-          fixture.pending.add(operation)
-          void operation.finally(() => fixture.pending.delete(operation)).catch(() => undefined)
-          return operation
-        },
-        close() {},
-      }
-    },
-  }
-})
+const fixture = vi.hoisted(() => ({ directory: "", storage: undefined as Awaited<ReturnType<typeof createBrowserMediaStoreFixture>> | undefined }))
+vi.mock("@/utils/im-media-intent", () => ({
+  createMediaIntentStore: () => fixture.storage!.createMediaIntentStore(),
+  createMediaBatchStore: () => fixture.storage!.createMediaBatchStore(),
+}))
 
 const api = vi.hoisted(() => ({
   listMessages: vi.fn(),
@@ -90,8 +66,17 @@ const attachment = {
   createdAt,
   expiresAt: createdAt + 86_400_000,
 }
-beforeEach(async () => {
+beforeAll(async () => {
   fixture.directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-app-media-store-"))
+  fixture.storage = await createBrowserMediaStoreFixture(fixture.directory)
+})
+afterAll(async () => {
+  await fixture.storage?.close()
+  if (fixture.directory) await fs.rm(fixture.directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+})
+beforeEach(async () => {
+  await fixture.storage!.records("intents", [])
+  await fixture.storage!.records("batches", [])
   Object.values(api).forEach((method) => method.mockReset())
   toast.showToast.mockReset()
   api.listMessages.mockResolvedValue({ messages: [], hasMore: false, nextCursor: null })
@@ -113,11 +98,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   cleanup()
-  for (let i = 0; i < 3; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    await Promise.allSettled([...fixture.pending])
-  }
-  await fs.rm(fixture.directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  await fixture.storage!.drain()
 })
 
 it("retries a lost file-message receipt with the same attachment and request ID without reuploading", async () => {
@@ -143,8 +124,8 @@ it("retries a lost file-message receipt with the same attachment and request ID 
   await screen.findByRole("button", { name: `${dict["im.media.batch.remove"]} fixture.txt` })
   expect(api.createMessage).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole("button", { name: dict["im.composer.send"] }))
-  const retry = await screen.findByRole("button", { name: dict["im.media.retry"] })
-  await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false))
+  await screen.findByRole("button", { name: dict["im.media.retry"] })
+  await waitFor(() => expect(screen.getByRole("button", { name: dict["im.media.retry"] }).hasAttribute("disabled")).toBe(false))
   fireEvent.click(screen.getByRole("button", { name: dict["im.media.retry"] }))
   await waitFor(() => expect(api.createMessage).toHaveBeenCalledTimes(2))
   await screen.findByRole("article")

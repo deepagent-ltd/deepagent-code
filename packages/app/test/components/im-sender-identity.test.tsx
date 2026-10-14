@@ -21,6 +21,10 @@ vi.mock("@/utils/im-client", async (original) => ({
   useIMClient: () => client,
   createIMClient: () => client,
 }))
+vi.mock("@/context/command", async (original) => ({
+  ...(await original<typeof import("@/context/command")>()),
+  useCommand: () => ({ register: vi.fn() }),
+}))
 vi.mock("@/context/sdk", () => ({ useSDK: () => ({ client: {} }) }))
 vi.mock("@/context/server", async (original) => ({
   ...(await original<typeof import("@/context/server")>()),

@@ -94,7 +94,7 @@ async function main() {
   const directory = path.join(root, "project")
   await mkdir(directory, { recursive: true })
   await writeFile(path.join(directory, "deepagent-code.json"), JSON.stringify({ formatter: false, lsp: false,
-    model: "fixture/test-model", permission: { "*": "allow", browser: ["permission", "retired", "selection-drift"].includes(mode) ? "ask" : "allow" }, provider: { fixture: { name: "Fixture", npm: "@ai-sdk/openai-compatible",
+    model: "fixture/test-model", permission: { "*": "allow", browser: ["permission", "retired", "selection-drift"].includes(mode) ? "ask" : "allow" }, provider: { deepagent: { options: { selfLearning: "manual", durableLearning: false } }, fixture: { name: "Fixture", npm: "@ai-sdk/openai-compatible",
       env: [], options: { apiKey: "loopback-fixture", baseURL: `http://127.0.0.1:${providerAddress.port}/v1` }, models: {
         "test-model": { id: "test-model", name: "Fixture", attachment: true, tool_call: true,
           modalities: { input: ["text", "image"], output: ["text"] }, limit: { context: 100_000, output: 10_000 }, cost: { input: 0, output: 0 } } } } } }))
@@ -115,6 +115,21 @@ async function main() {
     const text = await response.text()
     if (!response.ok) throw new Error(`${route} HTTP ${response.status}: ${text}`)
     return text ? JSON.parse(text) : undefined
+  }
+  const waitForSettled = async (sessionID: string, requests: number, duration: number) => {
+    const { DatabaseSync } = await import("node:sqlite")
+    const database = new DatabaseSync(path.join(root, "authority.sqlite"), { readOnly: true })
+    try {
+      const deadline = Date.now() + duration
+      while (Date.now() < deadline) {
+        const activity = database.prepare("SELECT state FROM session_activity WHERE session_id=? ORDER BY ordinal DESC LIMIT 1").get(sessionID)
+        if (bodies.length >= requests && activity?.state === "settled") return
+        if (activity && ["failed", "interrupted"].includes(String(activity.state)))
+          throw new Error(`Fixture activity did not settle: ${JSON.stringify(activity)}`)
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      throw new Error(`Fixture activity did not settle after ${bodies.length}/${requests} provider requests`)
+    } finally { database.close() }
   }
   try {
     if (mode === "identity") {
@@ -258,15 +273,13 @@ async function main() {
       }
     }
     if (["wrong-root", "wrong-session", "retired", "selection-drift", "control-tamper"].includes(mode)) {
-      const deadline = Date.now() + 3_000
-      while (bodies.length < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25))
-      await new Promise((resolve) => setTimeout(resolve, 300))
+      await waitForSettled(invokeSession.data.id, 3, 3_000)
       await writeFile(path.join(root, "result.json"), JSON.stringify({ mode, session, invokeSession, admitted,
         permissions, selectionMutationRejected, providerRequests: bodies.length, previewRequests }, null, 2))
       return
     }
     const deadline = Date.now() + 40_000
-    while (bodies.length < (interaction ? 9 : 5) && Date.now() < deadline) {
+    while (mode.endsWith("-denied") && bodies.length < 9 && Date.now() < deadline) {
       if (mode.endsWith("-denied") && bodies.length >= 6) {
         const { DatabaseSync } = await import("node:sqlite")
         const observed = new DatabaseSync(path.join(root, "authority.sqlite"), { readOnly: true })
@@ -276,7 +289,7 @@ async function main() {
       }
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    if (!mode.endsWith("-denied")) await waitForSettled(invokeSession.data.id, interaction ? 10 : 6, 40_000)
     const observed = await call(`/api/v1/browser/controls/${controlID}`)
     const stopped = await call(`/api/v1/browser/controls/${controlID}/cancel`, { requestID: "canonical-cancel", expectedRevision: observed.control.revision })
     const denied = await fetch(url + `/api/v1/browser/controls/${controlID}`)

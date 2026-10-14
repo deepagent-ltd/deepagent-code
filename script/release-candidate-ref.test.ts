@@ -54,7 +54,22 @@ async function prepare(root: string, contents: string, date = "2026-10-14T00:00:
   return git(root, ["rev-parse", "HEAD"])
 }
 
-function admit(root: string, baseCommit: string, commit: string) {
+type Release = {
+  databaseId: number
+  tagName: string
+  isDraft: boolean
+  publishedAt: string | null
+  assets: unknown[]
+  targetCommitish: string
+}
+type Recovery = {
+  sourceRef: string
+  sourceCommit: string
+  release: Release
+  replacement: { candidate: string; tag: string; releaseID: number }
+}
+
+function admit(root: string, baseCommit: string, commit: string, recovery?: Recovery, confirmed?: Release) {
   return Bun.spawnSync(
     [
       process.execPath,
@@ -62,7 +77,10 @@ function admit(root: string, baseCommit: string, commit: string) {
       `
     import { ensureReleaseCandidateRef } from ${JSON.stringify(path.join(import.meta.dir, "release-candidate-ref.ts"))};
     try {
-      console.log(await ensureReleaseCandidateRef(${JSON.stringify({ repository: root, version: "2.0.4", baseCommit, commit })}));
+      console.log(await ensureReleaseCandidateRef({
+        ...${JSON.stringify({ repository: root, version: "2.0.4", baseCommit, commit, ...recovery })},
+        ${recovery ? `confirmReplacement: async () => (${JSON.stringify(confirmed ?? recovery.release)}),` : ""}
+      }));
     } catch (error) {
       console.error(error.message);
       process.exitCode = 1;
@@ -131,5 +149,218 @@ test("release job Git configuration preserves the requested deepagent-ai source 
     expect(result.exitCode).toBe(0)
     expect(git(root, ["config", "--global", "--get", "user.name"])).toBe("deepagent-ai")
     expect(git(root, ["config", "--global", "--get", "user.email"])).toBe("deepagent-ai@deepagent.ltd")
+  })
+})
+
+async function recoveryRepository(
+  run: (root: string, input: Recovery, candidate: string) => Promise<void>,
+  annotated = false,
+) {
+  await repository(async (root, base) => {
+    const previous = await prepare(root, "2.0.4\n")
+    git(root, ["push", "--quiet", "origin", `${previous}:refs/heads/release-candidates/v2.0.4`])
+    git(
+      root,
+      annotated
+        ? ["tag", "--annotate", "v2.0.4", "--message", "test: prepared draft", previous]
+        : ["tag", "v2.0.4", previous],
+    )
+    const tag = git(root, ["rev-parse", "refs/tags/v2.0.4"])
+    git(root, ["push", "--quiet", "origin", "refs/tags/v2.0.4"])
+    git(root, ["checkout", "--quiet", "--detach", base])
+    await Bun.write(path.join(root, "repair"), "published source repair\n")
+    git(root, ["add", "repair"])
+    git(root, ["commit", "--quiet", "-m", "fix(release): repair source"])
+    const source = git(root, ["rev-parse", "HEAD"])
+    git(root, ["push", "--quiet", "origin", `${source}:refs/heads/main`])
+    const candidate = await prepare(root, "2.0.4\n")
+    const release = {
+      databaseId: 412460632,
+      tagName: "v2.0.4",
+      isDraft: true,
+      publishedAt: null,
+      assets: [],
+      targetCommitish: previous,
+    }
+    await run(
+      root,
+      {
+        sourceRef: "refs/heads/main",
+        sourceCommit: source,
+        release,
+        replacement: { candidate: previous, tag, releaseID: release.databaseId },
+      },
+      candidate,
+    )
+  })
+}
+
+function refs(root: string) {
+  return git(root, [
+    "ls-remote",
+    "origin",
+    "refs/heads/release-candidates/v2.0.4",
+    "refs/tags/v2.0.4",
+    "refs/tags/v2.0.4^{}",
+  ]).split("\n")
+}
+
+test("candidate recovery replaces only an explicitly pinned empty draft from an ancestor source", async () => {
+  await recoveryRepository(async (root, input, candidate) => {
+    const result = admit(root, input.sourceCommit, candidate, input)
+    expect({ code: result.exitCode, error: result.exitCode ? result.stderr.toString() : null }).toEqual({
+      code: 0,
+      error: null,
+    })
+    expect(refs(root)).toEqual([`${candidate}\trefs/heads/release-candidates/v2.0.4`, `${candidate}\trefs/tags/v2.0.4`])
+    expect(git(root, ["ls-remote", "origin", "refs/heads/main"]).split("\t")[0]).toBe(input.sourceCommit)
+    expect(git(root, ["rev-parse", "HEAD"])).toBe(candidate)
+  })
+})
+
+test("candidate recovery refuses published, nonempty and inconsistent release facts without changing refs", async () => {
+  await recoveryRepository(async (root, input, candidate) => {
+    const original = refs(root)
+    for (const release of [
+      { ...input.release, isDraft: false },
+      { ...input.release, publishedAt: "2026-10-14T00:00:00Z" },
+      { ...input.release, assets: [{ id: 1, name: "already-built.zip" }] },
+      { ...input.release, databaseId: input.release.databaseId + 1 },
+      { ...input.release, tagName: "v2.0.5" },
+      { ...input.release, targetCommitish: input.sourceCommit },
+    ]) {
+      expect(admit(root, input.sourceCommit, candidate, { ...input, release }).exitCode).toBe(1)
+      expect(refs(root)).toEqual(original)
+      expect(git(root, ["rev-parse", "HEAD"])).toBe(candidate)
+    }
+  })
+})
+
+test("candidate recovery refuses changed confirmation metadata before any Git replacement", async () => {
+  await recoveryRepository(async (root, input, candidate) => {
+    const original = refs(root)
+    for (const confirmed of [
+      { ...input.release, isDraft: false, publishedAt: "2026-10-14T01:00:00Z" },
+      { ...input.release, assets: [{ id: 2, name: "concurrent-upload.zip" }] },
+      { ...input.release, databaseId: input.release.databaseId + 1 },
+      { ...input.release, targetCommitish: candidate },
+    ]) {
+      expect(admit(root, input.sourceCommit, candidate, input, confirmed).exitCode).toBe(1)
+      expect(refs(root)).toEqual(original)
+    }
+  })
+})
+
+test("candidate recovery leases an annotated raw tag while requiring its peeled candidate", async () => {
+  await recoveryRepository(async (root, input, candidate) => {
+    expect(input.replacement.tag).not.toBe(input.replacement.candidate)
+    const original = refs(root)
+    expect(original).toContain(`${input.replacement.candidate}\trefs/tags/v2.0.4^{}`)
+    expect(
+      admit(root, input.sourceCommit, candidate, {
+        ...input,
+        replacement: { ...input.replacement, tag: input.replacement.candidate },
+      }).exitCode,
+    ).toBe(1)
+    expect(refs(root)).toEqual(original)
+    expect(admit(root, input.sourceCommit, candidate, input).exitCode).toBe(0)
+    expect(refs(root)).toEqual([`${candidate}\trefs/heads/release-candidates/v2.0.4`, `${candidate}\trefs/tags/v2.0.4`])
+  }, true)
+})
+
+test("candidate recovery rejects a real pre-push lease race atomically", async () => {
+  await recoveryRepository(async (root, input, candidate) => {
+    const raced = git(root, ["commit-tree", "HEAD^{tree}", "-p", candidate, "-m", "test: concurrent candidate writer"])
+    git(root, ["push", "--quiet", "origin", `${raced}:refs/heads/race-fixture`])
+    const hook = path.join(root, "hooks/pre-push")
+    await Bun.write(
+      hook,
+      `#!/bin/sh\ngit --git-dir=origin.git update-ref refs/heads/release-candidates/v2.0.4 ${raced} ${input.replacement.candidate} || exit 3\nprintf 'ACTUAL_CONCURRENT_WRITER\\n'\n`,
+    )
+    const { chmod } = await import("node:fs/promises")
+    await chmod(hook, 0o700)
+    const rejected = admit(root, input.sourceCommit, candidate, input)
+    expect(rejected.exitCode).toBe(1)
+    expect(rejected.stdout.toString()).toContain("ACTUAL_CONCURRENT_WRITER")
+    expect(refs(root)).toEqual([
+      `${raced}\trefs/heads/release-candidates/v2.0.4`,
+      `${input.replacement.tag}\trefs/tags/v2.0.4`,
+    ])
+  })
+})
+
+test("candidate recovery rejects a real raw-tag lease race without updating the candidate", async () => {
+  await recoveryRepository(async (root, input, candidate) => {
+    const raced = git(root, ["commit-tree", "HEAD^{tree}", "-p", candidate, "-m", "test: concurrent tag writer"])
+    git(root, ["push", "--quiet", "origin", `${raced}:refs/heads/race-fixture`])
+    const hook = path.join(root, "hooks/pre-push")
+    await Bun.write(
+      hook,
+      `#!/bin/sh\ngit --git-dir=origin.git update-ref refs/tags/v2.0.4 ${raced} ${input.replacement.tag} || exit 3\nprintf 'ACTUAL_CONCURRENT_TAG_WRITER\\n'\n`,
+    )
+    const { chmod } = await import("node:fs/promises")
+    await chmod(hook, 0o700)
+    const rejected = admit(root, input.sourceCommit, candidate, input)
+    expect(rejected.exitCode).toBe(1)
+    expect(rejected.stdout.toString()).toContain("ACTUAL_CONCURRENT_TAG_WRITER")
+    expect(refs(root)).toEqual([
+      `${input.replacement.candidate}\trefs/heads/release-candidates/v2.0.4`,
+      `${raced}\trefs/tags/v2.0.4`,
+    ])
+  })
+})
+
+test("candidate recovery refuses a changed main source and a multi-parent preparation", async () => {
+  await recoveryRepository(async (root, input, candidate) => {
+    const original = refs(root)
+    const advanced = git(root, [
+      "commit-tree",
+      `${input.sourceCommit}^{tree}`,
+      "-p",
+      input.sourceCommit,
+      "-m",
+      "test: advanced main",
+    ])
+    git(root, ["push", "--quiet", "origin", `${advanced}:refs/heads/main`])
+    expect(admit(root, input.sourceCommit, candidate, input).exitCode).toBe(1)
+    expect(refs(root)).toEqual(original)
+    git(root, [
+      "push",
+      "--quiet",
+      "origin",
+      `--force-with-lease=refs/heads/main:${advanced}`,
+      `${input.sourceCommit}:refs/heads/main`,
+    ])
+    const merged = git(root, [
+      "commit-tree",
+      "HEAD^{tree}",
+      "-p",
+      input.sourceCommit,
+      "-p",
+      input.replacement.candidate,
+      "-m",
+      "test: invalid merge preparation",
+    ])
+    git(root, ["reset", "--hard", merged])
+    expect(admit(root, input.sourceCommit, merged, input).exitCode).toBe(1)
+    expect(refs(root)).toEqual(original)
+  })
+})
+
+test("candidate recovery refuses an old candidate whose parent is outside the new source ancestry", async () => {
+  await recoveryRepository(async (root, input) => {
+    const original = refs(root)
+    const unrelated = git(root, ["commit-tree", `${input.sourceCommit}^{tree}`, "-m", "test: unrelated source history"])
+    git(root, ["reset", "--hard", unrelated])
+    git(root, [
+      "push",
+      "--quiet",
+      "origin",
+      `--force-with-lease=refs/heads/main:${input.sourceCommit}`,
+      `${unrelated}:refs/heads/main`,
+    ])
+    const candidate = await prepare(root, "2.0.4\n")
+    expect(admit(root, unrelated, candidate, { ...input, sourceCommit: unrelated }).exitCode).toBe(1)
+    expect(refs(root)).toEqual(original)
   })
 })

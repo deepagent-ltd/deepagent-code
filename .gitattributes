@@ -1,4 +1,7 @@
 packages/core/migration/**/snapshot.json linguist-generated
 packages/core/src/database/migration.gen.ts linguist-generated
-# Reviewed SDK declaration digests must survive Windows checkout unchanged.
+# Reviewed SDK digests must survive Windows checkout unchanged.
 packages/im-kernel-sdk/**/*.d.ts text eol=lf
+packages/im-kernel-sdk/lib/index.js text eol=lf
+# Rollup preserves upstream JavaScript line endings in generated reviewed bytes.
+packages/im-kernel-sdk/upstream/**/*.js text eol=lf

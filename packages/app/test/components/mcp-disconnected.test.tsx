@@ -23,6 +23,10 @@ vi.mock("@/context/sync", () => ({
     },
   }),
 }))
+vi.mock("@/context/sdk", async (original) => ({
+  ...(await original<typeof import("@/context/sdk")>()),
+  useSDK: () => ({ client, directory: "/owned/项目", scope: "mcp-disconnected-fixture" }),
+}))
 vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ show: () => {} }) }))
 vi.mock("@deepagent-code/ui/context/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))

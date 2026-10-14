@@ -58,13 +58,28 @@ async function run(root: string, mode: string) {
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ])
-    if (stdout.length + stderr.length > 1_048_576) throw new Error("Private fixture output exceeded bound")
-    const result = (await Bun.file(path.join(root, `child-result-${child.pid}.json`)).json()) as {
+    const diagnostic = JSON.stringify({
+      root,
+      mode,
+      pid: child.pid,
+      exitCode: code,
+      signal: child.signalCode,
+      resultPath: path.join(root, `child-result-${child.pid}.json`),
+      stdout: stdout.slice(-65536),
+      stderr: stderr.slice(-65536),
+    })
+    if (stdout.length + stderr.length > 1_048_576)
+      throw new Error(`Private fixture output exceeded bound: ${diagnostic}`)
+    const result = (await Bun.file(path.join(root, `child-result-${child.pid}.json`))
+      .json()
+      .catch((error: unknown) => {
+        throw new Error(`Private settings fixture result unavailable: ${diagnostic}`, { cause: error })
+      })) as {
       ok: boolean
       error?: string
       writes: string[]
     }
-    return { code, ...result }
+    return { code, ...result, diagnostic }
   } finally {
     clearTimeout(timer)
     child.kill("SIGKILL")
@@ -80,10 +95,44 @@ async function pauseAndKill(root: string, stage: string, actualExpiry = false) {
     const deadline = Date.now() + 12_000
     while (!(await Bun.file(path.join(root, "paused")).exists()) && Date.now() < deadline && child.exitCode === null)
       await Bun.sleep(10)
-    expect(await Bun.file(path.join(root, "paused")).exists()).toBe(true)
+    const paused = await Bun.file(path.join(root, "paused")).exists()
+    if (!paused) {
+      child.kill("SIGKILL")
+      await child.exited
+      const [stdout, stderr] = await output
+      expect(
+        Boolean(paused),
+        JSON.stringify({
+          root,
+          stage,
+          pid: child.pid,
+          exitCode: child.exitCode,
+          signal: child.signalCode,
+          pausedPath: path.join(root, "paused"),
+          resultPath: path.join(root, `child-result-${child.pid}.json`),
+          stdout: stdout.slice(-65536),
+          stderr: stderr.slice(-65536),
+        }),
+      ).toBe(true)
+    }
+    expect(paused).toBe(true)
     child.kill("SIGKILL")
     await child.exited
-    expect(child.signalCode).toBe("SIGKILL")
+    expect(
+      child.signalCode,
+      child.signalCode === "SIGKILL"
+        ? undefined
+        : JSON.stringify({
+            root,
+            stage,
+            pid: child.pid,
+            exitCode: child.exitCode,
+            signal: child.signalCode,
+            pausedPath: path.join(root, "paused"),
+            resultPath: path.join(root, `child-result-${child.pid}.json`),
+            output: (await output).map((value) => value.slice(-65536)),
+          }),
+    ).toBe("SIGKILL")
     if (actualExpiry) await Bun.sleep(61_000)
     if (!actualExpiry) {
       // Other cases mature only this confirmed-dead fixture owner's original heartbeat.
@@ -97,7 +146,20 @@ async function pauseAndKill(root: string, stage: string, actualExpiry = false) {
       }
     }
     const bytes = await output
-    expect(bytes.join("").length).toBeLessThan(1_048_576)
+    expect(
+      bytes.join("").length,
+      JSON.stringify({
+        root,
+        stage,
+        pid: child.pid,
+        exitCode: child.exitCode,
+        signal: child.signalCode,
+        pausedPath: path.join(root, "paused"),
+        resultPath: path.join(root, `child-result-${child.pid}.json`),
+        stdout: bytes[0].slice(-65536),
+        stderr: bytes[1].slice(-65536),
+      }),
+    ).toBeLessThan(1_048_576)
   } finally {
     clearTimeout(timer)
     child.kill("SIGKILL")
@@ -177,7 +239,7 @@ test(
     fixture(async (root) => {
       const before = await Bun.file(path.join(root, "storage", "settings.json")).text()
       const result = await run(root, "stale")
-      expect(result.code).toBe(1)
+      expect(result.code, result.diagnostic).toBe(1)
       expect(result.error).toContain("Configuration file changed")
       expect(result.writes).toEqual([])
       expect(await Bun.file(path.join(root, "storage", "settings.json")).text()).toBe(before)
@@ -302,7 +364,7 @@ test("private settings reject unsafe inode, invalid UTF8 and excess bytes before
       if (boundary === "capacity") await fs.writeFile(file, Buffer.alloc(1_048_577, 32))
       const before = await Bun.file(file).arrayBuffer()
       const result = await run(root, "direct")
-      expect(result.code).toBe(1)
+      expect(result.code, result.diagnostic).toBe(1)
       expect(result.writes).toEqual([])
       expect(await Bun.file(file).arrayBuffer()).toEqual(before)
       expect(await Bun.file(path.join(root, "storage", ".settings-operation.json")).exists()).toBe(false)

@@ -178,6 +178,9 @@ const allTargets: {
 // embedded web UI produced non-starting Windows PEs when the build host was macOS; building
 // natively removes that entire risk class instead of per-host triage).
 const excludeWin32 = process.argv.includes("--exclude-win32")
+// The release workflow builds Darwin helpers on their matching native hosts;
+// Bun cross-compilation alone cannot provide their Apple SDK and fixed runtime.
+const excludeDarwin = process.argv.includes("--exclude-darwin")
 
 const targets = (
   singleFlag
@@ -204,7 +207,7 @@ const targets = (
         return true
       })
     : allTargets
-).filter((item) => !excludeWin32 || item.os !== "win32")
+).filter((item) => (!excludeWin32 || item.os !== "win32") && (!excludeDarwin || item.os !== "darwin"))
 
 const binaries: Record<string, string> = {}
 if (!skipInstall) {

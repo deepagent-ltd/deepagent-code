@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
 import { createSignal } from "solid-js"
 import { MemoryRouter, Route } from "@solidjs/router"
@@ -14,33 +14,27 @@ import { MediaIntent } from "@deepagent-code/core/im/media-intent"
 import { GroupChatPanel } from "@/components/im/group-chat-panel"
 import { createIMClient, type IMClient } from "@/utils/im-client"
 import { dict } from "@/i18n/en"
+import { createBrowserMediaStoreFixture } from "./fixture/browser-media-store"
 
-const runtime = vi.hoisted(() => ({ directory: "", client: undefined as IMClient | undefined, sdk: undefined as ReturnType<typeof createSdkForServer> | undefined, connected: true }))
+const runtime = vi.hoisted(() => ({ directory: "", storage: undefined as Awaited<ReturnType<typeof createBrowserMediaStoreFixture>> | undefined, client: undefined as IMClient | undefined, sdk: undefined as ReturnType<typeof createSdkForServer> | undefined, connected: true }))
 vi.mock("@/utils/im-client", async (original) => ({
   ...(await original<typeof import("@/utils/im-client")>()),
   useIMClient: () => runtime.client!,
 }))
-vi.mock("@/utils/im-media-intent", async () => {
-  // HappyDOM lacks durable IndexedDB. Use the original private disk store, not a mocked receipt store.
-  const sibling = "../../../tui/src/util/im-media-intent"
-  const source = (await import(/* @vite-ignore */ sibling)) as {
-    createMediaIntentStore(
-      directory: string,
-    ): Omit<ReturnType<typeof import("@/utils/im-media-intent").createMediaIntentStore>, "close">
-    createMediaBatchStore(
-      directory: string,
-    ): Omit<ReturnType<typeof import("@/utils/im-media-intent").createMediaBatchStore>, "close">
-  }
-  return {
-    createMediaIntentStore: () => ({ ...source.createMediaIntentStore(runtime.directory), close() {} }),
-    createMediaBatchStore: () => ({ ...source.createMediaBatchStore(runtime.directory), close() {} }),
-  }
-})
+vi.mock("@/utils/im-media-intent", () => ({
+  createMediaIntentStore: () => runtime.storage!.createMediaIntentStore(),
+  createMediaBatchStore: () => runtime.storage!.createMediaBatchStore(),
+}))
+
 vi.mock("@/context/language", () => ({
   useLanguage: () => ({
     t: (key: keyof typeof dict, values?: Record<string, number | string>) =>
       Object.entries(values ?? {}).reduce((text, [key, value]) => text.replace(`{{${key}}}`, String(value)), dict[key]),
   }),
+}))
+vi.mock("@/context/command", async (original) => ({
+  ...(await original<typeof import("@/context/command")>()),
+  useCommand: () => ({ register: vi.fn() }),
 }))
 vi.mock("@/context/sdk", () => ({ useSDK: () => ({ client: runtime.sdk!, directory: "/private", url: runtime.client!.scope().url }) }))
 vi.mock("@/context/server", async (original) => ({ ...(await original<typeof import("@/context/server")>()), useServer: () => ({ key: "parent-media-fixture", all: [], projects: () => ({ list: [] }) }) }))
@@ -57,7 +51,17 @@ vi.mock("@/hooks/use-im-websocket", () => ({
   }),
 }))
 
+beforeAll(async () => {
+  runtime.directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-media-batch-app-"))
+  runtime.storage = await createBrowserMediaStoreFixture(runtime.directory)
+})
+afterAll(async () => {
+  await runtime.storage?.close()
+  if (runtime.directory) await fs.rm(runtime.directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+})
 beforeEach(async () => {
+  await runtime.storage!.records("intents", [])
+  await runtime.storage!.records("batches", [])
   vi.stubGlobal("fetch", window.fetch.bind(window))
   vi.stubGlobal("FormData", window.FormData)
   vi.stubGlobal("File", window.File)
@@ -66,12 +70,11 @@ beforeEach(async () => {
   vi.stubGlobal("AbortController", window.AbortController)
   vi.stubGlobal("AbortSignal", window.AbortSignal)
   runtime.connected = true
-  runtime.directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-media-batch-app-"))
 })
 afterEach(async () => {
   cleanup()
   vi.unstubAllGlobals()
-  await fs.rm(runtime.directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  await runtime.storage!.drain()
 })
 
 async function serve() {
@@ -145,7 +148,7 @@ async function serve() {
                 enabled: state.enabled,
                 multipleAttachments: true,
                 maxAttachments: 4,
-                maxAttachmentBytes: 52428800,
+                maxAttachmentBytes: 10 * 1024 * 1024,
                 ttlMs: 86400000,
               },
             }
@@ -173,7 +176,8 @@ async function serve() {
         ...(state.protected ? { reader: { displayEpoch: state.epoch, validatedServerNow: Date.now(), nextExpiryAt: null } } : {}) })
       return
     }
-    if (url.pathname.endsWith(`/groups/${groupID}`)) {
+    if (url.pathname.endsWith(`/groups/${groupID}`) ||
+      (request.method === "POST" && url.pathname.endsWith(`/groups/${groupID}/refresh`))) {
       state.groupReads++
       json({
         version: 1,
@@ -390,12 +394,12 @@ it("attachment initialization disabled capability does not report an attempted t
   } finally { await api.close() }
 })
 
-it.each(["storage", "capacity"])("attachment initialization %s retains actual original private store bytes and performs no transfer", async (kind) => {
+it.each(["storage", "capacity"])("attachment initialization %s retains actual original IndexedDB records and performs no transfer", async (kind) => {
   const api = await serve()
-  const file = path.join(runtime.directory, "im-media-v1", "records.json")
-  await fs.mkdir(path.dirname(file), { mode: 0o700 })
-  const original = kind === "storage" ? Buffer.from("[invalid original record") : Buffer.alloc(MediaIntent.maxStoreBytes + 1, 32)
-  await fs.writeFile(file, original, { mode: 0o600 })
+  const original = kind === "storage"
+    ? [{ id: "invalid-original", invalid: "record" }]
+    : [{ id: "capacity-original", content: " ".repeat(MediaIntent.maxStoreBytes + 1) }]
+  await runtime.storage!.records("intents", original)
   try {
     render(() => <GroupChatPanel groupID="group" protected fileUploadEnabled />)
     await screen.findByText(dict[kind === "storage" ? "im.media.initialize.storage" : "im.media.initialize.capacity"])
@@ -403,7 +407,7 @@ it.each(["storage", "capacity"])("attachment initialization %s retains actual or
     fireEvent.click(screen.getByRole("button", { name: dict["im.media.initialize.retry"] }))
     await waitFor(() => expect(api.state.statusReads).toBeGreaterThan(1))
     await waitFor(() => expect(screen.getByRole("button", { name: dict["im.media.initialize.retry"] }).hasAttribute("disabled")).toBe(false))
-    expect(await fs.readFile(file)).toEqual(original)
+    expect(await runtime.storage!.records("intents")).toEqual(original)
     expect(api.state.uploads).toHaveLength(0)
     expect(api.state.sends).toHaveLength(0)
   } finally { await api.close() }
@@ -417,7 +421,7 @@ it("attachment operation lost acknowledgement still retains the original unknown
     send.gate.resolve()
     await screen.findByText(dict["im.media.batch.unknown"])
     expect(screen.queryByText(dict["im.media.initialize.qualification"])).toBeNull()
-    const bytes = JSON.parse(await fs.readFile(path.join(runtime.directory, "im-media-v1", "batches.json"), "utf8"))
+    const bytes = await runtime.storage!.records("batches") as { phase: string; requestID: string }[]
     expect(bytes).toHaveLength(1)
     expect(bytes[0].phase).toBe("send_outcome_unknown")
     expect(bytes[0].requestID).toBe(api.state.sends[0].clientRequestID)
