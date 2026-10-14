@@ -25,7 +25,7 @@ test("actual Electron private utility channel isolates network, observes AX/PNG,
   await Bun.write(path.join(root, "process.log"), stdout + "\n" + stderr)
   console.log("MANAGED_BROWSER_EVIDENCE", root)
   const result = await Bun.file(path.join(root, "result.json")).json()
-  expect(code).toBe(0)
+  expect({ code, error: code === 0 ? null : result }).toEqual({ code: 0, error: null })
   expect(result.deniedTCP).toBe(0)
   expect(result.inheritedProxyConfigured).toBe(true)
   expect(result.requests).toContain("/")
