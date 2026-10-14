@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { chmod, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { prepareManagedBrowserInputAsset, verifyManagedBrowserInputPackAsset } from "../../scripts/managed-browser-input-assets"
 import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
 
@@ -61,7 +62,7 @@ test.skipIf(process.platform !== "darwin")("fixed Darwin input assets compile an
 }, 30_000)
 
 test.skipIf(process.platform === "darwin")("unsupported hosts remove only fixed managed browser input assets", async () => {
-  const directory = await realpath(await mkdtemp("/tmp/dac-browser-input-assets-unsupported-"))
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "dac-browser-input-assets-unsupported-")))
   await Promise.all(["managed-browser-input-darwin.node", "managed-browser-input.asset.json", "LICENSE", "UPSTREAM.json", "keep.txt"]
     .map((name) => writeFile(path.join(directory, name), "old")))
   expect(await prepareManagedBrowserInputAsset({ directory })).toBeUndefined()

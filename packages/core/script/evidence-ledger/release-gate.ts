@@ -6,17 +6,19 @@
  *     [--qualification-dir <dir> --qualification-run-id <id> --qualification-repo <owner/name>]
  *     [--gates <gate-results.json>] [--package-dir <dir> --runs <runs.json>]
  *     [--evidence <runtime-evidence.json>] [--asset-manifest <release-assets.json> --assets-dir <dir>]
+ *     [--standard-distribution --source-checks <main-checks.json>]
  *     [--out <ledger.json>]
  *
  * Builds an HONEST evidence manifest from the current tree (real content digests for schema,
  * migration registry, OpenAPI/SDK, capability catalog, event registry, provider profiles, runtime
  * flags), merges gate statuses from `--gates` (a `{ G0: "passed", ... }`-shaped JSON; gates without
  * an entry stay `pending`), then delegates to the single authoritative ledger generator. The exit
- * code is the ledger's: NO-GO exits non-zero and the release pipeline must stop.
+ * code is the ledger's; explicit standard distribution permits only absent G0-G8 review,
+ * while requiring successful exact-source checks and all package integrity inputs.
  *
- * With no qualification or `--gates` every gate is pending and release is refused. A packaged
- * passing gate also requires the staged final-asset manifest; the workflow archives exact
- * qualification and asset-manifest bytes with the ledger before any release upload.
+ * Without review every gate remains pending. The default qualification policy refuses it;
+ * standard distribution preserves that status without claiming RI-51 RELEASE-GO. Both policies
+ * archive exact input bytes and refuse integrity failures before any release upload.
  */
 import { readdirSync, statSync } from "node:fs"
 import { copyFile, mkdir } from "node:fs/promises"
@@ -48,6 +50,23 @@ const commit = git(["rev-parse", "HEAD"]) ?? "unknown"
 const tree = git(["rev-parse", "HEAD^{tree}"]) ?? "unknown"
 const dirty = (git(["status", "--porcelain", "--untracked-files=all"]) ?? "").length > 0
 const qualificationDir = option("--qualification-dir")
+const standardDistribution = args.includes("--standard-distribution")
+const sourceChecksPath = option("--source-checks")
+const sourceChecksBytes = sourceChecksPath ? await Bun.file(sourceChecksPath).bytes() : undefined
+if (standardDistribution && (qualificationDir || option("--gates")))
+  throw new Error("standard distribution cannot consume reviewed qualification or gate decisions")
+if (standardDistribution && (!option("--asset-manifest") || !packageDirs.length || !option("--evidence") || !sourceChecksPath))
+  throw new Error("standard distribution requires source checks, staged assets, a packaged runtime and runtime evidence")
+if (sourceChecksPath && !standardDistribution) throw new Error("source checks cannot replace reviewed qualification")
+if (sourceChecksPath) {
+  const { assertReleaseChecksReceipt } = await import("../../../../script/verify-release-checks")
+  const sourceCommit = assertReleaseChecksReceipt(JSON.parse(Buffer.from(sourceChecksBytes!).toString("utf8")), {
+    repository: process.env.GH_REPO ?? "", candidateCommit: commit, candidateTree: tree,
+  })
+  if (sourceCommit !== commit && (sourceCommit !== git(["rev-parse", `${commit}^`]) ||
+    git(["rev-list", "--parents", "-n", "1", commit])?.split(" ").length !== 2))
+    throw new Error("release checks source must be the candidate or its preparation parent")
+}
 if (qualificationDir && option("--gates")) throw new Error("choose --qualification-dir or --gates")
 if (qualificationDir && !option("--qualification-run-id")) throw new Error("qualification run ID is required")
 const qualification = qualificationDir
@@ -154,6 +173,7 @@ const manifest = makeAuthoritativeManifest({
           ["qualification-gates", await sha256File(path.join(qualificationDir, "gates.json"))],
         ]
       : []),
+    ...(sourceChecksBytes ? [["release-source-checks", Hash.sha256(Buffer.from(sourceChecksBytes))]] : []),
   ]),
   schemaDigest,
   migrationRegistryDigest,
@@ -181,6 +201,7 @@ const artifactDir = path.join(path.dirname(out), "release-evidence-products")
 await mkdir(artifactDir, { recursive: true })
 if (gatesPath) await copyFile(path.resolve(gatesPath), path.join(artifactDir, "gates.json"))
 if (assetManifestPath) await copyFile(path.resolve(assetManifestPath), path.join(artifactDir, "release-assets.json"))
+if (sourceChecksBytes) await Bun.write(path.join(artifactDir, "source-checks.json"), sourceChecksBytes)
 if (qualificationDir && qualification) {
   const archived = path.join(artifactDir, "qualification")
   await mkdir(path.join(archived, "evidence"), { recursive: true })
@@ -213,6 +234,8 @@ const child = Bun.spawnSync(
     "--artifact-dir",
     artifactDir,
     "--require-cli-binary",
+    ...(standardDistribution ? ["--standard-distribution"] : []),
+    ...(sourceChecksBytes ? ["--source-checks", path.join(artifactDir, "source-checks.json")] : []),
     // The candidate ledger spawns with cwd=repository; resolve relative inputs here so the
     // packaged-dir/runs paths keep meaning regardless of where the gate was invoked from.
     ...(packageDirs.length > 0

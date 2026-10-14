@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
+import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
 test("actual Chromium references reject stale nodes and focus theft without exposing passwords", async () => {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-inputs-"))
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-inputs-")))
   await fs.mkdir(path.join(root, "home"), { mode: 0o700 })
   await Bun.write(
     path.join(root, "main.ts"),
@@ -65,9 +67,9 @@ main().then(()=>app.exit(0)).catch(error=>{console.error(error);app.exit(1)})
   })
   expect(build.success).toBe(true)
   await fs.symlink(path.resolve(import.meta.dir, "../../node_modules"), path.join(root, "node_modules"), "dir")
-  const child = Bun.spawn([path.join(import.meta.dir, "../../node_modules/.bin/electron"), build.outputs[0]!.path], {
+  const child = Bun.spawn([managedBrowserInputFixtureExecutable, build.outputs[0]!.path], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: path.join(root, "home"), TMPDIR: root },
+    env: { ...managedBrowserInputFixtureEnvironment, PATH: process.env.PATH, HOME: path.join(root, "home"), TMPDIR: root },
     stdout: "pipe",
     stderr: "pipe",
   })

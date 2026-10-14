@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { managedBrowserInputFixtureDefine } from "./fixture/managed-browser-input-build"
+import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 import { Database } from "bun:sqlite"
 import { Schema } from "effect"
 import { BrowserSchema } from "@deepagent-code/core/browser/schema"
@@ -10,7 +12,7 @@ import { Hash } from "@deepagent-code/core/util/hash"
 
 test("original canonical Session runner admits approved browser program with independent once permissions and real Main effects", async () => {
   const replay = process.env.DAC_BROWSER_PROGRAM_CANONICAL_REPLAY
-  const root = await fs.realpath(replay ?? (await fs.mkdtemp("/tmp/dac-browser-program-canonical-")))
+  const root = await fs.realpath(replay ?? (await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-program-canonical-"))))
   if (replay && !root.startsWith("/private/tmp/dac-browser-program-canonical-"))
     throw new Error("Replay is limited to the private artifact from this fixture")
   if (!replay) {
@@ -62,7 +64,7 @@ test("original canonical Session runner admits approved browser program with ind
       parsed.sources.forEach((value, index) => {
         const absolute = path.resolve(path.dirname(map.path), value)
         const contents = parsed.sourcesContent[index]
-        if (!absolute.startsWith(repository + "/packages/") || absolute.includes("/node_modules/") || contents == null)
+        if (!absolute.startsWith(path.join(repository, "packages") + path.sep) || absolute.includes(path.sep + "node_modules" + path.sep) || contents == null)
           return
         sources.set(absolute, Hash.sha256(contents))
       })
@@ -87,11 +89,12 @@ test("original canonical Session runner admits approved browser program with ind
     console.log("CANONICAL_SOURCE_CAPTURED", root)
     const process = Bun.spawn(
       [
-        path.join(import.meta.dir, "../../node_modules/.bin/electron"),
+        managedBrowserInputFixtureExecutable,
         main.outputs.find((value) => value.path.endsWith("main.mjs"))!.path,
       ],
       {
         env: {
+          ...managedBrowserInputFixtureEnvironment,
           PATH: globalThis.process.env.PATH,
           HOME: root,
           TMPDIR: root,

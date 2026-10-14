@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { createDesktopShutdown } from "./shutdown"
+import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
 test("terminal shutdown closes a queued acquisition before it produces any side effects", async () => {
   const facts = { acquisitions: 0, stops: 0, exits: 0 }
@@ -44,7 +46,7 @@ test("terminal cancellation runs once while joining an already pending routine s
 
 for (const scenario of ["early", "acquiring", "signal"] as const) {
   test(`actual Electron ${scenario} shutdown owns original bootstrap and any late-adopted utility`, async () => {
-    const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-desktop-bootstrap-"))
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-desktop-bootstrap-")))
     await fs.chmod(root, 0o700)
     await fs.mkdir(path.join(root, "home"), { mode: 0o700 })
     const built = await Bun.build({
@@ -58,9 +60,10 @@ for (const scenario of ["early", "acquiring", "signal"] as const) {
     })
     expect(built.success).toBe(true)
     await fs.symlink(path.resolve(import.meta.dir, "../../node_modules"), path.join(root, "node_modules"), "dir")
-    const child = Bun.spawn([path.join(import.meta.dir, "../../node_modules/.bin/electron"), path.join(root, "shutdown-bootstrap.js")], {
+    const child = Bun.spawn([managedBrowserInputFixtureExecutable, path.join(root, "shutdown-bootstrap.js")], {
       cwd: root,
       env: {
+        ...managedBrowserInputFixtureEnvironment,
         PATH: process.env.PATH,
         HOME: path.join(root, "home"),
         TMPDIR: root,

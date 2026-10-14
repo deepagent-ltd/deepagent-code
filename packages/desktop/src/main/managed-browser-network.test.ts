@@ -2,18 +2,20 @@ import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { BrowserDNSMessage } from "./managed-browser-dns-message"
+import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
 const actual = process.env.DAC_BROWSER_PUBLIC_NETWORK_ACTUAL === "1" ? test : test.skip
-const build = (async () => {
-  const directory = await fs.mkdtemp("/tmp/dac-browser-public-network-build-")
+async function build() {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-public-network-build-"))
   const built = await Bun.build({ entrypoints: [path.join(import.meta.dir, "fixture/managed-browser-network.ts")],
     target: "node", external: ["electron"], outdir: directory, naming: "main.mjs" })
   if (!built.success) throw new AggregateError(built.logs, "Private browser network fixture build failed")
   return built.outputs[0]!.path
-})()
+}
 async function run(mode: string) {
-  const root = await fs.mkdtemp(`/tmp/dac-browser-public-network-${mode}-`)
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), `dac-browser-public-network-${mode}-`))
   await fs.chmod(root, 0o700)
   if (mode !== "public" && mode !== "doh-public") {
     for (const args of [
@@ -37,8 +39,8 @@ async function run(mode: string) {
   }
   const startup = mode === "doh-public" ? Object.fromEntries(["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY",
     "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR"].flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]])) : {}
-  const spawned = Bun.spawn([path.join(import.meta.dir, "../../node_modules/.bin/electron"), await build], {
-    cwd: root, env: { PATH: process.env.PATH, HOME: root, TMPDIR: root, XDG_CONFIG_HOME: root, XDG_DATA_HOME: root,
+  const spawned = Bun.spawn([managedBrowserInputFixtureExecutable, await build()], {
+    cwd: root, env: { ...managedBrowserInputFixtureEnvironment, PATH: process.env.PATH, HOME: root, TMPDIR: root, XDG_CONFIG_HOME: root, XDG_DATA_HOME: root,
       XDG_CACHE_HOME: root, ...startup, DAC_BROWSER_NETWORK_ROOT: root, DAC_BROWSER_NETWORK_MODE: mode }, stdout: "pipe", stderr: "pipe", timeout: 65000,
   })
   const [code, stdout, stderr] = await Promise.all([spawned.exited, new Response(spawned.stdout).text(), new Response(spawned.stderr).text()])

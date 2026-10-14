@@ -127,6 +127,8 @@ try {
   }
 
   const ledgerArgs = [
+    ...(args.includes("--standard-distribution") ? ["--standard-distribution"] : []),
+    ...(option("--source-checks") ? ["--source-checks", path.resolve(option("--source-checks")!)] : []),
     "--manifest",
     manifestPath,
     "--source-manifest",

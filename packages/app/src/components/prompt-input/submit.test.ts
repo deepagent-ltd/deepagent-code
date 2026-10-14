@@ -1,6 +1,10 @@
-import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import type { ContextItem, Prompt } from "@/context/prompt"
 import { toV2Prompt, type SessionStatus } from "@deepagent-code/sdk/client"
+
+// Bun module mocks survive mock.restore(); later SDK integration files need the original export table.
+const sdkClient = { ...(await import("@deepagent-code/sdk/client")) }
+afterAll(() => mock.module("@deepagent-code/sdk/client", () => sdkClient))
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 

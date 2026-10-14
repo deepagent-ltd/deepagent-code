@@ -21,7 +21,7 @@ const action = Bun.YAML.parse(await Bun.file(path.join(root, ".github/actions/pa
 const workflows = await Promise.all(["publish", "desktop-build"].map(async (name) => ({
   name,
   document: Bun.YAML.parse(await Bun.file(path.join(root, `.github/workflows/${name}.yml`)).text()) as {
-    jobs: Record<string, { steps: Step[] }>
+    jobs: Record<string, { env?: Record<string, string>; steps: Step[] }>
   },
 })))
 
@@ -129,4 +129,56 @@ test("formal Mac signing rejects incomplete credentials before certificate impor
     expect(output).not.toContain("test-only-value-do-not-log")
     if (missing) expect(output).toContain(`Missing macOS release signing credential: ${missing}`)
   }
+})
+
+test("formal Windows publishing preserves the existing optional Desktop signing policy", () => {
+  const release = workflows[0].document.jobs
+  const desktop = workflows[1].document.jobs.build
+  for (const name of ["sign-cli-windows", "build-electron"]) {
+    expect(release[name].env?.HAS_TRUSTED_SIGNING).toBe(desktop.env?.HAS_TRUSTED_SIGNING)
+    expect(release[name].env?.AZURE_CLIENT_ID).toBe("${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}")
+    expect(release[name].env?.AZURE_TENANT_ID).toBe("${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}")
+    expect(release[name].env?.AZURE_SUBSCRIPTION_ID).toBe("${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}")
+    expect(release[name].steps.find((step) => step.uses?.startsWith("azure/login@"))?.if)
+      .toContain("env.HAS_TRUSTED_SIGNING == 'true'")
+  }
+  const cli = release["sign-cli-windows"].steps
+  expect(cli.find((step) => step.uses?.startsWith("azure/artifact-signing-action@"))?.if)
+    .toBe("env.HAS_TRUSTED_SIGNING == 'true'")
+  expect(cli.find((step) => step.name === "Verify Windows CLI signatures")?.if)
+    .toBe("env.HAS_TRUSTED_SIGNING == 'true'")
+  expect(cli.find((step) => step.name === "Repack Windows CLI archives")?.if).toBeUndefined()
+  expect(cli.filter((step) => step.uses?.startsWith("actions/upload-artifact@"))
+    .map((step) => step.with?.name)).toEqual(["deepagent-code-cli-signed-windows", "deepagent-code-cli-signed-windows-archives"])
+  expect(cli.find((step) => step.name === "Report unsigned Windows artifacts")?.if)
+    .toBe("env.HAS_TRUSTED_SIGNING != 'true'")
+  const electron = release["build-electron"].steps
+  expect(electron.find((step) => step.name === "Verify signed Windows Electron artifacts")?.if)
+    .toBe("runner.os == 'Windows' && env.HAS_TRUSTED_SIGNING == 'true'")
+  const packaging = electron.find((step) => step.uses === "./.github/actions/package-desktop")!
+  expect(packaging.env?.DEEPAGENT_CODE_ALLOW_UNSIGNED)
+    .toBe("${{ runner.os == 'Windows' && env.HAS_TRUSTED_SIGNING != 'true' && '1' || '0' }}")
+  expect(packaging.if).toBeUndefined()
+  expect(packaging["continue-on-error"]).toBeUndefined()
+  expect([...cli, ...electron].every((step) => !step["continue-on-error"])).toBe(true)
+})
+
+test("main distribution binds existing checks before upload and never downgrades reviewed qualification", () => {
+  const steps = workflows[0].document.jobs.publish.steps
+  const checks = steps.find((step) => step.name === "Verify existing checks for this exact main source")!
+  const gate = steps.find((step) => step.name === "Verify distribution integrity and archive qualification status")!
+  expect(checks.if).toBe("needs.version.outputs.release && github.ref == 'refs/heads/main' && inputs.qualification_run_id == ''")
+  expect(checks.run).toBe("bun script/verify-release-checks.ts")
+  expect(checks.env?.RELEASE_SOURCE_COMMIT).toBe("${{ github.sha }}")
+  expect(checks.env?.RELEASE_CANDIDATE_COMMIT).toBe("${{ needs.version.outputs.candidate_commit }}")
+  expect(checks.env?.RELEASE_CANDIDATE_TREE).toBe("${{ needs.version.outputs.candidate_tree }}")
+  expect(gate.run).toContain('--standard-distribution --source-checks "$RUNNER_TEMP/ri51-source-checks.json"')
+  expect(gate.run).toContain('elif [[ "$RELEASE_REF" == \'refs/heads/main\' ]]')
+  expect(gate.run!.indexOf('if [[ -n "$QUALIFICATION_RUN_ID" ]]')).toBeLessThan(gate.run!.indexOf("--standard-distribution"))
+  expect(gate.run).toContain("Non-main release requires an explicit reviewed qualification run")
+  expect(gate.run).not.toContain("|| true")
+  expect(gate["continue-on-error"]).toBeUndefined()
+  const firstUpload = steps.findIndex((step) => step.name?.startsWith("Upload "))
+  expect(steps.indexOf(checks)).toBeLessThan(steps.indexOf(gate))
+  expect(steps.indexOf(gate)).toBeLessThan(firstUpload)
 })

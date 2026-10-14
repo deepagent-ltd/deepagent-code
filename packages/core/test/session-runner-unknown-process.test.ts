@@ -15,7 +15,7 @@ test.each([
   "unknown tool outcome survives process reopen (%j)",
   async (scenario) => {
     const root = await mkdtemp(path.join(tmpdir(), "runner-unknown-process-"))
-    await Promise.all(["home", "tmp", "config", "data", "cache", "state"].map((name) => mkdir(path.join(root, name))))
+    await Promise.all(["home", "tmp", "config", "data", "cache", "state", "workspace"].map((name) => mkdir(path.join(root, name))))
     const filename = path.join(root, "authority.sqlite")
     try {
       for (const phase of ["dispatch", "recover"]) {
@@ -39,6 +39,7 @@ test.each([
             XDG_CACHE_HOME: path.join(root, "cache"),
             XDG_STATE_HOME: path.join(root, "state"),
             DEEPAGENT_TEST_RUNNER_EFFECT_DB: filename,
+            DEEPAGENT_TEST_RUNNER_DIRECTORY: path.join(root, "workspace"),
             DEEPAGENT_TEST_RUNNER_EFFECT_PHASE: phase,
             DEEPAGENT_TEST_RUNNER_UNKNOWN_GATE: scenario.gate,
             DEEPAGENT_TEST_RUNNER_PROVIDER_FAILED: String(scenario.providerFailed),

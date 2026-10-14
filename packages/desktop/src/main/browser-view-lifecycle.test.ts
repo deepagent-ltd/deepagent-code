@@ -2,6 +2,7 @@ import { test, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
+import { managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
 test("real Electron browser views have independent window ownership and close their contents", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-lifecycle-"))
@@ -13,7 +14,7 @@ test("real Electron browser views have independent window ownership and close th
     naming: "fixture.mjs",
   })
   expect(built.success).toBe(true)
-  const child = Bun.spawn([path.join(import.meta.dir, "../../node_modules/.bin/electron"), built.outputs[0].path], {
+  const child = Bun.spawn([managedBrowserInputFixtureExecutable, built.outputs[0].path], {
     env: { ...process.env, DAC_BROWSER_TEST_ROOT: root, HOME: root },
     stdout: "pipe",
     stderr: "pipe",

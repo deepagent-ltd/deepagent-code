@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
+import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
 for (const scenario of ["merge", "occupied", "failure", "interrupt"]) {
   test(`actual Electron pre-ready storage awaits migration and preserves ${scenario} data`, async () => {
-    const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-desktop-startup-"))
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-desktop-startup-")))
     await fs.chmod(root, 0o700)
     await fs.mkdir(path.join(root, "home"), { mode: 0o700 })
     const built = await Bun.build({ entrypoints: [path.join(import.meta.dir, "fixture/startup-entry.ts")], outdir: root, target: "node", external: ["electron"], splitting: true,
@@ -12,9 +14,9 @@ for (const scenario of ["merge", "occupied", "failure", "interrupt"]) {
     expect(built.success).toBe(true)
     await Bun.write(path.join(root, "package.json"), JSON.stringify({ type: "module" }))
     await fs.symlink(path.resolve(import.meta.dir, "../../node_modules"), path.join(root, "node_modules"), "dir")
-    const child = Bun.spawn([path.join(import.meta.dir, "../../node_modules/.bin/electron"), path.join(root, "startup-entry.js")], {
+    const child = Bun.spawn([managedBrowserInputFixtureExecutable, path.join(root, "startup-entry.js")], {
       cwd: root,
-      env: { PATH: process.env.PATH, HOME: path.join(root, "home"), TMPDIR: root, DAC_STARTUP_ROOT: root, DAC_STARTUP_SCENARIO: scenario },
+      env: { ...managedBrowserInputFixtureEnvironment, PATH: process.env.PATH, HOME: path.join(root, "home"), TMPDIR: root, DAC_STARTUP_ROOT: root, DAC_STARTUP_SCENARIO: scenario },
       stdout: "pipe", stderr: "pipe",
     })
     const deadline = setTimeout(() => child.kill(), 10000)

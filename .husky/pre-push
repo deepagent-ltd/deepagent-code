@@ -17,4 +17,10 @@ if (process.versions.bun !== expectedBunVersion) {
   console.warn(`Warning: Bun version ${process.versions.bun} differs from expected ${expectedBunVersion}`);
 }
 '
-bun typecheck
+# Hosted CI runners have less memory than development machines. Preserve every
+# package check while limiting simultaneous compiler processes there.
+if [ "${CI:-}" = "true" ]; then
+  bun turbo typecheck --concurrency=2
+else
+  bun typecheck
+fi

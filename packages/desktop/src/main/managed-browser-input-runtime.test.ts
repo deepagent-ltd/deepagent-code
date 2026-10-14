@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test"
 import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
 
 test("the fixed native runtime contract rejects a package upgrade before compilation", async () => {
-  const root = await realpath(await mkdtemp("/tmp/dac-browser-input-runtime-"))
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "dac-browser-input-runtime-")))
   await mkdir(path.join(root, "scripts"))
   await mkdir(path.join(root, "native/managed-browser-input"), { recursive: true })
   try {

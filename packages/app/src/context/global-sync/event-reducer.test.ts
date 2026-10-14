@@ -98,6 +98,7 @@ const baseState = (input: Partial<State> = {}) =>
     todo: {},
     permission: {},
     permission_v2: {},
+    question_v2: {},
     question: {},
     mcp: {},
     lsp: [],
@@ -392,12 +393,14 @@ describe("applyDirectoryEvent", () => {
       baseState({
         session: [rootSession({ id: "ses_keep" })],
         part: { msg_1: [textPart("prt_1", "ses_drop", "msg_1")] },
+        question_v2: { ses_question_only: { que_decided: false } },
       }),
     )
 
     cleanupDroppedSessionCaches(store, setStore, store.session)
 
     expect(store.part.msg_1).toBeUndefined()
+    expect(store.question_v2.ses_question_only).toBeUndefined()
   })
 
   test("upserts and removes messages while clearing orphaned parts", () => {
@@ -722,6 +725,37 @@ describe("applyDirectoryEvent", () => {
     expect(store.part[messageID]).toBeUndefined()
   })
 
+  test.each(["question.v2.replied", "question.v2.rejected"] as const)(
+    "tracks V2 Question provenance until %s",
+    (type) => {
+      const [store, setStore] = createStore(baseState())
+      const request = questionRequest("que_v2", "ses_v2")
+      for (const properties of [request, questionRequest("que_v2", "ses_v2", "updated")]) {
+        applyDirectoryEvent({
+          event: { type: "question.v2.asked", properties },
+          store,
+          setStore,
+          directory: "/tmp",
+          push() {},
+          loadLsp() {},
+        })
+      }
+      expect(store.question.ses_v2).toHaveLength(1)
+      expect(store.question.ses_v2[0]?.questions[0]?.header).toBe("updated")
+      expect(store.question_v2.ses_v2?.que_v2).toBe(true)
+      applyDirectoryEvent({
+        event: { type, properties: { sessionID: "ses_v2", requestID: "que_v2", answers: [] } },
+        store,
+        setStore,
+        directory: "/tmp",
+        push() {},
+        loadLsp() {},
+      })
+      expect(store.question.ses_v2).toEqual([])
+      expect(store.question_v2.ses_v2?.que_v2).toBe(false)
+    },
+  )
+
   test("tracks permission and question request lifecycles", () => {
     const sessionID = "ses_1"
     const [store, setStore] = createStore(
@@ -821,7 +855,7 @@ describe("applyDirectoryEvent", () => {
     })
 
     expect(store.permission[sessionID]?.map((x) => x.id)).toEqual(["perm_1", "perm_2"])
-    expect(store.permission[sessionID]?.find((x) => x.id === "perm_2")).toMatchObject({
+    expect(unwrap(store.permission[sessionID]?.find((x) => x.id === "perm_2"))).toMatchObject({
       sessionID,
       permission: "bash",
       patterns: ["git status"],

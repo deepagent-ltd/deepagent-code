@@ -4,6 +4,7 @@ import { QueryClient } from "@tanstack/solid-query"
 import type { Config, DeepAgentCodeClient, Path, Project } from "@deepagent-code/sdk/client"
 import type { NormalizedProviderListResponse } from "@deepagent-code/ui/context"
 import { bootstrapDirectory, loadPathQuery, loadProvidersQuery } from "./bootstrap"
+import { applyDirectoryEvent } from "./event-reducer"
 import type { State, VcsCache } from "./types"
 import { ServerScope } from "@/utils/server-scope"
 
@@ -69,6 +70,7 @@ describe("bootstrapDirectory", () => {
       todo: {},
       permission: {},
       permission_v2: {},
+      question_v2: {},
       question: {},
       mcp_ready: true,
       mcp: {},
@@ -128,7 +130,7 @@ describe("bootstrapDirectory", () => {
     expect(mcpReads).toEqual([])
   })
 
-  test("rebuilds V2 pending permissions from durable list and clears decided entries", async () => {
+  test("rebuilds V2 pending permissions and questions without losing newer Question events", async () => {
     const legacySession = { id: "ses_legacy", time: { created: 1, updated: 1 } } as State["session"][number]
     const v2Permission = {
       id: "per_v2",
@@ -140,6 +142,23 @@ describe("bootstrapDirectory", () => {
     } as State["permission"][string][number]
     const stalePermission = { ...v2Permission, id: "per_stale", sessionID: "ses_stale" }
     const legacyPermission = { ...v2Permission, id: "per_legacy", sessionID: "ses_legacy" }
+    const pendingQuestion = {
+      id: "que_v2",
+      sessionID: "ses_v2",
+      questions: [
+        {
+          header: "Execute plan",
+          question: "Approve exact version?",
+          options: [{ label: "Execute this version", description: "Same Session" }],
+        },
+      ],
+    }
+    const staleQuestion = { ...pendingQuestion, id: "que_stale" }
+    const lateQuestion = { ...pendingQuestion, id: "que_late" }
+    const legacyQuestion = { ...pendingQuestion, id: "que_legacy", sessionID: "ses_legacy" }
+    const legacyRejectedQuestion = { ...legacyQuestion, id: "que_legacy_rejected" }
+    const lateLegacyQuestion = { ...legacyQuestion, id: "que_legacy_late" }
+    const updatedQuestion = { ...pendingQuestion, questions: [{ ...pendingQuestion.questions[0]!, header: "Newer observed request" }] }
     const [store, setStore] = createStore<State>({
       status: "loading",
       agent: [],
@@ -161,7 +180,8 @@ describe("bootstrapDirectory", () => {
       todo: {},
       permission: { ses_v2: [v2Permission], ses_stale: [stalePermission] },
       permission_v2: { ses_v2: { per_v2: true } },
-      question: {},
+      question_v2: { ses_v2: { que_stale: true, que_v2: true } },
+      question: { ses_v2: [staleQuestion, pendingQuestion], ses_legacy: [legacyQuestion, legacyRejectedQuestion] },
       mcp_ready: true,
       mcp: {},
       lsp_ready: true,
@@ -196,6 +216,25 @@ describe("bootstrapDirectory", () => {
         command: { list: async () => ({ data: [] }) },
         permission: { list: async () => ({ data: [legacyPermission] }) },
         v2: {
+          question: {
+            request: {
+              list: async () => {
+                for (const event of [
+                  { type: "question.v2.asked" as const, properties: lateQuestion },
+                  { type: "question.v2.asked" as const, properties: updatedQuestion },
+                  { type: "question.asked" as const, properties: lateLegacyQuestion },
+                  { type: "question.replied" as const, properties: { sessionID: "ses_legacy", requestID: "que_legacy", answers: [] } },
+                  { type: "question.rejected" as const, properties: { sessionID: "ses_legacy", requestID: "que_legacy_rejected" } },
+                  {
+                    type: "question.v2.replied" as const,
+                    properties: { sessionID: "ses_v2", requestID: "que_stale", answers: [] },
+                  },
+                ])
+                  applyDirectoryEvent({ event, store, setStore, directory: "/project", push() {}, loadLsp() {} })
+                return { data: { data: [pendingQuestion, staleQuestion] } }
+              },
+            },
+          },
           permission: {
             request: {
               list: async () => ({
@@ -215,7 +254,7 @@ describe("bootstrapDirectory", () => {
             },
           },
         },
-        question: { list: async () => ({ data: [] }) },
+        question: { list: async () => ({ data: [legacyQuestion, legacyRejectedQuestion] }) },
         provider: { list: async () => ({ data: { all: [], connected: [], default: {} } }) },
       } as unknown as DeepAgentCodeClient,
       store,
@@ -233,6 +272,11 @@ describe("bootstrapDirectory", () => {
     expect(store.permission.ses_legacy?.map((x) => x.id)).toEqual(["per_legacy"])
     expect(store.permission.ses_stale).toEqual([])
     expect(store.permission_v2.ses_v2).toEqual({ per_v2: true })
+    expect(store.question.ses_v2?.map((question) => question.id)).toEqual(["que_late", "que_v2"])
+    expect(store.question.ses_legacy?.map((question) => question.id)).toEqual(["que_legacy_late"])
+    expect(store.question.ses_v2?.find((question) => question.id === "que_v2")?.questions[0]?.header).toBe("Newer observed request")
+    expect(store.question_v2.ses_v2).toEqual({ que_late: true, que_v2: true })
+    expect(store.question_v2.ses_legacy).toEqual({})
   })
 })
 

@@ -10,11 +10,14 @@
  *     --evidence-dir <signed-evidence-dir> \
  *     --public-key <ed25519-public-key.pem> \
  *     [--out <authoritative-ledger.json>]
+ *     [--standard-distribution --source-checks <main-checks.json>]
  *
  * Source/runtime/package inputs are hashed from the exact bytes supplied to this command. Missing
  * optional inputs become explicit sentinel digests; the release gate then remains NO-GO instead of
- * silently manufacturing a green ledger. Evidence files may be raw runtime evidence or signed
- * envelopes; only signed envelopes are eligible for RELEASE-GO.
+ * silently manufacturing a green ledger. Standard distribution keeps G0-G8 pending and only
+ * permits their absent review when exact-source checks and every integrity input are present.
+ * Evidence files may be raw runtime evidence or signed envelopes; optional signature
+ * verification remains separate from content integrity and full RI-51 qualification.
  */
 import { contentDigest } from "../../src/contract/digest"
 import {
@@ -48,6 +51,24 @@ async function digestFile(filename: string | undefined): Promise<string> {
 
 const manifestPath = requiredOption("--manifest")
 const manifest = decodeEvidenceManifest(await Bun.file(manifestPath).json())
+const standardDistribution = args.includes("--standard-distribution")
+if (standardDistribution && manifest.gates.some((gate) => gate.status !== "pending" || gate.refs.length !== 0))
+  throw new Error("standard distribution cannot replace reviewed gate decisions")
+if (standardDistribution && !manifest.packageDigests["release-assets-manifest"])
+  throw new Error("standard distribution requires the staged release asset manifest digest")
+if (standardDistribution && !manifest.packageDigests["release-source-checks"])
+  throw new Error("standard distribution requires exact-source workflow checks")
+if (standardDistribution && (manifest.packageDigests["qualification-source-run"] || manifest.packageDigests["qualification-gates"]))
+  throw new Error("standard distribution cannot replace reviewed qualification")
+if (standardDistribution) {
+  const { assertReleaseChecksReceipt } = await import("../../../../script/verify-release-checks")
+  const bytes = await Bun.file(requiredOption("--source-checks")).bytes()
+  if (Hash.sha256(Buffer.from(bytes)) !== manifest.packageDigests["release-source-checks"])
+    throw new Error("release source checks bytes do not match manifest digest")
+  const parsed = JSON.parse(Buffer.from(bytes).toString("utf8")) as { repository?: string }
+  assertReleaseChecksReceipt(parsed, { repository: process.env.GH_REPO ?? parsed.repository ?? "",
+    candidateCommit: manifest.commit, candidateTree: manifest.tree })
+}
 const sourceManifestPath = option("--source-manifest")
 const sourceDigest = sourceManifestPath
   ? Hash.sha256(Buffer.from(await Bun.file(sourceManifestPath).arrayBuffer()))
@@ -92,13 +113,17 @@ const ledger = makeAuthoritativeLedger({
   packagedReportDigest: packagedDigest,
   evidenceBundleDigests,
 })
-let releaseGo = true
+let distributionAllowed = true
 try {
   assertLedgerReleaseGo(ledger, { artifacts: artifactRows })
 } catch (error) {
   if (!(error instanceof EvidenceLedgerReleaseGateError)) throw error
-  releaseGo = false
+  // Main publishes distribution artifacts; a complete, independently reviewed RI-51 campaign
+  // is a separate qualification. Preserve its pending status and every integrity blocker.
+  distributionAllowed = standardDistribution && error.blockers.length === 9 &&
+    error.blockers.every((blocker, index) => blocker === `G${index}:pending`)
   console.error(`RI-51 RELEASE-NO-GO: ${error.blockers.join(",")}`)
+  if (distributionAllowed) console.log("Standard distribution integrity checks passed; RI-51 qualification NOT REVIEWED")
 }
 const body = `${JSON.stringify(ledger, null, 2)}\n`
 const out = option("--out")
@@ -107,4 +132,4 @@ if (out) {
 } else {
   process.stdout.write(body)
 }
-if (!releaseGo) process.exitCode = 1
+if (!distributionAllowed) process.exitCode = 1

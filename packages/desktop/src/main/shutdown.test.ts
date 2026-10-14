@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { createDesktopShutdown } from "./shutdown"
+import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
 test("a failed stop is reported once without calling it again or claiming graceful completion", async () => {
   const facts = { stops: 0, quit: 0, exit: 0, relaunch: 0, errors: [] as unknown[] }
@@ -35,7 +37,7 @@ test("a failed stop is reported once without calling it again or claiming gracef
 
 for (const scenario of ["quit", "signal", "relaunch", "routine"] as const) {
   test(`actual Electron ${scenario} joins one delayed utility stop before its final action`, async () => {
-    const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-desktop-shutdown-"))
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-desktop-shutdown-")))
     await fs.chmod(root, 0o700)
     await fs.mkdir(path.join(root, "home"), { mode: 0o700 })
     const built = await Bun.build({
@@ -50,10 +52,11 @@ for (const scenario of ["quit", "signal", "relaunch", "routine"] as const) {
     expect(built.success).toBe(true)
     await fs.symlink(path.resolve(import.meta.dir, "../../node_modules"), path.join(root, "node_modules"), "dir")
     const child = Bun.spawn(
-      [path.join(import.meta.dir, "../../node_modules/.bin/electron"), path.join(root, "shutdown-main.js")],
+      [managedBrowserInputFixtureExecutable, path.join(root, "shutdown-main.js")],
       {
         cwd: root,
         env: {
+          ...managedBrowserInputFixtureEnvironment,
           PATH: process.env.PATH,
           HOME: path.join(root, "home"),
           TMPDIR: root,

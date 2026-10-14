@@ -1,14 +1,16 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
+import { managedBrowserInputFixtureEnvironment } from "./fixture/managed-browser-input-runtime"
 
 test("original Electron Vite output preserves relative Main preload and sidecar assets after splitting", async () => {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-desktop-startup-output-"))
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-desktop-startup-output-")))
   await fs.chmod(root, 0o700)
   const desktop = path.resolve(import.meta.dir, "../..")
   await Bun.write(path.join(root, "package.json"), JSON.stringify({ type: "module" }))
   await Bun.write(path.join(root, "entry.ts"), 'const main = await import("./main"); console.log(JSON.stringify(main.assets))')
-  await Bun.write(path.join(root, "main.ts"), 'export const assets = { sidecar: new URL("./sidecar.js", import.meta.url).pathname, preload: new URL("../preload/index.js", import.meta.url).pathname }')
+  await Bun.write(path.join(root, "main.ts"), 'import { fileURLToPath } from "node:url"; export const assets = { sidecar: fileURLToPath(new URL("./sidecar.js", import.meta.url)), preload: fileURLToPath(new URL("../preload/index.js", import.meta.url)) }')
   await Bun.write(path.join(root, "build.mjs"), `
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -23,7 +25,7 @@ await build({ ...resolved.config.main, plugins: resolved.config.main.plugins.fil
 } })
 `)
   const build = Bun.spawn([process.execPath, path.join(root, "build.mjs")], { cwd: desktop,
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: root, DEEPAGENT_CODE_CHANNEL: "dev" }, stdout: "pipe", stderr: "pipe" })
+    env: { ...managedBrowserInputFixtureEnvironment, PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: root, DEEPAGENT_CODE_CHANNEL: "dev" }, stdout: "pipe", stderr: "pipe" })
   const [code, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()])
   await fs.writeFile(path.join(root, "build.log"), stdout + stderr, { mode: 0o600 })
   expect({ code, error: code ? stdout + stderr : null }).toEqual({ code: 0, error: null })

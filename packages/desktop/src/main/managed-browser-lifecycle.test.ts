@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
+import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
 test("actual managed control creates selects closes four tabs and binds history to the exact document", async () => {
-  const root = await fs.mkdtemp("/tmp/dac-managed-browser-electron-")
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-managed-browser-electron-"))
   await fs.chmod(root, 0o700)
   const main = await Bun.build({ entrypoints: [path.join(import.meta.dir, "fixture/managed-browser.ts")],
     outdir: root, target: "node", external: ["electron"], naming: "main.mjs" })
@@ -12,8 +14,8 @@ test("actual managed control creates selects closes four tabs and binds history 
   expect(main.logs).toEqual([])
   expect(child.logs).toEqual([])
   expect(main.success && child.success).toBe(true)
-  const process = Bun.spawn([path.join(import.meta.dir, "../../node_modules/.bin/electron"), main.outputs[0]!.path], {
-    env: { PATH: globalThis.process.env.PATH, HOME: root, TMPDIR: root, XDG_DATA_HOME: root, XDG_CONFIG_HOME: root,
+  const process = Bun.spawn([managedBrowserInputFixtureExecutable, main.outputs[0]!.path], {
+    env: { ...managedBrowserInputFixtureEnvironment, PATH: globalThis.process.env.PATH, HOME: root, TMPDIR: root, XDG_DATA_HOME: root, XDG_CONFIG_HOME: root,
       XDG_CACHE_HOME: root, DAC_BROWSER_TEST_ROOT: root, DAC_BROWSER_CHILD: child.outputs[0]!.path }, stdout: "pipe", stderr: "pipe",
   })
   const timer = setTimeout(() => process.kill(), 55_000)

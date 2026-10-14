@@ -237,6 +237,9 @@ export const {
     // Provenance for permission requests normalized from permission.v2.asked: their replies must
     // go through the session-scoped V2 route (legacy /permission/:id/reply 404s on PermissionV2).
     const v2PermissionRequests = new Set<string>()
+    const v2QuestionRequests = new Set<string>()
+    const questionWrites = new Map<string, number>()
+    const questionKey = (sessionID: string, requestID: string) => JSON.stringify([sessionID, requestID])
     const touchMessage = (sessionID: string, messageID: string) => {
       hydratingSessions.get(sessionID)?.messages.add(messageID)
     }
@@ -294,6 +297,78 @@ export const {
       )
     }
 
+    const upsertQuestion = (request: QuestionRequest) => {
+      const requests = store.question[request.sessionID]
+      if (!requests) {
+        setStore("question", request.sessionID, [request])
+        return
+      }
+      const match = search(requests, request.id, (r) => r.id)
+      if (match.found) {
+        setStore("question", request.sessionID, match.index, reconcile(request))
+        return
+      }
+      setStore(
+        "question",
+        request.sessionID,
+        produce((draft) => {
+          draft.splice(match.index, 0, request)
+        }),
+      )
+    }
+
+    const removeQuestion = (sessionID: string, requestID: string) => {
+      const requests = store.question[sessionID]
+      if (!requests) return
+      const match = search(requests, requestID, (r) => r.id)
+      if (!match.found) return
+      setStore(
+        "question",
+        sessionID,
+        produce((draft) => {
+          draft.splice(match.index, 1)
+        }),
+      )
+    }
+
+    async function syncQuestions() {
+      const writes = new Map(questionWrites)
+      const client = sdk.client
+      const directory = project.instance.path().directory
+      const [legacy, current] = await Promise.all([
+        client.question.list({ directory }, { throwOnError: true }),
+        client.v2.question.request.list({ location: { directory } }, { throwOnError: true }),
+      ])
+      if (client !== sdk.client || directory !== project.instance.path().directory) return
+      const pending = [
+        ...(legacy.data ?? []).map((request) => ({ request, v2: false })),
+        ...(current.data?.data ?? []).map((request) => ({ request, v2: true })),
+      ]
+      const keys = new Set(pending.map((item) => questionKey(item.request.sessionID, item.request.id)))
+      const unchanged = (sessionID: string, requestID: string) => {
+        const key = questionKey(sessionID, requestID)
+        return (writes.get(key) ?? 0) === (questionWrites.get(key) ?? 0)
+      }
+      // A list is an earlier snapshot: SSE asks and decisions received while it loads win.
+      batch(() => {
+        for (const requests of Object.values(store.question)) {
+          for (const request of [...requests]) {
+            const key = questionKey(request.sessionID, request.id)
+            if (keys.has(key) || !unchanged(request.sessionID, request.id)) continue
+            v2QuestionRequests.delete(key)
+            removeQuestion(request.sessionID, request.id)
+          }
+        }
+        for (const item of pending) {
+          if (!unchanged(item.request.sessionID, item.request.id)) continue
+          const key = questionKey(item.request.sessionID, item.request.id)
+          if (item.v2) v2QuestionRequests.add(key)
+          if (!item.v2) v2QuestionRequests.delete(key)
+          upsertQuestion(item.request)
+        }
+      })
+    }
+
     event.subscribe((event, { workspace }) => {
       switch (event.type) {
         case "server.instance.disposed":
@@ -337,40 +412,24 @@ export const {
         }
 
         case "question.replied":
-        case "question.rejected": {
-          const requests = store.question[event.properties.sessionID]
-          if (!requests) break
-          const match = search(requests, event.properties.requestID, (r) => r.id)
-          if (!match.found) break
-          setStore(
-            "question",
-            event.properties.sessionID,
-            produce((draft) => {
-              draft.splice(match.index, 1)
-            }),
-          )
+        case "question.rejected":
+        case "question.v2.replied":
+        case "question.v2.rejected": {
+          const key = questionKey(event.properties.sessionID, event.properties.requestID)
+          questionWrites.set(key, (questionWrites.get(key) ?? 0) + 1)
+          v2QuestionRequests.delete(key)
+          removeQuestion(event.properties.sessionID, event.properties.requestID)
           break
         }
 
-        case "question.asked": {
+        case "question.asked":
+        case "question.v2.asked": {
           const request = event.properties
-          const requests = store.question[request.sessionID]
-          if (!requests) {
-            setStore("question", request.sessionID, [request])
-            break
-          }
-          const match = search(requests, request.id, (r) => r.id)
-          if (match.found) {
-            setStore("question", request.sessionID, match.index, reconcile(request))
-            break
-          }
-          setStore(
-            "question",
-            request.sessionID,
-            produce((draft) => {
-              draft.splice(match.index, 0, request)
-            }),
-          )
+          const key = questionKey(request.sessionID, request.id)
+          questionWrites.set(key, (questionWrites.get(key) ?? 0) + 1)
+          if (event.type === "question.v2.asked") v2QuestionRequests.add(key)
+          if (event.type === "question.asked") v2QuestionRequests.delete(key)
+          upsertQuestion(request)
           break
         }
 
@@ -589,6 +648,7 @@ export const {
       const workspace = project.workspace.current()
       const projectPromise = project.sync()
       const sessionListPromise = projectPromise.then(() => listSessions())
+      const questionsPromise = projectPromise.then(() => syncQuestions())
 
       // blocking - include session.list when continuing a session
       const providersPromise = sdk.client.config.providers({ workspace }, { throwOnError: true })
@@ -605,6 +665,7 @@ export const {
         { name: "app.agents", promise: agentsPromise },
         { name: "config.get", promise: configPromise },
         { name: "project.sync", promise: projectPromise },
+        { name: "question.list", promise: questionsPromise },
         ...(args.continue ? [{ name: "session.list", promise: sessionListPromise }] : []),
       ]
 
@@ -707,6 +768,9 @@ export const {
       },
       permissionV2(requestID: string) {
         return v2PermissionRequests.has(requestID)
+      },
+      questionV2(sessionID: string, requestID: string) {
+        return v2QuestionRequests.has(questionKey(sessionID, requestID))
       },
       session: {
         get(sessionID: string) {
