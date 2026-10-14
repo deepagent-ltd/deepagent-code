@@ -120,14 +120,14 @@ for (const viewport of viewports) {
       await expect(composer).toBeVisible()
       // W9.6 — a session with no execution-journal rows keeps ZERO pixel surface for the
       // execution line (the journal pump mirrored `{}` context responses, no rows to deliver).
-      await expect(page.getByText(/Last agent execution:/)).toHaveCount(0)
+      await expect(page.getByText(/Agent execution running|Last request (?:completed|failed|was interrupted)/)).toHaveCount(0)
       expect(errors).toEqual([])
       await page.screenshot({ path: `e2e/pixel-matrix/cn-${viewport.name}.png` })
     })
 
     test(`英文 session renders without overflow or overlap`, async ({ page }) => {
       const { errors } = await openSession(page, enID, "Refactor dependency graph across 3 repositories")
-      await expect(page.getByText("Extract the shared kernel")).toBeVisible()
+      await expect(page.getByText(/extract the shared kernel/i)).toBeVisible()
       expect(errors).toEqual([])
       await page.screenshot({ path: `e2e/pixel-matrix/en-${viewport.name}.png` })
     })
@@ -197,23 +197,28 @@ test.describe("pixel matrix @ recovery dock", () => {
 
     // W9.6 — the journal pump (1s poll) delivers the settled turn: the execution summary line
     // renders and is the kept product intent for an idle session with a finished turn.
-    await expect(page.getByText("Last agent execution: succeeded (turn 1)")).toBeVisible()
+    await expect(page.getByText("Last request completed (turn 1)")).toBeVisible()
 
-    // All five pending items render (three exact + two coordination).
+    // All five cards render; request hashes stay behind the diagnostic disclosure.
     for (const id of ["req-exact-0", "req-exact-1", "req-exact-2", "req-coord-3", "req-coord-4"]) {
+      const card = page.locator("div.mb-2.rounded-md", { hasText: id }).first()
+      await expect(card).toBeVisible()
+      await expect(page.getByText(id)).toBeHidden()
+      await card.getByText("Diagnostic reference").click()
       await expect(page.getByText(id)).toBeVisible()
     }
 
-    // Coordination items pass through the query-first path — an enabled
-    // "Query command" exit plus the typed reason, never a dead-end.
-    await expect(page.getByRole("button", { name: "Query command" })).toHaveCount(2)
-    await expect(page.getByText("No executable exit (query first).")).toHaveCount(2)
+    // Coordination items keep the query-first action and user-facing guidance.
+    await expect(page.getByRole("button", { name: "Check status" })).toHaveCount(2)
+    await expect(
+      page.getByText("Check its status before continuing. If it still cannot be confirmed, report the issue to us."),
+    ).toHaveCount(2)
 
     // Exact items expose executable exits immediately (never a dead button).
-    await expect(page.getByRole("button", { name: /abandon\.exact/ })).toHaveCount(3)
-    await expect(page.getByRole("button", { name: /recover\.resolve/ })).toHaveCount(3)
-    await expect(page.getByRole("button", { name: /abandon\.exact/ }).first()).toBeEnabled()
-    await expect(page.getByRole("button", { name: /recover\.resolve/ }).first()).toBeEnabled()
+    await expect(page.getByRole("button", { name: "Discard unfinished request" })).toHaveCount(3)
+    await expect(page.getByRole("button", { name: "Recover conversation" })).toHaveCount(3)
+    await expect(page.getByRole("button", { name: "Discard unfinished request" }).first()).toBeEnabled()
+    await expect(page.getByRole("button", { name: "Recover conversation" }).first()).toBeEnabled()
 
     // Cards never overlap.
     const boxes = await Promise.all(

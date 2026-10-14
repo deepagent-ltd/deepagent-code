@@ -17,6 +17,7 @@ export interface MockServerConfig {
   directory: string
   project: unknown
   sessions: ({ id: string } & Record<string, unknown>)[]
+  ordinaryEligible?: Record<string, boolean>
   pageMessages: (sessionId: string, limit: number, before?: string) => { items: unknown[]; cursor?: string }
   events?: () => unknown[]
 }
@@ -55,6 +56,9 @@ export async function mockDeepAgentCodeServer(page: Page, config: MockServerConf
     }
 
     const path = url.pathname
+    if (route.request().method() === "GET" && path === "/deepagent/packs/all") return json(route, { packs: [] })
+    if (route.request().method() === "GET" && path === "/experimental/session" && url.searchParams.get("archived") === "true")
+      return json(route, [])
     if (path === "/global/event" || path === "/event" || path === "/api/event" || path === "/debug/events") {
       return sse(route, config.events?.())
     }
@@ -89,7 +93,14 @@ export async function mockDeepAgentCodeServer(page: Page, config: MockServerConf
     const sessionMatch = path.match(/^\/session\/([^/]+)$/)
     if (sessionMatch) {
       const session = config.sessions.find((s) => s.id === sessionMatch[1])
-      return json(route, session ?? {})
+      // The original scoped GET owns this hint; list/SSE fixtures do not grant it.
+      const ordinaryEligible = route.request().method() === "GET" ? config.ordinaryEligible?.[sessionMatch[1]] : undefined
+      return json(
+        route,
+        session
+          ? { ...session, ...(ordinaryEligible === undefined ? {} : { ordinaryEligible }) }
+          : {},
+      )
     }
 
     if (/^\/session\/[^/]+\/(children|todo|diff)$/.test(path)) return json(route, [])
