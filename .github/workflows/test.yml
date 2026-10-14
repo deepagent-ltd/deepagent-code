@@ -129,6 +129,10 @@ jobs:
       - name: Install locked IM SDK build tools
         run: npm ci --ignore-scripts --prefix packages/im-kernel-sdk/upstream
 
+      - name: Install locked Chromium for component IndexedDB
+        working-directory: packages/app
+        run: bun x playwright install --only-shell --with-deps chromium
+
       - name: Prepare test search dependency
         run: |
           if ! bun -e 'process.exit(Bun.which("rg") ? 0 : 1)'; then

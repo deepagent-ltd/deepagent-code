@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
 import { createSignal } from "solid-js"
 import { createServer } from "node:http"
@@ -11,28 +11,18 @@ import { MediaIntent } from "@deepagent-code/core/im/media-intent"
 import { GroupChatPanel } from "@/components/im/group-chat-panel"
 import { createIMClient, type IMClient } from "@/utils/im-client"
 import { dict } from "@/i18n/en"
+import { createBrowserMediaStoreFixture } from "./fixture/browser-media-store"
 
-const runtime = vi.hoisted(() => ({ directory: "", client: undefined as IMClient | undefined }))
+const runtime = vi.hoisted(() => ({ directory: "", storage: undefined as Awaited<ReturnType<typeof createBrowserMediaStoreFixture>> | undefined, client: undefined as IMClient | undefined }))
 vi.mock("@/utils/im-client", async (original) => ({
   ...(await original<typeof import("@/utils/im-client")>()),
   useIMClient: () => runtime.client!,
 }))
-vi.mock("@/utils/im-media-intent", async () => {
-  // HappyDOM lacks durable IndexedDB. Use the original private disk store, not a mocked receipt store.
-  const sibling = "../../../tui/src/util/im-media-intent"
-  const source = (await import(/* @vite-ignore */ sibling)) as {
-    createMediaIntentStore(
-      directory: string,
-    ): Omit<ReturnType<typeof import("@/utils/im-media-intent").createMediaIntentStore>, "close">
-    createMediaBatchStore(
-      directory: string,
-    ): Omit<ReturnType<typeof import("@/utils/im-media-intent").createMediaBatchStore>, "close">
-  }
-  return {
-    createMediaIntentStore: () => ({ ...source.createMediaIntentStore(runtime.directory), close() {} }),
-    createMediaBatchStore: () => ({ ...source.createMediaBatchStore(runtime.directory), close() {} }),
-  }
-})
+vi.mock("@/utils/im-media-intent", () => ({
+  createMediaIntentStore: () => runtime.storage!.createMediaIntentStore(),
+  createMediaBatchStore: () => runtime.storage!.createMediaBatchStore(),
+}))
+
 vi.mock("@/context/language", () => ({
   useLanguage: () => ({
     t: (key: keyof typeof dict, values?: Record<string, number | string>) =>
@@ -51,7 +41,17 @@ vi.mock("@/hooks/use-im-websocket", () => ({
   }),
 }))
 
+beforeAll(async () => {
+  runtime.directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-media-batch-app-"))
+  runtime.storage = await createBrowserMediaStoreFixture(runtime.directory)
+})
+afterAll(async () => {
+  await runtime.storage?.close()
+  if (runtime.directory) await fs.rm(runtime.directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+})
 beforeEach(async () => {
+  await runtime.storage!.records("intents", [])
+  await runtime.storage!.records("batches", [])
   vi.stubGlobal("fetch", window.fetch.bind(window))
   vi.stubGlobal("FormData", window.FormData)
   vi.stubGlobal("File", window.File)
@@ -59,12 +59,11 @@ beforeEach(async () => {
   vi.stubGlobal("Request", window.Request)
   vi.stubGlobal("AbortController", window.AbortController)
   vi.stubGlobal("AbortSignal", window.AbortSignal)
-  runtime.directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-media-batch-app-"))
 })
 afterEach(async () => {
   cleanup()
   vi.unstubAllGlobals()
-  await fs.rm(runtime.directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  await runtime.storage!.drain()
 })
 
 async function serve() {
@@ -271,7 +270,7 @@ it("four real multipart uploads stay in a removable draft; lost send retries the
     expect(
       screen.getByRole("textbox").getAttribute("value") ?? (screen.getByRole("textbox") as HTMLTextAreaElement).value,
     ).toBe("new text draft")
-    expect(screen.getAllByRole("button", { name: dict["im.media.download"] })).toHaveLength(3)
+    await waitFor(() => expect(screen.getAllByRole("button", { name: dict["im.media.download"] })).toHaveLength(3))
   } finally {
     await api.close()
   }
