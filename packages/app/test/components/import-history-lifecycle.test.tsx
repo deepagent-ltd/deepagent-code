@@ -64,18 +64,38 @@ async function processFor(root: string, count: number) {
       stdio: ["ignore", "pipe", "pipe"],
     },
   )
-  let output = ""
+  let stdout = ""
+  let stderr = ""
+  let spawnError: string | undefined
   child.stdout?.on("data", (value: Buffer) => {
-    output = (output + value.toString()).slice(-65536)
+    stdout = (stdout + value.toString()).slice(-65536)
   })
   child.stderr?.on("data", (value: Buffer) => {
-    output = (output + value.toString()).slice(-65536)
+    stderr = (stderr + value.toString()).slice(-65536)
   })
-  const exited = new Promise<number | null>((resolve) => child.once("exit", resolve))
+  child.once("error", (error) => {
+    spawnError = error.message
+  })
+  const exited = new Promise<number | null>((resolve) => child.once("close", resolve))
+  const diagnostic = async () =>
+    JSON.stringify({
+      root,
+      pid: child.pid,
+      exitCode: child.exitCode,
+      signal: child.signalCode,
+      spawnError,
+      readyPath: path.join(root, "ready.json"),
+      resultFiles: (await fs.readdir(root))
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => path.join(root, name)),
+      stdout,
+      stderr,
+    })
   const deadline = setTimeout(() => child.kill("SIGTERM"), 60_000)
   const ready = await waitFor(
     async () => {
-      if (child.exitCode !== null) throw new Error(`Private import fixture exit ${child.exitCode}: ${output}`)
+      if (child.exitCode !== null || child.signalCode !== null || spawnError)
+        throw new Error(`Private import fixture ended: ${await diagnostic()}`)
       return JSON.parse(await fs.readFile(path.join(root, "ready.json"), "utf8")) as {
         url: string
         sourcePath: string
@@ -89,7 +109,7 @@ async function processFor(root: string, count: number) {
     const force = setTimeout(() => child.kill("SIGKILL"), 2000)
     await exited
     clearTimeout(force)
-    throw error
+    throw new Error(`Private import fixture not ready: ${String(error)}\n${await diagnostic()}`, { cause: error })
   })
   const calls: { method: string; path: string }[] = []
   const transport = {
@@ -144,8 +164,11 @@ async function processFor(root: string, count: number) {
       const force = setTimeout(() => child.kill("SIGKILL"), 2000)
       const code = await exited
       clearTimeout(force)
-      expect(code).toBe(0)
-      expect(output).not.toContain("Unexpected observer")
+      expect(code, code === 0 ? undefined : await diagnostic()).toBe(0)
+      expect(
+        stdout + stderr,
+        (stdout + stderr).includes("Unexpected observer") ? await diagnostic() : undefined,
+      ).not.toContain("Unexpected observer")
     },
   }
 }

@@ -111,7 +111,37 @@ const action = (command: BrowserSchema.Command): BrowserSchema.Action => ({
 })
 const code = (exit: Exit.Exit<unknown, BrowserSchema.Error>) =>
   Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause))?.code : null
-const execute = (command: BrowserSchema.Command) => Effect.runPromise(host.execute(active, action(command), current))
+const unexpectedFailures: unknown[] = []
+const execute = (command: BrowserSchema.Command) => {
+  const admitted = action(command)
+  return Effect.runPromise(
+    host.execute(active, admitted, current).pipe(
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          // Observe only after the original failure. Never dispatch the failed command again.
+          const observed = yield* host.execute(active, action({ type: "tabs.list" }), current).pipe(Effect.exit)
+          unexpectedFailures.push({
+            commandType: command.type,
+            tabID: "tabID" in command ? command.tabID : null,
+            commandGeneration: "generation" in command ? command.generation : null,
+            actionID: admitted.actionID,
+            admittedOutcome: admitted.outcome,
+            terminalOutcome: null,
+            terminalOutcomeUnavailable: "Native host execute errors expose an error code, not a durable action outcome",
+            errorCode: Option.getOrUndefined(Cause.findErrorOption(cause))?.code,
+            latestTabs: Exit.isSuccess(observed) ? observed.value.result.tabs : null,
+            generationAfterFailure:
+              Exit.isSuccess(observed) && "tabID" in command
+                ? (observed.value.result.tabs.find((tab) => tab.tabID === command.tabID)?.generation ?? null)
+                : null,
+            observationError: Exit.isFailure(observed) ? code(observed) : null,
+          })
+          return yield* Effect.failCause(cause)
+        }),
+      ),
+    ),
+  )
+}
 const rejected = (command: BrowserSchema.Command) =>
   Effect.runPromise(host.execute(active, action(command), current).pipe(Effect.exit)).then(code)
 
@@ -240,5 +270,6 @@ try {
     type: "fixture-error",
     message: String(error),
     stack: error instanceof Error ? error.stack : undefined,
+    unexpectedFailures,
   })
 }
