@@ -95,6 +95,16 @@ if (qualificationPresent) {
     throw new Error("archived qualification gates differ from ledger gates")
 }
 const assetManifest = Bun.file(path.join(artifactDir, "release-assets.json"))
+const sourceChecks = Bun.file(path.join(artifactDir, "source-checks.json"))
+if (Boolean(ledger.manifest.packageDigests["release-source-checks"]) !== await sourceChecks.exists())
+  throw new Error("release source checks presence does not match ledger")
+if (ledger.manifest.packageDigests["release-source-checks"]) {
+  const { assertReleaseChecksReceipt } = await import("../../../../script/verify-release-checks")
+  const bytes = await read("source-checks.json", ledger.manifest.packageDigests["release-source-checks"])
+  const parsed = JSON.parse(bytes.toString()) as { repository?: string }
+  assertReleaseChecksReceipt(parsed, { repository: process.env.GH_REPO ?? parsed.repository ?? "",
+    candidateCommit: ledger.manifest.commit, candidateTree: ledger.manifest.tree })
+}
 const assetManifestPresent = await assetManifest.exists()
 if (Boolean(ledger.manifest.packageDigests["release-assets-manifest"]) !== assetManifestPresent)
   throw new Error("release asset manifest presence does not match ledger")

@@ -244,9 +244,10 @@ jobs:
     runs-on: windows-2025
     if: github.repository == 'deepagent-ltd/deepagent-code'
     env:
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      HAS_TRUSTED_SIGNING: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE != '' && secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_TENANT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID != '' }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
       AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
       AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
       AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
@@ -268,6 +269,7 @@ jobs:
           deepagent-code-app-secret: ${{ secrets.DEEPAGENT_CODE_APP_SECRET }}
 
       - name: Azure login
+        if: env.HAS_TRUSTED_SIGNING == 'true'
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
           client-id: ${{ env.AZURE_CLIENT_ID }}
@@ -275,6 +277,7 @@ jobs:
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+        if: env.HAS_TRUSTED_SIGNING == 'true'
         with:
           endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
           signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
@@ -294,6 +297,7 @@ jobs:
           exclude-interactive-browser-credential: true
 
       - name: Verify Windows CLI signatures
+        if: env.HAS_TRUSTED_SIGNING == 'true'
         shell: pwsh
         run: |
           $files = @(
@@ -307,6 +311,11 @@ jobs:
               throw "Invalid signature for ${file}: $($sig.Status)"
             }
           }
+
+      - name: Report unsigned Windows artifacts
+        if: env.HAS_TRUSTED_SIGNING != 'true'
+        shell: pwsh
+        run: Write-Host "Azure Trusted Signing is not configured; using unsigned Windows artifacts"
 
       - name: Repack Windows CLI archives
         working-directory: packages/deepagent-code/dist
@@ -336,9 +345,10 @@ jobs:
     if: github.repository == 'deepagent-ltd/deepagent-code'
     continue-on-error: false
     env:
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      HAS_TRUSTED_SIGNING: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE != '' && secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_TENANT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID != '' }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
       AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
       AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
       AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
@@ -398,7 +408,7 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: ${{ matrix.settings.target == 'aarch64-apple-darwin' && '1' || '' }}
 
       - name: Azure login
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.HAS_TRUSTED_SIGNING == 'true'
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
           client-id: ${{ env.AZURE_CLIENT_ID }}
@@ -471,6 +481,7 @@ jobs:
           DEEPAGENT_CODE_CLI_ARTIFACT: ${{ (runner.os == 'Windows' && 'deepagent-code-cli-windows') || 'deepagent-code-cli' }}
           RUST_TARGET: ${{ matrix.settings.target }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
+          DEEPAGENT_CODE_ALLOW_UNSIGNED: ${{ runner.os == 'Windows' && env.HAS_TRUSTED_SIGNING != 'true' && '1' || '0' }}
           # Match desktop-build: use the imported Developer ID and the existing
           # Apple ID notarization secrets, without creating an empty API-key file.
           CSC_NAME: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_CSC_NAME || '' }}
@@ -500,7 +511,7 @@ jobs:
           tar -czf "$OUT_NAME" -C "$(dirname "$APP_PATH")" "$(basename "$APP_PATH")"
 
       - name: Verify signed Windows Electron artifacts
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.HAS_TRUSTED_SIGNING == 'true'
         shell: pwsh
         run: |
           $files = @()
@@ -664,6 +675,18 @@ jobs:
             --commit "$CANDIDATE_COMMIT" --tree "$CANDIDATE_TREE" \
             --run-id "$QUALIFICATION_RUN_ID" --repo "$GH_REPO"
 
+      - name: Verify existing checks for this exact main source
+        if: needs.version.outputs.release && github.ref == 'refs/heads/main' && inputs.qualification_run_id == ''
+        timeout-minutes: 35
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ needs.version.outputs.repo }}
+          RELEASE_SOURCE_COMMIT: ${{ github.sha }}
+          RELEASE_CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
+          RELEASE_CANDIDATE_TREE: ${{ needs.version.outputs.candidate_tree }}
+          RELEASE_CHECKS_RECEIPT: ${{ runner.temp }}/ri51-source-checks.json
+        run: bun script/verify-release-checks.ts
+
       - name: Stage and verify final release archives
         if: needs.version.outputs.release
         run: |
@@ -696,14 +719,14 @@ jobs:
           git config --global user.name "deepagent-ai"
           ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts || true
 
-      # RI-51 authoritative ledger release gate: regenerate the candidate ledger from THIS tree
-      # (caller inventory, source manifest, runtime-state inventory) and stop every upload on
-      # NO-GO. Gate statuses are explicit evidence (release-evidence inputs); without them all
-      # gates are pending and the release is refused — fail-closed by construction.
-      - name: RI-51 authoritative ledger release gate
+      # Standard main distribution binds successful existing source checks, actual packaged
+      # runtime and final assets. An explicitly supplied RI-51 review remains strictly required
+      # to claim complete G0-G8 qualification; standard distribution keeps those gates pending.
+      - name: Verify distribution integrity and archive qualification status
         if: needs.version.outputs.release
         env:
           QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+          RELEASE_REF: ${{ github.ref }}
           GH_REPO: ${{ needs.version.outputs.repo }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
@@ -724,8 +747,16 @@ jobs:
           if [[ -n "$QUALIFICATION_RUN_ID" ]]; then
             args+=(--qualification-dir "$RUNNER_TEMP/ri51-qualification" \
               --qualification-run-id "$QUALIFICATION_RUN_ID" --qualification-repo "$GH_REPO")
+          elif [[ "$RELEASE_REF" == 'refs/heads/main' ]]; then
+            args+=(--standard-distribution --source-checks "$RUNNER_TEMP/ri51-source-checks.json")
+          else
+            echo "Non-main release requires an explicit reviewed qualification run" >&2
+            exit 1
           fi
           (cd packages/core && bun run script/evidence-ledger/release-gate.ts "${args[@]}")
+          if [[ -z "$QUALIFICATION_RUN_ID" ]]; then
+            echo "Standard main distribution: existing source checks and package integrity passed; RI-51 G0-G8 not reviewed." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload authoritative ledger release asset
         if: needs.version.outputs.release && success()

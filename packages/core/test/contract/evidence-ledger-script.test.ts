@@ -164,6 +164,41 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
     }).ledgerDigest,
   ).toBe(ledger.ledgerDigest)
 
+  const sourceChecksPath = join(root.path, "source-checks.json")
+  const sourceChecks = JSON.stringify({ schemaVersion: "release-source-checks.v1", repository: "deepagent-ltd/deepagent-code",
+    sourceCommit: "a".repeat(40), candidateCommit: manifest.commit, candidateTree: manifest.tree,
+    checks: ["test.yml", "branding-check.yml", "generate.yml", "desktop-build.yml"]
+      .map((workflow, index) => ({ workflow, runID: index + 1, passed: true })) })
+  const pending = { ...manifest, packageDigests: { ...manifest.packageDigests, "release-assets-manifest": H("staged-assets"),
+    "release-source-checks": Hash.sha256(Buffer.from(sourceChecks)) },
+    gates: manifest.gates.map((gate) => ({ ...gate, status: "pending", refs: [] })) }
+  for (const scenario of ["standard", "strict", "reviewed", "missing-source", "missing-runtime", "missing-package", "missing-evidence", "finding", "missing-assets", "missing-checks", "changed-checks", "qualification"]) {
+    await Bun.write(sourceChecksPath, sourceChecks + (scenario === "changed-checks" ? "\n" : ""))
+    await Bun.write(manifestPath, JSON.stringify({ ...pending,
+      ...(scenario === "reviewed" ? { gates: manifest.gates } : {}),
+      ...(scenario === "finding" ? { openFindings: ["unresolved"] } : {}),
+      ...(scenario === "qualification" ? { packageDigests: { ...pending.packageDigests, "qualification-source-run": H("review") } } : {}),
+      ...(scenario === "missing-assets" ? { packageDigests: manifest.packageDigests } : {}) }))
+    const child = Bun.spawn([process.execPath, script.pathname,
+      ...(scenario === "strict" ? [] : ["--standard-distribution"]), "--manifest", manifestPath,
+      ...(scenario === "missing-checks" ? [] : ["--source-checks", sourceChecksPath]),
+      ...(scenario === "missing-source" ? [] : ["--source-manifest", sourcePath]),
+      ...(scenario === "missing-runtime" ? [] : ["--runtime-inventory", runtimePath]),
+      ...(scenario === "missing-package" || scenario === "missing-evidence" ? [] : ["--packaged-report", packagePath]),
+      ...(scenario === "missing-evidence" ? [] : ["--evidence-dir", evidenceDir]), "--out", outputPath],
+      { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe",
+        env: { ...process.env, GH_REPO: "deepagent-ltd/deepagent-code" } })
+    const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(),
+      new Response(child.stderr).text(), child.exited])
+    expect(exitCode === 0).toBe(scenario === "standard")
+    if (scenario !== "standard") continue
+    expect(stdout).toContain("RI-51 qualification NOT REVIEWED")
+    expect(stderr).toContain("G0:pending")
+    expect((await Bun.file(outputPath).json()).manifest.gates.every((gate: { status: string }) => gate.status === "pending"))
+      .toBe(true)
+  }
+  await Bun.write(manifestPath, JSON.stringify(manifest))
+
   const packageDir = join(root.path, "package-dir")
   await mkdir(join(packageDir, "bin"), { recursive: true })
   await Bun.write(join(packageDir, "bin", "deepagent"), "packaged-binary")
@@ -241,6 +276,21 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
     return { exitCode: await child.exited, stderr: await new Response(child.stderr).text() }
   }
   expect((await verify()).exitCode).toBe(0)
+  const originalLedger = await Bun.file(wrapperOutputPath).text()
+  const archivedChecks = join(productDir, "source-checks.json")
+  await Bun.write(archivedChecks, sourceChecks)
+  await Bun.write(wrapperOutputPath, JSON.stringify(makeAuthoritativeLedger({
+    manifest: makeAuthoritativeManifest({ ...wrapperLedger.manifest, packageDigests: {
+      ...wrapperLedger.manifest.packageDigests, "release-source-checks": Hash.sha256(Buffer.from(sourceChecks)) } }),
+    sourceManifestDigest: wrapperLedger.sourceManifestDigest, runtimeInventoryDigest: wrapperLedger.runtimeInventoryDigest,
+    packagedReportDigest: wrapperLedger.packagedReportDigest, evidenceBundleDigests: wrapperLedger.evidenceBundleDigests,
+  })))
+  expect((await verify()).exitCode).toBe(0)
+  await Bun.write(archivedChecks, `${sourceChecks}\n`)
+  expect((await verify()).stderr).toContain("source-checks.json bytes do not match ledger digest")
+  await rm(archivedChecks)
+  expect((await verify()).stderr).toContain("release source checks presence does not match ledger")
+  await Bun.write(wrapperOutputPath, originalLedger)
   for (const name of [
     "source-manifest.json",
     "runtime-inventory.tsv",
