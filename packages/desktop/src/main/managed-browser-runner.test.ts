@@ -2,9 +2,17 @@ import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
-import { Database } from "bun:sqlite"
+import { Database, constants } from "bun:sqlite"
+import { pathToFileURL } from "node:url"
 import { managedBrowserInputFixtureDefine } from "./fixture/managed-browser-input-build"
 import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
+
+function readAuthority(root: string) {
+  // Node checkpoints this owned database before exiting. Explicit URI mode is
+  // required on every SQLite build; immutable avoids creating WAL sidecars.
+  return new Database(`${pathToFileURL(path.join(root, "authority.sqlite")).href}?immutable=1`,
+    constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI)
+}
 
 async function run(mode: "identity" | "interaction-redirect-denied" | "interaction-path-denied" | "interaction-body-denied" | "interaction" | "happy" | "unknown" | "permission" | "wrong-root" | "wrong-session" | "retired" | "selection-drift" | "cancel" | "crash" | "control-tamper") {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-managed-browser-runner-")))
@@ -60,7 +68,7 @@ test("actual Desktop sidecar HTTP canonical runner delivers native Browser PNG t
     .filter((item: { type?: string }) => item.type === "file")
   expect(coldFiles).toHaveLength(1)
   expect(coldFiles[0].source).toEqual({ type: "data", data: images[0].image_url.url.split(",")[1] })
-  const db = new Database(`file:${path.join(root, "authority.sqlite")}?immutable=1`, { readonly: true })
+  const db = readAuthority(root)
   try {
     const actions = db.query<{ outcome: string; record: string }, []>("SELECT outcome, record FROM browser_action ORDER BY created_at").all()
     expect(actions).toHaveLength(4)
@@ -102,7 +110,7 @@ for (const mode of ["unknown", "cancel", "crash"] as const) test(`actual dispatc
   if (mode === "cancel") expect(result.explicitCancel.stopConfirmed).toBe(true)
   if (mode === "crash") expect(result.killedPID).toBeGreaterThan(0)
   expect(result.coldRetry.data.id).toBe(result.admitted.data.id)
-  const db = new Database(`file:${path.join(root, "authority.sqlite")}?immutable=1`, { readonly: true })
+  const db = readAuthority(root)
   try {
     const actions = db.query<{ outcome: string; record: string }, []>("SELECT outcome, record FROM browser_action ORDER BY created_at").all()
     expect(actions.map((action) => action.outcome)).toEqual(["completed", mode === "crash" ? "pending" : "unknown"])
@@ -120,7 +128,7 @@ for (const mode of ["wrong-root", "wrong-session", "retired", "selection-drift",
     expect(result.providerRequests).toBeLessThanOrEqual(3)
     if (["retired", "selection-drift"].includes(mode)) expect(result.permissions).toHaveLength(1)
     else if (mode !== "control-tamper") expect(result.session.data.id).not.toBe(result.invokeSession.data.id)
-    const db = new Database(`file:${path.join(root, "authority.sqlite")}?immutable=1`, { readonly: true })
+    const db = readAuthority(root)
     try {
       expect(db.query("SELECT * FROM browser_action").all()).toHaveLength(0)
       expect(db.query("SELECT * FROM session_v2_tool_effect_admission").all()).toHaveLength(2)
@@ -147,7 +155,7 @@ test("actual interaction profile submits one Chinese form through canonical acti
   const body = await Bun.file(path.join(root, "provider-10.json")).json()
   expect(JSON.stringify(body)).toContain("提交成功")
   expect(JSON.stringify(body)).toContain("data:image/png;base64,")
-  const db = new Database(`file:${path.join(root, "authority.sqlite")}?immutable=1`, { readonly: true })
+  const db = readAuthority(root)
   try {
     expect(db.query("SELECT * FROM browser_action WHERE outcome = 'completed'").all()).toHaveLength(8)
     expect(db.query("SELECT * FROM session_v2_tool_effect WHERE state = 'settled'").all()).toHaveLength(9)
@@ -162,7 +170,7 @@ for (const mode of ["interaction-path-denied", "interaction-body-denied", "inter
     expect(result.posted).toHaveLength(mode === "interaction-redirect-denied" ? 1 : 0)
     expect(result.outsideRequests).toBe(0)
     expect(result.stopped.stopConfirmed).toBe(true)
-    const db = new Database(`file:${path.join(root, "authority.sqlite")}?immutable=1`, { readonly: true })
+    const db = readAuthority(root)
     try {
       const clicks = db.query<{ outcome: string }, []>("SELECT outcome FROM browser_action WHERE json_extract(record, '$.command.type') = 'click'").all()
       expect(clicks).toHaveLength(1)
