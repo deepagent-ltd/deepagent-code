@@ -6,7 +6,8 @@ import { createHash, createPrivateKey, generateKeyPairSync, sign } from "node:cr
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { NativeInstallationSchema } from "../../deepagent-code/src/installation/native-installation.schema"
 import { cleanupNativePublisher, cleanupTestNativePublisher, guardTestNativeAssets, prepareNativePublisher, prepareTestNativePublisher,
-  sealTestNativeCLI, verifyTestNativeReceipt, verifyTestWindowsPreloader, verifyTestWindowsCLIPreloader } from "./test-native-publisher"
+  sealTestNativeCLI, verifyTestNativeReceipt, verifyTestWindowsPreloader, verifyTestWindowsCLIPreloader,
+  windowsNativePublisherTools } from "./test-native-publisher"
 import { guardReleaseNativePackage, prepareReleaseNativePublisher, releaseMacAssetIdentity } from "./native-publisher"
 import { sealInstalledNativeNode } from "./native-node-artifact"
 
@@ -35,6 +36,17 @@ async function fixture() {
   await fs.writeFile(`${executable}.native-components.json`, CanonicalJson.stringify(inventory), { mode: 0o600 })
   return { root, target, publisher, executable, environmentFile, inventory }
 }
+
+test("Windows publisher tools use only the configured local System32 paths", () => {
+  expect(windowsNativePublisherTools("C:\\Windows")).toEqual({
+    owner: "C:\\Windows\\System32\\whoami.exe", acl: "C:\\Windows\\System32\\icacls.exe",
+  })
+  expect(windowsNativePublisherTools("D:\\WINNT")).toEqual({
+    owner: "D:\\WINNT\\System32\\whoami.exe", acl: "D:\\WINNT\\System32\\icacls.exe",
+  })
+  for (const root of ["", "Windows", "C:Windows", "\\\\host\\Windows", "C:\\Windows\\..\\tools", "C:\\Windows\nOTHER=1"])
+    expect(() => windowsNativePublisherTools(root)).toThrow("QA_PUBLISHER_WINDOWS_ROOT_REJECTED")
+})
 
 test("one job gets fresh private temp keys, public-only environment references, and exact cleanup", async () => {
   const value = await fixture()
@@ -187,10 +199,14 @@ test("release publisher CLI prepares and destroys its real job keys and reports 
   const environmentFile = path.join(root, "job.env")
   await fs.writeFile(environmentFile, "", { mode: 0o600 })
   try {
+    if (process.platform === "win32")
+      await Promise.all(["whoami.exe", "icacls.exe", "cmd.exe"].map((name) => fs.writeFile(path.join(root, name), "not a Windows executable")))
     const environment = { ...process.env, RUNNER_TEMP: root, GITHUB_ENV: environmentFile, GITHUB_RUN_ID: "123",
       GITHUB_RUN_ATTEMPT: "1", DEEPAGENT_CODE_VERSION: "2.0.4", DEEPAGENT_CODE_CHANNEL: "prod",
       DAC_NATIVE_APPLE_SIGNED: "0", DEEPAGENT_CODE_RELEASE_NATIVE_PRIVATE_KEY: "",
-      DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY: "", DEEPAGENT_CODE_RELEASE_ID: "" }
+      DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY: "", DEEPAGENT_CODE_RELEASE_ID: "",
+      ...(process.platform === "win32" ? { PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+        COMSPEC: path.join(root, "cmd.exe") } : {}) }
     const run = async (phase: string, env: Record<string, string | undefined>) => {
       const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "native-publisher.ts"), phase],
         { cwd: root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
@@ -218,6 +234,39 @@ test("release publisher CLI prepares and destroys its real job keys and reports 
     expect(JSON.parse(cleanup.stdout)).toEqual({ state: "removed" })
     expect(await Bun.file(references.DEEPAGENT_CODE_RELEASE_NATIVE_PRIVATE_KEY).exists()).toBe(false)
     expect(await Bun.file(references.DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY).exists()).toBe(false)
+  } finally { await fs.rm(root, { recursive: true, force: true }) }
+})
+
+test.skipIf(process.platform !== "win32")("Windows owner and ACL command failures remove the unexported publisher directory", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-ci-windows-publisher-failure-")))
+  const environmentFile = path.join(root, "job.env")
+  await fs.writeFile(environmentFile, "", { mode: 0o600 })
+  try {
+    // Use the real system executable in an incomplete system-root fixture to
+    // exercise the ACL command failure, without changing the real OS directory.
+    const systemRoot = path.join(root, "incomplete-system-root")
+    await fs.mkdir(path.join(systemRoot, "System32"), { recursive: true })
+    await fs.copyFile(windowsNativePublisherTools().owner, path.join(systemRoot, "System32", "whoami.exe"))
+    for (const failure of [
+      { systemRoot: "relative", code: "QA_PUBLISHER_WINDOWS_ROOT_REJECTED" },
+      { systemRoot: path.join(root, "missing-system-root"), code: "QA_PUBLISHER_OWNER_COMMAND_FAILED" },
+      { systemRoot, code: "QA_PUBLISHER_ACL_COMMAND_FAILED" },
+    ]) {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "native-publisher.ts"), "prepare"], {
+        cwd: root, env: { ...process.env, SystemRoot: failure.systemRoot, RUNNER_TEMP: root, GITHUB_ENV: environmentFile,
+          GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1", DEEPAGENT_CODE_VERSION: "2.0.4", DAC_NATIVE_APPLE_SIGNED: "0",
+          DEEPAGENT_CODE_RELEASE_NATIVE_PRIVATE_KEY: "", DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY: "" },
+        stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      })
+      const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+      expect(exit).toBe(1)
+      expect(stdout).toBe("")
+      expect(JSON.parse(stderr)).toEqual({ state: "refused", phase: "prepare", code: failure.code, functionalAcceptance: false })
+      expect(stderr).not.toContain(root)
+      expect(stderr).not.toContain("-----BEGIN")
+      expect((await fs.readdir(root)).some((name) => name.startsWith("dac-release-native-publisher-"))).toBe(false)
+      expect(await fs.readFile(environmentFile, "utf8")).toBe("")
+    }
   } finally { await fs.rm(root, { recursive: true, force: true }) }
 })
 

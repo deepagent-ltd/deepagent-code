@@ -3,6 +3,7 @@ import path from "path"
 import { Shell } from "../../src/shell/shell"
 import { Filesystem } from "@/util/filesystem"
 import { which } from "@deepagent-code/core/util/which"
+import { ShellScan } from "@deepagent-code/core/shell/scan"
 
 const withShell = async (shell: string | undefined, fn: () => void | Promise<void>) => {
   const prev = process.env.SHELL
@@ -85,19 +86,23 @@ describe("shell", () => {
       })
     })
 
-    test("normalizes Git Bash shell paths from env", async () => {
+    test("normalizes explicitly configured Git Bash paths while inherited SHELL keeps the native default", async () => {
       const shell = "/cygdrive/c/Program Files/Git/bin/bash.exe"
       await withShell(shell, async () => {
-        expect(Shell.preferred()).toBe(Filesystem.windowsPath(shell))
+        expect(Shell.preferred()).toBe(ShellScan.defaultWindowsChain(ShellScan.windowsShells()))
+        if (Filesystem.stat(Filesystem.windowsPath(shell))?.isFile())
+          expect(Shell.preferred(shell)).toBe(Filesystem.windowsPath(shell))
       })
     })
 
-    test("resolves /usr/bin/bash from env to Git Bash", async () => {
+    test("resolves explicitly selected /usr/bin/bash to Git Bash without changing the default", async () => {
       const bash = Shell.gitbash()
       if (!bash) return
       await withShell("/usr/bin/bash", async () => {
-        expect(Shell.acceptable()).toBe(bash)
-        expect(Shell.preferred()).toBe(bash)
+        expect(Shell.acceptable("/usr/bin/bash")).toBe(bash)
+        expect(Shell.preferred("/usr/bin/bash")).toBe(bash)
+        expect(Shell.acceptable()).toBe(ShellScan.defaultWindowsChain(ShellScan.windowsShells()))
+        expect(Shell.preferred()).toBe(ShellScan.defaultWindowsChain(ShellScan.windowsShells()))
       })
     })
 
@@ -107,16 +112,22 @@ describe("shell", () => {
       expect(Shell.acceptable("bash")).toBe(bash)
       expect(Shell.preferred("bash")).toBe(bash)
       await withShell("bash", async () => {
-        expect(Shell.acceptable()).toBe(bash)
-        expect(Shell.preferred()).toBe(bash)
+        expect(Shell.acceptable()).toBe(ShellScan.defaultWindowsChain(ShellScan.windowsShells()))
+        expect(Shell.preferred()).toBe(ShellScan.defaultWindowsChain(ShellScan.windowsShells()))
       })
     })
 
     test("resolves bare PowerShell shells", async () => {
       const shell = which("pwsh") || which("powershell")
       if (!shell) return
-      await withShell(path.win32.basename(shell), async () => {
-        expect(Shell.preferred()).toBe(shell)
+      expect(Shell.preferred(path.win32.basename(shell))).toBe(shell)
+    })
+
+    test("ignores ambient SHELL even when no Git Bash is installed", async () => {
+      await withShell("/usr/bin/bash", async () => {
+        expect(Shell.preferred()).toBe(ShellScan.defaultWindowsChain(ShellScan.windowsShells()))
+        expect(Shell.acceptable()).toBe(ShellScan.defaultWindowsChain(ShellScan.windowsShells()))
+        expect(["pwsh", "powershell", "cmd"]).toContain(Shell.name(Shell.preferred()))
       })
     })
   }

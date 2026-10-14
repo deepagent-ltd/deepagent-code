@@ -107,10 +107,8 @@ export function win() {
   return Array.from(
     new Set(
       winChain({
-        pwsh: which("pwsh") ?? undefined,
-        powershell: which("powershell") ?? undefined,
+        ...ShellScan.windowsShells(),
         gitbash: gitbash(),
-        comspec: process.env.COMSPEC,
       }).map(full),
     ),
   )
@@ -132,11 +130,7 @@ function select(file: string | undefined, opts?: { acceptable?: boolean }) {
   // becomes the silent default (same source as the V2 core bash tool).
   if (process.platform === "win32")
     return full(
-      ShellScan.defaultWindowsChain({
-        pwsh: which("pwsh") ?? undefined,
-        powershell: which("powershell") ?? undefined,
-        comspec: process.env.COMSPEC,
-      }),
+      ShellScan.defaultWindowsChain(ShellScan.windowsShells()),
     )
   return fallback()
 }
@@ -220,8 +214,10 @@ export function args(file: string, command: string, cwd: string) {
   return ["-c", command]
 }
 
-const defaultPreferred = lazy(() => select(process.env.SHELL))
-const defaultAcceptable = lazy(() => select(process.env.SHELL, { acceptable: true }))
+// A Windows app started from Git Bash inherits SHELL=/usr/bin/bash. Only
+// explicit configuration selects that shell; the ordinary Windows default is native.
+const defaultPreferred = lazy(() => select(process.platform === "win32" ? undefined : process.env.SHELL))
+const defaultAcceptable = lazy(() => select(process.platform === "win32" ? undefined : process.env.SHELL, { acceptable: true }))
 
 export function preferred(configShell?: string) {
   if (configShell) return select(configShell)

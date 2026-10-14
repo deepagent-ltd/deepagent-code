@@ -90,10 +90,39 @@ test("the actual identity step propagates version, channel and Linux assets with
 test("Mac-only credentials cannot skip Linux sealing and configured Windows signing stays enabled", () => {
   const release = workflows[0].document.jobs["build-electron"].steps.find((step) => step.uses === "./.github/actions/package-desktop")!
   expect(release.with?.["macos-signed"]).toContain("runner.os == 'macOS' && needs.version.outputs.release != ''")
-  for (const name of ["CSC_NAME", "CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"])
+  for (const name of ["CSC_NAME", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"])
     expect(release.env?.[name]).toContain("runner.os == 'macOS' && needs.version.outputs.release != ''")
   expect(release.env?.CSC_NAME).toContain("secrets.APPLE_CSC_NAME")
   const desktop = workflows[1].document.jobs.build.steps.find((step) => step.uses === "./.github/actions/package-desktop")!
   expect(desktop.env?.DEEPAGENT_CODE_ALLOW_UNSIGNED).toContain("matrix.group == 'win' && env.HAS_TRUSTED_SIGNING == 'true'")
   expect(desktop.with?.["macos-signed"]).toContain("env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true'")
+  for (const name of ["APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"]) {
+    expect(release.env?.[name]).toContain(`secrets.${name}`)
+    expect(desktop.env?.[name]).toContain(`secrets.${name}`)
+  }
+  expect(release.env?.APPLE_API_KEY).toBeUndefined()
+  expect(workflows[0].document.jobs["build-electron"].steps.some((step) => step.run?.includes("apple-api-key.p8")))
+    .toBe(false)
+})
+
+test("formal Mac signing rejects incomplete credentials before certificate import without exposing values", async () => {
+  const steps = workflows[0].document.jobs["build-electron"].steps
+  const guard = steps.find((step) => step.name === "Validate macOS release signing credentials")!
+  const certificate = steps.find((step) => step.uses?.startsWith("apple-actions/import-codesign-certs@"))!
+  expect(guard.if).toBe("runner.os == 'macOS' && needs.version.outputs.release != ''")
+  expect(certificate.if).toBe(guard.if)
+  expect(steps.indexOf(guard)).toBeLessThan(steps.indexOf(certificate))
+  const names = ["APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_CSC_NAME", "APPLE_ID",
+    "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"]
+  const credentials = Object.fromEntries(names.map((name) => [name, "test-only-value-do-not-log"]))
+  for (const missing of [undefined, ...names]) {
+    const child = Bun.spawn(["bash", "-c", guard.run!], {
+      env: { ...Bun.env, ...credentials, ...(missing ? { [missing]: "" } : {}) },
+      stdout: "pipe", stderr: "pipe",
+    })
+    const output = await new Response(child.stdout).text() + await new Response(child.stderr).text()
+    expect(await child.exited).toBe(missing ? 1 : 0)
+    expect(output).not.toContain("test-only-value-do-not-log")
+    if (missing) expect(output).toContain(`Missing macOS release signing credential: ${missing}`)
+  }
 })
