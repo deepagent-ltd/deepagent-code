@@ -53,6 +53,7 @@ import { useDialog } from "../../ui/dialog"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { TodoItem } from "../../component/todo-item"
 import { DialogMessage } from "./dialog-message"
+import { PlanApproval } from "../../component/plan-approval"
 import type { PromptInfo } from "../../component/prompt/history"
 import { DialogConfirm } from "../../ui/dialog-confirm"
 import { DialogSelect } from "../../ui/dialog-select"
@@ -1674,7 +1675,13 @@ function UserMessage(props: {
             backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
             flexShrink={0}
           >
-            <text fg={theme.text}>{text()}</text>
+            <PlanApproval
+              text={text()}
+              sessionID={props.message.sessionID}
+              kind="approved"
+              approval={props.message.metadata?.dac_plan_approval}
+              fallback={<text fg={theme.text}>{text()}</text>}
+            />
             <Show when={files().length}>
               <box flexDirection="row" paddingBottom={metadataVisible() ? 1 : 0} paddingTop={1} gap={1} flexWrap="wrap">
                 <For each={files()}>

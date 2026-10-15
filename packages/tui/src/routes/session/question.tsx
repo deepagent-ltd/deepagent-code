@@ -12,6 +12,7 @@ import { useTuiI18n } from "../../context/i18n"
 import { useSync } from "../../context/sync"
 import { QuestionClient } from "../../context/question-client"
 import { useToast } from "../../ui/toast"
+import { PlanApproval } from "../../component/plan-approval"
 
 const QUESTION_MODE = "question"
 
@@ -400,10 +401,28 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
         <Show when={!confirm()}>
           <box paddingLeft={1} gap={1}>
             <box>
-              <text fg={theme.text}>
-                {question()?.question}
-                {multi() ? " (select all that apply)" : ""}
-              </text>
+              <Show
+                when={question()?.custom === false}
+                fallback={
+                  <text fg={theme.text}>
+                    {question()?.question}
+                    {multi() ? " (select all that apply)" : ""}
+                  </text>
+                }
+              >
+                <PlanApproval
+                  text={question()?.question ?? ""}
+                  sessionID={props.request.sessionID}
+                  kind="question"
+                  interactive={!store.editing}
+                  fallback={
+                    <text fg={theme.text}>
+                      {question()?.question}
+                      {multi() ? " (select all that apply)" : ""}
+                    </text>
+                  }
+                />
+              </Show>
             </box>
             <box>
               <For each={options()}>
