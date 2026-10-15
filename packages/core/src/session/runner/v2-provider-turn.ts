@@ -1368,7 +1368,10 @@ export function stream<A, E, R>(input: {
    * terminal provider outcome and is quarantined as `indeterminate_after_crash` instead of becoming a
    * retryable `failed` receipt.
    */
-  readonly terminalProviderFailure?: (error: unknown) => boolean
+  readonly terminalProviderFailure?: (
+    error: unknown,
+    input: { readonly providerEventsStarted: boolean },
+  ) => boolean
 }) {
   let current = input.receipt
   let reachedEnd = false
@@ -1460,7 +1463,7 @@ export function stream<A, E, R>(input: {
           }
           if (Exit.isFailure(exit) && Cause.findInterrupt(exit.cause)._tag === "Failure") {
             const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
-            if (input.terminalProviderFailure !== undefined && input.terminalProviderFailure(error)) {
+            if (input.terminalProviderFailure?.(error, { providerEventsStarted: current.state === "streaming" })) {
               return finalizeTransition(
                 input.service.settle({
                   receipt: current,

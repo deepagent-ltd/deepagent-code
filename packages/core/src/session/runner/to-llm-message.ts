@@ -186,3 +186,16 @@ ${message.recent}
 /** Translate projected V2 Session history into canonical @deepagent-code/llm context. */
 export const toLLMMessages = (messages: readonly SessionMessage.Message[], model: Model) =>
   messages.flatMap((message) => toLLMMessage(message, model))
+
+/** This runtime-authored assistant has no model reasoning. DeepSeek Chat still requires the
+ * explicit empty wire field while tools remain advertised, including toolChoice=none. */
+export const stepLimitMessage = (reasoningContinuation: boolean) =>
+  Message.make({
+    role: "assistant",
+    content: `CRITICAL - MAXIMUM STEPS REACHED
+
+The maximum number of steps allowed for this task has been reached. Tools are disabled until next user input. Respond with text only.
+
+Summarize the work completed so far, list any remaining tasks, and recommend what should happen next. Do not make any tool calls.`,
+    ...(reasoningContinuation ? { native: { openaiCompatible: { reasoning_content: "" } } } : {}),
+  })

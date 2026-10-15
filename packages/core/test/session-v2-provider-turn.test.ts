@@ -1,6 +1,9 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { generateKeyPairSync } from "node:crypto"
-import { LLM } from "@deepagent-code/llm"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { LLM, isTerminalProviderFailure } from "@deepagent-code/llm"
 import { LLMClient, RequestExecutor } from "@deepagent-code/llm/route"
 import { OpenAIResponses } from "@deepagent-code/llm/protocols/openai-responses"
 import { eq, sql } from "drizzle-orm"
@@ -13,6 +16,8 @@ import {
   SessionActivityTable,
   SessionContextSelectionTable,
   SessionContextValidationTable,
+  SessionProviderAttemptTable,
+  SessionProviderOwnerLeaseTable,
 } from "../src/context-federation/session-sql"
 import {
   LocationIdentityTable,
@@ -56,6 +61,114 @@ const projectScope = ProjectScopeKey.make("prj_v2_provider_turn")
 const locationKey = LocationKey.make("loc_v2_provider_turn")
 
 describe("V2 provider turn authority", () => {
+  for (const status of [400, 503]) {
+    test(`structured HTTP ${status} preserves the terminal boundary in a real file database`, async () => {
+      const directory = await mkdtemp(path.join(tmpdir(), "dac-provider-rejection-"))
+      const database = Database.layerFromPath(path.join(directory, "authority.sqlite"))
+      const owners = SessionProviderOwner.layer
+      const layer = Layer.mergeAll(
+        owners,
+        SessionProviderAttempt.layer,
+        V2ProviderTurn.layer.pipe(Layer.provide(owners)),
+        LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer)),
+      )
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const db = (yield* Database.Service).db
+            const recorded = yield* Effect.scoped(
+              Effect.gen(function* () {
+                yield* seed()
+                const service = yield* V2ProviderTurn.Service
+                const receipt = yield* admit(service, `msg-structured-http-${status}`)
+                const observed = { requests: 0, events: 0 }
+                const server = Bun.serve({
+                  hostname: "127.0.0.1",
+                  port: 0,
+                  fetch: () => {
+                    observed.requests++
+                    return Response.json(
+                      {
+                        error: {
+                          message: "Fixture request rejected",
+                          type: "invalid_request_error",
+                          code: "invalid_request_error",
+                        },
+                      },
+                      { status },
+                    )
+                  },
+                })
+                yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
+                const client = yield* LLMClient.Service
+                const exit = yield* V2ProviderTurn.stream({
+                  service,
+                  receipt,
+                  prepare: (wireHash) => prepared(receipt, wireHash, true),
+                  stream: client
+                    .stream(
+                      LLM.request({
+                        model: OpenAIResponses.route
+                          .with({ endpoint: { baseURL: `${server.url.origin}/v1` } })
+                          .model({ id: "fixture-model" }),
+                        system: "Fixed fixture instructions",
+                        prompt: "Rejected before generation",
+                        generation: { maxTokens: 16 },
+                      }),
+                    )
+                    .pipe(
+                      Stream.tap(() =>
+                        Effect.sync(() => {
+                          observed.events++
+                        }),
+                      ),
+                    ),
+                  outcomeArtifact: () => [],
+                  errorCode: () => `provider_stream_failed:http-${status}`,
+                  terminalProviderFailure: isTerminalProviderFailure,
+                }).pipe(Stream.runDrain, Effect.exit)
+                expect(exit._tag).toBe("Failure")
+                expect(observed).toEqual({ requests: 1, events: 0 })
+                const expected = status === 400 ? "failed" : "indeterminate_after_crash"
+                expect(yield* service.get(receipt.receiptId)).toMatchObject({
+                  state: expected,
+                  errorCode: `provider_stream_failed:http-${status}`,
+                })
+                expect(
+                  yield* db
+                    .select()
+                    .from(SessionProviderAttemptTable)
+                    .where(eq(SessionProviderAttemptTable.attempt_id, receipt.providerAttemptId!))
+                    .get(),
+                ).toMatchObject({
+                  state: expected,
+                })
+                return { ownerToken: receipt.ownerToken, receiptId: receipt.receiptId }
+              }).pipe(Effect.provide(layer)),
+            )
+            const owner = yield* db
+              .select()
+              .from(SessionProviderOwnerLeaseTable)
+              .where(eq(SessionProviderOwnerLeaseTable.owner_token, recorded.ownerToken))
+              .get()
+            expect(owner?.released_at).toBeNumber()
+            expect(
+              yield* db
+                .select()
+                .from(V2ProviderTurnReceiptTable)
+                .where(eq(V2ProviderTurnReceiptTable.receipt_id, recorded.receiptId))
+                .get(),
+            ).toMatchObject({
+              state: status === 400 ? "failed" : "indeterminate_after_crash",
+            })
+          }).pipe(Effect.provide(database), Effect.scoped),
+        )
+      } finally {
+        await rm(directory, { recursive: true, force: true })
+      }
+    })
+  }
+
   it.live("seals and settles a naturally completed stream exactly once", () =>
     Effect.gen(function* () {
       yield* seed()

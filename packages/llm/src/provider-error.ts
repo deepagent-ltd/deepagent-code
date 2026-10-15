@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { LLMError, ProviderErrorEvent } from "./schema"
 
 const patterns = [
@@ -31,7 +31,27 @@ export const isContextOverflowFailure = (failure: unknown) =>
     ? failure.reason._tag === "InvalidRequest" && failure.reason.classification === "context-overflow"
     : Schema.is(ProviderErrorEvent)(failure) && failure.classification === "context-overflow"
 
-// A rejected API key never starts generation, so the provider turn can settle as failed instead
-// of claiming its outcome is unknown and blocking the conversation for manual recovery.
-export const isTerminalProviderFailure = (failure: unknown) =>
-  isContextOverflowFailure(failure) || (failure instanceof LLMError && failure.reason._tag === "Authentication")
+const requestRejection = Schema.fromJsonString(
+  Schema.Struct({
+    error: Schema.Struct({
+      type: Schema.Literal("invalid_request_error"),
+      code: Schema.Literal("invalid_request_error"),
+    }),
+  }),
+)
+
+// A complete structured HTTP refusal before the first provider event proves the
+// request was rejected. A bare status/message or a failure after output does not.
+export const isTerminalProviderFailure = (failure: unknown, input?: { readonly providerEventsStarted: boolean }) => {
+  if (isContextOverflowFailure(failure)) return true
+  if (!(failure instanceof LLMError)) return false
+  if (failure.reason._tag === "Authentication") return true
+  if (failure.reason._tag !== "InvalidRequest" || input?.providerEventsStarted !== false) return false
+  const http = failure.reason.http
+  return (
+    http?.response?.status === 400 &&
+    http.bodyTruncated !== true &&
+    http.body !== undefined &&
+    Option.isSome(Schema.decodeUnknownOption(requestRejection)(http.body))
+  )
+}

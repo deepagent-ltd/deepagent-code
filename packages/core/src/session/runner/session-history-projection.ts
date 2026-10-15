@@ -104,11 +104,11 @@ export const clearedBudgetTokens = () =>
  *
  * `DEEPAGENT_CODE_HISTORY_PROJECTION_REASONING=all` restores full replay for A/B measurement.
  *
- * Protocol-aware default: the caller (runner/llm.ts) passes `reasoningKeep: 0` for the
- * OpenAI-family wire formats, where replaying past `reasoning_content` is optional (DeepSeek
- * only requires the FIELD on tool-call turns and an empty string satisfies it; GLM harnesses
- * never replay). Anthropic keeps the current turn's signed thinking for tool-call continuity,
- * so the module default stays 1 there.
+ * Protocol-aware default: the caller passes `reasoningKeep: 0` for OpenAI-family protocols.
+ * DeepSeek Chat is an explicit exception: requests carrying tools require the complete reasoning
+ * of the current user turn, including assistant turns without tool calls. Its continuation window
+ * is mandatory and survives a keep=0 optimization; prior user turns retain the normal policy.
+ * Anthropic keeps the current turn's signed thinking, so the module default stays 1 there.
  */
 const REASONING_KEEP_DEFAULT = 1
 // `fallback` is the protocol-aware default from the caller; an explicit env override still wins.
@@ -117,6 +117,9 @@ export const reasoningMessagesKept = (fallback: number = REASONING_KEEP_DEFAULT)
   if (raw !== undefined && raw.trim().toLowerCase() === "all") return Number.MAX_SAFE_INTEGER
   return parseNonNegativeInt(raw, fallback)
 }
+
+export const requiresReasoningContinuation = (providerID: string, protocol: string | null | undefined) =>
+  providerID === "deepseek" && protocol === "openai-compatible.chat"
 
 const toolOutputCaps = (): Record<string, number> => {
   const raw = process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CAPS"]
@@ -242,7 +245,7 @@ export type ProjectionResult = {
  */
 export const projectForModel = (
   messages: readonly SessionMessage.Message[],
-  options?: { readonly reasoningKeep?: number },
+  options?: { readonly reasoningKeep?: number; readonly reasoningContinuation?: boolean },
 ): ProjectionResult => {
   if (!projectionEnabled()) return { messages, truncated: 0, savedChars: 0 }
   const caps = toolOutputCaps()
@@ -316,25 +319,29 @@ export const projectForModel = (
       }
     }
   }
-  // Which assistant messages keep their reasoning. Walk from the newest: the first `keep` messages
-  // that CARRY reasoning are protected, everything older loses it.
+  // Only a durable user message starts a new provider turn. Synthetic context and later volatile
+  // request instructions must not cut a tool continuation's required reasoning chain.
+  const continuationFrom = options?.reasoningContinuation
+    ? messages.findLastIndex((message) => message.type === "user") + 1
+    : messages.length
   const keepReasoning = reasoningMessagesKept(options?.reasoningKeep)
   const reasoningKept = new Set<number>()
-  for (let m = messages.length - 1; m >= 0 && reasoningKept.size < keepReasoning; m--) {
+  for (let m = messages.length - 1; m >= 0; m--) {
     const message = messages[m]
     if (message?.type !== "assistant") continue
-    if (message.content.some((part) => part.type === "reasoning")) reasoningKept.add(m)
+    if (
+      message.content.some((part) => part.type === "reasoning") &&
+      (m >= continuationFrom || reasoningKept.size < keepReasoning)
+    )
+      reasoningKept.add(m)
   }
   const projected = messages.map((message, m) => {
     if (message.type !== "assistant") return message
     let changed = false
     const content: Array<SessionMessage.AssistantContent> = []
     for (const [p, part] of message.content.entries()) {
-      // Drop replayed reasoning from older turns. The model cannot re-derive the CURRENT turn's
-      // chain (it produced the tool calls this request continues), so that one is kept; an earlier
-      // chain is a repetition of thinking the model already acted on, and it was 41% of the request
-      // in the measured run. Dropping a part is not truncation: nothing is paraphrased, and the
-      // durable history keeps every byte for audit.
+      // Required continuation reasoning is copied verbatim. Optional older reasoning can be
+      // omitted from the request; the durable history always keeps the original audit bytes.
       if (part.type === "reasoning") {
         if (reasoningKept.has(m)) content.push(part)
         else {

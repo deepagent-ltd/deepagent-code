@@ -17,6 +17,7 @@ import {
   type LLMRequest,
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../src/agent-gateway"
+import { RequestExecutor } from "@deepagent-code/llm/route"
 import { DeepAgentActivityAuthority, DeepAgentPlanStore } from "../src/deepagent"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { AppProcess } from "@deepagent-code/core/process"
@@ -4847,6 +4848,60 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(2)
       expect(userTexts(requests[1]!)).toEqual(["Start working", "Recover with this"])
+    }),
+  )
+
+  it.live("settles a structured HTTP request refusal through the actual Session runner", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const observed = { requests: 0 }
+      const server = Bun.serve({
+        hostname: "127.0.0.1", port: 0,
+        fetch: () => {
+          observed.requests++
+          return Response.json({ error: {
+            message: "Fixture request rejected before generation",
+            type: "invalid_request_error", code: "invalid_request_error",
+          } }, { status: 400 })
+        },
+      })
+      yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
+      currentModel = OpenAIChat.route.with({
+        endpoint: { baseURL: `${server.url.origin}/v1` },
+        limits: { context: 128_000, output: 1_024 },
+      }).model({ id: "fixture-local-rejected" })
+      requests.length = 0
+      // Keep the existing runner fixture while using the real encoder/executor
+      // and local HTTP response. No generated model events or mocked transport.
+      responseStream = Stream.unwrap(LLMClient.Service.pipe(Effect.map((client) => {
+        const request = requests.at(-1)
+        if (!request) throw new Error("Actual runner request is missing")
+        return client.stream(request)
+      }))).pipe(Stream.provide(LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))))
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Reject this fixture request" }), resume: false })
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+      expect(failure).toBeInstanceOf(LLMError)
+      if (failure instanceof LLMError) expect(failure.reason).toMatchObject({
+        _tag: "InvalidRequest", http: { response: { status: 400 } },
+      })
+      expect(observed.requests).toBe(1)
+      expect(requests).toHaveLength(1)
+      expect(yield* db.select().from(SessionActivityTable)
+        .where(eq(SessionActivityTable.session_id, sessionID)).get()).toMatchObject({ state: "failed", settled_at: expect.any(Number) })
+      const receipts = yield* db.select().from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all()
+      expect(receipts).toHaveLength(1)
+      expect(receipts[0]).toMatchObject({ state: "failed", first_event_at: null, outcome_artifact: [] })
+      expect(yield* db.select().from(SessionProviderAttemptTable)
+        .where(eq(SessionProviderAttemptTable.attempt_id, receipts[0]!.provider_attempt_id!)).get()).toMatchObject({
+        state: "failed", settled_at: expect.any(Number),
+      })
+      expect(yield* db.select().from(V2ToolEffectTable)
+        .where(eq(V2ToolEffectTable.session_id, sessionID)).all()).toEqual([])
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get())
+        .toMatchObject({ execution_claim_token: null })
     }),
   )
 

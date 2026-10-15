@@ -14,7 +14,7 @@ import {
 } from "@deepagent-code/llm"
 import { RequestExecutor } from "@deepagent-code/llm/route"
 import { AgentGateway } from "../../agent-gateway"
-import { and, count, desc, eq, gt, inArray } from "drizzle-orm"
+import { and, count, desc, eq, gt, inArray, isNotNull } from "drizzle-orm"
 import { Cause, DateTime, Duration, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import path from "node:path"
 import { AgentV2 } from "../../agent"
@@ -41,7 +41,7 @@ import { SessionCompaction } from "../compaction"
 import { LongContext } from "../long-context"
 import { CompactionRequest } from "../compaction-request"
 import { SessionContext } from "../../context-federation/session-context"
-import { SessionActivityTable } from "../../context-federation/session-sql"
+import { SessionActivityTable, SessionProviderAttemptTable } from "../../context-federation/session-sql"
 import { ContextQueryAuthorization } from "../../context-federation/query-authorization"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
@@ -88,7 +88,7 @@ import { V2ToolEffectTable } from "./v2-tool-effect.sql"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { normalizeAttachments } from "./attachments"
 import { rehydrateToolArtifacts } from "./tool-artifacts"
-import { toLLMMessages } from "./to-llm-message"
+import { stepLimitMessage, toLLMMessages } from "./to-llm-message"
 import { SessionHistoryProjection } from "./session-history-projection"
 import { ModelPromptProfile } from "../../deepagent/model-prompt-profile"
 import { forgetSessionStageMarker } from "../../deepagent/prompt-policy"
@@ -219,12 +219,6 @@ const PROVIDER_RETRY_MAX_DELAY_MS = 10_000
 // instead of killing the drain.
 const TOOL_PATH_DEFECT =
   /^(Absolute path escapes the location|Path escapes the location|Path escapes managed tool output|Absolute paths cannot use a project reference|Absolute path is not managed tool output|Path is not a file or directory|Path is not a file|Path is not a directory|Unknown project reference|Path does not exist|Offset \d+ is out of range|Failed to find expected lines in |No changes to apply: |oldString cannot be empty when editing an existing file|filePath is required|File .* not found|Path is a directory, not a file: |Cannot read binary file: |Media exceeds \d+ byte ingestion limit: )/
-
-const MAX_STEPS_PROMPT = `CRITICAL - MAXIMUM STEPS REACHED
-
-The maximum number of steps allowed for this task has been reached. Tools are disabled until next user input. Respond with text only.
-
-Summarize the work completed so far, list any remaining tasks, and recommend what should happen next. Do not make any tool calls.`
 
 // B4 (design §7.3): tiered context-window budget warning for the volatile system tail. Tiers
 // align with the goal-loop soft-notify fractions (GoalLoop.DEFAULT_SOFT_NOTIFY_FRACTIONS
@@ -1101,16 +1095,19 @@ export const layer = Layer.effect(
       // holds). The result carries THIS call's truncation stats (no module-global counters —
       // concurrent sessions cannot settle each other's numbers); the per-turn fold into
       // observability happens below.
-      // Hoisted ahead of the projection call so the reasoning-replay default can be
-      // protocol-aware: OpenAI-family wire formats never replay past reasoning_content
-      // (DeepSeek only requires the FIELD on tool-call turns, and an empty string satisfies
-      // it), while Anthropic keeps the current turn's signed thinking for tool continuity.
+      // DeepSeek Chat requires verbatim reasoning across the current user's tool continuation.
+      // The ordinary OpenAI projection default cannot override that provider contract.
+      const reasoningContinuation = SessionHistoryProjection.requiresReasoningContinuation(
+        String(model.provider),
+        modelProtocol,
+      )
       const openaiFamilyProtocol =
         modelProtocol === "openai.responses" ||
         modelProtocol === "openai-compatible.responses" ||
         modelProtocol === "openai-compatible.chat"
       const projection = SessionHistoryProjection.projectForModel(context, {
         reasoningKeep: openaiFamilyProtocol ? 0 : undefined,
+        reasoningContinuation,
       })
       const historyRequestMessages = yield* normalizeAttachments(
         yield* rehydrateToolArtifacts(projection.messages, session.id, toolMaterialization.rehydrateArtifact),
@@ -1123,7 +1120,7 @@ export const layer = Layer.effect(
           : governedPlanContext
             ? [Message.user(governedPlanContext)]
             : []),
-        ...(stepLimitReached ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
+        ...(stepLimitReached ? [stepLimitMessage(reasoningContinuation)] : []),
       ]
       const requestMessages = [...historyMessages, ...controlMessages]
       // G3 model profile channel 3 (runtime params): clamp the activation policy's suggested
@@ -1961,7 +1958,7 @@ export const layer = Layer.effect(
         outcomeArtifact: () => providerEvents,
         errorCode: (error) => `provider_stream_failed:${Hash.sha256(String(error)).slice(0, 16)}`,
         ...(integrityIdentity === undefined ? {} : { integrityIdentity }),
-        // Context overflow and authentication rejection are known before generation. Other
+        // Typed provider refusals known to precede generation can close a failed receipt. Other
         // post-dispatch failures remain indeterminate until recovery confirms their outcome.
         terminalProviderFailure: isTerminalProviderFailure,
       })
@@ -2124,7 +2121,45 @@ export const layer = Layer.effect(
             yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
           if (stream._tag === "Success" && !publisher.hasProviderError())
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
-          if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
+          if (stream._tag === "Failure") {
+            if (
+              llmFailure &&
+              isTerminalProviderFailure(llmFailure, { providerEventsStarted: providerEvents.length > 0 }) &&
+              providerReceipt.providerAttemptId !== undefined &&
+              (yield* providerTurns.currentOwnerToken()) === providerReceipt.ownerToken &&
+              (yield* toolEffects.listPendingForSession(session.id)).length === 0
+            ) {
+              // A known refusal is terminal only for this exact still-owned attempt/activity.
+              // Quarantined receipts and unresolved tool effects must retain recovery authority.
+              const terminal = yield* db.select({ activityID: SessionActivityTable.activity_id })
+                .from(V2ProviderTurnReceiptTable)
+                .innerJoin(SessionProviderAttemptTable,
+                  eq(SessionProviderAttemptTable.attempt_id, V2ProviderTurnReceiptTable.provider_attempt_id))
+                .innerJoin(SessionActivityTable,
+                  eq(SessionActivityTable.activity_id, V2ProviderTurnReceiptTable.activity_id))
+                .where(and(
+                  eq(V2ProviderTurnReceiptTable.receipt_id, providerReceipt.receiptId),
+                  eq(V2ProviderTurnReceiptTable.session_id, session.id),
+                  eq(V2ProviderTurnReceiptTable.activity_id, selectionAdmission.activityId),
+                  eq(V2ProviderTurnReceiptTable.provider_attempt_id, providerReceipt.providerAttemptId),
+                  eq(V2ProviderTurnReceiptTable.owner_token, providerReceipt.ownerToken),
+                  eq(V2ProviderTurnReceiptTable.state, "failed"),
+                  isNotNull(V2ProviderTurnReceiptTable.terminal_at),
+                  eq(SessionProviderAttemptTable.session_id, session.id),
+                  eq(SessionProviderAttemptTable.activity_id, selectionAdmission.activityId),
+                  eq(SessionProviderAttemptTable.owner_token, providerReceipt.ownerToken),
+                  eq(SessionProviderAttemptTable.state, "failed"),
+                  isNotNull(SessionProviderAttemptTable.settled_at),
+                  eq(SessionActivityTable.session_id, session.id),
+                  eq(SessionActivityTable.state, "active"),
+                )).get().pipe(Effect.orDie)
+              if (terminal)
+                yield* Effect.uninterruptible(
+                  contexts.settleActivity({ activityId: terminal.activityID, state: "failed" }),
+                ).pipe(Effect.orDie)
+            }
+            return yield* Effect.failCause(stream.cause)
+          }
           if (settled._tag === "Failure") return yield* Effect.failCause(settled.cause)
           // UPD-002/RI-126: a captured StructuredOutput call ends the turn — the value persists
           // on the assistant (StructuredCaptured) and the drain stops without another provider
