@@ -1,13 +1,24 @@
 #define WIN32_LEAN_AND_MEAN
 #define CINTERFACE
 #include <windows.h>
+#include <delayimp.h>
 #include <msctf.h>
 #include <node_api.h>
 #include <stddef.h>
+#include <string.h>
 
 #if !defined(DAC_MANAGED_BROWSER_INPUT_ELECTRON_VERSION) || !defined(DAC_MANAGED_BROWSER_INPUT_NODE_VERSION)
 #error The fixed publisher must provide the reviewed managed browser input runtime cohort
 #endif
+
+// Electron exports Node symbols from its actual host image, including when the
+// packaged executable is renamed. Never search for a node.exe/node.dll fallback.
+static FARPROC WINAPI nodeImage(unsigned int notification, DelayLoadInfo* dependency) {
+  if (notification != dliNotePreLoadLibrary || !dependency || !dependency->szDll ||
+      _stricmp(dependency->szDll, "node.exe") != 0) return nullptr;
+  return reinterpret_cast<FARPROC>(GetModuleHandleW(nullptr));
+}
+decltype(__pfnDliNotifyHook2) __pfnDliNotifyHook2 = nodeImage;
 
 // Candidate only. The fixed publisher must qualify the real current TSF objects,
 // child windows, native IME and CDP separation before selecting this asset.
@@ -81,6 +92,18 @@ static ULONG references(Sink* value) {
 static bool bytesEqual(const char* a, const char* b) {
   while (*a && *a == *b) { ++a; ++b; }
   return *a == *b;
+}
+static bool sameObject(IUnknown* first, IUnknown* second) {
+  if (!first || !second) return first == second;
+  IUnknown* original = nullptr;
+  IUnknown* current = nullptr;
+  const bool same =
+    first->lpVtbl->QueryInterface(first, IID_IUnknown, reinterpret_cast<void**>(&original)) == S_OK && original &&
+    second->lpVtbl->QueryInterface(second, IID_IUnknown, reinterpret_cast<void**>(&current)) == S_OK && current &&
+    original == current;
+  if (current) current->lpVtbl->Release(current);
+  if (original) original->lpVtbl->Release(original);
+  return same;
 }
 static bool property(napi_env env, napi_value object, const char* key, const char* expected) {
   napi_value value;
@@ -263,7 +286,8 @@ static ULONG STDMETHODCALLTYPE editRelease(ITfTextEditSink* value) {
 }
 static bool captured(Owner* value, ITfDocumentMgr* document, ITfContext* context = nullptr) {
   for (unsigned i = 0; i < value->contextsCount; ++i)
-    if (value->contexts[i].document == document && (!context || value->contexts[i].context == context)) return true;
+    if (sameObject(reinterpret_cast<IUnknown*>(value->contexts[i].document), reinterpret_cast<IUnknown*>(document)) &&
+        (!context || sameObject(reinterpret_cast<IUnknown*>(value->contexts[i].context), reinterpret_cast<IUnknown*>(context)))) return true;
   return false;
 }
 static void changedDocument(Owner* value, ITfDocumentMgr* document) {
@@ -312,7 +336,8 @@ static HRESULT STDMETHODCALLTYPE edited(ITfTextEditSink* sink, ITfContext* conte
   Callback callback(value);
   if (!callback.entered || value->closed || value->closing) return S_OK;
   bool known = false;
-  for (unsigned i = 0; i < value->contextsCount; ++i) if (value->contexts[i].context == context) known = true;
+  for (unsigned i = 0; i < value->contextsCount; ++i)
+    if (sameObject(reinterpret_cast<IUnknown*>(value->contexts[i].context), reinterpret_cast<IUnknown*>(context))) known = true;
   HWND window = nullptr;
   if (!known || !contextWindow(context, &window)) { invalidate(value); return S_OK; }
   signalWindow(value, window);
@@ -323,7 +348,7 @@ static const ITfThreadMgrEventSinkVtbl threadMethods = {
 };
 static const ITfTextEditSinkVtbl editMethods = { editQuery, editAdd, editRelease, edited };
 
-struct Census { Watch* watch; unsigned count; bool valid; bool capture; };
+struct Census { Watch* watch; unsigned count; unsigned seen; bool valid; bool capture; };
 static bool windowIdentity(Watch* watch, HWND window, WNDPROC* procedure) {
   DWORD process = 0;
   const DWORD thread = GetWindowThreadProcessId(window, &process);
@@ -345,9 +370,13 @@ static BOOL CALLBACK child(HWND window, LPARAM parameter) {
     census->watch->children[i] = window; census->watch->procedures[i + 1] = procedure;
     return TRUE;
   }
-  if (census->watch->children[i] != window || census->watch->procedures[i + 1] != procedure) {
+  unsigned index = 0;
+  while (index < census->watch->childrenCount && census->watch->children[index] != window) ++index;
+  if (index == census->watch->childrenCount || (census->seen & (1u << index)) ||
+      census->watch->procedures[index + 1] != procedure) {
     census->valid = false; return FALSE;
   }
+  census->seen |= 1u << index;
   return TRUE;
 }
 static bool windowsCurrent(Watch* watch, bool capture = false) {
@@ -355,7 +384,7 @@ static bool windowsCurrent(Watch* watch, bool capture = false) {
   if (!windowIdentity(watch, watch->root, &root)) return false;
   if (capture) watch->procedures[0] = root;
   if (watch->procedures[0] != root) return false;
-  Census census{watch, 0, true, capture};
+  Census census{watch, 0, 0, true, capture};
   EnumChildWindows(watch->root, child, reinterpret_cast<LPARAM>(&census));
   if (!census.valid) return false;
   if (capture) watch->childrenCount = census.count;
@@ -369,13 +398,8 @@ static bool contextsCurrent(Watch* watch) {
   if (module != value->managerModule || !get) return false;
   ITfThreadMgr* manager = nullptr;
   const HRESULT active = get(&manager);
-  IUnknown* original = nullptr;
-  IUnknown* current = nullptr;
   const bool same = SUCCEEDED(active) && manager &&
-    SUCCEEDED(value->manager->lpVtbl->QueryInterface(value->manager, IID_IUnknown, reinterpret_cast<void**>(&original))) && original &&
-    SUCCEEDED(manager->lpVtbl->QueryInterface(manager, IID_IUnknown, reinterpret_cast<void**>(&current))) && current && current == original;
-  if (current) current->lpVtbl->Release(current);
-  if (original) original->lpVtbl->Release(original);
+    sameObject(reinterpret_cast<IUnknown*>(value->manager), reinterpret_cast<IUnknown*>(manager));
   if (manager) manager->lpVtbl->Release(manager);
   if (!same) return false;
   IEnumTfDocumentMgrs* documents = nullptr;
@@ -393,7 +417,8 @@ static bool contextsCurrent(Watch* watch) {
       valid = false; break;
     }
     unsigned index = 0;
-    while (index < value->contextsCount && value->contexts[index].document != document) ++index;
+    while (index < value->contextsCount &&
+           !sameObject(reinterpret_cast<IUnknown*>(value->contexts[index].document), reinterpret_cast<IUnknown*>(document))) ++index;
     if (index == value->contextsCount || (identities & (1u << index))) {
       document->lpVtbl->Release(document); valid = false; break;
     }
@@ -403,8 +428,10 @@ static bool contextsCurrent(Watch* watch) {
     const Context* item = &value->contexts[index];
     ITfContext* top = nullptr;
     ITfContext* base = nullptr;
-    valid = document == item->document && SUCCEEDED(document->lpVtbl->GetTop(document, &top)) && top == item->context &&
-      SUCCEEDED(document->lpVtbl->GetBase(document, &base)) && base == top;
+    valid = SUCCEEDED(document->lpVtbl->GetTop(document, &top)) &&
+      sameObject(reinterpret_cast<IUnknown*>(top), reinterpret_cast<IUnknown*>(item->context)) &&
+      SUCCEEDED(document->lpVtbl->GetBase(document, &base)) &&
+      sameObject(reinterpret_cast<IUnknown*>(base), reinterpret_cast<IUnknown*>(top));
     HWND window = nullptr;
     if (valid && top) valid = contextWindow(top, &window);
     if (base) base->lpVtbl->Release(base);
@@ -527,7 +554,8 @@ static bool start(Owner* value) {
     if (!item->context) continue;
     ITfContext* base = nullptr;
     const HRESULT bottom = document->lpVtbl->GetBase(document, &base);
-    const bool single = SUCCEEDED(bottom) && base == item->context;
+    const bool single = SUCCEEDED(bottom) &&
+      sameObject(reinterpret_cast<IUnknown*>(base), reinterpret_cast<IUnknown*>(item->context));
     if (base) base->lpVtbl->Release(base);
     if (!single) { complete = false; break; }
     if (FAILED(item->context->lpVtbl->QueryInterface(item->context, IID_ITfSource,
