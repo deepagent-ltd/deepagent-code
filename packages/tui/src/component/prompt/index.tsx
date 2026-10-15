@@ -498,6 +498,65 @@ export function Prompt(props: PromptProps) {
     }
   })
 
+  async function runGoalCommand() {
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    const client = sdk.client
+    const scope = { server: sdk.url, directory: project.instance.path().directory, sessionID }
+    const text = store.prompt.input
+    const command = text.trim().replace(/^\/goal\b\s*/, "").trim()
+    const current = () =>
+      !goalDisposed &&
+      props.sessionID === sessionID &&
+      sdk.client === client &&
+      sdk.url === scope.server &&
+      project.instance.path().directory === scope.directory
+    try {
+      const start = command
+        ? undefined
+        : await openGoalStart({
+            dialog,
+            current,
+            text: (key) => i18n.t(`tui.goal.start.${key}` as Parameters<typeof i18n.t>[0]),
+          })
+      if (!command && !start) return
+      const { snapshot } = await goalCommands.run({
+        client: client as unknown as GoalClient.Client,
+        scope,
+        command,
+        start,
+        current,
+      })
+      if (!current()) return
+      const observed = sync.data.session_goal[sessionID]
+      if (observed && observed.goalId !== snapshot.goalId) {
+        await sync.goal.sync(sessionID).catch(() => undefined)
+        return
+      }
+      if (!observed || GoalClient.accepts(observed.control, snapshot)) sync.goal.set(sessionID, snapshot)
+      // A late acknowledgement cannot consume text typed after this command was submitted.
+      if (store.prompt.input === text) {
+        input.setText("")
+        setStore("prompt", { input: "", parts: [] })
+      }
+      toast.show({ variant: "success", message: i18n.t("tui.goal.control.accepted"), duration: 4000 })
+      dialog.clear()
+    } catch (error) {
+      if (!current()) return
+      toast.show({
+        variant: "warning",
+        message:
+          error instanceof GoalClient.RequestError && error.unknownOutcome
+            ? `${i18n.t("tui.goal.control.unknown")} /goal retry`
+            : error instanceof Error
+              ? error.message
+              : i18n.t("tui.goal.control.failed"),
+        duration: 6000,
+      })
+      await sync.goal.sync(sessionID).catch(() => undefined)
+    }
+  }
+
   const promptCommands = createMemo(() =>
     [
       {
@@ -778,64 +837,7 @@ export function Prompt(props: PromptProps) {
         category: "Session",
         slashName: "goal",
         enabled: capabilities()?.goalLoop === true,
-        run: async () => {
-          const sessionID = props.sessionID
-          if (!sessionID) return
-          const client = sdk.client
-          const scope = { server: sdk.url, directory: project.instance.path().directory, sessionID }
-          const text = store.prompt.input
-          const command = text.replace(/^\/goal\b\s*/, "").trim()
-          const current = () =>
-            !goalDisposed &&
-            props.sessionID === sessionID &&
-            sdk.client === client &&
-            sdk.url === scope.server &&
-            project.instance.path().directory === scope.directory
-          try {
-            const start = command
-              ? undefined
-              : await openGoalStart({
-                  dialog,
-                  current,
-                  text: (key) => i18n.t(`tui.goal.start.${key}` as Parameters<typeof i18n.t>[0]),
-                })
-            if (!command && !start) return
-            const { snapshot } = await goalCommands.run({
-              client: client as unknown as GoalClient.Client,
-              scope,
-              command,
-              start,
-              current,
-            })
-            if (!current()) return
-            const observed = sync.data.session_goal[sessionID]
-            if (observed && observed.goalId !== snapshot.goalId) {
-              await sync.goal.sync(sessionID).catch(() => undefined)
-              return
-            }
-            if (!observed || GoalClient.accepts(observed.control, snapshot)) sync.goal.set(sessionID, snapshot)
-            // A late acknowledgement cannot consume text typed after this command was submitted.
-            if (store.prompt.input === text) {
-              input.setText("")
-              setStore("prompt", { input: "", parts: [] })
-            }
-            toast.show({ variant: "success", message: i18n.t("tui.goal.control.accepted"), duration: 4000 })
-            dialog.clear()
-          } catch (error) {
-            if (!current()) return
-            toast.show({
-              variant: "warning",
-              message:
-                error instanceof GoalClient.RequestError && error.unknownOutcome
-                  ? `${i18n.t("tui.goal.control.unknown")} /goal retry`
-                  : error instanceof Error
-                    ? error.message
-                    : i18n.t("tui.goal.control.failed"),
-              duration: 6000,
-            })
-            await sync.goal.sync(sessionID).catch(() => undefined)
-          }
-        },
+        run: runGoalCommand,
       },
       {
         title: i18n.t("tui.prompt.moveSession"),
@@ -1350,6 +1352,16 @@ export function Prompt(props: PromptProps) {
     if (workspace.creating() || move.creating()) return false
     if (auto()?.visible) return false
     if (!store.prompt.input) return false
+    // Client Goal commands with arguments do not appear in the server command list.
+    // Dispatch them before model selection or ordinary prompt admission.
+    if (store.mode === "normal" && /^\/goal(?:\s|$)/.test(store.prompt.input.trim())) {
+      if (!props.sessionID || capabilities()?.goalLoop !== true) {
+        toast.show({ variant: "warning", message: i18n.t("tui.goal.control.failed"), duration: 4000 })
+        return false
+      }
+      await runGoalCommand()
+      return false
+    }
     const agent = local.agent.current()
     if (!agent) return false
     const effectiveAgent = local.agent.effective?.()?.name
