@@ -59,9 +59,12 @@ export function GoalStartButton(props: { sessionID: string }) {
     sessionID: props.sessionID,
   }))
   const busy = () => !!state.busy
-  createEffect(() =>
-    setState({ busy: undefined, retry: pendingStarts.get(GoalClient.scopeKey(target()))?.request, error: undefined }),
-  )
+  createEffect(() => {
+    setState({ busy: undefined, retry: pendingStarts.get(GoalClient.scopeKey(target()))?.request, error: undefined })
+    // Acceptance references belong to this placement; another conversation starts with a fresh draft.
+    // Unknown writes still use their captured descriptor, independent of these editable fields.
+    setForm({ source: "session", preset: "default", commands: "", codeRefs: "", diagnostics: "none", reviewer: "none" })
+  })
 
   const [capabilities] = createResource(
     () => (props.sessionID ? target() : undefined),

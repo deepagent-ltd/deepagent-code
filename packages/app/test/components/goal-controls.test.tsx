@@ -316,3 +316,39 @@ it("start form captures only selected acceptance criteria and owned code referen
     criteria: [{ kind: "plan_complete" }, { kind: "tests_pass", commands: ["bun test affected.test.ts"] }],
   })
 })
+
+it("a Goal form never carries another conversation's acceptance draft into a new target", async () => {
+  const f = setup(null)
+  render(() => <GoalStartButton sessionID={f.target.sessionID} />)
+  fireEvent.click(await screen.findByRole("button", { name: dict["goal.start.button"] }))
+  fireEvent.change(screen.getByRole("combobox", { name: dict["goal.start.form.source"] }), {
+    target: { value: "workspace-file" },
+  })
+  fireEvent.change(screen.getByRole("combobox", { name: dict["goal.start.form.criteria"] }), {
+    target: { value: "custom" },
+  })
+  fireEvent.input(screen.getByRole("textbox", { name: dict["goal.start.form.commands"] }), {
+    target: { value: "bun test project-a.test.ts" },
+  })
+  fireEvent.input(screen.getByRole("textbox", { name: dict["goal.start.form.codeRefs"] }), {
+    target: { value: "src/project-a.ts:12" },
+  })
+  f.setTarget({ sessionID: "draft-new-session", server: "http://server-b", directory: "/project-b" })
+  // The old dialog can only close, never start against the replacement placement.
+  fireEvent.click(screen.getAllByRole("button", { name: dict["goal.start.button"] }).at(-1)!)
+  expect(postCalls(f.request)).toHaveLength(0)
+  fireEvent.click(await screen.findByRole("button", { name: dict["goal.start.button"] }))
+  expect((screen.getByRole("combobox", { name: dict["goal.start.form.source"] }) as HTMLSelectElement).value).toBe(
+    "session",
+  )
+  expect((screen.getByRole("combobox", { name: dict["goal.start.form.criteria"] }) as HTMLSelectElement).value).toBe(
+    "default",
+  )
+  expect((screen.getByRole("textbox", { name: dict["goal.start.form.codeRefs"] }) as HTMLTextAreaElement).value).toBe("")
+  expect(screen.queryByRole("textbox", { name: dict["goal.start.form.commands"] })).toBeNull()
+  fireEvent.click(screen.getAllByRole("button", { name: dict["goal.start.button"] }).at(-1)!)
+  await waitFor(() => expect(postCalls(f.request)).toHaveLength(1))
+  expect(postCalls(f.request)[0].body).toMatchObject({ sessionID: "draft-new-session", codeRefs: [] })
+  expect(postCalls(f.request)[0].body.criteria).toBeUndefined()
+  expect(postCalls(f.request)[0].body.planSource).toBeUndefined()
+})
