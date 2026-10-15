@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "dac.managed-input-linux-runtime-source.v1",
+  "status": "source-preparation-only-runtime-and-installed-qualification-pending",
+  "electron": {
+    "repository": "https://github.com/electron/electron",
+    "tag": "v41.10.6",
+    "commit": "832e70a551348f2b6b2e004b4f09b9eb6ca038c0",
+    "node": "24.18.0",
+    "license": "MIT"
+  },
+  "chromium": {
+    "repository": "https://chromium.googlesource.com/chromium/src",
+    "tag": "146.0.7680.216",
+    "commit": "ff9214069a282850ff7ebbef6615bb009cf45c57",
+    "license": "BSD-3-Clause"
+  },
+  "backend": "linux-x64-ozone-x11",
+  "upstreamFiles": [
+    {
+      "path": "ui/base/ime/input_method_observer.h",
+      "sha256": "2c7a1cd7d0717be65d549de37e55818979cf8699eb859287e9af22df4a010fa6",
+      "patchedSha256": "5c02392c137e486cde946e328f10733a673fb289384cba4c016126ea449bf8fe"
+    },
+    {
+      "path": "ui/base/ime/input_method.h",
+      "sha256": "5f0769dc08681fdaef9d24a93757f4bf23f7582c055319ec365710be627e9089",
+      "patchedSha256": "8d3d94542198744b4c7f0f79ea29e26fd0685f11fea66e73973176e166fb1bd0"
+    },
+    {
+      "path": "ui/base/ime/linux/linux_input_method_context.h",
+      "sha256": "1cefb9d72d3c721edf28c7727abcc7c979ef8429ea3402c00afe70034cfe6391",
+      "patchedSha256": "46e008894272faa53e805cced893231d6a1ffe42b4810e0fe821832f4bdb1625"
+    },
+    {
+      "path": "ui/gtk/input_method_context_impl_gtk.h",
+      "sha256": "736a9fce25d0d29c0977a688271726ff2b041c826b50457c9fd6e12c027a9d69",
+      "patchedSha256": "d1624cbd5ef5f441d51007bd644f09051816191a03153c638fcf048fe545894e"
+    },
+    {
+      "path": "ui/gtk/input_method_context_impl_gtk.cc",
+      "sha256": "586717209412f87d58c239251fa170f73421caac26c5aebe634c47a2f6fdb6e8",
+      "patchedSha256": "e22593e28b96079577432bb777d31fe44afc220015eed97232931a4b098eaee8"
+    },
+    {
+      "path": "ui/base/ime/input_method_base.h",
+      "sha256": "d5c15cb868011e9a0be90aab7337abf11e4e85c6702687898a2e38492fafdcd6",
+      "patchedSha256": "52e2074005bc0799f19eb6fed317683a19af1c87f27356f50d0c7ee154e69172"
+    },
+    {
+      "path": "ui/base/ime/input_method_base.cc",
+      "sha256": "51b6bdc244a7550ec421c457c88e6202eb9ef76f4424198394e3268ed26bb215",
+      "patchedSha256": "8fa42beaa2c300196f25175ea3a6fb7b9220ce678b270bb8c5f1f9f88429d6f1"
+    },
+    {
+      "path": "ui/base/ime/linux/input_method_auralinux.h",
+      "sha256": "6ae44fadf8808e01bf5b82bd403194f36d38f6a5db8080c5b92aa3e38738a902",
+      "patchedSha256": "b4fba9ff493dd8083085e1378f8717365508957fe082758e47f58e916db67edd"
+    },
+    {
+      "path": "ui/base/ime/linux/input_method_auralinux.cc",
+      "sha256": "214c84233e179a850f90a897f97add3d4be68cec57b08890c0af8158ac84a65c",
+      "patchedSha256": "2840f93ebb1345ae5e9afa6798590afe5643deb8b0c1e54d616527408505f928"
+    },
+    {
+      "path": "ui/aura/window_tree_host_observer.h",
+      "sha256": "6183fc053c18dd8c75ef4dc31c3bd03133fa6f71b725fa10271241cc6be7f0b5",
+      "patchedSha256": "6c949ef85d26bc915f5cbf048eea7527c2a94c8a6f9664dedc4f323f2c833418"
+    },
+    {
+      "path": "ui/aura/window_tree_host_platform.cc",
+      "sha256": "6b8cc62e2ab8fc388561b3007c9b47592171f0d7e8fe7f76dd78804159c46ea1",
+      "patchedSha256": "8f2bb11d6a7799004544a2436613edb0445edd11b80061de65b9287b25423330"
+    },
+    {
+      "path": "electron/BUILD.gn",
+      "sha256": "070809f58348fe030fb7b824aec13db1451f2b13a232413350a6775b9d595386",
+      "patchedSha256": "283363857c36c22cf078ba5f78d9c234fb4fe965e498a794e269eeed43cff14c"
+    }
+  ],
+  "patch": {
+    "file": "0001-dac-linux-original-input-observer.patch",
+    "sha256": "6850037819a19693de471e2c1fb9325a3f6a64373dc657cade6d07a2aace37a8"
+  },
+  "copy": [
+    {
+      "source": "bridge.cc",
+      "destination": "electron/shell/browser/dac_managed_input_bridge.cc",
+      "sha256": "33ebc06ccf6e5f8f3074d85c967adb103be85ed97d4b581bfe6d37e5004bfe32"
+    },
+    {
+      "source": "../linux-bridge.h",
+      "destination": "electron/shell/browser/dac_managed_input_bridge.h",
+      "sha256": "9cbced97cc2fdabb41e636cc184dc356b77fc4dfe8741ca0826076c09a4cacb8"
+    }
+  ],
+  "constraints": [
+    "No stock runtime qualification inherited.",
+    "Apply after the exact Electron upstream patch stack; all twelve input file hashes must match first.",
+    "GN/Chromium full build and runtime ABI/IME/CDP/lifecycle/installed packaging are pending.",
+    "This narrow source license inventory is not the complete patched Chromium artifact SBOM."
+  ]
+}
