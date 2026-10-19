@@ -1967,7 +1967,7 @@ export const dict = {
   "settings.general.row.collaborationMode.effective": "正在執行：{{mode}}",
   "settings.general.deepagent.intelligenceModel.unset": "未單獨設定",
   "settings.general.deepagent.intelligenceModel.unavailable": "已設定模型目前不可用",
-  "settings.im.description": "連線本裝置的 IM 服務、管理長期權益，並選擇 /dac 任務使用的模型。",
+  "settings.im.description": "連線本裝置的 IM 服務、管理權益，並選擇 /dac 任務使用的模型。",
   "settings.im.deviceGroup": "本裝置與 IM 權益",
   "settings.im.deviceGroup.description": "檢查裝置不會啟用或扣費，啟用始終需要你明確確認。",
   "settings.import.job.select": "既有匯入任務",
@@ -2043,4 +2043,6 @@ export const dict = {
   "settings.im.entitlement.checkDeviceFirst": "請先檢查本裝置，再啟用 IM 權益。",
   "settings.im.entitlement.legacyPurchaseUnavailable": "API Key 購買需接入新方案服務。你仍可在下方兌換既有啟用碼。",
   "settings.im.entitlement.serviceRequired": "請先設定 IM 服務位址，再檢查或啟用本裝置。",
+  "im.activation.codeHint":
+    "兌換既有的 IM 專用啟用碼，有效期限以服務傳回的權益紀錄為準。無需提供付費 API Key，兌換不會再次扣除 credits。",
 } satisfies Partial<Record<Keys, string>>

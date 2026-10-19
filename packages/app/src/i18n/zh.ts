@@ -2887,7 +2887,7 @@ export const dict = {
   "im.activation.key": "手填 DeepAgent API 付费 key",
   "im.activation.code": "IM 专用激活码",
   "im.activation.codeHint":
-    "兑换已购买的 IM 专用码，一次激活长期有效，不自动续费。无需提供付费 API key，兑换不再扣余额。",
+    "兑换已有的 IM 专用激活码，有效期以服务返回的权益记录为准。无需提供付费 API Key，兑换不会再次扣除 credits。",
   "im.activation.chargeConsent":
     "我明确确认一次扣除 1 credit 激活 IM，长期有效，不自动续费。同一账号已有激活权益时不重复收费。",
   "im.activation.charge": "扣 1 credit 激活 IM",
@@ -2988,7 +2988,7 @@ export const dict = {
     "这些默认值保存在当前 DAC 后端。工作深度控制 DAC 的知识使用与任务编排，与模型推理强度分开。",
   "settings.general.deepagent.intelligenceModel.unset": "未单独设置",
   "settings.general.deepagent.intelligenceModel.unavailable": "已配置模型当前不可用",
-  "settings.im.description": "连接本设备的 IM 服务、管理长期权益，并选择 /dac 任务使用的模型。",
+  "settings.im.description": "连接本设备的 IM 服务、管理权益，并选择 /dac 任务使用的模型。",
   "settings.im.deviceGroup": "本设备与 IM 权益",
   "settings.im.deviceGroup.description": "检查设备不会激活或扣费，激活始终需要你明确确认。",
   "settings.import.job.select": "已有导入任务",

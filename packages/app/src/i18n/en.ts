@@ -3080,7 +3080,7 @@ export const dict = {
   "im.activation.key": "Enter a paid DeepAgent API key",
   "im.activation.code": "IM activation code",
   "im.activation.codeHint":
-    "Redeem the IM code you purchased for long-term activation without automatic renewal. No paid API key is required and redemption does not deduct credits again.",
+    "Redeem an existing IM activation code. Its validity follows the service entitlement record. No paid API key is required and redemption does not deduct credits again.",
   "im.activation.chargeConsent":
     "I explicitly authorize a one-time 1 credit activation charge for long-term access without automatic renewal. The same account’s existing activation entitlement is not charged again.",
   "im.activation.charge": "Deduct 1 credit and activate IM",
@@ -3189,8 +3189,7 @@ export const dict = {
     "These defaults are stored for the current DAC backend. Working depth controls DAC knowledge and orchestration, separately from model reasoning effort.",
   "settings.general.deepagent.intelligenceModel.unset": "Not explicitly configured",
   "settings.general.deepagent.intelligenceModel.unavailable": "Configured model unavailable",
-  "settings.im.description":
-    "Connect this device to IM, manage its long-term access, and choose the model for /dac tasks.",
+  "settings.im.description": "Connect this device to IM, manage its access, and choose the model for /dac tasks.",
   "settings.im.deviceGroup": "This device and IM access",
   "settings.im.deviceGroup.description":
     "Checking this device does not activate or charge. Activation requires your explicit confirmation.",
