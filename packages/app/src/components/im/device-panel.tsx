@@ -149,12 +149,15 @@ export function IMDevicePanel(props: {
       <p class="text-12-regular text-text-weak">{language.t("im.device.notice")}</p>
       <Show when={state.info}>
         {(info) => (
-          <div class="flex flex-col gap-2">
-            <code class="break-all">{info().deviceJkt}</code>
-            <ButtonV2 variant="neutral" onClick={() => void copy()}>
-              {language.t("im.device.copy")}
-            </ButtonV2>
-          </div>
+          <details class="settings-v2-details">
+            <summary>{language.t("settings.details.title")}</summary>
+            <div class="settings-v2-actions">
+              <code class="break-all">{info().deviceJkt}</code>
+              <ButtonV2 variant="neutral" onClick={() => void copy()}>
+                {language.t("im.device.copy")}
+              </ButtonV2>
+            </div>
+          </details>
         )}
       </Show>
       <Show when={state.error}>
@@ -184,7 +187,10 @@ export function IMDevicePanel(props: {
         {(id) => (
           <div class="flex flex-col gap-2">
             <p role="status">{language.t("im.device.pending")}</p>
-            <code class="break-all">{id()}</code>
+            <details class="settings-v2-details">
+              <summary>{language.t("settings.details.title")}</summary>
+              <code class="break-all">{id()}</code>
+            </details>
             <ButtonV2 variant="neutral" disabled={state.busy || !current()} onClick={() => void recover()}>
               {language.t("im.device.recover")}
             </ButtonV2>

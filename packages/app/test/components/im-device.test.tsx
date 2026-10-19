@@ -65,6 +65,20 @@ function fixture(
 const writes = (request: ReturnType<typeof vi.fn>) =>
   request.mock.calls.map(([input]) => input).filter((input) => input.method === "POST")
 
+it("keeps technical device identities collapsed without hiding pending recovery or submitting a migration", async () => {
+  const test = fixture({ pending: true })
+  await screen.findByText(original)
+  const fingerprint = screen.getByText(metadata.deviceJkt).closest("details")!
+  const migration = screen.getByText(original).closest("details")!
+  expect(fingerprint.open).toBe(false)
+  expect(migration.open).toBe(false)
+  expect(screen.getByRole("button", { name: dict["im.device.recover"] }).closest("details")).toBeNull()
+  fireEvent.click(fingerprint.querySelector("summary")!)
+  expect(fingerprint.open).toBe(true)
+  expect(screen.getByRole("button", { name: dict["im.device.copy"] })).toBeTruthy()
+  expect(writes(test.request)).toHaveLength(0)
+})
+
 it("first binding is explicit, costs zero, and never submits on mount or field entry", async () => {
   const f = fixture()
   await screen.findByText(metadata.deviceJkt)
@@ -112,7 +126,10 @@ it("pending migration hides new purchase inputs and recovers only the retained I
   fireEvent.click(screen.getByRole("button", { name: dict["im.device.recover"] }))
   await screen.findByText(dict["im.device.complete"])
   expect(writes(f.request)).toHaveLength(0)
-  expect(f.request.mock.calls.at(-1)![0]).toMatchObject({ method: "GET", url: `/api/v1/im/device/migrations/${original}` })
+  expect(f.request.mock.calls.at(-1)![0]).toMatchObject({
+    method: "GET",
+    url: `/api/v1/im/device/migrations/${original}`,
+  })
 })
 
 it("OS store failure disables IM binding and leaves a clear local coding explanation", async () => {
@@ -168,7 +185,11 @@ for (const code of ["im_activation_unavailable", "im_device_unavailable"])
       const info = url.pathname === "/api/v1/im/device/info"
       const pending = url.pathname === "/api/v1/im/device/migrations"
       response.writeHead(info ? 200 : pending ? 502 : 404, { "Content-Type": "application/json" })
-      response.end(JSON.stringify(info ? metadata : pending ? { name: "IM_FACADE_UNAVAILABLE", data: { code } } : { error: "Not Found" }))
+      response.end(
+        JSON.stringify(
+          info ? metadata : pending ? { name: "IM_FACADE_UNAVAILABLE", data: { code } } : { error: "Not Found" },
+        ),
+      )
     })
     await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve))
     const address = listener.address()
@@ -179,7 +200,8 @@ for (const code of ["im_activation_unavailable", "im_device_unavailable"])
       render(() => (
         <IMDevicePanel client={sdk as unknown as IMDeviceClient.Transport} current={() => true} available={available} />
       ))
-      const message = dict[code === "im_activation_unavailable" ? "im.device.serviceUnavailable" : "im.device.observationUnavailable"]
+      const message =
+        dict[code === "im_activation_unavailable" ? "im.device.serviceUnavailable" : "im.device.observationUnavailable"]
       await screen.findByText(message)
       expect(screen.queryByText(dict["im.device.unavailable"])).toBeNull()
       expect(screen.queryByText(dict["im.device.pending"])).toBeNull()
@@ -197,6 +219,6 @@ for (const code of ["im_activation_unavailable", "im_device_unavailable"])
       ])
     } finally {
       cleanup()
-      await new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()))
+      await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
     }
   })

@@ -126,9 +126,10 @@ export function IMActivationPanel(props: {
       <Show when={controller.state.transactionID}>
         <div class="flex flex-col gap-2 text-12-regular">
           <p role="status">{language.t("im.activation.unknown")}</p>
-          <p class="break-all">
-            {language.t("im.activation.transaction")}: {controller.state.transactionID}
-          </p>
+          <details class="settings-v2-details">
+            <summary>{language.t("im.activation.transaction")}</summary>
+            <p class="break-all">{controller.state.transactionID}</p>
+          </details>
           <ButtonV2
             variant="neutral"
             disabled={controller.state.busy || !controller.current()}

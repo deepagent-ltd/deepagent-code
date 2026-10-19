@@ -86,7 +86,7 @@ export function SettingsIMService(props: {
           {text("reconnect")}
         </p>
       </Show>
-      <div class="flex items-center gap-2">
+      <div class="settings-v2-actions">
         <ButtonV2
           variant="contrast"
           disabled={state.busy || !current() || !state.address.trim()}

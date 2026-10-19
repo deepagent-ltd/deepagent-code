@@ -47,6 +47,27 @@ async function fields() {
   fireEvent.input(screen.getByLabelText(dict["im.activation.code"]), { target: { value: "owned-code" } })
 }
 
+it("keeps a pending transaction ID collapsed while its recovery and fee state stay visible", async () => {
+  const api = client()
+  api.activationPending.mockResolvedValue({
+    transactionID: "original-disclosure-only",
+    name: "Alice",
+    method: "api_key",
+    quoteID: "quote",
+    state: "pending",
+    chargedCredits: 1,
+    credentialStored: false,
+  })
+  render(() => <IMActivationPanel client={api} current={() => true} activated={vi.fn()} />)
+  const transaction = await screen.findByText("original-disclosure-only")
+  expect(transaction.closest("details")?.open).toBe(false)
+  expect(screen.getByRole("button", { name: dict["im.activation.check"] }).closest("details")).toBeNull()
+  expect(screen.getByText("Actual charge for this transaction: 1 credit").closest("details")).toBeNull()
+  fireEvent.click(transaction.closest("details")!.querySelector("summary")!)
+  expect(transaction.closest("details")?.open).toBe(true)
+  expect(api.activate).not.toHaveBeenCalled()
+})
+
 it("code redemption is one explicit action, does not require a paid key and reports zero charged credits", async () => {
   const api = client()
   const activated = vi.fn()

@@ -15,6 +15,7 @@ import { createIMActivationClient } from "@/utils/im-activation-client"
 import { SettingsIMModel } from "./im-model"
 import { SettingsIMService } from "./im-service"
 import type { IMFacadeStatus } from "@/utils/im-client"
+import { SettingsPage } from "./parts/page"
 
 export function SettingsIMV2(props: { activation?: IMActivationClient }) {
   const language = useLanguage()
@@ -96,97 +97,104 @@ export function SettingsIMV2(props: { activation?: IMActivationClient }) {
   })
 
   return (
-    <div class="settings-v2-tab-body flex flex-col gap-6">
-      <h2 class="settings-v2-tab-title">{language.t("settings.im.title")}</h2>
+    <SettingsPage title={language.t("settings.im.title")} description={language.t("settings.im.description")}>
       <Show when={current()} fallback={<p role="status">{language.t("im.activation.localOnly")}</p>}>
-        <SettingsIMService
-          configured={() => sync.data.config.im?.url}
-          service={() => service.info}
-          current={() => current() && !modelBusy()}
-          save={async (url) => {
-            if (!current() || service.busy || modelBusy()) throw new Error("Retired settings scope")
-            retire()
-            setService({ busy: true, failed: false })
-            try {
-              await update({ im: { ...sync.data.config.im, url } })
-              if (!current()) throw new Error("Retired settings scope")
-              const observed = await sdk.client.global.config.get({ signal: signal(), throwOnError: true })
-              if (!current() || observed.data?.im?.url !== url) throw new Error("Service setting changed")
-              queryClient.setQueryData(sync.queryOptions.globalConfig().queryKey, observed.data)
-              await loadService()
-            } finally {
-              if (!owner.signal.aborted) setService("busy", false)
-            }
-          }}
-        />
-        <Show when={service.failed}>
-          <p role="alert">{language.t("settings.im.service.loadFailed")}</p>
-        </Show>
-        <Show when={service.failed || !service.info}>
-          <ButtonV2
-            variant="neutral"
-            class="self-start"
-            disabled={!current() || service.busy || service.loading || modelBusy()}
-            onClick={() => {
-              if (!current() || service.busy || service.loading || modelBusy()) return
-              void loadService().catch(() => {})
+        <div class="settings-v2-section" data-slot="settings-im-service-group">
+          <SettingsIMService
+            configured={() => sync.data.config.im?.url}
+            service={() => service.info}
+            current={() => current() && !modelBusy()}
+            save={async (url) => {
+              if (!current() || service.busy || modelBusy()) throw new Error("Retired settings scope")
+              retire()
+              setService({ busy: true, failed: false })
+              try {
+                await update({ im: { ...sync.data.config.im, url } })
+                if (!current()) throw new Error("Retired settings scope")
+                const observed = await sdk.client.global.config.get({ signal: signal(), throwOnError: true })
+                if (!current() || observed.data?.im?.url !== url) throw new Error("Service setting changed")
+                queryClient.setQueryData(sync.queryOptions.globalConfig().queryKey, observed.data)
+                await loadService()
+              } finally {
+                if (!owner.signal.aborted) setService("busy", false)
+              }
             }}
-          >
-            {language.t(service.loading ? "common.loading" : "common.retry")}
-          </ButtonV2>
-        </Show>
-        <Show when={!service.busy && service.info?.url && !deviceRequested()}>
-          <ButtonV2
-            variant="neutral"
-            class="self-start"
-            onClick={() => {
-              if (current()) setDeviceRequested(true)
-            }}
-          >
-            {language.t("settings.im.service.checkDevice")}
-          </ButtonV2>
-        </Show>
-        <Show when={!service.busy && deviceRequested() && service.info?.url} keyed>
-          {(url) => {
-            const selected = () => current() && !service.busy && service.info?.url === url
-            const activation =
-              props.activation ??
-              createIMActivationClient({ client: sdk.client, scope: server.scope, current: selected })
-            return (
-              <>
-                <IMDevicePanel
-                  client={sdk.client as unknown as IMDeviceClient.Transport}
-                  current={selected}
-                  available={setDeviceAvailable}
-                />
-                <Show when={deviceAvailable()}>
-                  <IMActivationPanel
-                    client={activation}
+          />
+          <Show when={service.failed}>
+            <p role="alert">{language.t("settings.im.service.loadFailed")}</p>
+          </Show>
+          <Show when={service.failed || !service.info}>
+            <ButtonV2
+              variant="neutral"
+              class="self-start"
+              disabled={!current() || service.busy || service.loading || modelBusy()}
+              onClick={() => {
+                if (!current() || service.busy || service.loading || modelBusy()) return
+                void loadService().catch(() => {})
+              }}
+            >
+              {language.t(service.loading ? "common.loading" : "common.retry")}
+            </ButtonV2>
+          </Show>
+        </div>
+        <section class="settings-v2-section" data-slot="settings-im-device-group">
+          <h3 class="settings-v2-section-title">{language.t("settings.im.deviceGroup")}</h3>
+          <p class="text-12-regular text-text-weak">{language.t("settings.im.deviceGroup.description")}</p>
+          <Show when={!service.busy && service.info?.url && !deviceRequested()}>
+            <ButtonV2
+              variant="neutral"
+              class="self-start"
+              onClick={() => {
+                if (current()) setDeviceRequested(true)
+              }}
+            >
+              {language.t("settings.im.service.checkDevice")}
+            </ButtonV2>
+          </Show>
+          <Show when={!service.busy && deviceRequested() && service.info?.url} keyed>
+            {(url) => {
+              const selected = () => current() && !service.busy && service.info?.url === url
+              const activation =
+                props.activation ??
+                createIMActivationClient({ client: sdk.client, scope: server.scope, current: selected })
+              return (
+                <>
+                  <IMDevicePanel
+                    client={sdk.client as unknown as IMDeviceClient.Transport}
                     current={selected}
-                    activated={() => {
-                      if (selected()) sync.refreshProviders()
-                    }}
+                    available={setDeviceAvailable}
                   />
-                </Show>
-              </>
-            )
-          }}
-        </Show>
-        <SettingsIMModel
-          options={options}
-          value={() => sync.data.config.im?.model}
-          current={() => current() && !service.busy && !service.loading && !!service.info}
-          save={async (model) => {
-            if (!current() || service.busy || !service.info) throw new Error("Retired settings scope")
-            setModelBusy(true)
-            try {
-              await update({ im: { ...sync.data.config.im, model } })
-            } finally {
-              if (!owner.signal.aborted) setModelBusy(false)
-            }
-          }}
-        />
+                  <Show when={deviceAvailable()}>
+                    <IMActivationPanel
+                      client={activation}
+                      current={selected}
+                      activated={() => {
+                        if (selected()) sync.refreshProviders()
+                      }}
+                    />
+                  </Show>
+                </>
+              )
+            }}
+          </Show>
+        </section>
+        <section class="settings-v2-section" data-slot="settings-im-model-group">
+          <SettingsIMModel
+            options={options}
+            value={() => sync.data.config.im?.model}
+            current={() => current() && !service.busy && !service.loading && !!service.info}
+            save={async (model) => {
+              if (!current() || service.busy || !service.info) throw new Error("Retired settings scope")
+              setModelBusy(true)
+              try {
+                await update({ im: { ...sync.data.config.im, model } })
+              } finally {
+                if (!owner.signal.aborted) setModelBusy(false)
+              }
+            }}
+          />
+        </section>
       </Show>
-    </div>
+    </SettingsPage>
   )
 }
