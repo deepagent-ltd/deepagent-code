@@ -1,6 +1,23 @@
 // Approved v2.0.5 settings semantics. Other settings retain all-locale own-property coverage.
 // Keep this list explicit: newly missing translations must never be exempted automatically.
 export const settingsFallbackKeys = [
+  "settings.im.entitlement.title",
+  "settings.im.entitlement.active",
+  "settings.im.entitlement.inactive",
+  "settings.im.entitlement.expired",
+  "settings.im.entitlement.unknown",
+  "settings.im.entitlement.expiryUnknown",
+  "settings.im.entitlement.expiresOn",
+  "settings.im.entitlement.lifetime",
+  "settings.im.entitlement.plans",
+  "settings.im.entitlement.planYear",
+  "settings.im.entitlement.planThreeYears",
+  "settings.im.entitlement.planLifetime",
+  "settings.im.entitlement.purchaseUnavailable",
+  "settings.im.entitlement.homepage",
+  "settings.im.entitlement.checkDeviceFirst",
+  "settings.im.entitlement.legacyPurchaseUnavailable",
+  "settings.im.entitlement.serviceRequired",
   "provider.connect.models.manualDescription",
   "provider.connect.models.consent",
   "provider.connect.models.saveManual",

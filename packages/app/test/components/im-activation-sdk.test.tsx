@@ -170,7 +170,9 @@ it("GUI cold unknown recovery requires original-secret confirmation and sends ex
       credentialStored: false,
     }
     test.state.original = original
-    render(() => <IMActivationPanel client={test.client} current={() => true} activated={() => {}} />)
+    render(() => (
+      <IMActivationPanel client={test.client} current={() => true} activated={() => {}} allowPaidActivation={false} />
+    ))
     const button = await screen.findByRole<HTMLButtonElement>("button", { name: dict["im.activation.retryOriginal"] })
     expect(button.disabled).toBe(true)
     expect(screen.getByRole<HTMLInputElement>("textbox", { name: dict["im.activation.name"] }).disabled).toBe(true)

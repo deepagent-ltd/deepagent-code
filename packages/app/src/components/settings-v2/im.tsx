@@ -1,4 +1,4 @@
-import { Show, createEffect, createSignal, on, onCleanup } from "solid-js"
+import { For, Show, createEffect, createSignal, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useQueryClient } from "@tanstack/solid-query"
 import { ButtonV2 } from "@deepagent-code/ui/v2/button-v2"
@@ -10,6 +10,8 @@ import { useServerSync } from "@/context/server-sync"
 import { IMDevicePanel } from "../im/device-panel"
 import { IMDeviceClient } from "@deepagent-code/core/im/device-client"
 import { IMActivationPanel } from "../im/activation-panel"
+import { IMEntitlementSummary } from "../im/entitlement-summary"
+import { observeIMEntitlement, type IMEntitlementStatus } from "../im/entitlement"
 import type { IMActivationClient } from "../im/activation-controller"
 import { createIMActivationClient } from "@/utils/im-activation-client"
 import { SettingsIMModel } from "./im-model"
@@ -39,6 +41,8 @@ export function SettingsIMV2(props: { activation?: IMActivationClient }) {
   const [deviceRequested, setDeviceRequested] = createSignal(false)
   const [service, setService] = createStore({
     info: undefined as IMFacadeStatus["service"],
+    status: undefined as IMEntitlementStatus | undefined,
+    activated: false,
     busy: false,
     loading: false,
     failed: false,
@@ -48,7 +52,7 @@ export function SettingsIMV2(props: { activation?: IMActivationClient }) {
     observation.generation++
     observation.abort.abort()
     observation.abort = new AbortController()
-    setService({ info: undefined, loading: false, failed: false })
+    setService({ info: undefined, status: undefined, activated: false, loading: false, failed: false })
     setDeviceAvailable(false)
     setDeviceRequested(false)
   }
@@ -62,10 +66,17 @@ export function SettingsIMV2(props: { activation?: IMActivationClient }) {
       .then(
         (result) => {
           if (current() && generation === observation.generation)
-            setService({ info: result.data?.service, failed: !result.data?.service })
+            setService({
+              info: result.data?.service,
+              status: result.data
+                ? { service: result.data.service, facade: result.data.facade, blocked: result.data.blocked }
+                : undefined,
+              failed: !result.data?.service,
+            })
         },
         (error: unknown) => {
-          if (current() && generation === observation.generation) setService({ info: undefined, failed: true })
+          if (current() && generation === observation.generation)
+            setService({ info: undefined, status: undefined, failed: true })
           throw error
         },
       )
@@ -138,7 +149,7 @@ export function SettingsIMV2(props: { activation?: IMActivationClient }) {
           </Show>
         </div>
         <section class="settings-v2-section" data-slot="settings-im-device-group">
-          <h3 class="settings-v2-section-title">{language.t("settings.im.deviceGroup")}</h3>
+          <IMEntitlementSummary observation={observeIMEntitlement(service.status, service.activated)} />
           <p class="text-12-regular text-text-weak">{language.t("settings.im.deviceGroup.description")}</p>
           <Show when={!service.busy && service.info?.url && !deviceRequested()}>
             <ButtonV2
@@ -151,32 +162,42 @@ export function SettingsIMV2(props: { activation?: IMActivationClient }) {
               {language.t("settings.im.service.checkDevice")}
             </ButtonV2>
           </Show>
-          <Show when={!service.busy && deviceRequested() && service.info?.url} keyed>
+          <For each={[service.info?.url ?? null]}>
             {(url) => {
-              const selected = () => current() && !service.busy && service.info?.url === url
+              const selected = () => current() && !service.busy && (service.info?.url ?? null) === url
               const activation =
                 props.activation ??
                 createIMActivationClient({ client: sdk.client, scope: server.scope, current: selected })
               return (
                 <>
-                  <IMDevicePanel
-                    client={sdk.client as unknown as IMDeviceClient.Transport}
-                    current={selected}
-                    available={setDeviceAvailable}
-                  />
-                  <Show when={deviceAvailable()}>
-                    <IMActivationPanel
-                      client={activation}
+                  <Show when={deviceRequested() && url}>
+                    <IMDevicePanel
+                      client={sdk.client as unknown as IMDeviceClient.Transport}
                       current={selected}
-                      activated={() => {
-                        if (selected()) sync.refreshProviders()
-                      }}
+                      available={setDeviceAvailable}
                     />
                   </Show>
+                  <Show when={url && !deviceAvailable()}>
+                    <p class="text-12-regular text-text-weak">
+                      {language.t("settings.im.entitlement.checkDeviceFirst")}
+                    </p>
+                  </Show>
+                  <IMActivationPanel
+                    client={activation}
+                    current={selected}
+                    ready={() => !!url && deviceAvailable() && !service.loading}
+                    allowPaidActivation={false}
+                    hasAccess={() => observeIMEntitlement(service.status, service.activated).state === "active"}
+                    activated={() => {
+                      if (!selected()) return
+                      setService("activated", true)
+                      sync.refreshProviders()
+                    }}
+                  />
                 </>
               )
             }}
-          </Show>
+          </For>
         </section>
         <section class="settings-v2-section" data-slot="settings-im-model-group">
           <SettingsIMModel

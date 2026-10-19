@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import type { Config } from "@deepagent-code/sdk/client"
 import { SettingsIMV2 } from "@/components/settings-v2/im"
 import type { IMActivationClient } from "@/components/im/activation-controller"
+import type { IMFacadeStatus } from "@/utils/im-client"
 import { dict } from "@/i18n/en"
 
 const wiring = vi.hoisted(() => ({
@@ -14,8 +15,10 @@ const wiring = vi.hoisted(() => ({
   update: async (_config: Config) => {},
   configReads: 0,
   deviceReads: 0,
+  facade: "disabled" as IMFacadeStatus["facade"],
 }))
 vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
+vi.mock("@/context/platform", () => ({ usePlatform: () => ({ openLink: vi.fn() }) }))
 vi.mock("@/context/server", () => ({
   useServer: () => ({ scope: wiring.scope }),
   ServerConnection: { local: wiring.local },
@@ -28,6 +31,11 @@ vi.mock("@/context/server-sdk", () => ({
         facade: {
           status: async () => ({
             data: {
+              facade: wiring.facade,
+              identity: null,
+              blocked: null,
+              kernel: null,
+              keyOrigin: "none",
               service: {
                 url:
                   wiring.config().im?.url === null
@@ -139,6 +147,8 @@ it("the real settings wiring writes only im.model from visible configured models
     if (patch.im?.model) setState("config", "im", "model", patch.im.model)
   }
   settings(api)
+  expect(screen.getByLabelText(dict["im.activation.code"])).toHaveProperty("disabled", true)
+  expect(api.activationQuote).not.toHaveBeenCalled()
   fireEvent.click(await screen.findByRole("button", { name: dict["settings.im.service.checkDevice"] }))
   await waitFor(() => expect(api.activationQuote).toHaveBeenCalledTimes(1))
   const trigger = screen.getByRole("button", { name: "DeepSeek / Flash" })
@@ -204,7 +214,8 @@ it("confirms an edited service with a real config read before remounting and nev
   await screen.findByText(dict["settings.im.service.disabled"])
   expect(wiring.configReads).toBe(2)
   expect(state.config.im.url).toBeNull()
-  expect(screen.queryByRole("textbox", { name: dict["im.activation.name"] })).toBeNull()
+  expect(screen.getByRole("textbox", { name: dict["im.activation.name"] })).toHaveProperty("disabled", true)
+  expect(screen.getByText(dict["settings.im.entitlement.serviceRequired"])).toBeTruthy()
   expect(screen.queryByRole("button", { name: dict["settings.im.service.checkDevice"] })).toBeNull()
   expect(api.activate).not.toHaveBeenCalled()
   const model = screen.getByRole("button", { name: "DeepSeek / Flash" })
@@ -213,4 +224,20 @@ it("confirms an edited service with a real config read before remounting and nev
   fireEvent.click(await screen.findByRole("option", { name: "DeepSeek / Another" }))
   await screen.findByText(dict["settings.im.model.saved"])
   expect(patches.at(-1)).toEqual({ im: { model: "deepseek/another", url: null } })
+})
+
+it("shows confirmed active access with an unknown expiry and no new activation form or automatic payment lookup", async () => {
+  const api = client()
+  wiring.scope = () => "original"
+  wiring.local = () => true
+  wiring.config = () => ({ im: { url: "https://configured.invalid/im" } })
+  wiring.facade = "active"
+  settings(api)
+  await screen.findByText(dict["settings.im.entitlement.active"])
+  expect(screen.getByText(dict["settings.im.entitlement.expiryUnknown"])).toBeTruthy()
+  expect(screen.queryByLabelText(dict["im.activation.code"])).toBeNull()
+  expect(screen.queryByRole("button", { name: dict["im.activation.charge"] })).toBeNull()
+  expect(api.activationPending).not.toHaveBeenCalled()
+  expect(api.activationQuote).not.toHaveBeenCalled()
+  expect(api.activate).not.toHaveBeenCalled()
 })

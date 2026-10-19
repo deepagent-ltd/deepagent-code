@@ -1027,7 +1027,8 @@ export const dict = {
   "settings.providers.manage": "Manage",
   "settings.providers.supplier.alibabaChina": "Alibaba Cloud Bailian (China)",
   "settings.providers.supplier.alibabaInternational": "Alibaba Cloud Model Studio (International)",
-  "provider.connect.models.manualDescription": "This service did not provide a usable model list. Enter the model ID; the key and model have not been verified. The preset endpoint and protocol will be used.",
+  "provider.connect.models.manualDescription":
+    "This service did not provide a usable model list. Enter the model ID; the key and model have not been verified. The preset endpoint and protocol will be used.",
   "provider.connect.models.consent": "I understand that this key and model have not been verified.",
   "provider.connect.models.saveManual": "Save unverified configuration",
   "provider.connect.models.manualSaved": "Unverified configuration saved. The model has not been called.",
@@ -3252,4 +3253,23 @@ export const dict = {
   "settings.about.upstream.description":
     "Derived from OpenCode under MIT. DeepAgent Code is distributed under AGPL-3.0-or-later; see the complete notices below.",
   "settings.capabilities.integrated": "Integrated",
+  "settings.im.entitlement.title": "IM access",
+  "settings.im.entitlement.active": "Activated",
+  "settings.im.entitlement.inactive": "Not activated",
+  "settings.im.entitlement.expired": "Expired",
+  "settings.im.entitlement.unknown": "Not confirmed",
+  "settings.im.entitlement.expiryUnknown": "The service did not return an expiry date.",
+  "settings.im.entitlement.expiresOn": "Expires on {{date}}",
+  "settings.im.entitlement.lifetime": "Lifetime",
+  "settings.im.entitlement.plans": "View plans",
+  "settings.im.entitlement.planYear": "1 credit · 1 year",
+  "settings.im.entitlement.planThreeYears": "2 credits · 3 years",
+  "settings.im.entitlement.planLifetime": "9.9 credits · Lifetime",
+  "settings.im.entitlement.purchaseUnavailable": "Online plan purchases are not connected yet.",
+  "settings.im.entitlement.homepage": "Visit DeepAgent",
+  "settings.im.entitlement.checkDeviceFirst": "Check this device before activating IM access.",
+  "settings.im.entitlement.legacyPurchaseUnavailable":
+    "API key purchases need the new plan service. Redeem an existing activation code below.",
+  "settings.im.entitlement.serviceRequired":
+    "Configure the IM service address before checking or activating this device.",
 }

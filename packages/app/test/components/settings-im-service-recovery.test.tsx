@@ -13,6 +13,7 @@ const wiring = vi.hoisted(() => ({
   local: (): boolean => false,
 }))
 vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
+vi.mock("@/context/platform", () => ({ usePlatform: () => ({ openLink: vi.fn() }) }))
 vi.mock("@/context/server", () => ({
   useServer: () => ({ scope: () => wiring.scope() }),
   ServerConnection: { local: () => wiring.local() },
