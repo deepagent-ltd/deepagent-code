@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library"
 import { MemoryRouter, Route } from "@solidjs/router"
+import { createSignal } from "solid-js"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
 import { createIMClient, IMFacadeRequestError } from "@/utils/im-client"
 import { dict } from "@/i18n/en"
@@ -304,4 +305,64 @@ it("uses the only visible root input for local filtering and submits message his
   fireEvent.click(screen.getByRole("button", { name: dict["im.sidebar.clearSearch"] }))
   expect(search.getAttribute("data-query")).toBe("")
   expect(screen.getByRole("button", { name: /QA team/ })).toBeTruthy()
+})
+
+it("copies the active user ID through the real user-page menu and reports clipboard success and failure", async () => {
+  client.facadeStatus.mockResolvedValue(active)
+  const write = vi
+    .spyOn(navigator.clipboard, "writeText")
+    .mockResolvedValueOnce()
+    .mockRejectedValueOnce(new Error("denied"))
+  render(() => (
+    <MemoryRouter>
+      <Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} />
+    </MemoryRouter>
+  ))
+  fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.settings"] }))
+  await openActions()
+  const copy = screen.getByRole("menuitem", { name: dict["im.sidebar.copyID"] })
+  await waitFor(() => expect(copy.hasAttribute("data-disabled")).toBe(false))
+  fireEvent.keyDown(copy, { key: "Enter" })
+  await screen.findByText(dict["im.sidebar.copied"])
+  expect(write).toHaveBeenCalledExactlyOnceWith("alice-uuid")
+  await openActions()
+  fireEvent.keyDown(screen.getByRole("menuitem", { name: dict["im.sidebar.copyID"] }), { key: "Enter" })
+  await screen.findByText(dict["im.sidebar.copyFailed"])
+  expect(screen.queryByText(dict["im.sidebar.copied"])).toBeNull()
+  expect(write).toHaveBeenNthCalledWith(2, "alice-uuid")
+})
+
+it("does not show a late clipboard result after the user status and server scope retire", async () => {
+  const [scope, setScope] = createSignal(client.scope())
+  client.scope.mockImplementation(scope)
+  client.facadeStatus.mockResolvedValueOnce(active).mockResolvedValue({
+    ...active,
+    facade: "blocked",
+    identity: null,
+    blocked: { code: "im_activation_required", message: "" },
+  })
+  const pending = Promise.withResolvers<void>()
+  const write = vi.spyOn(navigator.clipboard, "writeText").mockReturnValue(pending.promise)
+  render(() => (
+    <MemoryRouter>
+      <Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} />
+    </MemoryRouter>
+  ))
+  fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.settings"] }))
+  await openActions()
+  const copy = screen.getByRole("menuitem", { name: dict["im.sidebar.copyID"] })
+  await waitFor(() => expect(copy.hasAttribute("data-disabled")).toBe(false))
+  fireEvent.keyDown(copy, { key: "Enter" })
+  expect(write).toHaveBeenCalledExactlyOnceWith("alice-uuid")
+  setScope({ ...scope(), directory: "/retired/fixture" })
+  await openActions()
+  await waitFor(() =>
+    expect(screen.getByRole("menuitem", { name: dict["im.sidebar.copyID"] }).hasAttribute("data-disabled")).toBe(true),
+  )
+  pending.resolve()
+  await pending.promise
+  await Promise.resolve()
+  expect(screen.queryByText(dict["im.sidebar.copied"])).toBeNull()
+  expect(screen.queryByText(dict["im.sidebar.copyFailed"])).toBeNull()
+  expect(write).toHaveBeenCalledTimes(1)
 })
