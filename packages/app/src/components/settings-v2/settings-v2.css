@@ -2,6 +2,7 @@
 @import "@deepagent-code/ui/v2/button-v2.css";
 
 [data-component="dialog-v2"][data-variant="settings"]:has(.settings-v2-dialog) [data-slot="dialog-container"] {
+  box-sizing: border-box;
   width: min(1080px, calc(100vw - 48px));
   height: min(760px, calc(100dvh - 48px));
   max-width: calc(100vw - 24px);
@@ -10,7 +11,9 @@
 }
 
 [data-component="dialog-v2"][data-variant="settings"] [data-slot="dialog-content"].settings-v2-dialog {
+  min-width: 0;
   min-height: 0;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -34,6 +37,7 @@
 }
 
 [data-component="tabs-v2"].settings-v2 {
+  box-sizing: border-box;
   height: 100%;
   min-height: 0;
   min-width: 0;
@@ -115,6 +119,7 @@
   min-width: 0;
   min-height: 0;
   height: 100%;
+  flex: 1 1 0%;
   flex-direction: column;
 }
 [data-component="settings-v2-page"] {
@@ -122,8 +127,9 @@
   min-width: 0;
   min-height: 0;
   height: 100%;
-  flex: 1;
+  flex: 1 1 0%;
   flex-direction: column;
+  overflow: hidden;
   container: settings-page / inline-size;
 }
 .settings-v2-tab-header {
@@ -161,15 +167,17 @@
   overflow-wrap: anywhere;
 }
 .settings-v2-tab-body {
+  box-sizing: border-box;
   display: flex;
   min-width: 0;
   min-height: 0;
-  flex: 1;
+  flex: 1 1 0%;
   flex-direction: column;
   gap: 24px;
   width: 100%;
   padding: 0 32px 32px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
@@ -239,6 +247,9 @@
   min-width: 0;
   max-width: 100%;
   width: 100%;
+  justify-content: flex-end;
+}
+[data-component="settings-v2-row"][data-layout="field"] > [data-slot="settings-v2-row-control"] {
   justify-content: flex-start;
 }
 [data-slot="settings-v2-row-control"] > * {
@@ -256,6 +267,22 @@
 [data-slot="settings-v2-row-control"] [data-component="select-v2"][data-appearance="inline"] {
   width: fit-content;
   max-width: 100%;
+}
+[data-component="settings-v2-row"][data-layout="row"]
+  > [data-slot="settings-v2-row-control"]
+  > [data-component="select-v2-root"]:has(> [data-component="select-v2"][data-appearance="inline"]) {
+  width: fit-content;
+}
+[data-component="settings-v2-row"]:has([data-component="text-input-v2"]) {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+[data-component="settings-v2-row"]:has([data-component="text-input-v2"]) > [data-slot="settings-v2-row-control"] {
+  justify-content: flex-start;
+}
+[data-slot="settings-v2-row-control"] > div:has([data-component="text-input-v2"]) {
+  width: 100%;
 }
 [data-slot="settings-v2-row-description"] a.settings-v2-link {
   color: var(--v2-text-text-accent);
@@ -330,14 +357,12 @@
 }
 
 @container settings-page (min-width: 560px) {
-  [data-component="settings-v2-row"][data-layout="row"] {
+  /* Keep field detection specificity neutral so the import and embedded adapters still win. */
+  [data-component="settings-v2-row"][data-layout="row"]:where(:not(:has([data-component="text-input-v2"]))) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(120px, 40%);
     align-items: center;
     gap: 24px;
-  }
-  [data-component="settings-v2-row"][data-layout="row"] > [data-slot="settings-v2-row-control"] {
-    justify-content: flex-end;
   }
 }
 @container settings-page (max-width: 479px) {
@@ -424,6 +449,43 @@
   gap: 16px;
   padding-block: 16px;
   border-bottom: 0.5px solid var(--v2-border-border-muted);
+}
+
+.settings-v2-provider-cards {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
+
+.settings-v2-provider-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--v2-background-bg-layer-02);
+}
+
+.settings-v2-provider-card-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.settings-v2-provider-card-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-v2-provider-card .settings-v2-provider-row {
+  padding: 0;
+  border: 0;
 }
 
 .settings-v2-provider-row:last-child {
