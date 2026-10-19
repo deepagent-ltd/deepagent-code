@@ -382,7 +382,7 @@ it("switches supplier products without retaining keys, pending discovery or a st
   fireEvent.click(screen.getByRole("button", { name: dict["common.goBack"] }))
   expect(data.pending.signal?.aborted).toBe(true)
   fireEvent.click(screen.getByRole("button", { name: /Zhipu AI Coding Plan/ }))
-  expect((await screen.findByRole<HTMLInputElement>("textbox", { name: /API key/i })).value).toBe("")
+  expect((await screen.findByLabelText<HTMLInputElement>(/API key/i)).value).toBe("")
   data.pending.release!()
   await waitFor(() => expect(screen.queryByRole("checkbox")).toBeNull())
   expect(data.calls.filter((call) => call.path.startsWith("/auth/") || call.path === "/global/config")).toEqual([])
