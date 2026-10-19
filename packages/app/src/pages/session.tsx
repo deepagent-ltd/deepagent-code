@@ -1834,7 +1834,7 @@ export default function Page() {
   return (
     <SessionLifecycle>
       <div class="workbench-session relative size-full overflow-hidden flex flex-col" data-session-id={params.id}>
-        <SessionHeader onTaskProgressAvailableChange={setTaskProgressAvailable} />
+        <SessionHeader />
         <Show when={params.id}>{(sessionID) => <SessionMcpAppInvocations sessionID={sessionID()} />}</Show>
         <div class="workbench-split flex-1 min-h-0 flex flex-col md:flex-row">
           <Show when={!isDesktop()}>
@@ -1888,6 +1888,7 @@ export default function Page() {
                     }
                   >
                     <MessageTimeline
+                      onTaskProgressAvailableChange={setTaskProgressAvailable}
                       actions={actions}
                       scroll={ui.scroll}
                       onResumeScroll={resumeScroll}

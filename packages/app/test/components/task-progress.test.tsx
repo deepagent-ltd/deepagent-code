@@ -11,7 +11,7 @@ const runtime = vi.hoisted(() => ({
   select: vi.fn(),
   open: vi.fn(),
   hide: vi.fn(),
-  sessionID: (): string => "parent",
+  sessionID: (): string | undefined => "parent",
   scope: (): string => "local",
   serverSync: (): unknown => ({ data: { session_plan: {} } }),
 }))
@@ -64,6 +64,13 @@ beforeEach(() => {
   })
 })
 afterEach(cleanup)
+
+it("does not display a task trigger or read tasks before a Session exists", () => {
+  runtime.sessionID = () => undefined
+  render(() => <TaskProgressPopover />)
+  expect(screen.queryByRole("button", { name: dict["workPanel.tasks"] })).toBeNull()
+  expect(runtime.client.session.taskSummary).not.toHaveBeenCalled()
+})
 
 it("opens the task summary on demand and selects readonly details without a child Session navigation", async () => {
   render(() => <TaskProgressPopover />)
@@ -153,7 +160,9 @@ it("shows a final result once when the last progress text is the same result", a
   render(() => <TaskProgressDetails />)
   await screen.findByText("Visible result")
   expect(screen.getAllByText("Visible result")).toHaveLength(1)
-  expect(screen.getByText(`${dict["workPanel.result"]}: ${dict["workPanel.resultState.available"]}`)).toBeTruthy()
+  const details = screen.getByText("Visible result").closest("section")
+  if (!details) throw new Error("The readonly task result section did not render")
+  expect(within(details).getByText(`${dict["workPanel.result"]}: ${dict["workPanel.resultState.available"]}`)).toBeTruthy()
 })
 
 it("separates the current plan from subtasks and leaves no old plan after close or scope change", async () => {
@@ -193,7 +202,9 @@ it("separates the current plan from subtasks and leaves no old plan after close 
   const result = render(() => <TaskProgressPopover />)
   expect(runtime.client.session.taskSummary).not.toHaveBeenCalled()
   const trigger = screen.getByRole("button", { name: dict["workPanel.tasks"] })
-  expect(trigger.classList.contains("w-8")).toBe(true)
+  expect(trigger.classList.contains("size-6")).toBe(true)
+  expect(trigger.classList.contains("rounded-md")).toBe(true)
+  expect(trigger.classList.contains("titlebar-icon")).toBe(false)
   expect(trigger.classList.contains("hidden")).toBe(false)
   fireEvent.click(trigger)
   await screen.findByText(dict["workPanel.tasksEmpty"])
@@ -215,6 +226,12 @@ it("separates the current plan from subtasks and leaves no old plan after close 
   await screen.findByText("Review own code and deliver")
   setCurrent("sessionID", "other-session")
   await screen.findByText(dict["workPanel.planEmpty"])
+  await waitFor(() =>
+    expect(runtime.client.session.taskSummary).toHaveBeenLastCalledWith(
+      { sessionID: "other-session" },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ),
+  )
   expect(screen.queryByText("Inspect")).toBeNull()
   expect(screen.queryByText("2/5")).toBeNull()
   batch(() => {

@@ -135,7 +135,8 @@ export function TaskProgressPopover() {
         triggerAs="button"
         triggerProps={{
           type: "button",
-          class: "titlebar-icon inline-flex w-8 h-6 items-center justify-center p-0 box-border shrink-0",
+          class:
+            "inline-flex size-6 items-center justify-center rounded-md p-0 box-border shrink-0 hover:bg-surface-base-hover data-[expanded]:bg-surface-base-active",
           title: text("tasks"),
           "aria-label": text("tasks"),
         }}

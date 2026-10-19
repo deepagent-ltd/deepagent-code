@@ -8,7 +8,7 @@ import { Spinner } from "@deepagent-code/ui/spinner"
 import { showToast } from "@/utils/toast"
 import { Tooltip, TooltipKeybind } from "@deepagent-code/ui/tooltip"
 import { getFilename } from "@deepagent-code/core/util/path"
-import { createEffect, createMemo, For, onCleanup, onMount, Show, type ComponentProps } from "solid-js"
+import { createEffect, createMemo, For, onMount, Show, type ComponentProps } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import { useCommand } from "@/context/command"
@@ -22,7 +22,6 @@ import { useSessionLayout } from "@/pages/session/session-layout"
 import { messageAgentColor } from "@/utils/agent"
 import { decode64 } from "@/utils/base64"
 import { Persist, persisted } from "@/utils/persist"
-import { TaskProgressPopover } from "@/pages/session/task-progress"
 
 const OPEN_APPS = [
   "vscode",
@@ -134,7 +133,7 @@ const showRequestError = (language: ReturnType<typeof useLanguage>, err: unknown
   })
 }
 
-export function SessionHeader(props: { onTaskProgressAvailableChange?: (available: boolean) => void } = {}) {
+export function SessionHeader() {
   const layout = useLayout()
   const command = useCommand()
   const server = useServer()
@@ -291,8 +290,6 @@ export function SessionHeader(props: { onTaskProgressAvailableChange?: (availabl
     setMounts("right", document.getElementById("deepagent-code-titlebar-actions"))
     setMounts("panel", document.getElementById("deepagent-code-titlebar-panel"))
   })
-  createEffect(() => props.onTaskProgressAvailableChange?.(!!params.id && !!mounts.right))
-  onCleanup(() => props.onTaskProgressAvailableChange?.(false))
 
   return (
     <>
@@ -431,7 +428,6 @@ export function SessionHeader(props: { onTaskProgressAvailableChange?: (availabl
                 </div>
               </Show>
               <div class="flex items-center gap-1">
-                <TaskProgressPopover />
                 <Show when={term()}>
                   <TooltipKeybind title={language.t("command.panel.toggle")} keybind={command.keybind("panel.toggle")}>
                     <Button

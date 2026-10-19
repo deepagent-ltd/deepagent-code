@@ -84,6 +84,7 @@ import { formatDuration } from "@/utils/format-duration"
 import { makeTimer } from "@solid-primitives/timer"
 import { MessageComment, SummaryDiff, Timeline, TimelineRow, TimelineRowMap } from "./message-timeline.data"
 import { TurnRail } from "./turn-rail"
+import { TaskProgressPopover } from "./task-progress"
 
 const emptyMessages: MessageType[] = []
 const emptyParts: PartType[] = []
@@ -521,6 +522,7 @@ export function MessageTimeline(props: {
   activeMessageID: () => string | undefined
   scrollToMessage: (message: UserMessage, behavior?: ScrollBehavior) => void
   setActiveMessage: (message: UserMessage | undefined) => void
+  onTaskProgressAvailableChange?: (available: boolean) => void
 }) {
   let touchGesture: number | undefined
 
@@ -674,6 +676,8 @@ export function MessageTimeline(props: {
     return language.t("command.session.new")
   })
   const showHeader = createMemo(() => !!(titleValue() || parentID()))
+  createEffect(() => props.onTaskProgressAvailableChange?.(showHeader() && !!sessionID()))
+  onCleanup(() => props.onTaskProgressAvailableChange?.(false))
 
   const messageRowMemos = createMemo(
     mapArray(
@@ -1965,6 +1969,7 @@ export function MessageTimeline(props: {
                 {(id) => (
                   <div class="shrink-0 flex items-center gap-3">
                     <SessionContextUsage placement="bottom" />
+                    <TaskProgressPopover />
                     <Show when={!parentID()}>
                       <DropdownMenu
                         gutter={4}
