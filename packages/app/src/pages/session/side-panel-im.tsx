@@ -17,12 +17,13 @@ import { Button } from "@deepagent-code/ui/button"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Icon } from "@deepagent-code/ui/icon"
 import { InlineInput } from "@deepagent-code/ui/inline-input"
+import { DropdownMenu } from "@deepagent-code/ui/dropdown-menu"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { useCommand } from "@/context/command"
 import { useSDK } from "@/context/sdk"
 import { IMContactsPage } from "@/components/im/contacts-page"
-import { SettingsIMV2 } from "@/components/settings-v2/im"
+import { IMUserSettingsPage } from "@/components/im/user-settings-page"
 import { GroupChatPanel } from "@/components/im/group-chat-panel"
 import { createComposerDrafts } from "@/components/im/composer-draft"
 import { MessageSearch } from "@/components/im/message-search"
@@ -31,7 +32,7 @@ import { IMFacadeRequestError, useIMClient, type IMClient, type IMFacadeStatus }
 import type { IMGroup } from "@/components/im/types"
 import { submitCreateDirect, submitCreateGroup, submitFacadeName } from "@/pages/session/im-panel-helpers"
 import { facadeFailureText, type FacadeFailureLike } from "@/components/im/facade-errors"
-import { ActivationCard, BlockedCard, IdentityCard } from "@/components/im/facade-cards"
+import { ActivationCard, BlockedCard } from "@/components/im/facade-cards"
 import { KernelGroupDialog } from "@/components/im/facade-dialogs"
 import { PersonalCommandFlow } from "@/components/im/personal-command-flow"
 import { imCommunicationState, publishIMNavigation, retireIMNavigation } from "@/components/im/navigation-state"
@@ -40,6 +41,7 @@ import { createDacDrafts, type DacDraft } from "@/components/im/personal-command
 import type { LocalMessage } from "@/hooks/use-im-websocket"
 import { useLocation, useNavigate } from "@solidjs/router"
 import { ServerConnection, useServer } from "@/context/server"
+import "./im-sidebar.css"
 
 type ReturnBookmark = {
   from: ServerConnection.Key
@@ -66,15 +68,18 @@ const sameConnection = (left: ServerConnection.HttpBase, right: ServerConnection
   left.password === right.password &&
   left.bearer === right.bearer
 
-// IM as a right-side-panel tab. Mirrors the other side-panels (browser, subagents):
-// owns a header + close button (calls onClose), fills the panel with `h-full`
-// instead of the old full-screen `h-screen` route. Group creation uses an inline
-// input — never window.prompt(), which throws in the Electron renderer.
+// IM owns the three-page content and contextual actions; the enclosing side-panel
+// owns its close button. Group creation remains inline because window.prompt()
+// throws in the Electron renderer.
 //
 // Only a missing status endpoint permits legacy mode; transient failures must not enable local-only creation.
-// active ⇒ 顶部身份卡 + 群徽标（全员群/内核群）+ 私聊/建群/邀请走门面端点（按名字，不按裸 id）；
+// active ⇒ 群徽标（全员群/内核群）+ 私聊/建群/邀请走门面端点（按名字，不按裸 id）；
 // claim_required and activation_required open explicit IM settings; other blocked states retain connection recovery.
-export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean }> = (props) => {
+export const SidePanelIM: Component<{
+  onClose: () => void
+  chromeOwned?: boolean
+  onManageIM?: () => void
+}> = (props) => {
   const language = useLanguage()
   const command = useCommand()
   const client = useIMClient()
@@ -184,7 +189,14 @@ export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean
 
   const [workspace, setWorkspace] = createStore({
     page: "messages" as "messages" | "contacts" | "settings",
+    visited: { contacts: false, settings: false },
     filter: "",
+    searchRequest: 0,
+    searchGroup: undefined as string | undefined,
+    refreshRequest: 0,
+    lookupRequest: 0,
+    renameRequest: 0,
+    copyResult: "" as "" | "copied" | "copyFailed",
   })
   const [groups, setGroups] = createSignal<IMGroup[]>([])
   const visibleGroups = createMemo(() =>
@@ -198,7 +210,11 @@ export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean
     epoch?: string
   }>()
   const [selectedGroupID, setSelectedGroup] = createSignal<string | null>(null)
-  const setSelectedGroupID = (groupID: string | null) => {
+  const scrollPositions = new Map<string, number>()
+  const setSelectedGroupID = (groupID: string | null, remember = true) => {
+    const previous = untrack(selectedGroupID)
+    const log = panel?.querySelector<HTMLElement>('[role="log"]')
+    if (remember && previous && log) scrollPositions.set(previous, log.scrollTop)
     setMessageLocation(undefined)
     return setSelectedGroup(groupID)
   }
@@ -316,12 +332,17 @@ export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean
         observedOwner = value
       }
       if (personalOwner !== value) {
-        setWorkspace("filter", "")
+        scrollPositions.clear()
+        setWorkspace({ filter: "", searchGroup: undefined, copyResult: "" })
+        setSearching(false)
         setPersonalFlow({ groupID: "", draft: undefined, autoSubmit: false, error: "" })
         personalOwner = value
       }
       if (value)
-        setSelectedGroupID(value.selected ?? (restoring?.accountID === value.accountID ? restoring.groupID : null))
+        setSelectedGroupID(
+          value.selected ?? (restoring?.accountID === value.accountID ? restoring.groupID : null),
+          false,
+        )
     }),
   )
   createEffect(
@@ -677,20 +698,17 @@ export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean
     void untrack(() => loadGroups())
   })
   createEffect(
-    on(
-      currentScope,
-      () => {
-        const connection = server.current?.http
-        if (!connection) return
-        const detach = imSummaryOwner.attach({
-          scope: server.scope(),
-          connection: { ...connection },
-          client,
-          reader: { owner: navigationOwner, refresh: () => loadGroups(true) },
-        })
-        onCleanup(detach)
-      },
-    ),
+    on(currentScope, () => {
+      const connection = server.current?.http
+      if (!connection) return
+      const detach = imSummaryOwner.attach({
+        scope: server.scope(),
+        connection: { ...connection },
+        client,
+        reader: { owner: navigationOwner, refresh: () => loadGroups(true) },
+      })
+      onCleanup(detach)
+    }),
   )
   onCleanup(() => {
     refresh.disposed = true
@@ -712,6 +730,7 @@ export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean
 
   const startCreate = () => {
     if (!canOpen()) return
+    setWorkspace("page", "messages")
     setInlineFailure(null)
     if (facadeActive()) {
       const generation = refresh.generation
@@ -860,10 +879,64 @@ export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean
   }
 
   const backToList = () => {
+    const scoped = workspace.searchGroup !== undefined
     setSelectedGroupID(null)
     setInvitingGroupID(null)
     setInlineFailure(null)
+    setWorkspace("searchGroup", undefined)
+    setSearching(!scoped && !!workspace.filter.trim() && workspace.searchRequest > 0)
   }
+  createEffect(
+    on([selectedReadyID, communicationOwner, selectedMessageLocation], ([id, owner, location]) => {
+      if (!id || location || !scrollPositions.has(id)) return
+      const scope = client.scope()
+      const observer = new MutationObserver(() => apply())
+      const apply = () => {
+        if (refresh.disposed || communication() !== owner || client.scope() !== scope || selectedGroupID() !== id)
+          return
+        const log = panel?.querySelector<HTMLElement>('[role="log"]')
+        if (!log) return
+        log.scrollTop = scrollPositions.get(id) ?? 0
+        observer.disconnect()
+      }
+      if (panel) observer.observe(panel, { childList: true, subtree: true })
+      queueMicrotask(apply)
+      onCleanup(() => observer.disconnect())
+    }),
+  )
+  const manageIM = async () => {
+    if (props.onManageIM) return props.onManageIM()
+    const scope = client.scope()
+    const { DialogSettings } = await import("@/components/settings-v2/dialog-settings-v2")
+    if (refresh.disposed || client.scope() !== scope) return
+    dialog.show(() => <DialogSettings initialTab="im" />)
+  }
+  const copyIdentity = async () => {
+    const self = identity()
+    const scope = client.scope()
+    if (!self || !facadeActive() || availability.statusFailed || facadeStatus()?.service?.reconnectRequired) return
+    const copied = await navigator.clipboard?.writeText(self.uuid).then(
+      () => true,
+      () => false,
+    )
+    if (refresh.disposed || client.scope() !== scope || identity()?.uuid !== self.uuid) return
+    setWorkspace("copyResult", copied ? "copied" : "copyFailed")
+  }
+  let searchInput: HTMLInputElement | undefined
+  const searchRecords = () => {
+    if (!workspace.filter.trim() || availability.statusFailed) return
+    batch(() => {
+      setSearching(true)
+      setWorkspace("searchRequest", (value) => value + 1)
+    })
+  }
+  const showSearch = () => {
+    setWorkspace("searchGroup", selectedGroupID() ?? undefined)
+    setSearching(true)
+    queueMicrotask(() => searchInput?.isConnected && searchInput.focus())
+  }
+  const shortFlow = () => directTarget() !== null || creatingName() !== null
+  const rootPage = () => workspace.page !== "messages" || (!selectedGroupID() && !shortFlow())
   createEffect(() => {
     if (
       !restoring?.returning ||
@@ -913,11 +986,7 @@ export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean
   }
 
   return (
-    <div
-      ref={panel}
-      class="@container/im h-full w-full min-w-0 flex flex-col overflow-hidden bg-background-base"
-      data-slot="im-workspace"
-    >
+    <div ref={panel} class="im-sidebar h-full w-full min-w-0 flex flex-col overflow-hidden" data-slot="im-workspace">
       <Show when={canReturn()}>
         {(saved) => (
           <Button
@@ -1033,116 +1102,187 @@ export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean
           </div>
         )}
       </Show>
-      <div class="sticky top-0 z-10 flex min-h-12 shrink-0 items-center justify-between gap-2 px-3 py-2 bg-background-base">
-        <div class="flex items-center gap-1 min-w-0">
-          <Show when={workspace.page === "messages" && selectedGroupID()}>
+      <header class="im-sidebar-header">
+        <div class="im-sidebar-heading">
+          <Show when={workspace.page === "messages" && (selectedGroupID() || shortFlow())}>
             <IconButton
               icon="chevron-left"
               variant="ghost"
-              class="h-7 w-7 rounded-md shrink-0"
-              onClick={backToList}
+              class="im-sidebar-action"
+              onClick={() => {
+                if (searching() && selectedGroupID()) return setSearching(false)
+                if (directTarget() !== null) return cancelDirect()
+                if (creatingName() !== null) return cancelCreate()
+                backToList()
+              }}
               aria-label={language.t("common.goBack")}
             />
           </Show>
-          <div class="min-w-0 flex-1">
-            <h2 class="text-13-medium text-text-strong truncate" title={selectedGroup()?.name}>
+          <div class="im-sidebar-title-copy">
+            <h2 title={selectedGroup()?.name}>
               {workspace.page === "settings"
                 ? language.t("im.workspace.settings")
                 : workspace.page === "contacts"
                   ? language.t("im.workspace.contacts")
-                  : (selectedGroup()?.name ??
-                    (props.chromeOwned ? identity()?.name : undefined) ??
-                    language.t("im.workspace.messages"))}
+                  : selectedGroupID()
+                    ? (selectedGroup()?.name ??
+                      groups().find((group) => group.id === selectedGroupID())?.name ??
+                      language.t("im.loading"))
+                    : shortFlow()
+                      ? language.t(directTarget() !== null ? "im.direct.create" : "im.group.create")
+                      : language.t("im.workspace.messages")}
             </h2>
-            <Show when={workspace.page === "messages" && !selectedGroupID() && !props.chromeOwned && identity()}>
-              {(self) => <p class="truncate text-11-regular text-text-weak">{self().name}</p>}
+            <Show when={facadeActive() && facadeStatus()?.kernel}>
+              <p>
+                {language.t(
+                  facadeStatus()?.kernel === "connected" ? "im.connection.live" : "im.connection.reconnecting",
+                )}
+              </p>
             </Show>
           </div>
         </div>
-        <div class="flex items-center gap-1 shrink-0">
-          <Show when={workspace.page === "messages" && !selectedGroupID()}>
-            <IconButton
-              icon="history"
-              variant="ghost"
-              class="h-7 w-7 rounded-md"
-              disabled={loading() || availability.statusLoading}
-              onClick={() => void loadGroups()}
-              aria-label={language.t("im.transport.refresh")}
-              title={language.t("im.transport.refresh")}
-            />
-            <IconButton
-              icon="magnifying-glass"
-              variant="ghost"
-              class="h-7 w-7 rounded-md"
-              classList={{ "bg-surface-raised-base-active": searching() }}
-              onClick={() => setSearching((v) => !v)}
-              aria-label={language.t("im.search.messages")}
-            />
-            <IconButton
-              icon="bubble-5"
-              variant="ghost"
-              class="h-7 w-7 rounded-md"
-              disabled={busy() || !canOpen() || directTarget() !== null}
-              onClick={startDirect}
-              aria-label={language.t("im.direct.create")}
-            />
-            <IconButton
-              icon="plus-small"
-              variant="ghost"
-              class="h-7 w-7 rounded-md"
-              disabled={busy() || !canOpen() || creatingName() !== null}
-              onClick={startCreate}
-              aria-label={language.t("im.group.create")}
-            />
-          </Show>
-          {/* 邀请入口：群视图 + 内核群（k:2: 绑定）+ 门面 active */}
-          <Show when={workspace.page === "messages" && inviteable()}>
-            <IconButton
-              icon="plus-small"
-              variant="ghost"
-              class="h-7 w-7 rounded-md"
-              classList={{ "bg-surface-raised-base-active": invitingGroupID() !== null }}
-              disabled={busy()}
-              onClick={() => {
-                setInlineFailure(null)
-                setInviteName("")
-                setInvitingGroupID((current) => (current === null ? selectedGroupID() : null))
-              }}
-              aria-label={language.t("im.facade.invite")}
-            />
-          </Show>
-          <Show when={!props.chromeOwned}>
-            <IconButton
-              icon="close-small"
-              variant="ghost"
-              class="h-7 w-7 rounded-md"
-              onClick={props.onClose}
-              aria-label={language.t("common.close")}
-            />
-          </Show>
-        </div>
-      </div>
+        <DropdownMenu placement="bottom-end" gutter={8} modal={false}>
+          <DropdownMenu.Trigger class="im-sidebar-action" aria-label={language.t("im.sidebar.actions")}>
+            <Icon name="plus-small" size="medium" />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content class="im-sidebar-menu">
+              <Show when={workspace.page === "settings"}>
+                <DropdownMenu.Item
+                  disabled={!facadeActive() || !identity() || availability.statusFailed}
+                  onSelect={() => setWorkspace("renameRequest", (value) => value + 1)}
+                >
+                  <Icon name="pencil-line" size="small" />
+                  <DropdownMenu.ItemLabel>{language.t("im.facade.identity.rename")}</DropdownMenu.ItemLabel>
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  disabled={!facadeActive() || !identity() || availability.statusFailed}
+                  onSelect={() => void copyIdentity()}
+                >
+                  <Icon name="copy" size="small" />
+                  <DropdownMenu.ItemLabel>{language.t("im.sidebar.copyID")}</DropdownMenu.ItemLabel>
+                </DropdownMenu.Item>
+              </Show>
+              <Show when={workspace.page === "contacts" || (workspace.page === "messages" && !selectedGroupID())}>
+                <DropdownMenu.Item
+                  disabled={
+                    busy() ||
+                    !canOpen() ||
+                    directTarget() !== null ||
+                    (workspace.page === "contacts" && !facadeActive())
+                  }
+                  onSelect={() => {
+                    if (workspace.page === "contacts") return setWorkspace("lookupRequest", (value) => value + 1)
+                    startDirect()
+                  }}
+                >
+                  <Icon name="bubble-5" size="small" />
+                  <DropdownMenu.ItemLabel>{language.t("im.direct.create")}</DropdownMenu.ItemLabel>
+                </DropdownMenu.Item>
+                <DropdownMenu.Item disabled={busy() || !canOpen() || creatingName() !== null} onSelect={startCreate}>
+                  <Icon name="plus-small" size="small" />
+                  <DropdownMenu.ItemLabel>{language.t("im.group.create")}</DropdownMenu.ItemLabel>
+                </DropdownMenu.Item>
+              </Show>
+              <Show when={workspace.page === "messages" && selectedGroupID()}>
+                <Show when={inviteable()}>
+                  <DropdownMenu.Item
+                    disabled={busy()}
+                    onSelect={() => {
+                      setInlineFailure(null)
+                      setInviteName("")
+                      setInvitingGroupID(selectedGroupID())
+                    }}
+                  >
+                    <Icon name="plus-small" size="small" />
+                    <DropdownMenu.ItemLabel>{language.t("im.facade.invite")}</DropdownMenu.ItemLabel>
+                  </DropdownMenu.Item>
+                </Show>
+                <DropdownMenu.Item
+                  disabled={availability.statusFailed || capabilities()?.im === false}
+                  onSelect={showSearch}
+                >
+                  <Icon name="magnifying-glass" size="small" />
+                  <DropdownMenu.ItemLabel>{language.t("im.search.messages")}</DropdownMenu.ItemLabel>
+                </DropdownMenu.Item>
+              </Show>
+              <DropdownMenu.Item
+                disabled={
+                  availability.statusLoading ||
+                  (workspace.page === "messages" && selectedGroupID()
+                    ? selectedReadyID() !== selectedGroupID()
+                    : loading())
+                }
+                onSelect={() => {
+                  if (workspace.page === "messages" && selectedGroupID())
+                    return setWorkspace("refreshRequest", (value) => value + 1)
+                  refreshFacade()
+                }}
+              >
+                <Icon name="history" size="small" />
+                <DropdownMenu.ItemLabel>{language.t("im.transport.refresh")}</DropdownMenu.ItemLabel>
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu>
+      </header>
+      <Show when={workspace.page === "settings" && workspace.copyResult}>
+        <p role="status" class="im-sidebar-feedback">
+          {language.t(workspace.copyResult === "copied" ? "im.sidebar.copied" : "im.sidebar.copyFailed")}
+        </p>
+      </Show>
 
       <div
-        class="min-h-0 flex-1 flex-col"
+        class="im-sidebar-page min-h-0 flex-1 flex-col"
         classList={{ flex: workspace.page === "messages", hidden: workspace.page !== "messages" }}
         aria-hidden={workspace.page !== "messages"}
       >
-        <div class="flex min-h-0 flex-1 gap-3 @[640px]/im:flex-row">
+        <div class="im-sidebar-stack flex min-h-0 flex-1 flex-col">
           <div
-            class="min-h-0 flex-1 flex-col overflow-y-auto @[640px]/im:max-w-60 @[640px]/im:shrink-0 @[640px]/im:rounded-xl @[640px]/im:bg-surface-panel"
-            classList={{ flex: !selectedGroupID(), "hidden @[640px]/im:flex": !!selectedGroupID() }}
+            class="im-sidebar-discovery min-h-0 flex-1 flex-col overflow-y-auto"
+            classList={{ flex: !selectedGroupID() || searching(), hidden: !!selectedGroupID() && !searching() }}
           >
-            <label class="mx-3 mb-3 flex items-center gap-2 rounded-lg bg-surface-raised-base px-3 py-2">
-              <span class="sr-only">{language.t("im.workspace.filter")}</span>
-              <Icon name="magnifying-glass" size="small" />
-              <input
-                class="min-w-0 flex-1 bg-transparent text-12-regular outline-none"
-                value={workspace.filter}
-                placeholder={language.t("im.workspace.filter")}
-                onInput={(event) => setWorkspace("filter", event.currentTarget.value)}
-              />
-            </label>
+            <Show when={!shortFlow()}>
+              <label class="im-sidebar-search">
+                <span class="sr-only">{language.t("im.workspace.filter")}</span>
+                <Icon name="magnifying-glass" size="small" />
+                <input
+                  ref={searchInput}
+                  value={workspace.filter}
+                  placeholder={language.t(selectedGroupID() ? "im.search.messages" : "im.workspace.filter")}
+                  onInput={(event) => setWorkspace("filter", event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return
+                    event.preventDefault()
+                    searchRecords()
+                  }}
+                />
+                <Show when={workspace.filter}>
+                  <button
+                    type="button"
+                    class="im-sidebar-clear"
+                    aria-label={language.t("im.sidebar.clearSearch")}
+                    onClick={() => {
+                      setWorkspace({ filter: "", searchGroup: undefined })
+                      setSearching(false)
+                      searchInput?.focus()
+                    }}
+                  >
+                    <Icon name="close-small" size="small" />
+                  </button>
+                </Show>
+              </label>
+              <Show when={workspace.filter.trim() && !searching()}>
+                <Button
+                  variant="ghost"
+                  class="im-sidebar-search-records"
+                  disabled={availability.statusFailed || capabilities()?.im === false}
+                  onClick={searchRecords}
+                >
+                  {language.t("im.sidebar.searchRecords")}
+                </Button>
+              </Show>
+            </Show>
             <Show when={availability.readerUnavailable}>
               <p role="status" class="px-3 py-2 text-12-regular text-text-weak">
                 {language.t("im.reader.unavailable")}
@@ -1157,38 +1297,12 @@ export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean
               </div>
             </Show>
             <Show when={facadeState() === "claim_required"}>
-              <ActivationCard onActivate={() => setWorkspace("page", "settings")} />
+              <ActivationCard onActivate={() => void manageIM()} />
             </Show>
             <Show when={facadeState() === "blocked" && facadeStatus()?.blocked}>
               {(blocked) => (
-                <BlockedCard
-                  blocked={blocked()}
-                  onRecovered={refreshFacade}
-                  onActivate={() => setWorkspace("page", "settings")}
-                />
+                <BlockedCard blocked={blocked()} onRecovered={refreshFacade} onActivate={() => void manageIM()} />
               )}
-            </Show>
-            {/* Search targets are re-read through the current conversation's history authority. */}
-            <Show when={searching()}>
-              <div class="border-b border-border-weaker-base">
-                <MessageSearch
-                  localGroupIDs={groups()
-                    .filter((group) => !protectedGroup(group))
-                    .map((group) => group.id)}
-                  displayEpoch={facadeStatus()?.reader?.displayEpoch}
-                  invalidation={availability.invalidation}
-                  onSelect={({ groupID, messageID }) => {
-                    setSearching(false)
-                    setSelectedGroupID(groupID)
-                    setMessageLocation({
-                      groupID,
-                      messageID,
-                      scope: client.scope(),
-                      epoch: facadeStatus()?.reader?.displayEpoch,
-                    })
-                  }}
-                />
-              </div>
             </Show>
             {/* §B3 direct message — inline counterparty editor. Facade 模式下按通讯录名字；
                 legacy 模式前缀 "@" for an agent、否则裸 user id。 */}
@@ -1267,97 +1381,122 @@ export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean
                 </Button>
               </div>
             </Show>
-            <Show
-              when={!loading()}
-              fallback={<div class="p-4 text-13-regular text-text-weak">{language.t("im.loading")}</div>}
-            >
-              <For each={["ordinary", "protected"] as const}>
-                {(lane) => (
-                  <Show when={paging[lane].more}>
-                    <Button
-                      size="small"
-                      variant="ghost"
-                      disabled={paging[lane].busy}
-                      onClick={() => void loadLane(lane, true)}
-                    >
-                      {language.t(lane === "ordinary" ? "im.reader.moreOrdinary" : "im.reader.moreProtected")}
-                    </Button>
-                  </Show>
-                )}
-              </For>
+            <Show when={!selectedGroupID() && !shortFlow()}>
+              <Show when={workspace.filter.trim()}>
+                <h3 class="im-sidebar-section-label">{language.t("im.sidebar.conversations")}</h3>
+              </Show>
               <Show
-                when={groups().length > 0}
-                fallback={
-                  <Show when={!availability.groupsFailed}>
-                    <div class="p-4 text-13-regular text-text-weak">{language.t("im.group.empty")}</div>
-                  </Show>
-                }
+                when={!loading()}
+                fallback={<div class="p-4 text-13-regular text-text-weak">{language.t("im.loading")}</div>}
               >
-                <div class="flex flex-col gap-0.5 p-2">
-                  <For
-                    each={visibleGroups()}
-                    fallback={
-                      <p role="status" class="p-4 text-center text-12-regular text-text-weak">
-                        {language.t("im.workspace.noMatches")}
-                      </p>
-                    }
-                  >
-                    {(group) => (
-                      <button
-                        type="button"
-                        onClick={() => setSelectedGroupID(group.id)}
-                        class="flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-surface-raised-base-hover"
-                        classList={{ "bg-surface-raised-base-active": selectedGroupID() === group.id }}
-                        aria-pressed={selectedGroupID() === group.id}
+                <For each={["ordinary", "protected"] as const}>
+                  {(lane) => (
+                    <Show when={paging[lane].more}>
+                      <Button
+                        size="small"
+                        variant="ghost"
+                        disabled={paging[lane].busy}
+                        onClick={() => void loadLane(lane, true)}
                       >
-                        <span
-                          class="flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface-raised-base text-14-medium text-text-weak"
-                          aria-hidden="true"
+                        {language.t(lane === "ordinary" ? "im.reader.moreOrdinary" : "im.reader.moreProtected")}
+                      </Button>
+                    </Show>
+                  )}
+                </For>
+                <Show
+                  when={groups().length > 0}
+                  fallback={
+                    <Show when={!availability.groupsFailed}>
+                      <div class="p-4 text-13-regular text-text-weak">{language.t("im.group.empty")}</div>
+                    </Show>
+                  }
+                >
+                  <div class="flex flex-col gap-0.5 p-2">
+                    <For
+                      each={visibleGroups()}
+                      fallback={
+                        <p role="status" class="p-4 text-center text-12-regular text-text-weak">
+                          {language.t("im.workspace.noMatches")}
+                        </p>
+                      }
+                    >
+                      {(group) => (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedGroupID(group.id)}
+                          class="flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-surface-raised-base-hover"
+                          classList={{ "bg-surface-raised-base-active": selectedGroupID() === group.id }}
+                          aria-pressed={selectedGroupID() === group.id}
                         >
-                          {Array.from(group.name)[0] ?? "?"}
-                        </span>
-                        <span class="min-w-0 flex-1">
-                          <span class="flex items-center gap-1.5 min-w-0">
-                            <span class="text-13-medium text-text-strong truncate">{group.name}</span>
-                            <Show when={kernelBadge(group)}>
-                              {(badge) => (
-                                <span class="shrink-0 rounded-sm bg-surface-raised-base px-1 py-px text-10-medium text-text-weak">
-                                  {language.t(
-                                    badge() === "orgAll" ? "im.facade.badge.orgAll" : "im.facade.badge.kernel",
-                                  )}
-                                </span>
-                              )}
-                            </Show>
+                          <span
+                            class="flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface-raised-base text-14-medium text-text-weak"
+                            aria-hidden="true"
+                          >
+                            {Array.from(group.name)[0] ?? "?"}
                           </span>
-                          <span class="mt-1 block truncate text-11-regular text-text-weak">
-                            {language.t(group.type === "direct" ? "im.workspace.direct" : "im.workspace.group")}
-                            <Show when={group.reader}>
-                              {" "}
-                              ·{" "}
-                              {group.reader?.state === "pending"
-                                ? language.t("im.reader.pending")
-                                : `${language.t("im.reader.unread")}: ${group.reader?.liveUnread ?? "—"}`}
-                            </Show>
+                          <span class="min-w-0 flex-1">
+                            <span class="flex items-center gap-1.5 min-w-0">
+                              <span class="text-13-medium text-text-strong truncate">{group.name}</span>
+                              <Show when={kernelBadge(group)}>
+                                {(badge) => (
+                                  <span class="shrink-0 rounded-sm bg-surface-raised-base px-1 py-px text-10-medium text-text-weak">
+                                    {language.t(
+                                      badge() === "orgAll" ? "im.facade.badge.orgAll" : "im.facade.badge.kernel",
+                                    )}
+                                  </span>
+                                )}
+                              </Show>
+                            </span>
+                            <span class="mt-1 block truncate text-11-regular text-text-weak">
+                              {language.t(group.type === "direct" ? "im.workspace.direct" : "im.workspace.group")}
+                              <Show when={group.reader}>
+                                {" "}
+                                ·{" "}
+                                {group.reader?.state === "pending"
+                                  ? language.t("im.reader.pending")
+                                  : `${language.t("im.reader.unread")}: ${group.reader?.liveUnread ?? "—"}`}
+                              </Show>
+                            </span>
                           </span>
-                        </span>
-                      </button>
-                    )}
-                  </For>
-                </div>
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                </Show>
               </Show>
             </Show>
+            <div classList={{ hidden: !searching() || !workspace.filter.trim() }} data-slot="im-message-search-results">
+              <h3 class="im-sidebar-section-label">{language.t("im.sidebar.records")}</h3>
+              <MessageSearch
+                hideInput
+                query={workspace.filter}
+                submitRequest={workspace.searchRequest}
+                groupID={workspace.searchGroup}
+                active={workspace.page === "messages" && searching()}
+                localGroupIDs={groups()
+                  .filter((group) => !protectedGroup(group))
+                  .map((group) => group.id)}
+                displayEpoch={facadeStatus()?.reader?.displayEpoch}
+                invalidation={availability.invalidation}
+                onSelect={({ groupID, messageID }) => {
+                  setSearching(false)
+                  setSelectedGroupID(groupID)
+                  setMessageLocation({
+                    groupID,
+                    messageID,
+                    scope: client.scope(),
+                    epoch: facadeStatus()?.reader?.displayEpoch,
+                  })
+                }}
+              />
+            </div>
           </div>
-          <Show
-            when={selectedGroupID()}
-            keyed
-            fallback={
-              <div class="hidden min-w-0 flex-1 items-center justify-center rounded-xl bg-surface-panel p-6 text-center text-12-regular text-text-weak @[640px]/im:flex">
-                {language.t("im.workspace.choose")}
-              </div>
-            }
-          >
+          <Show when={selectedGroupID()} keyed>
             {(id) => (
-              <div class="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden relative @[640px]/im:rounded-xl @[640px]/im:bg-surface-panel">
+              <div
+                class="im-sidebar-conversation flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden relative"
+                style={{ display: searching() ? "none" : undefined }}
+              >
                 {/* 邀请行内编辑（群视图）：按通讯录名字邀请进当前内核群。 */}
                 <Show when={invitingGroupID() !== null}>
                   <div class="p-2 border-b border-border-weaker-base flex flex-col gap-1">
@@ -1429,6 +1568,7 @@ export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean
                       ServerConnection.local(server.current) ? () => beginPersonal("") : undefined
                     }
                     headerOwned
+                    refreshRequest={workspace.refreshRequest}
                     drafts={drafts}
                     groupID={id}
                     protected={
@@ -1461,49 +1601,67 @@ export const SidePanelIM: Component<{ onClose: () => void; chromeOwned?: boolean
           </Show>
         </div>
       </div>
-      <Show when={workspace.page === "contacts"}>
-        <IMContactsPage
-          active
-          available={facadeActive() && !availability.statusFailed && !availability.readerUnavailable}
-          account={communication()?.accountID}
-          groups={groups()}
-          openDirect={openContactDirect}
-          openGroup={(id) => {
-            setSelectedGroupID(id)
-            setWorkspace("page", "messages")
-          }}
-        />
-      </Show>
-      <Show when={workspace.page === "settings"}>
-        <div class="min-h-0 flex-1 overflow-y-auto px-3 pb-4" data-slot="im-user-settings">
-          <Show when={facadeActive() && facadeStatus()?.identity}>
-            <IdentityCard status={facadeStatus()!} onChanged={refreshFacade} />
-          </Show>
-          <SettingsIMV2 />
-        </div>
-      </Show>
-      <nav
-        class="mx-3 mb-3 mt-2 flex shrink-0 gap-1 rounded-xl bg-surface-raised-base p-1"
-        aria-label={language.t("im.workspace.navigation")}
+      <div
+        class="im-sidebar-page min-h-0 flex-1 flex-col"
+        classList={{ flex: workspace.page === "contacts", hidden: workspace.page !== "contacts" }}
+        aria-hidden={workspace.page !== "contacts"}
       >
-        <For each={["messages", "contacts", "settings"] as const}>
-          {(page) => (
-            <button
-              type="button"
-              class="flex min-h-10 min-w-0 flex-1 items-center justify-center gap-2 rounded-lg px-2 py-2 text-12-medium text-text-weak hover:bg-surface-raised-base-hover"
-              classList={{ "bg-surface-panel text-text-strong shadow-sm": workspace.page === page }}
-              aria-current={workspace.page === page ? "page" : undefined}
-              onClick={() => setWorkspace("page", page)}
-            >
-              <Icon
-                name={page === "messages" ? "bubble-5" : page === "contacts" ? "bullet-list" : "settings-gear"}
-                size="small"
-              />
-              {language.t(`im.workspace.${page}`)}
-            </button>
-          )}
-        </For>
-      </nav>
+        <Show when={workspace.visited.contacts}>
+          <IMContactsPage
+            active={workspace.page === "contacts"}
+            available={facadeActive() && !availability.statusFailed && !availability.readerUnavailable}
+            account={communication()?.accountID}
+            groups={groups()}
+            lookupRequest={workspace.lookupRequest}
+            openDirect={openContactDirect}
+            openGroup={(id) => {
+              setSelectedGroupID(id)
+              setWorkspace("page", "messages")
+            }}
+          />
+        </Show>
+      </div>
+      <div
+        class="im-sidebar-page min-h-0 flex-1 flex-col"
+        classList={{ flex: workspace.page === "settings", hidden: workspace.page !== "settings" }}
+        aria-hidden={workspace.page !== "settings"}
+      >
+        <Show when={workspace.visited.settings}>
+          <IMUserSettingsPage
+            status={facadeStatus()}
+            statusFailed={availability.statusFailed}
+            current={() => !refresh.disposed}
+            localAvailable={ServerConnection.local(server.current)}
+            onManageIM={() => void manageIM()}
+            onChanged={refreshFacade}
+            renameRequest={workspace.renameRequest}
+          />
+        </Show>
+      </div>
+      <Show when={rootPage()}>
+        <nav class="im-sidebar-navigation" aria-label={language.t("im.workspace.navigation")}>
+          <For each={["messages", "contacts", "settings"] as const}>
+            {(page) => (
+              <button
+                type="button"
+                aria-current={workspace.page === page ? "page" : undefined}
+                onClick={() =>
+                  batch(() => {
+                    if (page !== "messages") setWorkspace("visited", page, true)
+                    setWorkspace("page", page)
+                  })
+                }
+              >
+                <Icon
+                  name={page === "messages" ? "bubble-5" : page === "contacts" ? "bullet-list" : "settings-gear"}
+                  size="small"
+                />
+                <span>{language.t(`im.workspace.${page}`)}</span>
+              </button>
+            )}
+          </For>
+        </nav>
+      </Show>
     </div>
   )
 }

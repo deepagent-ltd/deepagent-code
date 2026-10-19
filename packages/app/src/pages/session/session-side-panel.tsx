@@ -5,6 +5,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  onCleanup,
   onMount,
   type ComponentProps,
   type JSX,
@@ -13,6 +14,7 @@ import { createMediaQuery } from "@solid-primitives/media"
 import { Tabs } from "@deepagent-code/ui/tabs"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Icon } from "@deepagent-code/ui/icon"
+import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { ResizeHandle } from "@deepagent-code/ui/resize-handle"
 import type { SnapshotFileDiff, VcsFileDiff } from "@deepagent-code/sdk"
 import { type RightPanelWidthBucket } from "@/context/layout"
@@ -156,7 +158,22 @@ export function SessionSidePanel(props: {
   const platform = usePlatform()
   const sync = useSync()
   const sdk = useSDK()
+  const dialog = useDialog()
   const { params, sessionKey, tabs, view } = useSessionLayout()
+  const settings = { disposed: false, generation: 0 }
+  onCleanup(() => {
+    settings.disposed = true
+  })
+  const manageIM = async () => {
+    const generation = ++settings.generation
+    const directory = sdk.directory
+    const scope = sdk.scope
+    const current = () =>
+      !settings.disposed && settings.generation === generation && sdk.directory === directory && sdk.scope === scope
+    const { DialogSettings } = await import("@/components/settings-v2")
+    if (!current() || view().rightPanel.mode() !== "im") return
+    dialog.show(() => <DialogSettings initialTab="im" mcp={{ directory, current }} />)
+  }
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
 
@@ -603,7 +620,7 @@ export function SessionSidePanel(props: {
                       <SidePanelContext onClose={closePanel} />
                     </Match>
                     <Match when={isActive("im")}>
-                      <SidePanelIM onClose={closePanel} chromeOwned={isDesktop()} />
+                      <SidePanelIM onClose={closePanel} chromeOwned={isDesktop()} onManageIM={() => void manageIM()} />
                     </Match>
                     <Match when={isActive("terminal")}>
                       <SidePanelTerminal onClose={() => view().rightPanel.close()} />

@@ -1,4 +1,4 @@
-import { createSignal, createEffect, createMemo, onMount, Show, For, onCleanup, untrack } from "solid-js"
+import { createSignal, createEffect, createMemo, on, onMount, Show, For, onCleanup, untrack } from "solid-js"
 import { createStore, unwrap } from "solid-js/store"
 import { Button } from "@deepagent-code/ui/button"
 import { useLanguage } from "@/context/language"
@@ -35,6 +35,7 @@ interface GroupChatPanelProps {
   readerUnavailable?: boolean
   name?: string
   headerOwned?: boolean
+  refreshRequest?: number
   selfMemberIDs?: readonly string[]
   senderNames?: ReadonlyMap<string, string>
   // §B3 thread — when true, clicking a message opens its reply thread. Gated by the caller on the
@@ -829,6 +830,15 @@ function GroupConversation(
       if (!history.disposed) setState("refreshing", false)
     }
   }
+  createEffect(
+    on(
+      () => props.refreshRequest,
+      (request) => {
+        if (request) void refreshTransport()
+      },
+      { defer: true },
+    ),
+  )
 
   const handleTyping = (typing: boolean) => {
     send({ type: "typing", data: { groupID: props.groupID, memberID: selfMemberID(), typing } })
@@ -1143,15 +1153,17 @@ function GroupConversation(
                 </span>
               </Show>
             </div>
-            <Button
-              class="shrink-0"
-              size="small"
-              variant="ghost"
-              disabled={state.refreshing}
-              onClick={() => void refreshTransport()}
-            >
-              {state.refreshing ? language.t("im.transport.refreshing") : language.t("im.transport.refresh")}
-            </Button>
+            <Show when={!props.headerOwned}>
+              <Button
+                class="shrink-0"
+                size="small"
+                variant="ghost"
+                disabled={state.refreshing}
+                onClick={() => void refreshTransport()}
+              >
+                {state.refreshing ? language.t("im.transport.refreshing") : language.t("im.transport.refresh")}
+              </Button>
+            </Show>
           </div>
           <Show when={protectedGroup()}>
             <div class="flex items-center gap-2 flex-wrap mt-1">
