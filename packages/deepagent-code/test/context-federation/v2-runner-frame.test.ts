@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
-import { Context, Effect, Layer } from "effect"
+import { Cause, Context, Effect, Exit, Layer } from "effect"
 import { Location } from "@deepagent-code/core/location"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import {
@@ -52,6 +52,8 @@ import { make as makeDocumentStore } from "@/document-intelligence/live-repo-doc
 import { indexMarkdown } from "@/document-intelligence/markdown-adapter"
 import { ProductionSources } from "@/context-federation/production-sources"
 import { V2RunnerFrame } from "@/session/v2-runner-frame"
+import { RuntimeIntegrityIdentity } from "@/effect/runtime-integrity-identity"
+import { RuntimeIntegrityEvidenceContract } from "@deepagent-code/core/contract/runtime-integrity-evidence"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap-service"
 import { CodeIntelFacade } from "@/code-intelligence/facade"
@@ -428,6 +430,7 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
         ContextQueryFacade.defaultLayer,
         ContextQueryAuthorization.defaultLayer,
       )
+      const gateway = AgentGateway.runtimeLayer({ enabled: false, agentMode: "high" })
       const host = V2RunnerFrame.runnerFrameHostLayer.pipe(
         Layer.provide(Layer.succeed(ProductionV2Sources, {})),
         Layer.provide(RuntimeFlags.defaultLayer),
@@ -441,7 +444,7 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
             host,
             Database.defaultLayer,
             EventV2.defaultLayer,
-            AgentGateway.runtimeLayer({ enabled: false, agentMode: "high" }),
+            gateway,
           ),
         ]),
       )
@@ -477,7 +480,10 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
         // Facade-side view at the host graph: the SAME store must resolve the bound session.
         expect(yield* captured.resolve({ sessionId: "ses_shared_store", agent: "build" })).toBeDefined()
         expect(yield* captured.resolve({ sessionId: "ses_never_bound", agent: "build" })).toBeUndefined()
-      }).pipe(Effect.provide(Layer.mergeAll(locations, rootStore, host)), Effect.scoped)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(locations, rootStore, host).pipe(Layer.provide(gateway))),
+        Effect.scoped,
+      )
       await Effect.runPromise(program)
     } finally {
       Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = previous
@@ -489,6 +495,7 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
     const root = path.join(fixture.path, "repo")
     await Bun.write(path.join(root, "README.md"), "# host hooks\n")
     let settled = 0
+    const gateway = AgentGateway.runtimeLayer({ baseDir: root, durableLearning: false })
     const host = V2RunnerFrame.runnerFrameHostLayer.pipe(
       Layer.provide(Layer.succeed(ProductionV2Sources, {})),
       Layer.provide(RuntimeFlags.layer({ strictPlanGate: true })),
@@ -507,6 +514,21 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
     )
     const program = Effect.gen(function* () {
       const runtimeHost = yield* LocationRuntimeHost
+      const rootResolver = yield* V2ProviderTurn.CurrentRuntimeIntegrityIdentity
+      const slot = yield* RuntimeIntegrityIdentity.RootIdentitySlot
+      expect(rootResolver).toBeDefined()
+      const missing = yield* rootResolver!.resolve(yield* Effect.context()).pipe(Effect.exit)
+      expect(Exit.isFailure(missing) && Cause.squash(missing.cause)).toMatchObject({
+        reason: "runtime_identity_not_captured",
+      })
+      // Explicit fixture identity tests root/Location slot wiring only, not Native qualification.
+      slot.identity = RuntimeIntegrityEvidenceContract.RuntimeIdentity.make({
+        candidateID: "root-location-slot-contract", commit: "fixture", tree: "fixture",
+        packageDigest: "a".repeat(64), schemaDigest: "b".repeat(64),
+        rootCompositionDigest: "c".repeat(64), databaseSchemaDigest: "d".repeat(64),
+        eventSchemaDigest: "e".repeat(64), capabilityManifestDigest: "f".repeat(64),
+      })
+      expect(yield* rootResolver!.resolve(yield* Effect.context())).toBe(slot.identity)
       yield* Effect.gen(function* () {
         const gate = yield* SessionRunner.CurrentToolSettleGate
         const onSessionSettled = yield* SessionRunner.CurrentOnSessionSettled
@@ -517,6 +539,7 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
         expect(onSessionSettled).toBeDefined()
         expect(historyEpochLookup).toBeDefined()
         expect(runtimeIdentityResolver).toBeDefined()
+        expect(yield* runtimeIdentityResolver!.resolve(yield* Effect.context())).toBe(slot.identity!)
         if (!gate || !onSessionSettled || !historyEpochLookup || !runtimeIdentityResolver) return
         expect(yield* gate({ sessionID: "ses_host_gate", toolName: "edit", args: {} })).toMatchObject({
           kind: "block",
@@ -531,9 +554,11 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
         expect(yield* historyEpochLookup(SessionSchema.ID.make("ses_host_epoch"))).toBe(37)
       }).pipe(
         Effect.provide(runtimeHost.layer(Location.Ref.make({ directory: AbsolutePath.make(root) }))),
-        Effect.provide(AgentGateway.runtimeLayer({ baseDir: root, durableLearning: false })),
+        Effect.provide(gateway),
       )
-    }).pipe(Effect.provide(host), Effect.scoped)
+    }).pipe(Effect.provide(Layer.mergeAll(
+      host, V2RunnerFrame.runtimeIntegrityIdentityLayer, RuntimeIntegrityIdentity.rootIdentitySlotLayer,
+    ).pipe(Layer.provide(gateway))), Effect.scoped)
     await Effect.runPromise(program)
     expect(settled).toBe(1)
   })

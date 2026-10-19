@@ -8,7 +8,7 @@
 import { createSimpleContext } from "@deepagent-code/ui/context"
 import { createStore, produce } from "solid-js/store"
 import { onCleanup } from "solid-js"
-import { useServerSDK } from "./server-sdk"
+import { useSDK } from "./sdk"
 import { useServer } from "./server"
 
 // ── Types (mirror DebugService.SessionState for the frontend) ─────────────────
@@ -52,7 +52,7 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
   name: "Debug",
   gate: false,
   init: () => {
-    const sdk = useServerSDK()
+    const sdk = useSDK()
     const server = useServer()
 
     const [state, setState] = createStore<DebugStoreState>({
@@ -100,6 +100,7 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
 
     // ── SSE (single subscription) ───────────────────────────────────────────
 
+    const abort = new AbortController()
     let sseSource: { close?: () => void } | undefined
     const connectStream = () => {
       void sseSource?.close?.()
@@ -107,7 +108,7 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
         // C6-04: the generated SDK exposes the /debug/events SSE surface
         // (client.debug.events) with the same auth the REST calls use, so the
         // hand-rolled EventSource + auth_token URL is gone.
-        const stream = (await sdk.client.debug.events()) as unknown as {
+        const stream = (await sdk.client.debug.events(undefined, { signal: abort.signal })) as unknown as {
           stream: AsyncGenerator<{ type: string; data: Record<string, unknown> }>
           close?: () => void
         }
@@ -159,6 +160,7 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
           }
         }
       })().catch((error) => {
+        if (abort.signal.aborted) return
         console.error("[debug] event stream error", error)
       })
     }
@@ -167,7 +169,10 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
     connectStream()
     void loadSessions()
 
-    onCleanup(() => void sseSource?.close?.())
+    onCleanup(() => {
+      abort.abort()
+      void sseSource?.close?.()
+    })
 
     // ── actions ────────────────────────────────────────────────────────────
 

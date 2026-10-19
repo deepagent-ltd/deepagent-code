@@ -158,7 +158,7 @@ export const locationServiceMapDependencies = <HE, HR, DE, DR, EE, ER, GE, GR>(
     FetchHttpClient.layer,
     ToolOutputStore.defaultCleanupLayer,
     ApplicationTools.layer,
-    runtimeHost.pipe(Layer.provide(ownerReferences)),
+    runtimeHost.pipe(Layer.provide(ownerReferences), Layer.provide(gateway)),
   ] as const
 }
 

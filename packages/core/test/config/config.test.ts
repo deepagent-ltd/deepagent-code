@@ -16,6 +16,7 @@ import { eventLayer } from "../fixture/event-layer"
 import { ConfigMigrateV1 } from "@deepagent-code/core/v1/config/migrate"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Flag } from "@deepagent-code/core/flag/flag"
 import { Global } from "@deepagent-code/core/global"
 import { Location } from "@deepagent-code/core/location"
 import { Policy } from "@deepagent-code/core/policy"
@@ -164,7 +165,9 @@ describe("Config", () => {
               api: { type: "native", url: "https://native.invalid/v1" },
             })
             expect((yield* catalog.provider.get(ProviderV2.ID.make("separate"))).name).toBe("Native only")
-            expect((yield* catalog.model.get(ProviderV2.ID.make("mixed"), ModelV2.ID.make("old"))).name).toBe("Old model")
+            expect((yield* catalog.model.get(ProviderV2.ID.make("mixed"), ModelV2.ID.make("old"))).name).toBe(
+              "Old model",
+            )
             expect((yield* catalog.model.get(ProviderV2.ID.make("mixed"), ModelV2.ID.make("fresh"))).name).toBe(
               "Native model",
             )
@@ -331,6 +334,163 @@ describe("Config", () => {
             new Config.Directory({ type: "directory", path: AbsolutePath.make(path.join(tmp.path, "global")) }),
           ])
         }).pipe(Effect.provide(testLayer(tmp.path))),
+      ),
+    ),
+  )
+
+  it.live("loads explicit config into a fresh catalog with file-relative credentials", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.acquireRelease(
+            Effect.sync(() => Flag.DEEPAGENT_CODE_CONFIG),
+            (previous) =>
+              Effect.sync(() => {
+                Flag.DEEPAGENT_CODE_CONFIG = previous
+              }),
+          )
+          const directory = path.join(tmp.path, "workspace")
+          const file = path.join(tmp.path, "private", "custom.jsonc")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(directory)
+            await fs.mkdir(path.dirname(file))
+            await fs.writeFile(path.join(path.dirname(file), "provider.key"), "explicit-test-secret\n")
+            await fs.writeFile(
+              file,
+              JSON.stringify({
+                model: "explicit/model",
+                providers: {
+                  explicit: {
+                    name: "Explicit provider",
+                    api: {
+                      type: "native",
+                      url: "https://explicit.invalid/v1",
+                      settings: { apiKey: "{file:provider.key}" },
+                    },
+                    models: { model: { name: "Explicit model" } },
+                  },
+                },
+              }),
+            )
+            Flag.DEEPAGENT_CODE_CONFIG = file
+          })
+          return yield* Effect.gen(function* () {
+            const entries = yield* (yield* Config.Service).entries()
+            expect(entries.filter((entry) => entry.type === "document").map((entry) => entry.path)).toEqual([file])
+            yield* ConfigProviderPlugin.Plugin.effect
+            const catalog = yield* Catalog.Service
+            expect(yield* catalog.provider.get(ProviderV2.ID.make("explicit"))).toMatchObject({
+              origin: "config",
+              name: "Explicit provider",
+              api: {
+                type: "native",
+                url: "https://explicit.invalid/v1",
+                settings: { apiKey: "explicit-test-secret" },
+              },
+            })
+            expect((yield* catalog.model.get(ProviderV2.ID.make("explicit"), ModelV2.ID.make("model"))).name).toBe(
+              "Explicit model",
+            )
+            expect(Config.latest(entries, "model")).toBe("explicit/model")
+            expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toContain("{file:provider.key}")
+            expect(
+              yield* Effect.promise(() =>
+                fs.stat(path.join(tmp.path, "global")).then(
+                  () => true,
+                  () => false,
+                ),
+              ),
+            ).toBe(false)
+          }).pipe(
+            Effect.provide(testLayer(directory, path.join(tmp.path, "global"))),
+            Effect.provide(
+              Catalog.locationLayer.pipe(
+                Layer.provide(eventLayer()),
+                Layer.provide(
+                  Layer.succeed(
+                    Location.Service,
+                    Location.Service.of(
+                      location({
+                        directory: AbsolutePath.make(directory),
+                      }),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          )
+        }),
+      ),
+    ),
+  )
+
+  it.live("orders explicit config between global and project configs and retains the opened snapshot", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.acquireRelease(
+            Effect.sync(() => Flag.DEEPAGENT_CODE_CONFIG),
+            (previous) =>
+              Effect.sync(() => {
+                Flag.DEEPAGENT_CODE_CONFIG = previous
+              }),
+          )
+          const global = path.join(tmp.path, "global")
+          const directory = path.join(tmp.path, "workspace")
+          const explicit = path.join(tmp.path, "custom.jsonc")
+          const files = [
+            path.join(global, "config.json"),
+            explicit,
+            path.join(directory, "config.json"),
+            path.join(directory, ".deepagent-code", "config.json"),
+          ]
+          yield* Effect.promise(async () => {
+            await fs.mkdir(global)
+            await fs.mkdir(path.join(directory, ".deepagent-code"), { recursive: true })
+            await Promise.all(
+              files.map((file, index) =>
+                fs.writeFile(
+                  file,
+                  JSON.stringify({
+                    default_agent: `priority-${index}`,
+                    ...(index === 0 ? { shell: "global-shell" } : {}),
+                    ...(index === 1 ? { shell: "explicit-shell" } : {}),
+                  }),
+                ),
+              ),
+            )
+            Flag.DEEPAGENT_CODE_CONFIG = explicit
+          })
+          yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const entries = yield* config.entries()
+            expect(entries.filter((entry) => entry.type === "document").map((entry) => entry.path)).toEqual(files)
+            expect(Config.latest(entries, "shell")).toBe("explicit-shell")
+            expect(Config.latest(entries, "default_agent")).toBe("priority-3")
+            yield* Effect.promise(() => fs.writeFile(explicit, JSON.stringify({ shell: "late-change" })))
+            expect(Config.latest(yield* config.entries(), "shell")).toBe("explicit-shell")
+          }).pipe(Effect.provide(testLayer(directory, global)))
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              explicit,
+              JSON.stringify({
+                providers: { invalid: { api: { type: "unknown" } } },
+              }),
+            ),
+          )
+          const invalid = yield* Config.Service.use((config) => config.entries()).pipe(
+            Effect.provide(testLayer(directory, global)),
+            Effect.exit,
+          )
+          expect(Exit.isFailure(invalid)).toBe(true)
+          if (Exit.isFailure(invalid)) expect(Cause.pretty(invalid.cause)).toContain(`Invalid config in ${explicit}`)
+        }),
       ),
     ),
   )
@@ -772,10 +932,10 @@ describe("Config", () => {
       Effect.flatMap((tmp) =>
         Effect.gen(function* () {
           const mcp = { fixture: { type: "local" as const, command: ["bun", "server.ts"], enabled: true } }
-          yield* Effect.promise(() =>
-            fs.writeFile(path.join(tmp.path, "deepagent-code.json"), JSON.stringify({ mcp })),
+          yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "deepagent-code.json"), JSON.stringify({ mcp })))
+          const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+            Effect.provide(testLayer(tmp.path)),
           )
-          const entries = yield* Config.Service.use((config) => config.entries()).pipe(Effect.provide(testLayer(tmp.path)))
           expect(Config.latest(entries, "mcp")).toEqual(mcp)
         }),
       ),
@@ -791,18 +951,36 @@ describe("Config", () => {
         Effect.gen(function* () {
           const lsp = { fixture: { command: ["/fixture/server"], extensions: [".ts"] } }
           for (const fields of [{}, { permission: {} }]) {
-            yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "deepagent-code.json"), JSON.stringify({ ...fields, lsp })))
-            const absent = yield* Config.Service.use((config) => config.entries()).pipe(Effect.provide(testLayer(tmp.path)), Effect.exit)
+            yield* Effect.promise(() =>
+              fs.writeFile(path.join(tmp.path, "deepagent-code.json"), JSON.stringify({ ...fields, lsp })),
+            )
+            const absent = yield* Config.Service.use((config) => config.entries()).pipe(
+              Effect.provide(testLayer(tmp.path)),
+              Effect.exit,
+            )
             expect(Exit.isFailure(absent)).toBe(true)
             if (Exit.isFailure(absent)) expect(Cause.pretty(absent.cause)).toContain("Unsupported Core V2 config")
             const entries = yield* Config.Service.use((config) => config.entries()).pipe(
-              Effect.provide(testLayer(tmp.path).pipe(Layer.provide(Layer.succeed(Config.ApplicationLSP, { consumer: "ApplicationLSP" })))),
+              Effect.provide(
+                testLayer(tmp.path).pipe(
+                  Layer.provide(Layer.succeed(Config.ApplicationLSP, { consumer: "ApplicationLSP" })),
+                ),
+              ),
             )
             expect(Config.latest(entries, "lsp")).toEqual(lsp)
           }
-          yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "deepagent-code.json"), JSON.stringify({ lsp: { fixture: { command: [7], extensions: [".ts"] } } })))
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(tmp.path, "deepagent-code.json"),
+              JSON.stringify({ lsp: { fixture: { command: [7], extensions: [".ts"] } } }),
+            ),
+          )
           const malformed = yield* Config.Service.use((config) => config.entries()).pipe(
-            Effect.provide(testLayer(tmp.path).pipe(Layer.provide(Layer.succeed(Config.ApplicationLSP, { consumer: "ApplicationLSP" })))),
+            Effect.provide(
+              testLayer(tmp.path).pipe(
+                Layer.provide(Layer.succeed(Config.ApplicationLSP, { consumer: "ApplicationLSP" })),
+              ),
+            ),
             Effect.exit,
           )
           expect(Exit.isFailure(malformed)).toBe(true)

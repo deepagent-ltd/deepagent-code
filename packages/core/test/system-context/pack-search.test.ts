@@ -185,6 +185,40 @@ describe("pack_search + domain_pack_load over the real seeded corpus", () => {
       SESSION,
     ))
 
+  test("the updated DAC browser and IM instructions load through the seeded manual without execution authority", () =>
+    runQuota(
+      Effect.gen(function* () {
+        const baseDir = tmpRoot()
+        seedCoreKnowledgeAt(baseDir)
+        const store = openUserGlobalStore(baseDir)
+        const searchTool = makePackSearchTool({ store: () => store })
+        const loadTool = makeDomainPackLoadTool({ store: () => store })
+        const chinese = structured(
+          yield* search(searchTool, { query: "人类接管", pack: "deepagent.dac-manual" }, "call-browser-chinese-search"),
+        )
+        expect(chinese.entries.some((entry) => entry.name.includes("browser-shared-control"))).toBe(true)
+        const browser = structured(
+          yield* search(searchTool, { query: "shared browser", pack: "deepagent.dac-manual" }, "call-browser-manual-search"),
+        ).entries.find((entry) => entry.name.includes("browser-shared-control"))
+        expect(browser).toBeDefined()
+        const browserBody = loadStructured(yield* settleLoad(loadTool, browser!.ref, "call-browser-manual-load"))
+        expect(browserBody.state).toBe("loaded")
+        expect(browserBody.truncated).toBe(false)
+        expect(browserBody.body).toContain("original Session")
+        expect(browserBody.body).toContain("browser-file permission")
+        const im = structured(
+          yield* search(searchTool, { query: "im_send", pack: "deepagent.dac-manual" }, "call-im-manual-search"),
+        ).entries.find((entry) => entry.name.includes("im-send-tool"))
+        expect(im).toBeDefined()
+        const imBody = loadStructured(yield* settleLoad(loadTool, im!.ref, "call-im-manual-load"))
+        expect(imBody.state).toBe("loaded")
+        expect(imBody.truncated).toBe(false)
+        expect(imBody.body).toContain("Always supply group_id")
+        expect(imBody.body).toContain("Do not call im_send to duplicate")
+      }),
+      SESSION,
+    ))
+
   test("the dac-manual system manual pack is seeded, searchable, and loadable", () =>
     runQuota(
       Effect.gen(function* () {

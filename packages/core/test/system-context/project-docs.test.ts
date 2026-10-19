@@ -497,6 +497,8 @@ describe("ProjectDocs", () => {
           expect(observed.contents.LOG!.length).toBeLessThanOrEqual(6000 + 20)
           expect(observed.contents.LOG).toContain("… (truncated)")
           expect(observed.contents.LOG!.startsWith("line 0")).toBe(true)
+          const cached = yield* ProjectDocs.observeFor(tmp.path, fs)
+          expect(cached.contents.LOG).toBe(observed.contents.LOG)
           // the full file is untouched on disk
           const onDisk = yield* Effect.promise(() =>
             fsNode.readFile(path.join(tmp.path, ProjectDocs.DOCS_DIRECTORY, "LOG.md"), "utf8"),

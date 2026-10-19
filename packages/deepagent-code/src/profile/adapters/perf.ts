@@ -77,6 +77,7 @@ export interface PerfSymbolRow {
   symbol: string
   object?: string
   overheadPct: number
+  file_line?: PAP.FileLine
 }
 
 export interface PerfStatRow {
@@ -92,12 +93,33 @@ export interface PerfStatRow {
  */
 export function parsePerfReport(text: string): PerfSymbolRow[] {
   const rows: PerfSymbolRow[] = []
+  let firstEvent: string | undefined
+  let currentEvent: string | undefined
   for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^\s+([\d.]+)%\s+\S+\s+(\S+)\s+\[.\]\s+(.+)$/)
+    const event = line.match(/^# Samples: .* of event '([^']+)'/)
+    if (event) {
+      currentEvent = event[1]
+      firstEvent ??= currentEvent
+      continue
+    }
+    // Different sampled events have independent percentage denominators.
+    if (currentEvent !== firstEvent) continue
+    const fields = line.split("\t").map((value) => value.trim())
+    if (fields.length >= 5 && /^\d+(?:\.\d+)?%$/.test(fields[0]!)) {
+      const source = fields[4]!.match(/^(?!\?\?)(.+):([1-9]\d*)$/)
+      rows.push({
+        symbol: fields[3]!.replace(/^\[.\]\s+/, ""),
+        object: fields[2],
+        overheadPct: Number.parseFloat(fields[0]!),
+        ...(source ? { file_line: { file: source[1]!, line: Number(source[2]) } } : {}),
+      })
+      continue
+    }
+    const m = line.match(/^\s+([\d.]+)%\s+(?:([\d.]+)%\s+)?(?:\d+\s+)?\S+\s+(\S+)\s+\[.\]\s+(.+)$/)
     if (!m) continue
-    const overheadPct = parseFloat(m[1]!)
-    const object = m[2]!
-    const symbol = m[3]!.trim()
+    const overheadPct = parseFloat(m[2] ?? m[1]!)
+    const object = m[3]!
+    const symbol = m[4]!.trim()
     if (!symbol || isNaN(overheadPct)) continue
     rows.push({ symbol, object, overheadPct })
   }
@@ -111,7 +133,22 @@ export function parsePerfReport(text: string): PerfSymbolRow[] {
  */
 export function parsePerfStat(text: string): Map<string, number> {
   const result = new Map<string, number>()
+  let counters: string[] | undefined
   for (const line of text.split(/\r?\n/)) {
+    const header = line.match(/^#\s+PID\s+TID(?:\s+(.+))?$/)
+    if (header) {
+      counters = header[1]?.trim().split(/\s+/) ?? []
+      continue
+    }
+    if (counters) {
+      const fields = line.trim().split(/\s+/)
+      if (fields.length !== counters.length + 2 || !fields.every((value) => /^\d+$/.test(value))) continue
+      counters.forEach((counter, index) => {
+        const event = counter.replace(/:.*$/, "")
+        result.set(event, (result.get(event) ?? 0) + Number(fields[index + 2]))
+      })
+      continue
+    }
     // Skip comment/header lines
     if (line.trim().startsWith("#") || line.trim().startsWith("Performance")) continue
     // Match: optional leading spaces, number (with commas), whitespace, event name
@@ -178,12 +215,24 @@ export class PerfAdapter implements PAP.ProfileAdapter {
       log.info(msg)
       return Promise.reject(new Error(msg))
     }
+    const { Process } = await import("@/util/process")
+    // Probe only a fixed no-op. Never replay the user's program after a failed collection.
+    const events = "cycles,instructions,cache-misses,cache-references,branch-misses,branches"
+    const fs = await import("node:fs/promises")
+    const probeDirectory = await fs.mkdtemp(path.join(Global.Path.tmp, "profile-perf-probe-"))
+    const capability = await Process.run(
+      [bin, "record", "-s", "-g", "-e", events, "-o", path.join(probeDirectory, "perf.data"), "--", "/usr/bin/true"],
+      { nothrow: true },
+    ).finally(() => fs.rm(probeDirectory, { recursive: true, force: true }))
+    const selected = capability.code === 0 ? events : "cpu-clock:u"
+    if (capability.code !== 0) log.info("perf hardware events unavailable; collecting user CPU-clock samples")
     const outPath = path.join(Global.Path.tmp, `profile-perf-${Date.now()}.data`)
     const args = [
       "record",
+      "-s", // real per-thread event counts, read back with perf report -T
       "-g", // call graph
       "-e",
-      "cycles,instructions,cache-misses,cache-references,branch-misses,branches",
+      selected,
       "-o",
       outPath,
       "--",
@@ -193,7 +242,6 @@ export class PerfAdapter implements PAP.ProfileAdapter {
     log.info("perf collect", { command: bin, args })
     const exportCommand = `${bin} report --stdio -n -i ${outPath}`
 
-    const { Process } = await import("@/util/process")
     const result = await Process.run([bin, ...args], { cwd: target.cwd, nothrow: true })
     if (result.code !== 0) {
       const msg = `perf record exited with code ${result.code}: ${result.stderr.toString().trim()}`
@@ -220,25 +268,50 @@ export class PerfAdapter implements PAP.ProfileAdapter {
         return Promise.reject(new Error("perf binary required to parse perf.data; not found on PATH"))
       }
       const { Process } = await import("@/util/process")
-      // Export: `perf report --stdio -n` for symbol hotspots.
-      const reportResult = await Process.run([bin, "report", "--stdio", "-n", "-i", report.path], { nothrow: true })
-      // Export: `perf stat --log-fd 1 -i` for aggregate event counts.
-      const statResult = await Process.run([bin, "stat", "-i", report.path], { nothrow: true })
+      const reportResult = await Process.run(
+        [
+          bin,
+          "report",
+          "--stdio",
+          "--no-children",
+          "--call-graph",
+          "none",
+          "--fields",
+          "overhead,comm,dso,symbol,srcline",
+          "--sort",
+          "comm,dso,symbol,srcline",
+          "--full-source-path",
+          "-t",
+          "\t",
+          "-i",
+          report.path,
+        ],
+        { nothrow: true },
+      )
+      if (reportResult.code !== 0)
+        throw new Error(`perf report exited with code ${reportResult.code}: ${reportResult.stderr}`)
+      // Only read the original record. perf stat -i does not read a perf.data file.
+      const statResult = await Process.run(
+        [bin, "report", "--stdio", "-T", "--no-children", "--call-graph", "none", "-i", report.path],
+        { nothrow: true },
+      )
       text = [
         "=== SECTION: perf_report ===",
         reportResult.stdout.toString(),
         "=== SECTION: perf_stat ===",
-        statResult.stdout.toString() + statResult.stderr.toString(),
+        statResult.code === 0 ? statResult.stdout.toString() : "",
       ].join("\n")
     } else {
       return Promise.reject(new Error(`perf adapter cannot parse format: ${report.format}`))
     }
 
     const { reportRows, statCounts } = parsePerfMultiSection(text)
+    if (reportRows.length === 0) throw new Error("perf report contains no sampled hotspots")
 
     const hotspots: PAP.RawHotspot[] = reportRows.map((r) => ({
       name: r.symbol,
       kind: "symbol" as const,
+      file_line: r.file_line,
       self_pct: r.overheadPct,
       nativeMetrics: {
         [N.overhead]: r.overheadPct,
@@ -249,6 +322,8 @@ export class PerfAdapter implements PAP.ProfileAdapter {
 
     // Pull aggregate event counts from perf stat into nativeSummary.
     const nativeSummary: Record<string, number | string> = {}
+    const samplingEvent = text.match(/^# Samples: .* of event '([^']+)'/m)?.[1]
+    if (samplingEvent) nativeSummary.sampling_event = samplingEvent
     for (const [event, count] of statCounts) {
       nativeSummary[event] = count
     }
@@ -260,7 +335,7 @@ export class PerfAdapter implements PAP.ProfileAdapter {
       target: { command: report.path },
       nativeSummary,
       hotspots,
-      availableMetrics: AVAILABLE,
+      availableMetrics: [N.overhead, ...statCounts.keys()],
       raw_report_ref: report,
     }
   }
@@ -280,6 +355,12 @@ export class PerfAdapter implements PAP.ProfileAdapter {
     const cacheRefs = getNative(ns, N.cacheReferences)
     const branchMisses = getNative(ns, N.branchMisses)
     const branches = getNative(ns, N.branches)
+    const missingCounter = PAP.missing(
+      "not_collected",
+      typeof ns.sampling_event === "string" && ns.sampling_event.startsWith("cpu-clock")
+        ? "This run has CPU-clock software samples; hardware counter values were not recorded."
+        : "No per-thread hardware counter values were recorded; sample periods are not counter totals.",
+    )
 
     // cpi = cycles / instructions (computed, but vocab says derived:false).
     const cpiVal =
@@ -307,7 +388,7 @@ export class PerfAdapter implements PAP.ProfileAdapter {
               // cpi is not marked derived in vocab, but we compute it from primitives.
               formula: "cycles / instructions",
             })
-          : PAP.missing("not_collected"),
+          : missingCounter,
 
       ipc:
         ipcVal !== undefined
@@ -317,17 +398,17 @@ export class PerfAdapter implements PAP.ProfileAdapter {
               derived: true,
               formula: "instructions / cycles",
             })
-          : PAP.missing("not_collected"),
+          : missingCounter,
 
       clockticks:
         cycles !== undefined
           ? PAP.present(cycles, "count", { nativeMetric: N.cycles, semantic: "exact" })
-          : PAP.missing("not_collected"),
+          : missingCounter,
 
       instructions_retired:
         instructions !== undefined
           ? PAP.present(instructions, "count", { nativeMetric: N.instructions, semantic: "exact" })
-          : PAP.missing("not_collected"),
+          : missingCounter,
 
       cache_miss_rate:
         cacheMissRate !== undefined
@@ -336,7 +417,7 @@ export class PerfAdapter implements PAP.ProfileAdapter {
               semantic: "exact",
               formula: "cache-misses / cache-references",
             })
-          : PAP.missing("not_collected"),
+          : missingCounter,
 
       branch_misprediction_pct:
         branchMispredPct !== undefined
@@ -345,7 +426,7 @@ export class PerfAdapter implements PAP.ProfileAdapter {
               semantic: "exact",
               formula: "(branch-misses / branches) * 100",
             })
-          : PAP.missing("not_collected"),
+          : missingCounter,
     }
 
     // Per-hotspot normalization (symbols from perf report).

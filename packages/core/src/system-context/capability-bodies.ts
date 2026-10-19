@@ -298,17 +298,17 @@ export const capabilityBodies: ReadonlyArray<CapabilityBodyEntry> = [
   }),
   bodyEntry({
     id: "deepagent.pack-manual",
-    version: "1.0.0-beta.0",
-    summary: "Search and load the built-in domain pack manual (the system manual and curated domain guidance)",
+    version: "1.0.0-beta.1",
+    summary: "Read the DAC manual for browser handoff, IM, Goal, events and subagents, or curated domain guidance",
     use_when: ["how this system works", "domain question", "before answering from priors"],
     availability: "stable",
     required_permissions: ["capability.read"],
     required_runtime_features: [],
     entry_tools: ["pack_search", "domain_pack_load"],
     body: [
-      "Look up curated guidance in the built-in domain packs — including the deepagent.dac-manual system manual — instead of answering from priors.",
+      "Look up curated guidance in the built-in domain packs — including the deepagent.dac-manual system manual — instead of answering from priors. The DAC manual explains shared-browser human takeover, private /dac calls, explicit IM sending, Goal user controls and event execution boundaries; guidance never creates an execution tool or permission.",
       "When to use: a domain question, a how-does-this-system-work question, or whenever packaged guidance might exist for the task at hand.",
-      "Entry points: pack_search (query, optional pack filter) returns up to 5 cards with a one-line summary and an opaque ref, never a body; domain_pack_load (ref) discloses one active document's body, bounded to ~600 tokens, at most 2 new documents per turn — a document already loaded this session returns as already_loaded and costs nothing.",
+      "Entry points: pack_search (query, optional pack filter) returns up to 5 cards with a one-line summary and an opaque ref, never a body; domain_pack_load (ref) discloses one active document's body, bounded to ~600 tokens, at most 2 new documents per turn — a document already loaded this session returns as already_loaded without consuming another disclosure slot.",
       "Risks: a card summary is often enough, so spend load slots deliberately. A not_found ref means unknown, not active, or store unavailable — re-search rather than retrying the same ref. Manual documents are guidance, not permission: they never unlock a tool.",
     ].join("\n"),
   }),
@@ -346,7 +346,7 @@ export const capabilityBodies: ReadonlyArray<CapabilityBodyEntry> = [
   }),
   bodyEntry({
     id: "deepagent.im-send",
-    version: "1.0.0-beta.0",
+    version: "1.0.0-beta.1",
     summary: "Send a message to the user's IM group; asks the user first, rate-limited and scrubbed",
     use_when: ["post an update to the IM group", "deliver a long-running result to IM"],
     availability: "stable",
@@ -355,9 +355,9 @@ export const capabilityBodies: ReadonlyArray<CapabilityBodyEntry> = [
     entry_tools: ["im_send"],
     body: [
       "Deliver a message to one of the user's IM groups through the push policy gate: the user approves each send (default ask), then authorization, a 20-per-hour per-group rate limit, and secret/link/out-of-workspace-path scrubbing run before the message lands. During workspace quiet hours a normal message is held for the digest instead.",
-      "When to use: the user asked you to post to the group, or a long-running result they wanted delivered there is ready. An IM-originated session sends to its bound group by default; any other session must pass group_id explicitly and fails with an explanation when it omits it.",
-      "Entry point: im_send (text, optional group_id). The session's agent sends as itself when it is a group member; otherwise the runtime's system-pusher identity delivers under its workspace push permission.",
-      "Risks: a blocked outcome is the gate working — rate_limited means wait or report in-conversation, not retry. Never use im_send to mass-message, to reach anyone outside an existing group, or to move workspace content out; the scrub strips secrets and foreign paths, and every attempt writes an audit row. The send is mutating, not read-only — it grants no further capability.",
+      "When to use: the user explicitly asked you to post to an existing group, or a long-running result they wanted delivered there is ready. Always pass group_id explicitly; an IM-originated Session or conversation binding does not authorize a send. Private /dac commands and execution stay private; only their final answer returns through the normal result pipeline, without a separate im_send call.",
+      "Entry point: im_send (text, group_id), with an explicit target and normal user approval. The session's agent sends as itself when it is a group member; otherwise the runtime's system-pusher identity delivers under its workspace push permission. Do not duplicate a /dac final answer with an extra send.",
+      "Risks: a blocked outcome is the gate working — rate_limited means wait or report in-conversation, not retry. Never use im_send to mass-message, to reach anyone outside an existing group, or to move workspace content out; the scrub strips secrets and foreign paths, and accepted policy decisions are audited. The send is mutating, not read-only — it grants no further capability.",
     ].join("\n"),
   }),
   bodyEntry({

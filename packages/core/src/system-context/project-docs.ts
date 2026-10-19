@@ -96,7 +96,9 @@ const cachedRead = Effect.fn("ProjectDocs.cachedRead")(function* (file: string, 
   const size = Number(info?.size ?? -1)
   const cached = readCache.get(file)
   if (cached !== undefined && cached.mtime === mtime && cached.size === size) return cached.content
-  const content = yield* fs.readFileStringSafe(file)
+  const content = yield* fs.readFileStringSafe(file).pipe(
+    Effect.map((text) => (text === undefined ? undefined : excerpt(text))),
+  )
   readCache.set(file, { mtime, size, content })
   if (readCache.size > MAX_READ_CACHE) {
     const oldest = readCache.keys().next().value
