@@ -81,6 +81,7 @@ export function IMActivationPanel(props: {
                   onInput={(event) => controller.update({ name: event.currentTarget.value })}
                 />
               </label>
+              <p class="text-12-regular text-text-weak">{language.t("im.facade.name.rule")}</p>
               <label class="flex flex-col gap-1 text-12-regular">
                 {language.t(controller.state.method === "api_key" ? "im.activation.key" : "im.activation.code")}
                 <TextInputV2
@@ -98,7 +99,6 @@ export function IMActivationPanel(props: {
                   onInput={(event) => controller.update({ credential: event.currentTarget.value })}
                 />
               </label>
-              <p class="text-12-regular text-text-weak">{language.t("im.facade.name.rule")}</p>
               <Show when={!controller.state.transactionID}>
                 <Show
                   when={controller.state.method === "api_key"}
