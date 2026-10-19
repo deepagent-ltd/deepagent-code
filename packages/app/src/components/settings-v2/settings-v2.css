@@ -1031,15 +1031,22 @@
   gap: 12px;
 }
 
-.settings-v2-import [data-slot="settings-v2-row-control"] {
+.settings-v2-import [data-component="settings-v2-row"] > [data-slot="settings-v2-row-control"] {
   width: 100%;
   min-width: 0;
   flex-shrink: 1;
+  justify-content: flex-start;
 }
 
 .settings-v2-import [data-slot="settings-v2-row-control"] > * {
   max-width: 100%;
   min-width: 0;
+}
+
+.settings-v2-import [data-slot="settings-v2-row-control"] > div:has([data-component="text-input-v2"]),
+.settings-v2-import [data-slot="settings-v2-row-control"] > .settings-v2-import-file-picker,
+.settings-v2-import [data-slot="settings-v2-row-control"] > div:has(> .settings-v2-import-log) {
+  width: 100%;
 }
 
 .settings-v2-import [data-slot="settings-v2-row-description"] {
