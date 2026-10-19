@@ -7,10 +7,11 @@ import { MessageSearch } from "@/components/im/message-search"
 import { GroupChatPanel } from "@/components/im/group-chat-panel"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
 import { createIMClient, type IMClient } from "@/utils/im-client"
+import { imSummaryOwner } from "@/components/im/summary-owner"
 import type { IMMessage, IMReadAction, IMReaderGroup } from "@/components/im/types"
 import { dict } from "@/i18n/en"
 
-const runtime = vi.hoisted(() => ({ client: undefined as IMClient | undefined }))
+const runtime = vi.hoisted(() => ({ client: undefined as IMClient | undefined, connectedPanel: false }))
 vi.mock("@/utils/im-client", async (original) => ({
   ...(await original<typeof import("@/utils/im-client")>()),
   useIMClient: () => runtime.client!,
@@ -19,9 +20,18 @@ vi.mock("@/context/sdk", () => ({ useSDK: () => ({ client: {} }) }))
 vi.mock("@/context/command", () => ({ useCommand: () => ({ register: vi.fn() }) }))
 vi.mock("@/context/server", async (original) => ({
   ...(await original<typeof import("@/context/server")>()),
-  useServer: () => ({ key: "reader-fixture", all: [], projects: () => ({ list: [] }) }),
+  useServer: () => ({
+    key: "reader-fixture",
+    scope: () => "reader-fixture",
+    current: runtime.connectedPanel
+      ? { type: "http", http: { url: "http://fixture.test", password: "fixture" } }
+      : undefined,
+    all: [],
+    projects: () => ({ list: [] }),
+  }),
 }))
 vi.mock("@/components/im/capabilities", () => ({ fetchIMCapabilities: async () => ({}) }))
+vi.mock("@/components/settings-v2/im", () => ({ SettingsIMV2: () => null }))
 vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ show: vi.fn() }) }))
 vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
 class Socket {
@@ -73,6 +83,7 @@ let readPending: Promise<void> | undefined
 let readRefused: boolean
 let readErrorCode: string
 beforeEach(() => {
+  runtime.connectedPanel = false
   content = "protected first"
   expiry = 60000
   reads = []
@@ -141,6 +152,7 @@ beforeEach(() => {
   )
 })
 afterEach(() => {
+  imSummaryOwner.stop()
   cleanup()
   vi.unstubAllGlobals()
   vi.useRealTimers()
@@ -254,6 +266,30 @@ it("does not mark on view or refresh; explicit unknown/partial action preserves 
   expect(reads[2].continue).toBe(true)
   expect(Socket.instances[0].send.mock.calls.some(([value]) => String(value).includes("read_receipt"))).toBe(false)
 })
+it("a failed current history read releases its flight so a normal hint can recover a partial page", async () => {
+  const calls: Request[] = []
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init)
+    if (new URL(request.url).pathname.endsWith("/agents")) return Response.json([])
+    calls.push(request)
+    if (calls.length === 1)
+      return Response.json({ name: "IM_READER_UNAVAILABLE", data: { code: "reader_unavailable" } }, { status: 503 })
+    return Response.json({
+      messages: [message("recovered partial history")], nextCursor: null, hasMore: false,
+      reader: { state: "partial", displayEpoch: "e1", projectionRevision: "1", validatedServerNow: 1000, nextExpiryAt: null },
+    })
+  }))
+  await mount()
+  await screen.findByText(dict["im.message.load.failed"])
+  expect(calls).toHaveLength(1)
+  Socket.instances[0].emit("reader_changed")
+  await screen.findByText("recovered partial history", undefined, { timeout: 2500 })
+  expect(calls).toHaveLength(2)
+  expect(calls[0].signal.aborted).toBe(true)
+  expect(calls.every((request) => request.method === "GET")).toBe(true)
+  expect(screen.queryByText(dict["im.message.load.failed"])).toBeNull()
+  expect(reads).toHaveLength(0)
+})
 it("invalidation fences late HTTP and clears visible messages immediately", async () => {
   await mount()
   await screen.findByText("protected first")
@@ -264,9 +300,15 @@ it("invalidation fences late HTTP and clears visible messages immediately", asyn
   await waitFor(() => expect(gets).toBe(2))
   Socket.instances[0].emit("reader_invalidated")
   expect(screen.queryByText("protected first")).toBeNull()
+  pending = undefined
+  content = "current body after invalidation"
+  Socket.instances[0].emit("reader_changed")
+  await screen.findByText("current body after invalidation", undefined, { timeout: 2500 })
   late.resolve()
-  await screen.findByText(dict["im.reader.unavailable"])
+  await new Promise((resolve) => setTimeout(resolve, 0))
   expect(screen.queryByText("late forbidden body")).toBeNull()
+  expect(screen.getByText("current body after invalidation")).toBeTruthy()
+  expect(gets).toBe(3)
   expect(reads).toHaveLength(0)
 })
 it("expires the protected display without extending TTL on a late response; pending cannot mark", async () => {
@@ -323,6 +365,154 @@ it("search expiry removes protected results but retains known local results", as
   await screen.findByText("local search body")
   await waitFor(() => expect(screen.queryByText("protected search body")).toBeNull())
   expect(screen.getByText("local search body")).toBeTruthy()
+})
+
+it("search lifecycle preserves results and pagination across a same-epoch status snapshot", async () => {
+  vi.useFakeTimers()
+  const [status, setStatus] = createSignal({ reader: { displayEpoch: "e1" }, invalidation: 0 })
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+    messages: [message("current search body")], nextCursor: "older", hasMore: true,
+    reader: { state: "ready", displayEpoch: "e1", projectionRevision: "1", validatedServerNow: 1000, nextExpiryAt: 61000 },
+  })))
+  render(() => <MessageSearch displayEpoch={status().reader.displayEpoch} invalidation={status().invalidation} />)
+  const input = screen.getByPlaceholderText("Search messages…")
+  fireEvent.input(input, { target: { value: "body" } })
+  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(screen.getByText("current search body")).toBeTruthy()
+  setStatus({ reader: { displayEpoch: "e1" }, invalidation: 0 })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(screen.getByText("current search body")).toBeTruthy()
+  expect(screen.getByRole("button", { name: dict["common.loadMore"] })).toBeTruthy()
+  expect(screen.getByPlaceholderText("Search messages…")).toBe(input)
+  expect(screen.queryByText(dict["im.reader.unavailable"])).toBeNull()
+})
+
+it("search lifecycle retires the previous query expiry before accepting its held successor", async () => {
+  vi.useFakeTimers()
+  const gate = Promise.withResolvers<void>()
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const q = new URL(new Request(input, init).url).searchParams.get("q")
+    if (q === "second") await gate.promise
+    return Response.json({
+      messages: [message(`${q} query body`)], nextCursor: null, hasMore: false,
+      reader: { state: "ready", displayEpoch: "e1", projectionRevision: "1", validatedServerNow: 1000,
+        nextExpiryAt: q === "first" ? 1100 : 2000 },
+    })
+  }))
+  render(() => <MessageSearch displayEpoch="e1" />)
+  const input = screen.getByPlaceholderText("Search messages…")
+  fireEvent.input(input, { target: { value: "first" } })
+  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(screen.getByText("first query body")).toBeTruthy()
+  await vi.advanceTimersByTimeAsync(20)
+  fireEvent.input(input, { target: { value: "second" } })
+  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  await vi.advanceTimersByTimeAsync(100)
+  gate.resolve()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(screen.getByText("second query body")).toBeTruthy()
+  expect(screen.queryByText(dict["im.reader.unavailable"])).toBeNull()
+})
+
+it("search lifecycle replaces the deadline only after accepting a fresh complete page", async () => {
+  vi.useFakeTimers()
+  const current = { calls: 0 }
+  vi.stubGlobal("fetch", vi.fn(async () => {
+    current.calls++
+    return Response.json({
+      messages: [message(`replacement body ${current.calls}`)], nextCursor: null, hasMore: false,
+      reader: { state: "ready", displayEpoch: "e1", projectionRevision: String(current.calls), validatedServerNow: 1000,
+        nextExpiryAt: current.calls === 1 ? 1100 : 2000 },
+    })
+  }))
+  render(() => <MessageSearch displayEpoch="e1" />)
+  fireEvent.input(screen.getByPlaceholderText("Search messages…"), { target: { value: "body" } })
+  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(screen.getByText("replacement body 1")).toBeTruthy()
+  await vi.advanceTimersByTimeAsync(20)
+  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(screen.getByText("replacement body 2")).toBeTruthy()
+  await vi.advanceTimersByTimeAsync(81)
+  expect(screen.getByText("replacement body 2")).toBeTruthy()
+  await vi.advanceTimersByTimeAsync(920)
+  expect(screen.queryByText("replacement body 2")).toBeNull()
+  expect(screen.getByText(dict["im.reader.unavailable"])).toBeTruthy()
+})
+
+it("search lifecycle append keeps the earliest displayed proof expiry and retains local results", async () => {
+  vi.useFakeTimers()
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const append = new URL(new Request(input, init).url).searchParams.has("cursor")
+    return Response.json({
+      messages: append ? [message("appended protected body")] : [message("first protected body"), { ...message("local body"), groupID: "local" }],
+      nextCursor: append ? null : "older", hasMore: !append,
+      reader: { state: "ready", displayEpoch: "e1", projectionRevision: "1", validatedServerNow: 1000,
+        nextExpiryAt: append ? 2000 : 1100 },
+    })
+  }))
+  render(() => <MessageSearch localGroupIDs={["local"]} displayEpoch="e1" />)
+  fireEvent.input(screen.getByPlaceholderText("Search messages…"), { target: { value: "body" } })
+  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  await vi.advanceTimersByTimeAsync(0)
+  await vi.advanceTimersByTimeAsync(20)
+  fireEvent.click(screen.getByRole("button", { name: dict["common.loadMore"] }))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(screen.getByText("first protected body")).toBeTruthy()
+  expect(screen.getByText("appended protected body")).toBeTruthy()
+  await vi.advanceTimersByTimeAsync(81)
+  expect(screen.queryByText("first protected body")).toBeNull()
+  expect(screen.queryByText("appended protected body")).toBeNull()
+  expect(screen.getByText("local body")).toBeTruthy()
+})
+
+it("search lifecycle real epoch invalidation and scope changes reject their late protected responses", async () => {
+  vi.useFakeTimers()
+  const [status, setStatus] = createSignal({ epoch: "e1", invalidation: 0, directory: "/private/fixture" })
+  runtime.client = createIMClient(() => ({ url: "http://fixture.test", directory: status().directory, password: "fixture" }))
+  const response = { body: "initial", epoch: "e1", gate: undefined as Promise<void> | undefined }
+  vi.stubGlobal("fetch", vi.fn(async () => {
+    const page = {
+      messages: [message(response.body), { ...message("local body"), groupID: "local" }], nextCursor: null, hasMore: false,
+      reader: { state: "ready", displayEpoch: response.epoch, projectionRevision: "1", validatedServerNow: 1000, nextExpiryAt: null },
+    }
+    await response.gate
+    return Response.json(page)
+  }))
+  render(() => <MessageSearch localGroupIDs={["local"]} displayEpoch={status().epoch} invalidation={status().invalidation} />)
+  fireEvent.input(screen.getByPlaceholderText("Search messages…"), { target: { value: "body" } })
+  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(screen.getByText("initial")).toBeTruthy()
+  for (const change of ["epoch", "invalidation", "scope"] as const) {
+    const gate = Promise.withResolvers<void>()
+    const prior = response.body
+    response.body = `late ${change}`
+    response.gate = gate.promise
+    fireEvent.click(screen.getByRole("button", { name: "Search" }))
+    await vi.advanceTimersByTimeAsync(0)
+    setStatus((value) => change === "epoch" ? { ...value, epoch: "e2" }
+      : change === "invalidation" ? { ...value, invalidation: value.invalidation + 1 }
+      : { ...value, directory: "/private/changed" })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.queryByText(prior)).toBeNull()
+    expect(screen.queryByText(response.body)).toBeNull()
+    expect(screen.getByText("local body")).toBeTruthy()
+    expect(screen.getByText(dict["im.reader.unavailable"])).toBeTruthy()
+    gate.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.queryByText(response.body)).toBeNull()
+    response.body = `current ${change}`
+    response.epoch = status().epoch
+    response.gate = undefined
+    fireEvent.click(screen.getByRole("button", { name: "Search" }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByText(response.body)).toBeTruthy()
+    expect(screen.queryByText(dict["im.search.failed"])).toBeNull()
+  }
 })
 
 it("keeps one read request across body invalidation and accepts its confirmation only after fresh proof", async () => {
@@ -744,7 +934,9 @@ it("explicit group-list refresh observes current recovery and never reconnects o
       <Route path="/" component={() => <SidePanelIM onClose={() => {}} />} />
     </MemoryRouter>
   ))
+  fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.settings"] }))
   await screen.findByText(dict["im.facade.recovery.pending"])
+  fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.messages"] }))
   await waitFor(() =>
     expect(screen.getByRole("button", { name: dict["im.transport.refresh"] }).hasAttribute("disabled")).toBe(false),
   )
@@ -756,8 +948,10 @@ it("explicit group-list refresh observes current recovery and never reconnects o
   button.click()
   expect(current.statuses).toBe(2)
   gate.resolve()
+  fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.settings"] }))
   await waitFor(() => expect(screen.queryByText(dict["im.facade.recovery.pending"])).toBeNull())
   await waitFor(() => expect(screen.queryByText(dict["im.reader.unavailable"])).toBeNull())
+  fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.messages"] }))
   expect(screen.getByRole("button", { name: dict["im.transport.refresh"] }).hasAttribute("disabled")).toBe(false)
   expect(current.statuses).toBe(2)
   expect(calls).toHaveLength(6)
@@ -808,5 +1002,310 @@ it("explicit group-list refresh keeps protected content unavailable when the cur
   )
   expect(screen.getByText(dict["im.reader.unavailable"])).toBeTruthy()
   expect(screen.queryByText(dict["im.facade.recovery.failed"])).toBeNull()
+  expect(calls.every((request) => request.method === "GET")).toBe(true)
+})
+
+
+it("current body success clears only an older refresh failure and fences a late old body", async () => {
+  const late = Promise.withResolvers<void>()
+  const current = { delay: false, messages: 0, refreshes: 0 }
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const path = new URL(request.url).pathname
+      if (path.endsWith("/agents")) return Response.json([])
+      if (path.endsWith("/refresh")) {
+        current.refreshes++
+        return Response.json(
+          {
+            name: "IM_READER_UNAVAILABLE",
+            data: { code: "reader_unavailable" },
+          },
+          { status: 503 },
+        )
+      }
+      current.messages++
+      if (current.delay) await late.promise
+      return Response.json({
+        messages: [message("recovered current body")],
+        nextCursor: null,
+        hasMore: false,
+        reader: {
+          state: "ready",
+          displayEpoch: "e1",
+          projectionRevision: "1",
+          validatedServerNow: 1000,
+          nextExpiryAt: null,
+        },
+      })
+    }),
+  )
+  await mount()
+  await screen.findByText("recovered current body")
+  fireEvent.click(screen.getByRole("button", { name: dict["im.transport.refresh"] }))
+  await screen.findByText(dict["im.transport.refreshFailed"])
+  expect(screen.queryByText("recovered current body")).toBeNull()
+  Socket.instances[0].emit("reader_changed")
+  await screen.findByText("recovered current body")
+  await waitFor(() => expect(screen.queryByText(dict["im.transport.refreshFailed"])).toBeNull())
+  current.delay = true
+  const count = current.messages
+  Socket.instances[0].emit("reader_changed")
+  await waitFor(() => expect(current.messages).toBeGreaterThan(count), {
+    timeout: 2500,
+  })
+  fireEvent.click(screen.getByRole("button", { name: dict["im.transport.refresh"] }))
+  await screen.findByText(dict["im.transport.refreshFailed"])
+  late.resolve()
+  await Promise.resolve()
+  expect(screen.getByText(dict["im.transport.refreshFailed"])).toBeTruthy()
+  expect(screen.queryByText("recovered current body")).toBeNull()
+  expect(current.refreshes).toBe(2)
+  expect(reads).toHaveLength(0)
+})
+
+it("a verified owner keeps the editor openable during background status while submit remains gated", async () => {
+  runtime.connectedPanel = true
+  const initial = Promise.withResolvers<void>()
+  const background = Promise.withResolvers<void>()
+  const current = { statuses: 0, refused: false }
+  const calls: Request[] = []
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      calls.push(request)
+      const url = new URL(request.url)
+      if (url.pathname.endsWith("/status")) {
+        current.statuses++
+        if (current.statuses === 1) await initial.promise
+        if (current.statuses === 2) await background.promise
+        if (current.refused)
+          return Response.json(
+            {
+              name: "IM_READER_UNAVAILABLE",
+              data: { code: "reader_unavailable" },
+            },
+            { status: 503 },
+          )
+        return Response.json({
+          facade: "active",
+          identity: {
+            uuid: "ui-refresh-self",
+            name: "Self",
+            orgID: 1,
+            orgAllGroupID: "all",
+          },
+          blocked: null,
+          kernel: "connected",
+          keyOrigin: "stored",
+          reader: { state: "ready", displayEpoch: "e1" },
+        })
+      }
+      if (!url.pathname.endsWith("/groups/page")) throw new Error("Unexpected request")
+      const lane = url.searchParams.get("lane")
+      return Response.json({
+        version: 1,
+        lane,
+        groups: [],
+        hasMore: false,
+        nextCursor: null,
+        ...(lane === "protected"
+          ? {
+              reader: {
+                displayEpoch: "e1",
+                proofWindowMs: 1000,
+                nextExpiryAt: null,
+              },
+            }
+          : {}),
+      })
+    }),
+  )
+  render(() => (
+    <MemoryRouter>
+      <Route path="/" component={() => <SidePanelIM onClose={() => {}} />} />
+    </MemoryRouter>
+  ))
+  const opener = screen.getByRole("button", {
+    name: dict["im.direct.create"],
+  }) as HTMLButtonElement
+  expect(opener.disabled).toBe(true)
+  initial.resolve()
+  await waitFor(() => expect(opener.disabled).toBe(false))
+  const updating = imSummaryOwner.refresh()
+  await waitFor(() => expect(current.statuses).toBe(2))
+  expect(opener.disabled).toBe(false)
+  fireEvent.click(opener)
+  const editor = await screen.findByPlaceholderText(dict["im.facade.direct.placeholder"])
+  fireEvent.input(editor, { target: { value: "existing-person" } })
+  const submit = screen.getAllByRole("button", { name: dict["im.direct.create"] }).at(-1) as HTMLButtonElement
+  expect(submit.disabled).toBe(true)
+  background.resolve()
+  await updating
+  await waitFor(() => expect(submit.disabled).toBe(false))
+  current.refused = true
+  await imSummaryOwner.refresh()
+  expect(opener.disabled).toBe(true)
+  await waitFor(() => expect(current.statuses).toBeGreaterThanOrEqual(3))
+  await waitFor(() =>
+    expect(
+      screen
+        .getAllByRole("button", { name: dict["im.direct.create"] })
+        .every((button) => button.hasAttribute("disabled")),
+    ).toBe(true),
+  )
+  expect(calls.every((request) => request.method === "GET")).toBe(true)
+})
+
+it("parent search survives a status context snapshot with the same real client scope and retires on a changed scope", async () => {
+  const [context, setContext] = createSignal({
+    url: "http://fixture.test",
+    directory: "/scope-a",
+    password: "fixture",
+  })
+  runtime.client = createIMClient(context)
+  const calls: Request[] = []
+  const current = { statuses: 0 }
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init)
+    const url = new URL(request.url)
+    calls.push(request)
+    if (request.method !== "GET") throw new Error("Unexpected mutation")
+    if (url.pathname.endsWith("/status")) {
+      current.statuses++
+      if (current.statuses === 2) setContext((value) => ({ ...value }))
+      return Response.json({
+        facade: "active",
+        identity: { uuid: "parent-search-self", name: "Self", orgID: 1, orgAllGroupID: "all" },
+        blocked: null,
+        keyOrigin: "stored",
+        kernel: "connected",
+        reader: { state: "ready", displayEpoch: "e1" },
+      })
+    }
+    if (url.pathname.endsWith("/groups/page")) {
+      const lane = url.searchParams.get("lane")
+      return Response.json({
+        version: 1,
+        lane,
+        groups: lane === "ordinary" ? [{
+          id: "local", name: `Local ${url.searchParams.get("directory")}`, workspaceID: "fixture", projectID: null,
+          type: "direct", createdBy: "self", kernelConvID: null, createdAt: 1, updatedAt: 1,
+        }] : [],
+        hasMore: false,
+        nextCursor: null,
+        ...(lane === "protected" ? { reader: { displayEpoch: "e1", proofWindowMs: 1000, nextExpiryAt: null } } : {}),
+      })
+    }
+    if (url.pathname.endsWith("/search")) return Response.json({
+      messages: [message("parent search body")], nextCursor: null, hasMore: false,
+      reader: { state: "ready", displayEpoch: "e1", projectionRevision: "1", validatedServerNow: 1000, nextExpiryAt: null },
+    })
+    throw new Error("Unexpected request")
+  }))
+  render(() => <MemoryRouter><Route path="/" component={() => <SidePanelIM onClose={() => {}} />} /></MemoryRouter>)
+  await screen.findByRole("button", { name: /Local \/scope-a/ })
+  await waitFor(() => expect(screen.getByRole("button", { name: dict["im.transport.refresh"] }).hasAttribute("disabled")).toBe(false))
+  fireEvent.click(screen.getByRole("button", { name: dict["im.search.messages"] }))
+  const input = screen.getByPlaceholderText("Search messages…")
+  fireEvent.input(input, { target: { value: "body" } })
+  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  await screen.findByText("parent search body")
+  const scope = runtime.client.scope()
+  fireEvent.click(screen.getByRole("button", { name: dict["im.transport.refresh"] }))
+  await waitFor(() => expect(current.statuses).toBeGreaterThanOrEqual(2))
+  await waitFor(() => expect(screen.getByRole("button", { name: dict["im.transport.refresh"] }).hasAttribute("disabled")).toBe(false))
+  expect(runtime.client.scope()).toBe(scope)
+  expect(screen.queryByPlaceholderText("Search messages…")).toBe(input)
+  expect(screen.getByText("parent search body")).toBeTruthy()
+  expect((input as HTMLInputElement).value).toBe("body")
+  setContext((value) => ({ ...value, directory: "/scope-b" }))
+  await screen.findByRole("button", { name: /Local \/scope-b/ })
+  expect(runtime.client.scope()).not.toBe(scope)
+  expect(screen.queryByPlaceholderText("Search messages…")).toBeNull()
+  expect(screen.queryByText("parent search body")).toBeNull()
+  expect(calls.every((request) => request.method === "GET")).toBe(true)
+})
+
+it("parent anchor context survives same-owner metadata and status snapshots without replacing its summary owner", async () => {
+  runtime.connectedPanel = true
+  const [context, setContext] = createSignal({
+    url: "http://fixture.test",
+    directory: "/anchor-a",
+    password: "fixture",
+  })
+  runtime.client = createIMClient(context)
+  const attached = vi.spyOn(imSummaryOwner, "attach")
+  const calls: Request[] = []
+  const current = { statuses: 0, epoch: "e1", account: "anchor-owner-self" }
+  const group = () => ({
+    id: "protected", name: "Anchor protected conversation", workspaceID: "fixture", projectID: null,
+    type: "direct", createdBy: "self", kernelConvID: "kr1:fixture", createdAt: 1, updatedAt: current.statuses,
+    reader: { mode: "protected", state: "ready", liveUnread: "2" },
+  })
+  const proof = () => ({ displayEpoch: current.epoch, proofWindowMs: 1000, nextExpiryAt: null })
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init)
+    const url = new URL(request.url)
+    calls.push(request)
+    if (request.method !== "GET") throw new Error("Unexpected mutation")
+    if (url.pathname.endsWith("/status")) {
+      current.statuses++
+      if (current.statuses === 2) setContext((value) => ({ ...value }))
+      return Response.json({
+        facade: "active",
+        identity: { uuid: current.account, name: "Self", orgID: 1, orgAllGroupID: "all" },
+        blocked: null, keyOrigin: "stored", kernel: "connected",
+        reader: { state: "ready", displayEpoch: current.epoch },
+      })
+    }
+    if (url.pathname.endsWith("/groups/page")) {
+      const lane = url.searchParams.get("lane")
+      return Response.json({
+        version: 1, lane, groups: lane === "protected" ? [group()] : [], hasMore: false, nextCursor: null,
+        ...(lane === "protected" ? { reader: proof() } : {}),
+      })
+    }
+    if (url.pathname.endsWith("/groups/protected")) return Response.json({ version: 1, group: group(), reader: proof() })
+    if (url.pathname.endsWith("/agents")) return Response.json([])
+    if (url.pathname.endsWith("/search") || url.pathname.endsWith("/messages")) return Response.json({
+      messages: [{ ...message("anchor current body"), id: "anchor-target" }], nextCursor: null, hasMore: false,
+      reader: { state: "ready", displayEpoch: current.epoch, projectionRevision: "1", validatedServerNow: 1000, nextExpiryAt: null },
+    })
+    throw new Error("Unexpected request")
+  }))
+  render(() => <MemoryRouter><Route path="/" component={() => <SidePanelIM onClose={() => {}} />} /></MemoryRouter>)
+  await screen.findByRole("button", { name: /Anchor protected conversation/ })
+  await waitFor(() => expect(screen.getByRole("button", { name: dict["im.transport.refresh"] }).hasAttribute("disabled")).toBe(false))
+  fireEvent.click(screen.getByRole("button", { name: dict["im.search.messages"] }))
+  fireEvent.input(screen.getByPlaceholderText("Search messages…"), { target: { value: "anchor" } })
+  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  fireEvent.click(await screen.findByText("anchor current body"))
+  await waitFor(() => expect(Socket.instances).toHaveLength(1))
+  Socket.instances[0].open()
+  await screen.findByText("anchor current body")
+  expect(calls.filter((request) => new URL(request.url).pathname.endsWith("/messages"))
+    .every((request) => new URL(request.url).searchParams.get("anchorID") === "anchor-target")).toBe(true)
+  expect(screen.getByText(dict["im.message.location.context"])).toBeTruthy()
+  expect(attached).toHaveBeenCalledTimes(1)
+  const scope = runtime.client.scope()
+  await imSummaryOwner.refresh()
+  await waitFor(() => expect(current.statuses).toBeGreaterThanOrEqual(2))
+  await waitFor(() => expect(screen.getAllByRole("button", { name: dict["im.transport.refresh"] }).every((button) => !button.hasAttribute("disabled"))).toBe(true))
+  expect(runtime.client.scope()).toBe(scope)
+  expect(screen.queryByText(dict["im.message.location.context"])).not.toBeNull()
+  expect(screen.getByRole("button", { name: dict["im.message.location.latest"] })).toBeTruthy()
+  expect(screen.getByText("anchor current body")).toBeTruthy()
+  expect(attached).toHaveBeenCalledTimes(1)
+  expect(calls.filter((request) => new URL(request.url).pathname.endsWith("/messages"))
+    .every((request) => new URL(request.url).searchParams.get("anchorID") === "anchor-target")).toBe(true)
+  current.account = "anchor-owner-replacement"
+  vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1001)
+  await imSummaryOwner.refresh()
+  await waitFor(() => expect(current.statuses).toBeGreaterThanOrEqual(3))
+  await waitFor(() => expect(screen.queryByText(dict["im.message.location.context"])).toBeNull())
+  expect(screen.queryByText("anchor current body")).toBeNull()
   expect(calls.every((request) => request.method === "GET")).toBe(true)
 })

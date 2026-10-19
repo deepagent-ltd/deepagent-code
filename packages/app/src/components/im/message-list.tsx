@@ -18,18 +18,23 @@ interface MessageListProps {
   senderNames?: ReadonlyMap<string, string>
   onLoadOlder?: () => void
   loadingOlder?: boolean
+  focusMessageID?: string
 }
 
 export function MessageList(props: MessageListProps) {
   const language = useLanguage()
-  const [state, setState] = createStore({ unseen: 0 })
+  const [state, setState] = createStore({ unseen: 0, highlighted: "" })
   let containerRef: HTMLDivElement | undefined
   let following = true
   let previousIDs: string[] = []
   let anchor: { id: string; offset: number } | undefined
   let disposed = false
+  let requestedFocus: string | undefined
+  let focused: string | undefined
+  let highlightTimer: ReturnType<typeof setTimeout> | undefined
   onCleanup(() => {
     disposed = true
+    if (highlightTimer) clearTimeout(highlightTimer)
   })
 
   // Auto-scroll to bottom on new messages AND as live reasoning streams in, so
@@ -37,6 +42,15 @@ export function MessageList(props: MessageListProps) {
   createEffect(() => {
     // Track both signals so streaming progress updates also trigger a scroll.
     const ids = props.messages.map((message) => message.id)
+    const focus = props.focusMessageID
+    if (requestedFocus !== focus) {
+      requestedFocus = focus
+      focused = undefined
+      following = !focus
+      anchor = undefined
+      if (highlightTimer) clearTimeout(highlightTimer)
+      setState({ highlighted: "", unseen: 0 })
+    }
     props.agentProgress
     const last = ids.indexOf(previousIDs.at(-1) ?? "")
     const added = last < 0 ? [] : ids.slice(last + 1).filter((id) => !previousIDs.includes(id))
@@ -47,6 +61,23 @@ export function MessageList(props: MessageListProps) {
     // message anchor also works when a newer message arrives in the same batch.
     queueMicrotask(() => {
       if (disposed || !containerRef) return
+      if (focus && focus === props.focusMessageID && focused !== focus) {
+        const node = Array.from(containerRef.querySelectorAll<HTMLElement>("[data-im-message]")).find(
+          (element) => element.dataset.imMessage === focus,
+        )
+        if (node) {
+          focused = focus
+          following = false
+          containerRef.scrollTop +=
+            node.getBoundingClientRect().top -
+            containerRef.getBoundingClientRect().top -
+            (containerRef.clientHeight - node.getBoundingClientRect().height) / 2
+          node.focus({ preventScroll: true })
+          setState("highlighted", focus)
+          highlightTimer = setTimeout(() => !disposed && setState("highlighted", ""), 3000)
+          return
+        }
+      }
       if (anchor) {
         const node = Array.from(containerRef.querySelectorAll<HTMLElement>("[data-im-message]")).find(
           (element) => element.dataset.imMessage === anchor?.id,
@@ -70,7 +101,8 @@ export function MessageList(props: MessageListProps) {
       class="relative flex-1 min-h-0 overflow-y-auto p-3 space-y-4"
       onScroll={() => {
         if (!containerRef) return
-        following = containerRef.scrollHeight - containerRef.scrollTop - containerRef.clientHeight < 64
+        following =
+          !props.focusMessageID && containerRef.scrollHeight - containerRef.scrollTop - containerRef.clientHeight < 64
         if (following) setState("unseen", 0)
       }}
     >
@@ -107,7 +139,13 @@ export function MessageList(props: MessageListProps) {
       >
         <For each={props.messages}>
           {(message) => (
-            <div data-im-message={message.id}>
+            <div
+              data-im-message={message.id}
+              data-im-target={state.highlighted === message.id ? "true" : undefined}
+              aria-current={props.focusMessageID === message.id ? "location" : undefined}
+              tabIndex={props.focusMessageID === message.id ? -1 : undefined}
+              classList={{ "rounded-md bg-surface-raised-base-hover": state.highlighted === message.id }}
+            >
               <MessageItem
                 mediaEnabled={props.mediaEnabled}
                 message={message}

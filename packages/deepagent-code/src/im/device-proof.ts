@@ -4,6 +4,8 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, ran
 
 export const profile = "dac-im-device-v1"
 export const socketProfile = "dac-im-connect-proof-v1"
+// The server accepts HTTP proof iat up to 30 seconds behind its own clock.
+export const maxServerClockLeadMs = 30000
 export type Purpose =
   | "activation"
   | "activation-status"
@@ -176,6 +178,7 @@ export function socket(
   },
 ) {
   const audience = new URL(source.audience)
+  const now = Date.now()
   if (
     audience.username ||
     audience.password ||
@@ -191,8 +194,8 @@ export function socket(
     challenge.socketSession.length < 11 ||
     challenge.socketSession.length > 128 ||
     !Number.isSafeInteger(challenge.expiresAt) ||
-    challenge.expiresAt <= Date.now() ||
-    challenge.expiresAt > Date.now() + 10000 ||
+    challenge.expiresAt <= now ||
+    challenge.expiresAt > now + 10000 + maxServerClockLeadMs ||
     !/^[a-f0-9]{32}$/.test(source.entitlementID) ||
     !Number.isSafeInteger(source.bindingVersion) ||
     source.bindingVersion < 1
@@ -208,7 +211,9 @@ export function socket(
     ath: credentialHash(source.token),
     entitlementID: source.entitlementID,
     bindingVersion: source.bindingVersion,
-    iat: Math.floor(Date.now() / 1000),
+    // The verified challenge carries the server's original 10-second interval.
+    // Use that clock for both claims so exp-iat never exceeds the server limit.
+    iat: Math.floor((challenge.expiresAt - 10000) / 1000),
     exp: Math.floor(challenge.expiresAt / 1000),
     jti: randomBytes(32).toString("base64url"),
   })

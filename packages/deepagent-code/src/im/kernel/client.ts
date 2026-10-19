@@ -43,6 +43,7 @@ export interface SendTextInput {
 }
 
 export interface Interface {
+  readonly getDeliveryReceipt?: KernelSdk.Interface["getDeliveryReceipt"]
   /** 连接状态机——UI 经它观察内核链路（B2 的连接状态指示器的数据源）。 */
   readonly state: SubscriptionRef.SubscriptionRef<ConnectionState>
   readonly captureCurrentLink?: KernelSdk.Interface["captureCurrentLink"]
@@ -154,6 +155,7 @@ export const layer = Layer.effect(
     ).pipe(Effect.forkScoped)
 
     return Service.of({
+      getDeliveryReceipt: sdk.getDeliveryReceipt,
       state,
       captureCurrentLink: sdk.captureCurrentLink,
       readCurrentLink: sdk.readCurrentLink,

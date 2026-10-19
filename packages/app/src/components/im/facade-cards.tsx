@@ -79,7 +79,11 @@ export const BlockedCard: Component<{
         </Show>
         <div class="flex items-center gap-2">
           <Button variant="primary" size="small" disabled={busy()} onClick={() => void retry()}>
-            {busy() ? language.t("im.facade.retrying") : language.t("im.facade.retry")}
+            {busy()
+              ? language.t(
+                  props.blocked.code === "im_service_changed" ? "im.facade.reconnecting" : "im.facade.retrying",
+                )
+              : language.t(props.blocked.code === "im_service_changed" ? "im.facade.reconnect" : "im.facade.retry")}
           </Button>
         </div>
       </div>

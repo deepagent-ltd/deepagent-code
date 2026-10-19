@@ -1,7 +1,9 @@
 export * as KernelSdk from "./sdk"
 
 import { Context, Effect, Layer, Queue, Schedule, Schema, Semaphore, Stream } from "effect"
-import * as Log from "@deepagent-code/core/util/log"
+import { Log } from "@deepagent-code/core/util/log"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { IMDacSessionSchema } from "@deepagent-code/core/im/dac-session.schema"
 import type { KernelConfig } from "./config"
 import type { DeliveryReaderInfo, DeliveryChangesRequest, DeliveryChangesResult, DeliveryMessagesRequest, DeliveryMessagesResult, DeliveryProjectionRequest, DeliveryReadCutResult, DeliveryOutputProofRequest, DeliveryOutputProofResult, DeliveryMarkReadRequest, ProtectedMediaAttachment, ProtectedMediaCapabilities, ProtectedMediaTransferCapabilities, ProtectedMediaUploadProgress, ProtectedMediaBeginRequest, ProtectedMediaMetadata, ProtectedMediaObjectRequest, ProtectedMediaChunkRequest, ProtectedMediaRangeRequest, ProtectedCurrentLinkFacts } from "@deepagent-code/im-kernel-sdk"
 
@@ -95,6 +97,7 @@ export interface ConversationPage {
 }
 
 export interface Interface {
+  readonly getDeliveryReceipt?: (input: IMDacSessionSchema.ReplyReceiptQuery) => Effect.Effect<IMDacSessionSchema.ReplyReceipt, KernelError>
   readonly rawEvents: Stream.Stream<RawEvent>
   readonly captureCurrentLink?: () => object | undefined
   readonly readCurrentLink?: (handle: object) => ProtectedCurrentLinkFacts | undefined
@@ -173,6 +176,12 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
       const JuggleIM = (yield* Effect.promise(() => import("@deepagent-code/im-kernel-sdk"))).default
       const im = JuggleIM.init({ appkey: config.appkey, navList: [config.navigator], isSync: false, protectedDeliveryReader: true, protectedMedia: config.protectedMedia === true, protectedDeviceAuth: config.protectedDeviceAuth })
       const { ProtectedLiveOrigin } = yield* Effect.promise(() => import("./protected-live-origin"))
+      const observeLink = (original?: object) => {
+        try {
+          const handle = im.captureProtectedCurrentLink()
+          return { handle, generation: handle ? im.readProtectedCurrentLink(handle)?.generation : undefined, connected: im.isConnected(), originalLinkCurrent: original !== undefined && im.readProtectedCurrentLink(original) !== undefined }
+        } catch { return {} }
+      }
       const releaseLiveObserver = ProtectedLiveOrigin.subscribe(im, (handle) => offer({ tag: "protected_live_observed", handle }))
       yield* Effect.addFinalizer(() => Effect.sync(releaseLiveObserver))
 
@@ -203,6 +212,7 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
       yield* Effect.addFinalizer(() => request("disconnect", () => im.disconnect()).pipe(Effect.ignore))
 
       return Service.of({
+        getDeliveryReceipt: (input) => boundedRequest("receipt", () => im.getDeliveryReceipt(input)),
         rawEvents: Stream.fromQueue(queue),
         captureCurrentLink: () => im.captureProtectedCurrentLink(),
         readCurrentLink: (handle) => im.readProtectedCurrentLink(handle),
@@ -210,8 +220,10 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
           Effect.gen(function* () {
             // d.ts 把 Message.conversationType 错标成枚举对象类型（协议实际是 number），且漏标
             // lifeTime（上方 module augmentation 已补类型）——边界处一次性收窄转换。
-            const ack = yield* boundedRequest("sendMessage", () =>
-              im.sendProtectedMessage({
+            const ack = yield* boundedRequest("sendMessage", () => {
+              const original = observeLink()
+              const startedAt = performance.now()
+              return im.sendProtectedMessage({
                 tid: input.messageID,
                 clientMsgId: input.wireID,
                 conversationType: input.conversationType as 1 | 2,
@@ -219,8 +231,25 @@ export const liveFromConfig = (config: KernelConfig.Info) =>
                 name: "jg:text",
                 content: { content: input.text },
                 deliveryExpiresAt: input.expiresAt,
-              }),
-            )
+              }).catch((cause) => {
+                // Closed connection facts locate an unknown without changing the
+                // original rejection or exposing receiver, credential or content.
+                try {
+                  const current = observeLink(original.handle)
+                  log.warn("protected SDK send failure boundary", {
+                    messageHash: Hash.sha256(JSON.stringify({ messageID: input.messageID })),
+                    sdkElapsedMs: Math.max(0, Math.ceil(performance.now() - startedAt)),
+                    initialConnected: original.connected,
+                    currentConnected: current.connected,
+                    initialLinkAvailable: original.handle !== undefined,
+                    currentLinkAvailable: current.handle !== undefined,
+                    originalLinkCurrent: current.originalLinkCurrent === true,
+                    generationState: original.generation === undefined || current.generation === undefined ? "unavailable" : original.generation === current.generation ? "same" : "changed",
+                  })
+                } catch { /* Observation cannot replace an original delivery rejection. */ }
+                throw cause
+              })
+            })
             const messageID = (ack as { messageId?: unknown }).messageId
             if (typeof messageID !== "string" || messageID.length === 0)
               return yield* new KernelError({ operation: "sendMessage", message: "kernel ack carried no messageId" })

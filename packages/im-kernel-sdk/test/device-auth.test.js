@@ -66,15 +66,24 @@ function fixture(options = {}) {
           if (!peer.data.challenge) {
             expect(ext).toEqual({ profile: "dac-im-connect-proof-v1" });
             const challenge = { profile: "dac-im-connect-proof-v1", nonce: "n".repeat(43), socketSession: `socket_${state.connections.length}_original`,
-              audience: ownerAudience(), appkey: config.appkey, credentialDigest: IMDeviceProof.sha256(token), expiresAt: Date.now() + 9000,
+              audience: ownerAudience(), appkey: config.appkey, credentialDigest: IMDeviceProof.sha256(token),
+              expiresAt: Date.now() + (options.challengeTTLms ?? 9000) + (options.serverClockOffsetMs ?? 0),
               ...options.challenge };
             peer.data.challenge = challenge; state.challenges.push(challenge);
             send(peer, SIGNAL_CMD.CONNECT_ACK, "ConnectAckMsgBody", { code: 11024, ext: JSON.stringify(challenge) }); return;
           }
           expect(Object.keys(ext)).toEqual(["profile", "proof"]);
           const challenge = peer.data.challenge;
-          proof(ext.proof, { purpose: "im-connect", aud: challenge.audience, nonce: challenge.nonce,
+          const claims = proof(ext.proof, { purpose: "im-connect", aud: challenge.audience, nonce: challenge.nonce,
             sid: challenge.socketSession, ath: IMDeviceProof.credentialHash(token), entitlementID: "e".repeat(32), bindingVersion: 1 });
+          if (options.serverClockOffsetMs !== undefined) {
+            const serverNow = Math.floor((Date.now() + options.serverClockOffsetMs) / 1000);
+            expect(claims.iat).toBeGreaterThanOrEqual(serverNow - 30);
+            expect(claims.iat).toBeLessThanOrEqual(serverNow + 5);
+            expect(claims.exp).toBeGreaterThan(serverNow);
+            expect(claims.exp - claims.iat).toBe(10);
+            expect(claims.exp).toBe(Math.floor(challenge.expiresAt / 1000));
+          }
           state.verified++;
           send(peer, SIGNAL_CMD.CONNECT_ACK, "ConnectAckMsgBody", { code: 0, userId: "receiver", timestamp: Date.now(), ext: '{"dacDeliveryLiveRead":2}' });
           return;
@@ -193,6 +202,35 @@ test("the configured socket audience must equal the socket actually opened", asy
     expect(f.state.connections).toHaveLength(0); expect(f.state.signCalls).toBe(0);
   } finally { await client.disconnect(); }
 });
+
+for (const serverClockOffsetMs of [300, 29000, -5000])
+  test(`generated SDK accepts bounded server clock ${serverClockOffsetMs}ms without extending the signed interval`, async () => {
+    const f = fixture({ serverClockOffsetMs, challengeTTLms: 10000 }); const client = f.make();
+    try {
+      await client.connect({ token: f.token });
+      expect(f.state.connections).toHaveLength(2); expect(f.state.verified).toBe(1);
+      expect(client.isConnected()).toBe(true); expect(client.captureProtectedCurrentLink()).toBeDefined();
+    } finally { await client.disconnect(); }
+  });
+
+test("generated SDK refuses a challenge beyond the bounded server clock before invoking the signer", async () => {
+  const f = fixture({ serverClockOffsetMs: 31000, challengeTTLms: 10000 }); const client = f.make();
+  try {
+    await expect(client.connect({ token: f.token })).rejects.toMatchObject({ code: 11026 });
+    expect(f.state.connections).toHaveLength(1); expect(f.state.signCalls).toBe(0); expect(f.state.verified).toBe(0);
+  } finally { await client.disconnect(); }
+});
+
+test("generated SDK caps a pending signer at ten real seconds despite server clock lead", async () => {
+  const f = fixture({ serverClockOffsetMs: 29000, challengeTTLms: 10000, pauseProof: true }); const client = f.make();
+  const started = performance.now();
+  try {
+    await expect(client.connect({ token: f.token })).rejects.toMatchObject({ code: 11027 });
+    expect(performance.now() - started).toBeGreaterThanOrEqual(9500);
+    expect(performance.now() - started).toBeLessThan(14000);
+    expect(f.state.connections).toHaveLength(1); expect(f.state.signCalls).toBe(1); expect(f.state.verified).toBe(0);
+  } finally { await client.disconnect(); f.state.release?.(); }
+}, 15000);
 
 test("Connect logging retains command metadata without tokens, challenges or proofs", async () => {
   const f = fixture(); const output = [];

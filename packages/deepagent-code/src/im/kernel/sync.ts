@@ -41,7 +41,7 @@ export const deliveryFailureDiagnostic = (error: unknown) => {
       ...(error instanceof IMRepositoryError && typeof own.code === "string" && ["kernel_delivery_unavailable", "message_identity_conflict", "attachment_unavailable", ...KernelReaderSchema.CODES].includes(own.code) ? { repositoryCode: own.code } : {}),
       ...(cause.name === "DeliveryError" && typeof cause.operation === "string" && ["media", "media_send", "capabilities", "media_capabilities", "send"].includes(cause.operation) ? { deliveryOperation: cause.operation } : {}),
       ...(cause.name === "DeliveryError" && typeof cause.kind === "string" && ["invalid_request", "invalid_response", "disconnected", "unknown", "transport_timeout", "capacity", "unavailable", "denied", "reader_required", "stale", "upgrade_required", "unsupported_capability", "conflict", "expired", "not_found", "legacy_api_disabled"].includes(cause.kind) ? { deliveryKind: cause.kind } : {}),
-      ...(cause.name === "DeliveryError" && [11005, 12201, 12202, 12203, 12204, 12205, 12206, 30001].some((code) => code === cause.wireCode) ? { wireCode: cause.wireCode } : {}),
+      ...(cause.name === "DeliveryError" && [11005, 11013, 12201, 12202, 12203, 12204, 12205, 12206, 30001].some((code) => code === cause.wireCode) ? { wireCode: cause.wireCode } : {}),
     }
   } catch { return { kind: "unclassified" } }
 }
@@ -76,6 +76,8 @@ export interface ReaderLease {
 }
 export interface ReaderContext { readonly instance: InstanceContext; readonly workspaceID: string; readonly userID: string; readonly instanceCurrent: Effect.Effect<boolean> }
 export interface Interface {
+  readonly receiptSource?: KernelDeliverySchema.Source
+  readonly getDeliveryReceipt?: NonNullable<KernelClient.Interface["getDeliveryReceipt"]>
   readonly createMessage: IMRepositoryInterface["createMessage"]
   readonly createAttachment?: IMRepositoryInterface["createAttachment"]
   readonly prepareMediaContinuation?: (input:MediaUploadCheckpoint.Request) => Effect.Effect<void,IMRepositoryError>
@@ -308,7 +310,18 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => Laye
         const inspected = yield* entry.reader.inspect(conversation)
         if (input.type !== "file" && group.kernelConvID.startsWith("kr1:")) yield* entry.reader.pending({ ...conversation, name: inspected.name })
         yield* entry.assertCurrent
-        if (input.type !== "file") return yield* KernelDelivery.withCreation(entry.authority, input.groupID, repo.createMessage(input))
+        if (input.type !== "file") {
+          const create = KernelDelivery.withCreation(entry.authority, input.groupID, repo.createMessage(input))
+          // Membership inspection and pending mapping above may wait for the network.
+          // Admit text only after a fresh current proof, without replaying its write.
+          return yield* input.type === "text"
+            ? entry.reader.withOutput(
+                { workspaceID: entry.context.workspaceID, userID: entry.context.userID, groupIDs: [input.groupID] },
+                create,
+                { refreshBeforeEffect: true },
+              )
+            : create
+        }
         const requested = input.attachments ?? (input.attachment ? [input.attachment] : [])
         if (!requested.length || requested.length > 4 || new Set(requested.map((item) => item.id)).size !== requested.length || input.attachments !== undefined && input.attachment || !media || config.protectedMedia !== true || requested.some((item) => item.workspaceID !== entry.context.workspaceID)) return yield* new IMRepositoryError({ code: "attachment_unavailable", message: "Protected media is unavailable" })
         if (input.attachments !== undefined ? !Array.isArray(input.metadata) || input.metadata.length !== requested.length || input.metadata.some((item, index) => item.type !== "attachment_ref" || item.batch !== true || item.attachmentID !== requested[index]?.id) : !Schema.is(AttachmentRefMetadata)(input.metadata) || input.metadata.attachmentID !== requested[0]?.id || input.metadata.batch !== undefined) return yield* new IMRepositoryError({ code: "attachment_unavailable", message: "Original media metadata is unavailable" })
@@ -339,6 +352,12 @@ export const layer = (config: KernelConfig.Info, options?: LayerOptions) => Laye
         code: error instanceof KernelDeliverySchema.Error && error.code === "KERNEL_DELIVERY_RETIRED" ? "message_identity_conflict" : "reader_unavailable",
         message: error instanceof KernelDeliverySchema.Error && error.code === "KERNEL_DELIVERY_RETIRED" ? "The original message body has expired; it cannot be uploaded or sent again" : "Remote conversation is currently unavailable",
       }))),
+      receiptSource: entry.authority.source,
+      getDeliveryReceipt: client.getDeliveryReceipt ? (request) =>
+        entry.hold(entry.reader.request(client.getDeliveryReceipt!(request))).pipe(Effect.mapError((error) =>
+          error instanceof KernelSdk.KernelError ? error : new KernelSdk.KernelError({
+            operation: "receipt", message: "Current receipt reader is unavailable", cause: error,
+          }))) : undefined,
       deliveryStatuses: (ids) => entry.hold(repo.kernelDeliveryStatuses(ids, entry.authority)).pipe(Effect.mapError(() => new IMRepositoryError({ code: "reader_unavailable", message: "Remote conversation is currently unavailable" }))),
       deliveryStatus: (id) => entry.hold(repo.kernelDeliveryStatus(id, entry.authority)).pipe(Effect.mapError(() => new IMRepositoryError({ code: "reader_unavailable", message: "Remote conversation is currently unavailable" }))),
       state: client.state, recovery: scopedRecovery, reader: entry.reader, media, catchUp, drainPending,

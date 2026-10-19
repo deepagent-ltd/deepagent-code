@@ -1,4 +1,5 @@
 const PROFILE = "dac-im-connect-proof-v1";
+const MAX_SERVER_CLOCK_LEAD_MS = 30000;
 const proof = value => typeof value === "string" && value.length >= 100 && value.length <= 4096 && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value);
 const exact = (value, names) => value && typeof value === "object" && !Array.isArray(value) &&
   Object.keys(value).length === names.length && names.every(name => Object.prototype.hasOwnProperty.call(value, name));
@@ -19,20 +20,24 @@ export async function signConnect(auth, raw, source, current) {
   if (!current()) throw deviceError();
   if (typeof raw !== "string" || raw.length > 8192) throw deviceError();
   const challenge = JSON.parse(raw);
+  const now = Date.now();
   if (!exact(challenge, ["profile", "nonce", "socketSession", "audience", "appkey", "credentialDigest", "expiresAt"]) ||
     challenge.profile !== PROFILE || !/^[A-Za-z0-9_-]{43}$/.test(challenge.nonce) || typeof challenge.socketSession !== "string" ||
     challenge.socketSession.length < 11 || challenge.socketSession.length > 128 || challenge.audience !== auth.socketAudience ||
     challenge.audience !== source.audience || challenge.appkey !== source.appkey || !/^[a-f0-9]{64}$/.test(challenge.credentialDigest) ||
-    !Number.isSafeInteger(challenge.expiresAt) || challenge.expiresAt > Date.now() + 10000) throw deviceError();
-  if (challenge.expiresAt <= Date.now()) throw deviceError(11027);
+    !Number.isSafeInteger(challenge.expiresAt) || challenge.expiresAt > now + 10000 + MAX_SERVER_CLOCK_LEAD_MS) throw deviceError();
+  if (challenge.expiresAt <= now) throw deviceError(11027);
+  // Remote clock lead never extends this local, monotonic signing budget.
+  const deadline = performance.now() + Math.min(10000, challenge.expiresAt - now);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source.token));
   if (!current() || challenge.credentialDigest !== Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("")) throw deviceError();
+  if (performance.now() >= deadline) throw deviceError(11027);
   let timeout;
   try {
     const value = await Promise.race([auth.signConnect(Object.freeze(challenge), Object.freeze({
       audience: source.audience, token: source.token, connectionEpoch: source.connectionEpoch,
-    })), new Promise((_, reject) => { timeout = setTimeout(() => reject(deviceError(11027)), Math.max(1, challenge.expiresAt - Date.now())); })]);
-    if (challenge.expiresAt <= Date.now()) throw deviceError(11027);
+    })), new Promise((_, reject) => { timeout = setTimeout(() => reject(deviceError(11027)), Math.max(1, deadline - performance.now())); })]);
+    if (challenge.expiresAt <= Date.now() || performance.now() >= deadline) throw deviceError(11027);
     if (!current() || !proof(value)) throw deviceError();
     return JSON.stringify({ profile: PROFILE, proof: value });
   } finally { clearTimeout(timeout); }

@@ -19,6 +19,7 @@ interface Conversation { projectionKey: string; type: 1 | 2; target: string; nam
 export const make = () => {
   const scopeKey = hash("controlled-sdk:appkey_1:org7:uuid-alice")
   const conversations = new Map<string, Conversation>()
+  const readCutRefusal = { remaining: 0 }
   const observed = { database: undefined as Database.Interface | undefined, repository: undefined as IMRepositoryInterface | undefined, broadcaster: undefined as IMBroadcaster | undefined, engine: undefined as IMKernelSync.Interface | undefined, cursor: 0, factories: 0, active: 0, maximum: 0, marks: 0, sends: 0, platformMutations: 0, calls: [] as string[], errors: [] as string[], context: new Map<string, InstanceContext>(), lease: new Map<string, IMFacade.ReaderLease>(), sent: [] as { wireID: string; messageID: string; target: string; text: string; expiresAt: number }[] }
   const stalled: { key?: string; started: () => void; release: () => void; pending?: Promise<void> } = { started: () => {}, release: () => {} }
   const stalledMark: { key?: string; started: () => void; release: () => void; pending?: Promise<void> } = { started: () => {}, release: () => {} }
@@ -80,6 +81,10 @@ export const make = () => {
       return Promise.resolve({ version: 1 as const, scopeKey, projectionKey: input.projectionKey, projectionRevision: input.projectionRevision, direction: input.direction, nextDeliveryCursor: items.at(-1)?.deliveryCursor ?? input.anchorDeliveryCursor ?? "0", finished: true, serverNow: Date.now(), items })
     }),
     getDeliveryReadCut: (input) => native("getDeliveryReadCut", () => {
+      if (readCutRefusal.remaining > 0) {
+        readCutRefusal.remaining--
+        return Promise.reject({ kind: "stale", wireCode: 12203 })
+      }
       const result = cut(input)
       if (stalled.key !== input.projectionKey || !stalled.pending) return Promise.resolve(result)
       stalled.key = undefined
@@ -131,7 +136,7 @@ export const make = () => {
       } : sdk)))),
     )))
   }
-  return { observed, buildEngine, publish, conversation, cut, scopeKey, delayConnection: () => {
+  return { observed, buildEngine, publish, conversation, cut, scopeKey, refuseReadCuts: (count: number) => { readCutRefusal.remaining = count }, delayConnection: () => {
     const control = { subscribed: () => {}, release: (_state: number) => {} }
     const subscribed = new Promise<void>((resolve) => { control.subscribed = resolve })
     const state = new Promise<number>((resolve) => { control.release = resolve })

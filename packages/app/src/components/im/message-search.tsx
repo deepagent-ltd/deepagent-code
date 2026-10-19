@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, untrack, For, Show, type Component } from "solid-js"
+import { createEffect, createMemo, onCleanup, untrack, For, Show, type Component } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
 import { Button } from "@deepagent-code/ui/button"
@@ -31,11 +31,13 @@ export const MessageSearch: Component<{
     disposed: false,
     generation: 0,
     active: false,
+    appended: false,
     deadline: Infinity,
     timer: undefined as ReturnType<typeof setTimeout> | undefined,
   }
   const clearProtected = () => {
     lifecycle.generation++
+    lifecycle.appended = false
     lifecycle.deadline = Infinity
     if (lifecycle.timer) clearTimeout(lifecycle.timer)
     setState({
@@ -46,10 +48,12 @@ export const MessageSearch: Component<{
       unavailable: true,
     })
   }
+  // Fresh status objects do not retire an unchanged reader authority.
+  const authority = createMemo(() => [client.scope(), props.displayEpoch, props.invalidation] as const, undefined, {
+    equals: (prior, next) => prior?.[0] === next[0] && prior?.[1] === next[1] && prior?.[2] === next[2],
+  })
   createEffect(() => {
-    client.scope()
-    props.displayEpoch
-    props.invalidation
+    authority()
     untrack(clearProtected)
   })
   onCleanup(() => {
@@ -60,6 +64,7 @@ export const MessageSearch: Component<{
     const q = state.query.trim()
     if (!q || lifecycle.active || lifecycle.disposed) return
     lifecycle.active = true
+    if (!append) lifecycle.appended = false
     const generation = lifecycle.generation
     const scope = client.scope()
     const started = performance.now()
@@ -89,11 +94,15 @@ export const MessageSearch: Component<{
           clearProtected()
           return
         }
-        lifecycle.deadline = Math.min(lifecycle.deadline, started + remaining)
-        if (lifecycle.timer) clearTimeout(lifecycle.timer)
-        if (Number.isFinite(lifecycle.deadline))
-          lifecycle.timer = setTimeout(clearProtected, Math.max(0, lifecycle.deadline - performance.now()))
+        lifecycle.deadline = append ? Math.min(lifecycle.deadline, started + remaining) : started + remaining
       }
+      if (!append && !page.reader) lifecycle.deadline = Infinity
+      if (lifecycle.timer) clearTimeout(lifecycle.timer)
+      if (Number.isFinite(lifecycle.deadline))
+        lifecycle.timer = setTimeout(clearProtected, Math.max(0, lifecycle.deadline - performance.now()))
+      // A loaded result window stays put until a new search or its authority expires.
+      // Refreshing only page one would silently discard the appended pages.
+      if (append) lifecycle.appended = true
       setState({
         results: append
           ? Array.from(new Map([...state.results, ...page.messages].map((row) => [row.id, row])).values())
@@ -115,7 +124,7 @@ export const MessageSearch: Component<{
     }
   }
   const timer = setInterval(() => {
-    if (state.searched && state.query.trim()) void run(false)
+    if (!lifecycle.appended && state.searched && state.query.trim()) void run(false)
   }, 5000)
   onCleanup(() => clearInterval(timer))
 
@@ -128,7 +137,17 @@ export const MessageSearch: Component<{
           value={state.query}
           onInput={(e) => {
             lifecycle.generation++
-            setState({ query: e.currentTarget.value, results: [], searched: false, cursor: null, hasMore: false, failed: false })
+            lifecycle.appended = false
+            lifecycle.deadline = Infinity
+            if (lifecycle.timer) clearTimeout(lifecycle.timer)
+            setState({
+              query: e.currentTarget.value,
+              results: [],
+              searched: false,
+              cursor: null,
+              hasMore: false,
+              failed: false,
+            })
           }}
           onKeyDown={(e) => {
             e.stopPropagation()

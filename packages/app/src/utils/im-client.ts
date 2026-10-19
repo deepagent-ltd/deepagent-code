@@ -1,5 +1,6 @@
 import { useSDK } from "@/context/sdk"
 import { useServer } from "@/context/server"
+import { useServerSync } from "@/context/server-sync"
 import { authTokenFromCredentials, createSdkForServer } from "@/utils/server"
 import type {
   AgentDescriptor,
@@ -35,6 +36,7 @@ export interface IMFacadeIdentity {
 }
 
 export interface IMFacadeStatus {
+  service?: { url: string | null; source: "config" | "environment" | "none"; reconnectRequired: boolean }
   media?: MediaBatch.Policy
   reader?: IMReaderStatus
   facade: "disabled" | "claim_required" | "blocked" | "active"
@@ -71,6 +73,8 @@ export interface IMClientConfig {
   directory: string
   /** Grouping workspace id, when a routed workspace is available. */
   workspace?: string
+  /** IM realm selection participates in scope retirement, never in the DAC request URL. */
+  serviceURL?: string | null
   username?: string
   password?: string
   /** JWT bearer for Server Edition (gateway) connections. Takes precedence over Basic. */
@@ -215,7 +219,7 @@ export function createIMClient(config: () => IMClientConfig) {
     path: string,
     options?: { method?: string; query?: Record<string, string | undefined>; body?: unknown; signal?: AbortSignal },
   ): Promise<T> => {
-    const c = config()
+    const c = scope()
     const headers: Record<string, string> = { ...authHeaders(c) }
     if (c.directory) headers["x-deepagent-code-directory"] = encodeURIComponent(c.directory)
     if (c.workspace) headers["x-deepagent-code-workspace"] = c.workspace
@@ -225,6 +229,7 @@ export function createIMClient(config: () => IMClientConfig) {
       init.body = JSON.stringify(options.body)
     }
     const response = await fetch(buildURL(path, options?.query), init)
+    if (c !== scope()) throw new IMFacadeRequestError("status_changed", "IM service scope changed", 409)
     if (!response.ok) {
       const parsed = (await response.json().catch(() => undefined)) as
         | { name?: string; data?: { code?: unknown; message?: unknown } }
@@ -236,7 +241,9 @@ export function createIMClient(config: () => IMClientConfig) {
           : `IM facade request failed (${response.status})`
       throw new IMFacadeRequestError(code, message, response.status)
     }
-    return (await response.json()) as T
+    const result = (await response.json()) as T
+    if (c !== scope()) throw new IMFacadeRequestError("status_changed", "IM service scope changed", 409)
+    return result
   }
 
   // Multipart request for file uploads — the JSON `request` helper can't carry a
@@ -334,6 +341,27 @@ export function createIMClient(config: () => IMClientConfig) {
         ),
       )
     },
+    dacReplyReconcile: async (groupID: string, commandID: string, cursor: string | undefined, signal: AbortSignal) => {
+      const target = dacSDK()
+      const value = Schema.decodeUnknownSync(IMDacSessionSchema.ReplyReconcileResponse)(
+        dacResponse(
+          await target.client.im.dacReplyReconcile(
+            {
+              groupId: groupID,
+              commandID,
+              cursor,
+              directory: target.captured.directory,
+              workspace: target.captured.workspace,
+            },
+            { signal },
+          ),
+          target.captured,
+        ),
+        { onExcessProperty: "error" },
+      )
+      signal.throwIfAborted()
+      return value
+    },
     dacReplyRetry: async (groupID: string, commandID: string, signal: AbortSignal) => {
       const target = dacSDK()
       return Schema.decodeUnknownSync(IMDacSessionSchema.CommandResponse)(
@@ -371,9 +399,9 @@ export function createIMClient(config: () => IMClientConfig) {
       projectID?: string
       member?: { memberID: string; memberType: "user" | "agent" }
     }) => request<IMGroup>(`/api/v1/im/groups`, { method: "POST", body: payload }),
-    listMessages: (groupID: string, limit = 50, cursor?: string, signal?: AbortSignal) =>
+    listMessages: (groupID: string, limit = 50, cursor?: string, signal?: AbortSignal, anchorID?: string) =>
       request<IMMessagePage>(`/api/v1/im/groups/${groupID}/messages`, {
-        query: { limit: String(limit), cursor },
+        query: { limit: String(limit), cursor, anchorID },
         signal,
       }),
     createMessage: (
@@ -540,7 +568,8 @@ export function createIMClient(config: () => IMClientConfig) {
     facadeRename: (name: string) =>
       facadeRequest<IMFacadeIdentity>(`/api/v1/im/facade/rename`, { method: "POST", body: { name } }),
     facadeRetry: () => facadeRequest<IMFacadeIdentity>(`/api/v1/im/facade/retry`, { method: "POST", body: {} }),
-    facadeResolve: (name: string) => facadeRequest<IMResolveResult>(`/api/v1/im/facade/resolve`, { query: { name } }),
+    facadeResolve: (name: string, signal?: AbortSignal) =>
+      facadeRequest<IMResolveResult>(`/api/v1/im/facade/resolve`, { query: { name }, signal }),
     facadeOpenDirect: (name: string) =>
       facadeRequest<IMGroup>(`/api/v1/im/facade/direct`, { method: "POST", body: { name } }),
     facadeCreateGroup: (name: string, memberNames: string[]) =>
@@ -638,11 +667,13 @@ export function mergeIMMessages(
 export function useIMClient(): IMClient {
   const sdk = useSDK()
   const server = useServer()
+  const sync = useServerSync()
   return createIMClient(() => ({
     url: sdk.url,
     directory: sdk.directory,
     username: server.current?.http.username,
     password: server.current?.http.password,
     bearer: server.current?.http.bearer,
+    serviceURL: sync.data.config.im?.url,
   }))
 }

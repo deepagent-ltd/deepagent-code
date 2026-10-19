@@ -25,6 +25,7 @@ export const FACADE_ERROR_I18N = {
   im_invalid_group: "im.facade.error.im_invalid_group",
   im_source_identity_missing: "im.facade.error.im_source_identity_missing",
   im_kernel_error: "im.facade.error.im_kernel_error",
+  im_service_changed: "im.facade.error.im_service_changed",
   // ── 客户端侧分类码（deepagent-code 本地合成）──
   transport_error: "im.facade.error.transport_error",
   invalid_response: "im.facade.error.invalid_response",

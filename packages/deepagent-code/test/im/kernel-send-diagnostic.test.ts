@@ -31,6 +31,9 @@ test("closed delivery diagnostics classify real typed errors and cloned SDK nega
   expect(IMKernelSync.deliveryFailureDiagnostic(new KernelSdk.KernelError({ operation: "sendMedia", message: secret,
     cause: { name: "DeliveryError", operation: secret, kind: secret, wireCode: 99999, code: 12203 } })))
     .toEqual({ kind: "kernel_sdk", sdkOperation: "sendMedia" })
+  expect(IMKernelSync.deliveryFailureDiagnostic(new KernelSdk.KernelError({ operation: "sendMessage", message: secret,
+    cause: { name: "DeliveryError", operation: "send", kind: "unavailable", wireCode: 11013 } })))
+    .toEqual({ kind: "kernel_sdk", sdkOperation: "sendMessage", deliveryOperation: "send", deliveryKind: "unavailable", wireCode: 11013 })
   const reads = { count: 0 }
   const accessor = Object.defineProperties({}, Object.fromEntries(["name", "operation", "kind", "wireCode", "cause", "message", "stack"].map((key) => [key, { get() { reads.count++; throw new Error(secret) } }])))
   expect(IMKernelSync.deliveryFailureDiagnostic(new KernelSdk.KernelError({ operation: "sendMessage", message: secret, cause: accessor })))
@@ -50,20 +53,28 @@ const wait = <A, E, R>(effect: Effect.Effect<A | undefined, E, R>) => Effect.gen
   return yield* Effect.die(new Error("unreachable delivery observation"))
 })
 
-test("actual SDK/native WS and file DB preserve unknown without resend, separating SDK failure from a real late-ACK false", async () => {
+test("actual SDK/native WS and file DB preserve unknown without resend across SDK failure, late ACK and disconnect", async () => {
   const directory = await mkdtemp(join(tmpdir(), "dac-kernel-send-diagnostic-"))
   const previousLevel = Log.getLevel()
-  const mode = { value: "sdk_failure" as "sdk_failure" | "ack_false" }
+  const mode = { value: "sdk_failure" as "sdk_failure" | "ack_false" | "connection_lost" }
   const sent = { count: 0 }
   const stage = { value: "connect" }
   const results: { mode: string; publishes: number; state: string; messageHash: string }[] = []
   const native = KernelLiveFirstSeenFixture.make({
-    response(topic, _request, original) {
+    response(topic, request, original) {
       if (topic === "qry_delivery_capabilities") return { name: "DeliveryCapabilities", value: {
         version: 1, profile: "mysql-receipt-v1", maxLifetimeMs: 259200000,
         maxContentBytes: mode.value === "sdk_failure" ? 0 : 65536, eventualDelivery: false,
       } }
+      if (topic === "qry_delivery_read_cut") return { name: "DeliveryReadCutResult", value: {
+        ...request, throughOrdinal: "0", targetAdmittedOrdinal: "0", readOrdinal: "0", liveUnread: "0", storedUnread: "0", serverNow: Date.now(), complete: true,
+      } }
       return original
+    },
+    afterOutboundPublish: (close) => {
+      if (mode.value !== "connection_lost") return
+      close()
+      return "drop_ack"
     },
     outboundPublish(request, message) {
       sent.count++
@@ -111,7 +122,7 @@ test("actual SDK/native WS and file DB preserve unknown without resend, separati
       const lease = yield* (yield* IMKernelSync.Service).acquireReader!({ instance, workspaceID: instance.directory, userID: "server",
         instanceCurrent: store.peek(instance.directory).pipe(Effect.map((current) => current === instance)) })
       const groupID = yield* lease.reader.pending({ conversationType: 1, conversationID: "sender", name: "Sender" })
-      for (const selected of ["sdk_failure", "ack_false"] as const) {
+      for (const selected of ["sdk_failure", "ack_false", "connection_lost"] as const) {
         mode.value = selected
         stage.value = `create-${selected}`
         const message = yield* lease.engine.createMessage({ groupID, clientRequestID: `original-diagnostic-${selected}`,
@@ -120,13 +131,13 @@ test("actual SDK/native WS and file DB preserve unknown without resend, separati
         yield* lease.engine.send({ groupID, messageID: message.id, content: message.content })
         const original = yield* wait(lease.engine.deliveryStatus(message.id).pipe(Effect.map((value) => value?.state === "unknown" ? value : undefined)))
         expect(original).toMatchObject({ state: "unknown", kernelMessageID: null, reason: "delivery_outcome_unknown" })
-        expect(sent.count).toBe(selected === "sdk_failure" ? 0 : 1)
+        expect(sent.count).toBe(selected === "sdk_failure" ? 0 : selected === "ack_false" ? 1 : 2)
         // Explicit caller duplicate and pending drain still cannot re-dispatch the
         // original unknown. This assertion exercises the real durable claim gate.
         yield* lease.engine.send({ groupID, messageID: message.id, content: message.content })
         yield* lease.engine.drainPending
         yield* Effect.sleep("50 millis")
-        expect(sent.count).toBe(selected === "sdk_failure" ? 0 : 1)
+        expect(sent.count).toBe(selected === "sdk_failure" ? 0 : selected === "ack_false" ? 1 : 2)
         expect(yield* lease.engine.deliveryStatus(message.id)).toEqual(original)
         results.push({ mode: selected, publishes: sent.count, state: original.state,
           messageHash: Hash.sha256(JSON.stringify({ messageID: message.id })) })
@@ -134,7 +145,8 @@ test("actual SDK/native WS and file DB preserve unknown without resend, separati
     }).pipe(Effect.onError(() => Effect.sync(() => console.error({ diagnosticStage: stage.value }))),
       Effect.provide(Layer.mergeAll(services, engine)), Effect.scoped))
     await Log.init({ print: true, level: previousLevel })
-    const logged = (await Bun.file(logfile).text()).split("\n").filter((line) => line.includes("protected delivery observation"))
+    const allLines = (await Bun.file(logfile).text()).split("\n")
+    const logged = allLines.filter((line) => line.includes("protected delivery observation"))
     for (const result of results) {
       const lines = logged.filter((line) => line.includes(`messageHash=${result.messageHash} `))
       expect(lines).toHaveLength(3 + (result.mode === "ack_false" ? 1 : 0))
@@ -147,6 +159,17 @@ test("actual SDK/native WS and file DB preserve unknown without resend, separati
         expect(lines.at(-1)).toMatch(/^WARN .*stage=sdk_send event=failure kind=kernel_sdk sdkOperation=sendMessage deliveryOperation=capabilities deliveryKind=invalid_response /)
         expect(lines.join("\n")).not.toContain("event=send_settled")
       }
+      if (result.mode === "connection_lost") {
+        expect(lines.at(-1)).toMatch(/^WARN .*stage=sdk_send event=failure kind=kernel_sdk sdkOperation=sendMessage deliveryOperation=send deliveryKind=unknown /)
+        const boundaries = allLines.filter((line) => line.includes("protected SDK send failure boundary") && line.includes(`messageHash=${result.messageHash} `))
+        expect(boundaries).toHaveLength(1)
+        expect(boundaries[0]).toMatch(/initialConnected=true /)
+        expect(boundaries[0]).toMatch(/initialLinkAvailable=true /)
+        expect(boundaries[0]).toMatch(/originalLinkCurrent=false /)
+        expect(boundaries[0]).toMatch(/generationState=(changed|unavailable) /)
+        expect(boundaries[0]).toMatch(/sdkElapsedMs=[0-9]+ /)
+        for (const secret of [config.token, "PRIVATE_ORIGINAL_CONTENT_MUST_NOT_BE_LOGGED", "receiver", config.navigator]) expect(boundaries[0]).not.toContain(secret)
+      }
       if (result.mode === "ack_false") {
         expect(lines.at(-1)).toMatch(/^WARN .*stage=ack_write event=ack_false /)
         expect(lines.join("\n")).not.toContain("event=failure")
@@ -155,6 +178,7 @@ test("actual SDK/native WS and file DB preserve unknown without resend, separati
     expect(results.map(({ mode, publishes, state }) => ({ mode, publishes, state }))).toEqual([
       { mode: "sdk_failure", publishes: 0, state: "unknown" },
       { mode: "ack_false", publishes: 1, state: "unknown" },
+      { mode: "connection_lost", publishes: 2, state: "unknown" },
     ])
   } finally {
     native.server.stop(true)

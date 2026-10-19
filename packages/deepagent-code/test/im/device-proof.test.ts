@@ -66,3 +66,49 @@ test("IM custody survives restart, refuses missing native custody and never repl
     await expect(Effect.runPromise(restarted.preflight)).rejects.toThrow()
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
+
+test("socket proofs preserve the original server ten-second interval under bounded clock lead", () => {
+  const key = IMDeviceProof.identity()
+  const source = {
+    audience: "wss://im.example/im",
+    appkey: "dac",
+    token: "owned-clock-token",
+    entitlementID: "b".repeat(32),
+    bindingVersion: 1,
+  }
+  for (const lifetime of [10300, 39000, 5000, -1, 41000]) {
+    const challenge = {
+      profile: IMDeviceProof.socketProfile,
+      nonce: "n".repeat(43),
+      socketSession: "socket-owned-clock-contract",
+      audience: source.audience,
+      appkey: source.appkey,
+      credentialDigest: IMDeviceProof.sha256(source.token),
+      expiresAt: Date.now() + lifetime,
+    } satisfies IMDeviceProof.SocketChallenge
+    if (lifetime < 0 || lifetime > 40000) {
+      expect(() => IMDeviceProof.socket(key, challenge, source)).toThrow()
+      continue
+    }
+    const [header, body, signature] = IMDeviceProof.socket(key, challenge, source).split(".")
+    expect(
+      verify(
+        "sha256",
+        Buffer.from(`${header}.${body}`),
+        { key: createPublicKey(key.privateKey), dsaEncoding: "ieee-p1363" },
+        Buffer.from(signature, "base64url"),
+      ),
+    ).toBeTrue()
+    const claims = JSON.parse(Buffer.from(body, "base64url").toString())
+    expect(claims.exp - claims.iat).toBe(10)
+    expect(claims.exp).toBe(Math.floor(challenge.expiresAt / 1000))
+    expect(claims.iat).toBe(Math.floor((challenge.expiresAt - 10000) / 1000))
+    expect(claims).toMatchObject({
+      aud: source.audience,
+      nonce: challenge.nonce,
+      sid: challenge.socketSession,
+      entitlementID: source.entitlementID,
+      bindingVersion: source.bindingVersion,
+    })
+  }
+})

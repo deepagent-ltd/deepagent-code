@@ -3,6 +3,10 @@ export * as IMKernelExchange from "./exchange"
 import { Effect, Option, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import type { KernelConfig } from "./config"
+import { Log } from "@deepagent-code/core/util/log"
+import { IMDeviceTransport } from "../device-transport"
+
+const log = Log.create({ service: "im-kernel-exchange" })
 
 // 门面 /api/im 的 typed 客户端（design §4：sk- key → 内核连接坐标）。B2 用 exchange 替换 B1 的
 // 直连 env 注入：key 已认领 ⇒ exchange 幂等地 RegisterUser + 确保加入全员群后返回内核 token；
@@ -18,6 +22,28 @@ export class ExchangeError extends Schema.TaggedErrorClass<ExchangeError>()("IMK
   /** 5xx / 传输层失败用原重试计划；429 由门面按 retryAfterMs 单独等待。 */
   retryable: Schema.Boolean,
 }) {}
+
+// Only communication calls share a wait window. A freshly resolved source has
+// a new device object; no nonce, HTTP proof or authority result is retained here.
+const rateLimits = new WeakMap<object, { realm: string; until: number }>()
+const rateLimitError = (retryAfterMs: number) =>
+  new ExchangeError({
+    code: "im_unavailable",
+    status: 429,
+    message: "The IM facade is temporarily rate limited. Retry after the server wait window.",
+    retryable: false,
+    retryAfterMs,
+  })
+const rememberRateLimit = (input: ExchangeInput, delay = 30_000) => {
+  const realm = input.facadeURL.replace(/\/+$/, "")
+  const previous = input.device ? rateLimits.get(input.device) : undefined
+  const until = Math.max(
+    previous?.realm === realm ? previous.until : 0,
+    Math.min(Number.MAX_SAFE_INTEGER, performance.now() + delay),
+  )
+  if (input.device) rateLimits.set(input.device, { realm, until })
+  return rateLimitError(Math.max(0, Math.ceil(until - performance.now())))
+}
 
 export const IdentityPayload = Schema.Struct({
   uuid: Schema.String,
@@ -90,9 +116,31 @@ const call = <A>(
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
     const path = new URL(request.url).pathname
-    const authorized = input.device ? yield* input.device.headers({
-      method: request.method as "GET" | "POST" | "PUT" | "DELETE", url: request.url,
-    }).pipe(Effect.mapError(() => new ExchangeError({ code: "im_device_proof_invalid", message: "IM device authorization is unavailable", retryable: false }))) : undefined
+    const limited = input.device ? rateLimits.get(input.device) : undefined
+    if (limited?.realm === input.facadeURL.replace(/\/+$/, "") && limited.until > performance.now())
+      return yield* rateLimitError(Math.ceil(limited.until - performance.now()))
+    const authorized = input.device
+      ? yield* input.device
+          .headers({
+            method: request.method as "GET" | "POST" | "PUT" | "DELETE",
+            url: request.url,
+          })
+          .pipe(
+            Effect.mapError((error) => {
+              log.warn(
+                "IM device authorization failed",
+                IMDeviceTransport.diagnostic(error) ?? { stage: "unclassified", code: "unclassified" },
+              )
+              if (error instanceof IMDeviceTransport.Error && error.status === 429)
+                return rememberRateLimit(input, error.retryAfterMs)
+              return new ExchangeError({
+                code: "im_device_proof_invalid",
+                message: "IM device authorization is unavailable",
+                retryable: false,
+              })
+            }),
+          )
+      : undefined
     const prepared = authorized ? HttpClientRequest.setHeaders(request, authorized) : request
     const wire = authorized && path === "/api/im/login" ? yield* HttpClientRequest.bodyJson({ profile: input.device!.profile,
       challengeID: authorized["X-IM-Challenge-ID"],
@@ -126,25 +174,7 @@ const call = <A>(
     // a known refusal, not a malformed success envelope or permission to retry
     // through the ordinary one-second transport retry schedule.
     if (response.status === 429) {
-      const hint = response.headers["retry-after"]?.trim()
-      const seconds = hint && /^\d{1,16}$/.test(hint) ? Number(hint) : undefined
-      const date =
-        hint && /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(hint)
-          ? Date.parse(hint)
-          : undefined
-      const delay =
-        seconds !== undefined
-          ? Math.min(seconds * 1000, Number.MAX_SAFE_INTEGER)
-          : date !== undefined && Number.isFinite(date)
-            ? Math.max(0, date - Date.now())
-            : undefined
-      return yield* new ExchangeError({
-        code: "im_unavailable",
-        status: 429,
-        message: "The IM facade is temporarily rate limited. Retry after the server wait window.",
-        retryable: false,
-        ...(delay !== undefined && Number.isSafeInteger(delay) ? { retryAfterMs: delay } : {}),
-      })
+      return yield* rememberRateLimit(input, IMDeviceTransport.retryAfter(response.headers["retry-after"]))
     }
     const authenticationRejected = response.status === 401 || response.status === 403
     const keyRejected = () => new ExchangeError({

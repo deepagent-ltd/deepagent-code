@@ -43,6 +43,7 @@ function nativeShutdownFixture(
   options: Parameters<typeof KernelLiveFirstSeenFixture.make>[0],
   run: (input: {
     directory: string
+    database: Database.Interface
     native: ReturnType<typeof KernelLiveFirstSeenFixture.make>
     client: KernelClient.Interface
     store: InstanceStore.Interface
@@ -50,6 +51,7 @@ function nativeShutdownFixture(
     entry: IMReaderRegistry.Entry
     scope: Scope.Closeable
   }) => Effect.Effect<void, unknown, Scope.Scope>,
+  readerOptions?: Parameters<typeof IMReaderRegistry.make>[1],
 ) {
   return Effect.gen(function* () {
     const directory = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "dac-im-registry-shutdown-")))
@@ -66,11 +68,11 @@ function nativeShutdownFixture(
       yield* Effect.promise(() => mkdir(workspace))
       const instance = yield* store.load({ directory: workspace })
       const scope = yield* leaseScope
-      const registry = yield* IMReaderRegistry.make(config).pipe(Effect.provideService(Scope.Scope, scope))
+      const registry = yield* IMReaderRegistry.make(config, readerOptions).pipe(Effect.provideService(Scope.Scope, scope))
       const entry = yield* registry.acquire({ instance, workspaceID: workspace, userID: "server",
         instanceCurrent: store.peek(workspace).pipe(Effect.map((current) => current === instance)) })
       yield* pollWithTimeout(Effect.sync(() => entry.lifetime.lastSync > 0 && !entry.lifetime.native && !entry.lifetime.running && !entry.lifetime.queued ? true : undefined), "original registry did not become idle")
-      return yield* run({ directory, native, client, store, registry, entry, scope })
+      return yield* run({ directory, database: yield* Database.Service, native, client, store, registry, entry, scope })
     }).pipe(Effect.provide(Layer.mergeAll(
       Database.layerFromPath(join(directory, "reader.sqlite")), ReaderInstanceFixture.layer,
       ReaderInstanceFixture.registry, IMBroadcasterLive,
@@ -425,3 +427,105 @@ it.live("each real reader slice makes at most four native queries and leaves the
     expect(second.completed_after).toBe("0")
   }), client)
 }))
+
+
+shutdownTest("cancelled same-projection consumers share only their still-pending original native cut", () => {
+  const stalled = { value: false, delay: 2200, admitted: "0" }
+  return nativeShutdownFixture({
+    queryDelayMs: (topic) => stalled.value && topic === "qry_delivery_read_cut" ? stalled.delay : 0,
+    response: (topic, request, original) => topic === "qry_delivery_read_cut"
+      ? { name: "DeliveryReadCutResult", value: { ...request, throughOrdinal: stalled.admitted, targetAdmittedOrdinal: stalled.admitted, readOrdinal: "0", liveUnread: stalled.admitted, storedUnread: stalled.admitted, serverNow: Date.now(), complete: stalled.admitted === "0" } }
+      : original,
+  }, (input) => Effect.gen(function* () {
+    const row = (yield* KernelReader.projection(input.entry.reader.runtime, projectionKey))!
+    const db = input.database.db
+    const consumed = { count: 0 }
+    const body = () => input.entry.reader.withOutput({ workspaceID: input.entry.context.workspaceID, userID: "server", groupIDs: [row.local_group_id!] },
+      KernelReader.gateGroup(db, row.local_group_id!).pipe(Effect.tap(() => Effect.sync(() => { consumed.count++ })), Effect.map((group) => group?.mode)))
+    const cuts = () => input.native.topics.filter((topic) => topic === "qry_delivery_read_cut").length
+    const before = cuts()
+    stalled.value = true
+    const first = yield* Effect.forkChild(body())
+    yield* pollWithTimeout(Effect.sync(() => cuts() === before + 1 ? true : undefined), "first actual SDK cut did not reach peer")
+    yield* Fiber.interrupt(first)
+    expect(input.registry.statistics().native).toBe(1)
+    const second = yield* Effect.forkChild(body())
+    yield* Effect.sleep("60 millis")
+    yield* Fiber.interrupt(second)
+    const result = yield* body()
+    expect(result).toBe("protected")
+    expect(cuts()).toBe(before + 1)
+    expect(consumed.count).toBe(1)
+    expect(input.registry.statistics().native).toBe(0)
+    // Completion removes the flight. A later request must obtain a fresh current cut.
+    stalled.value = false
+    expect(yield* body()).toBe("protected")
+    expect(cuts()).toBe(before + 2)
+    expect(consumed.count).toBe(2)
+    // The original one-second consumption bound remains independent of sharing.
+    const expired = input.entry.reader.withOutput({ workspaceID: input.entry.context.workspaceID, userID: "server", groupIDs: [row.local_group_id!] }, Effect.sleep("1100 millis"))
+    expect(yield* expired.pipe(Effect.flip)).toMatchObject({ code: "reader_stale", operation: "output-deadline" })
+    const expiring = input.native.add("original-short-lived", { publish: false })
+    expiring.expiresAt = Date.now() + 1200
+    yield* input.entry.reader.sync
+    stalled.admitted = "1"
+    const near = cuts()
+    stalled.value = true
+    stalled.delay = 1500
+    const original = yield* Effect.forkChild(body())
+    yield* pollWithTimeout(Effect.sync(() => cuts() === near + 1 ? true : undefined), "near-expiry original cut did not reach peer")
+    yield* Fiber.interrupt(original)
+    yield* Effect.sleep("800 millis")
+    // This late join cannot restart the original message's remaining lifetime.
+    const expiredJoin = yield* body().pipe(Effect.exit)
+    expect(Date.now()).toBeGreaterThanOrEqual(expiring.expiresAt)
+    expect(yield* Effect.flip(expiredJoin)).toMatchObject({ code: "reader_stale", operation: "output-deadline" })
+    expect(cuts()).toBe(near + 1)
+    expect(consumed.count).toBe(2)
+    stalled.delay = 2200
+    const lateBefore = cuts()
+    const late = yield* Effect.forkChild(body())
+    yield* pollWithTimeout(Effect.sync(() => cuts() === lateBefore + 1 ? true : undefined), "revoked original SDK cut did not reach peer")
+    const retiring = yield* Effect.forkChild(input.store.dispose(input.entry.context.instance))
+    yield* pollWithTimeout(Effect.sync(() => !input.entry.lifetime.active ? true : undefined), "captured owner did not revoke")
+    expect(yield* Fiber.join(late).pipe(Effect.flip)).toMatchObject({ code: "reader_unavailable" })
+    yield* Fiber.join(retiring)
+    expect(consumed.count).toBe(2)
+    expect(input.registry.statistics().native).toBe(0)
+    expect(input.native.topics.filter((topic) => topic === "mark_delivery_read")).toHaveLength(0)
+  }), { inspectConversation: (request) => Effect.succeed({ conversation_type: request.conversationType, conversation_id: request.conversationID, org_id: 1, name: request.conversationID, member_uuids: ["receiver", "sender"] }) })
+})
+
+shutdownTest("one pending foreground native cut cannot starve an advisory header from the free slot", () => {
+  const foreground = { settled: false }
+  return nativeShutdownFixture({
+    queryDelayMs: (topic) => topic === "qry_delivery_read_cut" ? 9000 : 0,
+    response: (topic, request, original) => topic === "qry_delivery_read_cut"
+      ? { name: "DeliveryReadCutResult", value: { ...request, throughOrdinal: "0", targetAdmittedOrdinal: "0",
+          readOrdinal: "0", liveUnread: "0", storedUnread: "0", serverNow: Date.now(), complete: true } }
+      : original,
+  }, (input) => Effect.gen(function* () {
+    const headers = input.native.topics.filter((topic) => topic === "qry_delivery_reader").length
+    const lastSync = input.entry.lifetime.lastSync
+    const consumer = yield* Effect.forkChild(input.entry.reader.request(input.client.getDeliveryReadCut({ version: 1,
+      scopeKey, projectionKey, projectionRevision: "1" }).pipe(Effect.tap(() => Effect.sync(() => { foreground.settled = true })))))
+    yield* pollWithTimeout(Effect.sync(() => input.native.topics.includes("qry_delivery_read_cut") ? true : undefined), "foreground cut did not reach the actual SDK peer")
+    expect(input.registry.statistics().native).toBe(1)
+    yield* input.registry.hint(input.entry)
+    yield* pollWithTimeout(Effect.sync(() => input.native.topics.filter((topic) => topic === "qry_delivery_reader").length > headers ? true : undefined),
+      "advisory header was starved while the second native slot was free", "7500 millis")
+    expect(performance.now() - lastSync).toBeGreaterThanOrEqual(5000)
+    expect(foreground.settled).toBe(false)
+    expect(input.registry.statistics().native).toBeGreaterThanOrEqual(1)
+    expect(input.registry.statistics().native).toBeLessThanOrEqual(2)
+    yield* Fiber.interrupt(consumer)
+    expect(foreground.settled).toBe(false)
+    expect(input.registry.statistics().native).toBeGreaterThanOrEqual(1)
+    yield* pollWithTimeout(Effect.sync(() => foreground.settled ? true : undefined), "cancelled consumer released the actual SDK operation before settlement", "5 seconds")
+    yield* pollWithTimeout(Effect.sync(() => input.registry.statistics().native === 0 ? true : undefined), "native slots were not released after actual settlement")
+    expect(input.native.topics.filter((topic) => topic === "qry_delivery_read_cut")).toHaveLength(1)
+    expect(input.native.topics.filter((topic) => topic === "mark_delivery_read")).toHaveLength(0)
+    yield* Effect.promise(() => stopRegistry(input.scope)(true))
+    expect(input.registry.statistics()).toEqual({ entries: 0, owned: 0, native: 0 })
+  }))
+})

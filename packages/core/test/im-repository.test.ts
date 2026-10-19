@@ -254,6 +254,56 @@ describe("IMRepository", () => {
     )
   })
 
+  test("anchorID includes its exact same-millisecond position and continues with the original cursor", async () => {
+    await run(Effect.gen(function* () {
+      const { db, repo } = yield* makeTestEnv
+      const group = yield* repo.createGroup({ workspaceID: "ws_test", type: "project", name: "Anchor group", createdBy: "user_123" })
+      for (const index of [0, 1, 2, 3, 4, 5]) {
+        yield* repo.createMessage({ id: `imsg_anchor_${index}`, groupID: group.id, senderID: "user_123", senderType: "user", type: "text", content: `owned ${index}`, createdAt: 1234 })
+      }
+      const page = yield* repo.listMessages({ groupID: group.id, anchorID: "imsg_anchor_3", limit: 4 })
+      expect(page.messages.map((message) => message.id)).toEqual(["imsg_anchor_5", "imsg_anchor_4", "imsg_anchor_3", "imsg_anchor_2"])
+      expect(page.hasMore).toBe(true)
+      expect(page.nextCursor).toBe("1234_imsg_anchor_2")
+      const older = yield* repo.listMessages({ groupID: group.id, cursor: page.nextCursor!, limit: 2 })
+      expect(older.messages.map((message) => message.id)).toEqual(["imsg_anchor_1", "imsg_anchor_0"])
+      expect(older.hasMore).toBe(false)
+      expect(older.nextCursor).toBeNull()
+      const ordinary = yield* repo.listMessages({ groupID: group.id, limit: 2 })
+      expect(ordinary.messages.map((message) => message.id)).toEqual(["imsg_anchor_5", "imsg_anchor_4"])
+      const earliest = yield* repo.listMessages({ groupID: group.id, anchorID: "imsg_anchor_0", limit: 4 })
+      expect(earliest.messages.map((message) => message.id)).toEqual(["imsg_anchor_3", "imsg_anchor_2", "imsg_anchor_1", "imsg_anchor_0"])
+      expect(earliest.hasMore).toBe(false)
+      expect(earliest.nextCursor).toBeNull()
+      const latest = yield* repo.listMessages({ groupID: group.id, anchorID: "imsg_anchor_5", limit: 4 })
+      expect(latest.messages.map((message) => message.id)).toEqual(["imsg_anchor_5", "imsg_anchor_4", "imsg_anchor_3", "imsg_anchor_2"])
+      const single = yield* repo.listMessages({ groupID: group.id, anchorID: "imsg_anchor_3", limit: 1 })
+      expect(single.messages.map((message) => message.id)).toEqual(["imsg_anchor_3"])
+      expect(single.hasMore).toBe(true)
+      const plan = yield* db.all<{ detail: string }>(sql`EXPLAIN QUERY PLAN SELECT id, created_at FROM im_messages WHERE group_id=${group.id} AND deleted_at IS NULL AND (created_at,id) <= (1234,'imsg_anchor_3') ORDER BY created_at DESC,id DESC LIMIT 3`)
+      expect(plan.map((row) => row.detail).join(" ")).toContain("idx_im_messages_active")
+      expect(plan.map((row) => row.detail).join(" ")).toContain("(created_at,id)<(?,?)")
+    }))
+  })
+
+  test("anchorID never falls back to latest for missing, deleted or foreign-group targets and rejects a cursor", async () => {
+    await run(Effect.gen(function* () {
+      const { db, repo } = yield* makeTestEnv
+      const group = yield* repo.createGroup({ workspaceID: "ws_test", type: "project", name: "Visible anchor", createdBy: "user_123" })
+      const foreign = yield* repo.createGroup({ workspaceID: "ws_test", type: "project", name: "Foreign anchor", createdBy: "user_123" })
+      const active = yield* repo.createMessage({ groupID: group.id, senderID: "user_123", senderType: "user", type: "text", content: "visible ordinary" })
+      const deleted = yield* repo.createMessage({ groupID: group.id, senderID: "user_123", senderType: "user", type: "text", content: "deleted target" })
+      const other = yield* repo.createMessage({ groupID: foreign.id, senderID: "user_123", senderType: "user", type: "text", content: "foreign target" })
+      yield* db.update(MessageTable).set({ deleted_at: Date.now() }).where(sql`id = ${deleted.id}`)
+      for (const anchorID of ["missing-anchor", "", deleted.id, other.id]) {
+        expect(yield* repo.listMessages({ groupID: group.id, anchorID, limit: 50 })).toEqual({ messages: [], nextCursor: null, hasMore: false })
+      }
+      const invalid = yield* repo.listMessages({ groupID: group.id, anchorID: active.id, cursor: "", limit: 50 }).pipe(Effect.flip)
+      expect(invalid.message).toBe("anchorID and cursor are mutually exclusive")
+      expect((yield* repo.listMessages({ groupID: group.id, limit: 50 })).messages.map((message) => message.id)).toEqual([active.id])
+    }))
+  })
+
   test("paginates messages with cursor", async () => {
     await run(
       Effect.gen(function* () {

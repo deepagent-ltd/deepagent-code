@@ -25,6 +25,8 @@ import { validateIMName } from "@deepagent-code/core/im/facade-contract"
 import { SessionV2 } from "@deepagent-code/core/session"
 import * as Log from "@deepagent-code/core/util/log"
 import { Auth } from "@/auth"
+import { Config } from "@/config/config"
+import { ConfigIM } from "@deepagent-code/core/config/im"
 import { createHash } from "node:crypto"
 import { SERVER_USER_ID } from "@/server/routes/instance/httpapi/utils/workspace-context"
 import { KernelConfig } from "./kernel/config"
@@ -42,6 +44,7 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceState } from "@/effect/instance-state"
 import { InstanceRegistry } from "@/effect/instance-registry"
 import { InstanceStore } from "@/project/instance-store"
+import { IMServiceConfig } from "./service-config"
 
 // IM 门面运行时（B2）：new-api /api/im/* 的客户端门户 + 内核引擎生命周期的唯一所有者。
 //
@@ -56,7 +59,7 @@ import { InstanceStore } from "@/project/instance-store"
 // 凭据策略（项⑥，以 B1 落地方案为准）：kernel_token/navigator_url 只在内存（每次启动重新
 // exchange，短期凭证到期前或断线后续期，不落盘）。sk- key 来源：rebind 成功写入 auth.json（用户配置
 // 目录，0o600，不落仓库）优先；否则 DEEPAGENT_IM_FACADE_KEY env 注入（dev 路径）。URL 只认
-// DEEPAGENT_IM_FACADE_URL env。
+// URL 来自全局 im.url（null 显式关闭），缺省才兼容 DEEPAGENT_IM_FACADE_URL。
 
 const log = Log.create({ service: "im-facade" })
 
@@ -71,7 +74,7 @@ export interface IdentityInfo {
 }
 
 export type State =
-  /** 门面未配置（无 DEEPAGENT_IM_FACADE_URL；含 B1 PoC 直连模式——引擎可能在跑但门面功能关闭）。 */
+  /** No effective global service, or explicitly disabled. Legacy PoC mode may still have a separate dev engine. */
   | { readonly kind: "disabled" }
   /** boot exchange 收到 409 im_not_claimed——GUI 引导认领。 */
   | { readonly kind: "claim_required" }
@@ -89,6 +92,7 @@ export interface StatusSnapshot {
   readonly recovery?: IMKernelSync.RecoveryState
   readonly reader?: IMKernelReader.State
   readonly keyOrigin: "stored" | "env" | "none"
+  readonly service?: typeof ConfigIM.ServiceStatus.Type
 }
 
 /** 本地前提失败（群不存在/非内核绑定群）。门面失败一律走 IMKernelExchange.ExchangeError。 */
@@ -121,6 +125,10 @@ export interface Interface {
   readonly rebind: (newKey: string) => Effect.Effect<IdentityInfo, IMKernelExchange.ExchangeError>
   /** 重读持久凭据并重新 exchange；先关闭旧连接，成功后替换引擎并进入 active。 */
   readonly retryExchange: Effect.Effect<IdentityInfo, IMKernelExchange.ExchangeError>
+  readonly withServiceConfiguration: <A, E, R>(
+    url: string | null,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | IMKernelExchange.ExchangeError, R>
   /** 通讯录精确查找（名归一化后发送）。 */
   readonly resolve: (name: string) => Effect.Effect<IMKernelExchange.ResolvePayload, IMKernelExchange.ExchangeError>
   /** 建群：门面建内核群 → 本地镜像（成员 = 解析出的 uuid ∪ 本身份 uuid ∪ server 操作者）→ 绑定。 */
@@ -189,6 +197,13 @@ export const layer = (options?: Options) =>
       const broadcaster = yield* IMBroadcasterService
       const agentListProvider = yield* AgentListProviderService
       const auth = yield* Auth.Service
+      const configuration = Option.getOrUndefined(yield* Effect.serviceOption(Config.Service))
+      const serviceConfig = IMServiceConfig.read(
+        configuration,
+        env,
+        options?.env?.DEEPAGENT_IM_DEVICE_TEST_LOOPBACK === "true",
+        options?.buildEngine !== undefined,
+      )
       const instanceStore = yield* InstanceStore.Service
       const instanceRegistry = yield* InstanceRegistry.Service
       const http = Option.getOrUndefined(yield* Effect.serviceOption(HttpClient.HttpClient))
@@ -347,6 +362,10 @@ export const layer = (options?: Options) =>
                         },
                       }
                     : undefined
+                const inspections = new Map<
+                  string,
+                  Deferred.Deferred<IMKernelExchange.InspectConversationPayload, IMKernelExchange.ExchangeError>
+                >()
                 const depsBase = Context.make(IMRepository, repo).pipe(
                   Context.add(IMBroadcasterService, broadcaster),
                   Context.add(AgentListProviderService, agentListProvider),
@@ -372,16 +391,56 @@ export const layer = (options?: Options) =>
                             ? (input) =>
                                 Effect.gen(function* () {
                                   const source = yield* Ref.get(sourceRef)
-                                  if (!http || Option.isNone(source))
-                                    return yield* new IMKernelExchange.ExchangeError({
+                                  const unavailable = () =>
+                                    new IMKernelExchange.ExchangeError({
                                       code: "im_unavailable",
                                       message: "Conversation verification is unavailable",
                                       retryable: true,
                                     })
-                                  return yield* IMKernelExchange.inspectConversation({
-                                    ...source.value,
-                                    ...input,
-                                  }).pipe(Effect.provideService(HttpClient.HttpClient, http))
+                                  if (!http || Option.isNone(source) || !current() || source.value !== bound)
+                                    return yield* unavailable()
+                                  const captured = source.value
+                                  const key = JSON.stringify([
+                                    captured.facadeURL,
+                                    config.userID,
+                                    input.senderID ?? null,
+                                    input.conversationType,
+                                    input.conversationID,
+                                    "inspect",
+                                  ])
+                                  // Admission and worker startup cannot be interrupted between
+                                  // publishing the pending entry and owning its completion.
+                                  const pending = yield* Effect.uninterruptible(
+                                    Effect.suspend(() => {
+                                      const previous = inspections.get(key)
+                                      if (previous) return Effect.succeed(previous)
+                                      const pending = Deferred.makeUnsafe<
+                                        IMKernelExchange.InspectConversationPayload,
+                                        IMKernelExchange.ExchangeError
+                                      >()
+                                      inspections.set(key, pending)
+                                      return Deferred.complete(
+                                        pending,
+                                        IMKernelExchange.inspectConversation({
+                                          ...captured,
+                                          ...input,
+                                        }).pipe(Effect.provideService(HttpClient.HttpClient, http)),
+                                      ).pipe(
+                                        Effect.ensuring(
+                                          Effect.sync(() => {
+                                            if (inspections.get(key) === pending) inspections.delete(key)
+                                          }),
+                                        ),
+                                        Effect.forkIn(scope),
+                                        Effect.as(pending),
+                                      )
+                                    }),
+                                  )
+                                  const result = yield* Deferred.await(pending)
+                                  const after = yield* Ref.get(sourceRef)
+                                  if (!current() || Option.isNone(after) || after.value !== captured)
+                                    return yield* unavailable()
+                                  return result
                                 })
                             : undefined,
                         },
@@ -415,10 +474,11 @@ export const layer = (options?: Options) =>
           ),
         )
 
-      // 凭据解析：URL 只认 env；key 的优先级 stored(auth.json, rebind 写入——最新已知可用) > env。
+      // Resolve the global realm again on explicit reconnect; never adopt project coordinates.
       // 两边都没有 ⇒ fail-closed disabled（半截配置绝不连接，与 B1 一致；不打日志 value——key 是凭证）。
-      const facadeURL = env[KernelConfig.facadeEnvKeys.url]
       const resolveSource = Effect.gen(function* () {
+        const service = yield* serviceConfig
+        const facadeURL = service.url
         if (!facadeURL) return Option.none<KernelConfig.FacadeSource>()
         if (!options?.buildEngine || device) {
           if (!device || !transport)
@@ -516,8 +576,8 @@ export const layer = (options?: Options) =>
         const stored = yield* auth.get(AUTH_KEY).pipe(
           Effect.map((info) =>
             info?.type === "api" &&
-            (!info.metadata?.imSource ||
-              info.metadata.imSource ===
+            ((!info.metadata?.imSource && service.source === "environment") ||
+              info.metadata?.imSource ===
                 createHash("sha256")
                   .update(JSON.stringify(new URL(facadeURL).href.replace(/\/+$/, "")))
                   .digest("hex"))
@@ -526,7 +586,7 @@ export const layer = (options?: Options) =>
           ),
           Effect.orElseSucceed(() => undefined),
         )
-        const envKey = env[KernelConfig.facadeEnvKeys.key]
+        const envKey = service.source === "environment" ? env[KernelConfig.facadeEnvKeys.key] : undefined
         const key = stored ?? envKey
         if (!key) {
           log.warn(
@@ -602,7 +662,9 @@ export const layer = (options?: Options) =>
         if (Option.isNone(sourceOption)) {
           // B1 PoC 直连 env 注入：无组织身份，门面功能关闭，引擎照跑。
           const poc =
-            env.DEEPAGENT_IM_ALLOW_UNPAID_DEV_KERNEL === "true" && process.env.NODE_ENV !== "production"
+            (yield* serviceConfig).source !== "config" &&
+            env.DEEPAGENT_IM_ALLOW_UNPAID_DEV_KERNEL === "true" &&
+            process.env.NODE_ENV !== "production"
               ? KernelConfig.fromEnv(env)
               : undefined
           if (poc)
@@ -647,7 +709,7 @@ export const layer = (options?: Options) =>
         if (Option.isSome(current)) return current.value
         return yield* new IMKernelExchange.ExchangeError({
           code: "im_unavailable",
-          message: "IM facade is not configured (DEEPAGENT_IM_FACADE_URL/KEY absent)",
+          message: "IM service is disabled or has no credential for its selected address",
           status: 503,
           retryable: false,
         })
@@ -712,6 +774,15 @@ export const layer = (options?: Options) =>
             ),
           )
           yield* Ref.set(sourceRef, source)
+          if (Option.isNone(source) && (yield* serviceConfig).url === null) {
+            yield* SubscriptionRef.set(state, { kind: "disabled" })
+            return yield* new IMKernelExchange.ExchangeError({
+              code: "im_unavailable",
+              message: "IM service is disabled",
+              status: 503,
+              retryable: false,
+            })
+          }
           const outcome = yield* Effect.result(
             Option.isSome(source)
               ? withClient(exchangeOnce(source.value))
@@ -737,6 +808,47 @@ export const layer = (options?: Options) =>
           return yield* activate(outcome.success)
         }),
       )
+
+      const withServiceConfiguration = <A, E, R>(url: string | null, effect: Effect.Effect<A, E, R>) =>
+        identityLock
+          .withPermitsIfAvailable(1)(
+            Effect.gen(function* () {
+              const previous = yield* serviceConfig.pipe(Effect.orElseSucceed(() => ({ url: null })))
+              if (previous.url === url) return yield* effect
+              // Revoke before waiting for asynchronous Native/SDK finalizers or persisting the new realm.
+              yield* revokeOwner
+              yield* Ref.set(sourceRef, Option.none())
+              yield* Ref.set(keyOriginRef, "none")
+              yield* Ref.set(expiresAt, undefined)
+              yield* Ref.set(rateLimitedUntil, 0)
+              yield* SubscriptionRef.set(
+                state,
+                url === null
+                  ? { kind: "disabled" }
+                  : {
+                      kind: "blocked",
+                      code: "im_service_changed",
+                      message: "IM service changed; reconnect explicitly to use this address",
+                    },
+              )
+              yield* stopEngine
+              return yield* effect
+            }),
+          )
+          .pipe(
+            Effect.flatMap((result) =>
+              Option.isSome(result)
+                ? Effect.succeed(result.value)
+                : Effect.fail(
+                    new IMKernelExchange.ExchangeError({
+                      code: "im_service_busy",
+                      message: "An IM identity operation is still in progress",
+                      status: 409,
+                      retryable: false,
+                    }),
+                  ),
+            ),
+          )
 
       yield* boot.pipe(
         Effect.catch((error) =>
@@ -866,6 +978,9 @@ export const layer = (options?: Options) =>
         withCurrentConnectedReader,
         status: Effect.gen(function* () {
           const current = yield* SubscriptionRef.get(state)
+          const service = yield* serviceConfig.pipe(
+            Effect.orElseSucceed(() => ({ url: null, source: "none" as const })),
+          )
           const running = yield* Ref.get(engine)
           const actual = yield* InstanceRef
           const observed =
@@ -895,6 +1010,10 @@ export const layer = (options?: Options) =>
                 }
               : {}),
             keyOrigin: yield* Ref.get(keyOriginRef),
+            service: {
+              ...service,
+              reconnectRequired: current.kind === "blocked" && current.code === "im_service_changed",
+            },
           } satisfies StatusSnapshot
         }),
         claim: (raw) =>
@@ -951,17 +1070,27 @@ export const layer = (options?: Options) =>
               // 身份已在门面侧迁移 ⇒ 后续门面调用立即改用新 key；持久化（auth.json，0o600）供下次
               // 启动优先于 env。server mode 禁写 auth.json（gateway 托管 key）——记日志后继续。
               yield* Ref.set(sourceRef, Option.some({ facadeURL: source.facadeURL, key }))
-              yield* auth.set(AUTH_KEY, new Auth.Api({ type: "api", key })).pipe(
-                Effect.tapError((error) =>
-                  Effect.sync(() => log.warn("failed to persist the rebound IM key", { message: error.message })),
-                ),
-                Effect.ignore,
-                Effect.andThen(Ref.set(keyOriginRef, "stored")),
-              )
+              yield* auth
+                .set(
+                  AUTH_KEY,
+                  new Auth.Api({
+                    type: "api",
+                    key,
+                    metadata: { imSource: createHash("sha256").update(JSON.stringify(source.facadeURL)).digest("hex") },
+                  }),
+                )
+                .pipe(
+                  Effect.tapError((error) =>
+                    Effect.sync(() => log.warn("failed to persist the rebound IM key", { message: error.message })),
+                  ),
+                  Effect.ignore,
+                  Effect.andThen(Ref.set(keyOriginRef, "stored")),
+                )
               return yield* activate(payload)
             }),
           ),
         retryExchange,
+        withServiceConfiguration,
         resolve: (raw) =>
           Effect.gen(function* () {
             const { source } = yield* requireActive

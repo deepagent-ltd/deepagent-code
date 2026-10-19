@@ -4,6 +4,8 @@ import { createSignal } from "solid-js"
 import { MemoryRouter, Route } from "@solidjs/router"
 import { createServer } from "node:http"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
+import { MessageList } from "@/components/im/message-list"
+import type { LocalMessage } from "@/hooks/use-im-websocket"
 import { createIMClient, type IMClient } from "@/utils/im-client"
 import { createSdkForServer } from "@/utils/server"
 import { dict } from "@/i18n/en"
@@ -62,7 +64,8 @@ async function serve() {
     capabilities: 0,
     repeat: false,
     fail: false,
-    requests: [] as { directory: string; cursor: string | null; limit: string | null }[],
+    anchorMissing: false,
+    requests: [] as { directory: string; cursor: string | null; anchorID: string | null; limit: string | null }[],
     delayed: undefined as Promise<void> | undefined,
     delayedFinished: false,
     delayedClosed: false,
@@ -147,39 +150,53 @@ async function serve() {
       json([])
       return
     }
+    const message = (index: number) => ({
+      id: `${directory}-message-${index}`,
+      groupID: group.id,
+      senderID: "peer",
+      senderType: "user",
+      type: "text",
+      content: `${directory} history ${index} 中文`,
+      mentions: null,
+      metadata: null,
+      replyToID: null,
+      createdAt: 125 - index,
+      updatedAt: 125 - index,
+      deletedAt: null,
+    })
+    if (url.pathname.endsWith("/search")) {
+      json({
+        messages: [{ ...message(124), content: "Search preview is not conversation history" }],
+        nextCursor: null,
+        hasMore: false,
+        reader: reader(),
+      })
+      return
+    }
     if (url.pathname.endsWith("/messages")) {
       const cursor = url.searchParams.get("cursor")
-      state.requests.push({ directory, cursor, limit: url.searchParams.get("limit") })
+      const anchorID = url.searchParams.get("anchorID")
+      state.requests.push({ directory, cursor, anchorID, limit: url.searchParams.get("limit") })
       if (cursor && state.fail) {
         json({ name: "IM_READER_UNAVAILABLE", data: { code: "reader_unavailable" } }, 500)
         return
       }
-      if (cursor && state.delayed) {
+      if ((cursor || anchorID) && state.delayed) {
         response.once("close", () => {
           state.delayedClosed = true
         })
         await state.delayed
         state.delayedFinished = true
       }
-      const offset = cursor === "older-50" ? 50 : cursor === "older-100" ? 100 : 0
-      const messages = Array.from({ length: Math.min(50, 125 - offset) }, (_, index) => ({
-        id: `${directory}-message-${offset + index}`,
-        groupID: group.id,
-        senderID: "peer",
-        senderType: "user",
-        type: "text",
-        content: `${directory} history ${offset + index} 中文`,
-        mentions: null,
-        metadata: null,
-        replyToID: null,
-        createdAt: 125 - offset - index,
-        updatedAt: 125 - offset - index,
-        deletedAt: null,
-      }))
+      const offset = anchorID ? 75 : Number(cursor?.replace("older-", "") ?? 0)
+      const messages =
+        anchorID && state.anchorMissing
+          ? []
+          : Array.from({ length: Math.min(50, 125 - offset) }, (_, index) => message(offset + index))
       json({
         messages,
-        nextCursor: offset === 100 ? null : state.repeat && cursor ? cursor : `older-${offset + 50}`,
-        hasMore: offset !== 100,
+        nextCursor: offset >= 75 ? null : state.repeat && cursor ? cursor : `older-${offset + 50}`,
+        hasMore: offset < 75,
         reader: reader(),
       })
       return
@@ -222,6 +239,119 @@ async function select(directory = "/a") {
 }
 const count = () => document.querySelectorAll("[data-im-message]").length
 const older = () => screen.getByRole("button", { name: dict["im.message.older"] })
+
+async function searchTarget() {
+  await screen.findByRole("button", { name: /Remote \/a/ })
+  fireEvent.click(await screen.findByRole("button", { name: dict["im.search.messages"] }))
+  const input = await screen.findByPlaceholderText(`${dict["im.search.messages"]}…`)
+  fireEvent.input(input, { target: { value: "history" } })
+  fireEvent.keyDown(input, { key: "Enter" })
+  fireEvent.click(await screen.findByRole("button", { name: /Search preview is not conversation history/ }))
+}
+
+it("a parent search selection reads the real anchored page, focuses its exact message and returns to latest", async () => {
+  const api = await serve()
+  show()
+  try {
+    await searchTarget()
+    await screen.findByText("/a history 124 中文")
+    const target = document.querySelector<HTMLElement>('[data-im-message="/a-message-124"]')!
+    await waitFor(() => expect(target.dataset.imTarget).toBe("true"))
+    expect(target.getAttribute("aria-current")).toBe("location")
+    expect(document.activeElement).toBe(target)
+    expect(count()).toBe(50)
+    expect(screen.queryByText("Search preview is not conversation history")).toBeNull()
+    expect(api.state.requests.some((request) => request.anchorID === "/a-message-124" && request.cursor === null)).toBe(
+      true,
+    )
+    const composer = screen.getByPlaceholderText(dict["im.composer.placeholder"]) as HTMLTextAreaElement
+    fireEvent.input(composer, { target: { value: "Keep this unsent conversation draft" } })
+    fireEvent.click(screen.getByRole("button", { name: dict["im.message.location.latest"] }))
+    await screen.findByText("/a history 0 中文")
+    expect(screen.queryByText("/a history 124 中文")).toBeNull()
+    expect(document.querySelector('[aria-current="location"]')).toBeNull()
+    expect(screen.getByPlaceholderText(dict["im.composer.placeholder"])).toBe(composer)
+    expect(composer.value).toBe("Keep this unsent conversation draft")
+    expect(api.state.requests.at(-1)?.anchorID).toBeNull()
+    expect(api.state.posts).toBe(0)
+  } finally {
+    await api.close()
+  }
+})
+
+it("a focused message remains detached from tail following after a scroll event and a newer message", async () => {
+  const message: LocalMessage = {
+    id: "focus-target",
+    groupID: "focus-group",
+    senderID: "peer",
+    senderType: "user",
+    type: "text",
+    content: "Focused message",
+    mentions: null,
+    metadata: null,
+    replyToID: null,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+  }
+  const [messages, setMessages] = createSignal([message])
+  const [focus, setFocus] = createSignal<string | undefined>(message.id)
+  render(() => (
+    <MessageList messages={messages()} focusMessageID={focus()} agentStatuses={new Map()} agentProgress={new Map()} />
+  ))
+  const log = screen.getByRole("log")
+  await waitFor(() => expect(document.querySelector('[data-im-target="true"]')).toBeTruthy())
+  // happy-dom has no layout. This checks scroll state transitions, not Native geometry.
+  log.scrollTop = 100
+  fireEvent.scroll(log)
+  setMessages([message, { ...message, id: "newer-message", content: "Newer message", createdAt: 2 }])
+  await screen.findByText("Newer message")
+  await new Promise<void>((resolve) => queueMicrotask(resolve))
+  expect(log.scrollTop).toBe(100)
+  expect(document.querySelector('[aria-current="location"]')?.getAttribute("data-im-message")).toBe(message.id)
+  setFocus(undefined)
+  await waitFor(() => expect(log.scrollTop).toBe(log.scrollHeight))
+})
+
+it("an invisible search target shows explicit feedback without injecting the search preview or falling back to latest", async () => {
+  const api = await serve()
+  api.state.anchorMissing = true
+  show()
+  try {
+    await searchTarget()
+    await screen.findByText(dict["im.message.location.unavailable"])
+    expect(count()).toBe(0)
+    expect(screen.queryByText("/a history 0 中文")).toBeNull()
+    expect(screen.queryByText("Search preview is not conversation history")).toBeNull()
+    expect(api.state.requests.every((request) => request.anchorID === "/a-message-124")).toBe(true)
+    expect(api.state.posts).toBe(0)
+  } finally {
+    await api.close()
+  }
+})
+
+it("a directory switch aborts the held anchored page and never displays its late target in the next scope", async () => {
+  const api = await serve()
+  const gate = Promise.withResolvers<void>()
+  api.state.delayed = gate.promise
+  show()
+  try {
+    await searchTarget()
+    await waitFor(() => expect(api.state.requests.some((request) => request.anchorID === "/a-message-124")).toBe(true))
+    api.setDirectory("/b")
+    await select("/b")
+    await waitFor(() => expect(api.state.delayedClosed).toBe(true))
+    gate.resolve()
+    await waitFor(() => expect(api.state.delayedFinished).toBe(true))
+    expect(screen.queryByText("/a history 124 中文")).toBeNull()
+    expect(document.querySelector('[aria-current="location"]')).toBeNull()
+    expect(count()).toBe(50)
+    expect(api.state.posts).toBe(0)
+  } finally {
+    gate.resolve()
+    await api.close()
+  }
+})
 
 it("original parent and child load125 distinct protected messages in50/50/25 through real HTTP without a read write", async () => {
   const api = await serve()

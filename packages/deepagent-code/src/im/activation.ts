@@ -9,12 +9,13 @@ import { IMActivationSchema } from "@deepagent-code/core/im/activation.schema"
 import { IMActivationTable } from "@deepagent-code/core/im/activation.sql"
 import { validateIMName } from "@deepagent-code/core/im/facade-contract"
 import { Auth } from "@/auth"
+import { Config } from "@/config/config"
 import { Flag } from "@deepagent-code/core/flag/flag"
-import { KernelConfig } from "./kernel/config"
 import { IMDeviceStore } from "./device-store"
 import { IMDeviceProof } from "./device-proof"
 import { IMDeviceTransport } from "./device-transport"
 import { IMDeviceSchema } from "@deepagent-code/core/im/device.schema"
+import { IMServiceConfig } from "./service-config"
 
 const WireResult = Schema.Struct({
   transactionID: IMActivationSchema.Transaction.fields.transactionID,
@@ -105,6 +106,7 @@ export const make = Effect.fn("IMActivation.make")(function* (input: {
   auth: Auth.Interface
   http?: HttpClient.HttpClient
   facadeURL?: string
+  resolveFacadeURL?: Effect.Effect<string | null, unknown>
   device?: ReturnType<typeof IMDeviceStore.make>
   allowLoopback?: boolean
 }) {
@@ -116,25 +118,30 @@ export const make = Effect.fn("IMActivation.make")(function* (input: {
   const resultSchema: (value: unknown) => Option.Option<typeof WireResult.Type | typeof BoundResult.Type> = device
     ? Schema.decodeUnknownOption(BoundResult)
     : Schema.decodeUnknownOption(WireResult)
-  const source = Effect.try({
-    try: () => {
-      const url = new URL(input.facadeURL ?? "")
-      if (
-        url.username ||
-        url.password ||
-        url.search ||
-        url.hash ||
-        (url.protocol !== "https:" &&
-          !(
-            url.protocol === "http:" &&
-            (!device || input.allowLoopback) &&
-            ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-          ))
-      )
-        throw new Error()
-      return { url: url.href.replace(/\/+$/, ""), hash: hash(url.href.replace(/\/+$/, "")) }
-    },
-    catch: () => failure("im_activation_unavailable"),
+  const source = Effect.gen(function* () {
+    const facadeURL = input.resolveFacadeURL
+      ? yield* input.resolveFacadeURL.pipe(Effect.mapError(() => failure("im_activation_unavailable")))
+      : input.facadeURL
+    return yield* Effect.try({
+      try: () => {
+        const url = new URL(facadeURL ?? "")
+        if (
+          url.username ||
+          url.password ||
+          url.search ||
+          url.hash ||
+          (url.protocol !== "https:" &&
+            !(
+              url.protocol === "http:" &&
+              (!device || input.allowLoopback) &&
+              ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+            ))
+        )
+          throw new Error()
+        return { url: url.href.replace(/\/+$/, ""), hash: hash(url.href.replace(/\/+$/, "")) }
+      },
+      catch: () => failure("im_activation_unavailable"),
+    })
   })
   const call = <A>(request: HttpClientRequest.HttpClientRequest, decode: (data: unknown) => Option.Option<A>) =>
     Effect.gen(function* () {
@@ -461,6 +468,14 @@ export const make = Effect.fn("IMActivation.make")(function* (input: {
       }),
     )
   return {
+    withServiceConfiguration: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      lock
+        .withPermitsIfAvailable(1)(effect)
+        .pipe(
+          Effect.flatMap((result) =>
+            Option.isSome(result) ? Effect.succeed(result.value) : Effect.fail(failure("im_service_busy")),
+          ),
+        ),
     quote: Effect.gen(function* () {
       const current = yield* source
       return yield* call(
@@ -748,12 +763,18 @@ export const layer = (env: Readonly<Record<string, string | undefined>> = proces
   Layer.effect(
     Service,
     Effect.gen(function* () {
+      const configuration = Option.getOrUndefined(yield* Effect.serviceOption(Config.Service))
       return yield* make({
         db: (yield* Database.Service).db,
         auth: yield* Auth.Service,
         device: yield* IMDeviceStore.Service,
         http: Option.getOrUndefined(yield* Effect.serviceOption(HttpClient.HttpClient)),
-        facadeURL: env[KernelConfig.facadeEnvKeys.url],
+        resolveFacadeURL: IMServiceConfig.read(
+          configuration,
+          env,
+          env.DEEPAGENT_IM_DEVICE_TEST_LOOPBACK === "true",
+        ).pipe(Effect.map((service) => service.url)),
+        allowLoopback: env.DEEPAGENT_IM_DEVICE_TEST_LOOPBACK === "true",
       })
     }),
   )

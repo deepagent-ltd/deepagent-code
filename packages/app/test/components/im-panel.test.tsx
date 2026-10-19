@@ -11,6 +11,7 @@ const client = vi.hoisted(() => ({
   listGroups: vi.fn(),
   listGroupPage: vi.fn(),
   getGroup: vi.fn(),
+  dacBinding: vi.fn(),
   facadeOpenDirect: vi.fn(),
   facadeInvite: vi.fn(),
   createGroup: vi.fn(),
@@ -58,6 +59,16 @@ beforeEach(() => {
   }))
   client.scope.mockImplementation(actual.scope)
   client.listGroups.mockResolvedValue([])
+  client.dacBinding.mockImplementation(async (groupID) => ({
+    version: 1,
+    groupID,
+    bindingID: null,
+    sessionID: null,
+    directory: "/private/fixture",
+    projectID: "project",
+    workspaceID: null,
+    recentCommands: [],
+  }))
   client.listGroupPage.mockImplementation(async (lane: "ordinary" | "protected") => ({
     version: 1,
     lane,
@@ -75,7 +86,11 @@ describe("IM side panel recovery", () => {
     "keeps creation disabled when status cannot be verified (%s)",
     async (error) => {
       client.facadeStatus.mockRejectedValue(error)
-      render(() => <MemoryRouter><Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} /></MemoryRouter>)
+      render(() => (
+        <MemoryRouter>
+          <Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} />
+        </MemoryRouter>
+      ))
       await screen.findByText(dict["im.facade.status.failed"])
       expect(screen.getByRole("button", { name: dict["im.direct.create"] }).hasAttribute("disabled")).toBe(true)
       expect(screen.getByRole("button", { name: dict["im.group.create"] }).hasAttribute("disabled")).toBe(true)
@@ -88,7 +103,11 @@ describe("IM side panel recovery", () => {
 
   it("allows legacy conversations only for an absent facade endpoint", async () => {
     client.facadeStatus.mockRejectedValue(new IMFacadeRequestError("http_error", "Not found", 404))
-    render(() => <MemoryRouter><Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} /></MemoryRouter>)
+    render(() => (
+      <MemoryRouter>
+        <Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} />
+      </MemoryRouter>
+    ))
     const create = screen.getByRole("button", { name: dict["im.direct.create"] })
     await waitFor(() => expect(create.hasAttribute("disabled")).toBe(false))
     expect(screen.queryByText(dict["im.facade.status.failed"])).toBeNull()
@@ -97,7 +116,11 @@ describe("IM side panel recovery", () => {
   it("shows a failed conversation fetch as an error and retries to the real list", async () => {
     client.facadeStatus.mockResolvedValue(active)
     client.listGroups.mockRejectedValue(new Error("offline"))
-    render(() => <MemoryRouter><Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} /></MemoryRouter>)
+    render(() => (
+      <MemoryRouter>
+        <Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} />
+      </MemoryRouter>
+    ))
     await screen.findByText(dict["im.group.load.failed"])
     expect(screen.queryByText(dict["im.group.empty"])).toBeNull()
     client.listGroups.mockResolvedValue([{ id: "team", name: "Design team", type: "group", kernelConvID: "k:2:team" }])
@@ -110,7 +133,11 @@ describe("IM side panel recovery", () => {
     client.facadeStatus.mockResolvedValue(active)
     client.facadeOpenDirect.mockResolvedValue({ id: "bob", name: "bob", type: "direct" })
     client.getGroup.mockResolvedValue({ version: 1, group: { id: "bob", name: "bob", type: "direct" } })
-    render(() => <MemoryRouter><Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} /></MemoryRouter>)
+    render(() => (
+      <MemoryRouter>
+        <Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} />
+      </MemoryRouter>
+    ))
     await waitFor(() =>
       expect(screen.getByRole("button", { name: dict["im.direct.create"] }).hasAttribute("disabled")).toBe(false),
     )

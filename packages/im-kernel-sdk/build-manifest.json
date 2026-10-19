@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "lib/index.js",
-      "sha256": "6e31c06bff96cf9c9946d6c5d55c7f91e5df1b1eb0593ef97a0542488fb4ed14"
+      "sha256": "594b957fd5fed5a54eaf33ce260f4e0ad61d40a62bbee58e36199b798fe93027"
     },
     {
       "path": "lib/index.d.ts",
@@ -191,6 +191,19 @@
         }
       ],
       "note": "Prior reviewed bytes before device-bound Connect challenge/HTTP proof and async source fences"
+    },
+    {
+      "files": [
+        {
+          "path": "lib/index.js",
+          "sha256": "6e31c06bff96cf9c9946d6c5d55c7f91e5df1b1eb0593ef97a0542488fb4ed14"
+        },
+        {
+          "path": "lib/index.d.ts",
+          "sha256": "232876ff2c6c43d53188586130dac1d95a7960e1e3b66bac08907ca5a6fc5734"
+        }
+      ],
+      "note": "Prior reviewed bytes retained before bounded device-challenge clock handling and ten-second monotonic signer deadline"
     }
   ],
   "buildConfiguration": {

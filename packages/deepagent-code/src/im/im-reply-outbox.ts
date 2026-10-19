@@ -4,6 +4,7 @@ import { Cause, Effect, Layer, Option, Ref, Schedule, Duration } from "effect"
 import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm"
 import { IMReplyOutboxTable } from "@deepagent-code/core/im/reply-outbox.sql"
 import { ReplyBodyRetirement } from "@deepagent-code/core/im/reply-body-retirement"
+import { ReplyParts } from "@deepagent-code/core/im/reply-parts"
 import { ReplyBodyRetirementModel } from "@deepagent-code/core/im/reply-body-retirement.model"
 export { IMReplyOutboxTable } from "@deepagent-code/core/im/reply-outbox.sql"
 import { Database } from "@deepagent-code/core/database/database"
@@ -274,17 +275,6 @@ export function failReplyAttempt(
 
 // ── Terminal-reply collection ────────────────────────────────────────────────────────────────────
 
-/** The joined text parts of an assistant message, or undefined when it has none (tool-only turn). */
-const assistantText = (message: SessionMessage.Message): string | undefined => {
-  if (message.type !== "assistant") return undefined
-  const text = message.content
-    .filter((part): part is SessionMessage.AssistantText => part.type === "text")
-    .map((part) => part.text)
-    .filter((text) => text.trim().length > 0)
-    .join("\n\n")
-  return text.length > 0 ? text : undefined
-}
-
 export interface CollectDeps {
   readonly db: Database.Interface["db"]
   readonly v2Session: SessionV2.Interface
@@ -311,18 +301,9 @@ export function collectSessionReply(deps: CollectDeps, sessionID: string, now?: 
       if (!activity.finalMessageID) return false
       const final = yield* deps.v2Session.message({ sessionID: SessionV2.ID.make(sessionID), messageID: SessionMessage.ID.make(activity.finalMessageID) })
       if (!final || final.type !== "assistant" || final.error) return false
-      const text = assistantText(final)
+      const text = ReplyParts.text(final)
       if (!text) return false
-      // The kernel bounds the JSON envelope, so escaped quotes and controls
-      // count toward each part as well as UTF-8 bytes. Leave room for authorship.
-      const parts = [""]
-      const partSize = { bytes: 0 }
-      for (const character of text) {
-        const bytes = Buffer.byteLength(JSON.stringify(character)) - 2
-        if (partSize.bytes + bytes > 60000) { parts.push(""); partSize.bytes = 0 }
-        parts[parts.length - 1] += character
-        partSize.bytes += bytes
-      }
+      const parts = Array.from(ReplyParts.ranges(text), (range) => text.slice(range.start, range.end))
       const appended = yield* deps.db.transaction((tx) => Effect.forEach(parts, (part, index) => appendReplyInTransaction(tx, {
         sessionID, groupID: activity.groupID, agentID: final.agent, triggerMessageID: activity.triggerInputID,
         replyMessageID: parts.length === 1 ? activity.finalMessageID! : `${activity.finalMessageID}_impart_${String(index).padStart(8, "0")}`,

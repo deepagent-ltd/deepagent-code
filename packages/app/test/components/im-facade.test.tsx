@@ -88,8 +88,41 @@ describe("IM identity components", () => {
     expect(screen.queryByText("private upstream detail")).toBeNull()
   })
 
+  it("requires an explicit reconnect after the IM service changes without activating or charging", async () => {
+    const pending = Promise.withResolvers<unknown>()
+    client.facadeRetry.mockReturnValue(pending.promise)
+    const recovered = vi.fn()
+    const activate = vi.fn()
+    render(() => (
+      <BlockedCard
+        blocked={{ code: "im_service_changed", message: "private upstream detail" }}
+        onRecovered={recovered}
+        onActivate={activate}
+      />
+    ))
+    expect(screen.getByText(dict["im.facade.error.im_service_changed"])).toBeTruthy()
+    expect(screen.queryByText(dict["im.facade.error.unknown"])).toBeNull()
+    expect(screen.queryByText("private upstream detail")).toBeNull()
+    expect(client.facadeRetry).not.toHaveBeenCalled()
+    const reconnect = screen.getByRole("button", { name: dict["im.facade.reconnect"] })
+    expect(screen.queryByRole("button", { name: dict["im.facade.retry"] })).toBeNull()
+    fireEvent.click(reconnect)
+    expect(screen.getByRole("button", { name: dict["im.facade.reconnecting"] }).hasAttribute("disabled")).toBe(true)
+    fireEvent.click(reconnect)
+    expect(client.facadeRetry).toHaveBeenCalledTimes(1)
+    expect(recovered).not.toHaveBeenCalled()
+    expect(activate).not.toHaveBeenCalled()
+    expect(client.facadeClaim).not.toHaveBeenCalled()
+    expect(client.facadeRebind).not.toHaveBeenCalled()
+    pending.resolve({})
+    await waitFor(() => expect(recovered).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole("button", { name: dict["im.facade.reconnect"] }).hasAttribute("disabled")).toBe(false)
+  })
+
   it("keeps active connection retry reachable without a selected conversation and submits once while busy", async () => {
-    const [recovery, setRecovery] = createSignal<{ status: "pending" | "ready" | "failed" } | undefined>({ status: "pending" })
+    const [recovery, setRecovery] = createSignal<{ status: "pending" | "ready" | "failed" } | undefined>({
+      status: "pending",
+    })
     const pending = Promise.withResolvers<unknown>()
     client.facadeRetry.mockReturnValue(pending.promise)
     const changed = vi.fn()
