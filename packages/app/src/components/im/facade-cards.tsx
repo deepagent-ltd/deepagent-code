@@ -1,4 +1,4 @@
-import { createSignal, Show, type Component } from "solid-js"
+import { createEffect, createSignal, on, Show, type Component } from "solid-js"
 import { Button } from "@deepagent-code/ui/button"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { InlineInput } from "@deepagent-code/ui/inline-input"
@@ -106,7 +106,12 @@ const KERNEL_COLORS = {
 } as const
 
 /** Active identity: name, uuid, connection state and rename. */
-export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => void }> = (props) => {
+export const IdentityCard: Component<{
+  status: IMFacadeStatus
+  onChanged: () => void
+  compact?: boolean
+  renameRequest?: number
+}> = (props) => {
   const language = useLanguage()
   const client = useIMClient()
   const [editing, setEditing] = createSignal<string | null>(null)
@@ -115,6 +120,17 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
 
   const identity = () => props.status.identity!
   const kernel = () => props.status.kernel
+  createEffect(
+    on(
+      () => props.renameRequest,
+      (request) => {
+        if (!request || busy()) return
+        setFailure(null)
+        setEditing(identity().name)
+      },
+      { defer: true },
+    ),
+  )
 
   const submitRename = async () => {
     if (busy()) return
@@ -148,9 +164,23 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
   }
 
   return (
-    <div class="mx-3 mt-3 flex flex-col gap-1.5 rounded-md border border-border-weaker-base bg-surface-raised-base px-3 py-2">
+    <div
+      class={
+        props.compact
+          ? "im-sidebar-identity flex min-w-0 flex-col gap-3 rounded-2xl bg-surface-raised-base p-4"
+          : "mx-3 mt-3 flex flex-col gap-1.5 rounded-md border border-border-weaker-base bg-surface-raised-base px-3 py-2"
+      }
+    >
       <div class="flex items-center justify-between gap-2 min-w-0">
-        <div class="flex items-center gap-1.5 min-w-0">
+        <Show when={props.compact}>
+          <span
+            aria-hidden="true"
+            class="flex size-11 shrink-0 items-center justify-center rounded-full bg-surface-panel text-16-medium"
+          >
+            {Array.from(identity().name)[0] ?? "?"}
+          </span>
+        </Show>
+        <div class="flex items-center gap-1.5 min-w-0" classList={{ "flex-1": props.compact }}>
           <Show
             when={editing() === null}
             fallback={
@@ -173,16 +203,18 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
             }
           >
             <span class="text-13-medium text-text-strong truncate">{identity().name}</span>
-            <IconButton
-              icon="pencil-line"
-              variant="ghost"
-              class="h-6 w-6 rounded-md shrink-0"
-              aria-label={language.t("im.facade.identity.rename")}
-              onClick={() => {
-                setFailure(null)
-                setEditing(identity().name)
-              }}
-            />
+            <Show when={!props.compact}>
+              <IconButton
+                icon="pencil-line"
+                variant="ghost"
+                class="h-6 w-6 rounded-md shrink-0"
+                aria-label={language.t("im.facade.identity.rename")}
+                onClick={() => {
+                  setFailure(null)
+                  setEditing(identity().name)
+                }}
+              />
+            </Show>
           </Show>
         </div>
       </div>
@@ -212,29 +244,31 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
           </div>
         </div>
       </Show>
-      <div class="flex items-center gap-2 text-11-regular text-text-weak">
-        <span>{language.t("im.facade.identity.uuid", { uuid: identity().uuid.slice(0, 8) })}</span>
-        <Show when={kernel()}>
-          {(state) => (
+      <Show when={!props.compact}>
+        <div class="flex items-center gap-2 text-11-regular text-text-weak">
+          <span>{language.t("im.facade.identity.uuid", { uuid: identity().uuid.slice(0, 8) })}</span>
+          <Show when={kernel()}>
+            {(state) => (
+              <span class="flex items-center gap-1">
+                <span
+                  class="inline-block h-1.5 w-1.5 rounded-full"
+                  style={{ "background-color": KERNEL_COLORS[state()] }}
+                />
+                {language.t(KERNEL_TEXT_KEYS[state()])}
+              </span>
+            )}
+          </Show>
+          <Show when={!kernel()}>
             <span class="flex items-center gap-1">
               <span
                 class="inline-block h-1.5 w-1.5 rounded-full"
-                style={{ "background-color": KERNEL_COLORS[state()] }}
+                style={{ "background-color": KERNEL_COLORS.disconnected }}
               />
-              {language.t(KERNEL_TEXT_KEYS[state()])}
+              {language.t("im.facade.kernel.none")}
             </span>
-          )}
-        </Show>
-        <Show when={!kernel()}>
-          <span class="flex items-center gap-1">
-            <span
-              class="inline-block h-1.5 w-1.5 rounded-full"
-              style={{ "background-color": KERNEL_COLORS.disconnected }}
-            />
-            {language.t("im.facade.kernel.none")}
-          </span>
-        </Show>
-      </div>
+          </Show>
+        </div>
+      </Show>
       <Show when={props.status.recovery && props.status.recovery.status !== "ready"}>
         <div class="flex flex-col gap-1" role="status">
           <p class="text-12-regular text-text-weak">
@@ -244,9 +278,19 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
           </p>
         </div>
       </Show>
-      <Button variant="secondary" size="small" disabled={busy()} onClick={() => void retryRecovery()}>
-        {language.t("im.facade.retry")}
-      </Button>
+      <Show
+        when={
+          !props.compact ||
+          !kernel() ||
+          kernel() === "disconnected" ||
+          kernel() === "failed" ||
+          (props.status.recovery && props.status.recovery.status !== "ready")
+        }
+      >
+        <Button variant="secondary" size="small" disabled={busy()} onClick={() => void retryRecovery()}>
+          {language.t("im.facade.retry")}
+        </Button>
+      </Show>
       <Show when={failure()}>{(f) => <FailureText failure={f()} />}</Show>
     </div>
   )

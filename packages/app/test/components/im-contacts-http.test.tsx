@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
 import { createSignal } from "solid-js"
+import { createStore } from "solid-js/store"
 import { createServer, type RequestListener } from "node:http"
 import { IMContactsPage } from "@/components/im/contacts-page"
 import { createIMClient, type IMClient } from "@/utils/im-client"
@@ -65,7 +66,10 @@ it("looks up an exact contact without creating a conversation, then opens a dire
       />
     ))
     expect(calls).toHaveLength(0)
-    fireEvent.input(screen.getByLabelText(dict["im.contacts.find"]), { target: { value: "BOB" } })
+    fireEvent.input(screen.getByLabelText(dict["im.contacts.search"]), { target: { value: "BOB" } })
+    expect(calls).toHaveLength(0)
+    fireEvent.click(screen.getByRole("button", { name: dict["im.contacts.lookup"] }))
+    expect(screen.getByLabelText(dict["im.contacts.find"])).toHaveProperty("value", "BOB")
     fireEvent.click(screen.getByRole("button", { name: dict["im.contacts.find"] }))
     await screen.findByText("bob")
     expect(calls).toEqual([{ method: "GET", path: "/api/v1/im/facade/resolve", name: "bob" }])
@@ -113,14 +117,15 @@ it("retires an in-flight lookup when the active account changes and never shows 
         }}
       />
     ))
+    fireEvent.input(screen.getByLabelText(dict["im.contacts.search"]), { target: { value: "bob" } })
+    fireEvent.click(screen.getByRole("button", { name: dict["im.contacts.lookup"] }))
     fireEvent.input(screen.getByLabelText(dict["im.contacts.find"]), { target: { value: "bob" } })
     fireEvent.click(screen.getByRole("button", { name: dict["im.contacts.find"] }))
     await received.promise
     setAccount("charlie")
     release!()
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: dict["im.contacts.find"] }).hasAttribute("disabled")).toBe(false),
-    )
+    await screen.findByLabelText(dict["im.contacts.search"])
+    expect(screen.getByLabelText(dict["im.contacts.search"])).toHaveProperty("value", "")
     expect(screen.queryByText("old-contact")).toBeNull()
     expect(screen.queryByRole("button", { name: dict["im.contacts.message"] })).toBeNull()
   } finally {
@@ -161,6 +166,8 @@ it("shows a lookup failure without exposing an actionable contact, and permits a
         openDirect={async () => false}
       />
     ))
+    fireEvent.input(screen.getByLabelText(dict["im.contacts.search"]), { target: { value: "bob" } })
+    fireEvent.click(screen.getByRole("button", { name: dict["im.contacts.lookup"] }))
     fireEvent.input(screen.getByLabelText(dict["im.contacts.find"]), { target: { value: "bob" } })
     fireEvent.click(screen.getByRole("button", { name: dict["im.contacts.find"] }))
     await screen.findByRole("alert")
@@ -179,4 +186,51 @@ it("shows a lookup failure without exposing an actionable contact, and permits a
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
+})
+
+it("starts with recent contacts and groups, filters locally, and opens exact lookup only on a menu request", async () => {
+  runtime.client = createIMClient(() => ({ url: "http://127.0.0.1:1", directory: "/contacts-owned" }))
+  const opened = vi.fn()
+  const direct = vi.fn()
+  const [state, setState] = createStore({ lookup: 0 })
+  const groups = [
+    { id: "direct-bob", name: "bob", type: "direct" },
+    { id: "group-team", name: "team", type: "project" },
+  ].map((group) => ({
+    ...group,
+    workspaceID: "owned",
+    projectID: null,
+    createdBy: "alice",
+    kernelConvID: null,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+  }))
+  render(() => (
+    <IMContactsPage
+      active
+      available
+      account="alice"
+      groups={groups}
+      openGroup={opened}
+      openDirect={direct}
+      lookupRequest={state.lookup}
+    />
+  ))
+  expect(screen.getByRole("heading", { name: dict["im.contacts.recent"] })).toBeTruthy()
+  expect(screen.getByRole("heading", { name: dict["im.contacts.groups"] })).toBeTruthy()
+  expect(screen.queryByLabelText(dict["im.contacts.find"])).toBeNull()
+  expect(screen.getAllByRole("textbox")).toHaveLength(1)
+  fireEvent.click(screen.getByRole("button", { name: "team" }))
+  expect(opened).toHaveBeenCalledExactlyOnceWith("group-team")
+  fireEvent.input(screen.getByLabelText(dict["im.contacts.search"]), { target: { value: "BOB" } })
+  expect(screen.getByRole("button", { name: "bob" })).toBeTruthy()
+  expect(screen.queryByRole("button", { name: "team" })).toBeNull()
+  setState("lookup", 1)
+  await screen.findByLabelText(dict["im.contacts.find"])
+  expect(screen.getAllByRole("textbox")).toHaveLength(1)
+  expect(screen.getByLabelText(dict["im.contacts.find"])).toHaveProperty("value", "BOB")
+  fireEvent.click(screen.getByRole("button", { name: dict["im.contacts.lookupBack"] }))
+  expect(screen.getByLabelText(dict["im.contacts.search"])).toHaveProperty("value", "BOB")
+  expect(direct).not.toHaveBeenCalled()
 })
