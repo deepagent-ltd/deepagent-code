@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal, on, onCleanup } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useQueryClient } from "@tanstack/solid-query"
 import { ButtonV2 } from "@deepagent-code/ui/v2/button-v2"
@@ -11,6 +11,9 @@ import { IMDevicePanel } from "../im/device-panel"
 import { IMDeviceClient } from "@deepagent-code/core/im/device-client"
 import { IMActivationPanel } from "../im/activation-panel"
 import { IMEntitlementSummary } from "../im/entitlement-summary"
+import { createIMEntitlementRead } from "../im/entitlement-read"
+import { IMEntitlementSchema } from "@deepagent-code/core/im/entitlement.schema"
+import { Schema } from "effect"
 import { observeIMEntitlement, type IMEntitlementStatus } from "../im/entitlement"
 import type { IMActivationClient } from "../im/activation-controller"
 import { createIMActivationClient } from "@/utils/im-activation-client"
@@ -48,6 +51,25 @@ export function SettingsIMV2(props: { activation?: IMActivationClient }) {
     failed: false,
   })
   const observation = { generation: 0, abort: new AbortController() }
+  const entitlementScope = createMemo(() => ({ server: server.scope(), url: service.info?.url }))
+  const rights = createIMEntitlementRead({
+    current: () => current() && !!service.info?.url && !service.busy,
+    scope: entitlementScope,
+    entitlement: async (signal) => {
+      const result = await sdk.client.im.entitlement(undefined, { signal, throwOnError: true })
+      return Schema.decodeUnknownSync(IMEntitlementSchema.Observation)(result.data)
+    },
+    plans: async (signal) => {
+      const result = await sdk.client.im.plans(undefined, { signal, throwOnError: true })
+      return Schema.decodeUnknownSync(IMEntitlementSchema.PlansObservation)(result.data)
+    },
+  })
+  const entitlement = () =>
+    observeIMEntitlement(
+      service.status,
+      service.activated,
+      rights.entitlement() ?? { state: "unknown", reason: "service_unavailable" },
+    )
   const retire = () => {
     observation.generation++
     observation.abort.abort()
@@ -149,7 +171,22 @@ export function SettingsIMV2(props: { activation?: IMActivationClient }) {
           </Show>
         </div>
         <section class="settings-v2-section" data-slot="settings-im-device-group">
-          <IMEntitlementSummary observation={observeIMEntitlement(service.status, service.activated)} />
+          <IMEntitlementSummary observation={entitlement()} plans={rights.plans()} />
+          <Show when={service.info?.url}>
+            <ButtonV2
+              variant="neutral"
+              class="self-start"
+              disabled={!current() || service.busy || rights.loading()}
+              onClick={() => void rights.refresh()}
+            >
+              {language.t(rights.loading() ? "common.loading" : "settings.im.entitlement.refresh")}
+            </ButtonV2>
+          </Show>
+          <Show when={rights.failed()}>
+            <p role="alert" class="text-12-regular text-text-weak">
+              {language.t("settings.im.entitlement.readFailed")}
+            </p>
+          </Show>
           <p class="text-12-regular text-text-weak">{language.t("settings.im.deviceGroup.description")}</p>
           <Show when={!service.busy && service.info?.url && !deviceRequested()}>
             <ButtonV2
@@ -187,10 +224,11 @@ export function SettingsIMV2(props: { activation?: IMActivationClient }) {
                     current={selected}
                     ready={() => !!url && deviceAvailable() && !service.loading}
                     allowPaidActivation={false}
-                    hasAccess={() => observeIMEntitlement(service.status, service.activated).state === "active"}
+                    hasAccess={() => entitlement().state === "active"}
                     activated={() => {
                       if (!selected()) return
                       setService("activated", true)
+                      void rights.refresh()
                       sync.refreshProviders()
                     }}
                   />

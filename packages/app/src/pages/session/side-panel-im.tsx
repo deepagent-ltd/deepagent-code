@@ -24,6 +24,7 @@ import { useCommand } from "@/context/command"
 import { useSDK } from "@/context/sdk"
 import { IMContactsPage } from "@/components/im/contacts-page"
 import { IMUserSettingsPage } from "@/components/im/user-settings-page"
+import { createIMEntitlementRead } from "@/components/im/entitlement-read"
 import { GroupChatPanel } from "@/components/im/group-chat-panel"
 import { createComposerDrafts } from "@/components/im/composer-draft"
 import { MessageSearch } from "@/components/im/message-search"
@@ -313,6 +314,15 @@ export const SidePanelIM: Component<{
     keyOrigin: "none",
   }
   const [facadeStatus, setFacadeStatus] = createSignal<IMFacadeStatus>()
+  const rights = createIMEntitlementRead({
+    current: () =>
+      !refresh.disposed &&
+      workspace.page === "settings" &&
+      ServerConnection.local(server.current) &&
+      !!facadeStatus()?.service?.url,
+    scope: client.scope,
+    entitlement: async (signal) => client.entitlement(signal),
+  })
   const selectedMessageLocation = createMemo(() => {
     const location = messageLocation()
     if (
@@ -1216,6 +1226,7 @@ export const SidePanelIM: Component<{
                 onSelect={() => {
                   if (workspace.page === "messages" && selectedGroupID())
                     return setWorkspace("refreshRequest", (value) => value + 1)
+                  if (workspace.page === "settings") void rights.refresh()
                   refreshFacade()
                 }}
               >
@@ -1630,6 +1641,7 @@ export const SidePanelIM: Component<{
           <IMUserSettingsPage
             status={facadeStatus()}
             statusFailed={availability.statusFailed}
+            entitlement={rights.entitlement() ?? { state: "unknown", reason: "service_unavailable" }}
             current={() => !refresh.disposed}
             localAvailable={ServerConnection.local(server.current)}
             onManageIM={() => void manageIM()}

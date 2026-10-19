@@ -22,6 +22,7 @@ import { MediaIntent } from "@deepagent-code/core/im/media-intent"
 import { MediaBatch } from "@deepagent-code/core/im/media-batch"
 import type { DacInput } from "@/components/im/personal-command"
 import { IMDacSessionSchema } from "@deepagent-code/core/im/dac-session.schema"
+import { IMEntitlementSchema } from "@deepagent-code/core/im/entitlement.schema"
 
 // ── B2 门面（多用户 IM）────────────────────────────────────────────────────────
 // 类型镜像服务端 groups/im.ts 的 IMStatusResponse/IMIdentityResponse/IMResolveResponse。
@@ -565,6 +566,14 @@ export function createIMClient(config: () => IMClientConfig) {
       }),
     // ── B2 门面端点 ───────────────────────────────────────────────────────────
     facadeStatus: (signal?: AbortSignal) => facadeRequest<IMFacadeStatus>(`/api/v1/im/status`, { signal }),
+    entitlement: async (signal?: AbortSignal) =>
+      Schema.decodeUnknownSync(IMEntitlementSchema.Observation)(
+        await facadeRequest<unknown>(`/api/v1/im/entitlement`, { signal }),
+      ),
+    plans: async (signal?: AbortSignal) =>
+      Schema.decodeUnknownSync(IMEntitlementSchema.PlansObservation)(
+        await facadeRequest<unknown>(`/api/v1/im/plans`, { signal }),
+      ),
     facadeRename: (name: string) =>
       facadeRequest<IMFacadeIdentity>(`/api/v1/im/facade/rename`, { method: "POST", body: { name } }),
     facadeRetry: () => facadeRequest<IMFacadeIdentity>(`/api/v1/im/facade/retry`, { method: "POST", body: {} }),

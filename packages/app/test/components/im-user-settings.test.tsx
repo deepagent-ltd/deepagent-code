@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-li
 import { createStore } from "solid-js/store"
 import { IMUserSettingsPage } from "@/components/im/user-settings-page"
 import type { IMFacadeStatus } from "@/utils/im-client"
+import type { IMEntitlementSchema } from "@deepagent-code/core/im/entitlement.schema"
 import { dict } from "@/i18n/en"
 
 const runtime = vi.hoisted(() => ({
@@ -196,4 +197,44 @@ it("offers management for activation-required and keeps existing connection reco
   await waitFor(() => expect(changed).toHaveBeenCalledTimes(1))
   expect(runtime.retry).toHaveBeenCalledTimes(1)
   expect(runtime.rename).not.toHaveBeenCalled()
+})
+
+it("shows server-confirmed lifetime access and retires it with the parent scope", () => {
+  const [state, setState] = createStore({ current: true })
+  const entitlement: IMEntitlementSchema.Observation = {
+    state: "known",
+    entitlement: {
+      version: "dac-im-entitlement-v1",
+      profile: "dac-im-device-v1",
+      realm: "https://configured.invalid/im",
+      entitlementID: "a".repeat(32),
+      deviceJkt: "b".repeat(43),
+      bindingVersion: 1,
+      uuid: "alice",
+      planID: "im-lifetime",
+      planVersion: "im-plans-2026-10-19",
+      state: "active",
+      validityKnown: true,
+      lifetime: true,
+      validFrom: 1_700_000_000_000,
+      expiresAt: null,
+      serverObservedAt: 1_710_000_000_000,
+    },
+  }
+  render(() => (
+    <IMUserSettingsPage
+      status={status()}
+      entitlement={entitlement}
+      current={() => state.current}
+      localAvailable
+      onManageIM={vi.fn()}
+      onChanged={vi.fn()}
+    />
+  ))
+  expect(screen.getByText(dict["settings.im.entitlement.lifetime"])).toBeTruthy()
+  setState("current", false)
+  expect(screen.queryByText(dict["settings.im.entitlement.lifetime"])).toBeNull()
+  expect(screen.getByText(dict["settings.im.entitlement.unknown"])).toBeTruthy()
+  expect(runtime.rename).not.toHaveBeenCalled()
+  expect(runtime.retry).not.toHaveBeenCalled()
 })

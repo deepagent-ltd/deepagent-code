@@ -1,8 +1,10 @@
-import { afterEach, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
 import { createStore } from "solid-js/store"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import type { Config } from "@deepagent-code/sdk/client"
+import { IMEntitlementSchema } from "@deepagent-code/core/im/entitlement.schema"
+import { Schema } from "effect"
 import { SettingsIMV2 } from "@/components/settings-v2/im"
 import type { IMActivationClient } from "@/components/im/activation-controller"
 import type { IMFacadeStatus } from "@/utils/im-client"
@@ -16,8 +18,18 @@ const wiring = vi.hoisted(() => ({
   configReads: 0,
   deviceReads: 0,
   facade: "disabled" as IMFacadeStatus["facade"],
+  entitlementReads: 0,
+  entitlement: { state: "unknown", reason: "unsupported" } as IMEntitlementSchema.Observation,
 }))
-vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
+vi.mock("@/context/language", () => ({
+  useLanguage: () => ({
+    t: (key: keyof typeof dict, values?: Record<string, string | number>) =>
+      Object.entries(values ?? {}).reduce(
+        (text, [name, value]) => text.replace(`{{${name}}}`, String(value)),
+        dict[key],
+      ),
+  }),
+}))
 vi.mock("@/context/platform", () => ({ usePlatform: () => ({ openLink: vi.fn() }) }))
 vi.mock("@/context/server", () => ({
   useServer: () => ({ scope: wiring.scope }),
@@ -28,6 +40,11 @@ vi.mock("@/context/server-sdk", () => ({
     scope: "original",
     client: {
       im: {
+        entitlement: async () => {
+          wiring.entitlementReads++
+          return { data: wiring.entitlement }
+        },
+        plans: async () => ({ data: { state: "unknown", reason: "unsupported" } }),
         facade: {
           status: async () => ({
             data: {
@@ -107,6 +124,11 @@ vi.mock("@/context/models", () => ({
     visible: (model: { modelID: string }) => model.modelID !== "disabled",
   }),
 }))
+beforeEach(() => {
+  wiring.facade = "disabled"
+  wiring.entitlementReads = 0
+  wiring.entitlement = { state: "unknown", reason: "unsupported" }
+})
 afterEach(cleanup)
 function settings(api: IMActivationClient) {
   const query = new QueryClient({ defaultOptions: { queries: { gcTime: 0 } } })
@@ -226,17 +248,63 @@ it("confirms an edited service with a real config read before remounting and nev
   expect(patches.at(-1)).toEqual({ im: { model: "deepseek/another", url: null } })
 })
 
-it("shows confirmed active access with an unknown expiry and no new activation form or automatic payment lookup", async () => {
+it("does not infer current access from an active facade when the authority query is unsupported", async () => {
   const api = client()
   wiring.scope = () => "original"
   wiring.local = () => true
   wiring.config = () => ({ im: { url: "https://configured.invalid/im" } })
   wiring.facade = "active"
   settings(api)
-  await screen.findByText(dict["settings.im.entitlement.active"])
-  expect(screen.getByText(dict["settings.im.entitlement.expiryUnknown"])).toBeTruthy()
-  expect(screen.queryByLabelText(dict["im.activation.code"])).toBeNull()
+  await waitFor(() => expect(wiring.entitlementReads).toBe(1))
+  await screen.findByText(dict["settings.im.entitlement.unknown"])
+  expect(screen.queryByText(dict["settings.im.entitlement.lifetime"])).toBeNull()
   expect(screen.queryByRole("button", { name: dict["im.activation.charge"] })).toBeNull()
+  expect(api.activationPending).not.toHaveBeenCalled()
+  expect(api.activationQuote).not.toHaveBeenCalled()
+  expect(api.activate).not.toHaveBeenCalled()
+})
+
+it("renders authoritative access and expiry, then refreshes read-only without loading a payment or device identity", async () => {
+  const api = client()
+  wiring.scope = () => "original"
+  wiring.local = () => true
+  wiring.config = () => ({ im: { url: "https://configured.invalid/im" } })
+  wiring.deviceReads = 0
+  wiring.entitlement = {
+    state: "known",
+    entitlement: {
+      version: "dac-im-entitlement-v1",
+      profile: "dac-im-device-v1",
+      realm: "https://configured.invalid/im",
+      entitlementID: "a".repeat(32),
+      deviceJkt: "b".repeat(43),
+      bindingVersion: 1,
+      uuid: "alice",
+      planID: "im-year",
+      planVersion: "im-plans-2026-10-19",
+      state: "active",
+      validityKnown: true,
+      lifetime: false,
+      validFrom: 1_700_000_000_000,
+      expiresAt: 1_731_622_400_000,
+      serverObservedAt: 1_710_000_000_000,
+    },
+  }
+  expect(Schema.decodeUnknownSync(IMEntitlementSchema.Observation)(wiring.entitlement).state).toBe("known")
+  settings(api)
+  await screen.findByText(dict["settings.im.entitlement.active"])
+  expect(
+    screen.getByText(
+      dict["settings.im.entitlement.expiresOn"].replace("{{date}}", new Date(1_731_622_400_000).toLocaleDateString()),
+    ),
+  ).toBeTruthy()
+  expect(screen.queryByLabelText(dict["im.activation.code"])).toBeNull()
+  wiring.entitlement = { state: "unknown", reason: "service_unavailable" }
+  fireEvent.click(screen.getByRole("button", { name: dict["settings.im.entitlement.refresh"] }))
+  await waitFor(() => expect(wiring.entitlementReads).toBe(2))
+  await screen.findByText(dict["settings.im.entitlement.unknown"])
+  expect(screen.queryByText(dict["settings.im.entitlement.active"])).toBeNull()
+  expect(wiring.deviceReads).toBe(0)
   expect(api.activationPending).not.toHaveBeenCalled()
   expect(api.activationQuote).not.toHaveBeenCalled()
   expect(api.activate).not.toHaveBeenCalled()
