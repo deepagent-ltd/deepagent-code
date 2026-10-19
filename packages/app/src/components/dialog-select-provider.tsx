@@ -8,6 +8,7 @@ import { ProviderIcon } from "@deepagent-code/ui/provider-icon"
 import { DialogConnectProvider } from "./dialog-connect-provider"
 import { useLanguage } from "@/context/language"
 import { DialogCustomProvider } from "./dialog-custom-provider"
+import { providerPreset } from "@deepagent-code/core/provider-presets"
 
 const CUSTOM_ID = "_custom"
 
@@ -66,6 +67,14 @@ export const DialogSelectProvider: Component = () => {
           <div class="px-1.25 w-full flex items-center gap-x-3">
             <ProviderIcon data-slot="list-item-extra-icon" id={i.id} />
             <span>{i.name}</span>
+            <Show when={providerPreset(i.id)}>
+              {(preset) => (
+                <Tag>
+                  {language.t(`settings.providers.billing.${preset().billing}`)} ·{" "}
+                  {language.t(`settings.providers.region.${preset().region}`)}
+                </Tag>
+              )}
+            </Show>
             <Show when={i.id === CUSTOM_ID}>
               <Tag>{language.t("settings.providers.tag.custom")}</Tag>
             </Show>

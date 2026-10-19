@@ -15,10 +15,11 @@ import { DialogCustomProvider } from "../dialog-custom-provider"
 import { SettingsListV2 } from "./parts/list"
 import { canRefreshProviderModels } from "../provider-model-refresh"
 import "./settings-v2.css"
+import { SettingsPage } from "./parts/page"
+import { PROVIDER_BRANDS, providerPreset } from "@deepagent-code/core/provider-presets"
 
 type ProviderSource = "env" | "api" | "config" | "custom"
 type ProviderItem = ReturnType<ReturnType<typeof useProviders>["connected"]>[number]
-const DEEPAGENT_PROVIDER_ID = "deepagent"
 
 const PROVIDER_NOTES = [
   { match: (id: string) => id === "anthropic", key: "dialog.provider.anthropic.note" },
@@ -52,9 +53,7 @@ export const SettingsProvidersV2: Component = () => {
     return true
   }
 
-  const connected = createMemo(() => {
-    return providers.connected().filter((p) => p.id !== DEEPAGENT_PROVIDER_ID)
-  })
+  const connected = createMemo(() => providers.connected())
 
   const configErrors = createMemo(() => providers.errors())
 
@@ -70,6 +69,12 @@ export const SettingsProvidersV2: Component = () => {
     items.sort((a, b) => popularProviders.indexOf(a.id) - popularProviders.indexOf(b.id))
     return items
   })
+  const brands = createMemo(() =>
+    PROVIDER_BRANDS.map((brand) => ({
+      ...brand,
+      items: popular().filter((item) => providerPreset(item.id)?.brand === brand.id),
+    })).filter((brand) => brand.items.length > 0),
+  )
 
   const source = (item: ProviderItem): ProviderSource | undefined => {
     if (!("source" in item)) return
@@ -199,120 +204,56 @@ export const SettingsProvidersV2: Component = () => {
   }
 
   return (
-    <>
-      <div class="settings-v2-tab-header">
-        <h2 class="settings-v2-tab-title">{language.t("settings.providers.title")}</h2>
-      </div>
-
-      <div class="settings-v2-tab-body settings-v2-providers">
-        <div class="settings-v2-section" data-component="connected-providers-section">
-          <h3 class="settings-v2-section-title">{language.t("settings.providers.section.connected")}</h3>
-          <SettingsListV2>
-            <Show
-              when={connected().length > 0 || configErrors().length > 0}
-              fallback={
-                <div class="settings-v2-provider-empty">{language.t("settings.providers.connected.empty")}</div>
-              }
-            >
-              <For each={configErrors()}>
-                {(error) => (
-                  <div class="settings-v2-provider-row" data-component="provider-config-error">
-                    <div class="settings-v2-provider-lead">
-                      <ProviderIcon
-                        id="synthetic"
-                        width={PROVIDER_ICON_SIZE}
-                        height={PROVIDER_ICON_SIZE}
-                        class="settings-v2-provider-icon shrink-0"
-                      />
-                      <div class="settings-v2-provider-copy">
-                        <div class="settings-v2-provider-main">
-                          <span class="settings-v2-provider-name truncate">{error.source}</span>
-                          <Tag class="settings-v2-provider-error-tag">
-                            {language.t("settings.providers.tag.configError")}
-                          </Tag>
-                        </div>
-                        <p class="settings-v2-provider-description">
-                          {errorKindLabel(error.kind)}: {error.message}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </For>
-              <For each={connected()}>
-                {(item) => (
-                  <div
-                    class="settings-v2-provider-row group cursor-pointer"
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => openProviderConfig(item.id)}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" && event.key !== " ") return
-                      event.preventDefault()
-                      openProviderConfig(item.id)
-                    }}
-                  >
-                    <div class="settings-v2-provider-lead">
-                      <ProviderIcon
-                        id={item.id}
-                        width={PROVIDER_ICON_SIZE}
-                        height={PROVIDER_ICON_SIZE}
-                        class="settings-v2-provider-icon shrink-0"
-                      />
+    <SettingsPage
+      title={language.t("settings.providers.title")}
+      description={language.t("settings.providers.description")}
+      class="settings-v2-providers"
+    >
+      <div class="settings-v2-section" data-component="connected-providers-section">
+        <h3 class="settings-v2-section-title">{language.t("settings.providers.section.connected")}</h3>
+        <SettingsListV2>
+          <Show
+            when={connected().length > 0 || configErrors().length > 0}
+            fallback={<div class="settings-v2-provider-empty">{language.t("settings.providers.connected.empty")}</div>}
+          >
+            <For each={configErrors()}>
+              {(error) => (
+                <div class="settings-v2-provider-row" data-component="provider-config-error">
+                  <div class="settings-v2-provider-lead">
+                    <ProviderIcon
+                      id="synthetic"
+                      width={PROVIDER_ICON_SIZE}
+                      height={PROVIDER_ICON_SIZE}
+                      class="settings-v2-provider-icon shrink-0"
+                    />
+                    <div class="settings-v2-provider-copy">
                       <div class="settings-v2-provider-main">
-                        <span class="settings-v2-provider-name truncate">{item.name}</span>
-                        <Tag>{type(item)}</Tag>
+                        <span class="settings-v2-provider-name truncate">{error.source}</span>
+                        <Tag class="settings-v2-provider-error-tag">
+                          {language.t("settings.providers.tag.configError")}
+                        </Tag>
                       </div>
-                    </div>
-                    <div class="flex items-center gap-1">
-                      <Show when={canRefresh(item.id)}>
-                        <ButtonV2
-                          size="normal"
-                          variant="ghost-muted"
-                          disabled={refreshing[item.id]}
-                          onClick={(event: MouseEvent) => {
-                            event.stopPropagation()
-                            void refreshModels(item.id, item.name)
-                          }}
-                        >
-                          {refreshing[item.id]
-                            ? language.t("provider.models.refresh.refreshing")
-                            : language.t("common.refresh")}
-                        </ButtonV2>
-                      </Show>
-                      <Show
-                        when={canDisconnect(item)}
-                        fallback={
-                          <span class="settings-v2-provider-env-hint">
-                            {language.t("settings.providers.connected.environmentDescription")}
-                          </span>
-                        }
-                      >
-                        <ButtonV2
-                          size="normal"
-                          variant="ghost-muted"
-                          onClick={(event: MouseEvent) => {
-                            event.stopPropagation()
-                            void disconnect(item.id, item.name)
-                          }}
-                        >
-                          {language.t("common.disconnect")}
-                        </ButtonV2>
-                      </Show>
+                      <p class="settings-v2-provider-description">
+                        {errorKindLabel(error.kind)}: {error.message}
+                      </p>
                     </div>
                   </div>
-                )}
-              </For>
-            </Show>
-          </SettingsListV2>
-        </div>
-
-        <div class="settings-v2-section">
-          <h3 class="settings-v2-section-title">{language.t("settings.providers.section.popular")}</h3>
-          <SettingsListV2>
-            <For each={popular()}>
+                </div>
+              )}
+            </For>
+            <For each={connected()}>
               {(item) => (
-                <div class="settings-v2-provider-row">
+                <div
+                  class="settings-v2-provider-row group cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openProviderConfig(item.id)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return
+                    event.preventDefault()
+                    openProviderConfig(item.id)
+                  }}
+                >
                   <div class="settings-v2-provider-lead">
                     <ProviderIcon
                       id={item.id}
@@ -320,69 +261,157 @@ export const SettingsProvidersV2: Component = () => {
                       height={PROVIDER_ICON_SIZE}
                       class="settings-v2-provider-icon shrink-0"
                     />
-                    <div class="settings-v2-provider-copy">
-                      <div class="settings-v2-provider-main">
-                        <span class="settings-v2-provider-name">{item.name}</span>
-                      </div>
-                      <Show when={note(item.id)}>
-                        {(key) => <p class="settings-v2-provider-description">{language.t(key())}</p>}
-                      </Show>
+                    <div class="settings-v2-provider-main">
+                      <span class="settings-v2-provider-name truncate">{item.name}</span>
+                      <Tag>{type(item)}</Tag>
                     </div>
                   </div>
-                  <ButtonV2
-                    size="normal"
-                    variant="neutral"
-                    icon="plus"
-                    onClick={() => {
-                      dialog.show(() => <DialogConnectProvider provider={item.id} />)
-                    }}
-                  >
-                    {language.t("common.connect")}
-                  </ButtonV2>
+                  <div class="flex items-center gap-1">
+                    <Show when={canRefresh(item.id)}>
+                      <ButtonV2
+                        size="normal"
+                        variant="ghost-muted"
+                        disabled={refreshing[item.id]}
+                        onClick={(event: MouseEvent) => {
+                          event.stopPropagation()
+                          void refreshModels(item.id, item.name)
+                        }}
+                      >
+                        {refreshing[item.id]
+                          ? language.t("provider.models.refresh.refreshing")
+                          : language.t("common.refresh")}
+                      </ButtonV2>
+                    </Show>
+                    <Show
+                      when={canDisconnect(item)}
+                      fallback={
+                        <span class="settings-v2-provider-env-hint">
+                          {language.t("settings.providers.connected.environmentDescription")}
+                          <Show when={item.env.length > 0}> · {item.env.join(", ")}</Show>
+                        </span>
+                      }
+                    >
+                      <ButtonV2
+                        size="normal"
+                        variant="ghost-muted"
+                        onClick={(event: MouseEvent) => {
+                          event.stopPropagation()
+                          void disconnect(item.id, item.name)
+                        }}
+                      >
+                        {language.t("common.disconnect")}
+                      </ButtonV2>
+                    </Show>
+                  </div>
                 </div>
               )}
             </For>
-
-            <div class="settings-v2-provider-row" data-component="custom-provider-section">
-              <div class="settings-v2-provider-lead">
-                <ProviderIcon
-                  id="synthetic"
-                  width={PROVIDER_ICON_SIZE}
-                  height={PROVIDER_ICON_SIZE}
-                  class="settings-v2-provider-icon shrink-0"
-                />
-                <div class="settings-v2-provider-copy">
-                  <div class="settings-v2-provider-main">
-                    <span class="settings-v2-provider-name">{language.t("provider.custom.title")}</span>
-                    <Tag>{language.t("settings.providers.tag.custom")}</Tag>
-                  </div>
-                  <p class="settings-v2-provider-description">{language.t("settings.providers.custom.description")}</p>
-                </div>
-              </div>
-              <ButtonV2
-                size="normal"
-                variant="neutral"
-                icon="plus"
-                onClick={() => {
-                  dialog.show(() => <DialogCustomProvider back="close" />)
-                }}
-              >
-                {language.t("common.connect")}
-              </ButtonV2>
-            </div>
-          </SettingsListV2>
-
-          <button
-            type="button"
-            class="settings-v2-providers-view-all"
-            onClick={() => {
-              dialog.show(() => <DialogSelectProvider />)
-            }}
-          >
-            {language.t("dialog.provider.viewAll")}
-          </button>
-        </div>
+          </Show>
+        </SettingsListV2>
       </div>
-    </>
+
+      <div class="settings-v2-section">
+        <h3 class="settings-v2-section-title">{language.t("settings.providers.section.popular")}</h3>
+        <SettingsListV2>
+          <For each={brands()}>
+            {(brand) => (
+              <section class="settings-v2-section" aria-label={brand.name}>
+                <h4 class="settings-v2-section-title">{brand.name}</h4>
+                <For each={brand.items}>
+                  {(item) => (
+                    <div class="settings-v2-provider-row">
+                      <div class="settings-v2-provider-lead">
+                        <ProviderIcon
+                          id={item.id}
+                          width={PROVIDER_ICON_SIZE}
+                          height={PROVIDER_ICON_SIZE}
+                          class="settings-v2-provider-icon shrink-0"
+                        />
+                        <div class="settings-v2-provider-copy">
+                          <div class="settings-v2-provider-main">
+                            <span class="settings-v2-provider-name">{item.name}</span>
+                          </div>
+                          <Show when={note(item.id)}>
+                            {(key) => <p class="settings-v2-provider-description">{language.t(key())}</p>}
+                          </Show>
+                          <Show when={providerPreset(item.id)}>
+                            {(preset) => (
+                              <p class="settings-v2-provider-description">
+                                {language.t(`settings.providers.billing.${preset().billing}`)} ·{" "}
+                                {language.t(`settings.providers.region.${preset().region}`)}
+                              </p>
+                            )}
+                          </Show>
+                          <Show when={Object.keys(item.models).length === 0}>
+                            <p class="settings-v2-provider-description" role="status">
+                              {language.t("settings.providers.catalogPending")}
+                            </p>
+                          </Show>
+                          <Show
+                            when={serverSync.data.provider_auth[item.id]?.some((method) => method.type === "oauth")}
+                          >
+                            <p class="settings-v2-provider-description">
+                              {serverSync.data.provider_auth[item.id]?.map((method) => method.label).join(" · ")}
+                            </p>
+                          </Show>
+                        </div>
+                      </div>
+                      <ButtonV2
+                        size="normal"
+                        variant="neutral"
+                        icon="plus"
+                        onClick={() => {
+                          dialog.show(() => <DialogConnectProvider provider={item.id} />)
+                        }}
+                      >
+                        {language.t("common.connect")}
+                      </ButtonV2>
+                    </div>
+                  )}
+                </For>
+              </section>
+            )}
+          </For>
+
+          <div class="settings-v2-provider-row" data-component="custom-provider-section">
+            <div class="settings-v2-provider-lead">
+              <ProviderIcon
+                id="synthetic"
+                width={PROVIDER_ICON_SIZE}
+                height={PROVIDER_ICON_SIZE}
+                class="settings-v2-provider-icon shrink-0"
+              />
+              <div class="settings-v2-provider-copy">
+                <div class="settings-v2-provider-main">
+                  <span class="settings-v2-provider-name">{language.t("provider.custom.title")}</span>
+                  <Tag>{language.t("settings.providers.tag.custom")}</Tag>
+                </div>
+                <p class="settings-v2-provider-description">{language.t("settings.providers.custom.description")}</p>
+              </div>
+            </div>
+            <ButtonV2
+              size="normal"
+              variant="neutral"
+              icon="plus"
+              onClick={() => {
+                dialog.show(() => <DialogCustomProvider back="close" />)
+              }}
+            >
+              {language.t("common.connect")}
+            </ButtonV2>
+          </div>
+        </SettingsListV2>
+
+        <button
+          type="button"
+          class="settings-v2-providers-view-all"
+          onClick={() => {
+            dialog.show(() => <DialogSelectProvider />)
+          }}
+        >
+          {language.t("dialog.provider.viewAll")}
+        </button>
+      </div>
+    </SettingsPage>
   )
 }

@@ -11,6 +11,7 @@ import { EventV2 } from "./event"
 import { makeGlobalNode } from "./effect/app-node"
 import { httpClient } from "./effect/app-node-platform"
 import { OFFICIAL_PROVIDER_CATALOG_ALIASES } from "./provider-official"
+import { PROVIDER_BOOTSTRAP_CATALOG } from "./provider-presets"
 
 export const CatalogModelStatus = Schema.Literals(["alpha", "beta", "deprecated"])
 export type CatalogModelStatus = typeof CatalogModelStatus.Type
@@ -108,6 +109,8 @@ export const Provider = Schema.Struct({
 })
 
 export type Provider = Schema.Schema.Type<typeof Provider>
+
+const bootstrap = Schema.decodeUnknownSync(Schema.Record(Schema.String, Provider))(PROVIDER_BOOTSTRAP_CATALOG)
 
 export const Event = {
   Refreshed: EventV2.define({
@@ -294,7 +297,7 @@ export const DEEPAGENT_MODEL_PROTOCOL: Record<string, "openai-compatible.respons
 }
 
 export const mergeVendored = (loaded: Record<string, Provider>) => {
-  const merged = { ...OFFICIAL_VENDORED_CATALOG, ...loaded }
+  const merged = { ...loaded }
   // D2 — official-id catalog bridge, applied at the single choke point every consumer reads
   // (the V1 provider loader's database, the V2 Catalog via ModelsDevPlugin, and the refresh
   // handler all call ModelsDev.get()). Upstream models.dev renamed entries out from under
@@ -308,7 +311,7 @@ export const mergeVendored = (loaded: Record<string, Provider>) => {
     if (!entry) continue
     merged[officialID] = { ...entry, id: officialID }
   }
-  return merged
+  return { ...bootstrap, ...OFFICIAL_VENDORED_CATALOG, ...merged }
 }
 
 // Chain entries may be base URLs ("https://models.dev") or full file URLs (".../api.json",
@@ -357,7 +360,7 @@ export const layer = Layer.effect(
 
     // Ordered fetch chain: the self-hosted aly mirror (hourly-synced from models.dev, reachable
     // from CN networks) first, models.dev itself as the authoritative fallback. No build-time
-    // snapshot: offline first runs serve the vendored deepagent catalog until refresh heals.
+    // snapshot: offline first runs retain connection identities; refresh supplies model specs.
     const rawSource = Flag.DEEPAGENT_CODE_MODELS_URL
     const sources = (rawSource ?? "https://ai.deepagent.ltd,https://models.dev")
       .split(",")
@@ -426,11 +429,11 @@ export const layer = Layer.effect(
     const populate = Effect.gen(function* () {
       const fromDisk = yield* loadFromDisk
       if (fromDisk) return mergeVendored(fromDisk)
-      if (Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH) return OFFICIAL_VENDORED_CATALOG
+      if (Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH) return mergeVendored({})
       // The root-scoped flock is cross-process: concurrent CLIs sharing this Global root serialize
       // the cache file, while independent embedded roots cannot accidentally share a module path.
       // A failed chain must not kill provider init (there is no bundled snapshot anymore): serve
-      // the vendored deepagent catalog and let the hourly refresh heal the disk cache.
+      // supported connection identities and let the hourly refresh heal the disk cache.
       const data = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* flock.acquire(lockKey)
@@ -443,7 +446,7 @@ export const layer = Layer.effect(
           ),
         ),
       )
-      if (!data) return OFFICIAL_VENDORED_CATALOG
+      if (!data) return mergeVendored({})
       return mergeVendored(data)
     }).pipe(Effect.withSpan("ModelsDev.populate"), Effect.orDie)
 

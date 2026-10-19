@@ -18,6 +18,7 @@ import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import { isOfficialProvider } from "@deepagent-code/core/provider-official"
+import { providerPreset } from "@deepagent-code/core/provider-presets"
 
 // Recommended/official providers ship a fixed protocol (npm) tied to a canonical endpoint. Letting
 // users point one of these at a relay/local server silently breaks because the protocol no longer
@@ -25,19 +26,7 @@ import { isOfficialProvider } from "@deepagent-code/core/provider-official"
 // the baseURL field for these and only exposes it for ad-hoc config/custom providers. Google and xAI
 // resolve their real endpoint from the bundled SDK; the URL here only satisfies form validation and
 // the placeholder. Keys must exist for every official id (see OFFICIAL_PROVIDER_IDS in core).
-const providerBaseURL: Record<string, string> = {
-  openai: "https://api.openai.com/v1",
-  deepseek: "https://api.deepseek.com",
-  anthropic: "https://api.anthropic.com/v1",
-  zhipuai: "https://open.bigmodel.cn/api/paas/v4",
-  "zhipuai-coding-plan": "https://open.bigmodel.cn/api/coding/paas/v4",
-  zai: "https://api.z.ai/api/paas/v4",
-  "zai-coding-plan": "https://api.z.ai/api/coding/paas/v4",
-  "kimi-for-coding": "https://api.kimi.com/coding/v1",
-  "moonshotai-cn": "https://api.moonshot.cn/v1",
-  xai: "https://api.x.ai/v1",
-  google: "https://generativelanguage.googleapis.com/v1beta",
-}
+const providerBaseURL = (providerID: string) => providerPreset(providerID)?.api
 
 // Official = first-party in the backend (key store credentials, fixed protocol). This must match the
 // backend's OFFICIAL_PROVIDER_IDS exactly so the connect flow routes credentials the same way the
@@ -440,7 +429,9 @@ export function DialogConnectProvider(props: { provider: string }) {
       baseURL:
         typeof serverSync.data.config.provider?.[props.provider]?.options?.baseURL === "string"
           ? serverSync.data.config.provider[props.provider]!.options!.baseURL
-          : (providerBaseURL[props.provider] ?? ""),
+          : ((provider().models && Object.values(provider().models)[0]?.api?.url) ??
+            providerBaseURL(props.provider) ??
+            ""),
       error: undefined as string | undefined,
       baseURLError: undefined as string | undefined,
       discovered: [] as DiscoveredProviderModel[],
@@ -452,6 +443,16 @@ export function DialogConnectProvider(props: { provider: string }) {
       maxRetries: transportOption("maxRetries"),
       transportError: undefined as string | undefined,
     })
+    const protocol = () => {
+      if (props.provider === "deepagent") return "OpenAI Responses / Chat · Anthropic Messages"
+      const npm = providerPreset(props.provider)?.npm ?? Object.values(provider().models)[0]?.api?.npm
+      if (npm === "@ai-sdk/anthropic") return "Anthropic Messages"
+      if (npm === "@ai-sdk/openai") return "OpenAI Responses"
+      if (npm === "@ai-sdk/google") return "Google Gemini"
+      if (npm === "@ai-sdk/xai") return "xAI"
+      if (npm === "@openrouter/ai-sdk-provider") return "OpenRouter"
+      return "OpenAI-compatible"
+    }
 
     // Parse a transport field: empty → undefined (use default); "0" for header/request timeout →
     // false (disabled); otherwise a positive integer. Returns { ok, value } so callers can reject
@@ -490,7 +491,7 @@ export function DialogConnectProvider(props: { provider: string }) {
       // Built-in providers don't render a baseURL field; use their canonical endpoint instead of
       // letting users override it (which would break the fixed protocol).
       const baseURL = isBuiltinProvider(props.provider)
-        ? providerBaseURL[props.provider]
+        ? providerBaseURL(props.provider)
         : ((formData.get("baseURL") as string | null)?.trim() ?? "")
       const key = apiKey.trim()
 
@@ -513,32 +514,47 @@ export function DialogConnectProvider(props: { provider: string }) {
           return
         }
         setFormStore("transportError", undefined)
-        if (key) {
-          await serverSDK.client.auth.set({
-            providerID: props.provider,
-            auth: {
-              type: "api",
-              key,
+        try {
+          if (key) {
+            await serverSDK.client.auth.set(
+              {
+                providerID: props.provider,
+                auth: {
+                  type: "api",
+                  key,
+                },
+              },
+              { throwOnError: true },
+            )
+          }
+          // Route transport tuning through the config overlay's intercept → SettingsStore. The
+          // remaining official-provider fields are ignored by the backend loader; only options.<transport>
+          // is picked up (and stripped from the config file). Always send the key so cleared fields reset.
+          const disabled = (serverSync.data.config.disabled_providers ?? []).filter((id) => id !== props.provider)
+          await serverSync.updateConfig({
+            disabled_providers: disabled,
+            provider: {
+              [props.provider]: { options: transport },
             },
           })
+          await serverSDK.client.global.dispose()
+          serverSync.refreshProviders()
+          showToast({
+            variant: "success",
+            icon: "circle-check",
+            title: catalogModels().length
+              ? language.t("provider.connect.toast.connected.title", { provider: provider().name })
+              : language.t("provider.connect.toast.saved.title"),
+            description: catalogModels().length
+              ? language.t("provider.connect.toast.connected.description", { provider: provider().name })
+              : language.t("provider.connect.toast.saved.description"),
+          })
+        } catch (error) {
+          if (!alive.value) return
+          const message = formatError(error, language.t("common.requestFailed"))
+          setFormStore("error", message)
+          showToast({ title: language.t("common.requestFailed"), description: message })
         }
-        // Route transport tuning through the config overlay's intercept → SettingsStore. The
-        // remaining official-provider fields are ignored by the backend loader; only options.<transport>
-        // is picked up (and stripped from the config file). Always send the key so cleared fields reset.
-        const disabled = (serverSync.data.config.disabled_providers ?? []).filter((id) => id !== props.provider)
-        await serverSync.updateConfig({
-          disabled_providers: disabled,
-          provider: {
-            [props.provider]: { options: transport },
-          },
-        })
-        await serverSDK.client.global.dispose()
-        showToast({
-          variant: "success",
-          icon: "circle-check",
-          title: language.t("provider.connect.toast.connected.title", { provider: provider().name }),
-          description: language.t("provider.connect.toast.connected.description", { provider: provider().name }),
-        })
         return
       }
 
@@ -615,6 +631,36 @@ export function DialogConnectProvider(props: { provider: string }) {
 
     return (
       <div class="flex flex-col gap-6">
+        <Show when={providerPreset(props.provider)}>
+          {(preset) => (
+            <div
+              class="grid min-w-0 gap-2 rounded-lg bg-surface-raised-base p-3 text-12-regular"
+              data-component="provider-connection-metadata"
+            >
+              <p>
+                {language.t(`settings.providers.billing.${preset().billing}`)} ·{" "}
+                {language.t(`settings.providers.region.${preset().region}`)}
+              </p>
+              <dl class="grid min-w-0 gap-2">
+                <div>
+                  <dt class="text-text-weak">{language.t("provider.custom.field.protocol.label")}</dt>
+                  <dd class="break-words">{protocol()}</dd>
+                </div>
+                <div>
+                  <dt class="text-text-weak">{language.t("provider.custom.field.baseURL.label")}</dt>
+                  <dd>
+                    <code class="break-all select-text">{formStore.baseURL}</code>
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          )}
+        </Show>
+        <Show when={catalogModels().length === 0}>
+          <p class="text-12-regular text-text-weak" role="status">
+            {language.t("settings.providers.catalogPending")}
+          </p>
+        </Show>
         <div class="text-14-regular text-text-base">
           {language.t("provider.connect.apiKey.description", { provider: provider().name })}
         </div>
@@ -623,7 +669,7 @@ export function DialogConnectProvider(props: { provider: string }) {
             <TextField
               type="text"
               label={language.t("provider.custom.field.baseURL.label")}
-              placeholder={providerBaseURL[props.provider] ?? language.t("provider.custom.field.baseURL.placeholder")}
+              placeholder={providerBaseURL(props.provider) ?? language.t("provider.custom.field.baseURL.placeholder")}
               name="baseURL"
               value={formStore.baseURL}
               onChange={(v) => setFormStore("baseURL", v)}
@@ -633,6 +679,7 @@ export function DialogConnectProvider(props: { provider: string }) {
           </Show>
           <TextField
             autofocus
+            class="w-full min-w-0"
             type="text"
             label={language.t("provider.connect.apiKey.label", { provider: provider().name })}
             placeholder={language.t("provider.connect.apiKey.placeholder")}
@@ -847,7 +894,7 @@ export function DialogConnectProvider(props: { provider: string }) {
 
   return (
     <Dialog
-      class="[&_[data-slot=dialog-body]]:min-h-0"
+      class="provider-connect-dialog [&_[data-slot=dialog-body]]:min-h-0"
       title={
         <IconButton
           tabIndex={-1}
@@ -858,10 +905,10 @@ export function DialogConnectProvider(props: { provider: string }) {
         />
       }
     >
-      <div class="flex h-full min-h-0 flex-col gap-6 overflow-y-auto px-2.5 pb-3">
-        <div class="px-2.5 flex gap-4 items-center">
+      <div class="flex h-full min-h-0 min-w-0 flex-col gap-6 overflow-y-auto px-2.5 pb-3">
+        <div class="px-2.5 flex min-w-0 gap-4 items-center">
           <ProviderIcon id={props.provider} class="size-5 shrink-0 icon-strong-base" />
-          <div class="text-16-medium text-text-strong">
+          <div class="min-w-0 break-words text-16-medium text-text-strong">
             <Switch>
               <Match when={props.provider === "anthropic" && method()?.label?.toLowerCase().includes("max")}>
                 {language.t("provider.connect.title.anthropicProMax")}

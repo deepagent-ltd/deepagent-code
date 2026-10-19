@@ -4,7 +4,8 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { Global } from "@deepagent-code/core/global"
-import { ModelsDev, OFFICIAL_VENDORED_CATALOG } from "@deepagent-code/core/models-dev"
+import { ModelsDev, mergeVendored } from "@deepagent-code/core/models-dev"
+import { PROVIDER_PRESETS } from "@deepagent-code/core/provider-presets"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { it } from "./lib/effect"
 import { eventLayer } from "./fixture/event-layer"
@@ -133,10 +134,7 @@ afterAll(async () => {
 
 // Vendored first-party catalog entries (deepagent) are always overlaid under
 // whatever the disk/snapshot/network source provides.
-const merged = (base: Record<string, ModelsDev.Provider>): Record<string, ModelsDev.Provider> => ({
-  ...OFFICIAL_VENDORED_CATALOG,
-  ...base,
-})
+const merged = mergeVendored
 
 const initialState: MockState = {
   body: JSON.stringify(fixture),
@@ -160,7 +158,7 @@ describe("ModelsDev Service", () => {
   )
 
   it.live(
-    "get() ships the vendored first-party catalog when disk empty, fetch disabled, and no bundled snapshot is injected",
+    "get() retains supported connection identities in an empty offline profile without claiming loaded models",
     () =>
       Effect.gen(function* () {
         const state = yield* Ref.make(initialState)
@@ -168,8 +166,11 @@ describe("ModelsDev Service", () => {
           state,
           ModelsDev.Service.use((s) => s.get()),
         )
-        expect(result).toEqual(OFFICIAL_VENDORED_CATALOG)
+        expect(result).toEqual(mergeVendored({}))
         expect(result["deepagent"]).toBeDefined()
+        for (const preset of PROVIDER_PRESETS) expect(result[preset.id]?.id).toBe(preset.id)
+        expect(result.openai?.models).toEqual({})
+        expect(result["alibaba-coding-plan-cn"]?.api).toBe("https://coding.dashscope.aliyuncs.com/v1")
         const final = yield* Ref.get(state)
         expect(final.calls).toEqual([])
       }),
