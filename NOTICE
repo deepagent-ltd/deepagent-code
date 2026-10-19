@@ -8,6 +8,11 @@ copyright and permission notice required by that license.
 
 No endorsement by the opencode project or its contributors is implied.
 
+The shared browser proxy and CDP frame routing additionally adapt OpenCode's
+packages/plugin-browser and packages/desktop browser implementation at commit
+d099d2cb2a0869d07d2f533c66348e4868325a78. These upstream components use the MIT
+License reproduced below. The proxy source retains its full MIT notice.
+
 Upstream opencode MIT notice
 ---------------------------
 

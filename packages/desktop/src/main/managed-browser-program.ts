@@ -18,20 +18,38 @@ export function compileManagedBrowserProgram(
   fail: (code: BrowserSchema.Error["code"]) => never,
 ) {
   if (!BrowserSchema.allowsProgram(control, command)) return fail("BROWSER_SCOPE_DENIED")
+  return compileManagedBrowserProgramPlan(
+    control.profile === BrowserSchema.INTERACTION_PROFILE ? control.programGrants : undefined,
+    command,
+    json,
+    fail,
+  )
+}
+
+/** Pure plan validation only. Shared callers must independently establish their own
+ * profile/policy, current owner and permissions; grants or a compiled plan are not authority. */
+export function compileManagedBrowserProgramPlan(
+  programGrants: typeof BrowserSchema.ProgramGrants.Type | undefined,
+  command: Command,
+  json: string,
+  fail: (code: BrowserSchema.Error["code"]) => never,
+) {
+  if (command.scriptHash !== createHash("sha256").update(command.source).digest("hex"))
+    return fail("BROWSER_SCOPE_DENIED")
+  const allowed = Schema.decodeUnknownOption(BrowserSchema.ProgramGrants, { onExcessProperty: "error" })(programGrants)
+  if (Option.isNone(allowed)) return fail("BROWSER_SCOPE_DENIED")
+  // This keeps targets unique and args/source within the original command contract,
+  // while their hashes below bind original bytes rather than a normalized JSON value.
+  if (Option.isNone(Schema.decodeUnknownOption(BrowserSchema.Command, { onExcessProperty: "error" })(command)))
+    return fail("BROWSER_INVALID_RECORD")
   if (Buffer.byteLength(json, "utf8") > BrowserSchema.MAX_SCRIPT_RESULT_BYTES) return fail("BROWSER_OUTPUT_LIMIT")
   const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(BrowserSchema.ProgramPlan), {
     onExcessProperty: "error",
   })(json)
   if (Option.isNone(decoded)) return fail("BROWSER_INVALID_RECORD")
   const plan = decoded.value
-  const grant =
-    control.profile === BrowserSchema.INTERACTION_PROFILE
-      ? control.programGrants?.find(
-          (value) =>
-            value.scriptHash === command.scriptHash &&
-            value.argsHash === createHash("sha256").update(command.argsJSON).digest("hex"),
-        )
-      : undefined
+  const grant = allowed.value.find((value) => value.scriptHash === command.scriptHash &&
+    value.argsHash === createHash("sha256").update(command.argsJSON).digest("hex"))
   if (
     !grant ||
     plan.steps.length > grant.maxSteps ||

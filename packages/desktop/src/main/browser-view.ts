@@ -21,6 +21,7 @@ type Entry = {
   view: WebContentsView
   bounds: { x: number; y: number; width: number; height: number }
   visible: boolean
+  navigationRequested: boolean
   closed: () => void
   closing?: Promise<void>
 }
@@ -67,7 +68,7 @@ function ensureView(window: BrowserWindow): Entry {
     if (views.get(window)?.view === view)
       void browserView.destroy(window).catch((error) => console.error("Browser view cleanup failed", error))
   }
-  const entry: Entry = { view, bounds: { x: 0, y: 0, width: 0, height: 0 }, visible: false, closed }
+  const entry: Entry = { view, bounds: { x: 0, y: 0, width: 0, height: 0 }, visible: false, navigationRequested: false, closed }
   views.set(window, entry)
   custody.add(entry)
 
@@ -113,7 +114,10 @@ export const browserView = {
     entry.visible = true
     if (!window.contentView.children.includes(entry.view)) window.contentView.addChildView(entry.view)
     applyBounds(entry)
-    if (!entry.view.webContents.getURL()) void entry.view.webContents.loadURL(HOME).catch(() => {})
+    if (!entry.navigationRequested && !entry.view.webContents.getURL()) {
+      entry.navigationRequested = true
+      void entry.view.webContents.loadURL(HOME).catch(() => {})
+    }
     emit(window, entry)
   },
   hide(window: BrowserWindow) {
@@ -132,9 +136,11 @@ export const browserView = {
     applyBounds(entry)
   },
   navigate(window: BrowserWindow, url: string) {
-    const entry = views.get(window)
     const target = url.trim()
-    if (!entry || entry.closing || entry.view.webContents.isDestroyed() || !target) return
+    if (window.isDestroyed() || !target || views.get(window)?.closing) return
+    const entry = ensureView(window)
+    // Showing a view before this navigation commits must not replace it with HOME.
+    entry.navigationRequested = true
     // Only http(s) — never file:// or app protocols that could reach local resources.
     void entry.view.webContents.loadURL(/^https?:\/\//i.test(target) ? target : `https://${target}`).catch(() => {})
   },

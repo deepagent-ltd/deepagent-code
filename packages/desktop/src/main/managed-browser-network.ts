@@ -761,7 +761,7 @@ function noProxy(hostname: string, port: number, source: string) {
   })
 }
 // Fixed IANA special-use exclusions, plus multicast/reserved and IPv6 transition ranges.
-function publicAddress(value: string) {
+export function publicAddress(value: string) {
   if (net.isIP(value) === 4) {
     const bytes = value.split(".").map(Number)
     return !(bytes[0] === 0 || bytes[0] === 10 || bytes[0] === 127 || bytes[0]! >= 224 ||

@@ -3,7 +3,8 @@ export * as BrowserFiles from "./file-exchange"
 import fs from "node:fs/promises"
 import type { FileHandle } from "node:fs/promises"
 import path from "node:path"
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { spawn } from "node:child_process"
+import { Readable, Writable } from "node:stream"
 import { createHash, randomUUID } from "node:crypto"
 import { Context, Deferred, Effect, Exit, Layer, Option, Schema, Scope } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
@@ -14,7 +15,14 @@ import { BrowserSchema } from "@deepagent-code/core/browser/schema"
 import { BrowserFileCapability } from "@deepagent-code/core/browser/file-capability"
 import { BrowserFileExchange } from "@deepagent-code/core/browser/file-exchange"
 import { BrowserFileSchema } from "@deepagent-code/core/browser/file-exchange.schema"
+import { SharedBrowserFileSchema } from "@deepagent-code/core/browser/shared-file-schema"
+import { SharedBrowserFileBinding } from "@deepagent-code/core/browser/shared-file-binding"
+import { SharedBrowserFileExchange } from "@deepagent-code/core/browser/shared-file-exchange"
+import { SharedBrowserSchema } from "@deepagent-code/core/browser/shared-schema"
+import { SharedBrowserControl } from "@deepagent-code/core/browser/shared-control"
 import { WorkFileHelper } from "../installation/work-file-helper"
+import { LocalAuthority } from "../installation/local-authority"
+import { WindowsBrowserFileStage } from "./windows-file-stage"
 
 const fail = BrowserFileExchange.failure
 const hash = BrowserFileExchange.hash
@@ -33,16 +41,26 @@ const Reply = Schema.Struct({ version: Schema.Literal(1), id: Schema.String,
   capture_id: Schema.optional(Schema.String), binary_complete: Schema.optional(Schema.Boolean),
   destination_parent: Schema.optional(WireIdentity),
   preparation: Schema.optional(Schema.Struct({ parent: WireIdentity, stage: WireIdentity })),
+  browser_stage: Schema.optional(WindowsBrowserFileStage.Description),
   write: Schema.optional(Schema.Struct({ parent: WireIdentity, stage: WireIdentity, file: WireIdentity,
     sha256: BrowserFileSchema.Digest, bytes: BrowserFileSchema.FileBytes, previous: Schema.Struct({ kind: Schema.Literal("missing") }),
     publication: Schema.Literal("optimistic_namespace_publish") })),
 })
 type Asset = Effect.Success<ReturnType<typeof WorkFileHelper.browserAsset>>
 type Response = { value: typeof Reply.Type; bytes: Buffer }
-type Native = { child: ChildProcessWithoutNullStreams; exited: Promise<void>; stopped: boolean; live: boolean; closing?: Promise<void>;
+type HelperProcess = {
+  stdin: Writable; stdout: Readable; stderr: Readable
+  exitCode: number | null; signalCode: NodeJS.Signals | null
+  once(event: "close" | "error", listener: () => void): unknown
+  kill(signal?: NodeJS.Signals | number): boolean
+  retainBrowserCustody?: () => void
+}
+type Native = { holdingStage: boolean; child: HelperProcess; release?: () => Promise<void>; exited: Promise<void>; stopped: boolean; live: boolean; closing?: Promise<void>;
   buffer: Buffer; pending?: { id: string; resolve: (value: Response) => void; reject: (error: BrowserFileSchema.Error) => void } }
-type Leaf = { artifact: BrowserFileSchema.Artifact; grant: BrowserFileSchema.Grant; process: Native;
-  stage: string; stageIdentity: BrowserFileSchema.Identity; file: FileHandle; fileIdentity: BrowserFileSchema.Identity;
+type FileArtifact = BrowserFileSchema.Artifact | SharedBrowserFileSchema.Artifact
+type FileGrant = BrowserFileSchema.Grant | SharedBrowserFileSchema.Grant
+type Leaf = { artifact: FileArtifact; grant: FileGrant; process: Native;
+  stage: string; stageIdentity: BrowserFileSchema.Identity; file?: FileHandle; windows?: WindowsBrowserFileStage.Description; fileIdentity: BrowserFileSchema.Identity;
   offset: number; stream: ReturnType<typeof createHash>; captureID?: string; complete: boolean; publication?: BrowserFileCapability.Observation;
   unknown: boolean; cleaned: boolean; sealed: boolean; fileClosed?: boolean }
 type Transfer = { active: boolean; asset: Asset; leaves: Map<string, Leaf>; processes: Set<Native>; retiring?: Promise<void>; current: () => Promise<void> }
@@ -57,30 +75,32 @@ function identity(stat: Awaited<ReturnType<typeof fs.lstat>> & { dev: number | b
   if (process.platform === "win32") throw fail()
   return { kind: "posix", device: String(stat.dev), inode: String(stat.ino) }
 }
-async function open(asset: Asset, directory: string, expected: BrowserFileSchema.Identity, captured: (entry: Native) => void) {
+async function open(asset: Asset, directory: string, expected: BrowserFileSchema.Identity, captured: (entry: Native) => void, scope: Scope.Scope) {
   await Effect.runPromise(asset.current)
-  const child = spawn(asset.filename, [], { cwd: path.dirname(asset.filename), env: {}, stdio: ["pipe", "pipe", "pipe"] })
-  const entry: Native = { child, exited: new Promise<void>((resolve) => child.once("close", resolve)), stopped: false, live: true, buffer: Buffer.alloc(0) }
-  child.once("close", () => { entry.stopped = true })
+  const original = "launch" in asset && asset.launch ? await asset.launch(scope) : undefined
+  if (process.platform === "win32" && !original) throw fail()
+  const child: HelperProcess = original?.child ?? spawn(asset.filename, [], { cwd: path.dirname(asset.filename), env: {}, stdio: ["pipe", "pipe", "pipe"] })
+  const entry: Native = { holdingStage: false, child, release: original?.release, exited: new Promise<void>((resolve) => child.once("close", resolve)), stopped: false, live: true, buffer: Buffer.alloc(0) }
+  child.once("close", () => { entry.stopped = true; void entry.release?.().catch(() => undefined) })
   captured(entry)
   child.stderr.resume()
   const refused = () => { entry.live = false; entry.pending?.reject(fail("BROWSER_FILE_UNKNOWN")); entry.pending = undefined }
   child.once("error", refused)
   child.once("close", refused)
   child.stdout.on("data", (data: Buffer) => {
-    if (!entry.live || !entry.pending || entry.buffer.length + data.length > 65_536 + 4 + BrowserFileSchema.CHUNK_BYTES) { refused(); child.kill(); return }
+    if (!entry.live || !entry.pending || entry.buffer.length + data.length > 65_536 + 4 + BrowserFileSchema.CHUNK_BYTES) { refused(); if (!entry.holdingStage) child.kill(); return }
     entry.buffer = Buffer.concat([entry.buffer, data])
     if (entry.buffer.length < 4) return
     const length = entry.buffer.readUInt32BE(0)
-    if (length === 0 || length > 65_536) { refused(); child.kill(); return }
+    if (length === 0 || length > 65_536) { refused(); if (!entry.holdingStage) child.kill(); return }
     if (entry.buffer.length < length + 4) return
     const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Reply), { onExcessProperty: "error" })(entry.buffer.subarray(4, length + 4).toString("utf8"))
     if (Option.isNone(decoded) || decoded.value.id !== entry.pending.id || decoded.value.payload_bytes > BrowserFileSchema.CHUNK_BYTES) {
-      refused(); child.kill(); return
+      refused(); if (!entry.holdingStage) child.kill(); return
     }
     const end = length + 4 + decoded.value.payload_bytes
     if (entry.buffer.length < end) return
-    if (entry.buffer.length !== end) { refused(); child.kill(); return }
+    if (entry.buffer.length !== end) { refused(); if (!entry.holdingStage) child.kill(); return }
     const pending = entry.pending
     const bytes = entry.buffer.subarray(length + 4, end)
     entry.buffer = Buffer.alloc(0)
@@ -93,40 +113,63 @@ async function open(asset: Asset, directory: string, expected: BrowserFileSchema
     return entry
   } catch (error) { await close(entry); throw error }
 }
-async function request(entry: Native, body: Record<string, unknown>, deadline = Date.now() + 10_000): Promise<Response> {
+async function request(entry: Native, body: Record<string, unknown>, deadline = Date.now() + 10_000, payload?: Buffer): Promise<Response> {
   if (!entry.live || entry.pending || deadline <= Date.now()) throw fail("BROWSER_FILE_CHANGED")
   return new Promise<Response>((resolve, reject) => {
     const id = randomUUID()
     const timer = setTimeout(() => {
       if (entry.pending?.id !== id) return
-      entry.pending = undefined; entry.live = false; entry.child.kill("SIGKILL"); reject(fail("BROWSER_FILE_UNKNOWN"))
+      entry.pending = undefined; entry.live = false; if (!entry.holdingStage) entry.child.kill("SIGKILL"); reject(fail("BROWSER_FILE_UNKNOWN"))
     }, Math.min(30_000, deadline - Date.now()))
     entry.pending = { id, resolve: (value) => { clearTimeout(timer); resolve(value) }, reject: (error) => { clearTimeout(timer); reject(error) } }
     const data = Buffer.from(JSON.stringify({ version: 1, id, ...body }))
     if (data.length > 65_536) { entry.pending = undefined; clearTimeout(timer); reject(fail()); return }
     const size = Buffer.alloc(4); size.writeUInt32BE(data.length)
-    entry.child.stdin.write(Buffer.concat([size, data]), (error) => {
+    if (payload && (body.op !== "write_browser_stage" || payload.length < 1 || payload.length > BrowserFileSchema.CHUNK_BYTES ||
+      body.length !== payload.length)) { entry.pending = undefined; clearTimeout(timer); reject(fail()); return }
+    const failed = (error: Error | null | undefined) => {
       if (!error || entry.pending?.id !== id) return
+      if (payload) entry.live = false
       entry.pending = undefined; clearTimeout(timer); reject(fail("BROWSER_FILE_UNKNOWN"))
-    })
+    }
+    // Native's original pipe bounds each write at 1MiB+4. Keep metadata and
+    // raw binary payload ordered without expanding the 64KiB JSON frame.
+    entry.child.stdin.write(Buffer.concat([size, data]), failed)
+    if (payload) entry.child.stdin.write(payload, failed)
   })
 }
 function close(entry: Native) {
+  if (entry.holdingStage) return Promise.reject(fail("BROWSER_FILE_UNKNOWN"))
   // Only the first close owns native dispatch. Unknown retains this exact promise and child;
   // a later original close event is an observation, never a fresh kill or replay.
   entry.closing ??= (async () => {
-    if (entry.live && !entry.pending) await request(entry, { op: "close" }).catch(() => undefined)
-    entry.live = false
-    if (entry.child.exitCode === null && entry.child.signalCode === null) entry.child.kill("SIGKILL")
+    const ending = { value: Promise.resolve() }
+    if (process.platform === "win32") {
+      if (!entry.live || entry.pending) throw fail("BROWSER_FILE_UNKNOWN")
+      const closed = await request(entry, { op: "close" })
+      if (closed.value.status !== "closed" || closed.value.code !== null || closed.bytes.length !== 0) throw fail("BROWSER_FILE_UNKNOWN")
+      entry.live = false
+      // A protected custodian ends only after its exact Close acknowledgement.
+      // Native's close event still proves job, writer and both output EOFs joined.
+      ending.value = new Promise<void>((resolve, reject) => entry.child.stdin.end((error?: Error | null) => {
+        if (error) { reject(fail("BROWSER_FILE_UNKNOWN")); return }
+        resolve()
+      }))
+    } else {
+      if (entry.live && !entry.pending) await request(entry, { op: "close" }).catch(() => undefined)
+      entry.live = false
+      if (entry.child.exitCode === null && entry.child.signalCode === null) entry.child.kill("SIGKILL")
+    }
     const timer = { value: undefined as ReturnType<typeof setTimeout> | undefined }
-    const stopped = await Promise.race([entry.exited.then(() => true), new Promise<false>((resolve) => {
+    const stopped = await Promise.race([Promise.all([entry.exited, ending.value]).then(() => true), new Promise<false>((resolve) => {
       timer.value = setTimeout(() => resolve(false), 1000)
     })]).finally(() => clearTimeout(timer.value))
     if (!stopped) throw fail("BROWSER_FILE_UNKNOWN")
+    await entry.release?.()
   })()
   return entry.closing
 }
-async function rootIdentity(directory: string) {
+async function posixRootIdentity(directory: string) {
   if (process.platform !== "darwin" && process.platform !== "linux" || !path.isAbsolute(directory) || await fs.realpath(directory) !== directory) throw fail()
   const stat = await fs.lstat(directory, { bigint: true })
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail("BROWSER_FILE_CHANGED")
@@ -144,6 +187,7 @@ async function privateStage(directory: string, expected: BrowserFileSchema.Ident
 }
 
 export interface Interface {
+  readonly shared: SharedInterface
   readonly preview: (input: { controlID: string; scope: BrowserSchema.Scope; request: BrowserFileSchema.PreviewRequest }) =>
     Effect.Effect<{ previewID: string; preview: BrowserFileSchema.Preview }, BrowserFileSchema.Error>
   readonly approve: (input: { controlID: string; scope: BrowserSchema.Scope; command: BrowserFileSchema.Approve }) =>
@@ -153,6 +197,20 @@ export interface Interface {
   readonly list: (input: { controlID: string; scope: BrowserSchema.Scope; cursor?: string; limit?: number }) =>
     Effect.Effect<{ files: (typeof BrowserFileSchema.Summary.Type)[]; grants: BrowserFileSchema.GrantSummary[]; nextCursor: string | null }, BrowserFileSchema.Error>
 }
+export interface SharedInterface {
+  readonly preview: (input: { resourceID: string; scope: BrowserSchema.Scope; request: SharedBrowserFileSchema.PreviewRequest }) =>
+    Effect.Effect<{ previewID: string; preview: SharedBrowserFileSchema.Preview }, BrowserFileSchema.Error>
+  readonly approve: (input: { resourceID: string; scope: BrowserSchema.Scope; command: SharedBrowserFileSchema.Approve }) =>
+    Effect.Effect<SharedApprovalResult, BrowserFileSchema.Error>
+  readonly status: (input: { resourceID: string; scope: BrowserSchema.Scope; requestID: string }) =>
+    Effect.Effect<SharedStatusResult, BrowserFileSchema.Error>
+  readonly list: (input: { resourceID: string; scope: BrowserSchema.Scope; cursor?: string; limit?: number }) =>
+    Effect.Effect<{ files: (typeof BrowserFileSchema.Summary.Type)[]; grants: BrowserFileSchema.GrantSummary[]; nextCursor: string | null }, BrowserFileSchema.Error>
+}
+export type SharedApprovalResult = { grant: BrowserFileSchema.GrantSummary; replayed: boolean } |
+  { requestID: string; state: "cancelled"; grant: null; replayed: boolean }
+export type SharedStatusResult = { requestID: string; state: BrowserFileSchema.GrantSummary["state"] | "missing"; grant: BrowserFileSchema.GrantSummary | null } |
+  { requestID: string; state: "cancelled"; grant: null }
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/BrowserFiles") {}
 
 /** Captured once in the existing Root. The factory accepts no path, helper, resolver, CA or authority callback from callers. */
@@ -160,8 +218,14 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
   const database = yield* Database.Service
   const host = yield* BrowserHost.Current
   const scope = yield* Effect.scope
-  const previews = new WeakMap<BrowserFileCapability.Preview, { control: BrowserSchema.Control; request: BrowserFileSchema.PreviewRequest;
-    description: BrowserFileSchema.Preview; asset: Asset }>()
+  const context = yield* Effect.context<never>()
+  const rootIdentity = (directory: string) => process.platform === "win32"
+    ? Effect.runPromiseWith(context)(WorkFileHelper.inspectRoot(directory).pipe(Effect.map((value) => value.rootIdentity), Effect.mapError(() => fail("BROWSER_FILE_CHANGED"))))
+    : posixRootIdentity(directory)
+  const previews = new WeakMap<BrowserFileCapability.Preview,
+    { kind: 1; control: BrowserSchema.Control; request: BrowserFileSchema.PreviewRequest; description: BrowserFileSchema.Preview; asset: Asset } |
+    { kind: 2; resource: SharedBrowserSchema.Resource; lease: SharedBrowserSchema.Lease;
+      request: SharedBrowserFileSchema.PreviewRequest; description: SharedBrowserFileSchema.Preview; asset: Asset }>()
   const approvals = new WeakMap<BrowserFileCapability.Approval, { preview: BrowserFileCapability.Preview;
     commandHash: string; confirmation: BrowserFileSchema.Confirmation }>()
   const grants = new Map<string, string>()
@@ -169,8 +233,8 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
   const observations = new WeakMap<BrowserFileCapability.Observation, BrowserFileSchema.Publication>()
   const released = new WeakMap<BrowserFileCapability.Released, readonly string[]>()
   const active = new Set<Transfer>()
-  const cleanupReceipts = new Map<string, { artifacts: BrowserFileSchema.Artifact[]; confirmation: BrowserFileCapability.Released }>()
-  const observing = new Set<{ process?: Native; control: BrowserSchema.Control; input: BrowserFileSchema.PreviewRequest; asset?: Asset }>()
+  const cleanupReceipts = new Map<string, { artifacts: FileArtifact[]; confirmation: BrowserFileCapability.Released }>()
+  const observing = new Set<{ process?: Native; asset?: Asset }>()
   const state = { live: true, opening: 0, previewing: 0 }
   const retireTransfer = (transfer: Transfer) => {
     if (transfer.active || [...transfer.processes].some((entry) => !entry.stopped) ||
@@ -180,8 +244,10 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
   const closeTransfer = (transfer: Transfer) => {
     transfer.active = false
     transfer.retiring ??= Promise.allSettled([...transfer.leaves.values()].map(async (leaf) => {
-      await leaf.file.close()
-      leaf.fileClosed = true
+      if (leaf.file) { await leaf.file.close(); leaf.fileClosed = true }
+      // A Tool scope ending cannot release the original Windows locks while Main
+      // may still own FileList/readings. Only confirmed complete() cleanup may do so.
+      if (leaf.windows && !leaf.process.holdingStage) { await close(leaf.process); leaf.fileClosed = leaf.process.stopped }
     })).then(async () => {
       await Promise.allSettled([...transfer.processes].map(close))
       // Retire only known original handles. Unknown stays strongly owned and occupies its slot.
@@ -196,43 +262,60 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
     const actual = yield* BrowserControl.requireActive(database.db, control.controlID, control.scope, host).pipe(Effect.mapError(() => fail("BROWSER_FILE_CHANGED")))
     if (hash(actual) !== hash(control)) return yield* fail("BROWSER_FILE_CHANGED")
   })
-  const observe = async (control: BrowserSchema.Control, input: BrowserFileSchema.PreviewRequest, priorAsset?: Asset) => {
+  const currentShared = (resource: SharedBrowserSchema.Resource, lease: SharedBrowserSchema.Lease) => Effect.scoped(Effect.gen(function* () {
+    if (!state.live || !host) return yield* fail()
+    const captured = yield* BrowserFileControl.captureShared(database.db, resource, lease, host).pipe(Effect.mapError(() => fail("BROWSER_FILE_CHANGED")))
+    yield* BrowserFileControl.requireCurrent(database.db, captured).pipe(Effect.mapError(() => fail("BROWSER_FILE_CHANGED")))
+  }))
+  // One helper/FD observation path for both owner contracts; only the signed owner metadata differs.
+  const observeBinary = async (directory: string, input: { direction: "upload" | "download"; relative: string },
+    current: Effect.Effect<void, BrowserFileSchema.Error>, priorAsset?: Asset) => {
     if (!state.live) throw fail("BROWSER_FILE_CHANGED")
     if (state.opening + active.size >= 8) throw fail("BROWSER_FILE_CAPACITY")
-    // Reserve synchronously before the first filesystem/native await.
     state.opening++
-    const reservation = { control, input, asset: priorAsset, process: undefined as Native | undefined }
+    const reservation = { asset: priorAsset, process: undefined as Native | undefined }
     observing.add(reservation)
     const release = () => { if (observing.delete(reservation)) state.opening-- }
     try {
-      await Effect.runPromise(currentControl(control))
-      const asset = priorAsset ?? await Effect.runPromise(WorkFileHelper.browserAsset())
+      await Effect.runPromise(current)
+      const asset = priorAsset ?? await Effect.runPromiseWith(context)(WorkFileHelper.browserAsset())
       reservation.asset = asset
-      const root = await rootIdentity(control.scope.directory)
-      const process = await open(asset, control.scope.directory, root, (entry) => {
+      const root = await rootIdentity(directory)
+      const process = await open(asset, directory, root, (entry) => {
         reservation.process = entry
         void entry.exited.then(release)
-      })
+      }, scope)
       const reply = await request(process, { op: input.direction === "upload" ? "observe_binary" : "inspect_binary_destination",
         relative: input.relative, ...(input.direction === "upload" ? { scan_limit: BrowserFileSchema.MAX_FILE_BYTES } : {}), deadline_ms: 30_000 })
-      await Effect.runPromise(currentControl(control))
+      await Effect.runPromise(current)
       await Effect.runPromise(asset.current)
-      const common = { version: 1 as const, instanceID: asset.instanceID, controlID: control.controlID, controlHash: hash(control),
-        scopeHash: hash(control.scope), helperHash: asset.helperHash, rootIdentity: root, relative: input.relative,
-        name: path.posix.basename(input.relative), observedAt: Date.now() }
-      if (input.direction === "upload") {
-        if (reply.value.status !== "observed" || !reply.value.observation || reply.bytes.length !== 0) throw fail("BROWSER_FILE_CHANGED")
-        return { asset, description: { ...common, direction: input.direction, targetPath: input.targetPath, fileIdentity: fromWire(reply.value.observation.identity),
-          bytes: reply.value.observation.file_bytes, sha256: reply.value.observation.observed_sha256 } }
-      }
-      if (reply.value.status !== "missing" || !reply.value.destination_parent || reply.bytes.length !== 0) throw fail("BROWSER_FILE_CHANGED")
-      return { asset, description: { ...common, direction: input.direction, targetURL: input.targetURL, parentIdentity: fromWire(reply.value.destination_parent),
-        maxBytes: input.maxBytes, expected: "missing" as const } }
+      if (reply.bytes.length !== 0 || (input.direction === "upload" ? reply.value.status !== "observed" || !reply.value.observation :
+        reply.value.status !== "missing" || !reply.value.destination_parent)) throw fail("BROWSER_FILE_CHANGED")
+      return { asset, root, reply: reply.value }
     } finally {
       if (reservation.process) await close(reservation.process)
-      // No spawned child, or its original close already confirmed: the reservation is known.
       if (!reservation.process || reservation.process.stopped) release()
     }
+  }
+  const observe = async (control: BrowserSchema.Control, input: BrowserFileSchema.PreviewRequest, priorAsset?: Asset) => {
+    const observed = await observeBinary(control.scope.directory, input, currentControl(control), priorAsset)
+    const common = { version: 1 as const, instanceID: observed.asset.instanceID, controlID: control.controlID, controlHash: hash(control),
+      scopeHash: hash(control.scope), helperHash: observed.asset.helperHash, rootIdentity: observed.root, relative: input.relative,
+      name: path.posix.basename(input.relative), observedAt: Date.now() }
+    return { asset: observed.asset, description: input.direction === "upload" ? { ...common, direction: input.direction, targetPath: input.targetPath,
+      fileIdentity: fromWire(observed.reply.observation!.identity), bytes: observed.reply.observation!.file_bytes, sha256: observed.reply.observation!.observed_sha256 } :
+      { ...common, direction: input.direction, targetURL: input.targetURL, parentIdentity: fromWire(observed.reply.destination_parent!), maxBytes: input.maxBytes, expected: "missing" as const } }
+  }
+  const observeShared = async (resource: SharedBrowserSchema.Resource, lease: SharedBrowserSchema.Lease,
+    input: SharedBrowserFileSchema.PreviewRequest, priorAsset?: Asset) => {
+    const observed = await observeBinary(resource.scope.directory, input, currentShared(resource, lease), priorAsset)
+    const binding = SharedBrowserFileBinding.from(resource, lease)
+    const common = { version: 2 as const, binding, bindingHash: hash(binding), instanceID: observed.asset.instanceID, scopeHash: hash(resource.scope),
+      helperHash: observed.asset.helperHash, rootIdentity: observed.root, relative: input.relative, targetURL: input.targetURL,
+      name: path.posix.basename(input.relative), observedAt: Date.now() }
+    return { asset: observed.asset, description: input.direction === "upload" ? { ...common, direction: input.direction,
+      fileIdentity: fromWire(observed.reply.observation!.identity), bytes: observed.reply.observation!.file_bytes, sha256: observed.reply.observation!.observed_sha256 } :
+      { ...common, direction: input.direction, parentIdentity: fromWire(observed.reply.destination_parent!), maxBytes: input.maxBytes, expected: "missing" as const } }
   }
   const lookup = (handle: BrowserFileCapability.Transfer, artifactID: string) => {
     const transfer = transfers.get(handle)
@@ -240,50 +323,15 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
     if (!transfer?.active || !leaf || leaf.cleaned || leaf.unknown) throw fail("BROWSER_FILE_CHANGED")
     return { transfer, leaf }
   }
-  const native: BrowserFileCapability.Interface = {
-    preview: (input) => Effect.gen(function* () {
-      const observed = yield* wrapped(() => observe(input.control, input.request))
-      const handle = Object.freeze({}) as BrowserFileCapability.Preview
-      previews.set(handle, { control: input.control, request: input.request, description: observed.description, asset: observed.asset })
-      return handle
-    }),
-    describePreview: (handle, input) => {
-      const prior = previews.get(handle)
-      return state.live && prior && hash(prior.control) === hash(input.control) && hash(prior.request) === hash(input.request) ? prior.description : undefined
-    },
-    currentPreview: (handle) => wrapped(async () => {
-      const prior = previews.get(handle)
-      if (!prior) throw fail("BROWSER_FILE_CHANGED")
-      const observed = await observe(prior.control, prior.request, prior.asset)
-      if (hash({ ...observed.description, observedAt: prior.description.observedAt }) !== hash(prior.description)) throw fail("BROWSER_FILE_CHANGED")
-    }),
-    confirm: (handle, command) => Effect.gen(function* () {
-      const prior = previews.get(handle)
-      if (!prior || !host?.confirmFiles) return yield* fail()
-      yield* native.currentPreview(handle)
-      const confirmation = yield* host.confirmFiles(prior.control, prior.description, command, native.currentPreview(handle))
-      if (confirmation.previewHash !== hash(prior.description) || confirmation.commandHash !== hash(command)) return yield* fail("BROWSER_FILE_CHANGED")
-      const approved = Object.freeze({}) as BrowserFileCapability.Approval
-      approvals.set(approved, { preview: handle, commandHash: hash(command), confirmation })
-      return approved
-    }),
-    approved: (handle, preview, command) => state.live && approvals.get(handle)?.preview === preview && approvals.get(handle)?.commandHash === hash(command),
-    describeApproval: (handle) => state.live ? approvals.get(handle)?.confirmation : undefined,
-    acceptGrant: (handle, approval, grant) => {
-      const prior = previews.get(handle)
-      const allowed = approvals.get(approval)
-      if (!state.live || !prior || !allowed || allowed.preview !== handle || hash(grant.preview) !== hash(prior.description) ||
-        grant.commandHash !== allowed.commandHash || hash(grant.confirmation) !== hash(allowed.confirmation) || grants.has(grant.grantID)) return false
-      grants.set(grant.grantID, hash(grant)); return true
-    },
-    prepare: (input) => Effect.gen(function* () {
+  const prepare = (input: { directory: string; action: { actionID: string; deadline: number }; grants: readonly FileGrant[];
+    artifacts: readonly FileArtifact[]; current: Effect.Effect<void, BrowserFileSchema.Error>;
+    capture: Effect.Effect<BrowserFileControl.Lease, BrowserFileSchema.Error, Scope.Scope> }) => Effect.gen(function* () {
       if (!host || !state.live) return yield* fail()
       if (state.opening + active.size >= 8) return yield* fail("BROWSER_FILE_CAPACITY")
       state.opening++
       const reservation = { pending: true }
       return yield* Effect.gen(function* () {
-      const control = yield* BrowserFileControl.capture(database.db, input.control, host)
-        .pipe(Effect.mapError(() => fail("BROWSER_FILE_CHANGED")))
+      const control = yield* input.capture
       yield* input.current
       if (input.grants.length < 1 || input.grants.length > 4 || input.artifacts.length !== input.grants.length)
         return yield* fail("BROWSER_FILE_CAPACITY")
@@ -302,21 +350,37 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
       yield* Effect.addFinalizer(() => wrapped(() => closeTransfer(transfer)).pipe(Effect.catch(() => Effect.void)))
       for (const [ordinal, grant] of input.grants.entries()) {
         const artifact = input.artifacts[ordinal]!
-        if (grants.get(grant.grantID) !== hash(grant) || grant.instanceID !== asset.instanceID ||
+        if (artifact.version !== grant.version || grants.get(grant.grantID) !== hash(grant) || grant.instanceID !== asset.instanceID ||
           grant.expiresAt <= Date.now() || artifact.state !== "reserved" || artifact.ordinal !== ordinal || artifact.releasedAt !== null ||
           artifact.actionID !== input.action.actionID || artifact.grantHash !== hash(grant) || hash(artifact.manifest) !== hash(grant.preview) ||
-          hash(artifact.manifest.rootIdentity) !== hash(yield* wrapped(() => rootIdentity(input.control.scope.directory)))) return yield* fail("BROWSER_FILE_CHANGED")
-        const process = yield* Effect.acquireRelease(wrapped(() => open(asset, input.control.scope.directory, grant.preview.rootIdentity, (entry) => {
+          hash(artifact.manifest.rootIdentity) !== hash(yield* wrapped(() => rootIdentity(input.directory)))) return yield* fail("BROWSER_FILE_CHANGED")
+        const opening = wrapped(() => open(asset, input.directory, grant.preview.rootIdentity, (entry) => {
           transfer.processes.add(entry)
           void entry.exited.then(() => retireTransfer(transfer))
-        })),
+        }, scope))
+        const channel = globalThis.process.platform === "win32" ? yield* opening : yield* Effect.acquireRelease(opening,
           (entry) => wrapped(() => close(entry)).pipe(Effect.catch(() => Effect.void)))
-        const stage = yield* wrapped(() => privateStage(input.control.scope.directory, grant.preview.rootIdentity))
-        const leaf: Leaf = { artifact, grant, process, ...stage, offset: 0, stream: createHash("sha256"), complete: false, unknown: false, cleaned: false, sealed: false }
+        const stage = globalThis.process.platform === "win32" ? yield* wrapped(async () => {
+          const preview = grant.preview
+          if (!channel.child.retainBrowserCustody) throw fail()
+          // Native marks this same original child before the first namespace
+          // mutation. No Scope/error stop may release its stage while Main reads.
+          channel.child.retainBrowserCustody()
+          channel.holdingStage = true
+          const reply = await request(channel, { op: "prepare_browser_stage", purpose: preview.direction, basename: randomUUID().replaceAll("-", ""),
+            name: preview.direction === "upload" ? preview.name : "payload",
+            limit: preview.direction === "upload" ? preview.bytes : preview.maxBytes })
+          const windows = reply.value.browser_stage
+          if (reply.value.status !== "prepared" || !windows || windows.sealed || windows.bytes !== 0 ||
+            hash(fromWire(windows.root)) !== hash(preview.rootIdentity)) throw fail("BROWSER_FILE_CHANGED")
+          return { stage: windows.directory, stageIdentity: WindowsBrowserFileStage.identity(windows.stage),
+            fileIdentity: WindowsBrowserFileStage.identity(windows.file), windows }
+        }) : yield* wrapped(() => privateStage(input.directory, grant.preview.rootIdentity))
+        const leaf: Leaf = { artifact, grant, process: channel, ...stage, offset: 0, stream: createHash("sha256"), complete: false, unknown: false, cleaned: false, sealed: false }
         transfer.leaves.set(artifact.artifactID, leaf)
         const preview = grant.preview
         if (preview.direction === "upload") {
-          const opened = yield* wrapped(() => request(process, { op: "open_binary", relative: preview.relative,
+          const opened = yield* wrapped(() => request(channel, { op: "open_binary", relative: preview.relative,
             expected: { kind: "observed", identity: wire(preview.fileIdentity), bytes: preview.bytes, sha256: preview.sha256 },
             deadline_ms: Math.max(1, Math.min(30_000, input.action.deadline - Date.now())) }, input.action.deadline))
           if (opened.value.status !== "observed" || !opened.value.capture_id) return yield* fail("BROWSER_FILE_CHANGED")
@@ -327,7 +391,45 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
       transfers.set(handle, transfer)
       return handle
       }).pipe(Effect.ensuring(Effect.sync(() => { if (reservation.pending) state.opening-- })))
+    })
+  const native: BrowserFileCapability.Interface = {
+    preview: (input) => Effect.gen(function* () {
+      const observed = yield* wrapped(() => observe(input.control, input.request))
+      const handle = Object.freeze({}) as BrowserFileCapability.Preview
+      previews.set(handle, { kind: 1, control: input.control, request: input.request, description: observed.description, asset: observed.asset })
+      return handle
     }),
+    describePreview: (handle, input) => {
+      const prior = previews.get(handle)
+      return state.live && prior?.kind === 1 && hash(prior.control) === hash(input.control) && hash(prior.request) === hash(input.request) ? prior.description : undefined
+    },
+    currentPreview: (handle) => wrapped(async () => {
+      const prior = previews.get(handle)
+      if (prior?.kind !== 1) throw fail("BROWSER_FILE_CHANGED")
+      const observed = await observe(prior.control, prior.request, prior.asset)
+      if (hash({ ...observed.description, observedAt: prior.description.observedAt }) !== hash(prior.description)) throw fail("BROWSER_FILE_CHANGED")
+    }),
+    confirm: (handle, command) => Effect.gen(function* () {
+      const prior = previews.get(handle)
+      if (prior?.kind !== 1 || !host?.confirmFiles) return yield* fail()
+      yield* native.currentPreview(handle)
+      const confirmation = yield* host.confirmFiles(prior.control, prior.description, command, native.currentPreview(handle))
+      if (confirmation.previewHash !== hash(prior.description) || confirmation.commandHash !== hash(command)) return yield* fail("BROWSER_FILE_CHANGED")
+      const approved = Object.freeze({}) as BrowserFileCapability.Approval
+      approvals.set(approved, { preview: handle, commandHash: hash(command), confirmation })
+      return approved
+    }),
+    approved: (handle, preview, command) => state.live && approvals.get(handle)?.preview === preview && approvals.get(handle)?.commandHash === hash(command),
+    describeApproval: (handle) => state.live ? approvals.get(handle)?.confirmation : undefined,
+    acceptGrant: (handle, approval, grant) => {
+      const prior = previews.get(handle)
+      const allowed = approvals.get(approval)
+      if (!state.live || prior?.kind !== 1 || !allowed || allowed.preview !== handle || hash(grant.preview) !== hash(prior.description) ||
+        grant.commandHash !== allowed.commandHash || hash(grant.confirmation) !== hash(allowed.confirmation) || grants.has(grant.grantID)) return false
+      grants.set(grant.grantID, hash(grant)); return true
+    },
+    prepare: (input) => prepare({ ...input, directory: input.control.scope.directory,
+      capture: host ? BrowserFileControl.capture(database.db, input.control, host).pipe(Effect.mapError(() => fail("BROWSER_FILE_CHANGED"))) : Effect.fail(fail()) }),
     current: (handle) => wrapped(async () => { const transfer = transfers.get(handle); if (!transfer) throw fail(); await transfer.current() }),
     readUpload: (handle, input) => wrapped(async () => {
       const { transfer, leaf } = lookup(handle, input.artifactID)
@@ -341,8 +443,13 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
       if (reply.value.status !== "observed" || !observation || observation.offset !== input.offset || observation.file_bytes !== preview.bytes ||
         observation.observed_sha256 !== preview.sha256 || hash(fromWire(observation.identity)) !== hash(preview.fileIdentity) ||
         observation.page_sha256 !== createHash("sha256").update(reply.bytes).digest("hex")) throw fail("BROWSER_FILE_CHANGED")
-      const written = await leaf.file.write(reply.bytes, 0, reply.bytes.length, input.offset)
-      if (written.bytesWritten !== reply.bytes.length) throw fail("BROWSER_FILE_UNKNOWN")
+      if (leaf.windows) {
+        if (reply.bytes.length > 0 && (await request(leaf.process, { op: "write_browser_stage", offset: input.offset,
+          length: reply.bytes.length }, undefined, reply.bytes)).value.status !== "observed") throw fail("BROWSER_FILE_UNKNOWN")
+      } else {
+        const written = await leaf.file!.write(reply.bytes, 0, reply.bytes.length, input.offset)
+        if (written.bytesWritten !== reply.bytes.length) throw fail("BROWSER_FILE_UNKNOWN")
+      }
       leaf.stream.update(reply.bytes); leaf.offset += reply.bytes.length; leaf.complete = reply.value.binary_complete === true
       if (leaf.complete && (leaf.offset !== preview.bytes || leaf.stream.copy().digest("hex") !== preview.sha256)) throw fail("BROWSER_FILE_CHANGED")
       await transfer.current()
@@ -354,7 +461,10 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
       const preview = leaf.grant.preview
       if (preview.direction !== "download" || leaf.complete || input.offset !== leaf.offset || input.bytes.length > BrowserFileSchema.CHUNK_BYTES ||
         input.bytes.length === 0 || input.offset + input.bytes.length > preview.maxBytes) throw fail("BROWSER_FILE_CHANGED")
-      if ((await leaf.file.write(input.bytes, 0, input.bytes.length, input.offset)).bytesWritten !== input.bytes.length) throw fail("BROWSER_FILE_UNKNOWN")
+      if (leaf.windows) {
+        if ((await request(leaf.process, { op: "write_browser_stage", offset: input.offset,
+          length: input.bytes.length }, undefined, Buffer.from(input.bytes))).value.status !== "observed") throw fail("BROWSER_FILE_UNKNOWN")
+      } else if ((await leaf.file!.write(input.bytes, 0, input.bytes.length, input.offset)).bytesWritten !== input.bytes.length) throw fail("BROWSER_FILE_UNKNOWN")
       leaf.stream.update(input.bytes); leaf.offset += input.bytes.length
       await transfer.current()
     }),
@@ -365,21 +475,30 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
       const preview = leaf.grant.preview
       if (preview.direction !== "upload" || !leaf.complete || leaf.sealed || !leaf.captureID || input.bytes !== preview.bytes || input.sha256 !== preview.sha256)
         throw fail("BROWSER_FILE_CHANGED")
-      await leaf.file.sync()
-      const before = await leaf.file.stat({ bigint: true })
+      if (leaf.windows) {
+        const reply = await request(leaf.process, { op: "seal_browser_stage", bytes: input.bytes, sha256: input.sha256, deadline_ms: 30_000 })
+        const windows = reply.value.browser_stage
+        if (reply.value.status !== "observed" || !windows || !windows.sealed || windows.bytes !== input.bytes || windows.sha256 !== input.sha256 ||
+          hash(windows.stage) !== hash(leaf.windows.stage) || hash(windows.file) !== hash(leaf.windows.file) ||
+          windows.path !== leaf.windows.path || windows.directory !== leaf.windows.directory) throw fail("BROWSER_FILE_CHANGED")
+        leaf.windows = windows
+      } else {
+      await leaf.file!.sync()
+      const before = await leaf.file!.stat({ bigint: true })
       const digest = createHash("sha256")
       const buffer = Buffer.alloc(65_536)
       let offset = 0
       while (offset < input.bytes) {
-        const read = await leaf.file.read(buffer, 0, Math.min(buffer.length, input.bytes - offset), offset)
+        const read = await leaf.file!.read(buffer, 0, Math.min(buffer.length, input.bytes - offset), offset)
         if (read.bytesRead === 0) throw fail("BROWSER_FILE_CHANGED")
         digest.update(buffer.subarray(0, read.bytesRead)); offset += read.bytesRead
       }
-      const after = await leaf.file.stat({ bigint: true })
+      const after = await leaf.file!.stat({ bigint: true })
       const named = await fs.lstat(path.join(leaf.stage, "payload"), { bigint: true })
       const stamp = (value: typeof before) => [value.dev, value.ino, value.size, value.mode, value.nlink, value.mtimeNs, value.ctimeNs].join(":")
       if (stamp(before) !== stamp(after) || stamp(after) !== stamp(named) || before.size !== BigInt(input.bytes) || digest.digest("hex") !== input.sha256)
         throw fail("BROWSER_FILE_CHANGED")
+      }
       const sealed = await request(leaf.process, { op: "seal_binary", capture_id: leaf.captureID, deadline_ms: 30_000 })
       if (sealed.value.status !== "observed" || !sealed.value.observation || sealed.value.binary_complete !== true ||
         sealed.value.observation.observed_sha256 !== input.sha256 || sealed.value.observation.file_bytes !== input.bytes ||
@@ -387,15 +506,33 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
       await transfer.current()
       leaf.sealed = true
     }),
+    uploadStage: (handle, artifactID) => wrapped(async () => {
+      const { transfer, leaf } = lookup(handle, artifactID)
+      if (!leaf.windows) return undefined
+      await transfer.current()
+      if (!leaf.complete || !leaf.sealed || leaf.grant.preview.direction !== "upload") throw fail("BROWSER_FILE_CHANGED")
+      const reply = await request(leaf.process, { op: "inspect_browser_stage" })
+      const windows = reply.value.browser_stage
+      if (reply.value.status !== "observed" || !windows || hash(windows) !== hash(leaf.windows)) throw fail("BROWSER_FILE_CHANGED")
+      await transfer.current()
+      return { artifactID, path: windows.path, stageIdentity: leaf.stageIdentity, fileIdentity: leaf.fileIdentity,
+        bytes: windows.bytes, sha256: windows.sha256 }
+    }),
     observeUpload: (handle, input) => wrapped(async () => {
       const { transfer, leaf } = lookup(handle, input.artifactID)
       await transfer.current()
       const preview = leaf.grant.preview
       if (preview.direction !== "upload" || !leaf.complete || !leaf.sealed || leaf.publication || input.bytes !== preview.bytes || input.sha256 !== preview.sha256)
         throw fail("BROWSER_FILE_CHANGED")
-      await leaf.file.sync()
-      const stat = await leaf.file.stat({ bigint: true })
-      if (stat.size !== BigInt(preview.bytes) || hash(identity(stat)) !== hash(leaf.fileIdentity)) throw fail("BROWSER_FILE_CHANGED")
+      if (leaf.windows) {
+        const reply = await request(leaf.process, { op: "inspect_browser_stage" })
+        if (reply.value.status !== "observed" || !reply.value.browser_stage || hash(reply.value.browser_stage) !== hash(leaf.windows))
+          throw fail("BROWSER_FILE_CHANGED")
+      } else {
+        await leaf.file!.sync()
+        const stat = await leaf.file!.stat({ bigint: true })
+        if (stat.size !== BigInt(preview.bytes) || hash(identity(stat)) !== hash(leaf.fileIdentity)) throw fail("BROWSER_FILE_CHANGED")
+      }
       const observed = Object.freeze({}) as BrowserFileCapability.Observation
       observations.set(observed, { version: 1, artifactID: leaf.artifact.artifactID, grantID: leaf.grant.grantID,
         direction: "upload", rootIdentity: preview.rootIdentity, stageIdentity: leaf.stageIdentity, fileIdentity: preview.fileIdentity,
@@ -411,7 +548,13 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
       if (preview.direction !== "download" || leaf.complete || leaf.publication || input.bytes !== leaf.offset ||
         input.bytes > preview.maxBytes || input.sha256 !== leaf.stream.copy().digest("hex")) throw fail("BROWSER_FILE_CHANGED")
       leaf.complete = true
-      await leaf.file.sync()
+      if (leaf.windows) {
+        const sealed = await request(leaf.process, { op: "seal_browser_stage", bytes: input.bytes, sha256: input.sha256, deadline_ms: 30_000 })
+        if (sealed.value.status !== "observed" || !sealed.value.browser_stage || !sealed.value.browser_stage.sealed ||
+          hash(sealed.value.browser_stage.file) !== hash(leaf.windows.file) || hash(sealed.value.browser_stage.stage) !== hash(leaf.windows.stage))
+          throw fail("BROWSER_FILE_CHANGED")
+        leaf.windows = sealed.value.browser_stage
+      } else await leaf.file!.sync()
       // Publication is one-shot even after a lost reply. The retained charge survives unknown custody.
       const prepared = await request(leaf.process, { op: "prepare_binary_write", relative: preview.relative,
         stage: leaf.stage, stage_identity: wire(leaf.stageIdentity), bytes: input.bytes, sha256: input.sha256,
@@ -439,10 +582,14 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
         if (leaf.cleaned) throw fail("BROWSER_FILE_CONFLICT")
         const cleaned = await request(leaf.process, { op: "cleanup_binary_stage", stage: leaf.stage, stage_identity: wire(leaf.stageIdentity) })
         if (cleaned.value.status !== "cleaned") throw fail("BROWSER_FILE_UNKNOWN")
-        await leaf.file.close()
-        leaf.fileClosed = true
-        if (hash(await rootIdentity(leaf.stage)) !== hash(leaf.stageIdentity)) throw fail("BROWSER_FILE_CHANGED")
-        await fs.rmdir(leaf.stage)
+        leaf.process.holdingStage = false
+        if (leaf.file) {
+          await leaf.file.close()
+          leaf.fileClosed = true
+          if (hash(await rootIdentity(leaf.stage)) !== hash(leaf.stageIdentity)) throw fail("BROWSER_FILE_CHANGED")
+          await fs.rmdir(leaf.stage)
+        }
+        if (leaf.windows) leaf.fileClosed = true
         await close(leaf.process)
         leaf.cleaned = true
       }
@@ -450,7 +597,7 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
       const value = Object.freeze({}) as BrowserFileCapability.Released
       released.set(value, [...transfer.leaves.keys()])
       const artifacts = [...transfer.leaves.values()].map((leaf) => leaf.artifact)
-      cleanupReceipts.set(artifacts[0]!.actionID, { artifacts, confirmation: value })
+      cleanupReceipts.set(`${artifacts[0]!.version}\0${artifacts[0]!.actionID}`, { artifacts, confirmation: value })
       return value
     }),
     describeReleased: (handle) => released.get(handle),
@@ -462,7 +609,8 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
     recordObservation: (handle, artifactID, observation) => Effect.gen(function* () {
       const owned = transfers.get(handle)?.leaves.get(artifactID)
       if (!owned || owned.publication !== observation) return yield* fail("BROWSER_FILE_CHANGED")
-      owned.artifact = yield* BrowserFileExchange.observed(database.db, owned.artifact, observation)
+      owned.artifact = owned.artifact.version === 1 ? yield* BrowserFileExchange.observed(database.db, owned.artifact, observation)
+        .pipe(Effect.provideService(BrowserFileCapability.Service, native)) : yield* SharedBrowserFileExchange.observed(database.db, owned.artifact, observation)
         .pipe(Effect.provideService(BrowserFileCapability.Service, native))
     }),
     unknownAction: (handle) => Effect.gen(function* () {
@@ -470,25 +618,115 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
       if (!transfer) return yield* fail()
       for (const leaf of transfer.leaves.values()) {
         if (leaf.artifact.state === "reserved" || leaf.artifact.state === "staged")
-          leaf.artifact = yield* BrowserFileExchange.unknown(database.db, leaf.artifact)
+          leaf.artifact = yield* (leaf.artifact.version === 1 ? BrowserFileExchange.unknown(database.db, leaf.artifact) : SharedBrowserFileExchange.unknown(database.db, leaf.artifact))
       }
     }),
     finishAction: (actionID) => Effect.gen(function* () {
-      const receipt = cleanupReceipts.get(actionID)
+      const receipt = cleanupReceipts.get(`1\0${actionID}`)
       if (!receipt) return yield* fail("BROWSER_FILE_UNKNOWN")
-      yield* BrowserFileExchange.released(database.db, receipt.artifacts, receipt.confirmation)
+      yield* BrowserFileExchange.released(database.db, receipt.artifacts.filter((artifact): artifact is BrowserFileSchema.Artifact => artifact.version === 1), receipt.confirmation)
         .pipe(Effect.provideService(BrowserFileCapability.Service, native))
-      cleanupReceipts.delete(actionID)
+      cleanupReceipts.delete(`1\0${actionID}`)
     }),
     listFiles: (input) => api.list(input),
   }
+  const shared: BrowserFileCapability.Shared = {
+    listFiles: (input) => api.shared.list(input),
+    preview: (input) => Effect.gen(function* () {
+      // The explicit preview already passed Core scope and file-policy checks.
+      // Fresh Desktop installs need only the local identity, never operator enrollment.
+      yield* currentShared(input.resource, input.lease)
+      yield* LocalAuthority.initializeInstallation().pipe(Effect.mapError(() => fail()))
+      const observed = yield* wrapped(() => observeShared(input.resource, input.lease, input.request))
+      const handle = Object.freeze({}) as BrowserFileCapability.Preview
+      previews.set(handle, { kind: 2, ...input, description: observed.description, asset: observed.asset })
+      return handle
+    }),
+    describePreview: (handle, input) => {
+      const prior = previews.get(handle)
+      return state.live && prior?.kind === 2 && hash(prior.resource) === hash(input.resource) && hash(prior.lease) === hash(input.lease) &&
+        hash(prior.request) === hash(input.request) ? prior.description : undefined
+    },
+    currentPreview: (handle) => wrapped(async () => {
+      const prior = previews.get(handle)
+      if (prior?.kind !== 2) throw fail("BROWSER_FILE_CHANGED")
+      const observed = await observeShared(prior.resource, prior.lease, prior.request, prior.asset)
+      if (hash({ ...observed.description, observedAt: prior.description.observedAt }) !== hash(prior.description)) throw fail("BROWSER_FILE_CHANGED")
+    }),
+    confirm: (handle, command) => Effect.gen(function* () {
+      const prior = previews.get(handle)
+      if (prior?.kind !== 2 || !host?.shared?.files) return yield* fail()
+      yield* shared.currentPreview(handle)
+      const confirmation = yield* host.shared.files.confirm(prior.resource, prior.lease, prior.description, command, {
+        previewCurrent: shared.currentPreview(handle),
+        authorityCurrent: Effect.gen(function* () {
+          if (!state.live || previews.get(handle) !== prior) return yield* fail("BROWSER_FILE_CHANGED")
+          yield* currentShared(prior.resource, prior.lease)
+          if (!state.live || previews.get(handle) !== prior) return yield* fail("BROWSER_FILE_CHANGED")
+        }),
+      })
+      if (confirmation.previewHash !== hash(prior.description) || confirmation.commandHash !== hash(command)) return yield* fail("BROWSER_FILE_CHANGED")
+      if ("kind" in confirmation) return confirmation
+      const approved = Object.freeze({}) as BrowserFileCapability.Approval
+      approvals.set(approved, { preview: handle, commandHash: hash(command), confirmation })
+      return approved
+    }),
+    cancellation: (handle, command) => Effect.gen(function* () {
+      const prior = previews.get(handle)
+      if (!state.live || prior?.kind !== 2 || !host?.shared?.files?.cancellation) return undefined
+      const decision = yield* host.shared.files.cancellation(prior.resource, prior.lease, prior.description, command)
+      if (decision && (decision.resourceID !== prior.resource.resourceID || decision.requestID !== command.requestID ||
+        decision.bindingHash !== prior.description.bindingHash || decision.previewHash !== hash(prior.description) ||
+        decision.commandHash !== hash(command) || decision.cancelledAt < prior.description.observedAt ||
+        decision.cancelledAt > command.expiresAt || decision.cancelledAt > Date.now())) return yield* fail("BROWSER_FILE_CHANGED")
+      return decision
+    }),
+    approved: (handle, preview, command) => state.live && previews.get(preview)?.kind === 2 &&
+      approvals.get(handle)?.preview === preview && approvals.get(handle)?.commandHash === hash(command),
+    describeApproval: native.describeApproval,
+    acceptGrant: (handle, approval, grant) => {
+      const prior = previews.get(handle)
+      const allowed = approvals.get(approval)
+      if (!state.live || prior?.kind !== 2 || !allowed || allowed.preview !== handle || hash(grant.preview) !== hash(prior.description) ||
+        grant.commandHash !== allowed.commandHash || hash(grant.confirmation) !== hash(allowed.confirmation) || grants.has(grant.grantID)) return false
+      grants.set(grant.grantID, hash(grant)); return true
+    },
+    prepare: (input) => Effect.gen(function* () {
+      const binding = SharedBrowserFileBinding.from(input.resource, input.lease)
+      if (!host || input.action.resourceID !== binding.resourceID || input.action.rootSessionID !== binding.rootSessionID ||
+        input.action.leaseID !== binding.leaseID || input.action.leaseEpoch !== binding.leaseEpoch || input.action.manualEpoch !== binding.manualEpoch ||
+        input.grants.some((grant) => grant.bindingHash !== hash(binding) || hash(grant.binding) !== hash(binding)) ||
+        input.artifacts.some((artifact) => artifact.bindingHash !== hash(binding) || hash(artifact.binding) !== hash(binding))) return yield* fail("BROWSER_FILE_CHANGED")
+      return yield* prepare({ ...input, directory: input.resource.scope.directory,
+        capture: BrowserFileControl.captureShared(database.db, input.resource, input.lease, host).pipe(Effect.mapError(() => fail("BROWSER_FILE_CHANGED"))) })
+    }),
+    executionFiles: (input) => Effect.gen(function* () {
+      const files = yield* SharedBrowserFileExchange.actionFiles(database.db, input.action)
+      const transfer = yield* shared.prepare({ ...input, grants: files.map((entry) => entry.grant), artifacts: files.map((entry) => entry.artifact) })
+      return { files, transfer }
+    }),
+    finishAction: (actionID) => Effect.gen(function* () {
+      const key = `2\0${actionID}`
+      const receipt = cleanupReceipts.get(key)
+      if (!receipt || receipt.artifacts.some((artifact) => artifact.version !== 2)) return yield* fail("BROWSER_FILE_UNKNOWN")
+      yield* SharedBrowserFileExchange.released(database.db,
+        receipt.artifacts.filter((artifact): artifact is SharedBrowserFileSchema.Artifact => artifact.version === 2), receipt.confirmation)
+        .pipe(Effect.provideService(BrowserFileCapability.Service, native))
+      cleanupReceipts.delete(key)
+    }),
+  }
+  Object.assign(native, { shared })
   yield* Scope.addFinalizer(scope, Effect.promise(async () => {
     state.live = false
     await Promise.allSettled([...active].map(closeTransfer))
     await Promise.allSettled([...observing].flatMap((entry) => entry.process ? [close(entry.process)] : []))
   }))
   const captures = new Map<string, BrowserFileExchange.Capture>()
+  const sharedCaptures = new Map<string, SharedBrowserFileExchange.Capture>()
   const operations = new Map<string, { commandHash: string; effect: Effect.Effect<{ grant: BrowserFileSchema.GrantSummary; replayed: boolean }, BrowserFileSchema.Error> }>()
+  const sharedOperations = new Map<string, { commandHash: string; scopeHash: string; command: SharedBrowserFileSchema.Approve;
+    capture?: SharedBrowserFileExchange.Capture; cancellation?: SharedBrowserFileSchema.Cancellation;
+    effect: Effect.Effect<SharedApprovalResult, BrowserFileSchema.Error> }>()
   const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.provideService(BrowserFileCapability.Service, native))
   const projection = (grant: BrowserFileSchema.Grant, artifact?: BrowserFileSchema.Artifact) => Effect.gen(function* () {
     const control = yield* BrowserControl.get(database.db, grant.controlID).pipe(Effect.mapError(() => fail()))
@@ -500,9 +738,99 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
         !host.verify(control).stopped ? "approved" : "unavailable" }
     return summary
   })
-  const api: Interface = {
+  const sharedProjection = (grant: SharedBrowserFileSchema.Grant, artifact?: SharedBrowserFileSchema.Artifact) => Effect.gen(function* () {
+    const resource = yield* SharedBrowserControl.get(database.db, grant.binding.resourceID).pipe(Effect.mapError(() => fail()))
+    const lease = resource?.liveLeaseID ? yield* SharedBrowserControl.lease(database.db, resource.liveLeaseID).pipe(Effect.mapError(() => fail())) : undefined
+    const current = resource && lease && hash(SharedBrowserFileBinding.from(resource, lease)) === grant.bindingHash &&
+      state.live && grants.get(grant.grantID) === hash(grant) ? yield* currentShared(resource, lease).pipe(Effect.exit) : undefined
+    return { grantID: grant.grantID, direction: grant.preview.direction, name: grant.preview.name,
+      ...(grant.preview.direction === "upload" ? { bytes: grant.preview.bytes } : { maxBytes: grant.preview.maxBytes }), expiresAt: grant.expiresAt,
+      state: artifact ? "used" as const : grant.expiresAt <= Date.now() ? "expired" as const : current && Exit.isSuccess(current) ? "approved" as const : "unavailable" as const }
+  })
+  const sharedApi: SharedInterface = {
     preview: (input) => provide(Effect.gen(function* () {
-      if (!state.live || captures.size + state.previewing >= 64) return yield* fail("BROWSER_FILE_CAPACITY")
+      if (!state.live || captures.size + sharedCaptures.size + state.previewing >= 64) return yield* fail("BROWSER_FILE_CAPACITY")
+      state.previewing++
+      return yield* Effect.gen(function* () {
+        const capture = yield* SharedBrowserFileExchange.preview(database.db, input)
+        const preview = SharedBrowserFileExchange.describePreview(capture)
+        if (!state.live || !preview) return yield* fail()
+        const previewID = randomUUID(); sharedCaptures.set(previewID, capture)
+        return { previewID, preview }
+      }).pipe(Effect.ensuring(Effect.sync(() => { state.previewing-- })))
+    })),
+    approve: (input) => provide(Effect.gen(function* () {
+      const prior = yield* SharedBrowserFileExchange.requestGrant(database.db, { ...input, requestID: input.command.requestID })
+      if (prior) {
+        const result = yield* SharedBrowserFileExchange.approve(database.db, input)
+        return { grant: yield* sharedProjection(result.grant, yield* SharedBrowserFileExchange.grantArtifact(database.db, result.grant.grantID)), replayed: result.replayed }
+      }
+      const key = `2\0${input.resourceID}\0${input.command.requestID}`
+      const digest = hash({ scope: input.scope, command: input.command })
+      const cached = sharedOperations.get(key)
+      if (cached) {
+        if (cached.commandHash !== digest) return yield* fail("BROWSER_FILE_CONFLICT")
+        if (cached.cancellation) return { requestID: cached.cancellation.requestID, state: "cancelled" as const, grant: null, replayed: true }
+        return yield* cached.effect
+      }
+      if (operations.size + sharedOperations.size >= BrowserSchema.MAX_CONTROLS * BrowserFileSchema.MAX_GRANTS_PER_CONTROL) return yield* fail("BROWSER_FILE_CAPACITY")
+      const completed = Deferred.makeUnsafe<Exit.Exit<SharedApprovalResult, BrowserFileSchema.Error>>()
+      const entry: NonNullable<ReturnType<typeof sharedOperations.get>> = { commandHash: digest, scopeHash: hash(input.scope), command: input.command,
+        effect: Deferred.await(completed).pipe(Effect.flatMap((exit) => exit)) }
+      sharedOperations.set(key, entry)
+      return yield* provide(Effect.gen(function* () {
+        const capture = sharedCaptures.get(input.command.previewID)
+        if (!capture) return yield* fail("BROWSER_FILE_CHANGED")
+        const preview = SharedBrowserFileExchange.describePreview(capture)
+        if (!preview || preview.binding.resourceID !== input.resourceID || preview.scopeHash !== hash(input.scope))
+          return yield* fail("BROWSER_FILE_SCOPE_DENIED")
+        entry.capture = capture
+        const decision = yield* SharedBrowserFileExchange.confirm(database.db, capture, input.command)
+        if (decision) {
+          if (decision.resourceID !== input.resourceID) return yield* fail("BROWSER_FILE_CHANGED")
+          entry.cancellation = decision
+          sharedCaptures.delete(input.command.previewID)
+          return { requestID: decision.requestID, state: "cancelled" as const, grant: null, replayed: false }
+        }
+        const result = yield* SharedBrowserFileExchange.approve(database.db, input, capture)
+        sharedCaptures.delete(input.command.previewID)
+        return { grant: yield* sharedProjection(result.grant), replayed: result.replayed }
+      })).pipe(Effect.onExit((exit) => Effect.sync(() => { Deferred.doneUnsafe(completed, Effect.succeed(exit)) })))
+    })),
+    status: (input) => provide(Effect.gen(function* () {
+      const grant = yield* SharedBrowserFileExchange.requestGrant(database.db, input)
+      const summary = grant ? yield* sharedProjection(grant, yield* SharedBrowserFileExchange.grantArtifact(database.db, grant.grantID)) : null
+      if (!summary) {
+        const operation = sharedOperations.get(`2\0${input.resourceID}\0${input.requestID}`)
+        if (operation?.scopeHash === hash(input.scope)) {
+          const decision = operation.cancellation ?? (operation.capture ?
+            yield* SharedBrowserFileExchange.cancellation(database.db, operation.capture, operation.command) : undefined)
+          if (decision) {
+            operation.cancellation = decision
+            sharedCaptures.delete(operation.command.previewID)
+            return { requestID: input.requestID, state: "cancelled" as const, grant: null }
+          }
+        }
+      }
+      return { requestID: input.requestID, state: summary?.state ?? "missing", grant: summary }
+    })),
+    list: (input) => Effect.gen(function* () {
+      const page = yield* SharedBrowserFileExchange.list(database.db, input)
+      const summaries = yield* Effect.forEach(page.records, ({ grant, artifact }) => sharedProjection(grant, artifact))
+      const files = page.records.flatMap(({ artifact }) => {
+        const publication = artifact?.publication
+        return publication && (artifact.state === "selected" || artifact.state === "published") ? [{
+          artifactID: artifact.artifactID, grantID: artifact.grantID, direction: publication.direction, name: artifact.manifest.name,
+          bytes: publication.bytes, sha256: publication.sha256, state: artifact.state, nativeVerified: true as const,
+        }] : []
+      })
+      return { files, grants: summaries, nextCursor: page.nextCursor }
+    }),
+  }
+  const api: Interface = {
+    shared: sharedApi,
+    preview: (input) => provide(Effect.gen(function* () {
+      if (!state.live || captures.size + sharedCaptures.size + state.previewing >= 64) return yield* fail("BROWSER_FILE_CAPACITY")
       state.previewing++
       return yield* Effect.gen(function* () {
         const capture = yield* BrowserFileExchange.preview(database.db, input)
@@ -518,11 +846,11 @@ export const layer = Layer.unwrap(Effect.gen(function* () {
         const result = yield* BrowserFileExchange.approve(database.db, input)
         return { grant: yield* projection(result.grant, yield* BrowserFileExchange.grantArtifact(database.db, result.grant.grantID)), replayed: result.replayed }
       }
-      const key = `${input.controlID}\0${input.command.requestID}`
+      const key = `1\0${input.controlID}\0${input.command.requestID}`
       const digest = hash({ scope: input.scope, command: input.command })
       const cached = operations.get(key)
       if (cached) return cached.commandHash === digest ? yield* cached.effect : yield* fail("BROWSER_FILE_CONFLICT")
-      if (operations.size >= BrowserSchema.MAX_CONTROLS * BrowserFileSchema.MAX_GRANTS_PER_CONTROL) return yield* fail("BROWSER_FILE_CAPACITY")
+      if (operations.size + sharedOperations.size >= BrowserSchema.MAX_CONTROLS * BrowserFileSchema.MAX_GRANTS_PER_CONTROL) return yield* fail("BROWSER_FILE_CAPACITY")
       const completed = Deferred.makeUnsafe<Exit.Exit<{ grant: BrowserFileSchema.GrantSummary; replayed: boolean }, BrowserFileSchema.Error>>()
       const entry = { commandHash: digest, effect: Deferred.await(completed).pipe(Effect.flatMap((exit) => exit)) }
       // Publish a pending original request before any effect allocation/yield. Exact joins wait

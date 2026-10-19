@@ -1,7 +1,7 @@
 export * as BrowserFileControl from "./file-control"
 
 import { and, eq, isNull, sql } from "drizzle-orm"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import type { Database } from "../database/database"
 import { SecurityNamespaceTable, LocationIdentityTable, ProjectScopeIdentityTable } from "../context-federation/sql"
 import { SessionTable } from "../session/sql"
@@ -10,6 +10,9 @@ import { BrowserControlTable } from "./browser.sql"
 import { BrowserControl } from "./control"
 import type { BrowserHost } from "./host"
 import type { BrowserSchema } from "./schema"
+import type { SharedBrowserSchema } from "./shared-schema"
+import { SharedBrowserControl } from "./shared-control"
+import { SharedBrowserFileBinding } from "./shared-file-binding"
 
 type Db = Database.Interface["db"]
 type Reader = Db | Parameters<Parameters<Db["transaction"]>[0]>[0]
@@ -17,12 +20,15 @@ type Host = Pick<BrowserHost.Interface, "hostID" | "hostIncarnation" | "credenti
 declare const lease: unique symbol
 export type Lease = { readonly [lease]: true }
 type Entry = {
+  kind: "browser-v1"
   active: boolean
   control: BrowserSchema.Control
   host: Host
   row: typeof BrowserControlTable.$inferSelect
 }
-const leases = new WeakMap<Lease, Entry>()
+type SharedEntry = { kind: "shared-v2"; active: boolean; resource: SharedBrowserSchema.Resource;
+  lease: SharedBrowserSchema.Lease; host: BrowserHost.Interface; db: Db }
+const leases = new WeakMap<Lease, Entry | SharedEntry>()
 const denied = () => BrowserControl.failure("BROWSER_STALE_TARGET")
 
 /** Host control custody only. The caller retains its independent per-file
@@ -36,7 +42,7 @@ export const capture = Effect.fn("BrowserFileControl.capture")(function* (db: Db
     if (!row || !nativeCurrent({ control: current, host })) return yield* denied()
     // The strict DB decoder produced this separate object. Do not retain the
     // caller's mutable scope/expiry object as the captured identity.
-    return { active: true, control: current, host, row }
+    return { kind: "browser-v1" as const, active: true, control: current, host, row }
   }), { behavior: "immediate" })
   return yield* Effect.acquireRelease(Effect.sync(() => {
     const handle = Object.freeze({}) as Lease
@@ -51,9 +57,10 @@ export const capture = Effect.fn("BrowserFileControl.capture")(function* (db: Db
 /** One indexed joined current probe; no control JSON decode or policy reload.
  * The short writer fence closes before any helper/FD/network operation. */
 export const requireCurrent = Effect.fn("BrowserFileControl.requireCurrent")(function* (db: Reader, handle: Lease) {
+  if (leases.get(handle)?.kind === "shared-v2") return yield* requireSharedCurrent(db, handle)
   return yield* db.transaction((tx) => Effect.gen(function* () {
     const entry = leases.get(handle)
-    if (!entry?.active || !nativeCurrent(entry)) return yield* denied()
+    if (entry?.kind !== "browser-v1" || !entry.active || !nativeCurrent(entry)) return yield* denied()
     const scope = entry.control.scope
     const found = yield* tx.select({ controlID: BrowserControlTable.control_id }).from(BrowserControlTable)
       .innerJoin(SessionTable, eq(SessionTable.id, SessionSchema.ID.make(scope.sessionID)))
@@ -77,6 +84,70 @@ export const requireCurrent = Effect.fn("BrowserFileControl.requireCurrent")(fun
     if (!found || !entry.active || !nativeCurrent(entry)) return yield* denied()
   }), { behavior: "immediate" }).pipe(Effect.mapError(() => denied()))
 })
+
+/** Same opaque lease registry and factory. A real nonreducing Main probe brackets the
+ * SQL capture; a durable resource row or reducing status cannot create live custody. */
+export const captureShared = Effect.fn("BrowserFileControl.captureShared")(function* (
+  db: Db, resource: SharedBrowserSchema.Resource, lease: SharedBrowserSchema.Lease, host: BrowserHost.Interface,
+) {
+  yield* requireOutsideTransaction(db)
+  const original: SharedEntry = { kind: "shared-v2", active: true, resource, lease, host, db }
+  yield* nativeSharedCurrent(original)
+  const entry = yield* db.transaction((tx) => Effect.gen(function* () {
+    yield* BrowserControl.requireScope(tx, resource.scope)
+    const current = yield* SharedBrowserControl.requireActive(tx, resource.resourceID, resource.scope)
+    if (SharedBrowserFileBinding.hash(current.resource) !== SharedBrowserFileBinding.hash(resource) ||
+      SharedBrowserFileBinding.hash(current.lease) !== SharedBrowserFileBinding.hash(lease)) return yield* denied()
+    return { ...original, resource: current.resource, lease: current.lease }
+  }), { behavior: "immediate" })
+  yield* nativeSharedCurrent(entry)
+  return yield* Effect.acquireRelease(Effect.sync(() => {
+    const handle = Object.freeze({}) as Lease
+    leases.set(handle, entry)
+    return handle
+  }), (handle) => Effect.sync(() => { entry.active = false; leases.delete(handle) }))
+})
+
+function requireSharedCurrent(db: Reader, handle: Lease) {
+  return Effect.gen(function* () {
+    const entry = leases.get(handle)
+    if (entry?.kind !== "shared-v2" || entry.db !== db) return yield* denied()
+    yield* requireOutsideTransaction(db)
+    yield* nativeSharedCurrent(entry)
+    yield* db.transaction((tx) => Effect.gen(function* () {
+      yield* BrowserControl.requireScope(tx, entry.resource.scope)
+      const current = yield* SharedBrowserControl.requireActive(tx, entry.resource.resourceID, entry.resource.scope)
+      if (!entry.active || leases.get(handle) !== entry ||
+        SharedBrowserFileBinding.hash(current.resource) !== SharedBrowserFileBinding.hash(entry.resource) ||
+        SharedBrowserFileBinding.hash(current.lease) !== SharedBrowserFileBinding.hash(entry.lease)) return yield* denied()
+    }), { behavior: "immediate" })
+    yield* nativeSharedCurrent(entry)
+  }).pipe(Effect.mapError(() => denied()))
+}
+
+function requireOutsideTransaction(db: Reader) {
+  return Effect.gen(function* () {
+    if (!("$client" in db) || Option.isSome(yield* Effect.serviceOption(db.$client.transactionService)))
+      return yield* denied()
+  })
+}
+
+function nativeSharedCurrent(entry: SharedEntry) {
+  return Effect.gen(function* () {
+    const files = entry.host.shared?.files
+    const current = () => entry.active && entry.host.alive() && entry.host.shared?.files === files &&
+      entry.host.shared?.mainIncarnation === entry.resource.mainIncarnation &&
+      entry.host.hostIncarnation === entry.lease.sidecarIncarnation && entry.host.principal === entry.resource.scope.principal &&
+      entry.lease.resourceID === entry.resource.resourceID && entry.lease.mainIncarnation === entry.resource.mainIncarnation &&
+      entry.resource.liveLeaseID === entry.lease.leaseID && entry.resource.manualEpoch === entry.lease.manualEpoch &&
+      entry.resource.state === "agent_owned" && entry.lease.state === "active" && entry.resource.resourceAlive &&
+      !entry.resource.agentAccessFenced && !entry.resource.manualEnabled &&
+      Math.min(entry.resource.expiresAt, entry.lease.expiresAt) > Date.now()
+    if (!files || !current()) return yield* denied()
+    yield* files.current(entry.resource, entry.lease).pipe(Effect.mapError(() => denied()))
+    if (!current()) return yield* denied()
+  })
+}
 
 function nativeCurrent(entry: Pick<Entry, "control" | "host">) {
   if (!entry.host.alive() || entry.host.hostID !== entry.control.hostID ||

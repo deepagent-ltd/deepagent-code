@@ -40,6 +40,7 @@ import { WorkSessionGuard } from "./session/work-session-guard"
 import { WorkAuthoritySchema } from "./session/work-authority.schema"
 import { GoalChild } from "./deepagent/goal-child"
 import { GoalChildSchema } from "./deepagent/goal-child.schema"
+import { SharedBrowserUserInput } from "./browser/shared-user-input"
 
 // get project -> project.locations
 //
@@ -933,7 +934,11 @@ export const layer = Layer.effect(
                 ? undefined
                 : writable.agent ?? (yield* requireAdmissionAgent(writable.location, undefined, false)),
               revertEpoch: input.revertEpoch,
-              ...(managed ? { commit: (seq: number) => GoalChild.recordInput(db, input, seq) } : {}),
+              commit: (seq: number) => Effect.gen(function* () {
+                if (managed) yield* GoalChild.recordInput(db, input, seq)
+                yield* SharedBrowserUserInput.recordAdmission(db, { id: messageID, sessionID: input.sessionID,
+                  prompt: input.prompt, delivery, admittedSeq: seq }).pipe(Effect.orDie)
+              }),
             }).pipe(
               Effect.catchDefect((defect) =>
                 defect instanceof SessionInput.LifecycleConflict

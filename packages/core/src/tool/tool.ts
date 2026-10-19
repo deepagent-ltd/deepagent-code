@@ -64,6 +64,9 @@ type Config<Input extends SchemaType<any>, Output extends SchemaType<any>> = {
   readonly description: string
   readonly input: Input
   readonly output: Output
+  /** Opt-in protocol decoding for tools with distinct wire forms. Other tools retain
+   * their existing schema parsing and excess-property compatibility. */
+  readonly decodeInput?: (input: unknown) => Effect.Effect<Schema.Schema.Type<Input>, ToolFailure>
   readonly execute: (
     input: Schema.Schema.Type<Input>,
     context: Context,
@@ -106,8 +109,11 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
       return definition
     },
     settle: (call, context) =>
-      Schema.decodeUnknownEffect(config.input)(call.input).pipe(
-        Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
+      (config.decodeInput
+        ? config.decodeInput(call.input)
+        : Schema.decodeUnknownEffect(config.input)(call.input).pipe(
+          Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
+        )).pipe(
         Effect.flatMap((input) =>
           config.execute(input, context).pipe(
             Effect.flatMap((output) =>

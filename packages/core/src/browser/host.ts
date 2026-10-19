@@ -3,6 +3,7 @@ export * as BrowserHost from "./host"
 import { Context, Effect } from "effect"
 import type { BrowserSchema } from "./schema"
 import type { BrowserFileSchema } from "./file-exchange.schema"
+import type { SharedBrowserHost } from "./shared-host"
 
 export interface Interface {
   readonly hostID: string
@@ -11,6 +12,7 @@ export interface Interface {
   readonly credentialBinding: string
   readonly matchesCredentials: (username: string, password: string) => boolean
   readonly alive: () => boolean
+  readonly shared?: SharedBrowserHost.Interface
   /** Normal observation requires the actual create ACK. A reducing cancellation may still
    * target its original descriptor after a lost ACK; neither path accepts a SQL hash as proof. */
   readonly verify: (control: BrowserSchema.Control, destroyOnly?: boolean) => { matched: boolean; stopped: boolean }

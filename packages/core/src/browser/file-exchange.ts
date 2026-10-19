@@ -145,7 +145,7 @@ export const approve = Effect.fn("BrowserFileExchange.approve")(function* (db: D
       policyRevision: fresh.policyRevision, scopeHash: hash(fresh.scope), command, commandHash: hash(command),
       preview: capture.preview, confirmation, expiresAt: command.expiresAt, createdAt: Date.now() }
     yield* bounded(BrowserFileSchema.Grant, grant)
-    yield* reserve(tx, grant.instanceID, { grants: 1, artifacts: 0, body: 0 })
+    yield* reserveCapacityInTransaction(tx, grant.instanceID, { grants: 1, artifacts: 0, body: 0 })
     yield* tx.insert(BrowserFileGrantTable).values(grantColumns(grant)).run()
     return { grant, replayed: false }
   }))
@@ -285,7 +285,7 @@ export const reserveArtifactsInTransaction = Effect.fn("BrowserFileExchange.rese
   }))
   // Zero-byte upload still has durable custody. Metadata is never released with its body.
   const normalized = artifacts.map((artifact) => ({ ...artifact, reservedBytes: Math.max(1, artifact.reservedBytes) }))
-  yield* reserve(tx, grants[0]!.instanceID, { grants: 0, artifacts: artifacts.length, body: normalized.reduce((sum, artifact) => sum + artifact.reservedBytes, 0) })
+  yield* reserveCapacityInTransaction(tx, grants[0]!.instanceID, { grants: 0, artifacts: artifacts.length, body: normalized.reduce((sum, artifact) => sum + artifact.reservedBytes, 0) })
   yield* Effect.forEach(normalized, (artifact) => tx.insert(BrowserFileArtifactTable).values(artifactColumns(artifact)).run())
   return { grants, artifacts: normalized }
 }, preserve)
@@ -306,14 +306,19 @@ export const observed = Effect.fn("BrowserFileExchange.observed")(function* (db:
   observation: BrowserFileCapability.Observation) {
   const files = yield* native
   const publication = yield* checked(BrowserFileSchema.Publication, files.describe(observation))
-  if (publication.artifactID !== prior.artifactID || publication.grantID !== prior.grantID || publication.direction !== prior.manifest.direction ||
-    publication.helperHash !== prior.manifest.helperHash || hash(publication.rootIdentity) !== hash(prior.manifest.rootIdentity) ||
-    (prior.manifest.direction === "upload" && (publication.bytes !== prior.manifest.bytes || publication.sha256 !== prior.manifest.sha256 ||
-      hash(publication.fileIdentity) !== hash(prior.manifest.fileIdentity) || publication.outcome !== "selected")) ||
-    (prior.manifest.direction === "download" && (publication.bytes > prior.manifest.maxBytes || publication.outcome !== "published")))
-    return yield* failure("BROWSER_FILE_CHANGED")
+  if (!publicationMatches(prior, publication)) return yield* failure("BROWSER_FILE_CHANGED")
   return yield* transition(db, prior, publication.outcome, publication)
 }, preserve)
+/** Shared custody uses the identical helper/FD publication evidence rules. */
+export function publicationMatches(prior: { artifactID: string; grantID: string; manifest: {
+  direction: "upload"; helperHash: string; rootIdentity: BrowserFileSchema.Identity; bytes: number; sha256: string; fileIdentity: BrowserFileSchema.Identity
+} | { direction: "download"; helperHash: string; rootIdentity: BrowserFileSchema.Identity; maxBytes: number } }, publication: BrowserFileSchema.Publication) {
+  return publication.artifactID === prior.artifactID && publication.grantID === prior.grantID && publication.direction === prior.manifest.direction &&
+    publication.helperHash === prior.manifest.helperHash && hash(publication.rootIdentity) === hash(prior.manifest.rootIdentity) &&
+    (prior.manifest.direction === "upload" ? publication.bytes === prior.manifest.bytes && publication.sha256 === prior.manifest.sha256 &&
+      hash(publication.fileIdentity) === hash(prior.manifest.fileIdentity) && publication.outcome === "selected" :
+      publication.bytes <= prior.manifest.maxBytes && publication.outcome === "published")
+}
 export const staged = (db: Db, prior: BrowserFileSchema.Artifact) => transition(db, prior, "staged")
 export const unknown = (db: Db, prior: BrowserFileSchema.Artifact) => transition(db, prior, "unknown")
 export const refused = (db: Db, prior: BrowserFileSchema.Artifact) => transition(db, prior, "refused")
@@ -335,9 +340,9 @@ export const released = Effect.fn("BrowserFileExchange.released")(function* (db:
     const now = Date.now()
     const result = { ...actual, revision: actual.revision + 1, updatedAt: now, stopConfirmedAt: now, releasedAt: now, reservedBytes: 0 }
     yield* writeArtifact(tx, actual, result)
-    const meter = yield* readMeter(tx, actual.instanceID)
+    const meter = yield* readCapacityInTransaction(tx, actual.instanceID)
     if (meter.reserved_bytes < actual.reservedBytes + meter.metadata_bytes) return yield* failure("BROWSER_FILE_INVALID")
-    yield* writeMeter(tx, meter, { ...meter, reserved_bytes: meter.reserved_bytes - actual.reservedBytes })
+    yield* writeCapacityInTransaction(tx, meter, { ...meter, reserved_bytes: meter.reserved_bytes - actual.reservedBytes })
     return result
   })))
 }, preserve)
@@ -356,7 +361,7 @@ function bounded<A>(schema: Schema.Decoder<A>, record: A, bytes = BrowserFileSch
   return checked(schema, record).pipe(Effect.flatMap(() => Buffer.byteLength(CanonicalJson.stringify(record)) <= bytes
     ? Effect.void : Effect.fail(failure("BROWSER_FILE_CAPACITY"))))
 }
-function readMeter(tx: Tx, instanceID: string) {
+export function readCapacityInTransaction(tx: Tx, instanceID: string) {
   return Effect.gen(function* () {
     const meter = yield* tx.select().from(BrowserFileCapacityTable).where(eq(BrowserFileCapacityTable.instance_id, instanceID)).get()
     if (!meter || ![meter.grant_count, meter.artifact_count, meter.reserved_bytes, meter.metadata_bytes, meter.revision, meter.updated_at].every(Number.isSafeInteger) ||
@@ -367,7 +372,7 @@ function readMeter(tx: Tx, instanceID: string) {
     return meter
   })
 }
-function writeMeter(tx: Tx, prior: typeof BrowserFileCapacityTable.$inferSelect, next: typeof BrowserFileCapacityTable.$inferSelect) {
+export function writeCapacityInTransaction(tx: Tx, prior: typeof BrowserFileCapacityTable.$inferSelect, next: typeof BrowserFileCapacityTable.$inferSelect) {
   return Effect.gen(function* () {
     const changed = yield* tx.update(BrowserFileCapacityTable).set({ ...next, revision: prior.revision + 1, updated_at: Date.now() })
       .where(and(eq(BrowserFileCapacityTable.instance_id, prior.instance_id), eq(BrowserFileCapacityTable.revision, prior.revision)))
@@ -375,17 +380,17 @@ function writeMeter(tx: Tx, prior: typeof BrowserFileCapacityTable.$inferSelect,
     if (changed.length !== 1) return yield* failure("BROWSER_FILE_CONFLICT")
   })
 }
-function reserve(tx: Tx, instanceID: string, input: { grants: number; artifacts: number; body: number }) {
+export function reserveCapacityInTransaction(tx: Tx, instanceID: string, input: { grants: number; artifacts: number; body: number }) {
   return Effect.gen(function* () {
     yield* tx.insert(BrowserFileCapacityTable).values({ instance_id: instanceID, grant_count: 0, artifact_count: 0,
       metadata_bytes: 0, reserved_bytes: 0, revision: 1, updated_at: Date.now() }).onConflictDoNothing().run()
-    const meter = yield* readMeter(tx, instanceID)
+    const meter = yield* readCapacityInTransaction(tx, instanceID)
     const metadata = (input.grants + input.artifacts) * metadataReservation
     const next = { ...meter, grant_count: meter.grant_count + input.grants, artifact_count: meter.artifact_count + input.artifacts,
       metadata_bytes: meter.metadata_bytes + metadata, reserved_bytes: meter.reserved_bytes + metadata + input.body }
     if (next.artifact_count > BrowserFileSchema.MAX_ARTIFACTS || next.metadata_bytes > BrowserFileSchema.MAX_METADATA_BYTES ||
       next.reserved_bytes > BrowserFileSchema.MAX_RESERVED_BYTES || !Number.isSafeInteger(next.reserved_bytes)) return yield* failure("BROWSER_FILE_CAPACITY")
-    yield* writeMeter(tx, meter, next)
+    yield* writeCapacityInTransaction(tx, meter, next)
   })
 }
 function writeArtifact(tx: Tx, prior: BrowserFileSchema.Artifact, next: BrowserFileSchema.Artifact) {
@@ -398,12 +403,14 @@ function writeArtifact(tx: Tx, prior: BrowserFileSchema.Artifact, next: BrowserF
 }
 function grantColumns(record: BrowserFileSchema.Grant) {
   return { grant_id: record.grantID, instance_id: record.instanceID, control_id: record.controlID,
+    binding_version: 1, shared_resource_id: null, shared_lease_id: null,
     request_id: record.command.requestID, command_hash: record.commandHash, scope_hash: record.scopeHash,
     control_epoch: record.controlEpoch, policy_revision: record.policyRevision, direction: record.preview.direction,
     expires_at: record.expiresAt, record: CanonicalJson.stringify(record), record_hash: hash(record), created_at: record.createdAt }
 }
 function artifactColumns(record: BrowserFileSchema.Artifact) {
   return { artifact_id: record.artifactID, instance_id: record.instanceID, grant_id: record.grantID, grant_hash: record.grantHash,
+    binding_version: 1, shared_resource_id: null, shared_lease_id: null, shared_action_id: null,
     action_id: record.actionID, control_id: record.controlID, scope_hash: record.scopeHash, ordinal: record.ordinal,
     state: record.state, revision: record.revision, reserved_bytes: record.reservedBytes, record: CanonicalJson.stringify(record),
     record_hash: hash(record), created_at: record.createdAt, updated_at: record.updatedAt, released_at: record.releasedAt }
