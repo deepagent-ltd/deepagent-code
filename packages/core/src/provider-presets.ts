@@ -16,6 +16,28 @@ export const PROVIDER_BRANDS = [
   { id: "openrouter", name: "OpenRouter" },
 ] as const
 
+// A supplier owns account/region boundaries; its API and subscription products
+// retain separate provider IDs and credentials within one settings entry.
+export const PROVIDER_SUPPLIERS = [
+  { id: "deepagent", name: "DeepAgent", providers: ["deepagent"] },
+  { id: "deepseek", name: "DeepSeek", providers: ["deepseek"] },
+  { id: "openai", name: "OpenAI", providers: ["openai"] },
+  { id: "anthropic", name: "Anthropic", providers: ["anthropic"] },
+  { id: "zhipuai", name: "Zhipu AI", providers: ["zhipuai", "zhipuai-coding-plan"] },
+  { id: "zai", name: "Z.AI", providers: ["zai", "zai-coding-plan"] },
+  { id: "kimi", name: "Kimi", providers: ["moonshotai-cn", "kimi-for-coding"] },
+  { id: "moonshotai", name: "Moonshot AI", providers: ["moonshotai"] },
+  { id: "alibaba-cn", name: "Alibaba Cloud Bailian (China)", providers: ["alibaba-cn", "alibaba-coding-plan-cn"] },
+  { id: "alibaba", name: "Alibaba Cloud Model Studio", providers: ["alibaba", "alibaba-coding-plan"] },
+  { id: "google", name: "Google Gemini", providers: ["google"] },
+  { id: "xai", name: "xAI Grok", providers: ["xai"] },
+  { id: "openrouter", name: "OpenRouter", providers: ["openrouter"] },
+] as const
+
+export function providerSupplier(providerID: string) {
+  return PROVIDER_SUPPLIERS.find((item) => item.providers.some((id) => id === providerID))
+}
+
 type Preset = {
   id: string
   brand: (typeof PROVIDER_BRANDS)[number]["id"]

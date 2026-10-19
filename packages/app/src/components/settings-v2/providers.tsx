@@ -3,37 +3,23 @@ import { Tag } from "@deepagent-code/ui/v2/badge-v2"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { ProviderIcon } from "@deepagent-code/ui/provider-icon"
 import { showToast } from "@/utils/toast"
-import { popularProviders, useProviders } from "@/hooks/use-providers"
+import { useProviders } from "@/hooks/use-providers"
 import { createMemo, type Component, For, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { DialogConnectProvider } from "../dialog-connect-provider"
+import { DialogConnectSupplier } from "../dialog-connect-supplier"
 import { DialogSelectProvider } from "../dialog-select-provider"
 import { DialogCustomProvider } from "../dialog-custom-provider"
-import { SettingsListV2 } from "./parts/list"
 import { canRefreshProviderModels } from "../provider-model-refresh"
 import "./settings-v2.css"
 import { SettingsPage } from "./parts/page"
-import { PROVIDER_BRANDS, providerPreset } from "@deepagent-code/core/provider-presets"
+import { PROVIDER_SUPPLIERS, providerPreset, providerSupplier } from "@deepagent-code/core/provider-presets"
 
 type ProviderSource = "env" | "api" | "config" | "custom"
 type ProviderItem = ReturnType<ReturnType<typeof useProviders>["connected"]>[number]
-
-const PROVIDER_NOTES = [
-  { match: (id: string) => id === "anthropic", key: "dialog.provider.anthropic.note" },
-  { match: (id: string) => id === "openai", key: "dialog.provider.openai.note" },
-  { match: (id: string) => id === "deepseek", key: "dialog.provider.deepseek.note" },
-  { match: (id: string) => id === "google", key: "dialog.provider.google.note" },
-  { match: (id: string) => id === "xai", key: "dialog.provider.xai.note" },
-  { match: (id: string) => id === "zhipuai", key: "dialog.provider.zhipuai.note" },
-  { match: (id: string) => id === "zhipuai-coding-plan", key: "dialog.provider.zhipuai-coding-plan.note" },
-  { match: (id: string) => id === "zai", key: "dialog.provider.zai.note" },
-  { match: (id: string) => id === "zai-coding-plan", key: "dialog.provider.zai-coding-plan.note" },
-  { match: (id: string) => id === "kimi-for-coding", key: "dialog.provider.kimi-for-coding.note" },
-  { match: (id: string) => id === "moonshotai-cn", key: "dialog.provider.moonshotai-cn.note" },
-] as const
 
 const PROVIDER_ICON_SIZE = 16
 
@@ -60,21 +46,38 @@ export const SettingsProvidersV2: Component = () => {
   const errorKindLabel = (kind: string) =>
     kind === "json" ? language.t("settings.providers.error.json") : language.t("settings.providers.error.schema")
 
-  const popular = createMemo(() => {
-    const connectedIDs = new Set(connected().map((p) => p.id))
-    const items = providers
-      .popular()
-      .filter((p) => !connectedIDs.has(p.id))
-      .slice()
-    items.sort((a, b) => popularProviders.indexOf(a.id) - popularProviders.indexOf(b.id))
-    return items
+  const connectedSuppliers = createMemo(() => {
+    const key = (providerID: string) => {
+      const supplier = providerSupplier(providerID)
+      return supplier ? `supplier:${supplier.id}` : `provider:${providerID}`
+    }
+    return [...new Set(connected().map((item) => key(item.id)))].map((identity) => {
+      const id = identity.slice(identity.indexOf(":") + 1)
+      const supplier = identity.startsWith("supplier:") ? PROVIDER_SUPPLIERS.find((item) => item.id === id) : undefined
+      const items = connected().filter((item) => key(item.id) === identity)
+      return { id, name: supplier?.name ?? items[0].name, supplier, items }
+    })
   })
-  const brands = createMemo(() =>
-    PROVIDER_BRANDS.map((brand) => ({
-      ...brand,
-      items: popular().filter((item) => providerPreset(item.id)?.brand === brand.id),
-    })).filter((brand) => brand.items.length > 0),
-  )
+  const popular = createMemo(() => {
+    const present = new Set(connectedSuppliers().flatMap((item) => (item.supplier ? [item.supplier.id] : [])))
+    return PROVIDER_SUPPLIERS.filter(
+      (item) => !present.has(item.id) && item.providers.some((id) => providers.all().has(id)),
+    )
+  })
+  const supplierName = (id: string, name: string) => {
+    if (id === "alibaba-cn") return language.t("settings.providers.supplier.alibabaChina")
+    if (id === "alibaba") return language.t("settings.providers.supplier.alibabaInternational")
+    return name
+  }
+  const productDescription = (ids: readonly string[]) =>
+    [
+      ...new Set(
+        ids.flatMap((id) => {
+          const preset = providerPreset(id)
+          return preset ? [language.t(`settings.providers.billing.${preset.billing}`)] : []
+        }),
+      ),
+    ].join(" · ")
 
   const source = (item: ProviderItem): ProviderSource | undefined => {
     if (!("source" in item)) return
@@ -96,8 +99,6 @@ export const SettingsProvidersV2: Component = () => {
   }
 
   const canDisconnect = (item: ProviderItem) => source(item) !== "env"
-
-  const note = (id: string) => PROVIDER_NOTES.find((item) => item.match(id))?.key
 
   const canRefresh = (providerID: string) =>
     canRefreshProviderModels(providerID, serverSync.data.config.provider?.[providerID])
@@ -209,209 +210,145 @@ export const SettingsProvidersV2: Component = () => {
       description={language.t("settings.providers.description")}
       class="settings-v2-providers"
     >
-      <div class="settings-v2-section" data-component="connected-providers-section">
+      <section class="settings-v2-section" data-component="connected-providers-section">
         <h3 class="settings-v2-section-title">{language.t("settings.providers.section.connected")}</h3>
-        <SettingsListV2>
+        <div class="settings-v2-provider-cards">
           <Show
             when={connected().length > 0 || configErrors().length > 0}
             fallback={<div class="settings-v2-provider-empty">{language.t("settings.providers.connected.empty")}</div>}
           >
             <For each={configErrors()}>
               {(error) => (
-                <div class="settings-v2-provider-row" data-component="provider-config-error">
+                <article class="settings-v2-provider-card" data-component="provider-config-error">
+                  <strong>{error.source}</strong>
+                  <p class="settings-v2-provider-description">
+                    {errorKindLabel(error.kind)}: {error.message}
+                  </p>
+                </article>
+              )}
+            </For>
+            <For each={connectedSuppliers()}>
+              {(group) => (
+                <article
+                  class="settings-v2-provider-card"
+                  data-supplier={group.supplier?.id}
+                  data-provider-card={group.supplier ? undefined : group.id}
+                >
+                  <div class="settings-v2-provider-card-header">
+                    <div class="settings-v2-provider-lead">
+                      <ProviderIcon
+                        id={group.items[0].id}
+                        width={PROVIDER_ICON_SIZE}
+                        height={PROVIDER_ICON_SIZE}
+                        class="settings-v2-provider-icon shrink-0"
+                      />
+                      <span class="settings-v2-provider-name">{supplierName(group.id, group.name)}</span>
+                    </div>
+                    <ButtonV2
+                      variant="neutral"
+                      onClick={() =>
+                        group.supplier
+                          ? dialog.push(() => <DialogConnectSupplier supplier={group.id} />)
+                          : openProviderConfig(group.items[0].id)
+                      }
+                    >
+                      {language.t("settings.providers.manage")}
+                    </ButtonV2>
+                  </div>
+                  <div class="settings-v2-provider-card-body">
+                    <For each={group.items}>
+                      {(item) => (
+                        <div class="settings-v2-provider-row" data-provider={item.id}>
+                          <div class="settings-v2-provider-copy">
+                            <div class="settings-v2-provider-main">
+                              <span>{productDescription([item.id]) || item.name}</span>
+                              <Tag>{type(item)}</Tag>
+                            </div>
+                            <Show when={source(item) === "env"}>
+                              <p class="settings-v2-provider-description">
+                                {language.t("settings.providers.connected.environmentDescription")} ·{" "}
+                                {item.env.join(", ")}
+                              </p>
+                            </Show>
+                          </div>
+                          <div class="settings-v2-provider-actions">
+                            <Show when={canRefresh(item.id)}>
+                              <ButtonV2
+                                variant="ghost-muted"
+                                disabled={refreshing[item.id]}
+                                onClick={() => void refreshModels(item.id, item.name)}
+                              >
+                                {refreshing[item.id]
+                                  ? language.t("provider.models.refresh.refreshing")
+                                  : language.t("common.refresh")}
+                              </ButtonV2>
+                            </Show>
+                            <Show when={canDisconnect(item)}>
+                              <ButtonV2 variant="ghost-muted" onClick={() => void disconnect(item.id, item.name)}>
+                                {language.t("common.disconnect")}
+                              </ButtonV2>
+                            </Show>
+                          </div>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </article>
+              )}
+            </For>
+          </Show>
+        </div>
+      </section>
+      <section class="settings-v2-section">
+        <h3 class="settings-v2-section-title">{language.t("settings.providers.section.popular")}</h3>
+        <div class="settings-v2-provider-cards">
+          <For each={popular()}>
+            {(supplier) => (
+              <article class="settings-v2-provider-card" data-supplier={supplier.id}>
+                <div class="settings-v2-provider-card-header">
                   <div class="settings-v2-provider-lead">
                     <ProviderIcon
-                      id="synthetic"
+                      id={supplier.providers[0]}
                       width={PROVIDER_ICON_SIZE}
                       height={PROVIDER_ICON_SIZE}
                       class="settings-v2-provider-icon shrink-0"
                     />
                     <div class="settings-v2-provider-copy">
-                      <div class="settings-v2-provider-main">
-                        <span class="settings-v2-provider-name truncate">{error.source}</span>
-                        <Tag class="settings-v2-provider-error-tag">
-                          {language.t("settings.providers.tag.configError")}
-                        </Tag>
-                      </div>
-                      <p class="settings-v2-provider-description">
-                        {errorKindLabel(error.kind)}: {error.message}
-                      </p>
+                      <span class="settings-v2-provider-name">{supplierName(supplier.id, supplier.name)}</span>
+                      <p class="settings-v2-provider-description">{productDescription(supplier.providers)}</p>
                     </div>
                   </div>
+                  <ButtonV2
+                    variant="neutral"
+                    icon="plus"
+                    onClick={() => dialog.push(() => <DialogConnectSupplier supplier={supplier.id} />)}
+                  >
+                    {language.t("common.connect")}
+                  </ButtonV2>
                 </div>
-              )}
-            </For>
-            <For each={connected()}>
-              {(item) => (
-                <div
-                  class="settings-v2-provider-row group cursor-pointer"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => openProviderConfig(item.id)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" && event.key !== " ") return
-                    event.preventDefault()
-                    openProviderConfig(item.id)
-                  }}
-                >
-                  <div class="settings-v2-provider-lead">
-                    <ProviderIcon
-                      id={item.id}
-                      width={PROVIDER_ICON_SIZE}
-                      height={PROVIDER_ICON_SIZE}
-                      class="settings-v2-provider-icon shrink-0"
-                    />
-                    <div class="settings-v2-provider-main">
-                      <span class="settings-v2-provider-name truncate">{item.name}</span>
-                      <Tag>{type(item)}</Tag>
-                    </div>
-                  </div>
-                  <div class="flex items-center gap-1">
-                    <Show when={canRefresh(item.id)}>
-                      <ButtonV2
-                        size="normal"
-                        variant="ghost-muted"
-                        disabled={refreshing[item.id]}
-                        onClick={(event: MouseEvent) => {
-                          event.stopPropagation()
-                          void refreshModels(item.id, item.name)
-                        }}
-                      >
-                        {refreshing[item.id]
-                          ? language.t("provider.models.refresh.refreshing")
-                          : language.t("common.refresh")}
-                      </ButtonV2>
-                    </Show>
-                    <Show
-                      when={canDisconnect(item)}
-                      fallback={
-                        <span class="settings-v2-provider-env-hint">
-                          {language.t("settings.providers.connected.environmentDescription")}
-                          <Show when={item.env.length > 0}> · {item.env.join(", ")}</Show>
-                        </span>
-                      }
-                    >
-                      <ButtonV2
-                        size="normal"
-                        variant="ghost-muted"
-                        onClick={(event: MouseEvent) => {
-                          event.stopPropagation()
-                          void disconnect(item.id, item.name)
-                        }}
-                      >
-                        {language.t("common.disconnect")}
-                      </ButtonV2>
-                    </Show>
-                  </div>
-                </div>
-              )}
-            </For>
-          </Show>
-        </SettingsListV2>
-      </div>
-
-      <div class="settings-v2-section">
-        <h3 class="settings-v2-section-title">{language.t("settings.providers.section.popular")}</h3>
-        <SettingsListV2>
-          <For each={brands()}>
-            {(brand) => (
-              <section class="settings-v2-section" aria-label={brand.name}>
-                <h4 class="settings-v2-section-title">{brand.name}</h4>
-                <For each={brand.items}>
-                  {(item) => (
-                    <div class="settings-v2-provider-row">
-                      <div class="settings-v2-provider-lead">
-                        <ProviderIcon
-                          id={item.id}
-                          width={PROVIDER_ICON_SIZE}
-                          height={PROVIDER_ICON_SIZE}
-                          class="settings-v2-provider-icon shrink-0"
-                        />
-                        <div class="settings-v2-provider-copy">
-                          <div class="settings-v2-provider-main">
-                            <span class="settings-v2-provider-name">{item.name}</span>
-                          </div>
-                          <Show when={note(item.id)}>
-                            {(key) => <p class="settings-v2-provider-description">{language.t(key())}</p>}
-                          </Show>
-                          <Show when={providerPreset(item.id)}>
-                            {(preset) => (
-                              <p class="settings-v2-provider-description">
-                                {language.t(`settings.providers.billing.${preset().billing}`)} ·{" "}
-                                {language.t(`settings.providers.region.${preset().region}`)}
-                              </p>
-                            )}
-                          </Show>
-                          <Show when={Object.keys(item.models).length === 0}>
-                            <p class="settings-v2-provider-description" role="status">
-                              {language.t("settings.providers.catalogPending")}
-                            </p>
-                          </Show>
-                          <Show
-                            when={serverSync.data.provider_auth[item.id]?.some((method) => method.type === "oauth")}
-                          >
-                            <p class="settings-v2-provider-description">
-                              {serverSync.data.provider_auth[item.id]?.map((method) => method.label).join(" · ")}
-                            </p>
-                          </Show>
-                        </div>
-                      </div>
-                      <ButtonV2
-                        size="normal"
-                        variant="neutral"
-                        icon="plus"
-                        onClick={() => {
-                          dialog.show(() => <DialogConnectProvider provider={item.id} />)
-                        }}
-                      >
-                        {language.t("common.connect")}
-                      </ButtonV2>
-                    </div>
-                  )}
-                </For>
-              </section>
+              </article>
             )}
           </For>
-
-          <div class="settings-v2-provider-row" data-component="custom-provider-section">
-            <div class="settings-v2-provider-lead">
-              <ProviderIcon
-                id="synthetic"
-                width={PROVIDER_ICON_SIZE}
-                height={PROVIDER_ICON_SIZE}
-                class="settings-v2-provider-icon shrink-0"
-              />
+          <article class="settings-v2-provider-card" data-component="custom-provider-section">
+            <div class="settings-v2-provider-card-header">
               <div class="settings-v2-provider-copy">
-                <div class="settings-v2-provider-main">
-                  <span class="settings-v2-provider-name">{language.t("provider.custom.title")}</span>
-                  <Tag>{language.t("settings.providers.tag.custom")}</Tag>
-                </div>
+                <span class="settings-v2-provider-name">{language.t("provider.custom.title")}</span>
                 <p class="settings-v2-provider-description">{language.t("settings.providers.custom.description")}</p>
               </div>
+              <ButtonV2
+                variant="neutral"
+                icon="plus"
+                onClick={() => dialog.push(() => <DialogCustomProvider back="close" />)}
+              >
+                {language.t("common.connect")}
+              </ButtonV2>
             </div>
-            <ButtonV2
-              size="normal"
-              variant="neutral"
-              icon="plus"
-              onClick={() => {
-                dialog.show(() => <DialogCustomProvider back="close" />)
-              }}
-            >
-              {language.t("common.connect")}
-            </ButtonV2>
-          </div>
-        </SettingsListV2>
-
-        <button
-          type="button"
-          class="settings-v2-providers-view-all"
-          onClick={() => {
-            dialog.show(() => <DialogSelectProvider />)
-          }}
-        >
+          </article>
+        </div>
+        <ButtonV2 variant="ghost" onClick={() => dialog.push(() => <DialogSelectProvider />)}>
           {language.t("dialog.provider.viewAll")}
-        </button>
-      </div>
+        </ButtonV2>
+      </section>
     </SettingsPage>
   )
 }

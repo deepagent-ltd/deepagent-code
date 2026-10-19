@@ -1010,6 +1010,28 @@ export const dict = {
 
   "dialog.provider.viewAll": "Show more providers",
 
+  "provider.connect.supplier.title": "Choose a product from {{supplier}}",
+  "provider.connect.supplier.description":
+    "API and Coding Plan use separate credentials. Choose the product to connect.",
+  "provider.connect.models.discover": "Verify and load models",
+  "provider.connect.models.discovering": "Verifying connection…",
+  "provider.connect.models.title": "Choose models",
+  "provider.connect.models.description": "These models were returned by the server. Select the models to enable.",
+  "provider.connect.models.empty": "No usable models were returned. Credentials have not been saved.",
+  "provider.connect.models.save": "Save and enable selected models",
+  "provider.connect.models.selectionRequired": "Select at least one model.",
+  "provider.connect.models.back": "Edit key",
+  "provider.connect.models.preferencesFailed":
+    "Credentials saved, but model preferences could not be saved. Retry to finish setup.",
+  "provider.connect.oauth.catalogUnverified": "Authorization saved. The remote model catalog has not been verified.",
+  "settings.providers.manage": "Manage",
+  "settings.providers.supplier.alibabaChina": "Alibaba Cloud Bailian (China)",
+  "settings.providers.supplier.alibabaInternational": "Alibaba Cloud Model Studio (International)",
+  "provider.connect.models.manualDescription": "This service did not provide a usable model list. Enter the model ID; the key and model have not been verified. The preset endpoint and protocol will be used.",
+  "provider.connect.models.consent": "I understand that this key and model have not been verified.",
+  "provider.connect.models.saveManual": "Save unverified configuration",
+  "provider.connect.models.manualSaved": "Unverified configuration saved. The model has not been called.",
+  "provider.connect.models.manual": "Configure model manually",
   "provider.connect.title": "Connect {{provider}}",
   "provider.connect.title.anthropicProMax": "Login with Claude Pro/Max",
   "provider.connect.selectMethod": "Select login method for {{provider}}.",
@@ -2584,7 +2606,8 @@ export const dict = {
   "settings.shortcuts.group.prompt": "Prompt",
 
   "settings.providers.title": "Providers",
-  "settings.providers.description": "Connect an API or a plan with its own credentials.",
+  "settings.providers.description":
+    "One entry per supplier. Choose API or Coding Plan inside; account regions stay separate.",
   "settings.providers.section.deepagentBackends": "DeepAgent model backends",
   "settings.providers.section.connected": "Connected providers",
   "settings.providers.connected.empty": "No connected providers",

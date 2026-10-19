@@ -1,6 +1,28 @@
 // Approved v2.0.5 settings semantics. Other settings retain all-locale own-property coverage.
 // Keep this list explicit: newly missing translations must never be exempted automatically.
 export const settingsFallbackKeys = [
+  "provider.connect.models.manualDescription",
+  "provider.connect.models.consent",
+  "provider.connect.models.saveManual",
+  "provider.connect.models.manualSaved",
+  "provider.connect.models.manual",
+
+  "provider.connect.supplier.title",
+  "provider.connect.supplier.description",
+  "provider.connect.models.discover",
+  "provider.connect.models.discovering",
+  "provider.connect.models.title",
+  "provider.connect.models.description",
+  "provider.connect.models.empty",
+  "provider.connect.models.save",
+  "provider.connect.models.selectionRequired",
+  "provider.connect.models.back",
+  "provider.connect.models.preferencesFailed",
+  "provider.connect.oauth.catalogUnverified",
+  "settings.providers.manage",
+  "settings.providers.supplier.alibabaChina",
+  "settings.providers.supplier.alibabaInternational",
+
   "settings.general.row.collaborationMode.effective",
   "settings.im.service.title",
   "settings.im.service.description",

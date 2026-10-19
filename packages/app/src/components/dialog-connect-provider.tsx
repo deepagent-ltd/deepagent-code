@@ -33,11 +33,9 @@ const providerBaseURL = (providerID: string) => providerPreset(providerID)?.api
 // loader reads them (auth for official, config options.apiKey for third-party).
 const isBuiltinProvider = (providerID: string) => isOfficialProvider(providerID)
 
-const providerKind = (providerID: string) => (providerID === "anthropic" ? "anthropic" : "openai-compatible")
-
 type DiscoveredProviderModel = { id: string; name: string }
 
-export function DialogConnectProvider(props: { provider: string }) {
+export function DialogConnectProvider(props: { provider: string; onBack?: () => void }) {
   const dialog = useDialog()
   const serverSync = useServerSync()
   const serverSDK = useServerSDK()
@@ -352,16 +350,21 @@ export function DialogConnectProvider(props: { provider: string }) {
 
   async function complete() {
     await serverSDK.client.global.dispose()
+    serverSync.refreshProviders()
     dialog.close()
     showToast({
       variant: "success",
       icon: "circle-check",
-      title: language.t("provider.connect.toast.connected.title", { provider: provider().name }),
-      description: language.t("provider.connect.toast.connected.description", { provider: provider().name }),
+      title: language.t("provider.connect.toast.saved.title"),
+      description: language.t("provider.connect.oauth.catalogUnverified"),
     })
   }
 
   function goBack() {
+    if (props.onBack) {
+      props.onBack()
+      return
+    }
     if (methods().length === 1) {
       all()
       return
@@ -411,7 +414,6 @@ export function DialogConnectProvider(props: { provider: string }) {
   }
 
   function ApiAuthView() {
-    const hasStoredAuth = createMemo(() => providers.connected().some((item) => item.id === props.provider))
     const catalogModels = () =>
       Object.values(provider().models ?? {}).map((model) => ({
         id: model.id,
@@ -427,16 +429,23 @@ export function DialogConnectProvider(props: { provider: string }) {
     const [formStore, setFormStore] = createStore({
       value: "",
       baseURL:
-        typeof serverSync.data.config.provider?.[props.provider]?.options?.baseURL === "string"
+        providerBaseURL(props.provider) ??
+        (typeof serverSync.data.config.provider?.[props.provider]?.options?.baseURL === "string"
           ? serverSync.data.config.provider[props.provider]!.options!.baseURL
-          : ((provider().models && Object.values(provider().models)[0]?.api?.url) ??
-            providerBaseURL(props.provider) ??
-            ""),
+          : ((provider().models && Object.values(provider().models)[0]?.api?.url) ?? "")),
       error: undefined as string | undefined,
       baseURLError: undefined as string | undefined,
       discovered: [] as DiscoveredProviderModel[],
-      selectedModel: undefined as string | undefined,
+      selectedModels: [] as string[],
       discovering: false,
+      saving: false,
+      saved: false,
+      credentialSaved: false,
+      configured: false,
+      manualAvailable: false,
+      manual: false,
+      manualID: "",
+      manualConsent: false,
       headerTimeout: transportOption("headerTimeout"),
       chunkTimeout: transportOption("chunkTimeout"),
       timeout: transportOption("timeout"),
@@ -482,20 +491,35 @@ export function DialogConnectProvider(props: { provider: string }) {
       return options
     }
 
+    const owner = { active: true, request: undefined as AbortController | undefined }
+    onCleanup(() => {
+      owner.active = false
+      owner.request?.abort()
+    })
+    const reset = () => {
+      owner.request?.abort()
+      owner.request = undefined
+      setFormStore({
+        discovered: [],
+        selectedModels: [],
+        error: undefined,
+        saved: false,
+        discovering: false,
+        credentialSaved: false,
+        configured: false,
+        manualAvailable: false,
+        manual: false,
+        manualID: "",
+        manualConsent: false,
+      })
+    }
+
     async function handleSubmit(e: SubmitEvent) {
       e.preventDefault()
-
-      const form = e.currentTarget as HTMLFormElement
-      const formData = new FormData(form)
-      const apiKey = formData.get("apiKey") as string
-      // Built-in providers don't render a baseURL field; use their canonical endpoint instead of
-      // letting users override it (which would break the fixed protocol).
-      const baseURL = isBuiltinProvider(props.provider)
-        ? providerBaseURL(props.provider)
-        : ((formData.get("baseURL") as string | null)?.trim() ?? "")
-      const key = apiKey.trim()
-
-      if (!key && !hasStoredAuth()) {
+      if (formStore.discovering || formStore.saving) return
+      const key = formStore.value.trim()
+      const baseURL = providerBaseURL(props.provider) ?? (formStore.baseURL ?? "").trim()
+      if (!key) {
         setFormStore("error", language.t("provider.connect.apiKey.required"))
         return
       }
@@ -503,129 +527,161 @@ export function DialogConnectProvider(props: { provider: string }) {
         setFormStore("baseURLError", language.t("provider.custom.error.baseURL.format"))
         return
       }
-
-      setFormStore("error", undefined)
-      setFormStore("baseURLError", undefined)
-
-      if (isBuiltinProvider(props.provider)) {
-        const transport = transportOptions()
-        if (transport === "invalid") {
-          setFormStore("transportError", language.t("provider.connect.transport.error.number"))
-          return
-        }
-        setFormStore("transportError", undefined)
-        try {
-          if (key) {
-            await serverSDK.client.auth.set(
-              {
-                providerID: props.provider,
-                auth: {
-                  type: "api",
-                  key,
-                },
-              },
-              { throwOnError: true },
-            )
-          }
-          // Route transport tuning through the config overlay's intercept → SettingsStore. The
-          // remaining official-provider fields are ignored by the backend loader; only options.<transport>
-          // is picked up (and stripped from the config file). Always send the key so cleared fields reset.
-          const disabled = (serverSync.data.config.disabled_providers ?? []).filter((id) => id !== props.provider)
-          await serverSync.updateConfig({
-            disabled_providers: disabled,
-            provider: {
-              [props.provider]: { options: transport },
-            },
-          })
-          await serverSDK.client.global.dispose()
-          serverSync.refreshProviders()
-          showToast({
-            variant: "success",
-            icon: "circle-check",
-            title: catalogModels().length
-              ? language.t("provider.connect.toast.connected.title", { provider: provider().name })
-              : language.t("provider.connect.toast.saved.title"),
-            description: catalogModels().length
-              ? language.t("provider.connect.toast.connected.description", { provider: provider().name })
-              : language.t("provider.connect.toast.saved.description"),
-          })
-        } catch (error) {
-          if (!alive.value) return
-          const message = formatError(error, language.t("common.requestFailed"))
-          setFormStore("error", message)
-          showToast({ title: language.t("common.requestFailed"), description: message })
-        }
+      const transport = transportOptions()
+      if (transport === "invalid") {
+        setFormStore("transportError", language.t("provider.connect.transport.error.number"))
         return
       }
-
-      setFormStore("discovering", true)
+      reset()
+      const request = new AbortController()
+      owner.request = request
+      setFormStore({ discovering: true, baseURLError: undefined, transportError: undefined })
       try {
-        const discovered = await serverSDK.client.provider.models
-          .discover(
+        const npm = providerPreset(props.provider)?.npm ?? Object.values(provider().models)[0]?.api?.npm
+        const discovered = await serverSDK.client.provider.models.discover(
+          {
+            providerID: props.provider,
+            baseURL,
+            apiKey: key,
+            kind: npm === "@ai-sdk/anthropic" ? "anthropic" : npm === "@ai-sdk/google" ? "google" : "openai-compatible",
+          },
+          { throwOnError: true, signal: request.signal },
+        )
+        if (!owner.active || owner.request !== request) return
+        const models = discovered.data?.models ?? []
+        if (!models.length) throw new Error(language.t("provider.connect.models.empty"))
+        setFormStore({
+          discovered: models,
+          selectedModels: models
+            .filter(
+              (model) => serverSync.data.config.providers?.[props.provider]?.models?.[model.id]?.disabled !== true,
+            )
+            .map((model) => model.id),
+        })
+      } catch (error) {
+        if (!owner.active || owner.request !== request) return
+        const message = formatError(error, language.t("common.requestFailed"))
+        setFormStore({
+          error: message,
+          manualAvailable: providerPreset(props.provider)?.billing === "plan" && /\bHTTP (404|405|501)\b/.test(message),
+        })
+      } finally {
+        if (owner.active && owner.request === request) setFormStore("discovering", false)
+      }
+    }
+
+    const addManualModel = () => {
+      const id = formStore.manualID.trim()
+      if (!id || formStore.discovered.some((model) => model.id === id)) return
+      setFormStore({
+        discovered: [...formStore.discovered, { id, name: id }],
+        selectedModels: [...formStore.selectedModels, id],
+        manualID: "",
+        configured: false,
+      })
+    }
+
+    async function saveSelection() {
+      if (formStore.saving || formStore.discovering || formStore.saved) return
+      if (formStore.manual && !formStore.manualConsent) return
+      if (!formStore.selectedModels.length || !formStore.discovered.length) {
+        setFormStore("error", language.t("provider.connect.models.selectionRequired"))
+        return
+      }
+      const transport = transportOptions()
+      if (transport === "invalid") {
+        setFormStore("transportError", language.t("provider.connect.transport.error.number"))
+        return
+      }
+      setFormStore({ saving: true, error: undefined })
+      try {
+        // The probe never persists a credential. The explicit confirmation below uses the
+        // existing credential/config routes only for this exact product identity.
+        const key = formStore.value.trim()
+        const current = serverSync.data.config.provider?.[props.provider] ?? {}
+        if (isBuiltinProvider(props.provider) && key && !formStore.credentialSaved) {
+          await serverSDK.client.auth.set(
+            { providerID: props.provider, auth: { type: "api", key } },
+            { throwOnError: true },
+          )
+          if (owner.active) setFormStore("credentialSaved", true)
+        }
+        if (!owner.active) return
+        if (!formStore.configured)
+          await serverSDK.client.global.config.update(
             {
-              providerID: props.provider,
-              baseURL,
-              apiKey: key || undefined,
-              authProviderID: key ? undefined : props.provider,
-              kind: providerKind(props.provider),
+              config: {
+                providers: {
+                  [props.provider]: {
+                    models: Object.fromEntries(
+                      [
+                        ...new Set([
+                          ...catalogModels().map((model) => model.id),
+                          ...formStore.discovered.map((model) => model.id),
+                        ]),
+                      ].map((id) => [id, { disabled: !formStore.selectedModels.includes(id) }]),
+                    ),
+                  },
+                },
+                provider: {
+                  [props.provider]: isBuiltinProvider(props.provider)
+                    ? { options: transport }
+                    : {
+                        ...current,
+                        name: current.name ?? provider().name,
+                        npm: providerPreset(props.provider)?.npm ?? current.npm,
+                        options: {
+                          ...current.options,
+                          baseURL: providerBaseURL(props.provider) ?? (formStore.baseURL ?? "").trim(),
+                          ...(key ? { apiKey: key } : {}),
+                        },
+                        discovery: !formStore.manual,
+                        ...(formStore.manual
+                          ? {
+                              models: {
+                                ...current.models,
+                                ...Object.fromEntries(
+                                  formStore.discovered.map((model) => [
+                                    model.id,
+                                    { ...current.models?.[model.id], name: model.name },
+                                  ]),
+                                ),
+                              },
+                            }
+                          : {}),
+                      },
+                },
+                disabled_providers: (serverSync.data.config.disabled_providers ?? []).filter(
+                  (id) => id !== props.provider,
+                ),
+              },
             },
             { throwOnError: true },
           )
-          .catch((error) => {
-            const models = catalogModels()
-            if (models.length === 0) throw error
-            return { data: { providerID: props.provider, baseURL, models, selected: models[0] } }
-          })
-        const models = discovered.data?.models ?? []
-        const selected = discovered.data?.selected
-        const fallbackModels = catalogModels()
-        const nextModels = models.length > 0 && selected ? models : fallbackModels
-        const nextSelected = models.length > 0 && selected ? selected : fallbackModels[0]
-        if (!nextModels.length || !nextSelected) throw new Error(language.t("provider.custom.error.required"))
-
-        setFormStore("discovered", nextModels)
-        setFormStore("selectedModel", nextSelected.id)
-
-        const current = serverSync.data.config.provider?.[props.provider] ?? {}
-        const keepLegacySnapshot =
-          current.discovery !== true && current.npm === undefined && Object.keys(current.models ?? {}).length > 0
-        await serverSync.updateConfig({
-          provider: {
-            [props.provider]: {
-              ...current,
-              name: current.name ?? provider().name,
-              options: {
-                ...(current.options ?? {}),
-                baseURL,
-                ...(key ? { apiKey: key } : {}),
-              },
-              // Keep the provider's live /models endpoint authoritative after the initial import.
-              // Existing discovery-mode entries may contain intentional per-model overrides. Legacy
-              // static snapshots stay untagged because config updates merge nested maps and cannot
-              // safely clear them; the backend recognizes that old shape and ignores the snapshot
-              // whenever a live list is available.
-              ...(keepLegacySnapshot
-                ? {}
-                : { discovery: true, models: current.discovery ? (current.models ?? {}) : {} }),
-            },
-          },
-          disabled_providers: (serverSync.data.config.disabled_providers ?? []).filter((id) => id !== props.provider),
-          model: `${props.provider}/${nextSelected.id}`,
-        })
-        await serverSDK.client.global.dispose()
-
+        if (!owner.active) return
+        setFormStore("configured", true)
+        await serverSDK.client.global.dispose({ throwOnError: true })
+        if (!owner.active) return
+        serverSync.refreshProviders()
+        setFormStore("saved", true)
         showToast({
           variant: "success",
-          icon: "circle-check",
-          title: language.t("provider.connect.toast.connected.title", { provider: provider().name }),
-          description: language.t("provider.connect.toast.connected.description", { provider: provider().name }),
+          title: formStore.manual
+            ? language.t("provider.connect.models.manualSaved")
+            : language.t("provider.connect.toast.connected.title", { provider: provider().name }),
         })
-      } catch (err) {
-        const message = formatError(err, language.t("common.requestFailed"))
-        setFormStore("error", message)
-        showToast({ title: language.t("common.requestFailed"), description: message })
+      } catch (error) {
+        if (owner.active) {
+          const message = formatError(error, language.t("common.requestFailed"))
+          setFormStore(
+            "error",
+            formStore.credentialSaved && !formStore.configured
+              ? `${language.t("provider.connect.models.preferencesFailed")} ${message}`
+              : message,
+          )
+        }
       } finally {
-        setFormStore("discovering", false)
+        if (owner.active) setFormStore("saving", false)
       }
     }
 
@@ -633,10 +689,11 @@ export function DialogConnectProvider(props: { provider: string }) {
       <div class="flex flex-col gap-6">
         <Show when={providerPreset(props.provider)}>
           {(preset) => (
-            <div
+            <details
               class="grid min-w-0 gap-2 rounded-lg bg-surface-raised-base p-3 text-12-regular"
               data-component="provider-connection-metadata"
             >
+              <summary class="cursor-pointer">{language.t("settings.details.title")}</summary>
               <p>
                 {language.t(`settings.providers.billing.${preset().billing}`)} ·{" "}
                 {language.t(`settings.providers.region.${preset().region}`)}
@@ -653,10 +710,10 @@ export function DialogConnectProvider(props: { provider: string }) {
                   </dd>
                 </div>
               </dl>
-            </div>
+            </details>
           )}
         </Show>
-        <Show when={catalogModels().length === 0}>
+        <Show when={catalogModels().length === 0 && formStore.discovered.length === 0}>
           <p class="text-12-regular text-text-weak" role="status">
             {language.t("settings.providers.catalogPending")}
           </p>
@@ -667,14 +724,17 @@ export function DialogConnectProvider(props: { provider: string }) {
           })}
         </div>
         <form onSubmit={handleSubmit} class="flex flex-col items-start gap-4">
-          <Show when={!isBuiltinProvider(props.provider)}>
+          <Show when={!providerPreset(props.provider)}>
             <TextField
               type="text"
               label={language.t("provider.custom.field.baseURL.label")}
               placeholder={providerBaseURL(props.provider) ?? language.t("provider.custom.field.baseURL.placeholder")}
               name="baseURL"
               value={formStore.baseURL}
-              onChange={(v) => setFormStore("baseURL", v)}
+              onChange={(v) => {
+                reset()
+                setFormStore("baseURL", v)
+              }}
               validationState={formStore.baseURLError ? "invalid" : undefined}
               error={formStore.baseURLError}
             />
@@ -689,9 +749,12 @@ export function DialogConnectProvider(props: { provider: string }) {
             placeholder={language.t("provider.connect.apiKey.placeholder")}
             name="apiKey"
             value={formStore.value}
-            onChange={(v) => setFormStore("value", v)}
-            validationState={formStore.error ? "invalid" : undefined}
-            error={formStore.error}
+            onChange={(v) => {
+              reset()
+              setFormStore("value", v)
+            }}
+            disabled={formStore.discovering || formStore.saving || formStore.discovered.length > 0}
+            validationState={formStore.discovered.length === 0 && formStore.error ? "invalid" : undefined}
           />
           <Show when={isBuiltinProvider(props.provider)}>
             <Collapsible class="w-full">
@@ -742,38 +805,120 @@ export function DialogConnectProvider(props: { provider: string }) {
               </Collapsible.Content>
             </Collapsible>
           </Show>
-          <Button class="w-auto" type="submit" size="large" variant="primary" disabled={formStore.discovering}>
-            {language.t("common.continue")}
-          </Button>
+          <Show when={formStore.discovered.length === 0 && !formStore.manual}>
+            <Button
+              class="w-auto"
+              type="submit"
+              size="large"
+              variant="primary"
+              disabled={formStore.discovering || formStore.saving}
+            >
+              {language.t(
+                formStore.discovering ? "provider.connect.models.discovering" : "provider.connect.models.discover",
+              )}
+            </Button>
+          </Show>
         </form>
+        <Show when={formStore.error}>
+          <p role="alert" class="break-words text-12-regular text-icon-critical-base">
+            {formStore.error}
+          </p>
+        </Show>
+        <Show when={formStore.manualAvailable && !formStore.manual}>
+          <Button variant="secondary" onClick={() => setFormStore({ manual: true, error: undefined })}>
+            {language.t("provider.connect.models.manual")}
+          </Button>
+        </Show>
+        <Show when={formStore.manual}>
+          <div class="flex min-w-0 flex-col gap-3 rounded-lg bg-surface-raised-base p-3">
+            <p role="status" class="text-12-regular text-text-weak">
+              {language.t("provider.connect.models.manualDescription")}
+            </p>
+            <TextField
+              label={language.t("provider.custom.models.id.label")}
+              placeholder={language.t("provider.custom.models.id.placeholder")}
+              value={formStore.manualID}
+              disabled={formStore.saving || formStore.saved}
+              onChange={(value) => setFormStore("manualID", value)}
+              onKeyDown={(event: KeyboardEvent) => {
+                if (event.key !== "Enter" || event.isComposing) return
+                event.preventDefault()
+                addManualModel()
+              }}
+            />
+            <Button
+              variant="secondary"
+              disabled={!formStore.manualID.trim() || formStore.saving || formStore.saved}
+              onClick={addManualModel}
+            >
+              {language.t("provider.custom.models.add")}
+            </Button>
+          </div>
+        </Show>
         <Show when={formStore.discovered.length > 0}>
-          <div class="flex flex-col gap-3 rounded-md border border-border-weak-base bg-background-strong p-3">
-            <div class="text-13-medium text-text-strong">
-              {language.t("provider.connect.toast.connected.title", { provider: provider().name })}
-            </div>
-            <div class="text-12-regular text-text-weak">
-              {language.t("provider.connect.toast.connected.description", { provider: provider().name })}
-            </div>
-            <div class="flex max-h-56 flex-col divide-y divide-border-weak-base overflow-auto rounded-md border border-border-weak-base">
+          <section
+            class="flex min-w-0 flex-col gap-3 rounded-lg bg-surface-raised-base p-3"
+            aria-label={language.t("provider.connect.models.title")}
+          >
+            <h3 class="text-13-medium text-text-strong">{language.t("provider.connect.models.title")}</h3>
+            <Show when={!formStore.manual}>
+              <p class="text-12-regular text-text-weak">{language.t("provider.connect.models.description")}</p>
+            </Show>
+            <div class="flex max-h-56 min-w-0 flex-col gap-2 overflow-auto">
               <For each={formStore.discovered}>
                 {(model) => (
-                  <div
-                    class={`flex items-center justify-between gap-3 px-3 py-2 text-12-regular ${
-                      model.id === formStore.selectedModel ? "bg-background-base" : ""
-                    }`}
-                  >
-                    <div class="min-w-0">
-                      <div class="truncate font-medium text-text-strong">{model.name}</div>
-                      <div class="truncate font-mono text-text-weak">{model.id}</div>
-                    </div>
-                    <Show when={model.id === formStore.selectedModel}>
-                      <span class="shrink-0 text-text-weak">selected</span>
-                    </Show>
-                  </div>
+                  <label class="flex min-w-0 items-center gap-3 rounded-md px-2 py-2 text-12-regular">
+                    <input
+                      type="checkbox"
+                      checked={formStore.selectedModels.includes(model.id)}
+                      disabled={formStore.saving || formStore.saved}
+                      onChange={(event) => {
+                        setFormStore("selectedModels", (ids) =>
+                          event.currentTarget.checked ? [...ids, model.id] : ids.filter((id) => id !== model.id),
+                        )
+                        setFormStore("configured", false)
+                      }}
+                    />
+                    <span class="flex min-w-0 flex-col break-words">
+                      <span>{model.name}</span>
+                      <code class="break-all text-text-weak">{model.id}</code>
+                    </span>
+                  </label>
                 )}
               </For>
             </div>
-          </div>
+            <Show when={formStore.manual}>
+              <label class="flex items-start gap-2 text-12-regular">
+                <input
+                  type="checkbox"
+                  checked={formStore.manualConsent}
+                  disabled={formStore.saving || formStore.saved}
+                  onChange={(event) => setFormStore("manualConsent", event.currentTarget.checked)}
+                />
+                {language.t("provider.connect.models.consent")}
+              </label>
+            </Show>
+            <div class="flex flex-wrap gap-2">
+              <Button variant="secondary" disabled={formStore.saving} onClick={reset}>
+                {language.t("provider.connect.models.back")}
+              </Button>
+              <Button variant="secondary" disabled={formStore.saving} onClick={() => dialog.close()}>
+                {language.t("common.cancel")}
+              </Button>
+              <Button
+                variant="primary"
+                disabled={
+                  formStore.saving ||
+                  formStore.saved ||
+                  formStore.selectedModels.length === 0 ||
+                  (formStore.manual && !formStore.manualConsent)
+                }
+                onClick={() => void saveSelection()}
+              >
+                {language.t(formStore.manual ? "provider.connect.models.saveManual" : "provider.connect.models.save")}
+              </Button>
+            </div>
+          </section>
         </Show>
       </div>
     )
