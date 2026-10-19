@@ -79,7 +79,8 @@ export function normalizeLoadedConfig(data: unknown, source: string) {
     Object.fromEntries(Object.entries(copy).filter(([key]) => Object.hasOwn(MixedNativeFields.fields, key))),
     source,
   )
-  delete copy.providers
+  // Native provider selections also belong to the settings HTTP projection;
+  // dropping them here made a successful PATCH disappear before readback.
   delete copy.permissions
   return copy
 }

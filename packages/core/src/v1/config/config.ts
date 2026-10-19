@@ -4,6 +4,7 @@ import { Schema } from "effect"
 import { NonNegativeInt, PositiveInt, type DeepMutable } from "../../schema"
 import { ConfigExperimental } from "../../config/experimental"
 import { ConfigIM } from "../../config/im"
+import { ConfigProvider } from "../../config/provider"
 import { ConfigAgentV1 } from "./agent"
 import { ConfigAttachmentV1 } from "./attachment"
 import { ConfigCommandV1 } from "./command"
@@ -31,6 +32,9 @@ const LogLevelRef = Schema.Literals(["DEBUG", "INFO", "WARN", "ERROR"]).annotate
 })
 
 export const Info = Schema.Struct({
+  // The HTTP settings facade must round-trip native V2 model selections. Core
+  // consumes this field directly, separately from migrated V1 provider entries.
+  providers: Schema.optional(Schema.Record(Schema.String, ConfigProvider.Info)),
   $schema: Schema.optional(Schema.String).annotate({
     description: "JSON schema reference for configuration validation",
   }),

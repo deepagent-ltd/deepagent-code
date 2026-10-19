@@ -55,7 +55,7 @@ export const ProviderModelDiscoverInput = Schema.Struct({
   apiKey: Schema.optional(Schema.String),
   authProviderID: Schema.optional(Schema.String),
   modelID: Schema.optional(Schema.String),
-  kind: Schema.optional(Schema.Literals(["openai-compatible", "anthropic"])),
+  kind: Schema.optional(Schema.Literals(["openai-compatible", "anthropic", "google"])),
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 })
 
@@ -83,7 +83,7 @@ export const ProviderModelDiscoverResult = Schema.Struct({
   // The protocol that actually answered discovery. When the client omits `kind`, the server probes
   // openai-compatible then anthropic and reports whichever succeeded so the client can persist the
   // matching SDK npm.
-  kind: Schema.Literals(["openai-compatible", "anthropic"]),
+  kind: Schema.Literals(["openai-compatible", "anthropic", "google"]),
   models: Schema.Array(ProviderDiscoveredModel),
   selected: ProviderDiscoveredModel,
 })

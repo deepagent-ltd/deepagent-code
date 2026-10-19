@@ -723,14 +723,15 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   onCleanup(() => clearInterval(providerRefreshTimer))
 
   const updateConfigMutation = useMutation(() => ({
-    mutationFn: (config: Config) => serverSDK.client.global.config.update({ config }),
+    mutationFn: (config: Config) => serverSDK.client.global.config.update({ config }, { throwOnError: true }),
     onError: (error) =>
       showToast({
         variant: "error",
         title: language.t("common.requestFailed"),
         description: formatServerError(error, language.t),
       }),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result.data) queryClient.setQueryData(queryOptionsApi.globalConfig().queryKey, result.data)
       // Invalidate all provider queries so newly configured custom providers
       // appear immediately in the available provider list across all directories.
       refreshProviders()

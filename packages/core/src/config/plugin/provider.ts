@@ -26,19 +26,28 @@ export const Plugin = PluginV2.define({
       for (const file of files) {
         for (const [id, item] of Object.entries(file.info.providers ?? {})) {
           const providerID = ProviderV2.ID.make(id)
-          catalog.provider.update(providerID, (provider) => {
-            if (item.name !== undefined) provider.name = item.name
-            if (item.env !== undefined) provider.env = [...item.env]
-            // K-04 contract: config-ingressed providers carry a dedicated origin
-            // provenance; `enabled.via: "custom"` stays an availability fact only.
-            provider.origin = "config"
-            provider.enabled = { via: "custom", data: {} }
-            if (item.api !== undefined) provider.api = { ...item.api }
-            if (item.request !== undefined) {
-              Object.assign(provider.request.headers, item.request.headers)
-              Object.assign(provider.request.body, item.request.body)
-            }
-          })
+          // Enabling a model must not manufacture an authenticated provider or
+          // replace its existing credential provenance with a custom origin.
+          const selectionOnly =
+            item.name === undefined &&
+            item.env === undefined &&
+            item.api === undefined &&
+            item.request === undefined &&
+            Object.values(item.models ?? {}).every((model) => Object.keys(model).every((key) => key === "disabled"))
+          if (!selectionOnly)
+            catalog.provider.update(providerID, (provider) => {
+              if (item.name !== undefined) provider.name = item.name
+              if (item.env !== undefined) provider.env = [...item.env]
+              // K-04 contract: config-ingressed providers carry a dedicated origin
+              // provenance; `enabled.via: "custom"` stays an availability fact only.
+              provider.origin = "config"
+              provider.enabled = { via: "custom", data: {} }
+              if (item.api !== undefined) provider.api = { ...item.api }
+              if (item.request !== undefined) {
+                Object.assign(provider.request.headers, item.request.headers)
+                Object.assign(provider.request.body, item.request.body)
+              }
+            })
           const providerApi = catalog.provider.get(providerID)?.provider.api
           const providerPackage = providerApi?.type === "aisdk" ? providerApi.package : undefined
 

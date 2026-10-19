@@ -25,7 +25,7 @@ import { EffectPromise } from "@/effect/promise"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { discoverModelsCached } from "./discovery-cache"
-import type { DiscoveredModel, ProviderDiscoveryKind } from "./model-discovery"
+import { discoveryKind, type DiscoveredModel } from "./model-discovery"
 import { buildCatalogIndex, catalogSpecFor } from "./catalog-spec"
 import { isRecord } from "@/util/record"
 import { optionalOmitUndefined } from "@deepagent-code/core/schema"
@@ -1480,8 +1480,7 @@ export const layer = Layer.effect(
               const headers = provider.options?.headers as Record<string, string> | undefined
               // A key OR custom auth headers must be present; a bare baseURL can't authenticate.
               if (!apiKey && !headers) return
-              const kind: ProviderDiscoveryKind =
-                (provider.npm ?? modelsDev[providerID]?.npm) === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
+              const kind = discoveryKind(provider.npm ?? modelsDev[providerID]?.npm)
               const models = yield* discoverModelsCached(fs, flock, { providerID, baseURL, apiKey, kind, headers })
               if (!models.length) return
               discoveredModels[providerID] = Object.fromEntries(
@@ -1526,10 +1525,7 @@ export const layer = Layer.effect(
                 ...(group.options?.headers as Record<string, string> | undefined),
               }
               if (!apiKey && Object.keys(headers).length === 0) return
-              const kind: ProviderDiscoveryKind =
-                (group.npm ?? provider.npm ?? modelsDev[providerID]?.npm) === "@ai-sdk/anthropic"
-                  ? "anthropic"
-                  : "openai-compatible"
+              const kind = discoveryKind(group.npm ?? provider.npm ?? modelsDev[providerID]?.npm)
               const models = yield* discoverModelsCached(fs, flock, {
                 providerID: `${providerID}:${groupID}`,
                 baseURL,

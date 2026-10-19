@@ -691,16 +691,12 @@ const scenarios: Scenario[] = [
     .seeded(() =>
       Effect.acquireRelease(
         Effect.promise(async () => {
-          await Bun.write(
-            path.join(exerciseDataDirectory, "auth.json"),
-            JSON.stringify({ test: { type: "api", key: "stored-provider-key" } }),
-          )
           const server = Bun.serve({
             port: 0,
             fetch(request) {
               const url = new URL(request.url)
               if (url.pathname === "/models") {
-                if (request.headers.get("authorization") !== "Bearer stored-provider-key") {
+                if (request.headers.get("authorization") !== "Bearer discovery-probe-fixture") {
                   return new Response("unauthorized", { status: 401 })
                 }
                 return Response.json({ data: [{ id: "model-a", name: "Model A" }] })
@@ -719,7 +715,7 @@ const scenarios: Scenario[] = [
       body: {
         providerID: "test",
         baseURL: ctx.state.baseURL,
-        authProviderID: "test",
+        apiKey: "discovery-probe-fixture",
       },
     }))
     .json(200, (body) => {

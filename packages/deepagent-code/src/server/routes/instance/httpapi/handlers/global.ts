@@ -1,5 +1,6 @@
 import { Config } from "@/config/config"
 import { ConfigIM } from "@deepagent-code/core/config/im"
+import { ServerCapabilities } from "@deepagent-code/core/server-capabilities"
 import { IMActivation } from "@/im/activation"
 import { IMFacade } from "@/im/facade"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -174,6 +175,13 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     const configUpdate = Effect.fn("GlobalHttpApi.configUpdate")(function* (ctx) {
+      if (
+        ["provider", "providers", "enabled_providers", "disabled_providers"].some((key) =>
+          Object.hasOwn(ctx.payload, key),
+        ) &&
+        !ServerCapabilities.isAllowed(ServerCapabilities.Actions.providerConfigWrite)
+      )
+        return yield* new HttpApiError.BadRequest({})
       const changesService = ctx.payload.im && Object.hasOwn(ctx.payload.im, "url")
       const result = yield* Effect.gen(function* () {
         if (!changesService) return yield* config.updateGlobal(ctx.payload)

@@ -12222,7 +12222,7 @@ export class Models extends HeyApiClient {
       apiKey?: string
       authProviderID?: string
       modelID?: string
-      kind?: "openai-compatible" | "anthropic"
+      kind?: "openai-compatible" | "anthropic" | "google"
       headers?: {
         [key: string]: string
       }

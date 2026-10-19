@@ -2483,7 +2483,6 @@ export type ProviderConfig = {
           [key: string]: unknown
         }
       }
-      disabled?: boolean
     }
   }
   groups?: {
@@ -2569,6 +2568,9 @@ export type AttachmentConfig = {
 }
 
 export type Config = {
+  providers?: {
+    [key: string]: ConfigV2Provider
+  }
   $schema?: string
   shell?: string
   logLevel?: LogLevel
@@ -8240,6 +8242,145 @@ export type SyncEventSessionCompacted1 = {
     data: {
       sessionID: string
     }
+  }
+}
+
+export type ConfigV2ProviderRequest = {
+  headers?: {
+    [key: string]: string
+  }
+  body?: {
+    [key: string]: unknown
+  }
+}
+
+export type ConfigV2ModelCostCache = {
+  read?: number
+  write?: number
+}
+
+export type ConfigV2ModelCost = {
+  tier?: {
+    type: "context"
+    size: number
+  }
+  input: number
+  output: number
+  cache?: ConfigV2ModelCostCache
+}
+
+export type ConfigV2ModelLimit = {
+  context?: number
+  input?: number
+  output?: number
+}
+
+export type ConfigV2Model = {
+  family?: string
+  name?: string
+  api?:
+    | {
+        id?: string
+        type: "aisdk"
+        package: string
+        url?: string
+        settings?: {
+          [key: string]: unknown
+        }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+        protocolCapabilities?: {
+          structuredOutput: boolean
+          reasoningItems: boolean
+          providerToolExecution: boolean
+          previousResponseId: boolean
+          remoteCompaction: boolean
+          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
+          protocolRevision: number
+        }
+      }
+    | {
+        id?: string
+        type: "native"
+        url?: string
+        settings: {
+          [key: string]: unknown
+        }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+        protocolCapabilities?: {
+          structuredOutput: boolean
+          reasoningItems: boolean
+          providerToolExecution: boolean
+          previousResponseId: boolean
+          remoteCompaction: boolean
+          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
+          protocolRevision: number
+        }
+      }
+    | {
+        id: string
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+        protocolCapabilities?: {
+          structuredOutput: boolean
+          reasoningItems: boolean
+          providerToolExecution: boolean
+          previousResponseId: boolean
+          remoteCompaction: boolean
+          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
+          protocolRevision: number
+        }
+      }
+  capabilities?: {
+    tools: boolean
+    input: Array<string>
+    output: Array<string>
+  }
+  request?: {
+    headers?: {
+      [key: string]: string
+    }
+    body?: {
+      [key: string]: unknown
+    }
+    variant?: string
+  }
+  variants?: Array<{
+    id: string
+    headers?: {
+      [key: string]: string
+    }
+    body?: {
+      [key: string]: unknown
+    }
+  }>
+  cost?: ConfigV2ModelCost | Array<ConfigV2ModelCost>
+  disabled?: boolean
+  limit?: ConfigV2ModelLimit
+}
+
+export type ConfigV2Provider = {
+  name?: string
+  env?: Array<string>
+  api?:
+    | {
+        type: "aisdk"
+        package: string
+        url?: string
+        settings?: {
+          [key: string]: unknown
+        }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+      }
+    | {
+        type: "native"
+        url?: string
+        settings: {
+          [key: string]: unknown
+        }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+      }
+  request?: ConfigV2ProviderRequest
+  models?: {
+    [key: string]: ConfigV2Model
   }
 }
 
@@ -27805,7 +27946,7 @@ export type ProviderModelsDiscoverData = {
     apiKey?: string
     authProviderID?: string
     modelID?: string
-    kind?: "openai-compatible" | "anthropic"
+    kind?: "openai-compatible" | "anthropic" | "google"
     headers?: {
       [key: string]: string
     }
@@ -27834,7 +27975,7 @@ export type ProviderModelsDiscoverResponses = {
   200: {
     providerID: string
     baseURL: string
-    kind: "openai-compatible" | "anthropic"
+    kind: "openai-compatible" | "anthropic" | "google"
     models: Array<{
       id: string
       name: string
