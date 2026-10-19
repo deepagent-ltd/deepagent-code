@@ -378,6 +378,8 @@ import type {
   ImDacSubmitResponses,
   ImDeviceInfoErrors,
   ImDeviceInfoResponses,
+  ImEntitlementErrors,
+  ImEntitlementResponses,
   ImFacadeClaimErrors,
   ImFacadeClaimResponses,
   ImFacadeDirectErrors,
@@ -424,6 +426,8 @@ import type {
   ImMigrationPendingResponses,
   ImMigrationStatusErrors,
   ImMigrationStatusResponses,
+  ImPlansErrors,
+  ImPlansResponses,
   ImportJobRequest,
   ImportRequest,
   ImWebsocketConnectResponses,
@@ -9214,6 +9218,62 @@ export class Websocket extends HeyApiClient {
 }
 
 export class Im extends HeyApiClient {
+  /**
+   * Read the selected IM service's authoritative plan catalog without purchasing
+   */
+  public plans<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImPlansResponses, ImPlansErrors, ThrowOnError>({
+      url: "/api/v1/im/plans",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read this existing device binding's authoritative IM entitlement without logging in
+   */
+  public entitlement<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImEntitlementResponses, ImEntitlementErrors, ThrowOnError>({
+      url: "/api/v1/im/entitlement",
+      ...options,
+      ...params,
+    })
+  }
+
   /**
    * Read public IM device identity and verify native custody
    */

@@ -22118,6 +22118,166 @@ export type FileLockStatusResponses = {
 
 export type FileLockStatusResponse = FileLockStatusResponses[keyof FileLockStatusResponses]
 
+export type ImPlansData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/plans"
+}
+
+export type ImPlansErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type ImPlansError = ImPlansErrors[keyof ImPlansErrors]
+
+export type ImPlansResponses = {
+  /**
+   * Success
+   */
+  200:
+    | {
+        state: "unknown"
+        reason:
+          | "service_unconfigured"
+          | "not_bound"
+          | "custody_unavailable"
+          | "unsupported"
+          | "service_unavailable"
+          | "invalid_response"
+          | "scope_changed"
+      }
+    | {
+        state: "known"
+        catalog: {
+          version: "dac-im-plans-v1"
+          planVersion: string
+          salesAvailable: boolean
+          serverObservedAt: number
+          purchaseURL: string
+          plans: [
+            {
+              planID: "im-year" | "im-three-years" | "im-lifetime"
+              priceCredits: "1" | "2" | "9.9"
+              term:
+                | {
+                    kind: "calendarYears"
+                    years: 1 | 3
+                  }
+                | {
+                    kind: "lifetime"
+                  }
+              maxBoundDevices: 1
+              autoRenew: false
+            },
+            {
+              planID: "im-year" | "im-three-years" | "im-lifetime"
+              priceCredits: "1" | "2" | "9.9"
+              term:
+                | {
+                    kind: "calendarYears"
+                    years: 1 | 3
+                  }
+                | {
+                    kind: "lifetime"
+                  }
+              maxBoundDevices: 1
+              autoRenew: false
+            },
+            {
+              planID: "im-year" | "im-three-years" | "im-lifetime"
+              priceCredits: "1" | "2" | "9.9"
+              term:
+                | {
+                    kind: "calendarYears"
+                    years: 1 | 3
+                  }
+                | {
+                    kind: "lifetime"
+                  }
+              maxBoundDevices: 1
+              autoRenew: false
+            },
+          ]
+        }
+      }
+}
+
+export type ImPlansResponse = ImPlansResponses[keyof ImPlansResponses]
+
+export type ImEntitlementData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/entitlement"
+}
+
+export type ImEntitlementErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type ImEntitlementError = ImEntitlementErrors[keyof ImEntitlementErrors]
+
+export type ImEntitlementResponses = {
+  /**
+   * Success
+   */
+  200:
+    | {
+        state: "unknown"
+        reason:
+          | "service_unconfigured"
+          | "not_bound"
+          | "custody_unavailable"
+          | "unsupported"
+          | "service_unavailable"
+          | "invalid_response"
+          | "scope_changed"
+      }
+    | {
+        state: "known"
+        entitlement: {
+          version: "dac-im-entitlement-v1"
+          profile: "dac-im-device-v1"
+          realm: string
+          entitlementID: string
+          deviceJkt: string
+          bindingVersion: number
+          uuid: string
+          planID: string
+          planVersion: string
+          state: "active" | "expired" | "revoked" | "pending"
+          validityKnown: boolean
+          lifetime: boolean
+          validFrom: number
+          expiresAt: number
+          serverObservedAt: number
+        }
+      }
+}
+
+export type ImEntitlementResponse = ImEntitlementResponses[keyof ImEntitlementResponses]
+
 export type ImDeviceInfoData = {
   body?: never
   path?: never
