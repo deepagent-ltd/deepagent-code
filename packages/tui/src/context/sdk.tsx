@@ -6,6 +6,7 @@ import { batch, onCleanup, onMount } from "solid-js"
 import type { GoalPlanClient } from "@deepagent-code/core/deepagent/goal-plan-client"
 import type { McpOperatorClient } from "@deepagent-code/core/mcp/operator-client"
 import type { TaskHumanClient } from "@deepagent-code/core/session/task-human-client"
+import { createBrowserOwnerSubmit, type BrowserOwnerTransport } from "../prompt/browser-owner"
 
 export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
@@ -22,6 +23,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     goalPlan?: GoalPlanClient.Transport
     mcpOperator?: McpOperatorClient.Transport
     taskControl?: TaskHumanClient.Transport
+    browserOwner?: BrowserOwnerTransport
   }) => {
     const abort = new AbortController()
     let sse: AbortController | undefined
@@ -37,6 +39,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     let sdk = createSDK()
+    const browserSubmit = createBrowserOwnerSubmit(sdk, props.browserOwner)
     const goalInteractions = new Set<object>()
     const mcpInteractions = new Set<object>()
     const taskInteractions = new Set<object>()
@@ -166,6 +169,8 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       goalPlan: props.goalPlan,
       mcpOperator: props.mcpOperator,
       taskControl: props.taskControl,
+      browserOwner: props.browserOwner,
+      browserSubmit,
       protectTaskControl() {
         const interaction = {}
         taskInteractions.add(interaction)

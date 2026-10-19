@@ -152,6 +152,7 @@ export type DiffResult = Schema.Schema.Type<typeof DiffResult>
 
 export const BranchSummary = Schema.Struct({
   base: Schema.String,
+  defaultCheckout: Schema.optional(Schema.String),
   additions: Schema.Number,
   deletions: Schema.Number,
   files: Schema.Number,
@@ -555,11 +556,20 @@ export const layer: Layer.Layer<
       }
 
       const directory = yield* canonical(input.directory)
+      const common = yield* git(["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: ctx.worktree })
+      if (common.code !== 0 || !common.text.trim())
+        return yield* new RemoveFailedError({ message: "Failed to locate the git common directory" })
+      const repository = yield* fs.realPath(common.text.trim()).pipe(
+        Effect.mapError(() => new RemoveFailedError({ message: "Git common directory is unavailable" })),
+      )
+      // The opened instance may be the worktree being removed. Keep every repository
+      // command anchored outside its checkout so branch deletion still has a live cwd.
+      const run = (args: string[]) => git(["--git-dir", repository, ...args], { cwd: repository })
 
       // Preserve the loaded path casing for the store cache; `directory` is lowercased on Windows.
       if (directory !== (yield* canonical(ctx.worktree))) yield* store.disposeDirectory(input.directory)
 
-      const list = yield* git(["worktree", "list", "--porcelain"], { cwd: ctx.worktree })
+      const list = yield* run(["worktree", "list", "--porcelain"])
       if (list.code !== 0) {
         return yield* new RemoveFailedError({ message: list.stderr || list.text || "Failed to read git worktrees" })
       }
@@ -579,9 +589,9 @@ export const layer: Layer.Layer<
       // Git may return the original casing when a caller supplied a normalized Windows path.
       yield* store.disposeDirectory(entry.path)
       yield* stopFsmonitor(entry.path)
-      const removed = yield* git(["worktree", "remove", "--force", entry.path], { cwd: ctx.worktree })
+      const removed = yield* run(["worktree", "remove", "--force", entry.path])
       if (removed.code !== 0) {
-        const next = yield* git(["worktree", "list", "--porcelain"], { cwd: ctx.worktree })
+        const next = yield* run(["worktree", "list", "--porcelain"])
         if (next.code !== 0) {
           return yield* new RemoveFailedError({
             message: removed.stderr || removed.text || next.stderr || next.text || "Failed to remove git worktree",
@@ -600,7 +610,7 @@ export const layer: Layer.Layer<
 
       const branch = entry.branch?.replace(/^refs\/heads\//, "")
       if (branch) {
-        const deleted = yield* git(["branch", "-D", branch], { cwd: ctx.worktree })
+        const deleted = yield* run(["branch", "-D", branch])
         if (deleted.code !== 0) {
           return yield* new RemoveFailedError({
             message: deleted.stderr || deleted.text || "Failed to delete worktree branch",
@@ -869,8 +879,36 @@ export const layer: Layer.Layer<
 
       const base = yield* gitSvc.defaultBranch(entry.path).pipe(Effect.catch(() => Effect.succeed(undefined)))
       if (!base) return { base: "", additions: 0, deletions: 0, files: 0 } satisfies BranchSummary
+      const defaultCheckout = yield* Effect.gen(function* () {
+        const list = yield* safeGit(["worktree", "list", "--porcelain"], entry.path)
+        const targets = parseWorktreeList(list.text).filter((item) => item.branch === `refs/heads/${base.name}`)
+        if (list.code !== 0 || targets.length !== 1 || !targets[0]?.path) return
+        const target = yield* fs.realPath(targets[0].path).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (!target || (yield* canonical(target)) === (yield* canonical(entry.path))) return
+        const sourceCommon = yield* safeGit(["rev-parse", "--path-format=absolute", "--git-common-dir"], entry.path)
+        const targetCommon = yield* safeGit(["rev-parse", "--path-format=absolute", "--git-common-dir"], target)
+        if (sourceCommon.code !== 0 || targetCommon.code !== 0 || !sourceCommon.text.trim() || !targetCommon.text.trim())
+          return
+        const sourceRoot = yield* fs
+          .realPath(sourceCommon.text.trim())
+          .pipe(Effect.catch(() => Effect.succeed(undefined)))
+        const targetRoot = yield* fs
+          .realPath(targetCommon.text.trim())
+          .pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (!sourceRoot || !targetRoot || (yield* canonical(sourceRoot)) !== (yield* canonical(targetRoot))) return
+        const branch = yield* safeGit(["symbolic-ref", "--quiet", "HEAD"], target)
+        if (branch.code !== 0 || branch.text.trim() !== `refs/heads/${base.name}`) return
+        return target
+      })
       const mb = yield* gitSvc.mergeBase(entry.path, base.ref).pipe(Effect.catch(() => Effect.succeed(undefined)))
-      if (!mb) return { base: base.name, additions: 0, deletions: 0, files: 0 } satisfies BranchSummary
+      if (!mb)
+        return {
+          base: base.name,
+          ...(defaultCheckout ? { defaultCheckout } : {}),
+          additions: 0,
+          deletions: 0,
+          files: 0,
+        } satisfies BranchSummary
 
       const numstat = yield* safeGit(["diff", "--numstat", `${mb}..HEAD`], entry.path)
       let additions = 0
@@ -885,7 +923,13 @@ export const layer: Layer.Layer<
           if (m[2] !== "-") deletions += Number(m[2])
         }
       }
-      return { base: base.name, additions, deletions, files } satisfies BranchSummary
+      return {
+        base: base.name,
+        ...(defaultCheckout ? { defaultCheckout } : {}),
+        additions,
+        deletions,
+        files,
+      } satisfies BranchSummary
     })
 
     // U3: merge the worktree branch back into the default branch. Uses --no-commit --no-ff so the
@@ -901,9 +945,45 @@ export const layer: Layer.Layer<
       const base = yield* gitSvc.defaultBranch(ctx.worktree).pipe(Effect.catch(() => Effect.succeed(undefined)))
       if (!base) return yield* new MergeFailedError({ message: "Default branch not found" })
 
-      const merge = yield* git(["merge", "--no-commit", "--no-ff", entry.branch], { cwd: ctx.worktree })
+      // ctx.worktree is the opened sandbox, which may be the source itself.
+      // Find the registered checkout of the default branch instead of merging there.
+      const list = yield* safeGit(["worktree", "list", "--porcelain"], ctx.worktree)
+      const targets = parseWorktreeList(list.text).filter((item) => item.branch === `refs/heads/${base.name}`)
+      if (list.code !== 0 || targets.length !== 1 || !targets[0]?.path)
+        return yield* new MergeFailedError({ message: "Default branch has no unique checked-out worktree" })
+      const target = yield* fs.realPath(targets[0].path).pipe(
+        Effect.mapError(() => new MergeFailedError({ message: "Default branch checkout is unavailable" })),
+      )
+      if ((yield* canonical(target)) === (yield* canonical(entry.path)))
+        return yield* new MergeFailedError({ message: "Cannot merge a worktree into itself" })
+      const sourceCommon = yield* safeGit(["rev-parse", "--path-format=absolute", "--git-common-dir"], entry.path)
+      const targetCommon = yield* safeGit(["rev-parse", "--path-format=absolute", "--git-common-dir"], target)
+      if (sourceCommon.code !== 0 || targetCommon.code !== 0 || !sourceCommon.text.trim() || !targetCommon.text.trim())
+        return yield* new MergeFailedError({ message: "Could not verify the merge repository" })
+      if ((yield* canonical(sourceCommon.text.trim())) !== (yield* canonical(targetCommon.text.trim())))
+        return yield* new MergeFailedError({ message: "Default branch checkout belongs to another repository" })
+      const status = yield* safeGit(["status", "--porcelain"], target)
+      const merging = yield* safeGit(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], target)
+      if (status.code !== 0 || status.text.trim() || merging.code !== 1)
+        return yield* new MergeFailedError({ message: "Default branch checkout is not clean or has an active merge" })
+      const branch = yield* safeGit(["symbolic-ref", "--quiet", "HEAD"], target)
+      const head = yield* safeGit(["rev-parse", "--verify", "HEAD"], target)
+      const source = yield* safeGit(["rev-parse", "--verify", `refs/heads/${entry.branch}^{commit}`], entry.path)
+      if (branch.code !== 0 || branch.text.trim() !== `refs/heads/${base.name}` || head.code !== 0 || source.code !== 0)
+        return yield* new MergeFailedError({ message: "Merge source or default branch checkout changed" })
+      const included = yield* safeGit(["merge-base", "--is-ancestor", source.text.trim(), head.text.trim()], target)
+      if (included.code === 0)
+        return {
+          merged: true,
+          conflicted: [],
+          message: `${entry.branch} is already included in ${base.name}.`,
+        } satisfies MergeResult
+      if (included.code !== 1)
+        return yield* new MergeFailedError({ message: "Could not determine the merge ancestry" })
+
+      const merge = yield* git(["merge", "--no-commit", "--no-ff", source.text.trim()], { cwd: target })
       if (merge.code !== 0) {
-        const conflicts = yield* safeGit(["diff", "--name-only", "--diff-filter=U"], ctx.worktree)
+        const conflicts = yield* safeGit(["diff", "--name-only", "--diff-filter=U"], target)
         const files =
           conflicts.code === 0
             ? conflicts.text
@@ -911,7 +991,9 @@ export const layer: Layer.Layer<
                 .map((l) => l.trim())
                 .filter(Boolean)
             : []
-        yield* git(["merge", "--abort"], { cwd: ctx.worktree }).pipe(Effect.ignore)
+        const aborted = yield* git(["merge", "--abort"], { cwd: target })
+        if (files.length && aborted.code !== 0)
+          return yield* new MergeFailedError({ message: "Merge conflicted and could not be aborted; checkout preserved" })
         return {
           merged: false,
           conflicted: files,
@@ -920,6 +1002,15 @@ export const layer: Layer.Layer<
             : merge.stderr || merge.text || "Merge failed.",
         } satisfies MergeResult
       }
+      const after = yield* safeGit(["rev-parse", "--verify", "HEAD"], target)
+      const prepared = yield* safeGit(["rev-parse", "--verify", "MERGE_HEAD"], target)
+      if (
+        after.code !== 0 ||
+        after.text.trim() !== head.text.trim() ||
+        prepared.code !== 0 ||
+        prepared.text.trim() !== source.text.trim()
+      )
+        return yield* new MergeFailedError({ message: "Merge completion could not be confirmed; checkout preserved" })
       return {
         merged: true,
         conflicted: [],

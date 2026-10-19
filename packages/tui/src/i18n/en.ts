@@ -1,6 +1,57 @@
 // W2-7 — TUI locale dictionaries. Keys are namespaced "tui.<area>.<name>"; en is the source of
 // truth for the key union, other locales mirror it with `Keys` enforcing coverage at typecheck.
 export const dict = {
+  "tui.browser.owner.cancelUnsent": "Cancel original input that has not entered the chat",
+  "tui.browser.owner.pendingInput":
+    "An original terminal submission is unconfirmed. Recover it from the shared browser menu before sending another.",
+  "tui.browser.owner.pair": "Connect this terminal to Desktop",
+  "tui.browser.owner.pending": "Compare the SHA256 code in Desktop, then explicitly approve this live terminal.",
+  "tui.browser.owner.active":
+    "This terminal is connected to the original Desktop chat. New Enter submissions may request browser control; this menu does not restore control.",
+  "tui.browser.owner.retired":
+    "This terminal connection has ended. Connect again explicitly to approve a new input source.",
+  "tui.browser.owner.detach": "Disconnect this terminal",
+  "tui.browser.owner.retry": "Recover the original terminal submission",
+
+  "tui.browser.shared.originalCloseUnavailable":
+    "The original close request is unavailable. Recover it in the original Desktop window.",
+  "tui.browser.shared.title": "Shared browser",
+  "tui.browser.shared.hint":
+    "Agent and manual browsing use the same page and login state. This menu does not submit a task or grant control automatically.",
+  "tui.browser.shared.resumeUnavailable":
+    "This terminal has no trusted Desktop user-input bridge. After manual operation, use the original chat in Desktop to ask the Agent to continue. This menu cannot restore control.",
+  "tui.browser.shared.scopeChanged":
+    "The original server, chat or workspace changed. Return to that chat to check this request.",
+  "tui.browser.shared.unknown": "The operation is unconfirmed. Check the original browser request before retrying.",
+  "tui.browser.shared.capacity":
+    "The retained browser request limit has been reached. Recover an existing request first.",
+  "tui.browser.shared.invalid":
+    "The browser policy is invalid. Use exact approved origins and explicit submission or file grants.",
+  "tui.browser.shared.originalUnavailable":
+    "The original takeover request is unavailable. Reconcile it in the original Desktop window.",
+  "tui.browser.shared.pages": "Shared pages",
+  "tui.browser.shared.create": "Create shared browser",
+  "tui.browser.shared.new": "Create another shared page",
+  "tui.browser.shared.retryCreate": "Check original creation request",
+  "tui.browser.shared.refresh": "Refresh shared browser status",
+  "tui.browser.shared.use": "Add resource to Agent draft",
+  "tui.browser.shared.takeover": "Take over",
+  "tui.browser.shared.takeoverPending": "Handing over control…",
+  "tui.browser.shared.retryTakeover": "Retry original takeover cleanup",
+  "tui.browser.shared.close": "Close shared browser",
+  "tui.browser.shared.back": "Back to chat",
+  "tui.browser.shared.policyHint":
+    "JSON browser policy. Initial manual and Agent origins are explicit. POST, scripts, programs and files are denied unless their own grants are included. Returning to chat does not restore Agent control.",
+  "tui.browser.shared.creating": "Opening shared browser…",
+  "tui.browser.shared.agent_owned": "Agent is controlling",
+  "tui.browser.shared.takeover_pending": "Handing over control…",
+  "tui.browser.shared.human_owned": "You are in control",
+  "tui.browser.shared.acquire_pending": "Restoring Agent control…",
+  "tui.browser.shared.fenced_blocked": "Handover not confirmed",
+  "tui.browser.shared.recovery_required": "Control needs attention",
+  "tui.browser.shared.resource_lost": "Browser is unavailable",
+  "tui.browser.shared.closing": "Closing browser…",
+  "tui.browser.shared.closed": "Browser closed",
   "tui.planApproval.question": "Review this exact plan",
   "tui.planApproval.approved": "Approved plan queued for execution",
   "tui.planApproval.scope":
@@ -29,10 +80,13 @@ export const dict = {
   "tui.planApproval.copy": "Copy original snapshot",
   "tui.planApproval.copyUnavailable": "Clipboard unavailable",
   "tui.planApproval.scroll": "Scroll snapshot",
-  "tui.im.activation.retryHint": "Re-enter the original key or code. This resends the same transaction under its original authorization; an already processed transaction is not charged again. Checking its status remains read-only. Alt+C confirms; Enter or Ctrl+R only checks.",
-  "tui.im.activation.retryConsent": "Confirm the original transaction and credential; resend this request without creating another purchase.",
+  "tui.im.activation.retryHint":
+    "Re-enter the original key or code. This resends the same transaction under its original authorization; an already processed transaction is not charged again. Checking its status remains read-only. Alt+C confirms; Enter or Ctrl+R only checks.",
+  "tui.im.activation.retryConsent":
+    "Confirm the original transaction and credential; resend this request without creating another purchase.",
   "tui.im.activation.retryOriginal": "Resend original request · Alt+S",
-  "tui.im.device.retryHint": "Original voucher and ID only. Alt+C confirms, Alt+S resends; Enter/Ctrl+R only checks. Cost: 0 credits.",
+  "tui.im.device.retryHint":
+    "Original voucher and ID only. Alt+C confirms, Alt+S resends; Enter/Ctrl+R only checks. Cost: 0 credits.",
   "tui.im.device.retryConsent": "Confirm resending this original request · 0 credits.",
   "tui.im.device.retryOriginal": "Resend original migration · Alt+S",
 
@@ -49,8 +103,10 @@ export const dict = {
     "The OS credential store is unavailable. IM purchase, binding and sign-in are disabled. Local coding remains available.",
   "tui.im.device.unavailable":
     "This device operation could not be confirmed. Recover the original request before starting another one.",
-  "tui.im.device.serviceUnavailable": "The IM service is unavailable. Refresh to retry or contact the service administrator. Local coding remains available.",
-  "tui.im.device.observationUnavailable": "Device status could not be read. Refresh to retry. This check did not start a binding request.",
+  "tui.im.device.serviceUnavailable":
+    "The IM service is unavailable. Refresh to retry or contact the service administrator. Local coding remains available.",
+  "tui.im.device.observationUnavailable":
+    "Device status could not be read. Refresh to retry. This check did not start a binding request.",
   "tui.im.device.state": "Migration: {{state}} · charged {{credits}} credits",
   "tui.im.device.voucher": "Root-reviewed first-binding voucher",
   "tui.im.device.confirm": "Bind this device to the existing paid entitlement for 0 credits.",
@@ -242,6 +298,11 @@ export const dict = {
   "tui.im.dac.submit": "Submit to my DAC (Enter)",
   "tui.im.dac.refresh": "Check command state",
   "tui.im.dac.recent": "Recent DAC tasks",
+  "tui.im.dac.reconcile": "Check reply receipt",
+  "tui.im.dac.reconcileMore": "Check remaining parts",
+  "tui.im.dac.reconcileHelp":
+    "Only checks original server receipts; never resends the answer or reruns the task. Server acceptance does not confirm that anyone has read it.",
+  "tui.im.dac.reconcileCount": "Original parts confirmed by server: {{confirmed}} / {{total}}",
   "tui.im.dac.replyRetry": "Resend the failed final answer",
   "tui.im.dac.hint":
     "Alt+Q queue · Alt+S supplement · Alt+N new Session · Esc return to chat. Ordinary Session permissions and Stop remain available.",

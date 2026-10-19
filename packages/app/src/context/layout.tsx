@@ -33,6 +33,15 @@ import {
   type PanelView,
 } from "./layout-helpers"
 
+import {
+  closeWorkPanelView,
+  openWorkPanel,
+  workPanelState,
+  type WorkPanelKind,
+  type WorkPanelState,
+} from "./work-panel-state"
+export type { WorkPanelKind, WorkPanelView } from "./work-panel-state"
+
 export { createSessionKeyReader, ensureSessionKey, pruneSessionKeys }
 
 export type { ProjectAvatarVariant }
@@ -52,7 +61,7 @@ const DEFAULT_RIGHT_PANEL_NARROW_RATIO = 0.2
 const MIN_RIGHT_PANEL_PX = 300
 const MAX_RIGHT_PANEL_RATIO = 0.6
 // T3.2 — the always-on vertical icon rail is a fixed, non-resizable strip beside the content area.
-export const RIGHT_PANEL_RAIL_PX = 44
+export const RIGHT_PANEL_RAIL_PX = 0
 export type RightPanelWidthBucket = "wide" | "narrow"
 const FALLBACK_WINDOW_WIDTH = 1280
 const DEFAULT_SESSION_WIDTH = 600
@@ -105,6 +114,7 @@ type SessionTabs = {
 type SessionView = {
   scroll: Record<string, SessionScroll>
   reviewOpen?: string[]
+  sharedBrowserSelection?: { resourceID: string; nonce: string }
   // U3/U4/U7: added "worktree" (isolated worktree diff/merge), "subagents" (child-session list),
   // "browser" (isolated WebContentsView).
   // T3.2: the "menu" mode is gone — an always-on icon rail replaced the full-panel menu list.
@@ -113,7 +123,9 @@ type SessionView = {
   // WS1: "debug"/"profile"/"context" merged into the tabbed "dev" panel (stored values migrate
   // to "dev" at read time); "plugins" moved to Settings, "stats" into the SessionContextUsage
   // dialog, "mcp" dropped in P0 — stored values for those fall back to a closed panel.
+  workPanel?: WorkPanelState
   rightPanelMode?:
+    | "home"
     | "review"
     | "files"
     | "worktree"
@@ -122,6 +134,8 @@ type SessionView = {
     | "mcp"
     | "im"
     | "dev"
+    | "profile"
+    | "context"
     | "oversight"
     // Movable panel views can also live in the side panel.
     | "terminal"
@@ -918,13 +932,27 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         const key = createSessionKeyReader(sessionKey, ensureKey)
         const s = createMemo(() => store.sessionView[key()] ?? { scroll: {} })
         const reviewPanelOpened = createMemo(() => store.review?.panelOpened ?? true)
-        const rightPanelMode = createMemo(() => {
-          const mode = store.sessionView[key()]?.rightPanelMode
-          // Phase 2 backward-compat: "oversight" was merged into "subagents". Any session that
-          // persisted "oversight" should silently open the unified subagents panel instead.
-          if (mode === "oversight") return "subagents" as SessionRightPanelMode
-          return mode
-        })
+        const workPanel = createMemo(() => workPanelState(s().workPanel, s().rightPanelMode))
+        const rightPanelMode = createMemo<SessionRightPanelMode | undefined>(() =>
+          workPanel().visible ? workPanel().tabs.find((tab) => tab.id === workPanel().active)?.kind : undefined,
+        )
+        const setWorkPanel = (next: WorkPanelState) => {
+          const session = key()
+          const current = store.sessionView[session]
+          const mode = next.visible ? next.tabs.find((tab) => tab.id === next.active)?.kind : undefined
+          if (!current) {
+            setStore("sessionView", session, { scroll: {}, workPanel: next, rightPanelMode: mode })
+            return
+          }
+          setStore(
+            "sessionView",
+            session,
+            produce((draft) => {
+              draft.workPanel = next
+              draft.rightPanelMode = mode
+            }),
+          )
+        }
         const bottomPanel = createMemo(() => {
           const current = store.sessionView[key()]
           // One-way compatibility migration from the pre-panel global terminal flag.
@@ -959,6 +987,16 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
             produce((draft) => {
               draft.bottomPanel = bottom
               draft.rightPanelMode = next.rightPanelMode
+              draft.workPanel = next.rightPanelMode
+                ? openWorkPanel(
+                    workPanel(),
+                    next.rightPanelMode === "oversight"
+                      ? "subagents"
+                      : next.rightPanelMode === "mcp"
+                        ? "home"
+                        : next.rightPanelMode,
+                  )
+                : { ...workPanel(), visible: false }
             }),
           )
         }
@@ -972,15 +1010,14 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         }
 
         function setRightPanelMode(next: SessionView["rightPanelMode"]) {
-          const session = key()
-          const current = store.sessionView[session]
-          if (!current) {
-            setStore("sessionView", session, { scroll: {}, rightPanelMode: next })
+          if (!next) {
+            setWorkPanel({ ...workPanel(), visible: false })
             return
           }
-
-          if (current.rightPanelMode === next) return
-          setStore("sessionView", session, "rightPanelMode", next)
+          const kind = next === "oversight" ? "subagents" : next === "mcp" ? "home" : next
+          setWorkPanel(
+            openWorkPanel(workPanel(), kind, kind === "browser" ? s().sharedBrowserSelection?.resourceID : undefined),
+          )
         }
 
         function setTerminalOpened(next: boolean) {
@@ -1085,9 +1122,51 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
               setReviewPanelOpened(!reviewPanelOpened())
             },
           },
+          workPanel: {
+            tabs: () => workPanel().tabs,
+            active: () => workPanel().tabs.find((tab) => tab.id === workPanel().active),
+            visible: () => workPanel().visible,
+            expanded: () => workPanel().expanded,
+            taskID: () => workPanel().taskID,
+            selectTask(taskID?: string) {
+              setWorkPanel({ ...workPanel(), taskID })
+            },
+            open(kind: WorkPanelKind, options?: { resourceID?: string }) {
+              setWorkPanel(openWorkPanel(workPanel(), kind, options?.resourceID))
+            },
+            focus(id: string) {
+              if (workPanel().tabs.some((tab) => tab.id === id))
+                setWorkPanel({ ...workPanel(), active: id, visible: true })
+            },
+            closeView(id: string) {
+              setWorkPanel(closeWorkPanelView(workPanel(), id))
+            },
+            show() {
+              setWorkPanel({ ...workPanel(), visible: true })
+            },
+            hide() {
+              setWorkPanel({ ...workPanel(), visible: false })
+            },
+            toggle() {
+              setWorkPanel({ ...workPanel(), visible: !workPanel().visible })
+            },
+            setExpanded(expanded: boolean) {
+              setWorkPanel({ ...workPanel(), expanded })
+            },
+          },
           rightPanel: {
             mode: rightPanelMode,
             opened: createMemo(() => isPanelOpen(rightPanelMode())),
+            sharedBrowserSelection: createMemo(() => s().sharedBrowserSelection),
+            selectSharedBrowser(resourceID?: string) {
+              const session = key()
+              const selection = resourceID ? { resourceID, nonce: crypto.randomUUID() } : undefined
+              if (!store.sessionView[session]) {
+                if (selection) setStore("sessionView", session, { scroll: {}, sharedBrowserSelection: selection })
+                return
+              }
+              setStore("sessionView", session, "sharedBrowserSelection", selection)
+            },
             open(mode: NonNullable<SessionView["rightPanelMode"]>) {
               setRightPanelMode(mode)
             },

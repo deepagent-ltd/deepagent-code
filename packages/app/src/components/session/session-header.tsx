@@ -8,7 +8,7 @@ import { Spinner } from "@deepagent-code/ui/spinner"
 import { showToast } from "@/utils/toast"
 import { Tooltip, TooltipKeybind } from "@deepagent-code/ui/tooltip"
 import { getFilename } from "@deepagent-code/core/util/path"
-import { createEffect, createMemo, For, onMount, Show, type ComponentProps } from "solid-js"
+import { createEffect, createMemo, For, onCleanup, onMount, Show, type ComponentProps } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import { useCommand } from "@/context/command"
@@ -18,11 +18,11 @@ import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { useSync } from "@/context/sync"
 import { useTerminalHosts } from "@/context/terminal"
-import { focusTerminalById } from "@/pages/session/helpers"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { messageAgentColor } from "@/utils/agent"
 import { decode64 } from "@/utils/base64"
 import { Persist, persisted } from "@/utils/persist"
+import { TaskProgressPopover } from "@/pages/session/task-progress"
 
 const OPEN_APPS = [
   "vscode",
@@ -134,7 +134,7 @@ const showRequestError = (language: ReturnType<typeof useLanguage>, err: unknown
   })
 }
 
-export function SessionHeader() {
+export function SessionHeader(props: { onTaskProgressAvailableChange?: (available: boolean) => void } = {}) {
   const layout = useLayout()
   const command = useCommand()
   const server = useServer()
@@ -205,30 +205,21 @@ export function SessionHeader() {
     ]
   })
 
-  const bottomPanelOpen = createMemo(() => view().panel.bottom.opened())
+  const bottomPanelOpen = createMemo(
+    () =>
+      view().panel.bottom.opened() &&
+      !(
+        view().rightPanel.opened() &&
+        ((view().workPanel.expanded() && view().panel.sideAvailable()) ||
+          (view().rightPanel.mode() === "im" && !view().panel.sideAvailable()))
+      ),
+  )
 
-  const toggleBottomPanel = () => {
-    view().panel.bottom.toggle()
-    if (bottomPanelOpen() && view().panel.bottom.activeView() === "terminal") {
-      const id = terminalHosts.bottom.active()
-      if (id) focusTerminalById(id)
-    }
-  }
+  const toggleBottomPanel = () => command.trigger("panel.toggle")
 
   const rightPanelOpen = createMemo(() => view().rightPanel.opened())
 
-  const toggleRightPanel = () => {
-    if (rightPanelOpen()) {
-      view().rightPanel.close()
-      return
-    }
-
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    // T3.2: the right panel now has an always-on icon rail; there is no separate "menu" list. Opening
-    // the panel means opening a default content panel (review) — the rail lets the user switch from there.
-    view().rightPanel.open("review")
-  }
+  const toggleRightPanel = () => view().workPanel.toggle()
 
   const [prefs, setPrefs] = persisted(Persist.global("open.app"), createStore({ app: "finder" as OpenApp }))
   const [menu, setMenu] = createStore({ open: false })
@@ -293,11 +284,15 @@ export function SessionHeader() {
   const [mounts, setMounts] = createStore({
     center: null as HTMLElement | null,
     right: null as HTMLElement | null,
+    panel: null as HTMLElement | null,
   })
   onMount(() => {
     setMounts("center", document.getElementById("deepagent-code-titlebar-center"))
-    setMounts("right", document.getElementById("deepagent-code-titlebar-right"))
+    setMounts("right", document.getElementById("deepagent-code-titlebar-actions"))
+    setMounts("panel", document.getElementById("deepagent-code-titlebar-panel"))
   })
+  createEffect(() => props.onTaskProgressAvailableChange?.(!!params.id && !!mounts.right))
+  onCleanup(() => props.onTaskProgressAvailableChange?.(false))
 
   return (
     <>
@@ -436,6 +431,7 @@ export function SessionHeader() {
                 </div>
               </Show>
               <div class="flex items-center gap-1">
+                <TaskProgressPopover />
                 <Show when={term()}>
                   <TooltipKeybind title={language.t("command.panel.toggle")} keybind={command.keybind("panel.toggle")}>
                     <Button
@@ -450,31 +446,37 @@ export function SessionHeader() {
                     </Button>
                   </TooltipKeybind>
                 </Show>
-                <div class="hidden md:flex items-center gap-1 shrink-0">
-                  <TooltipKeybind
-                    title={language.t("session.sidePanel.toggle")}
-                    keybind={command.keybind("sidePanel.toggle")}
-                  >
-                    <Button
-                      variant="ghost"
-                      class="group/right-panel-toggle titlebar-icon relative w-8 h-6 p-0 box-border"
-                      onClick={toggleRightPanel}
-                      aria-label={language.t("session.sidePanel.toggle")}
-                      aria-expanded={rightPanelOpen()}
-                      aria-controls="review-panel"
-                    >
-                      <Icon size="small" name={rightPanelOpen() ? "layout-right-full" : "layout-right"} />
-                      <Show when={hasRunningSubagent()}>
-                        <span
-                          class="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-text-success"
-                          style={{ animation: "var(--animate-pulse-scale)" }}
-                          aria-hidden="true"
-                        />
-                      </Show>
-                    </Button>
-                  </TooltipKeybind>
-                </div>
               </div>
+            </div>
+          </Portal>
+        )}
+      </Show>
+      <Show when={mounts.panel}>
+        {(mount) => (
+          <Portal mount={mount()}>
+            <div class="hidden md:flex items-center gap-1 shrink-0">
+              <TooltipKeybind
+                title={language.t("session.sidePanel.toggle")}
+                keybind={command.keybind("sidePanel.toggle")}
+              >
+                <Button
+                  variant="ghost"
+                  class="group/right-panel-toggle titlebar-icon relative w-8 h-6 p-0 box-border"
+                  onClick={toggleRightPanel}
+                  aria-label={language.t("session.sidePanel.toggle")}
+                  aria-expanded={rightPanelOpen()}
+                  aria-controls="review-panel"
+                >
+                  <Icon size="small" name={rightPanelOpen() ? "layout-right-full" : "layout-right"} />
+                  <Show when={hasRunningSubagent()}>
+                    <span
+                      class="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-text-success"
+                      style={{ animation: "var(--animate-pulse-scale)" }}
+                      aria-hidden="true"
+                    />
+                  </Show>
+                </Button>
+              </TooltipKeybind>
             </div>
           </Portal>
         )}

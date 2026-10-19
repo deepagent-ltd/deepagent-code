@@ -47,7 +47,10 @@ import { createStore, produce, unwrap } from "solid-js/store"
 import { usePromptHistory, type PromptInfo } from "../../prompt/history"
 import { computePromptTraits } from "../../prompt/traits"
 import { promptIntelligenceMode } from "../../prompt/intelligence-mode"
+import { reviewIntelligenceDraft } from "../../prompt/intelligence-review"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
+import { createInteractiveSubmitGate } from "../../prompt/interactive-submit"
+import type { BrowserOwnerSource, BrowserOwnerTicket } from "../../prompt/browser-owner"
 import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
@@ -63,7 +66,6 @@ import { useDialog } from "../../ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { DialogSelect } from "../../ui/dialog-select"
-import { DialogPrompt } from "../../ui/dialog-prompt"
 import { useToast } from "../../ui/toast"
 import { useTuiI18n } from "../../context/i18n"
 import { useKV } from "../../context/kv"
@@ -275,9 +277,7 @@ export function Prompt(props: PromptProps) {
       if (result.intent_id && result.intent_id !== intentID) throw new Error("prepare returned a different intent")
       const editable = (result.preview ?? result.goal ?? "").trim()
       if (!editable) return direct
-      const edited = await DialogPrompt.show(dialog, i18n.t("tui.intelligence.reviewTitle"), {
-        value: editable,
-      })
+      const edited = await reviewIntelligenceDraft(dialog, i18n.t("tui.intelligence.reviewTitle"), editable)
       if (edited === null) return false
       return {
         deepagent: {
@@ -337,6 +337,14 @@ export function Prompt(props: PromptProps) {
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
+  const ownerInput = createInteractiveSubmitGate<BrowserOwnerSource>()
+  const offOwnerInput = keymap.intercept("key", (event) => {
+    ownerInput.begin(event.event, sdk.browserSubmit.source(props.sessionID, project.instance.directory()))
+  })
+  onCleanup(() => {
+    offOwnerInput()
+    ownerInput.clear()
+  })
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
   const renderer = useRenderer()
@@ -504,7 +512,10 @@ export function Prompt(props: PromptProps) {
     const client = sdk.client
     const scope = { server: sdk.url, directory: project.instance.path().directory, sessionID }
     const text = store.prompt.input
-    const command = text.trim().replace(/^\/goal\b\s*/, "").trim()
+    const command = text
+      .trim()
+      .replace(/^\/goal\b\s*/, "")
+      .trim()
     const current = () =>
       !goalDisposed &&
       props.sessionID === sessionID &&
@@ -574,9 +585,10 @@ export function Prompt(props: PromptProps) {
         name: "prompt.submit",
         category: "Prompt",
         hidden: true,
-        run: async () => {
+        run: async (event: CommandContext<Renderable, KeyEvent>) => {
           if (!input.focused) return
-          const handled = await submit()
+          if (submitting || scheduledSubmission) return
+          const handled = await submit(captureOwnerInput(ownerInput.take(event.event)))
           if (!handled) return
 
           dialog.clear()
@@ -840,16 +852,6 @@ export function Prompt(props: PromptProps) {
         run: runGoalCommand,
       },
       {
-        title: i18n.t("tui.prompt.moveSession"),
-        desc: i18n.t("tui.prompt.moveSessionDesc"),
-        name: "session.move",
-        category: "Session",
-        slashName: "move",
-        run: () => {
-          move.open()
-        },
-      },
-      {
         // GUI D1 parity — the per-session intelligence toggle (scenario-toggle). While on, sends
         // run through the prepare pipeline with an editable draft review before submission.
         title: intelligenceMode() ? i18n.t("tui.intelligence.toggleOn") : i18n.t("tui.intelligence.toggleOff"),
@@ -955,7 +957,6 @@ export function Prompt(props: PromptProps) {
       "prompt.stash.list",
       "session.interrupt",
       "workspace.set",
-      "session.move",
     ]),
   }))
 
@@ -1322,7 +1323,24 @@ export function Prompt(props: PromptProps) {
   })
 
   let submitting = false
-  async function submit() {
+  let scheduledSubmission = false
+  const captureOwnerInput = (source: BrowserOwnerSource | undefined) => {
+    if (!source || props.disabled || store.mode !== "normal") return undefined
+    const rawInput = input.plainText
+    if (
+      !rawInput ||
+      /^\/goal(?:\s|$)/.test(rawInput.trim()) ||
+      (rawInput.startsWith("/") &&
+        sync.data.command.some((command) => command.name === rawInput.split("\n")[0].split(" ")[0].slice(1)))
+    )
+      return undefined
+    try {
+      return sdk.browserSubmit.capture(source, rawInput)
+    } catch {
+      return undefined
+    }
+  }
+  async function submit(ownerTicket?: BrowserOwnerTicket) {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
     // a second call slips past the empty-input check before the first call
@@ -1332,13 +1350,13 @@ export function Prompt(props: PromptProps) {
     if (submitting) return false
     submitting = true
     try {
-      return await submitInner()
+      return await submitInner(ownerTicket)
     } finally {
       submitting = false
     }
   }
 
-  async function submitInner() {
+  async function submitInner(ownerTicket?: BrowserOwnerTicket) {
     workspace.clearNotice()
 
     // IME: double-defer may fire before onContentChange flushes the last
@@ -1352,6 +1370,10 @@ export function Prompt(props: PromptProps) {
     if (workspace.creating() || move.creating()) return false
     if (auto()?.visible) return false
     if (!store.prompt.input) return false
+    if (props.sessionID && sdk.browserSubmit.pending(props.sessionID)) {
+      toast.show({ variant: "warning", message: i18n.t("tui.browser.owner.pendingInput"), duration: 6000 })
+      return false
+    }
     // Client Goal commands with arguments do not appear in the server command list.
     // Dispatch them before model selection or ordinary prompt admission.
     if (store.mode === "normal" && /^\/goal(?:\s|$)/.test(store.prompt.input.trim())) {
@@ -1549,8 +1571,8 @@ export function Prompt(props: PromptProps) {
         }
         metadata = prepared
       }
-      sdk.client.v2.session
-        .prompt(
+      sdk.browserSubmit
+        .submit(
           {
             sessionID,
             delivery: queueMode ? "queue" : undefined,
@@ -1569,7 +1591,7 @@ export function Prompt(props: PromptProps) {
               ],
             }),
           },
-          { throwOnError: true },
+          ownerTicket,
         )
         .then((result) => {
           // V4.1 §S1.2 steer ack: a message sent mid-turn is absorbed as a steer and delivered
@@ -1865,9 +1887,19 @@ export function Prompt(props: PromptProps) {
                 }
               }}
               onSubmit={() => {
+                if (submitting || scheduledSubmission) return
+                const ticket = captureOwnerInput(ownerInput.take())
+                scheduledSubmission = true
                 // IME: double-defer so the last composed character (e.g. Korean
                 // hangul) is flushed to plainText before we read it for submission.
-                setTimeout(() => setTimeout(() => submit(), 0), 0)
+                setTimeout(
+                  () =>
+                    setTimeout(() => {
+                      scheduledSubmission = false
+                      void submit(ticket)
+                    }, 0),
+                  0,
+                )
               }}
               onPaste={async (event: PasteEvent) => {
                 if (props.disabled) {

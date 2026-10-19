@@ -30,6 +30,9 @@ import { DialogBrowserControl } from "@/components/dialog-browser-control"
 import { DialogPromptStash } from "@/components/dialog-prompt-stash"
 import { base64Encode } from "@deepagent-code/core/util/encode"
 import { sessionControls } from "@/utils/session-controls"
+import { usePlatform } from "@/context/platform"
+import { onCleanup, onMount } from "solid-js"
+import { createStore } from "solid-js/store"
 
 export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
@@ -48,6 +51,7 @@ const withCategory = (category: string) => {
 export const useSessionCommands = (actions: SessionCommandContext) => {
   const command = useCommand()
   const dialog = useDialog()
+  const platform = usePlatform()
   const file = useFile()
   const language = useLanguage()
   const local = useLocal()
@@ -66,6 +70,18 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const navigate = useNavigate()
   const forkRequests = createForkRequestRegistry<Session>()
   const { params, tabs, view } = useSessionLayout()
+  const [terminalFocus, setTerminalFocus] = createStore({ host: undefined as "bottom" | "side" | undefined })
+  onMount(() => {
+    const focus = (event: FocusEvent) => {
+      const host =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-terminal-host]")?.dataset.terminalHost
+          : undefined
+      if (host === "bottom" || host === "side") setTerminalFocus("host", host)
+    }
+    document.addEventListener("focusin", focus)
+    onCleanup(() => document.removeEventListener("focusin", focus))
+  })
 
   const info = () => {
     const id = params.id
@@ -301,8 +317,21 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     addSelectionToContext(path, selectionFromLines(range))
   }
 
-  // Phase 3: openTerminal always creates in the bottom host and opens the bottom panel.
+  const bottomOccluded = () =>
+    view().rightPanel.opened() &&
+    ((view().workPanel.expanded() && view().panel.sideAvailable()) ||
+      (view().rightPanel.mode() === "im" && !view().panel.sideAvailable()))
+  const uncoverBottom = () => {
+    view().workPanel.setExpanded(false)
+    if (!view().panel.sideAvailable() && view().rightPanel.mode() === "im") view().workPanel.hide()
+  }
   const openTerminal = () => {
+    if (terminalHost() === "side") {
+      void terminalHosts.side.new()
+      view().workPanel.open("terminal")
+      return
+    }
+    uncoverBottom()
     void terminalHosts.bottom.new()
     view().panel.reveal("terminal")
   }
@@ -641,30 +670,41 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     viewCommand({
       id: "sidePanel.toggle",
       title: language.t("session.sidePanel.toggle"),
-      onSelect: () => {
-        if (view().rightPanel.opened()) {
-          view().rightPanel.close()
-          return
-        }
-
-        view().reviewPanel.close()
-        layout.fileTree.close()
-        // T3.2: no more "menu" list — the always-on rail is the switcher; open a default content panel.
-        view().rightPanel.open("review")
-      },
+      onSelect: () => view().workPanel.toggle(),
     }),
     viewCommand({
       id: "panel.toggle",
       title: language.t("command.panel.toggle"),
       keybind: "mod+j",
-      onSelect: () => view().panel.bottom.toggle(),
+      onSelect: () => {
+        const covered = bottomOccluded()
+        uncoverBottom()
+        if (!covered || !view().panel.bottom.opened()) view().panel.bottom.toggle()
+      },
     }),
     viewCommand({
       id: "terminal.toggle",
       title: language.t("command.terminal.toggle"),
       keybind: "ctrl+`",
       slash: "terminal",
-      onSelect: () => view().panel.toggle("terminal"),
+      onSelect: () => {
+        const host =
+          view().panel.sideAvailable() && terminalFocus.host === "side"
+            ? "side"
+            : terminalFocus.host === "bottom"
+              ? "bottom"
+              : terminalHost()
+        setTerminalFocus("host", host)
+        if (host === "side") {
+          if (sideTerminalOpen()) view().workPanel.hide()
+          else view().workPanel.open("terminal")
+          return
+        }
+        const covered = bottomOccluded()
+        uncoverBottom()
+        if (covered && view().panel.bottom.opened() && view().panel.bottom.activeView() === "terminal") return
+        view().panel.toggle("terminal")
+      },
     }),
     viewCommand({
       id: "debugConsole.reveal",
@@ -703,7 +743,10 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     viewCommand({
       id: "panel.terminal.show",
       title: `${language.t("session.panel.showView")}: ${language.t("session.panel.terminal")}`,
-      onSelect: () => view().panel.reveal("terminal"),
+      onSelect: () => {
+        uncoverBottom()
+        view().panel.reveal("terminal")
+      },
     }),
     viewCommand({
       id: "review.toggle",
@@ -733,13 +776,17 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     }),
   ]
 
-  // Phase 3: terminal commands route to the bottom host. The side terminal is
-  // opened from the right-panel rail (session-side-panel.tsx) rather than commands.
-  const bottomTerminalOpen = () => view().panel.bottom.opened() && view().panel.bottom.activeView() === "terminal"
-  const sideTerminalOpen = () => view().rightPanel.mode() === "terminal"
+  const bottomTerminalOpen = () =>
+    !bottomOccluded() && view().panel.bottom.opened() && view().panel.bottom.activeView() === "terminal"
+  const sideTerminalOpen = () =>
+    view().panel.sideAvailable() && view().rightPanel.opened() && view().rightPanel.mode() === "terminal"
   const terminalOpen = () => bottomTerminalOpen() || sideTerminalOpen()
-  // Keybind commands operate on the bottom terminal session.
-  const focusedPane = () => terminalHosts.bottom.focusedPaneId()
+  // Preserve the terminal focus when a command menu takes focus. Hidden hosts
+  // cannot receive commands, and each host keeps its existing PTYs.
+  const terminalHost = () =>
+    terminalFocus.host === "bottom" && bottomTerminalOpen() ? "bottom" : sideTerminalOpen() ? "side" : "bottom"
+  const currentTerminal = () => terminalHosts[terminalHost()]
+  const focusedPane = () => currentTerminal().focusedPaneId()
   const terminalCmds = () => [
     terminalCommand({
       id: "terminal.new",
@@ -753,43 +800,43 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.terminal.split"),
       description: language.t("command.terminal.split.description"),
       keybind: "ctrl+alt+\\",
-      disabled: !bottomTerminalOpen() || !terminalHosts.bottom.canSplit(focusedPane()),
-      onSelect: () => void terminalHosts.bottom.split("horizontal"),
+      disabled: !terminalOpen() || !currentTerminal().canSplit(focusedPane()),
+      onSelect: () => void currentTerminal().split("horizontal"),
     }),
     terminalCommand({
       id: "terminal.closePane",
       title: language.t("command.terminal.closePane"),
       keybind: "ctrl+alt+w",
-      disabled: !bottomTerminalOpen(),
-      onSelect: () => void terminalHosts.bottom.closePane(focusedPane()),
+      disabled: !terminalOpen(),
+      onSelect: () => void currentTerminal().closePane(focusedPane()),
     }),
     terminalCommand({
       id: "terminal.focus.left",
       title: language.t("command.terminal.focus.left"),
       keybind: "ctrl+arrowleft",
-      disabled: !bottomTerminalOpen(),
-      onSelect: () => terminalHosts.bottom.focusNeighbor("left"),
+      disabled: !terminalOpen(),
+      onSelect: () => currentTerminal().focusNeighbor("left"),
     }),
     terminalCommand({
       id: "terminal.focus.right",
       title: language.t("command.terminal.focus.right"),
       keybind: "ctrl+arrowright",
-      disabled: !bottomTerminalOpen(),
-      onSelect: () => terminalHosts.bottom.focusNeighbor("right"),
+      disabled: !terminalOpen(),
+      onSelect: () => currentTerminal().focusNeighbor("right"),
     }),
     terminalCommand({
       id: "terminal.focus.up",
       title: language.t("command.terminal.focus.up"),
       keybind: "ctrl+arrowup",
-      disabled: !bottomTerminalOpen(),
-      onSelect: () => terminalHosts.bottom.focusNeighbor("up"),
+      disabled: !terminalOpen(),
+      onSelect: () => currentTerminal().focusNeighbor("up"),
     }),
     terminalCommand({
       id: "terminal.focus.down",
       title: language.t("command.terminal.focus.down"),
       keybind: "ctrl+arrowdown",
-      disabled: !bottomTerminalOpen(),
-      onSelect: () => terminalHosts.bottom.focusNeighbor("down"),
+      disabled: !terminalOpen(),
+      onSelect: () => currentTerminal().focusNeighbor("down"),
     }),
   ]
 
@@ -908,6 +955,27 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         dialog.show(() => (
           <DialogBrowserControl
             sessionID={sessionID}
+            sharedBrowser={platform.sharedBrowser}
+            onSharedUse={(resourceID) => {
+              if (
+                !validationOwner() ||
+                server.scope() !== scope ||
+                sdk.client !== client ||
+                sdk.scope !== scope ||
+                params.dir !== directory ||
+                params.id !== sessionID
+              )
+                return
+              const content = `\nshared browser resourceID: ${resourceID}`
+              const start = prompt.current().reduce((end, part) => ("end" in part ? Math.max(end, part.end) : end), 0)
+              prompt.set(
+                [...prompt.current(), { type: "text", content, start, end: start + content.length }],
+                start + content.length,
+              )
+              view().rightPanel.selectSharedBrowser(resourceID)
+              view().rightPanel.open("browser")
+              actions.focusInput()
+            }}
             onUse={(controlID, script) => {
               if (
                 !validationOwner() ||

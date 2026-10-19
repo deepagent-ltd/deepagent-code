@@ -236,3 +236,98 @@ test("real REST interruption rows advance the cursor across duplicate drains and
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 })
+
+test("the existing REST consumer delivers a hidden session's terminal rows once before focus returns", async () => {
+  const { createOpencodeClient } = await import("@deepagent-code/sdk")
+  const { createServer } = await import("node:http")
+  const original = Object.getOwnPropertyDescriptor(document, "visibilityState")
+  const visibility = { state: "visible" }
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility.state })
+  const rows: EventRow[] = [
+    { id: "start", seq: 1, type: "session.execution.started.1", data: { sessionID: "ses-hidden" } },
+  ]
+  const requests: string[] = []
+  const consumed: number[] = []
+  const idle: string[] = []
+  const errors: string[] = []
+  const anchored = Promise.withResolvers<void>()
+  const completed = Promise.withResolvers<void>()
+  const server = createServer((request, response) => {
+    const url = new URL(request.url!, "http://127.0.0.1")
+    response.setHeader("Content-Type", "application/json")
+    response.setHeader("Access-Control-Allow-Origin", request.headers.origin ?? "*")
+    if (request.method === "OPTIONS") {
+      response.setHeader("Access-Control-Allow-Methods", "GET")
+      response.setHeader(
+        "Access-Control-Allow-Headers",
+        request.headers["access-control-request-headers"] ?? "content-type",
+      )
+      response.writeHead(204).end()
+      return
+    }
+    if (url.pathname === "/context/eventsCursor") {
+      response.end(JSON.stringify({ watermark: 0, cursor: 0, floor: 0 }))
+      return
+    }
+    if (url.pathname !== "/context/events") {
+      response.writeHead(404).end()
+      return
+    }
+    requests.push(url.searchParams.get("after") ?? "")
+    response.end(JSON.stringify({ events: rows, nextCursor: rows.at(-1)?.seq ?? 0, floor: 0 }))
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (!address || typeof address === "string") throw new Error("Missing hidden-session listener address")
+  const close = subscribeSessionNotifications(
+    createOpencodeClient({ baseUrl: `http://127.0.0.1:${address.port}` }),
+    ["ses-hidden"],
+    {
+      onIdle: (sessionID) => idle.push(sessionID),
+      onError: (_sessionID, error) => {
+        errors.push(error.message)
+        completed.resolve()
+      },
+      onJournalEvent: (_sessionID, event) => {
+        consumed.push(event.seq)
+        if (event.seq === 1) anchored.resolve()
+      },
+    },
+    undefined,
+    5,
+  )
+  try {
+    expect(await Promise.race([anchored.promise.then(() => true), Bun.sleep(1000).then(() => false)])).toBe(true)
+    visibility.state = "hidden"
+    document.dispatchEvent(new Event("visibilitychange"))
+    rows.push(
+      { id: "success", seq: 2, type: "session.execution.succeeded.1", data: { sessionID: "ses-hidden" } },
+      {
+        id: "failure",
+        seq: 3,
+        type: "session.execution.failed.1",
+        data: { sessionID: "ses-hidden", error: { type: "unknown", message: "hidden provider failure" } },
+      },
+      { id: "duplicate", seq: 3, type: "session.execution.succeeded.1", data: { sessionID: "ses-hidden" } },
+    )
+    expect(await Promise.race([completed.promise.then(() => true), Bun.sleep(500).then(() => false)])).toBe(true)
+    expect(idle).toEqual(["ses-hidden"])
+    expect(errors).toEqual(["hidden provider failure"])
+    expect(consumed).toEqual([1, 2, 3])
+    expect(document.visibilityState).toBe("hidden")
+
+    visibility.state = "visible"
+    document.dispatchEvent(new Event("visibilitychange"))
+    await Bun.sleep(30)
+    expect(requests.filter((after) => after === "3").length).toBeGreaterThan(0)
+    expect(idle).toEqual(["ses-hidden"])
+    expect(errors).toEqual(["hidden provider failure"])
+    expect(consumed).toEqual([1, 2, 3])
+  } finally {
+    close()
+    if (original) Object.defineProperty(document, "visibilityState", original)
+    if (!original) Reflect.deleteProperty(document, "visibilityState")
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})

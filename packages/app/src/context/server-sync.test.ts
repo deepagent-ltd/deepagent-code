@@ -7,7 +7,46 @@ import {
   sessionPlanCursor,
   type SessionPlan,
 } from "./global-sync/types"
-import { syncRetainedSessionPlanSnapshots } from "./server-sync"
+import { loadMcpQuery, scheduleServerEventStart, syncRetainedSessionPlanSnapshots } from "./server-sync"
+import { QueryClient } from "@tanstack/solid-query"
+import { createServer } from "node:http"
+import { createDeepAgentCodeClient } from "@deepagent-code/sdk/client"
+import { ServerConnection } from "./server"
+import { ServerScope } from "../utils/server-scope"
+
+describe("background server event startup", () => {
+  test("starts once while hidden without waiting for a paint", async () => {
+    const visibility = Object.getOwnPropertyDescriptor(document, "visibilityState")
+    const frame = globalThis.requestAnimationFrame
+    const calls = { start: 0, frame: 0 }
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" })
+    globalThis.requestAnimationFrame = () => {
+      calls.frame++
+      return 1
+    }
+    const cancel = scheduleServerEventStart(() => calls.start++)
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(document.visibilityState).toBe("hidden")
+      expect(calls).toEqual({ start: 1, frame: 0 })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(calls.start).toBe(1)
+    } finally {
+      cancel()
+      globalThis.requestAnimationFrame = frame
+      if (visibility) Object.defineProperty(document, "visibilityState", visibility)
+      if (!visibility) Reflect.deleteProperty(document, "visibilityState")
+    }
+  })
+
+  test("cancels startup when its owner unmounts before the timer", async () => {
+    const calls = { start: 0 }
+    const cancel = scheduleServerEventStart(() => calls.start++)
+    cancel()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(calls.start).toBe(0)
+  })
+})
 
 const sessionPlan = (overrides: Partial<SessionPlan> = {}): SessionPlan => ({
   plan_id: "plan-1",
@@ -237,5 +276,138 @@ describe("canDisposeDirectory", () => {
         loadingSessions: false,
       }),
     ).toBe(true)
+  })
+})
+
+async function mcpStatusFixture() {
+  const started = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const requests: Array<{ method: string; directory: string | null }> = []
+  const server = createServer(async (request, response) => {
+    response.setHeader("access-control-allow-origin", "*")
+    response.setHeader("access-control-allow-headers", "content-type")
+    response.setHeader("access-control-allow-methods", "GET, OPTIONS")
+    if (request.method === "OPTIONS") {
+      response.writeHead(204)
+      response.end()
+      return
+    }
+    requests.push({
+      method: request.method!,
+      directory: new URL(request.url!, "http://127.0.0.1").searchParams.get("directory"),
+    })
+    started.resolve()
+    await release.promise
+    response.writeHead(200, { "content-type": "application/json" })
+    response.end(
+      JSON.stringify({
+        fixture: { status: "disconnected", authStatus: "not_authenticated", reason: "explicit_connect_required" },
+      }),
+    )
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (!address || typeof address === "string") throw new Error("MCP fixture listener unavailable")
+  return {
+    baseUrl: "http://127.0.0.1:" + address.port,
+    requests,
+    started: started.promise,
+    release: () => release.resolve(),
+    close: async () => {
+      release.resolve()
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()))
+        server.closeAllConnections()
+      })
+    },
+  }
+}
+
+describe("MCP status query identity", () => {
+  test("joins in-flight status for equivalent Windows directory spellings without rewriting the request", async () => {
+    for (const [raw, canonical] of [
+      ["C:\\Work\\App\\", "C:/Work/App"],
+      ["\\\\Host\\Share\\Work\\App\\", "//Host/Share/Work/App"],
+      ["C:\\", "C:/"],
+    ]) {
+      const fixture = await mcpStatusFixture()
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      try {
+        const sdk = createDeepAgentCodeClient({ baseUrl: fixture.baseUrl, throwOnError: true, directory: raw })
+        const first = client.fetchQuery(loadMcpQuery(ServerScope.local, raw, sdk))
+        await fixture.started
+        const second = client.fetchQuery(loadMcpQuery(ServerScope.local, canonical, sdk))
+        fixture.release()
+        const values = await Promise.all([first, second])
+        values.forEach((value) =>
+          expect(value).toEqual({
+            fixture: { status: "disconnected", authStatus: "not_authenticated", reason: "explicit_connect_required" },
+          }),
+        )
+        expect(fixture.requests).toEqual([{ method: "GET", directory: raw }])
+        expect(
+          client
+            .getQueryCache()
+            .getAll()
+            .map((query) => query.queryKey),
+        ).toEqual([[ServerScope.local, canonical, "mcp"]])
+      } finally {
+        client.clear()
+        await fixture.close()
+      }
+    }
+  })
+
+  test("isolates case, drive, UNC authority, POSIX backslash and server scope", async () => {
+    const fixture = await mcpStatusFixture()
+    const remote = ServerScope.fromServerKey(ServerConnection.Key.make("http://fixture.invalid"))
+    const inputs = [
+      { directory: "C:/Work/App", scope: ServerScope.local },
+      { directory: "C:/Work/app", scope: ServerScope.local },
+      { directory: "c:/Work/App", scope: ServerScope.local },
+      { directory: "D:/Work/App", scope: ServerScope.local },
+      { directory: "\\\\Host\\Share\\App", scope: ServerScope.local },
+      { directory: "\\\\Other\\Share\\App", scope: ServerScope.local },
+      { directory: "/work/a\\b", scope: ServerScope.local },
+      { directory: "/work/a/b", scope: ServerScope.local },
+      { directory: "C:/Work/App", scope: remote },
+    ]
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    try {
+      const first = inputs[0]
+      const pending = [
+        client.fetchQuery(
+          loadMcpQuery(
+            first.scope,
+            first.directory,
+            createDeepAgentCodeClient({ baseUrl: fixture.baseUrl, throwOnError: true, directory: first.directory }),
+          ),
+        ),
+      ]
+      await fixture.started
+      pending.push(
+        ...inputs
+          .slice(1)
+          .map((input) =>
+            client.fetchQuery(
+              loadMcpQuery(
+                input.scope,
+                input.directory,
+                createDeepAgentCodeClient({ baseUrl: fixture.baseUrl, throwOnError: true, directory: input.directory }),
+              ),
+            ),
+          ),
+      )
+      fixture.release()
+      await Promise.all(pending)
+      expect(fixture.requests.map((request) => request.directory).toSorted()).toEqual(
+        inputs.map((input) => input.directory).toSorted(),
+      )
+      expect(fixture.requests.every((request) => request.method === "GET")).toBe(true)
+      expect(client.getQueryCache().getAll().length).toBe(inputs.length)
+    } finally {
+      client.clear()
+      await fixture.close()
+    }
   })
 })

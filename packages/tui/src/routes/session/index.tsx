@@ -1,6 +1,7 @@
 import { createEventWorkOwner, DialogEventWork } from "../../component/dialog-event-work"
 import { createEventValidationOwner, DialogEventValidation } from "../../component/dialog-event-validation"
 import { DialogBrowserControl } from "../../component/dialog-browser-control"
+import { DialogSharedBrowser } from "../../component/dialog-shared-browser"
 import { openGoalPlan } from "../../component/dialog-goal-plan"
 import {
   batch,
@@ -508,6 +509,37 @@ export function Session() {
     }
   }
 
+  function openSharedBrowser() {
+    const sessionID = route.sessionID
+    if (!sessionID) return
+    const client = sdk.client
+    const directory = project.instance.directory()
+    const workspace = project.workspace.current()
+    dialog.replace(() => (
+      <DialogSharedBrowser
+        sessionID={sessionID}
+        onUse={(resourceID) => {
+          if (
+            !validationOwner() ||
+            sdk.client !== client ||
+            route.type !== "session" ||
+            route.sessionID !== sessionID ||
+            project.instance.directory() !== directory ||
+            project.workspace.current() !== workspace
+          )
+            return
+          const input = promptRef.current
+          if (!input) return
+          input.set({
+            ...input.current,
+            input: `${input.current.input}\nshared browser resourceID: ${resourceID}`.trimStart(),
+          })
+          input.focus()
+        }}
+      />
+    ))
+  }
+
   const sessionCommandList = createMemo(() => [
     ...(navigation.canReturnToIM()
       ? [
@@ -693,11 +725,23 @@ export function Session() {
         const client = sdk.client
         const directory = project.instance.directory()
         const workspaceID = project.workspace.current()
-        dialog.replace(() => <DialogEventWork sessionID={sessionID}
-          active={() => eventWorkOwner() && sdk.client === client && route.type === "session" &&
-            route.sessionID === sessionID && project.instance.directory() === directory &&
-            project.workspace.current() === workspaceID}
-          onOpenSession={(id) => { dialog.clear(); navigate({ type: "session", sessionID: id }) }} />)
+        dialog.replace(() => (
+          <DialogEventWork
+            sessionID={sessionID}
+            active={() =>
+              eventWorkOwner() &&
+              sdk.client === client &&
+              route.type === "session" &&
+              route.sessionID === sessionID &&
+              project.instance.directory() === directory &&
+              project.workspace.current() === workspaceID
+            }
+            onOpenSession={(id) => {
+              dialog.clear()
+              navigate({ type: "session", sessionID: id })
+            }}
+          />
+        ))
       },
     },
     {
@@ -722,6 +766,14 @@ export function Session() {
       },
     },
     {
+      title: i18n.t("tui.browser.shared.title"),
+      desc: i18n.t("tui.browser.shared.hint"),
+      value: "session.browser.shared",
+      category: i18n.t("tui.category.session"),
+      slash: { name: "browser-shared" },
+      run: openSharedBrowser,
+    },
+    {
       title: i18n.t("tui.browser.control.title"),
       desc: i18n.t("tui.browser.control.description"),
       value: "session.browser",
@@ -736,15 +788,36 @@ export function Session() {
         dialog.replace(() => (
           <DialogBrowserControl
             sessionID={sessionID}
+            onOpenShared={() => {
+              if (
+                sdk.client !== client ||
+                route.type !== "session" ||
+                route.sessionID !== sessionID ||
+                project.instance.directory() !== directory ||
+                project.workspace.current() !== workspace
+              )
+                return
+              openSharedBrowser()
+            }}
             onUse={(controlID, script) => {
-              if (!validationOwner() || sdk.client !== client || route.type !== "session" || route.sessionID !== sessionID ||
-                project.instance.directory() !== directory || project.workspace.current() !== workspace) return
+              if (
+                !validationOwner() ||
+                sdk.client !== client ||
+                route.type !== "session" ||
+                route.sessionID !== sessionID ||
+                project.instance.directory() !== directory ||
+                project.workspace.current() !== workspace
+              )
+                return
               const input = promptRef.current
               if (!input) return
               input.set({
                 ...input.current,
-                input: `${input.current.input}\nbrowser controlID: ${controlID}${script
-                  ? `\n${script.mode === "program" ? "Bounded browser program approved; use program with a fresh snapshot/frame and current AX refs bound to target names" : "Read-only page validation approved; use evaluate with a fresh snapshot and frame"}:\n${JSON.stringify(script)}` : ""}`.trimStart(),
+                input: `${input.current.input}\nbrowser controlID: ${controlID}${
+                  script
+                    ? `\n${script.mode === "program" ? "Bounded browser program approved; use program with a fresh snapshot/frame and current AX refs bound to target names" : "Read-only page validation approved; use evaluate with a fresh snapshot and frame"}:\n${JSON.stringify(script)}`
+                    : ""
+                }`.trimStart(),
               })
               input.focus()
             }}

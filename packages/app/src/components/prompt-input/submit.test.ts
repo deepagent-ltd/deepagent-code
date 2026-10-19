@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
+import { createServer, request } from "node:http"
+import { Readable } from "node:stream"
 import type { ContextItem, Prompt } from "@/context/prompt"
 import { toV2Prompt, type SessionStatus } from "@deepagent-code/sdk/client"
+import type { SharedBrowserPlatform } from "@deepagent-code/core/browser/shared-platform"
+import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
+import { Hash } from "@deepagent-code/core/util/hash"
 
 // Bun module mocks survive mock.restore(); later SDK integration files need the original export table.
 const sdkClient = { ...(await import("@deepagent-code/sdk/client")) }
@@ -65,7 +70,10 @@ let variant: string | undefined
 let promptMode: "direct" | "intelligence" | "wish" = "direct"
 let appLocale = "en"
 let releaseDelayedPrompt: (() => void) | undefined
+let prepareTransportURL: string | undefined
 const rejectedAdmissionReceipts = new Set<string>()
+let ownerBridge: Pick<SharedBrowserPlatform, "stampInput" | "sealInput"> | undefined
+const sentOwnerHeaders: Array<Record<string, string> | undefined> = []
 
 const promptValue: Prompt = [{ type: "text", content: "ls", start: 0, end: 2 }]
 const promptContextItems: Array<ContextItem & { key: string }> = []
@@ -100,17 +108,21 @@ const clientFor = (directory: string) => {
     },
     v2: {
       session: {
-        prompt: async (payload: {
-          id?: string
-          delivery?: "queue" | "steer"
-          prompt: {
-            text: string
-            metadata?: unknown
-            files?: unknown[]
-            agents?: unknown[]
-            intent?: { id?: string; source?: string; variant?: string }
-          }
-        }) => {
+        prompt: async (
+          payload: {
+            id?: string
+            delivery?: "queue" | "steer"
+            prompt: {
+              text: string
+              metadata?: unknown
+              files?: unknown[]
+              agents?: unknown[]
+              intent?: { id?: string; source?: string; variant?: string }
+            }
+          },
+          options?: { headers?: Record<string, string> },
+        ) => {
+          sentOwnerHeaders.push(options?.headers)
           const sent = {
             directory,
             delivery: payload.delivery,
@@ -165,6 +177,22 @@ const clientFor = (directory: string) => {
           text,
         })
         preparedIntents.push({ intentID: payload.body?.intent_id, source: payload.body?.intent_source })
+        if (prepareTransportURL) {
+          // Happy DOM owns this file's EventTarget globals; use actual Node HTTP rather
+          // than mixing its signal with Bun's branded native fetch implementation.
+          return new Promise<{ data: ReadableStream<Uint8Array> }>((resolve, reject) => {
+            const call = request(prepareTransportURL!, { method: "POST" }, (response) => {
+              // Node and DOM declarations spell the standard reader overloads differently.
+              resolve({ data: Readable.toWeb(response) as unknown as ReadableStream<Uint8Array> })
+            })
+            const abort = () => call.destroy(new Error("Own prepare transport aborted"))
+            payload.signal?.addEventListener("abort", abort, { once: true })
+            call.once("close", () => payload.signal?.removeEventListener("abort", abort))
+            call.on("error", reject)
+            if (payload.signal?.aborted) abort()
+            else call.end(JSON.stringify(payload.body))
+          })
+        }
         if (text === "prepare fails") {
           throw new Error("POST /session/ses_1/prompt_prepare returned 400", {
             cause: {
@@ -422,6 +450,7 @@ beforeAll(async () => {
   mock.module("@/context/platform", () => ({
     usePlatform: () => ({
       fetch: fetch,
+      sharedBrowser: ownerBridge,
     }),
   }))
 
@@ -438,6 +467,7 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  prepareTransportURL = undefined
   selectedAgent = "agent"
   effectiveAgent = "agent"
   for (const key of Object.keys(goals)) delete goals[key]
@@ -468,6 +498,8 @@ beforeEach(() => {
   releaseDelayedPrompt?.()
   releaseDelayedPrompt = undefined
   rejectedAdmissionReceipts.clear()
+  ownerBridge = undefined
+  sentOwnerHeaders.length = 0
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
 })
 
@@ -961,7 +993,7 @@ describe("prompt submit worktree selection", () => {
 
   // D1: a prepare stream that never emits its terminal event (hung refinement / dropped body)
   // must time out and degrade to direct instead of locking the composer forever.
-  test("times out a stalled prepare stream and degrades to direct", async () => {
+  test("times out a stalled prepare stream and preserves the draft without automatic dispatch", async () => {
     params = { id: "session-1" }
     promptMode = "intelligence"
     promptValue[0] = { type: "text", content: "prepare stalls", start: 0, end: 14 }
@@ -988,15 +1020,70 @@ describe("prompt submit worktree selection", () => {
     await new Promise((resolve) => setTimeout(resolve, 300))
     await flushAsyncSubmit()
 
-    expect(sentPromptAsync[0]?.text).toBe("prepare stalls")
-    expect(sentPromptAsync[0]?.metadata).toEqual({
-      deepagent: {
-        agent_mode_override: "general",
-        prompt_pipeline: {
-          mode: "direct_override",
-        },
-      },
-    })
+    expect(sentPromptAsync).toHaveLength(0)
+    expect(promptValue[0]?.type === "text" && promptValue[0].content).toBe("prepare stalls")
+    expect(toastCalls[0]?.title).toBe("Prompt preparation timed out")
+  })
+
+  test("absolute prepare deadline closes real HTTP before headers and despite continuous progress", async () => {
+    for (const mode of ["headers", "progress"] as const) {
+      params = { id: "session-1" }
+      promptMode = "intelligence"
+      promptValue[0] = { type: "text", content: `real ${mode}`, start: 0, end: 20 }
+      const facts = { requests: 0, closed: 0, progress: 0 }
+      const server = createServer((request, response) => {
+        facts.requests++
+        request.resume()
+        const timer =
+          mode === "progress"
+            ? setInterval(() => {
+                facts.progress++
+                response.write(`data: ${JSON.stringify({ type: "progress", preview: "Waiting" })}\n\n`)
+              }, 20)
+            : undefined
+        response.on("close", () => {
+          clearInterval(timer)
+          facts.closed++
+        })
+        if (mode === "progress") {
+          response.writeHead(200, { "content-type": "text/event-stream" })
+          response.write('data: {"type":"started"}\n\n')
+        }
+      })
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+      const address = server.address()
+      if (!address || typeof address === "string") throw new Error("Own HTTP fixture has no loopback port")
+      prepareTransportURL = `http://127.0.0.1:${address.port}/prepare`
+      try {
+        const submit = createPromptSubmit({
+          info: () => ({ id: "session-1" }),
+          imageAttachments: () => [],
+          commentCount: () => 0,
+          autoAccept: () => false,
+          mode: () => "normal",
+          working: () => false,
+          editor: () => undefined,
+          queueScroll: () => undefined,
+          promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+          addToHistory: () => undefined,
+          resetHistoryNavigation: () => undefined,
+          setMode: () => undefined,
+          setPopover: () => undefined,
+          onSubmit: () => undefined,
+        })
+        await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+        await new Promise((resolve) => setTimeout(resolve, 350))
+        expect(facts.requests).toBe(1)
+        expect(facts.closed).toBe(1)
+        expect(sentPromptAsync).toHaveLength(0)
+        expect(promptValue[0]?.type === "text" && promptValue[0].content).toBe(`real ${mode}`)
+        if (mode === "progress") expect(facts.progress).toBeGreaterThan(1)
+      } finally {
+        prepareTransportURL = undefined
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
+    }
   })
 
   test("stops intelligence prompt preparation without submitting", async () => {
@@ -1116,6 +1203,26 @@ describe("prompt submit worktree selection", () => {
   })
 
   test("reuses submission identity when the durable admission receipt is lost", async () => {
+    const origins: string[] = []
+    ownerBridge = {
+      stampInput: async (input) => {
+        origins.push("stamp")
+        return {
+          inputID: input.inputID,
+          originalSubmissionID: input.originalSubmissionID,
+          rootSessionID: input.sessionID,
+          mainIncarnation: "fixture-main",
+          rawInputHash: Hash.sha256(input.rawInput),
+          sourceKind: "gui_composer",
+          sourceBindingHash: "a".repeat(64),
+          submissionOrder: origins.length,
+        }
+      },
+      sealInput: async (input) => {
+        origins.push("seal")
+        return { ...input.stamp, promptHash: Hash.sha256(CanonicalJson.stringify(input.prompt)) }
+      },
+    }
     params = { id: "session-1" }
     promptValue[0] = { type: "text", content: "receipt lost", start: 0, end: 12 }
     const context = {
@@ -1163,6 +1270,9 @@ describe("prompt submit worktree selection", () => {
     expect(sentPromptAsync[0]?.intentID).toBeDefined()
     expect(sentPromptAsync[1]?.intentID).toBe(sentPromptAsync[0]?.intentID)
     expect(sentPromptAsync[1]?.parts).toEqual(sentPromptAsync[0]?.parts)
+    expect(origins).toEqual(["stamp", "seal"])
+    expect(sentOwnerHeaders[0]?.["x-dac-user-input"]).toBeTruthy()
+    expect(sentOwnerHeaders[1]).toEqual(sentOwnerHeaders[0])
 
     promptContextItems.push({ ...context, key: "new-ui-key-after-success" })
     await submit.handleSubmit(event)

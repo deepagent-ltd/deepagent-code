@@ -51,6 +51,7 @@ import {
   acceptsSessionPlanUpdate,
   hasSessionPlanIdentityConflict,
   sessionPlanCursor,
+  sessionGoalFromStatus,
   type SessionPlan,
   type SessionPlanStep,
   type SessionGoal,
@@ -58,6 +59,12 @@ import {
 } from "./global-sync/types"
 
 export type { SessionPlan, SessionPlanStep, SessionGoal }
+
+export function scheduleServerEventStart(start: () => unknown) {
+  // Hidden desktop windows can pause animation frames while their Sessions keep running.
+  const timer = setTimeout(() => void start(), 0)
+  return () => clearTimeout(timer)
+}
 
 export async function syncRetainedSessionPlanSnapshots(input: {
   stores: Readonly<Record<string, { readonly session: readonly { readonly id: string }[] }>>
@@ -101,7 +108,7 @@ type GlobalStore = {
 
 export const loadMcpQuery = (scope: ServerScope, directory: string, sdk: DeepAgentCodeClient) =>
   queryOptions({
-    queryKey: [scope, directory, "mcp"] as const,
+    queryKey: [scope, directoryKey(directory), "mcp"] as const,
     queryFn: () => sdk.mcp.status().then((r) => r.data ?? {}),
   })
 
@@ -234,14 +241,6 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
 
   let bootedAt = 0
   let bootingRoot = false
-  let eventFrame: number | undefined
-  let eventTimer: ReturnType<typeof setTimeout> | undefined
-
-  onCleanup(() => {
-    if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)
-    if (eventTimer !== undefined) clearTimeout(eventTimer)
-  })
-
   const setProjects = (next: Project[] | ((draft: Project[]) => Project[])) => {
     setGlobalStore("project", next)
   }
@@ -340,7 +339,8 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
           ...(current?.goalId === goal.goalId
             ? { ledger: goal.ledger, stallCount: goal.stallCount, gaps: goal.gaps }
             : {}),
-          eventHint: (current?.eventHint ?? 0) + 1,
+          eventHint:
+            !current || current.goalId === goal.goalId ? (current?.eventHint ?? 0) + 1 : current.eventHint,
         }),
       )
       return
@@ -356,7 +356,11 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       goalReloads.add(key)
       return pending
     }
-    const previous = { goalId: globalStore.session_goal[sessionID]?.goalId, write: goalWrites.get(sessionID) ?? 0 }
+    const previous = {
+      goalId: globalStore.session_goal[sessionID]?.goalId,
+      write: goalWrites.get(sessionID) ?? 0,
+      eventHint: globalStore.session_goal[sessionID]?.eventHint ?? 0,
+    }
     const promise = GoalClient.status(sdkFor(directory) as unknown as GoalClient.Client, sessionID)
       .then((snapshot) => {
         if (goalDisposed) return
@@ -367,21 +371,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
           return
         }
         if (!GoalClient.accepts(current?.control, snapshot)) return
-        setSessionGoal(
-          sessionID,
-          {
-            goalId: snapshot.goalId,
-            planDocId: snapshot.planDocId,
-            phase: snapshot.phase,
-            control: snapshot,
-            ledger:
-              current?.goalId === snapshot.goalId ? current.ledger : { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0 },
-            stallCount: current?.goalId === snapshot.goalId ? current.stallCount : 0,
-            gaps: current?.goalId === snapshot.goalId ? current.gaps : [],
-            eventHint: current?.eventHint,
-          },
-          { source: "status" },
-        )
+        setSessionGoal(sessionID, sessionGoalFromStatus(current, snapshot, previous.eventHint), { source: "status" })
       })
       .finally(() => {
         goalLoads.delete(key)
@@ -704,20 +694,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   })
 
   onMount(() => {
-    if (typeof requestAnimationFrame === "function") {
-      eventFrame = requestAnimationFrame(() => {
-        eventFrame = undefined
-        eventTimer = setTimeout(() => {
-          eventTimer = undefined
-          void serverSDK.event.start()
-        }, 0)
-      })
-    } else {
-      eventTimer = setTimeout(() => {
-        eventTimer = undefined
-        void serverSDK.event.start()
-      }, 0)
-    }
+    onCleanup(scheduleServerEventStart(() => serverSDK.event.start()))
   })
 
   const projectApi = {
@@ -747,11 +724,12 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
 
   const updateConfigMutation = useMutation(() => ({
     mutationFn: (config: Config) => serverSDK.client.global.config.update({ config }),
-    onError: (error) => showToast({
-      variant: "error",
-      title: language.t("common.requestFailed"),
-      description: formatServerError(error, language.t),
-    }),
+    onError: (error) =>
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: formatServerError(error, language.t),
+      }),
     onSuccess: () => {
       // Invalidate all provider queries so newly configured custom providers
       // appear immediately in the available provider list across all directories.

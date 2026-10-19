@@ -1134,6 +1134,7 @@ export function MessageTimeline(props: {
   }
 
   const [exportProgress, setExportProgress] = createSignal("")
+  const [exportSaving, setExportSaving] = createSignal(false)
   const [bundleShare, setBundleShare] = createSignal<Record<string, { url: string; revokeToken: string }>>((() => {
     if (typeof localStorage === "undefined") return {}
     try {
@@ -1190,11 +1191,12 @@ export function MessageTimeline(props: {
     if (exportProgress()) return
     const session = sync.session.get(sessionID)
     const base = (session?.title || sessionID).replace(/[^\w\u4e00-\u9fff-]+/g, "-").slice(0, 60) || sessionID
-    exportAbort = new AbortController()
+    const abort = new AbortController()
+    exportAbort = abort
     setExportProgress(language.t("session.bundle.export.preparing"))
     try {
       const response = await sdk.client.session.exportBundleStream(
-        { sessionID, tier, redact: true }, { throwOnError: true, signal: exportAbort.signal, sseMaxRetryAttempts: 1 },
+        { sessionID, tier, redact: true }, { throwOnError: true, signal: abort.signal, sseMaxRetryAttempts: 1 },
       )
       let bundle = ""
       for await (const raw of response.stream) {
@@ -1203,8 +1205,12 @@ export function MessageTimeline(props: {
         if (event.type === "error") throw new Error(event.message ?? "Export failed")
         if (event.type === "result") bundle = event.bundle ?? ""
       }
+      if (abort.signal.aborted) return
       if (!bundle) throw new Error("Export ended without a bundle")
       const bytes = Uint8Array.from(atob(bundle), (character) => character.charCodeAt(0))
+      // Electron's save dialog is cancelled in the native dialog, not by aborting
+      // the completed HTTP stream. Do not offer a nonfunctional Cancel action.
+      setExportSaving(true)
       setExportProgress(language.t("session.bundle.export.saving"))
       const name = `${base}-${tier}.zip`
       if (platform.saveFileDialog) {
@@ -1226,11 +1232,12 @@ export function MessageTimeline(props: {
         title: language.t("session.bundle.export.success"),
       })
     } catch (err) {
-      if (exportAbort.signal.aborted) return
+      if (abort.signal.aborted) return
       console.error("Failed to export session ZIP", err)
       showToast({ title: err instanceof Error ? err.message : language.t("common.requestFailed") })
     } finally {
       exportAbort = undefined
+      setExportSaving(false)
       setExportProgress("")
     }
   }
@@ -1790,7 +1797,9 @@ export function MessageTimeline(props: {
       <Show when={exportProgress()}>
         <div class="absolute left-4 right-4 top-4 z-[70] rounded-md bg-surface-base px-4 py-3 shadow-lg md:left-12 md:right-12" role="status">
           <span>{exportProgress()}</span>
-          <button class="ml-4 underline" onClick={() => exportAbort?.abort()}>{language.t("session.bundle.export.cancel")}</button>
+          <Show when={exportAbort && !exportSaving()}>
+            <button class="ml-4 underline" onClick={() => exportAbort?.abort()}>{language.t("session.bundle.export.cancel")}</button>
+          </Show>
         </div>
       </Show>
       <Show when={recoveryStatus()}>
@@ -1812,6 +1821,7 @@ export function MessageTimeline(props: {
       />
       <div
         class="absolute left-1/2 -translate-x-1/2 bottom-6 z-[60] pointer-events-none transition-all duration-200 ease-out"
+        inert={!props.scroll.overflow || !props.scroll.jump}
         classList={{
           "opacity-100 translate-y-0 scale-100": props.scroll.overflow && props.scroll.jump,
           "opacity-0 translate-y-2 scale-95 pointer-events-none": !props.scroll.overflow || !props.scroll.jump,
