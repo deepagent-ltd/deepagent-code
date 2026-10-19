@@ -2045,4 +2045,10 @@ export const dict = {
   "settings.im.entitlement.serviceRequired": "請先設定 IM 服務位址，再檢查或啟用本裝置。",
   "im.activation.codeHint":
     "兌換既有的 IM 專用啟用碼，有效期限以服務傳回的權益紀錄為準。無需提供付費 API Key，兌換不會再次扣除 credits。",
+  "im.activation.name": "IM 使用者名稱",
+  "im.facade.claim.name.placeholder": "你的 IM 使用者名稱",
+  "im.facade.name.rule":
+    "用於讓聯絡人以完整使用者名稱找到你，也會顯示於聊天中；可在「訊息 → 使用者設定」修改。組織內唯一，1–20 個漢字、字母或數字（不區分大小寫與全半形）。",
+  "im.facade.identity.rename": "修改 IM 使用者名稱",
+  "im.facade.identity.rename.placeholder": "新的 IM 使用者名稱",
 } satisfies Partial<Record<Keys, string>>

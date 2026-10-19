@@ -1568,9 +1568,10 @@ export const dict = {
   // ── B2 多用户门面 ───────────────────────────────────────────────────────────
   "im.facade.claim.title": "认领你的 IM 身份",
   "im.facade.claim.description": "这个服务器 key 还没有 IM 身份。选一个名字即可加入组织内的消息网络。",
-  "im.facade.claim.name.placeholder": "你的显示名",
+  "im.facade.claim.name.placeholder": "你的 IM 用户名",
   "im.facade.claim.submit": "认领",
-  "im.facade.name.rule": "1-20 个汉字/字母/数字（不区分大小写与全半角）",
+  "im.facade.name.rule":
+    "用于联系人按完整用户名找到你，也会显示在聊天中；可在“消息 → 用户设置”修改。组织内唯一，1–20 个汉字、字母或数字（不区分大小写与全半角）。",
   "im.facade.name.error.empty": "名字不能为空",
   "im.facade.name.error.too_long": "名字过长（最多 20 个字符）",
   "im.facade.name.error.invalid_chars": "只允许汉字、字母和数字",
@@ -1587,8 +1588,8 @@ export const dict = {
   "im.facade.reconnecting": "正在连接…",
   "im.facade.error.im_service_changed": "IM 服务地址已变更，请确认后重新连接。重新连接不会购买激活权益或扣费。",
   "im.facade.identity.uuid": "ID {{uuid}}",
-  "im.facade.identity.rename": "改名",
-  "im.facade.identity.rename.placeholder": "新的显示名",
+  "im.facade.identity.rename": "修改 IM 用户名",
+  "im.facade.identity.rename.placeholder": "新的 IM 用户名",
   "im.facade.identity.rebind": "更换 key",
   "im.facade.rebind.title": "将 IM 身份迁移到新 key",
   "im.facade.rebind.description":
@@ -2883,7 +2884,7 @@ export const dict = {
   "im.activation.method": "激活方式",
   "im.activation.method.code": "兑换 IM 激活码",
   "im.activation.method.key": "使用付费 API key 激活",
-  "im.activation.name": "IM 显示名称",
+  "im.activation.name": "IM 用户名",
   "im.activation.key": "手填 DeepAgent API 付费 key",
   "im.activation.code": "IM 专用激活码",
   "im.activation.codeHint":

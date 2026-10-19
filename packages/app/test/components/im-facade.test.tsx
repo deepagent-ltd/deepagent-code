@@ -184,6 +184,8 @@ describe("IM identity components", () => {
     expect(client.facadeRename).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole("button", { name: dict["im.facade.identity.rename"] }))
     const input = screen.getByPlaceholderText(dict["im.facade.identity.rename.placeholder"])
+    expect(screen.getByRole("textbox", { name: "New IM username" })).toBe(input)
+    expect(screen.getByText(dict["im.facade.name.rule"]).textContent).toContain("exact username")
     fireEvent.input(input, { target: { value: "ALICE2" } })
     fireEvent.blur(input)
     await user.click(screen.getByRole("button", { name: dict["common.save"] }))

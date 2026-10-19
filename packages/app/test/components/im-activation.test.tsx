@@ -74,6 +74,8 @@ it("code redemption is one explicit action, does not require a paid key and repo
   const activated = vi.fn()
   render(() => <IMActivationPanel client={api} current={() => true} activated={activated} />)
   await fields()
+  expect(screen.getByRole("textbox", { name: "IM username" })).toBeTruthy()
+  expect(screen.getByText(dict["im.facade.name.rule"]).textContent).toContain("exact username")
   expect(api.activate).not.toHaveBeenCalled()
   expect(screen.queryByRole("checkbox")).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: dict["im.activation.redeem"] }))

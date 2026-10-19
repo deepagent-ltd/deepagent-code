@@ -1701,9 +1701,10 @@ export const dict = {
   "im.facade.claim.title": "Claim your IM identity",
   "im.facade.claim.description":
     "This server key has no IM identity yet. Pick a name to join your organization's messaging.",
-  "im.facade.claim.name.placeholder": "Your display name",
+  "im.facade.claim.name.placeholder": "Your IM username",
   "im.facade.claim.submit": "Claim",
-  "im.facade.name.rule": "1–20 characters: CJK characters, letters, or digits (case-insensitive, full-width folded)",
+  "im.facade.name.rule":
+    "Contacts can find you by this exact username, which also appears in chats. Change it in Messages → User settings. Unique within your organization; 1–20 Han characters, letters or digits (case-insensitive, full-width folded).",
   "im.facade.name.error.empty": "Name must not be empty",
   "im.facade.name.error.too_long": "Name is too long (max 20 characters)",
   "im.facade.name.error.invalid_chars": "Only CJK characters, letters, and digits are allowed",
@@ -1721,8 +1722,8 @@ export const dict = {
   "im.facade.error.im_service_changed":
     "The IM service address changed. Reconnect when you are ready; reconnecting does not purchase activation or charge credits.",
   "im.facade.identity.uuid": "ID {{uuid}}",
-  "im.facade.identity.rename": "Rename",
-  "im.facade.identity.rename.placeholder": "New display name",
+  "im.facade.identity.rename": "Change IM username",
+  "im.facade.identity.rename.placeholder": "New IM username",
   "im.facade.identity.rebind": "Change key",
   "im.facade.rebind.title": "Move IM identity to a new key",
   "im.facade.rebind.description":
@@ -3076,7 +3077,7 @@ export const dict = {
   "im.activation.method": "Activation method",
   "im.activation.method.code": "Redeem an IM activation code",
   "im.activation.method.key": "Activate with a paid API key",
-  "im.activation.name": "IM display name",
+  "im.activation.name": "IM username",
   "im.activation.key": "Enter a paid DeepAgent API key",
   "im.activation.code": "IM activation code",
   "im.activation.codeHint":

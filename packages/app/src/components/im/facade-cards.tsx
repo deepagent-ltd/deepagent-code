@@ -187,26 +187,29 @@ export const IdentityCard: Component<{ status: IMFacadeStatus; onChanged: () => 
         </div>
       </div>
       <Show when={editing() !== null}>
-        <div class="flex gap-2">
-          <Button
-            variant="primary"
-            size="small"
-            disabled={busy() || !editing()?.trim()}
-            onClick={() => void submitRename()}
-          >
-            {language.t("common.save")}
-          </Button>
-          <Button
-            variant="secondary"
-            size="small"
-            disabled={busy()}
-            onClick={() => {
-              setEditing(null)
-              setFailure(null)
-            }}
-          >
-            {language.t("common.cancel")}
-          </Button>
+        <div class="flex flex-col gap-2">
+          <p class="text-12-regular text-text-weak">{language.t("im.facade.name.rule")}</p>
+          <div class="flex gap-2">
+            <Button
+              variant="primary"
+              size="small"
+              disabled={busy() || !editing()?.trim()}
+              onClick={() => void submitRename()}
+            >
+              {language.t("common.save")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="small"
+              disabled={busy()}
+              onClick={() => {
+                setEditing(null)
+                setFailure(null)
+              }}
+            >
+              {language.t("common.cancel")}
+            </Button>
+          </div>
         </div>
       </Show>
       <div class="flex items-center gap-2 text-11-regular text-text-weak">
