@@ -1,3 +1,4 @@
+import { SettingsCompaction } from "./compaction"
 import { Component, For, Show, createMemo, createResource, onMount } from "solid-js"
 import { ButtonV2 } from "@deepagent-code/ui/v2/button-v2"
 import { Icon } from "@deepagent-code/ui/icon"
@@ -433,6 +434,7 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
       <h3 class="settings-v2-section-title">{language.t("settings.general.section.deepagent")}</h3>
 
       <SettingsListV2>
+        <SettingsCompaction />
         <SettingsCollaborationMode
           modes={collaborationModes}
           loading={collaborationModes.loading}

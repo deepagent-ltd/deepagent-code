@@ -84,7 +84,7 @@ import { formatDuration } from "@/utils/format-duration"
 import { makeTimer } from "@solid-primitives/timer"
 import { MessageComment, SummaryDiff, Timeline, TimelineRow, TimelineRowMap } from "./message-timeline.data"
 import { TurnRail } from "./turn-rail"
-import { TaskProgressPopover } from "./task-progress"
+import { TaskProgressPopover, type TaskProgressGit } from "./task-progress"
 
 const emptyMessages: MessageType[] = []
 const emptyParts: PartType[] = []
@@ -283,12 +283,14 @@ function TimelineDiffSummaryRow(props: {
         setState({
           artifactFiles: [
             ...state.artifactFiles,
-            ...data.files.filter((file) => !existing.has(file.file)).map((file) => ({
-              file: file.file,
-              additions: file.additions,
-              deletions: file.deletions,
-              ...(file.status ? { status: file.status } : {}),
-            })),
+            ...data.files
+              .filter((file) => !existing.has(file.file))
+              .map((file) => ({
+                file: file.file,
+                additions: file.additions,
+                deletions: file.deletions,
+                ...(file.status ? { status: file.status } : {}),
+              })),
           ],
           artifactCursor: data.nextCursor,
           artifactComplete: data.complete,
@@ -350,79 +352,77 @@ function TimelineDiffSummaryRow(props: {
         </Show>
       </div>
       <Show when={!props.artifact || state.artifactOpen}>
-      <div data-component="session-turn-diffs-content">
-        <Accordion
-          multiple
-          style={{ "--sticky-accordion-offset": "44px" }}
-          value={expanded()}
-          onChange={(value) => {
-            const next = Array.isArray(value) ? value : value ? [value] : []
-            setState("expanded", next.slice(-3))
-          }}
-        >
-          <For each={visible()}>
-            {(diff) => {
-              const opened = createMemo(() => expanded().includes(diff.file))
-
-              return (
-                <Accordion.Item value={diff.file}>
-                  <StickyAccordionHeader>
-                    <Accordion.Trigger>
-                      <div data-slot="session-turn-diff-trigger">
-                        <span
-                          data-slot="session-turn-diff-path"
-                          title={diff.file}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onClick={(event) => event.stopPropagation()}
-                        >
-                          <Show when={diff.file.includes("/")}>
-                            <span data-slot="session-turn-diff-directory">{`\u202A${getDirectory(diff.file)}\u202C`}</span>
-                          </Show>
-                          <span data-slot="session-turn-diff-filename">{getFilename(diff.file)}</span>
-                        </span>
-                        <div data-slot="session-turn-diff-meta">
-                          <span data-slot="session-turn-diff-changes">
-                            <DiffChanges changes={diff} />
-                          </span>
-                          <span data-slot="session-turn-diff-chevron">
-                            <Icon name="chevron-down" size="small" />
-                          </span>
-                        </div>
-                      </div>
-                    </Accordion.Trigger>
-                  </StickyAccordionHeader>
-                  <Accordion.Content>
-                    <Show when={opened()}>
-                      <Show when={props.artifact} fallback={<TimelineDiffView diff={diff} />}>
-                        {(artifact) => (
-                          <TimelineArtifactDiffView
-                            messageID={props.messageID}
-                            artifact={artifact()}
-                            diff={diff}
-                          />
-                        )}
-                      </Show>
-                    </Show>
-                  </Accordion.Content>
-                </Accordion.Item>
-              )
+        <div data-component="session-turn-diffs-content">
+          <Accordion
+            multiple
+            style={{ "--sticky-accordion-offset": "44px" }}
+            value={expanded()}
+            onChange={(value) => {
+              const next = Array.isArray(value) ? value : value ? [value] : []
+              setState("expanded", next.slice(-3))
             }}
-          </For>
-        </Accordion>
-        <Show when={!showAll() && overflow() > 0}>
-          <div data-slot="session-turn-diffs-more" onClick={() => setState("showAll", true)}>
-            {language.t("ui.sessionTurn.diffs.more", { count: String(overflow()) })}
-          </div>
-        </Show>
-        <Show when={props.artifact && !state.artifactComplete && !state.artifactLoading}>
-          <div data-slot="session-turn-diffs-more" onClick={() => void loadManifest()}>
-            {language.t("ui.sessionTurn.diffs.showAll")}
-          </div>
-        </Show>
-        <Show when={state.artifactLoading}>
-          <div data-slot="session-turn-diffs-more"><Spinner /></div>
-        </Show>
-      </div>
+          >
+            <For each={visible()}>
+              {(diff) => {
+                const opened = createMemo(() => expanded().includes(diff.file))
+
+                return (
+                  <Accordion.Item value={diff.file}>
+                    <StickyAccordionHeader>
+                      <Accordion.Trigger>
+                        <div data-slot="session-turn-diff-trigger">
+                          <span
+                            data-slot="session-turn-diff-path"
+                            title={diff.file}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <Show when={diff.file.includes("/")}>
+                              <span data-slot="session-turn-diff-directory">{`\u202A${getDirectory(diff.file)}\u202C`}</span>
+                            </Show>
+                            <span data-slot="session-turn-diff-filename">{getFilename(diff.file)}</span>
+                          </span>
+                          <div data-slot="session-turn-diff-meta">
+                            <span data-slot="session-turn-diff-changes">
+                              <DiffChanges changes={diff} />
+                            </span>
+                            <span data-slot="session-turn-diff-chevron">
+                              <Icon name="chevron-down" size="small" />
+                            </span>
+                          </div>
+                        </div>
+                      </Accordion.Trigger>
+                    </StickyAccordionHeader>
+                    <Accordion.Content>
+                      <Show when={opened()}>
+                        <Show when={props.artifact} fallback={<TimelineDiffView diff={diff} />}>
+                          {(artifact) => (
+                            <TimelineArtifactDiffView messageID={props.messageID} artifact={artifact()} diff={diff} />
+                          )}
+                        </Show>
+                      </Show>
+                    </Accordion.Content>
+                  </Accordion.Item>
+                )
+              }}
+            </For>
+          </Accordion>
+          <Show when={!showAll() && overflow() > 0}>
+            <div data-slot="session-turn-diffs-more" onClick={() => setState("showAll", true)}>
+              {language.t("ui.sessionTurn.diffs.more", { count: String(overflow()) })}
+            </div>
+          </Show>
+          <Show when={props.artifact && !state.artifactComplete && !state.artifactLoading}>
+            <div data-slot="session-turn-diffs-more" onClick={() => void loadManifest()}>
+              {language.t("ui.sessionTurn.diffs.showAll")}
+            </div>
+          </Show>
+          <Show when={state.artifactLoading}>
+            <div data-slot="session-turn-diffs-more">
+              <Spinner />
+            </div>
+          </Show>
+        </div>
       </Show>
     </div>
   )
@@ -469,7 +469,14 @@ function TimelineArtifactDiffView(props: {
       .finally(() => setState("loading", false))
   })
   return (
-    <Show when={state.value} fallback={<Show when={state.loading}><Spinner /></Show>}>
+    <Show
+      when={state.value}
+      fallback={
+        <Show when={state.loading}>
+          <Spinner />
+        </Show>
+      }
+    >
       {(value) => (
         <TimelineDiffView
           diff={{
@@ -523,6 +530,8 @@ export function MessageTimeline(props: {
   scrollToMessage: (message: UserMessage, behavior?: ScrollBehavior) => void
   setActiveMessage: (message: UserMessage | undefined) => void
   onTaskProgressAvailableChange?: (available: boolean) => void
+  taskProgressGit?: TaskProgressGit
+  onTaskProgressOpenChange?: (opened: boolean) => void
 }) {
   let touchGesture: number | undefined
 
@@ -539,6 +548,21 @@ export function MessageTimeline(props: {
 
   let virtualizer: VirtualizerHandle | undefined
   const sessionID = createMemo(() => params.id)
+  const [overview, setOverview] = createStore({ open: "" as "" | "context" | "tasks" })
+  const openOverview = (kind: "context" | "tasks", opened: boolean) => {
+    setOverview("open", opened ? kind : overview.open === kind ? "" : overview.open)
+    props.onTaskProgressOpenChange?.(overview.open === "tasks")
+  }
+  createEffect(
+    on(
+      () => [serverSDK.scope, sdk.directory, sessionID()],
+      () => {
+        setOverview("open", "")
+        props.onTaskProgressOpenChange?.(false)
+      },
+    ),
+  )
+  onCleanup(() => props.onTaskProgressOpenChange?.(false))
   const sessionMessages = createMemo(() => {
     const id = sessionID()
     if (!id) return emptyMessages
@@ -1012,7 +1036,8 @@ export function MessageTimeline(props: {
   }
 
   const shareMutation = useMutation(() => ({
-    mutationFn: (id: string) => serverSDK.client.session.share({ sessionID: id, directory: sdk.directory }, { throwOnError: true }),
+    mutationFn: (id: string) =>
+      serverSDK.client.session.share({ sessionID: id, directory: sdk.directory }, { throwOnError: true }),
     onError: (err) => {
       console.error("Failed to share session", err)
       showToast({
@@ -1024,7 +1049,8 @@ export function MessageTimeline(props: {
   }))
 
   const unshareMutation = useMutation(() => ({
-    mutationFn: (id: string) => serverSDK.client.session.unshare({ sessionID: id, directory: sdk.directory }, { throwOnError: true }),
+    mutationFn: (id: string) =>
+      serverSDK.client.session.unshare({ sessionID: id, directory: sdk.directory }, { throwOnError: true }),
     onError: (err) => {
       console.error("Failed to unshare session", err)
       showToast({
@@ -1139,14 +1165,16 @@ export function MessageTimeline(props: {
 
   const [exportProgress, setExportProgress] = createSignal("")
   const [exportSaving, setExportSaving] = createSignal(false)
-  const [bundleShare, setBundleShare] = createSignal<Record<string, { url: string; revokeToken: string }>>((() => {
-    if (typeof localStorage === "undefined") return {}
-    try {
-      return JSON.parse(localStorage.getItem("deepagent.bundle-shares") ?? "{}")
-    } catch {
-      return {}
-    }
-  })())
+  const [bundleShare, setBundleShare] = createSignal<Record<string, { url: string; revokeToken: string }>>(
+    (() => {
+      if (typeof localStorage === "undefined") return {}
+      try {
+        return JSON.parse(localStorage.getItem("deepagent.bundle-shares") ?? "{}")
+      } catch {
+        return {}
+      }
+    })(),
+  )
   let exportAbort: AbortController | undefined
 
   const shareSessionBundle = async (sessionID: string, tier: "conversation" | "session_logs") => {
@@ -1200,11 +1228,18 @@ export function MessageTimeline(props: {
     setExportProgress(language.t("session.bundle.export.preparing"))
     try {
       const response = await sdk.client.session.exportBundleStream(
-        { sessionID, tier, redact: true }, { throwOnError: true, signal: abort.signal, sseMaxRetryAttempts: 1 },
+        { sessionID, tier, redact: true },
+        { throwOnError: true, signal: abort.signal, sseMaxRetryAttempts: 1 },
       )
       let bundle = ""
       for await (const raw of response.stream) {
-        const event = raw as unknown as { type: string; phase?: string; percent?: number; bundle?: string; message?: string }
+        const event = raw as unknown as {
+          type: string
+          phase?: string
+          percent?: number
+          bundle?: string
+          message?: string
+        }
         if (event.type === "progress") setExportProgress(`${event.phase ?? "Preparing"} ${event.percent ?? 0}%`)
         if (event.type === "error") throw new Error(event.message ?? "Export failed")
         if (event.type === "result") bundle = event.bundle ?? ""
@@ -1799,10 +1834,15 @@ export function MessageTimeline(props: {
   return (
     <div class="relative w-full h-full min-w-0">
       <Show when={exportProgress()}>
-        <div class="absolute left-4 right-4 top-4 z-[70] rounded-md bg-surface-base px-4 py-3 shadow-lg md:left-12 md:right-12" role="status">
+        <div
+          class="absolute left-4 right-4 top-4 z-[70] rounded-md bg-surface-base px-4 py-3 shadow-lg md:left-12 md:right-12"
+          role="status"
+        >
           <span>{exportProgress()}</span>
           <Show when={exportAbort && !exportSaving()}>
-            <button class="ml-4 underline" onClick={() => exportAbort?.abort()}>{language.t("session.bundle.export.cancel")}</button>
+            <button class="ml-4 underline" onClick={() => exportAbort?.abort()}>
+              {language.t("session.bundle.export.cancel")}
+            </button>
           </Show>
         </div>
       </Show>
@@ -1968,8 +2008,16 @@ export function MessageTimeline(props: {
               <Show when={sessionID()} keyed>
                 {(id) => (
                   <div class="shrink-0 flex items-center gap-3">
-                    <SessionContextUsage placement="bottom" />
-                    <TaskProgressPopover />
+                    <SessionContextUsage
+                      placement="bottom"
+                      open={overview.open === "context"}
+                      onOpenChange={(opened) => openOverview("context", opened)}
+                    />
+                    <TaskProgressPopover
+                      open={overview.open === "tasks"}
+                      onOpenChange={(opened) => openOverview("tasks", opened)}
+                      git={props.taskProgressGit}
+                    />
                     <Show when={!parentID()}>
                       <DropdownMenu
                         gutter={4}
@@ -2033,17 +2081,25 @@ export function MessageTimeline(props: {
                               </DropdownMenu.Item>
                             </Show>
                             <DropdownMenu.Item onSelect={() => void exportSession(id, "conversation")}>
-                              <DropdownMenu.ItemLabel>{language.t("session.bundle.export.conversation")}</DropdownMenu.ItemLabel>
+                              <DropdownMenu.ItemLabel>
+                                {language.t("session.bundle.export.conversation")}
+                              </DropdownMenu.ItemLabel>
                             </DropdownMenu.Item>
                             <DropdownMenu.Item onSelect={() => void exportSession(id, "conversation_metadata")}>
-                              <DropdownMenu.ItemLabel>{language.t("session.bundle.export.metadata")}</DropdownMenu.ItemLabel>
+                              <DropdownMenu.ItemLabel>
+                                {language.t("session.bundle.export.metadata")}
+                              </DropdownMenu.ItemLabel>
                             </DropdownMenu.Item>
                             <DropdownMenu.Item onSelect={() => void exportSession(id, "session_logs")}>
-                              <DropdownMenu.ItemLabel>{language.t("session.bundle.export.logs")}</DropdownMenu.ItemLabel>
+                              <DropdownMenu.ItemLabel>
+                                {language.t("session.bundle.export.logs")}
+                              </DropdownMenu.ItemLabel>
                             </DropdownMenu.Item>
                             <Show when={bundleShare()[id]}>
                               <DropdownMenu.Item onSelect={() => void revokeSessionBundle(id)}>
-                                <DropdownMenu.ItemLabel>{language.t("session.bundle.share.revoke")}</DropdownMenu.ItemLabel>
+                                <DropdownMenu.ItemLabel>
+                                  {language.t("session.bundle.share.revoke")}
+                                </DropdownMenu.ItemLabel>
                               </DropdownMenu.Item>
                             </Show>
                             <DropdownMenu.Item onSelect={() => command.trigger("session.export")}>

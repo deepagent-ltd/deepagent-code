@@ -68,22 +68,23 @@ afterEach(cleanup)
 it("does not display a task trigger or read tasks before a Session exists", () => {
   runtime.sessionID = () => undefined
   render(() => <TaskProgressPopover />)
-  expect(screen.queryByRole("button", { name: dict["workPanel.tasks"] })).toBeNull()
+  expect(screen.queryByRole("button", { name: dict["workPanel.overview"] })).toBeNull()
   expect(runtime.client.session.taskSummary).not.toHaveBeenCalled()
 })
 
 it("opens the task summary on demand and selects readonly details without a child Session navigation", async () => {
   render(() => <TaskProgressPopover />)
   expect(runtime.client.session.taskSummary).not.toHaveBeenCalled()
-  fireEvent.click(screen.getByRole("button", { name: dict["workPanel.tasks"] }))
+  fireEvent.click(screen.getByRole("button", { name: dict["workPanel.overview"] }))
+  fireEvent.click(screen.getByRole("button", { name: /Subtasks/ }))
   await screen.findByText("Readonly task")
   expect(screen.getByText(`${dict["workPanel.result"]}: ${dict["workPanel.resultState.available"]}`)).toBeTruthy()
   expect(screen.queryByText(dict["workPanel.taskState.completed"])).toBeNull()
-  expect(screen.getByText(dict["workPanel.tasksPartial"])).toBeTruthy()
+  expect(screen.getByText(new RegExp(dict["workPanel.loadedOnly"]))).toBeTruthy()
   fireEvent.click(screen.getByRole("button", { name: /Readonly task/ }))
-  expect(runtime.select).toHaveBeenCalledWith("child")
-  expect(runtime.open).toHaveBeenCalledWith("subagents")
-  expect(screen.queryByText("Readonly task")).toBeNull()
+  expect(runtime.select).not.toHaveBeenCalled()
+  expect(runtime.open).not.toHaveBeenCalled()
+  expect(await screen.findByText("Visible result")).toBeTruthy()
 })
 
 it("keeps result availability, task state and notification separate and exposes no task mutation", async () => {
@@ -113,7 +114,8 @@ it("shares one readonly observer across the popover and details until the last v
   const details = render(() => <TaskProgressDetails />)
   await screen.findByText("Visible result")
   const popover = render(() => <TaskProgressPopover />)
-  fireEvent.click(screen.getByRole("button", { name: dict["workPanel.tasks"] }))
+  fireEvent.click(screen.getByRole("button", { name: dict["workPanel.overview"] }))
+  fireEvent.click(screen.getByRole("button", { name: /Subtasks/ }))
   await waitFor(() => expect(screen.getAllByText("Readonly task")).toHaveLength(3))
   expect(runtime.client.session.taskSummary).toHaveBeenCalledTimes(1)
   expect(intervals.mock.calls.filter((call) => call[1] === 5_000)).toHaveLength(1)
@@ -135,7 +137,7 @@ it("has not read tasks while hidden, then shows empty only after a current succe
     data: { parentSessionID: "parent", observedAt: 3, items: [], hasMore: false, nextCursor: null },
   })
   render(() => <TaskProgressPopover />)
-  fireEvent.click(screen.getByRole("button", { name: dict["workPanel.tasks"] }))
+  fireEvent.click(screen.getByRole("button", { name: dict["workPanel.overview"] }))
   expect(screen.getByText(dict["workPanel.tasksPending" as keyof typeof dict] ?? "workPanel.tasksPending")).toBeTruthy()
   expect(screen.queryByText(dict["workPanel.tasksEmpty"])).toBeNull()
   expect(runtime.client.session.taskSummary).not.toHaveBeenCalled()
@@ -162,7 +164,9 @@ it("shows a final result once when the last progress text is the same result", a
   expect(screen.getAllByText("Visible result")).toHaveLength(1)
   const details = screen.getByText("Visible result").closest("section")
   if (!details) throw new Error("The readonly task result section did not render")
-  expect(within(details).getByText(`${dict["workPanel.result"]}: ${dict["workPanel.resultState.available"]}`)).toBeTruthy()
+  expect(
+    within(details).getByText(`${dict["workPanel.result"]}: ${dict["workPanel.resultState.available"]}`),
+  ).toBeTruthy()
 })
 
 it("separates the current plan from subtasks and leaves no old plan after close or scope change", async () => {
@@ -201,7 +205,7 @@ it("separates the current plan from subtasks and leaves no old plan after close 
   const intervals = vi.spyOn(globalThis, "setInterval")
   const result = render(() => <TaskProgressPopover />)
   expect(runtime.client.session.taskSummary).not.toHaveBeenCalled()
-  const trigger = screen.getByRole("button", { name: dict["workPanel.tasks"] })
+  const trigger = screen.getByRole("button", { name: dict["workPanel.overview"] })
   expect(trigger.classList.contains("size-6")).toBe(true)
   expect(trigger.classList.contains("rounded-md")).toBe(true)
   expect(trigger.classList.contains("titlebar-icon")).toBe(false)
@@ -212,11 +216,13 @@ it("separates the current plan from subtasks and leaves no old plan after close 
   const subtasks = screen.getByRole("region", { name: dict["workPanel.subtasks"] })
   expect(within(plan).getByText("2/5")).toBeDefined()
   expect(within(plan).getByText("Review own code and deliver")).toBeDefined()
+  expect(within(plan).queryAllByRole("listitem")).toHaveLength(0)
+  fireEvent.click(within(plan).getByRole("button"))
   expect(within(plan).getAllByRole("listitem")).toHaveLength(5)
   expect(within(plan).getAllByText(dict["workPanel.taskState.completed"])).toHaveLength(2)
-  expect(within(subtasks).getByText("0")).toBeDefined()
+  expect(within(subtasks).getByText("0", { exact: true })).toBeDefined()
   expect(within(subtasks).getByText(dict["workPanel.tasksEmpty"])).toBeDefined()
-  expect(within(plan).queryByRole("button")).toBeNull()
+  expect(within(plan).getByRole("button").getAttribute("aria-expanded")).toBe("true")
   expect(intervals.mock.calls.filter((call) => call[1] === 5_000)).toHaveLength(1)
   const originalSignal = runtime.client.session.taskSummary.mock.calls[0][1].signal as AbortSignal
   fireEvent.click(trigger)
@@ -244,4 +250,103 @@ it("separates the current plan from subtasks and leaves no old plan after close 
   result.unmount()
   expect(runtime.client.session.taskSummary.mock.calls.every((call) => call[1].signal.aborted)).toBe(true)
   intervals.mockRestore()
+})
+
+it("loads real cursor pages, deduplicates child identities and rechecks the first page without navigating away", async () => {
+  const first = {
+    ...item,
+    state: "running",
+    runID: "run",
+    generation: 2,
+    result: { ...item.result, state: "not_available", text: null },
+  }
+  const last = {
+    ...item,
+    childSessionID: "second",
+    title: "Completed task",
+    state: "completed",
+    runID: "run-second",
+    generation: 1,
+  }
+  runtime.client.session.taskSummary.mockImplementation(async (input: { sessionID: string; cursor?: string }) => ({
+    data: {
+      parentSessionID: "parent",
+      observedAt: 3,
+      items: input.cursor ? [{ ...first, generation: 1 }, last] : [first],
+      hasMore: !input.cursor,
+      nextCursor: input.cursor ? null : "next",
+    },
+  }))
+  render(() => <TaskProgressPopover />)
+  fireEvent.click(screen.getByRole("button", { name: dict["workPanel.overview"] }))
+  await screen.findByText("Readonly task")
+  fireEvent.click(screen.getByRole("button", { name: /Subtasks/ }))
+  fireEvent.click(screen.getByRole("button", { name: dict["workPanel.loadMoreTasks"] }))
+  await screen.findByText("Completed task")
+  expect(runtime.client.session.taskSummary.mock.calls.map((call) => call[0])).toEqual([
+    { sessionID: "parent" },
+    { sessionID: "parent" },
+    { sessionID: "parent", cursor: "next" },
+    { sessionID: "parent" },
+  ])
+  expect(screen.getAllByText("Readonly task")).toHaveLength(1)
+  expect(screen.queryByRole("button", { name: dict["workPanel.loadMoreTasks"] })).toBeNull()
+  expect(runtime.select).not.toHaveBeenCalled()
+})
+
+it("opens comparison details and selects only the reference without running a worktree operation", async () => {
+  const compare = vi.fn()
+  const choose = vi.fn()
+  const readRefs = vi.fn()
+  const refresh = vi.fn()
+  render(() => (
+    <TaskProgressPopover
+      git={{
+        summary: {
+          directory: "/owned",
+          repositoryRoot: "/owned",
+          branch: "feature",
+          headOID: "a".repeat(40),
+          baseRef: "refs/remotes/origin/dev",
+          baseOID: "b".repeat(40),
+          mergeBaseOID: "c".repeat(40),
+          startedAt: 1,
+          observedAt: 2,
+          state: "ready",
+          coverage: "complete",
+          stale: false,
+          files: 4,
+          additions: 20,
+          deletions: 3,
+          uncommitted: 2,
+          binary: 0,
+          conflicts: 0,
+          lineStatsComplete: true,
+        },
+        loading: false,
+        failed: false,
+        baseRef: "refs/remotes/origin/dev",
+        refs: [
+          { name: "origin/dev", ref: "refs/remotes/origin/dev", oid: "b".repeat(40), kind: "remote" },
+          { name: "main", ref: "refs/heads/main", oid: "d".repeat(40), kind: "local" },
+        ],
+        refsLoading: false,
+        onOpenRefs: readRefs,
+        onBaseRefChange: choose,
+        onOpenReview: compare,
+        onRefresh: refresh,
+      }}
+    />
+  ))
+  fireEvent.click(screen.getByRole("button", { name: dict["workPanel.overview"] }))
+  const region = screen.getByRole("region", { name: dict["workPanel.changes"] })
+  expect(within(region).getByText(/4 changed files/)).toBeTruthy()
+  const select = within(region).getByRole("combobox", { name: dict["workPanel.referenceBranch"] })
+  fireEvent.focus(select)
+  expect(readRefs).toHaveBeenCalledTimes(1)
+  fireEvent.change(select, { target: { value: "refs/heads/main" } })
+  expect(choose).toHaveBeenCalledWith("refs/heads/main")
+  fireEvent.click(within(region).getByRole("button", { name: /4 changed files/ }))
+  expect(compare).toHaveBeenCalledTimes(1)
+  expect(screen.queryByRole("button", { name: /checkout|merge|switch worktree/i })).toBeNull()
 })
