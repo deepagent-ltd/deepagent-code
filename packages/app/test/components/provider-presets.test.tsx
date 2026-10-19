@@ -146,7 +146,7 @@ it("uses localized protocol and one API qualifier in the Chinese DeepAgent crede
   runtime.dictionary = chinese.dict
   runtime.locale = "zh"
   const data = fixtureForDeepAgent()
-  expect(await screen.findByRole("textbox", { name: "DeepAgent API 密钥" })).toBeTruthy()
+  expect(await screen.findByLabelText("DeepAgent API 密钥")).toBeTruthy()
   expect(
     screen.getByText("输入你的 DeepAgent API 密钥以连接帐户，并在 DeepAgent Code 中使用 DeepAgent 模型。"),
   ).toBeTruthy()
@@ -191,7 +191,8 @@ it("keeps a connected DeepAgent manageable and removes its redundant recommended
 it("probes DeepAgent before saving any credential and confirms the selected remotely returned models", async () => {
   const fixture = fixtureForDeepAgent(false, ["old-catalog-only"])
   const user = userEvent.setup()
-  const input = await screen.findByRole("textbox", { name: /API key/i })
+  const input = await screen.findByLabelText(/API key/i)
+  expect(input.getAttribute("type")).toBe("password")
   await user.type(input, "test-only-key")
   fireEvent.submit(input.closest("form")!)
   const second = await screen.findByRole("checkbox", { name: /Verified two/ })
@@ -232,7 +233,7 @@ it("probes DeepAgent before saving any credential and confirms the selected remo
 it("keeps a manual-only Plan inside its original supplier identity with explicit unverified consent", async () => {
   const data = fixture({ discoveryStatus: 404 })
   mountProvider("alibaba-coding-plan")
-  const input = await screen.findByRole("textbox", { name: /API key/i })
+  const input = await screen.findByLabelText(/API key/i)
   await userEvent.setup().type(input, "plan-test-key")
   fireEvent.submit(input.closest("form")!)
   fireEvent.click(await screen.findByRole("button", { name: dict["provider.connect.models.manual"] }))
@@ -271,7 +272,7 @@ it.each([401, 403, "timeout"] as const)(
   async (discoveryStatus) => {
     const data = fixture({ discoveryStatus })
     mountProvider("alibaba-coding-plan")
-    const input = await screen.findByRole("textbox", { name: /API key/i })
+    const input = await screen.findByLabelText(/API key/i)
     await userEvent.setup().type(input, "rejected-plan-key")
     fireEvent.submit(input.closest("form")!)
     await screen.findByRole("alert")
@@ -302,7 +303,7 @@ it.each(["failure", "empty"] as const)(
   async (discovery) => {
     const data = fixture({ connected: ["deepagent"], discovery })
     mountProvider("deepagent")
-    const input = await screen.findByRole("textbox", { name: /API key/i })
+    const input = await screen.findByLabelText(/API key/i)
     await userEvent.setup().type(input, "replacement-test-key")
     fireEvent.submit(input.closest("form")!)
     await screen.findByRole("alert")
@@ -320,7 +321,7 @@ it.each(["env", "config", "api"] as const)(
   async (source) => {
     const data = fixture({ connected: ["deepagent"], source })
     mountProvider("deepagent")
-    const input = await screen.findByRole("textbox", { name: /API key/i })
+    const input = await screen.findByLabelText(/API key/i)
     fireEvent.submit(input.closest("form")!)
     expect((await screen.findByRole("alert")).textContent).toContain(dict["provider.connect.apiKey.required"])
     expect(data.calls.filter((call) => call.path !== "/provider/auth")).toEqual([])
@@ -330,7 +331,7 @@ it.each(["env", "config", "api"] as const)(
 it("probes Google with its native discovery kind and retains current native model preferences", async () => {
   const data = fixture({ config: { providers: { google: { models: { "verified-two": { disabled: true } } } } } })
   mountProvider("google")
-  const input = await screen.findByRole("textbox", { name: /API key/i })
+  const input = await screen.findByLabelText(/API key/i)
   await userEvent.setup().type(input, "google-test-key")
   fireEvent.submit(input.closest("form")!)
   expect((await screen.findByRole<HTMLInputElement>("checkbox", { name: /Verified one/ })).checked).toBe(true)
@@ -347,7 +348,7 @@ it("probes Google with its native discovery kind and retains current native mode
 it("discloses partial credential save and retries only model preferences after their real SDK failure", async () => {
   const data = fixture({ preferencesFailure: true })
   mountProvider("deepagent")
-  const input = await screen.findByRole("textbox", { name: /API key/i })
+  const input = await screen.findByLabelText(/API key/i)
   await userEvent.setup().type(input, "test-only-key")
   fireEvent.submit(input.closest("form")!)
   await screen.findByRole("checkbox", { name: /Verified one/ })
@@ -362,7 +363,7 @@ it("discloses partial credential save and retries only model preferences after t
 
 it("cancels after remote discovery without persisting the proposed key or model preferences", async () => {
   const data = fixtureForDeepAgent()
-  const input = await screen.findByRole("textbox", { name: /API key/i })
+  const input = await screen.findByLabelText(/API key/i)
   await userEvent.setup().type(input, "cancelled-test-key")
   fireEvent.submit(input.closest("form")!)
   await screen.findByRole("checkbox", { name: /Verified one/ })
@@ -374,7 +375,7 @@ it("switches supplier products without retaining keys, pending discovery or a st
   const data = fixture({ delayedDiscovery: true })
   mountSupplier("zhipuai")
   fireEvent.click(await screen.findByRole("button", { name: /^Zhipu AI(?! Coding)/ }))
-  const input = await screen.findByRole("textbox", { name: /API key/i })
+  const input = await screen.findByLabelText(/API key/i)
   await userEvent.setup().type(input, "api-only-test-key")
   fireEvent.submit(input.closest("form")!)
   await waitFor(() => expect(data.pending.release).toBeTypeOf("function"))
@@ -389,7 +390,7 @@ it("switches supplier products without retaining keys, pending discovery or a st
 
 it("reports actual credential persistence failure and does not save config, dispose or report success", async () => {
   const fixture = fixtureForDeepAgent(true)
-  const input = await screen.findByRole("textbox", { name: /API key/i })
+  const input = await screen.findByLabelText(/API key/i)
   await userEvent.setup().type(input, "test-only-key")
   fireEvent.submit(input.closest("form")!)
   await screen.findByRole("checkbox", { name: /Verified one/ })
@@ -426,7 +427,7 @@ it.each(["zhipuai", "zhipuai-coding-plan", "zai", "zai-coding-plan", "kimi-for-c
   async (providerID) => {
     const data = fixture()
     mountProvider(providerID)
-    const input = await screen.findByRole("textbox", { name: /API key/i })
+    const input = await screen.findByLabelText(/API key/i)
     await userEvent.setup().type(input, "selected-product-test-key")
     fireEvent.submit(input.closest("form")!)
     await screen.findByRole("checkbox", { name: /Verified one/ })

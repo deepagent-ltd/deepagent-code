@@ -338,6 +338,8 @@ export function DialogCustomProvider(props: Props) {
               error={form.err.baseURL}
             />
             <TextField
+              type="password"
+              autocomplete="off"
               label={language.t("provider.custom.field.apiKey.label")}
               placeholder={language.t("provider.custom.field.apiKey.placeholder")}
               description={language.t("provider.custom.field.apiKey.description")}

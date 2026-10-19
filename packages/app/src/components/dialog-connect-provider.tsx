@@ -742,7 +742,8 @@ export function DialogConnectProvider(props: { provider: string; onBack?: () => 
           <TextField
             autofocus
             class="w-full min-w-0"
-            type="text"
+            type="password"
+            autocomplete="off"
             label={language.t("provider.connect.apiKey.label", {
               provider: props.provider === "deepagent" ? "DeepAgent" : provider().name,
             })}
