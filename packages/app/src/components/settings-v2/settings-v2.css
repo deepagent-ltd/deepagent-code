@@ -1,7 +1,7 @@
 @import "@deepagent-code/ui/v2/text-input-v2.css";
 @import "@deepagent-code/ui/v2/button-v2.css";
 
-[data-component="dialog-v2"]:has(.settings-v2-dialog) [data-slot="dialog-container"] {
+[data-component="dialog-v2"][data-variant="settings"]:has(.settings-v2-dialog) [data-slot="dialog-container"] {
   width: min(1080px, calc(100vw - 48px));
   height: min(760px, calc(100dvh - 48px));
   max-width: calc(100vw - 24px);
@@ -9,12 +9,14 @@
   background: var(--workbench-background);
 }
 
-[data-component="dialog-v2"] .settings-v2-dialog {
+[data-component="dialog-v2"][data-variant="settings"] [data-slot="dialog-content"].settings-v2-dialog {
   min-height: 0;
   overflow: hidden;
 }
 
-[data-component="dialog-v2"] .settings-v2-dialog > [data-slot="dialog-header"] {
+[data-component="dialog-v2"][data-variant="settings"]
+  [data-slot="dialog-content"].settings-v2-dialog
+  > [data-slot="dialog-header"] {
   position: absolute;
   top: 12px;
   right: 12px;
@@ -23,7 +25,9 @@
   background: transparent;
 }
 
-[data-component="dialog-v2"] .settings-v2-dialog > [data-slot="dialog-body"] {
+[data-component="dialog-v2"][data-variant="settings"]
+  [data-slot="dialog-content"].settings-v2-dialog
+  > [data-slot="dialog-body"] {
   min-height: 0;
   padding: 0;
   overflow: hidden;
@@ -38,7 +42,8 @@
   overflow: hidden;
 }
 
-.settings-v2[data-orientation="vertical"] > [data-slot="tabs-v2-list"] {
+[data-component="tabs-v2"].settings-v2[data-variant="settings"][data-orientation="vertical"]
+  > [data-slot="tabs-v2-list"] {
   flex: 0 0 200px;
   min-width: 0;
   width: 200px;
@@ -91,7 +96,8 @@
   background: var(--v2-background-bg-layer-01);
 }
 
-.settings-v2 [data-slot="tabs-v2-trigger-wrapper"]:has([data-selected]) {
+[data-component="tabs-v2"].settings-v2[data-variant="settings"][data-orientation="vertical"]
+  [data-slot="tabs-v2-trigger-wrapper"]:has([data-selected]) {
   border-color: transparent;
   border-radius: 8px;
   background: var(--v2-background-bg-layer-02);
@@ -343,7 +349,7 @@
   }
 }
 @media (max-width: 767px) {
-  [data-component="dialog-v2"]:has(.settings-v2-dialog) [data-slot="dialog-container"] {
+  [data-component="dialog-v2"][data-variant="settings"]:has(.settings-v2-dialog) [data-slot="dialog-container"] {
     width: calc(100vw - 24px);
     height: calc(100dvh - 24px);
   }

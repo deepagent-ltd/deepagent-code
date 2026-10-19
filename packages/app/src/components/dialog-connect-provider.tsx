@@ -662,7 +662,9 @@ export function DialogConnectProvider(props: { provider: string }) {
           </p>
         </Show>
         <div class="text-14-regular text-text-base">
-          {language.t("provider.connect.apiKey.description", { provider: provider().name })}
+          {language.t("provider.connect.apiKey.description", {
+            provider: props.provider === "deepagent" ? "DeepAgent" : provider().name,
+          })}
         </div>
         <form onSubmit={handleSubmit} class="flex flex-col items-start gap-4">
           <Show when={!isBuiltinProvider(props.provider)}>
@@ -681,7 +683,9 @@ export function DialogConnectProvider(props: { provider: string }) {
             autofocus
             class="w-full min-w-0"
             type="text"
-            label={language.t("provider.connect.apiKey.label", { provider: provider().name })}
+            label={language.t("provider.connect.apiKey.label", {
+              provider: props.provider === "deepagent" ? "DeepAgent" : provider().name,
+            })}
             placeholder={language.t("provider.connect.apiKey.placeholder")}
             name="apiKey"
             value={formStore.value}

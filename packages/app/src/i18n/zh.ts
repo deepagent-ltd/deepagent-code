@@ -1011,6 +1011,7 @@ export const dict = {
   "provider.custom.field.apiKey.label": "API 密钥",
   "provider.custom.field.apiKey.placeholder": "API 密钥",
   "provider.custom.field.apiKey.description": "可选。如果你通过请求头管理认证，可留空。",
+  "provider.custom.field.protocol.label": "协议",
   "provider.custom.edit.title": "编辑自定义提供方",
   "provider.custom.specWarning":
     "模型规格（上下文窗口、推理能力）是根据公共目录自动补全的默认值，仅供参考。如果你修改它们，我们无法保证模型仍能正常使用。",

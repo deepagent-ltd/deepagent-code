@@ -644,6 +644,7 @@ export const dict = {
   "provider.custom.field.apiKey.label": "API 金鑰",
   "provider.custom.field.apiKey.placeholder": "API 金鑰",
   "provider.custom.field.apiKey.description": "選填。若您透過標頭管理驗證，可留空。",
+  "provider.custom.field.protocol.label": "協定",
   "provider.custom.edit.title": "編輯自訂提供方",
   "provider.custom.specWarning":
     "模型規格（上下文視窗、推理能力）是根據公開目錄自動補全的預設值，僅供參考。若您修改它們，我們無法保證模型仍能正常使用。",

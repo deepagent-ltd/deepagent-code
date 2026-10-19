@@ -12,12 +12,16 @@ const runtime = vi.hoisted(() => ({
   client: undefined as ReturnType<typeof createDeepAgentCodeClient> | undefined,
   sync: (): unknown => ({}),
   toasts: vi.fn(),
+  dictionary: undefined as Record<string, string> | undefined,
+  locale: "en",
 }))
 vi.mock("@/context/language", () => ({
   useLanguage: () => ({
-    locale: () => "en",
+    locale: () => runtime.locale,
     t: (key: keyof typeof dict, params?: Record<string, string | number>) =>
-      (dict[key] ?? key).replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(params?.[name] ?? "")),
+      (runtime.dictionary?.[key] ?? dict[key] ?? key).replace(/\{\{(\w+)\}\}/g, (_, name: string) =>
+        String(params?.[name] ?? ""),
+      ),
   }),
 }))
 vi.mock("@solidjs/router", () => ({ useParams: () => ({}) }))
@@ -84,8 +88,28 @@ function fixture(
   return { all, calls, refresh }
 }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  runtime.dictionary = undefined
+  runtime.locale = "en"
+})
 afterEach(cleanup)
+
+it("uses localized protocol and one API qualifier in the Chinese DeepAgent credential form", async () => {
+  const chinese = await import("@/i18n/zh")
+  runtime.dictionary = chinese.dict
+  runtime.locale = "zh"
+  const data = fixtureForDeepAgent()
+  expect(await screen.findByRole("textbox", { name: "DeepAgent API 密钥" })).toBeTruthy()
+  expect(
+    screen.getByText("输入你的 DeepAgent API 密钥以连接帐户，并在 DeepAgent Code 中使用 DeepAgent 模型。"),
+  ).toBeTruthy()
+  expect(screen.getByText("协议")).toBeTruthy()
+  expect(screen.queryByText("Protocol")).toBeNull()
+  expect(screen.queryByText(/DeepAgent API API/)).toBeNull()
+  expect(data.calls.every((call) => call.path === "/provider/auth")).toBe(true)
+  expect(data.all.get("deepagent")?.name).toBe("DeepAgent API")
+})
 
 it("shows all ten preset brands, independent API/plan/region choices and a custom entry without claiming loaded models", () => {
   fixture()
