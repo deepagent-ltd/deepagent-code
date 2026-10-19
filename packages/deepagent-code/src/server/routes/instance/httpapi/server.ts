@@ -225,7 +225,7 @@ const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.lay
 const imRepositoryLayer = IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))
 // IM 门面（B2，design §2/§4/§7）：new-api 门面的客户端门户 + 内核引擎生命周期的唯一所有者。
 // boot 时按凭据解析落状态机（disabled / claim_required / blocked / active），拿到内核坐标即建成
-// 同步引擎（B1 的 boot 语义收编进 IMFacade.layer：URL 只认 env，key 优先级 auth.json(rebind 持久化)
+// 同步引擎（B1 的 boot 语义收编进 IMFacade.layer：URL只读global im.url，缺省才兼容env；历史key优先级auth.json(rebind持久化)
 // > DEEPAGENT_IM_FACADE_KEY；exchange 失败不阻塞启动——blocked/claim_required 由 GUI 引导恢复）。
 // B1 PoC 直连 env（DEEPAGENT_IM_KERNEL_*）照跑引擎但门面功能关闭。两边都没有 ⇒ 状态 disabled——
 // 单用户路径零内核足迹。门面热路径（claim/retry 后的引擎热启动）在 facade 内部用 SDK 进程单例
@@ -257,25 +257,32 @@ const oversightServicesLayer = Layer.mergeAll(
 // lane reaches the kernel.
 // ServerAgentListProviderLive still requires Agent/InstanceStore from the shared instance graph,
 // so it stays declared here WITHOUT those deps and resolved against that graph.
-function createIMRuntimeLayer(options?: IMFacade.Options) {
-  const facade = IMFacade.layer(options).pipe(
-    Layer.provide(IMDeviceStore.layer),
-    Layer.provide(imRepositoryLayer),
-    Layer.provide(IMBroadcasterLive),
-    Layer.provide(ServerAgentListProviderLive),
-  )
-  return Layer.mergeAll(
-    IMActivation.layer(options?.env).pipe(Layer.provide(IMDeviceStore.layer)),
-    imRepositoryLayer,
-    IMBroadcasterLive,
-    ServerAgentListProviderLive,
-    IMReplyOutbox.layer.pipe(
-      Layer.provide(ServerAgentListProviderLive),
-      Layer.provide(imRepositoryLayer),
-      Layer.provide(IMBroadcasterLive),
-      Layer.provide(facade),
-    ),
-    facade,
+/** Trusted process composition only; neither configuration nor request data selects custody. */
+export function createIMRuntimeLayer(options?: IMFacade.Options, deviceStore = IMDeviceStore.layer) {
+  return Layer.unwrap(
+    Effect.map(Config.Service, (configuration) => {
+      const configured = Layer.succeed(Config.Service, configuration)
+      const facade = IMFacade.layer(options).pipe(
+        Layer.provide(configured),
+        Layer.provide(deviceStore),
+        Layer.provide(imRepositoryLayer),
+        Layer.provide(IMBroadcasterLive),
+        Layer.provide(ServerAgentListProviderLive),
+      )
+      return Layer.mergeAll(
+        IMActivation.layer(options?.env).pipe(Layer.provide(deviceStore), Layer.provide(configured)),
+        imRepositoryLayer,
+        IMBroadcasterLive,
+        ServerAgentListProviderLive,
+        IMReplyOutbox.layer.pipe(
+          Layer.provide(ServerAgentListProviderLive),
+          Layer.provide(imRepositoryLayer),
+          Layer.provide(IMBroadcasterLive),
+          Layer.provide(facade),
+        ),
+        facade,
+      )
+    }),
   )
 }
 const imRuntimeLayer = createIMRuntimeLayer()
@@ -310,7 +317,7 @@ const v4EventRuntimeLayer = V4EventRuntime.layer.pipe(
   Layer.provide(imRepositoryLayer),
 )
 
-const rootApiRoutes = () =>
+const rootApiRoutes = (runtime = imRuntimeLayer) =>
   HttpApiBuilder.layer(RootHttpApi).pipe(
     Layer.provide([
       controlHandlers,
@@ -320,23 +327,29 @@ const rootApiRoutes = () =>
     ]),
     Layer.provide(schemaErrorLayer),
     Layer.provide(httpApiAuthLayer),
+    Layer.provide(runtime),
   )
 const browserApiRoutes = () =>
   HttpApiBuilder.layer(BrowserHttpApi).pipe(
-    Layer.provide(browserHandlers().pipe(Layer.provide(ServerAuth.Config.defaultLayer),
-      Layer.provide(LocationIdentity.defaultLayer), Layer.provide(V2RunnerFrame.browserFilesLayer))),
+    Layer.provide(
+      browserHandlers().pipe(
+        Layer.provide(ServerAuth.Config.defaultLayer),
+        Layer.provide(LocationIdentity.defaultLayer),
+        Layer.provide(V2RunnerFrame.browserFilesLayer),
+      ),
+    ),
     Layer.provide([schemaErrorLayer, httpApiAuthLayer]),
   )
-const eventValidationRuntime = Layer.effectDiscard(Effect.gen(function* () {
-  const service = yield* EventValidationHost.Service
-  // No installed operator means no enabled rules to restore. Startup never creates
-  // an approval; an explicit authenticated command enables each rule later.
-  yield* service.start.pipe(Effect.catch(() => Effect.void))
-  const investigation = yield* EventInvestigationHost.Service
-  yield* investigation.reconcile.pipe(Effect.catch(() => Effect.void))
-})).pipe(
-  Layer.provideMerge(EventValidationHost.defaultLayer),
-)
+const eventValidationRuntime = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const service = yield* EventValidationHost.Service
+    // No installed operator means no enabled rules to restore. Startup never creates
+    // an approval; an explicit authenticated command enables each rule later.
+    yield* service.start.pipe(Effect.catch(() => Effect.void))
+    const investigation = yield* EventInvestigationHost.Service
+    yield* investigation.reconcile.pipe(Effect.catch(() => Effect.void))
+  }),
+).pipe(Layer.provideMerge(EventValidationHost.defaultLayer))
 const eventValidationApiRoutes = () =>
   HttpApiBuilder.layer(EventValidationHttpApi).pipe(
     Layer.provide([eventValidationHandlers(), eventInvestigationHandlers()]),
@@ -381,10 +394,18 @@ const maintenanceApiRoutes = () =>
     Layer.provide([httpApiAuthLayer, schemaErrorLayer]),
     Layer.provide(maintenanceRegistryLayer),
   )
-const currentServerAuthLayer = Layer.unwrap(Effect.serviceOption(ServerAuth.Config).pipe(Effect.map((config) =>
-  Option.isSome(config) ? Layer.succeed(ServerAuth.Config, config.value) : ServerAuth.Config.defaultLayer)))
-const currentGlobalLayer = Layer.unwrap(Effect.serviceOption(Global.Service).pipe(Effect.map((global) =>
-  Option.isSome(global) ? Layer.succeed(Global.Service, global.value) : Global.defaultLayer)))
+const currentServerAuthLayer = Layer.unwrap(
+  Effect.serviceOption(ServerAuth.Config).pipe(
+    Effect.map((config) =>
+      Option.isSome(config) ? Layer.succeed(ServerAuth.Config, config.value) : ServerAuth.Config.defaultLayer,
+    ),
+  ),
+)
+const currentGlobalLayer = Layer.unwrap(
+  Effect.serviceOption(Global.Service).pipe(
+    Effect.map((global) => (Option.isSome(global) ? Layer.succeed(Global.Service, global.value) : Global.defaultLayer)),
+  ),
+)
 
 const instanceApiRoutes = () =>
   HttpApiBuilder.layer(InstanceHttpApi).pipe(
@@ -392,10 +413,7 @@ const instanceApiRoutes = () =>
       configHandlers,
       debugHandlers,
       profileHandlers,
-      deepagentHandlers.pipe(Layer.provide([
-        V2RunnerFrame.gatewayRuntimeLayer,
-        currentServerAuthLayer,
-      ])),
+      deepagentHandlers.pipe(Layer.provide([V2RunnerFrame.gatewayRuntimeLayer, currentServerAuthLayer])),
       oversightHandlers,
       webhookHandlers,
       experimentalHandlers,
@@ -418,7 +436,7 @@ const instanceApiRoutes = () =>
       workspaceConfigHandlers,
       capabilityHandlers,
       systemContextHandlers,
-      contextHandlers,
+      contextHandlers.pipe(Layer.provide(V2RunnerFrame.gatewayRuntimeLayer)),
     ]),
   )
 
@@ -444,25 +462,33 @@ const instanceRoutes = (runtime = imRuntimeLayer) =>
   )
 const serverRoutes = () =>
   HttpApiBuilder.layer(Api).pipe(
-    Layer.provide(createHandlers().pipe(Layer.provide(
-      Layer.effect(AttentionControl.Task, Effect.gen(function* () {
-        const control = yield* TaskControl.bind
-        const authentication = yield* ServerAuth.Config
-        const corsPolicy = yield* CorsConfig
-        const flags = yield* RuntimeFlags.Service
-        return AttentionControl.Task.of({
-          control,
-          advertise: (request) => GoalPlanRebaseAccess.authenticateOperator(authentication, request).pipe(
-            Effect.andThen((access) => GoalPlanRebaseAccess.current(access)),
-            Effect.provideService(CorsConfig, corsPolicy),
-            Effect.match({
-              onSuccess: () => ({ task: true, goal: flags.experimentalGoalLoop }),
-              onFailure: () => ({ task: false, goal: false }),
+    Layer.provide(
+      createHandlers().pipe(
+        Layer.provide(
+          Layer.effect(
+            AttentionControl.Task,
+            Effect.gen(function* () {
+              const control = yield* TaskControl.bind
+              const authentication = yield* ServerAuth.Config
+              const corsPolicy = yield* CorsConfig
+              const flags = yield* RuntimeFlags.Service
+              return AttentionControl.Task.of({
+                control,
+                advertise: (request) =>
+                  GoalPlanRebaseAccess.authenticateOperator(authentication, request).pipe(
+                    Effect.andThen((access) => GoalPlanRebaseAccess.current(access)),
+                    Effect.provideService(CorsConfig, corsPolicy),
+                    Effect.match({
+                      onSuccess: () => ({ task: true, goal: flags.experimentalGoalLoop }),
+                      onFailure: () => ({ task: false, goal: false }),
+                    }),
+                  ),
+              })
             }),
-          ),
-        })
-      })).pipe(Layer.provide(currentServerAuthLayer)),
-    ))),
+          ).pipe(Layer.provide(currentServerAuthLayer)),
+        ),
+      ),
+    ),
     Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),
     Layer.provide(
       Layer.effect(
@@ -534,13 +560,13 @@ type RouteRequirements =
 export function createRoutes(
   corsOptions?: CorsOptions,
   runtimeFlagsLayer = RuntimeFlags.defaultLayer,
-  composition?: { readonly imFacade?: IMFacade.Options },
+  composition?: { readonly imFacade?: IMFacade.Options; readonly imRuntime?: ReturnType<typeof createIMRuntimeLayer> },
 ) {
   // One construction-time transport choice; HTTP, WS and the outbox retain the
   // same facade generation. This is never derived from a request or Config.
-  const imRuntime = composition?.imFacade ? createIMRuntimeLayer(composition.imFacade) : imRuntimeLayer
+  const imRuntime = composition?.imRuntime ?? (composition?.imFacade ? createIMRuntimeLayer(composition.imFacade) : imRuntimeLayer)
   const baseRoutes = Layer.mergeAll(
-    rootApiRoutes(),
+    rootApiRoutes(imRuntime),
     browserApiRoutes(),
     eventValidationApiRoutes(),
     gatewayApiRoutes(),

@@ -38,6 +38,37 @@ import type {
   BrowserFilesStatusResponses,
   BrowserGetErrors,
   BrowserGetResponses,
+  BrowserSharedApproveOriginErrors,
+  BrowserSharedApproveOriginResponses,
+  BrowserSharedCloseErrors,
+  BrowserSharedCloseResponses,
+  BrowserSharedCreateErrors,
+  BrowserSharedCreateResponses,
+  BrowserSharedFilesApproveErrors,
+  BrowserSharedFilesApproveResponses,
+  BrowserSharedFilesListErrors,
+  BrowserSharedFilesListResponses,
+  BrowserSharedFilesPreviewErrors,
+  BrowserSharedFilesPreviewResponses,
+  BrowserSharedFilesStatusErrors,
+  BrowserSharedFilesStatusResponses,
+  BrowserSharedGetErrors,
+  BrowserSharedGetResponses,
+  BrowserSharedListErrors,
+  BrowserSharedListResponses,
+  BrowserSharedTakeoverErrors,
+  BrowserSharedTakeoverResponses,
+  BrowserTuiDetachErrors,
+  BrowserTuiDetachResponses,
+  BrowserTuiOwnerErrors,
+  BrowserTuiOwnerResponse,
+  BrowserTuiOwnerResponses,
+  BrowserTuiPairErrors,
+  BrowserTuiPairResponses,
+  BrowserTuiReserveErrors,
+  BrowserTuiReserveResponses,
+  BrowserTuiSealErrors,
+  BrowserTuiSealResponses,
   CapabilityCatalogErrors,
   CapabilityCatalogResponses,
   CapabilityLoadReceiptsErrors,
@@ -70,6 +101,7 @@ import type {
   DebugEvaluateErrors,
   DebugEvaluateResponses,
   DebugEventsErrors,
+  DebugEventsResponse,
   DebugEventsResponses,
   DebugScopesErrors,
   DebugScopesResponses,
@@ -338,6 +370,8 @@ import type {
   ImDacBindingResponses,
   ImDacCommandErrors,
   ImDacCommandResponses,
+  ImDacReplyReconcileErrors,
+  ImDacReplyReconcileResponses,
   ImDacReplyRetryErrors,
   ImDacReplyRetryResponses,
   ImDacSubmitErrors,
@@ -698,6 +732,8 @@ import type {
   SessionStatusResponses,
   SessionSummarizeErrors,
   SessionSummarizeResponses,
+  SessionTaskSummaryErrors,
+  SessionTaskSummaryResponses,
   SessionTodoErrors,
   SessionTodoResponses,
   SessionUnrevertErrors,
@@ -2171,6 +2207,579 @@ export class Global extends HeyApiClient {
 }
 
 export class Browser extends HeyApiClient {
+  public tuiPair<ThrowOnError extends boolean = false>(
+    parameters: {
+      requestID: string
+      challengeHash: string
+      rootSessionID: string
+      directory: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "requestID" },
+            { in: "body", key: "challengeHash" },
+            { in: "body", key: "rootSessionID" },
+            { in: "body", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserTuiPairResponses, BrowserTuiPairErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/tui/pair",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public tuiOwner<ThrowOnError extends boolean = false>(
+    parameters: {
+      attachID: string
+      generation: string
+      secret: string
+    },
+    options?: Options<never, ThrowOnError, BrowserTuiOwnerResponse>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "attachID" },
+            { in: "body", key: "generation" },
+            { in: "body", key: "secret" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).sse.post<BrowserTuiOwnerResponses, BrowserTuiOwnerErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/tui/owner",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public tuiReserve<ThrowOnError extends boolean = false>(
+    parameters: {
+      attachID: string
+      generation: string
+      secret: string
+      expectedBarrierOrder: number
+      inputID: string
+      originalSubmissionID: string
+      rawInput: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "attachID" },
+            { in: "body", key: "generation" },
+            { in: "body", key: "secret" },
+            { in: "body", key: "expectedBarrierOrder" },
+            { in: "body", key: "inputID" },
+            { in: "body", key: "originalSubmissionID" },
+            { in: "body", key: "rawInput" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserTuiReserveResponses, BrowserTuiReserveErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/tui/reserve",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public tuiSeal<ThrowOnError extends boolean = false>(
+    parameters: {
+      attachID: string
+      generation: string
+      secret: string
+      stamp: {
+        originalSubmissionID: string
+        inputID: string
+        rootSessionID: string
+        rawInputHash: string
+        promptHash?: string
+        sourceKind: "gui_composer" | "tui_owner" | "im_owner_dac"
+        sourceBindingHash: string
+        mainIncarnation: string
+        submissionOrder: number
+      }
+      prompt: unknown
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "attachID" },
+            { in: "body", key: "generation" },
+            { in: "body", key: "secret" },
+            { in: "body", key: "stamp" },
+            { in: "body", key: "prompt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserTuiSealResponses, BrowserTuiSealErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/tui/seal",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public tuiDetach<ThrowOnError extends boolean = false>(
+    parameters: {
+      attachID: string
+      generation: string
+      secret: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "attachID" },
+            { in: "body", key: "generation" },
+            { in: "body", key: "secret" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserTuiDetachResponses, BrowserTuiDetachErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/tui/detach",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public sharedList<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<BrowserSharedListResponses, BrowserSharedListErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/resources",
+      ...options,
+      ...params,
+    })
+  }
+
+  public sharedCreate<ThrowOnError extends boolean = false>(
+    parameters: {
+      version: 2
+      profile: "managed-shared-browser-v1"
+      inputAssurance: "shared-document-v1"
+      requestID: string
+      sessionID: string
+      policy: {
+        origin: string
+        approvedOrigins: Array<string>
+        manualApprovedOrigins: Array<string>
+        resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        postGrants: Array<{
+          method: "POST"
+          url: string
+          contentType: "application/json" | "application/x-www-form-urlencoded" | "text/plain"
+          bodySha256: string
+          bytes: number
+        }>
+        scriptContext?: "snapshot-json-v1"
+        scriptGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          readOnly: true
+        }>
+        programGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+          maxSteps: number
+        }>
+        filePolicy?: {
+          upload: boolean
+          download: boolean
+        }
+      }
+      expiresAt: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "version" },
+            { in: "body", key: "profile" },
+            { in: "body", key: "inputAssurance" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "policy" },
+            { in: "body", key: "expiresAt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserSharedCreateResponses, BrowserSharedCreateErrors, ThrowOnError>(
+      {
+        url: "/api/v1/browser/shared/resources",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  public sharedGet<ThrowOnError extends boolean = false>(
+    parameters: {
+      resourceID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "resourceID" }] }])
+    return (options?.client ?? this.client).get<BrowserSharedGetResponses, BrowserSharedGetErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/resources/{resourceID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  public sharedTakeover<ThrowOnError extends boolean = false>(
+    parameters: {
+      path_resourceID: string
+      body_resourceID: string
+      requestID: string
+      expectedRevision: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            {
+              in: "path",
+              key: "path_resourceID",
+              map: "resourceID",
+            },
+            {
+              in: "body",
+              key: "body_resourceID",
+              map: "resourceID",
+            },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedRevision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      BrowserSharedTakeoverResponses,
+      BrowserSharedTakeoverErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/browser/shared/resources/{resourceID}/takeover",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public sharedApproveOrigin<ThrowOnError extends boolean = false>(
+    parameters: {
+      path_resourceID: string
+      body_resourceID: string
+      requestID: string
+      expectedRevision: number
+      expectedManualEpoch: number
+      expectedPolicyHash: string
+      origin: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            {
+              in: "path",
+              key: "path_resourceID",
+              map: "resourceID",
+            },
+            {
+              in: "body",
+              key: "body_resourceID",
+              map: "resourceID",
+            },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedRevision" },
+            { in: "body", key: "expectedManualEpoch" },
+            { in: "body", key: "expectedPolicyHash" },
+            { in: "body", key: "origin" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      BrowserSharedApproveOriginResponses,
+      BrowserSharedApproveOriginErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/browser/shared/resources/{resourceID}/origins",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public sharedClose<ThrowOnError extends boolean = false>(
+    parameters: {
+      path_resourceID: string
+      body_resourceID: string
+      requestID: string
+      expectedRevision: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            {
+              in: "path",
+              key: "path_resourceID",
+              map: "resourceID",
+            },
+            {
+              in: "body",
+              key: "body_resourceID",
+              map: "resourceID",
+            },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedRevision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserSharedCloseResponses, BrowserSharedCloseErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/resources/{resourceID}/close",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public sharedFilesPreview<ThrowOnError extends boolean = false>(
+    parameters: {
+      resourceID: string
+      body:
+        | {
+            direction: "upload"
+            relative: string
+            targetURL: string
+          }
+        | {
+            direction: "download"
+            relative: string
+            targetURL: string
+            maxBytes: number
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "resourceID" },
+            { key: "body", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      BrowserSharedFilesPreviewResponses,
+      BrowserSharedFilesPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/browser/shared/resources/{resourceID}/files/preview",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public sharedFilesApprove<ThrowOnError extends boolean = false>(
+    parameters: {
+      resourceID: string
+      requestID: string
+      previewID: string
+      expectedResourceRevision: number
+      expectedLeaseID: string
+      expectedLeaseEpoch: number
+      expectedManualEpoch: number
+      expiresAt: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "resourceID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "previewID" },
+            { in: "body", key: "expectedResourceRevision" },
+            { in: "body", key: "expectedLeaseID" },
+            { in: "body", key: "expectedLeaseEpoch" },
+            { in: "body", key: "expectedManualEpoch" },
+            { in: "body", key: "expiresAt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      BrowserSharedFilesApproveResponses,
+      BrowserSharedFilesApproveErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/browser/shared/resources/{resourceID}/files/approve",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public sharedFilesStatus<ThrowOnError extends boolean = false>(
+    parameters: {
+      resourceID: string
+      requestID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "resourceID" },
+            { in: "path", key: "requestID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      BrowserSharedFilesStatusResponses,
+      BrowserSharedFilesStatusErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/browser/shared/resources/{resourceID}/files/requests/{requestID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  public sharedFilesList<ThrowOnError extends boolean = false>(
+    parameters: {
+      resourceID: string
+      cursor?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "resourceID" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      BrowserSharedFilesListResponses,
+      BrowserSharedFilesListErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/browser/shared/resources/{resourceID}/files",
+      ...options,
+      ...params,
+    })
+  }
+
   public create<ThrowOnError extends boolean = false>(
     parameters: {
       body:
@@ -4228,7 +4837,7 @@ export class Debug extends HeyApiClient {
       workspace?: string
       sessionId?: string
     },
-    options?: Options<never, ThrowOnError>,
+    options?: Options<never, ThrowOnError, DebugEventsResponse>,
   ) {
     const params = buildClientParams(
       [parameters],
@@ -4242,7 +4851,7 @@ export class Debug extends HeyApiClient {
         },
       ],
     )
-    return (options?.client ?? this.client).get<DebugEventsResponses, DebugEventsErrors, ThrowOnError>({
+    return (options?.client ?? this.client).sse.get<DebugEventsResponses, DebugEventsErrors, ThrowOnError>({
       url: "/debug/events",
       ...options,
       ...params,
@@ -7677,6 +8286,7 @@ export class Messages extends HeyApiClient {
       directory?: string
       workspace?: string
       cursor?: string
+      anchorID?: string
       limit?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -7690,6 +8300,7 @@ export class Messages extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "query", key: "cursor" },
+            { in: "query", key: "anchorID" },
             { in: "query", key: "limit" },
           ],
         },
@@ -8958,6 +9569,48 @@ export class Im extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  /**
+   * Explicitly check original final reply receipts without sending or executing again
+   */
+  public dacReplyReconcile<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      commandID: string
+      directory?: string
+      workspace?: string
+      cursor?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "path", key: "commandID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "cursor" },
+          ],
+        },
+      ],
+    )
+    params.body ??= {}
+    return (options?.client ?? this.client).post<ImDacReplyReconcileResponses, ImDacReplyReconcileErrors, ThrowOnError>(
+      {
+        url: "/api/v1/im/groups/{groupId}/dac/commands/{commandID}/reply/reconcile",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
   }
 
   /**
@@ -12043,6 +12696,40 @@ export class Session2 extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<SessionChildrenResponses, SessionChildrenErrors, ThrowOnError>({
       url: "/session/{sessionID}/children",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get direct child task facts
+   *
+   * Read latest task generations, visible progress, results and notification facts within the routed parent Session. This endpoint never executes or controls a task.
+   */
+  public taskSummary<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      cursor?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "cursor" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<SessionTaskSummaryResponses, SessionTaskSummaryErrors, ThrowOnError>({
+      url: "/session/{sessionID}/task-summary",
       ...options,
       ...params,
     })

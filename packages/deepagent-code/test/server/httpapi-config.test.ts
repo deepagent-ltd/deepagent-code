@@ -36,6 +36,52 @@ const CAPS_KEY = "DEEPAGENT_SERVER_CAPABILITIES"
 
 describe("config HttpApi", () => {
   it.live(
+    "IM service configuration uses the shared runtime, ignores project coordinates and stays disconnected until explicit retry",
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirEffect({ config: { formatter: false, lsp: false } })
+      const request = (url: string, value?: unknown) =>
+        Effect.promise(() =>
+          Promise.resolve(
+            app().request(url, {
+              ...(value === undefined ? {} : { method: "PATCH", body: JSON.stringify(value) }),
+              headers: { "content-type": "application/json", "x-deepagent-code-directory": tmp.path },
+            }),
+          ),
+        )
+      const saved = yield* request("/global/config", { im: { url: "https://configured.invalid/platform///" } })
+      expect(saved.status).toBe(200)
+      expect(yield* Effect.promise(() => saved.json())).toMatchObject({
+        im: { url: "https://configured.invalid/platform" },
+      })
+      const observed = yield* request("/api/v1/im/status")
+      expect(observed.status).toBe(200)
+      expect(yield* Effect.promise(() => observed.json())).toMatchObject({
+        facade: "blocked",
+        kernel: null,
+        blocked: { code: "im_service_changed" },
+        service: { url: "https://configured.invalid/platform", source: "config", reconnectRequired: true },
+      })
+      expect((yield* request("/config", { im: { url: "https://project.invalid" } })).status).toBe(200)
+      const retained = yield* request("/api/v1/im/status")
+      expect(yield* Effect.promise(() => retained.json())).toMatchObject({
+        service: { url: "https://configured.invalid/platform" },
+      })
+      expect((yield* request("/global/config", { im: { url: "https://configured.invalid?secret=x" } })).status).toBe(
+        400,
+      )
+      const closed = yield* request("/global/config", { im: { url: null } })
+      expect(closed.status).toBe(200)
+      const status = yield* request("/api/v1/im/status")
+      expect(yield* Effect.promise(() => status.json())).toMatchObject({
+        facade: "disabled",
+        kernel: null,
+        identity: null,
+        service: { url: null, source: "config", reconnectRequired: false },
+      })
+    }),
+  )
+
+  it.live(
     "rejects a provider-touching config update when providerConfigEditable is denied",
     Effect.gen(function* () {
       const original = process.env[CAPS_KEY]

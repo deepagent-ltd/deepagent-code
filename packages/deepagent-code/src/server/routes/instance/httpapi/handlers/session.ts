@@ -21,10 +21,12 @@ import { AgentV2 } from "@deepagent-code/core/agent"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { WorkAuthoritySchema } from "@deepagent-code/core/session/work-authority.schema"
 import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
+import { PromptPrepare } from "@deepagent-code/core/session/prompt-prepare"
 import { SessionMutationEpoch } from "@/session/mutation-epoch"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionSummary } from "@/session/summary"
+import { TaskSummary } from "@deepagent-code/core/session/task-summary"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { SessionProviderResolution } from "@/session/provider-resolution"
 import { DevCampaignMint } from "@/effect/dev-campaign-mint"
@@ -78,7 +80,7 @@ import {
 } from "../errors"
 import * as SessionError from "./session-errors"
 import { randomUUID } from "node:crypto"
-import { getWorkspaceContext } from "../utils/workspace-context"
+import { getWorkspaceContext, resolveRoutedDirectory } from "../utils/workspace-context"
 import { SessionDiffArtifact } from "@/session/diff-artifact"
 import { exportSessionSnapshot, importSessionSnapshot, type SessionSnapshot } from "@/session/snapshot"
 import { exportSessionBundle, parseSessionBundle, BUNDLE_MAX_BYTES } from "@/session/bundle"
@@ -210,8 +212,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
                   resource: error.code,
                 })
               : notFound(`Session not found: ${sessionID}`),
-          ),
-        )
+        ),
+      )
 
     const refuseLegacyMessageMutation = Effect.fn("SessionHttpApi.refuseLegacyMessageMutation")(function* (
       sessionID: SessionID,
@@ -262,6 +264,33 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const children = Effect.fn("SessionHttpApi.children")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireSession(ctx.params.sessionID)
       return yield* session.children(ctx.params.sessionID)
+    })
+
+    const taskSummary = Effect.fn("SessionHttpApi.taskSummary")(function* (ctx: {
+      params: { sessionID: SessionID }; query: { cursor?: string; directory?: string; workspace?: string }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const instance = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      // Session routing follows the stored placement. Also reject an explicit stale client
+      // placement instead of silently turning a scoped read into another project's task list.
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const directory = ctx.query.directory || request.headers["x-deepagent-code-directory"]
+      if ((directory && resolveRoutedDirectory(directory) !== instance.directory) ||
+        (ctx.query.workspace && ctx.query.workspace !== workspaceID))
+        return yield* notFound(`Session not found: ${ctx.params.sessionID}`)
+      return yield* database.db.transaction((tx) => TaskSummary.read(tx, {
+        parentSessionID: ctx.params.sessionID,
+        projectID: instance.project.id,
+        directory: instance.directory,
+        workspaceID,
+        cursor: ctx.query.cursor,
+      })).pipe(
+        Effect.mapError(() => notFound(`Session not found: ${ctx.params.sessionID}`)),
+        Effect.catchDefect(() => Effect.fail(new ServiceUnavailableError({
+          service: "session.task-summary", message: "Task summary could not be read",
+        }))),
+      )
     })
 
     const todo = Effect.fn("SessionHttpApi.todo")(function* (ctx: { params: { sessionID: SessionID } }) {
@@ -414,7 +443,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           .pipe(
             // RI-04 admission validation surfaces as a typed 400 like the public V2 endpoint.
             Effect.catchTags({
-              "GoalChild.Error": (error) => Effect.fail(new ConflictError({ message: error.message, resource: error.code })),
+              "GoalChild.Error": (error) =>
+                Effect.fail(new ConflictError({ message: error.message, resource: error.code })),
               "WorkAuthority.Error": (error) =>
                 Effect.fail(new InvalidRequestError({ message: error.message, kind: error.code })),
               "AgentV2.NotFoundError": (error) => Effect.fail(new HttpApiError.BadRequest({})),
@@ -688,7 +718,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       })
     })
 
-    const preparePromptDraft = Effect.fn("SessionHttpApi.preparePromptDraft")(function* (input: {
+    const preparePromptDraftBody = Effect.fn("SessionHttpApi.preparePromptDraft")(function* (input: {
       ctx: { params: { sessionID: SessionID }; payload: typeof PromptPreparePayload.Type }
       onProgress?: (preview: string) => void
     }) {
@@ -768,11 +798,25 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       }
     })
 
+    const preparePromptDraft = (input: Parameters<typeof preparePromptDraftBody>[0]) =>
+      preparePromptDraftBody(input).pipe(
+        Effect.timeoutOrElse({
+          duration: PromptPrepare.TIMEOUT_MS,
+          orElse: () => Effect.fail(new PromptPrepare.Timeout()),
+        }),
+      )
+
     const promptPrepare = Effect.fn("SessionHttpApi.promptPrepare")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof PromptPreparePayload.Type
     }) {
-      return yield* preparePromptDraft({ ctx })
+      return yield* preparePromptDraft({ ctx }).pipe(
+        Effect.mapError((error) =>
+          error instanceof PromptPrepare.Timeout
+            ? new ServiceUnavailableError({ service: "intelligence_prepare", message: error.message })
+            : error,
+        ),
+      )
     })
 
     const promptPrepareStream = Effect.fn("SessionHttpApi.promptPrepareStream")(function* (ctx: {
@@ -791,13 +835,23 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         },
       }).pipe(
         Effect.tap((result) => Effect.sync(() => Queue.offerUnsafe(queue, { type: "result", result }))),
+        Effect.catch((error) =>
+          Effect.sync(() =>
+            Queue.offerUnsafe(queue, {
+              type: "error",
+              message: error instanceof PromptPrepare.Timeout ? error.message : "Prompt preparation failed",
+              ...(error instanceof PromptPrepare.Timeout ? { code: error.code } : {}),
+            }),
+          ),
+        ),
         Effect.catchCause((cause) =>
           Effect.sync(() => Queue.offerUnsafe(queue, { type: "error", message: Cause.pretty(cause) })),
         ),
         Effect.forkScoped({ startImmediately: true }),
       )
       return HttpServerResponse.stream(
-        Stream.fromQueue(queue).pipe(
+        Stream.make({ type: "started" }).pipe(
+          Stream.concat(Stream.fromQueue(queue)),
           Stream.takeUntil(isPromptPrepareTerminal),
           Stream.map(promptPrepareEvent),
           Stream.pipeThroughChannel(Sse.encode()),
@@ -1238,8 +1292,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const importBundle = Effect.fn("SessionHttpApi.importBundle")(function* (ctx: {
       payload: typeof ImportBundlePayload.Type
     }) {
-      if (ctx.payload.bundle.length > BUNDLE_MAX_BYTES * 1.4)
-        return yield* new HttpApiError.BadRequest({})
+      if (ctx.payload.bundle.length > BUNDLE_MAX_BYTES * 1.4) return yield* new HttpApiError.BadRequest({})
       const parsed = yield* Effect.tryPromise(() => parseSessionBundle(Buffer.from(ctx.payload.bundle, "base64"))).pipe(
         Effect.mapError(() => new HttpApiError.BadRequest({})),
       )
@@ -1325,6 +1378,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("status", status)
       .handle("get", get)
       .handle("children", children)
+      .handle("taskSummary", taskSummary)
       .handle("todo", todo)
       .handle("plan", plan)
       .handle("diff", diff)

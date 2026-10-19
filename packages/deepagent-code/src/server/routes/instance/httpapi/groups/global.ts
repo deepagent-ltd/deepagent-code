@@ -17,6 +17,15 @@ const GlobalHealth = Schema.Struct({
   runtimeId: Schema.String,
 })
 
+export class IMServiceBusyError extends Schema.TaggedErrorClass<IMServiceBusyError>()(
+  "IMServiceBusyError",
+  {
+    name: Schema.Literal("IM_SERVICE_BUSY"),
+    data: Schema.Struct({ code: Schema.Literal("im_service_busy"), message: Schema.String }),
+  },
+  { httpApiStatus: 409 },
+) {}
+
 // Capabilities / version handshake for the Server Edition. A desktop client
 // connecting through the gateway `/w` proxy hits `/w/global/capabilities` to
 // confirm it is talking to a compatible data-plane before driving the app.
@@ -196,7 +205,7 @@ export const GlobalApi = HttpApi.make("global").add(
       HttpApiEndpoint.patch("configUpdate", GlobalPaths.config, {
         payload: ConfigV1.Info,
         success: described(ConfigV1.Info, "Successfully updated global config"),
-        error: HttpApiError.BadRequest,
+        error: [HttpApiError.BadRequest, IMServiceBusyError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "global.config.update",

@@ -163,6 +163,7 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
       "AttentionItem",
       "TaskHumanControlInput",
       "TaskHumanControlReceipt",
+      "IMServiceStatus",
     ].includes(name)
       ? stripNativeOptionalNull(structuredClone(schema))
       : stripOptionalNull(structuredClone(schema))
@@ -212,7 +213,11 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
             "/api/v1/im/groups/{groupId}/messages/{messageId}/attachments/{attachmentId}/content",
           ].includes(path)) ||
         (method === "post" &&
-          ["/api/v1/im/work/{workID}/recover-known", "/api/v1/im/work/{workID}/resume-recovered", "/api/v1/im/work/cleanup-known"].includes(path)) ||
+          [
+            "/api/v1/im/work/{workID}/recover-known",
+            "/api/v1/im/work/{workID}/resume-recovered",
+            "/api/v1/im/work/cleanup-known",
+          ].includes(path)) ||
         path.startsWith("/deepagent/goal/plan-rebase/") ||
         path.startsWith("/api/v1/browser/") ||
         path.startsWith("/api/v1/event-validation/")
@@ -402,6 +407,10 @@ function applyLegacySchemaOverrides(spec: OpenApiSpec) {
   const attention = schemas.AttentionItem?.properties
   if (attention?.occurredAt) attention.occurredAt = nullable(attention.occurredAt)
   if (attention?.seenAt) attention.seenAt = nullable(attention.seenAt)
+  // An explicit null disables IM. Legacy optional-field cleanup must not turn
+  // that persisted choice into an absent URL that falls back to the environment.
+  const im = schemas.ConfigIM?.properties
+  if (im?.url) im.url = nullable(im.url)
   const providerOptions = schemas.ProviderConfig?.properties?.options
   if (providerOptions) providerOptions.additionalProperties = {}
   const model = schemas.ProviderConfig?.properties?.models?.additionalProperties

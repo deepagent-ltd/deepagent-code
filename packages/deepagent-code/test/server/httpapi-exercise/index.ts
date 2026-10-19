@@ -1157,6 +1157,23 @@ const scenarios: Scenario[] = [
       )
     }),
   http.protected
+    .get("/session/{sessionID}/task-summary", "session.taskSummary")
+    .seeded((ctx) => Effect.gen(function* () {
+      const parent = yield* ctx.session({ title: "Task summary parent" })
+      const child = yield* ctx.session({ title: "Historical child", parentID: parent.id })
+      return { parent, child }
+    }))
+    .at((ctx) => ({ path: route("/session/{sessionID}/task-summary", { sessionID: ctx.state.parent.id }),
+      headers: ctx.headers() }))
+    .json(200, (body, ctx) => {
+      object(body)
+      array(body.items)
+      check(body.parentSessionID === ctx.state.parent.id, "summary should retain the original parent")
+      check(body.items.some((item) => isRecord(item) && item.childSessionID === ctx.state.child.id &&
+        item.state === "unknown"), "historical child without a TaskRun should remain unknown")
+      check(body.hasMore === false && body.nextCursor === null, "complete summary should not advertise another page")
+    }),
+  http.protected
     .get("/session/{sessionID}/todo", "session.todo")
     .seeded((ctx) =>
       Effect.gen(function* () {

@@ -184,6 +184,12 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
 
+      - name: Verify Windows browser file stages
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 5
+        run: ./.github/scripts/test-windows-browser-file-stages.ps1
+
       - name: Build, package and verify Desktop Native assets
         uses: ./.github/actions/package-desktop
         timeout-minutes: 90

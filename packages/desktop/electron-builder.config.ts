@@ -7,6 +7,7 @@ import { lstat } from "node:fs/promises"
 import { Arch } from "electron-builder"
 import type { Configuration } from "electron-builder"
 import { auditPackageInputs } from "./scripts/audit-package"
+import { verifySharedBrowserComputationAsset } from "./scripts/shared-browser-compute-assets"
 import { prepareWindowsNativeNodePackage, sealInstalledNativeNode, signMacWithNativeNode } from "./scripts/native-node-artifact"
 import { verifyManagedBrowserInputPackAsset } from "./scripts/managed-browser-input-assets"
 import { verifyLinuxNativeAssets } from "./scripts/linux-native-assets"
@@ -106,6 +107,7 @@ const getBase = (): Configuration => ({
     "out/main/chunks/linux-native-licenses/**",
     "out/main/chunks/work-file-helper.*",
     "out/main/managed-browser-input/**",
+    "out/main/shared-browser-compute/**",
     // ESM resolution starts from the physical entry, outside app.asar. Its
     // external selector and parser must have complete adjacent package trees.
     "node_modules/jsonc-parser/**",
@@ -115,6 +117,7 @@ const getBase = (): Configuration => ({
   beforePack: async (context) => {
     const directory = path.dirname(fileURLToPath(import.meta.url))
     await auditPackageInputs(directory)
+    await verifySharedBrowserComputationAsset(path.join(directory, "out/main/shared-browser-compute"))
     const linuxManifest = await lstat(path.join(directory, "out/main/chunks/linux-native-dev-assets.json")).then(
       () => true,
       (error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return false; throw error },
@@ -132,6 +135,10 @@ const getBase = (): Configuration => ({
     })
   },
   afterPack: async (context) => {
+    await verifySharedBrowserComputationAsset(path.join(context.appOutDir,
+      ...(context.electronPlatformName === "darwin" ? [`${context.packager.appInfo.productFilename}.app`, "Contents"] : []),
+      "resources/app.asar.unpacked/out/main/shared-browser-compute"),
+      await verifySharedBrowserComputationAsset(path.join(path.dirname(fileURLToPath(import.meta.url)), "out/main/shared-browser-compute")))
     const linuxManifestHash = linuxNativeCohorts.get(context.appOutDir)
     if (linuxManifestHash) {
       try {

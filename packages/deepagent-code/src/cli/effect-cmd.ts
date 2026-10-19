@@ -1,5 +1,5 @@
 import type { Argv } from "yargs"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import type { AppServices } from "@/effect/app-runtime"
 import type { InstanceStore } from "@/project/instance-store"
 import { cmd, type WithDoubleDash } from "./cmd/cmd"
@@ -95,6 +95,14 @@ export const effectCmd = <Args, A>(opts: EffectCmdOpts<Args, A>) =>
         // Config.Service; the cast documents that narrowing at this boundary. `standaloneLayer`
         // is the DB-free Config boot — building `defaultLayer` here would open + lock the
         // database (AccountRepo) before Server.listen and recreate the self-lock misclassification.
+        if (process.platform === "win32") {
+          const { WindowsSettingsStorage } = await import("@/installation/windows-settings-storage")
+          const handler = opts.handler(args).pipe(Effect.provide(
+            Config.standaloneLayer.pipe(Layer.provideMerge(WindowsSettingsStorage.standaloneLayer)),
+          )) as Effect.Effect<A, CliError>
+          await Effect.runPromise(handler)
+          return
+        }
         const handler = opts.handler(args).pipe(Effect.provide(Config.standaloneLayer)) as Effect.Effect<A, CliError>
         await Effect.runPromise(handler)
         return

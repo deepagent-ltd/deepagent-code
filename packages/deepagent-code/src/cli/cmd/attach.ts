@@ -79,19 +79,26 @@ export const AttachCommand = cmd({
     const { Effect } = await import("effect")
     const { run } = await import("../tui/layer")
     const { createLegacyTuiPluginHost } = await import("@/plugin/tui/runtime")
-    await Effect.runPromise(
-      run({
-        url: args.url,
-        config,
-        pluginHost: createLegacyTuiPluginHost(),
-        args: {
-          continue: args.continue,
-          sessionID: args.session,
-          fork: args.fork,
-        },
-        directory,
-        headers,
-      }),
-    )
+    const { createBrowserOwnerBridge } = await import("../tui/browser-owner-bridge")
+    const browserOwner = process.stdin.isTTY ? createBrowserOwnerBridge({ url: args.url, headers }) : undefined
+    try {
+      await Effect.runPromise(
+        run({
+          browserOwner: browserOwner?.transport,
+          url: args.url,
+          config,
+          pluginHost: createLegacyTuiPluginHost(),
+          args: {
+            continue: args.continue,
+            sessionID: args.session,
+            fork: args.fork,
+          },
+          directory,
+          headers,
+        }),
+      )
+    } finally {
+      browserOwner?.close()
+    }
   },
 })

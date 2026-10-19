@@ -51,7 +51,6 @@ jobs:
     env:
       DEEPAGENT_CODE_ALLOW_UNSIGNED: "1"
       DEEPAGENT_CODE_CHANNEL: dev
-      DEEPAGENT_CODE_VERSION: "0.0.0-dev-204.${{ github.run_id }}.${{ github.run_attempt }}"
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       DEEPAGENT_CODE_BUILD_LINUX_NATIVE_ASSETS: ${{ matrix.group == 'linux' && '1' || '' }}
     steps:
@@ -69,6 +68,20 @@ jobs:
         if: inputs.platforms == 'all' || inputs.platforms == matrix.group
         with:
           node-version: "24"
+      - name: Pin the source version for unsigned test artifacts
+        if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        shell: bash
+        run: |
+          # Template substitutions belong to JavaScript, not the shell.
+          # shellcheck disable=SC2016
+          bun -e '
+            const { appendFile } = await import("node:fs/promises");
+            const desktop = await Bun.file("packages/desktop/package.json").json();
+            const cli = await Bun.file("packages/deepagent-code/package.json").json();
+            if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(desktop.version) || desktop.version !== cli.version) throw new Error("Test source package versions must match");
+            if (!/^[0-9]+$/.test(process.env.GITHUB_RUN_ID ?? "") || !/^[0-9]+$/.test(process.env.GITHUB_RUN_ATTEMPT ?? "")) throw new Error("Test run identity is required");
+            await appendFile(process.env.GITHUB_ENV, `DAC_TEST_SOURCE_VERSION=${desktop.version}\nDEEPAGENT_CODE_VERSION=0.0.0-dev.${desktop.version}.${process.env.GITHUB_RUN_ID}.${process.env.GITHUB_RUN_ATTEMPT}\n`);
+          '
       - name: Rebuild the locked IM transport SDK and verify reviewed bytes
         if: inputs.platforms == 'all' || inputs.platforms == matrix.group
         shell: bash
@@ -79,6 +92,10 @@ jobs:
         if: inputs.platforms == 'all' || inputs.platforms == matrix.group
         working-directory: packages/desktop
         run: bun test ./scripts/test-native-publisher.test.ts
+      - name: Verify QA source identity and bounded installer inventory
+        if: (inputs.platforms == 'all' || inputs.platforms == matrix.group) && matrix.group == 'linux'
+        working-directory: packages/desktop
+        run: bun test ./scripts/assert-test-package-linux.test.ts
       - name: Prepare this job's private internal Native QA publisher
         if: inputs.platforms == 'all' || inputs.platforms == matrix.group
         env:
@@ -176,7 +193,7 @@ jobs:
         if: (inputs.platforms == 'all' || inputs.platforms == matrix.group) && success()
         uses: actions/upload-artifact@v4
         with:
-          name: dac-2.0.4-test-${{ matrix.target }}-${{ github.run_id }}
+          name: dac-${{ env.DAC_TEST_SOURCE_VERSION }}-test-${{ matrix.target }}-${{ github.run_id }}
           retention-days: 7
           if-no-files-found: error
           path: |
@@ -193,7 +210,7 @@ jobs:
         if: (inputs.platforms == 'all' || inputs.platforms == matrix.group) && always()
         uses: actions/upload-artifact@v4
         with:
-          name: dac-2.0.4-diagnostic-report-${{ matrix.target }}-${{ github.run_id }}
+          name: dac-${{ env.DAC_TEST_SOURCE_VERSION || 'unresolved' }}-diagnostic-report-${{ matrix.target }}-${{ github.run_id }}
           retention-days: 7
           if-no-files-found: warn
           path: packages/desktop/dist/test-native-qualification.json

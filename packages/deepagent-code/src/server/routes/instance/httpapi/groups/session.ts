@@ -10,6 +10,7 @@ import { SessionCommandV2 } from "@/session/command-v2"
 import { SessionRevert } from "@/session/revert"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
+import { TaskSummarySchema } from "@deepagent-code/core/session/task-summary.schema"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Snapshot } from "@/snapshot"
@@ -455,6 +456,7 @@ export const SessionPaths = {
   status: `${root}/status`,
   get: `${root}/:sessionID`,
   children: `${root}/:sessionID/children`,
+  taskSummary: `${root}/:sessionID/task-summary`,
   todo: `${root}/:sessionID/todo`,
   plan: `${root}/:sessionID/plan`,
   diff: `${root}/:sessionID/diff`,
@@ -549,6 +551,18 @@ export const SessionApi = HttpApi.make("session")
             description: "Retrieve all child sessions that were forked from the specified parent session.",
           }),
         ),
+        HttpApiEndpoint.get("taskSummary", SessionPaths.taskSummary, {
+          params: { sessionID: SessionID },
+          query: Schema.Struct({ ...WorkspaceRoutingQueryFields,
+            cursor: Schema.optional(Schema.String.check(Schema.isMaxLength(128))),
+          }),
+          success: described(TaskSummarySchema.Summary, "Direct child task summary"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
+        }).annotateMerge(OpenApi.annotations({
+          identifier: "session.taskSummary",
+          summary: "Get direct child task facts",
+          description: "Read latest task generations, visible progress, results and notification facts within the routed parent Session. This endpoint never executes or controls a task.",
+        })),
         HttpApiEndpoint.get("todo", SessionPaths.todo, {
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
