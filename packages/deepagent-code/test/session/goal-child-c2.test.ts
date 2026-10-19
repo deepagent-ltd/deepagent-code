@@ -40,6 +40,7 @@ function spawn(root: string, scenario: string) {
 for (const scenario of [
   "manager-default",
   "manager-tests",
+  "manager-status-publish-failure",
   "plain",
   "structured",
   "plan",
@@ -55,6 +56,12 @@ for (const scenario of [
   "validation-control",
   "initialize",
   "initialize-conflict",
+  "initial-selection-markdown",
+  "initial-selection-stored",
+  "initial-selection-active",
+  "initial-selection-done",
+  "initial-selection-source-conflict",
+  "initial-selection-cas-conflict",
   "program",
   "loop",
   "loop-failed",
@@ -91,7 +98,12 @@ for (const scenario of [
       await Bun.write(path.join(root, "output.log"), log)
       expect({ status, log, root }).toMatchObject({ status: 0 })
       const result = await Bun.file(path.join(root, "result.json")).json()
-      if (scenario === "loop-capacity" || scenario === "loop-initial-mutated") {
+      if (scenario.startsWith("initial-selection-")) {
+        expect(result.requests).toBe(0)
+        expect(result.result.inputs).toEqual([])
+        expect(result.result.units).toEqual([])
+        expect(result.result.active).toEqual([])
+      } else if (scenario === "loop-capacity" || scenario === "loop-initial-mutated") {
         expect(result.requests).toBe(0)
         expect(result.result.inputs).toEqual([])
         expect(result.result.units).toEqual([])

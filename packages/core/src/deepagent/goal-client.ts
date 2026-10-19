@@ -233,7 +233,8 @@ function decodeSnapshot(value: unknown): Snapshot {
     typeof goal.inFlight !== "boolean" ||
     typeof goal.recoveryRequired !== "boolean" ||
     !["none", "pending", "published", "superseded"].includes(goal.wakeState ?? "") ||
-    typeof goal.replayed !== "boolean"
+    typeof goal.replayed !== "boolean" ||
+    (goal.progress !== undefined && !validProgress(goal.progress))
   )
     throw new RequestError(
       "Goal status is unavailable or uses an unsupported control contract",
@@ -242,4 +243,22 @@ function decodeSnapshot(value: unknown): Snapshot {
       true,
     )
   return goal as Snapshot
+}
+
+function validProgress(value: unknown): value is GoalControlSchema.Progress {
+  if (!value || typeof value !== "object") return false
+  const progress = value as Partial<GoalControlSchema.Progress>
+  return (
+    !!progress.ledger &&
+    typeof progress.ledger === "object" &&
+    [progress.ledger.ticks, progress.ledger.tokens, progress.ledger.wallclockMs, progress.stallCount].every(
+      (count) => Number.isSafeInteger(count) && count! >= 0,
+    ) &&
+    typeof progress.ledger.cost === "number" &&
+    Number.isFinite(progress.ledger.cost) &&
+    progress.ledger.cost >= 0 &&
+    Array.isArray(progress.gaps) &&
+    progress.gaps.length <= 64 &&
+    progress.gaps.every((gap) => typeof gap === "string" && gap.length <= 4096)
+  )
 }

@@ -25,6 +25,7 @@ import { DeepAgentDurableLearning, type Admission } from "./deepagent/durable-le
 import { writeFileAtomic } from "./deepagent/atomic-write"
 import { EffectFlock } from "./util/effect-flock"
 import { Flock } from "./util/flock"
+import { PromptPrepare } from "./session/prompt-prepare"
 import {
   buildDeterministicResult,
   classifyDeterministicTask,
@@ -905,23 +906,30 @@ export const runAuxiliary = <A, E, R>(
     if (!isManagedDeepAgentRuntimeWith(config)) return yield* effect
     yield* preflightWith(input, config)
     yield* Effect.promise(ensureConfiguredKnowledgeSeed)
-    const run = yield* open(input, config)
-    ensureSessionStateForRun(run)
-    const result = yield* effect.pipe(Effect.exit)
-    if (result._tag === "Success") {
-      yield* Effect.promise(() => close(run, "completed", learningAuthority, legacyLearningQueue))
-      return result.value
-    }
-    yield* Effect.promise(() =>
-      close(
-        run,
-        Cause.hasInterrupts(result.cause) ? "cancelled" : "failed",
-        learningAuthority,
-        legacyLearningQueue,
-        result.cause,
-      ),
+    return yield* Effect.acquireUseRelease(
+      open(input, config),
+      (run) => Effect.sync(() => ensureSessionStateForRun(run)).pipe(Effect.andThen(effect)),
+      (run, exit) =>
+        Effect.promise(() =>
+          close(
+            run,
+            exit._tag === "Success" ? "completed" : Cause.hasInterrupts(exit.cause) ? "cancelled" : "failed",
+            learningAuthority,
+            legacyLearningQueue,
+            exit._tag === "Failure" ? exit.cause : undefined,
+          ),
+        ).pipe(
+          // Closing is a real finalizer, including when the request fiber is interrupted.
+          // A failed/stalled writer must not make Stop wait forever or invent a receipt.
+          Effect.interruptible,
+          Effect.timeout(PromptPrepare.FINALIZE_MS),
+          Effect.catchCause(() =>
+            Effect.logWarning("Auxiliary finalization unavailable; provider outcome and billing remain unknown").pipe(
+              Effect.annotateLogs({ runID: run.runID, feature: run.input.feature }),
+            ),
+          ),
+        ),
     )
-    return yield* Effect.failCause(result.cause)
   })
 }
 
@@ -1521,6 +1529,7 @@ const runState = (run: RunRecord, state: RunCloseState, learningAdmissionFingerp
   blocking_reasons: state === "blocked" ? ["provider_executed_tool_blocked"] : [],
   cancellation_reasons: state === "cancelled" ? ["user_or_runtime_interrupt"] : [],
   degraded_reasons: [],
+  ...auxiliaryUncertainty(run),
   deterministic_status: deterministicResultArtifact(run).verified_state,
   failure_dossier_ref: run.failureDossierRef,
   ...(learningAdmissionFingerprint ? { learning_admission_fingerprint: learningAdmissionFingerprint } : {}),
@@ -1539,7 +1548,22 @@ const ledger = (run: RunRecord) => ({
   created_at: run.createdAt,
   ...run.usage,
   actual_billed_cost: null,
+  ...auxiliaryUncertainty(run),
 })
+
+// runAuxiliary wraps an opaque effect, not the canonical provider event stream. Its
+// historical numeric defaults are not measurements or a zero-billing certificate.
+const auxiliaryUncertainty = (run: RunRecord) =>
+  run.input.callKind === "auxiliary_ai_call"
+    ? {
+        uncertainty: {
+          provider_outcome: "unknown",
+          usage: "unobserved",
+          billing: "unknown",
+          numeric_defaults_are_measurements: false,
+        },
+      }
+    : {}
 
 const artifactsFor = (run: RunRecord, state: RunCloseState, summary = runSummaryFor(run, state)) => {
   const base: Record<string, unknown> = {
@@ -2675,6 +2699,7 @@ const monitor = (run: RunRecord, state: RunCloseState, refs: Record<string, stri
   event_count: run.eventCount,
   latest_events: run.latestEvents,
   token_totals: run.usage,
+  ...auxiliaryUncertainty(run),
   resource_latest: resourceLatest(run),
   artifact_refs: [
     { kind: "task_spec", ref: "TASK_SPEC.json", sha256: refs["TASK_SPEC.json"] ?? null },

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import path from "node:path"
 import { tmpdir } from "node:os"
 import { existsSync } from "node:fs"
-import { Effect, Stream } from "effect"
+import { Deferred, Effect, Fiber, Stream } from "effect"
 import { LLM, LLMEvent, Model } from "@deepagent-code/llm"
 import { AgentGateway } from "../src/agent-gateway"
 import { writePinnedPacks } from "../src/deepagent/pinned-packs"
@@ -45,6 +45,92 @@ const readOnlyRunDir = async (dir: string) => {
 const readJson = async (dir: string, name: string) => JSON.parse(await readFile(path.join(dir, name), "utf8"))
 
 describe("AgentGateway", () => {
+  test("finalizes an interrupted auxiliary run without certifying zero provider usage", async () => {
+    const root = await tempRunsDir()
+    const dir = path.join(root, "runs")
+    try {
+      AgentGateway.configure({
+        enabled: true,
+        agentMode: "high",
+        baseDir: root,
+        runsDir: dir,
+        durableLearning: false,
+        selfLearning: "manual",
+      })
+      const entered = Deferred.makeUnsafe<void>()
+      const fiber = Effect.runFork(
+        AgentGateway.runAuxiliary(
+          {
+            callKind: "auxiliary_ai_call",
+            feature: "prepare-cancel",
+            providerID: "deepseek",
+            modelID: "deepseek-flash",
+          },
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+        ),
+      )
+      await Effect.runPromise(Deferred.await(entered).pipe(Effect.timeout("5 seconds")))
+      await Effect.runPromise(Fiber.interrupt(fiber).pipe(Effect.timeout("5 seconds")))
+      const runDir = await readOnlyRunDir(dir)
+      expect(await readJson(runDir, "DEEPAGENT_RUN_STATE.json")).toMatchObject({
+        state: "cancelled",
+        uncertainty: { provider_outcome: "unknown", usage: "unobserved", billing: "unknown" },
+      })
+      expect(await readJson(runDir, "run_monitor_snapshot.json")).toMatchObject({
+        state: "cancelled",
+        uncertainty: { numeric_defaults_are_measurements: false },
+      })
+      expect(await readJson(runDir, "token_usage_ledger.json")).toMatchObject({
+        actual_billed_cost: null,
+        uncertainty: { usage: "unobserved", billing: "unknown", numeric_defaults_are_measurements: false },
+      })
+    } finally {
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined, baseDir: undefined })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("a real auxiliary receipt writer failure cannot hang cancellation or forge a terminal receipt", async () => {
+    const root = await tempRunsDir()
+    const dir = path.join(root, "runs")
+    try {
+      AgentGateway.configure({
+        enabled: true,
+        agentMode: "high",
+        baseDir: root,
+        runsDir: dir,
+        durableLearning: false,
+        selfLearning: "manual",
+      })
+      const exit = await Effect.runPromise(
+        AgentGateway.runAuxiliary(
+          {
+            callKind: "auxiliary_ai_call",
+            feature: "prepare-writer-failure",
+            providerID: "deepseek",
+            modelID: "deepseek-flash",
+          },
+          Effect.promise(async () => {
+            const opened = await readOnlyRunDir(dir)
+            await rename(opened, path.join(root, "original-opened"))
+            await writeFile(opened, "Own fixture occupies the original directory path")
+          }).pipe(Effect.andThen(Effect.interrupt)),
+        ).pipe(Effect.exit, Effect.timeout("5 seconds")),
+      )
+      expect(exit._tag).toBe("Failure")
+      expect(await readJson(path.join(root, "original-opened"), "DEEPAGENT_RUN_STATE.json")).toMatchObject({
+        state: "opened",
+        uncertainty: { provider_outcome: "unknown", billing: "unknown" },
+      })
+      expect(await readFile(path.join(dir, (await readdir(dir))[0]!), "utf8")).toBe(
+        "Own fixture occupies the original directory path",
+      )
+    } finally {
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined, baseDir: undefined })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   test("V2 runtime snapshots stay isolated from legacy configure order", async () => {
     const read = Effect.gen(function* () {
       const runtime = yield* AgentGateway.Runtime

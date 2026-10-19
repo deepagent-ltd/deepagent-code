@@ -9,7 +9,6 @@ import {
   LLMEvent,
   Model,
   TransportReason,
-  ProviderInternalReason,
   InvalidRequestReason,
   NoRouteReason,
   ToolFailure,
@@ -70,6 +69,12 @@ import {
 } from "@deepagent-code/core/flag/runtime-features"
 import { LocationKey, ProjectScopeKey, SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
+import { RuntimeIntegrityEvidenceContract } from "@deepagent-code/core/contract/runtime-integrity-evidence"
+import { GoalChild } from "@deepagent-code/core/deepagent/goal-child"
+import { GoalChildExecution } from "@deepagent-code/core/deepagent/goal-child-execution"
+import { GoalChildPolicy } from "@deepagent-code/core/deepagent/goal-child-policy"
+import { GoalChildResult } from "@deepagent-code/core/deepagent/goal-child-result"
+import { GoalChildC1Fixture } from "./fixture/goal-child-c1"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
 import { V2ToolEffectAdmissionTable, V2ToolEffectTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
 import {
@@ -551,7 +556,8 @@ const gateway = Layer.succeed(
 // composition against an explicit registry (e.g. the `=false` staged fallback) — the process
 // global is an immutable startup snapshot, so flipping env mid-test is intentionally unobservable.
 const runnerStack = (features?: RuntimeFeatureRegistry, gitLayer = Git.defaultLayer, configLayer = config,
-  permissionLayer: Layer.Layer<PermissionV2.Service, unknown> = permission) => {
+  permissionLayer: Layer.Layer<PermissionV2.Service, unknown> = permission,
+  runtimeIdentity?: V2ProviderTurn.RuntimeIntegrityIdentityResolver) => {
   const base =
     features === undefined
       ? SessionRunnerLLM.layer
@@ -566,7 +572,9 @@ const runnerStack = (features?: RuntimeFeatureRegistry, gitLayer = Git.defaultLa
       ),
     ),
   )
-  return gated.pipe(
+  return (runtimeIdentity
+    ? gated.pipe(Layer.provide(Layer.succeed(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, runtimeIdentity)))
+    : gated).pipe(
     Layer.provide(FSUtil.defaultLayer),
     Layer.provide(gitLayer),
     Layer.provide(providerTurns),
@@ -704,6 +712,56 @@ const it = testEffect(
     ),
   ),
 )
+// Explicit localhost contract identity; this test root does not claim Native qualification.
+const refusalRuntimeIdentity: RuntimeIntegrityEvidenceContract.RuntimeIdentity = {
+  candidateID: "localhost-refusal-contract",
+  commit: "localhost-test-commit",
+  tree: "localhost-test-tree",
+  packageDigest: Hash.sha256("localhost-test-package"),
+  schemaDigest: Hash.sha256("localhost-test-schema"),
+  rootCompositionDigest: Hash.sha256("localhost-test-runner-root"),
+  databaseSchemaDigest: Hash.sha256("localhost-test-database"),
+  eventSchemaDigest: Hash.sha256("localhost-test-events"),
+  capabilityManifestDigest: Hash.sha256("localhost-test-capabilities"),
+}
+const refusalIdentityResolver = {
+  resolve: () => Effect.succeed(refusalRuntimeIdentity),
+  current: () => refusalRuntimeIdentity,
+}
+const refusalRunner = runnerStack(undefined, Git.defaultLayer, config, permission, refusalIdentityResolver)
+  .pipe(Layer.provideMerge(database))
+const verifiedRefusal = testEffect(Layer.mergeAll(
+  database, providerTurns, events, projector, store, agents, registry, permission,
+  Layer.succeed(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, refusalIdentityResolver),
+  refusalRunner, locationsFor(refusalRunner), executionFor(refusalRunner), sessionsFor(refusalRunner),
+))
+const localhostProviderStream = () => Stream.unwrap(LLMClient.Service.pipe(Effect.map((client) => {
+  const request = requests.at(-1)
+  if (!request) throw new Error("Actual runner request is missing")
+  return client.stream(request)
+}))).pipe(Stream.provide(LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))))
+const useLocalhostModel = (baseURL: string, id: string, provider = "fixture-local") => {
+  currentModel = Model.make({ id, provider, route: OpenAIChat.route.with({
+    endpoint: { baseURL }, limits: { context: 128_000, output: 1_024 },
+  }) })
+  const info = ModelV2.Info.empty(ProviderV2.ID.make(provider), ModelV2.ID.make(id))
+  currentModelInfo = new ModelV2.Info({
+    ...info,
+    api: { id: info.id, type: "aisdk", package: "@ai-sdk/openai-compatible", url: baseURL,
+      protocol: "openai-compatible.chat" },
+    limit: { context: 128_000, output: 1_024 },
+  })
+}
+const localhostCompletion = () => new Response([
+  { id: "localhost-success", model: "never-called", choices: [{ index: 0, delta: { role: "assistant", content: "Recovered locally" }, finish_reason: null }] },
+  { id: "localhost-success", model: "never-called", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: {
+    prompt_tokens: 20, completion_tokens: 5, total_tokens: 25,
+    prompt_tokens_details: { cached_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 0 },
+  } },
+].map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n", {
+  headers: { "content-type": "text/event-stream" },
+})
+
 const contained = testEffect(
   Layer.mergeAll(
     database,
@@ -5022,9 +5080,109 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  // The retry backoff is real time, so these two run on the live clock with an explicit budget.
-  it.live(
-    "retries a pre-dispatch DNS failure on a fresh attempt instead of ending the run",
+  verifiedRefusal.live("a localhost 503 refusal retries once and retains the complete owned Goal result proof", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const db = (yield* Database.Service).db
+      const sessions = yield* SessionV2.Service
+      const observed = { requests: 0 }
+      const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+        observed.requests++
+        return observed.requests === 1
+          ? Response.json({ error: { message: "Temporarily unavailable", type: "server_error" } }, {
+              status: 503, headers: { "retry-after-ms": "1" },
+            })
+          : localhostCompletion()
+      } })
+      yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
+      useLocalhostModel(`${server.url.origin}/v1`, "never-called", "goal-fixture")
+      const goal = yield* GoalChildC1Fixture.prepare(testDirectory)
+      const policy = yield* GoalChildPolicy.prepare(db, yield* AgentV2.Service, {
+        permitID: goal.permit.permit_id, roleKey: goal.admission.roleKey, agent: "worker", mode: "plain",
+      })
+      const child = yield* GoalChild.admitV2(db, sessions, { ...goal.admission, policy })
+      requests.length = 0
+      responseStreams = Array.from({ length: 4 }, localhostProviderStream)
+      const owned = yield* SessionExecution.requireOwned(yield* SessionExecution.Service)
+      const run = yield* owned.run(GoalChildExecution.target(child.unit))
+      if (run.status !== "started") throw new Error(run.status)
+      const outcome = yield* owned.await(run.receipt)
+      if (outcome.status === "settled" && Exit.isFailure(outcome.exit)) return yield* Effect.failCause(outcome.exit.cause)
+      expect(outcome.status === "settled" && Exit.isSuccess(outcome.exit)).toBe(true)
+      expect(observed.requests).toBe(2)
+      expect(requests).toHaveLength(2)
+      const receipts = yield* db.select().from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(child.unit.child_session_id)))
+        .orderBy(asc(V2ProviderTurnReceiptTable.request_ordinal)).all()
+      expect(receipts.map((row) => row.state)).toEqual(["failed", "settled"])
+      const rejected = V2ProviderTurn.fromRow(receipts[0]!)
+      expect(V2ProviderTurn.providerRefusal(rejected, refusalRuntimeIdentity)?.refusal)
+        .toEqual({ kind: "provider-internal", status: 503 })
+      expect(receipts[0]?.integrity_evidence?.identity).toEqual(refusalRuntimeIdentity)
+      for (const altered of [
+        { ...rejected, errorCode: `provider-refusal.v1:provider-internal:503:${"a".repeat(64)}` },
+        { ...rejected, integrityEvidenceHash: Hash.sha256("modified evidence") },
+        { ...rejected, integrityEvidence: undefined, integrityEvidenceHash: undefined },
+        { ...rejected, state: "indeterminate_after_crash" as const },
+      ]) expect(V2ProviderTurn.providerRefusal(altered, refusalRuntimeIdentity)).toBeUndefined()
+      expect(V2ProviderTurn.providerRefusal(rejected, {
+        ...refusalRuntimeIdentity, rootCompositionDigest: Hash.sha256("different fixture root"),
+      })).toBeUndefined()
+      const facts = yield* GoalChildResult.inspect(db, child.unit.unit_id, "plain").pipe(
+        Effect.flatMap((proof) => GoalChildResult.recheck(db, proof)),
+        Effect.provideService(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, refusalIdentityResolver),
+      )
+      expect(facts.result.providers.count).toBe(2)
+      expect(facts.result.usage).toMatchObject({ input: 20, output: 5 })
+      expect(facts.result.usageDerivation.refusals).toMatchObject({ version: 1, count: 1, billing: "unknown" })
+      expect(facts.result.usageDerivation.refusals?.ledgerHash).toMatch(/^[a-f0-9]{64}$/)
+      expect(facts.text).toBe("Recovered locally")
+      expect((yield* sessions.context(SessionV2.ID.make(child.unit.child_session_id))).at(-1))
+        .toMatchObject({ type: "assistant", finish: "stop" })
+    }), 20_000,
+  )
+
+  for (const phase of ["after-event", "post-dispatch"] as const)
+    verifiedRefusal.live(`a localhost ${phase} socket failure never retries or certifies a refusal`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const sessions = yield* SessionV2.Service
+        const db = (yield* Database.Service).db
+        const observed = { requests: 0 }
+        const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+          observed.requests++
+          if (phase === "post-dispatch") {
+            setTimeout(() => { void server.stop(true) }, 25)
+            return new Promise<Response>(() => {})
+          }
+          return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({
+              id: "partial-local", choices: [{ index: 0, delta: { content: "Partial" }, finish_reason: null }],
+            })}\n\n`))
+            setTimeout(() => controller.error(new Error("Local fixture stream interrupted")), 100)
+          } }), { headers: { "content-type": "text/event-stream" } })
+        } })
+        yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
+        useLocalhostModel(`${server.url.origin}/v1`, "fixture-local-interrupted")
+        requests.length = 0
+        responseStreams = Array.from({ length: 4 }, localhostProviderStream)
+        yield* sessions.prompt({ sessionID, prompt: new Prompt({ text: "Keep an unknown delivery unknown" }), resume: false })
+        expect(Exit.isFailure(yield* sessions.resume(sessionID).pipe(Effect.exit))).toBe(true)
+        expect(observed.requests).toBe(1)
+        expect(requests).toHaveLength(1)
+        const receipts = yield* db.select().from(V2ProviderTurnReceiptTable)
+          .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all()
+        expect(receipts).toHaveLength(1)
+        expect(receipts[0]?.state).toBe("indeterminate_after_crash")
+        expect(V2ProviderTurn.providerRefusal(V2ProviderTurn.fromRow(receipts[0]!), refusalRuntimeIdentity)).toBeUndefined()
+        expect(receipts[0]?.first_event_at === null).toBe(phase === "post-dispatch")
+      }), 20_000,
+    )
+
+  // Bun fetch may hide the native connection code; absence of positive pre-dispatch proof
+  // must remain unknown even though this fixture deliberately closes its loopback listener.
+  verifiedRefusal.live(
+    "keeps a real loopback connection error without dispatch proof indeterminate",
     () =>
       Effect.gen(function* () {
         yield* setup
@@ -5032,51 +5190,24 @@ describe("SessionRunnerLLM", () => {
         const { db } = yield* Database.Service
         yield* session.prompt({
           sessionID,
-          prompt: new Prompt({ text: "DNS briefly unavailable" }),
+          prompt: new Prompt({ text: "Connection briefly unavailable" }),
           resume: false,
         })
 
-        const sealThen = (wire: string, then: Stream.Stream<LLMEvent, LLMError>) =>
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const seal = yield* V2ProviderTurn.CurrentRequestSeal
-              if (!seal) return yield* Effect.die("Retry-attempt request seal is missing")
-              yield* seal
-                .seal({
-                  wireHash: Hash.sha256(wire),
-                  bodyHash: Hash.sha256(`${wire}-body`),
-                  bodyLength: 4,
-                  contentType: "application/json",
-                })
-                .pipe(Effect.orDie)
-              return then
-            }),
-          )
-
+        const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: localhostCompletion })
+        const port = reservation.port
+        yield* Effect.addFinalizer(() => Effect.promise(() => reservation.stop(true)))
+        yield* Effect.promise(() => reservation.stop(true))
+        useLocalhostModel(`http://127.0.0.1:${port}/v1`, "fixture-local-connect-retry")
         requests.length = 0
-        // Attempt 1: DNS resolution proves the request never reached the provider. Attempt 2: normal
-        // completion. A pre-dispatch transport failure is safe to retry on a fresh sealed attempt.
-        responseStreams = [
-          sealThen(
-            "pre-dispatch-dns-failure",
-            Stream.fail(
-              new LLMError({
-                module: "test",
-                method: "stream",
-                reason: new TransportReason({
-                  message: "getaddrinfo EAI_AGAIN api.example.test",
-                  kind: "TransportError",
-                  phase: "pre-dispatch",
-                }),
-              }),
-            ),
-          ),
-          sealedResponse(fragmentFixture("text", "retry-succeeded", ["Recovered"]).completeEvents, "retry-succeeded"),
-        ]
+        responseStreams = [localhostProviderStream()]
 
-        yield* session.resume(sessionID)
+        const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+        expect(failure).toBeInstanceOf(LLMError)
+        if (failure instanceof LLMError)
+          expect(failure.reason).toMatchObject({ _tag: "Transport", phase: "post-dispatch" })
 
-        expect(requests).toHaveLength(2)
+        expect(requests).toHaveLength(1)
         const receipts = yield* db
           .select({ state: V2ProviderTurnReceiptTable.state, errorCode: V2ProviderTurnReceiptTable.error_code })
           .from(V2ProviderTurnReceiptTable)
@@ -5084,24 +5215,21 @@ describe("SessionRunnerLLM", () => {
           .orderBy(asc(V2ProviderTurnReceiptTable.request_ordinal))
           .all()
           .pipe(Effect.orDie)
-        // The rejected attempt stays quarantined as indeterminate evidence; the retry opens a new
-        // ordinal and settles. The quarantined row is never replayed.
-        expect(receipts).toHaveLength(2)
+        expect(receipts).toHaveLength(1)
         expect(receipts[0]).toMatchObject({
           state: "indeterminate_after_crash",
           errorCode: expect.stringMatching(/^provider_stream_failed:/),
         })
-        expect(receipts[1]).toMatchObject({ state: "settled", errorCode: null })
         expect(yield* session.context(sessionID)).toMatchObject([
-          { type: "user", text: "DNS briefly unavailable" },
-          { type: "assistant", finish: "stop" },
+          { type: "user", text: "Connection briefly unavailable" },
+          { type: "assistant", finish: "error" },
         ])
       }),
     20_000,
   )
 
   // The retry backoff is real time, so these two run on the live clock with an explicit budget.
-  it.live(
+  verifiedRefusal.live(
     "gives up after the bounded provider rejection retry budget is spent",
     () =>
       Effect.gen(function* () {
@@ -5114,44 +5242,24 @@ describe("SessionRunnerLLM", () => {
           resume: false,
         })
 
-        const rejection = () =>
-          new LLMError({
-            module: "test",
-            method: "stream",
-            reason: new ProviderInternalReason({ message: "Provider request failed with HTTP 503", status: 503 }),
+        const observed = { requests: 0 }
+        const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+          observed.requests++
+          return Response.json({ error: { message: "Unavailable", type: "server_error" } }, {
+            status: 503, headers: { "retry-after-ms": "1" },
           })
-        // A dispatched 503 is a sealed request: the receipt quarantines indeterminate (the state a
-        // retry is allowed to re-open), exactly as it does in production. One sealed failing stream
-        // per attempt, with the initial dispatch plus the full retry budget.
-        const sealedRejection = (wire: string) =>
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const seal = yield* V2ProviderTurn.CurrentRequestSeal
-              if (!seal) return yield* Effect.die("Rejection request seal is missing")
-              yield* seal
-                .seal({
-                  wireHash: Hash.sha256(wire),
-                  bodyHash: Hash.sha256(`${wire}-body`),
-                  bodyLength: 4,
-                  contentType: "application/json",
-                })
-                .pipe(Effect.orDie)
-              return Stream.fail(rejection())
-            }),
-          )
+        } })
+        yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
+        useLocalhostModel(`${server.url.origin}/v1`, "fixture-local-retry-exhausted")
         requests.length = 0
         // Every attempt is rejected before generation. The runner retries a bounded number of times and
         // then surfaces the failure instead of looping forever.
-        responseStreams = [
-          sealedRejection("reject-1"),
-          sealedRejection("reject-2"),
-          sealedRejection("reject-3"),
-          sealedRejection("reject-4"),
-        ]
+        responseStreams = Array.from({ length: 5 }, localhostProviderStream)
 
         const exit = yield* session.resume(sessionID).pipe(Effect.exit)
         expect(Exit.isFailure(exit)).toBe(true)
         expect(requests.length).toBe(4)
+        expect(observed.requests).toBe(4)
         const receipts = yield* db
           .select({ state: V2ProviderTurnReceiptTable.state })
           .from(V2ProviderTurnReceiptTable)
@@ -5160,7 +5268,7 @@ describe("SessionRunnerLLM", () => {
           .all()
           .pipe(Effect.orDie)
         expect(receipts).toHaveLength(4)
-        expect(receipts.every((row) => row.state === "indeterminate_after_crash")).toBe(true)
+        expect(receipts.every((row) => row.state === "failed")).toBe(true)
       }),
     20_000,
   )

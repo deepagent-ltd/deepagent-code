@@ -284,9 +284,9 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // §B: threaded conversations (thread query + reply grouping on the IM surface). Default OFF (known
   // correctness bugs pending). Enable with DEEPAGENT_CODE_V4_THREAD_ENABLED=true.
   v4ThreadEnabled: bool("DEEPAGENT_CODE_V4_THREAD_ENABLED"),
-  // §B: inbound file/attachment upload on the IM surface (im_attachments + local-disk storage). Enable
-  // with DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED=true.
-  v4FileUploadEnabled: bool("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
+  // IM attachments ship with the activated IM surface; ordinary Desktop installs have no env flags.
+  // Operators can still disable uploads with DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED=false.
+  v4FileUploadEnabled: stableOn("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
   // The disabled panel capability also prevents new event-driven panel admissions.
   v4PanelAutoConvene: Config.succeed(false),
   // §L: the EVENT-DRIVEN execution archiver TRIGGER. PROMOTED ON by default (V4.0.4 3b): the

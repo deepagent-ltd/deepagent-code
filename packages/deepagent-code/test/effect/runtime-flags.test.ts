@@ -206,7 +206,12 @@ describe("RuntimeFlags", () => {
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
       // Still operator opt-in (default OFF): experimental or risky features not yet broadly tested.
       expect(flags.v4ThreadEnabled).toBe(false)
-      expect(flags.v4FileUploadEnabled).toBe(false)
+      expect(flags.v4FileUploadEnabled).toBe(true)
+      const disabled = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED: "false" })),
+      )
+      expect(disabled.v4FileUploadEnabled).toBe(false)
+      expect(disabled.v4ThreadEnabled).toBe(false)
       // Promoted ON (stableOn): daemon audit GO, broadly deployed.
       expect(flags.v4AgentPushEnabled).toBe(true)
       expect(flags.v4PanelAutoConvene).toBe(false)
@@ -231,7 +236,7 @@ describe("RuntimeFlags", () => {
       // capability by capability. Uses v4ThreadEnabled, which remains OFF-by-default.
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_THREAD_ENABLED: "true" })))
       expect(flags.v4ThreadEnabled).toBe(true)
-      expect(flags.v4FileUploadEnabled).toBe(false)
+      expect(flags.v4FileUploadEnabled).toBe(true)
       // stableOn flags are unaffected by the override — they remain ON
       expect(flags.v4AgentPushEnabled).toBe(true)
       expect(flags.v4PanelAutoConvene).toBe(false)
@@ -241,7 +246,7 @@ describe("RuntimeFlags", () => {
   it.effect("2.0.3: legacy panel opt-in cannot re-enable the unavailable capability", () =>
     Effect.gen(function* () {
       // v4EventDrivenIm was removed with the V2 IM durable-only migration (no bus-mediated IM path
-      // remains to gate); the surviving V4.0 flags remain independent full-stack opt-ins.
+      // remains to gate); the remaining flags cannot override permanently disabled capabilities.
       const flags = yield* readFlags.pipe(
         Effect.provide(
           fromConfig({

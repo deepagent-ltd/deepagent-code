@@ -13,11 +13,13 @@ import { DeepAgentEventSpoolTable } from "./event-spool-sql"
 // Event-driven consumers have an EXTERNAL side effect beyond the delivery ledger: the goal tick driver
 // advances a goal, the handoff consumer launches the next agent, and (in the deepagent-code wiring) the
 // panel convene, execution-archive and IM-push sinks mutate their own stores. Each side effect must be
-// idempotent under redelivery. This module is the durable idempotency seam: one receipt per
-// (consumerKind, sourceEventId) that proves the side effect RAN (or is pending).
+// idempotent under redelivery. This module records one durable receipt per
+// (consumerKind, sourceEventId): `done` deduplicates completed work; `pending` is retryable.
+// It does not claim pending work exclusively: concurrent calls or a crash after dispatch may
+// re-enter the side effect, which must provide its own idempotency or execution ownership.
 //
 //   - first delivery  → the side effect executes and the receipt flips to `done` (+ receiptRef).
-//   - redelivery      → a `done` receipt returns "existing" — the side effect runs EXACTLY ONCE.
+//   - redelivery      → a `done` receipt returns "existing" without re-running the side effect.
 //   - sink failure    → the receipt STAYS `pending` (retryable) so the E3 delivery retry resumes it.
 //   - cold recovery   → receipts are durable; a simulated restart restores them and a done receipt is
 //                       NOT re-executed.
@@ -116,7 +118,7 @@ export const receiptRefFor = (consumerKind: ConsumerKind, sourceEventId: string)
 export interface RunOnceInput {
   readonly consumerKind: ConsumerKind
   readonly sourceEventId: string
-  /** The consumer's external side effect. Runs ONCE on first delivery (and again only if still pending). */
+  /** Retryable external work; must provide its own idempotency or claim while the receipt is pending. */
   readonly sideEffect: Effect.Effect<unknown, unknown>
   readonly now: number
 }
@@ -126,11 +128,12 @@ export type RunOnceResult =
   | { readonly kind: "existing"; readonly receipt: ConsumerReceiptRow }
 
 /**
- * Run a consumer side effect at most once for a (consumerKind, sourceEventId), with durable
- * idempotency + E3 retry semantics:
+ * Deduplicate completed work for a (consumerKind, sourceEventId), with durable E3 retry semantics.
+ * Pending receipts are not execution claims; their side effects may re-enter concurrently or after
+ * an uncertain dispatch and require independent idempotency or ownership:
  *   - no receipt       → insert `pending`, run the side effect, mark `done` on success.
  *   - `done` receipt   → return "existing" WITHOUT re-running (redelivery is a no-op).
- *   - `pending` receipt→ a prior delivery did not complete (sink failure or crash): re-run it, and on
+ *   - `pending` receipt→ completion is not recorded (in flight, sink failure or crash): re-run it, and on
  *                        failure the receipt STAYS `pending` for the E3 delivery retry to resume.
  */
 export function runOnce(db: DatabaseClient, input: RunOnceInput): Effect.Effect<RunOnceResult, ConsumerReceiptError> {

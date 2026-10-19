@@ -10,11 +10,12 @@ import {
   ToolDefinition,
   isContextOverflowFailure,
   isTerminalProviderFailure,
+  retryableProviderRefusal,
   type ProviderErrorEvent,
 } from "@deepagent-code/llm"
 import { RequestExecutor } from "@deepagent-code/llm/route"
 import { AgentGateway } from "../../agent-gateway"
-import { and, count, desc, eq, gt, inArray, isNotNull } from "drizzle-orm"
+import { and, count, desc, eq, gt, inArray, isNotNull, sql } from "drizzle-orm"
 import { Cause, DateTime, Duration, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import path from "node:path"
 import { AgentV2 } from "../../agent"
@@ -82,6 +83,7 @@ import { ModelHardPolicy } from "./model-hard-policy"
 import { buildDeepAgentPrompt, buildGovernedPlanContext } from "./deepagent-prompt"
 import { V2ToolEffect } from "./v2-tool-effect"
 import { CurrentToolExecution } from "./current-tool-execution"
+import { SharedBrowserUserInput } from "../../browser/shared-user-input"
 import { TaskContinuation } from "../task-continuation"
 import { WorkChildAuthority } from "../work-child-authority"
 import { V2ToolEffectTable } from "./v2-tool-effect.sql"
@@ -1415,8 +1417,11 @@ export const layer = Layer.effect(
         },
         policy: policyReceipt,
         ownerToken: yield* providerTurns.currentOwnerToken(),
-      })
+      }).pipe(Effect.provideService(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, runtimeIntegrityIdentity))
       const providerReceipt = admittedTurn.receipt
+      yield* SharedBrowserUserInput.recordTurn(db, { sessionID: session.id, receiptID: providerReceipt.receiptId,
+        activityID: selectionAdmission.activityId, selectionID: selectionAdmission.selectionId,
+        projectionHash: selectionAdmission.projectionHash, promotedInputIDs: promoted })
       // R4 — pricing belongs to the Location catalog and is an explicit runner dependency. A
       // missing catalog model keeps cost 0 rather than guessing, but a composition can no longer
       // silently omit the catalog service and disable accounting for every turn.
@@ -2069,20 +2074,44 @@ export const layer = Layer.effect(
             return yield* Effect.die(continueAfterOverflowCompaction(currentStep))
           }
           const llmFailure = failure instanceof LLMError ? failure : undefined
-          // The executor's own retryable contract is the proof that re-sending is safe: 429/5xx are
-          // definite provider rejections (no generation), and a transport failure counts only when
-          // it predates dispatch. Anything user-visible already published would duplicate output,
-          // and every other failure keeps the terminal path (an unknown post-dispatch outcome stays
-          // quarantined for recovery rather than being silently replayed).
-          if (
-            llmFailure !== undefined &&
-            llmFailure.retryable &&
-            !publisher.hasAssistantStarted() &&
-            providerRetry < MAX_PROVIDER_ATTEMPT_RETRIES
-          )
-            return yield* Effect.die(
-              retryAttempt(currentStep, providerRetry, "provider_rejection", llmFailure.retryAfterMs),
+          // Re-sending requires the same zero-event typed refusal AND its exact durable failed
+          // attempt/RI binding. A retryable flag alone cannot replay an indeterminate delivery.
+          const refusal = retryableProviderRefusal(llmFailure, { providerEventsStarted: providerEvents.length > 0 })
+          if (refusal && !publisher.hasAssistantStarted() && providerRetry < MAX_PROVIDER_ATTEMPT_RETRIES) {
+            const failed = yield* providerTurns.get(providerReceipt.receiptId)
+            const attempt = providerReceipt.providerAttemptId
+              ? yield* db.select().from(SessionProviderAttemptTable).where(and(
+                eq(SessionProviderAttemptTable.attempt_id, providerReceipt.providerAttemptId),
+                eq(SessionProviderAttemptTable.session_id, session.id),
+                eq(SessionProviderAttemptTable.activity_id, selectionAdmission.activityId),
+                eq(SessionProviderAttemptTable.owner_token, providerReceipt.ownerToken),
+                eq(SessionProviderAttemptTable.state, "failed"),
+                isNotNull(SessionProviderAttemptTable.settled_at),
+              )).get().pipe(Effect.orDie)
+              : undefined
+            const proof = failed && V2ProviderTurn.providerRefusalAttempt(
+              failed, attempt, integrityIdentity, yield* store.claimToken(session.id),
             )
+            if (
+              proof && failed && failed.ownerToken === providerReceipt.ownerToken &&
+              (yield* providerTurns.currentOwnerToken()) === providerReceipt.ownerToken &&
+              (yield* toolEffects.listPendingForSession(session.id)).length === 0 &&
+              !(yield* db.get<{ found: number }>(sql`SELECT 1 AS found FROM (
+                SELECT receipt_id FROM session_v2_tool_effect_admission WHERE receipt_id=${failed.receiptId}
+                UNION ALL SELECT receipt_id FROM session_v2_tool_effect WHERE receipt_id=${failed.receiptId}
+              ) LIMIT 1`).pipe(Effect.orDie))
+            ) {
+              yield* Effect.logWarning("verified provider refusal before retry", {
+                type: proof.refusal.kind,
+                status: proof.refusal.status,
+                phase: proof.refusal.kind === "transport-pre-dispatch" ? "pre-dispatch" : "response-before-events",
+                receiptID: failed.receiptId,
+              })
+              return yield* Effect.die(
+                retryAttempt(currentStep, providerRetry, "provider_rejection", llmFailure?.retryAfterMs),
+              )
+            }
+          }
           // A transport failure after dispatch has an unknown provider outcome even when no local
           // assistant event was observed. The receipt is already quarantined indeterminate by the
           // provider-turn boundary; never hide that uncertainty by opening a fresh physical attempt.

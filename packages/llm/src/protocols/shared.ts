@@ -24,21 +24,84 @@ export const optionalNull = <const S extends Schema.Top>(schema: S) => Schema.op
 
 /** OpenAI function schemas require one flat object at the top level. */
 export const openAiToolInputSchema = (schema: JsonSchema.JsonSchema): JsonSchema.JsonSchema => {
-  const variants = Array.isArray(schema.anyOf) ? schema.anyOf.filter(isRecord) : []
-  const flattened =
-    variants.length === 0
-      ? { ...schema, type: "object" }
-      : {
-          ...Object.fromEntries(Object.entries(schema).filter(([key]) => key !== "anyOf")),
-          type: "object",
-          properties: variants.reduce(
-            (properties, variant) => ({ ...(isRecord(variant.properties) ? variant.properties : {}), ...properties }),
-            {},
-          ),
-          additionalProperties: false,
-        }
-  const normalized = removeNullSchemas(flattened)
-  return isRecord(normalized) ? normalized : { type: "object" }
+  const normalized = removeNullSchemas(schema)
+  if (!isRecord(normalized)) return { type: "object" }
+  if (!Array.isArray(normalized.anyOf)) return { ...normalized, type: "object" }
+  const variants = objectVariants(normalized)
+  if (variants.length === 0) return { ...normalized, type: "object" }
+  const properties = variants.map((variant) => (isRecord(variant.properties) ? variant.properties : {}))
+  // This is a provider-facing projection. Cross-field branch restrictions remain enforced by
+  // the original Tool schema; a shared field must still advertise every valid branch value.
+  const required = variants
+    .map((variant) =>
+      Array.isArray(variant.required)
+        ? variant.required.filter((field): field is string => typeof field === "string")
+        : [],
+    )
+    .reduce((common, fields) => common.filter((field) => fields.includes(field)))
+  return {
+    ...Object.fromEntries(
+      Object.entries(normalized).filter(([key]) => !["anyOf", "required", "properties"].includes(key)),
+    ),
+    type: "object",
+    properties: Object.fromEntries(
+      [...new Set(properties.flatMap((variant) => Object.keys(variant)))].map((key) => [
+        key,
+        unionProperty(properties.flatMap((variant) => (key in variant ? [variant[key]] : []))),
+      ]),
+    ),
+    ...(required.length ? { required } : {}),
+    additionalProperties: false,
+  }
+}
+
+function objectVariants(schema: Record<string, unknown>): Record<string, unknown>[] {
+  if (!Array.isArray(schema.anyOf)) return [schema]
+  const common = Object.fromEntries(Object.entries(schema).filter(([key]) => key !== "anyOf"))
+  return schema.anyOf.filter(isRecord).flatMap((variant) =>
+    objectVariants(variant).map((leaf) => {
+      const parent = isRecord(common.properties) ? common.properties : {}
+      const child = isRecord(leaf.properties) ? leaf.properties : {}
+      return {
+        ...common,
+        ...leaf,
+        properties: Object.fromEntries(
+          [...new Set([...Object.keys(parent), ...Object.keys(child)])].map((key) => [
+            key,
+            key in parent && key in child
+              ? { allOf: [parent[key], child[key]] }
+              : key in child
+                ? child[key]
+                : parent[key],
+          ]),
+        ),
+        required: [
+          ...new Set([common.required, leaf.required].flatMap((value) => (Array.isArray(value) ? value : []))),
+        ],
+      }
+    }),
+  )
+}
+
+function unionProperty(schemas: unknown[]) {
+  const variants = [...new Map(schemas.map((schema) => [JSON.stringify(schema), schema])).values()]
+  if (variants.length === 1) return variants[0]
+  const enums = variants.map((variant) => {
+    if (!isRecord(variant) || (!Array.isArray(variant.enum) && !("const" in variant))) return undefined
+    return {
+      base: Object.fromEntries(Object.entries(variant).filter(([key]) => !["enum", "const"].includes(key))),
+      values: Array.isArray(variant.enum) ? variant.enum : [variant.const],
+    }
+  })
+  const first = enums[0]
+  if (first && enums.every((variant) => variant && JSON.stringify(variant.base) === JSON.stringify(first.base)))
+    return {
+      ...first.base,
+      enum: [
+        ...new Map(enums.flatMap((variant) => variant!.values).map((value) => [JSON.stringify(value), value])).values(),
+      ],
+    }
+  return { anyOf: variants }
 }
 
 const removeNullSchemas = (value: unknown): unknown => {

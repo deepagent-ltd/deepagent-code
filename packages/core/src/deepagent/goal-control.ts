@@ -14,6 +14,7 @@ import { GoalTickProgram } from "./goal-tick-program"
 import { GoalPlanRebase } from "./goal-plan-rebase"
 import { GoalTickState } from "./goal-tick-state"
 import { GoalChild } from "./goal-child"
+import { GoalChildResult } from "./goal-child-result"
 import { GoalControlCommandTable, GoalControlTable, GoalTickPermitTable } from "./goal-control.sql"
 
 type Db = Database.Interface["db"]
@@ -437,7 +438,7 @@ export const control = Effect.fn("GoalControl.control")(function* (
             return yield* failure("recovery_required", "Goal has an unresolved tick; resume cannot replay it")
           if (input.action === "resume" && row.requested_phase !== "paused")
             return yield* failure("target_conflict", "Only a paused Goal can resume")
-          if (input.action === "resume" && row.plan_revision > 0) {
+          if (input.action === "resume" && (row.plan_revision > 0 || row.initialization.executionContract === "owned-goal-v2")) {
             const source = yield* GoalPlanRebase.baseline(tx, row)
             const document = source.documents.find((item) => item.id === `doc:run_context:${row.goal_id}`)
             const runtime = document ? yield* decode(Schema.fromJsonString(GoalTickState.Runtime), document.body) : undefined
@@ -498,7 +499,7 @@ export const control = Effect.fn("GoalControl.control")(function* (
           return receipt
         }),
       { behavior: "immediate" },
-    ),
+    ).pipe((effect) => input.action === "resume" ? effect.pipe(GoalChildResult.withRuntimeIdentity(db)) : effect),
   )
 })
 

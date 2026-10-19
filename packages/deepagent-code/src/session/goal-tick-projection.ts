@@ -7,6 +7,7 @@ import { GoalControl } from "@deepagent-code/core/deepagent/goal-control"
 import { GoalControlSchema } from "@deepagent-code/core/deepagent/goal-control.schema"
 import { GoalTickCheckpoint } from "@deepagent-code/core/deepagent/goal-tick-checkpoint"
 import { GoalTickProgram } from "@deepagent-code/core/deepagent/goal-tick-program"
+import { GoalPlanRebase } from "@deepagent-code/core/deepagent/goal-plan-rebase"
 import { GoalTickState } from "@deepagent-code/core/deepagent/goal-tick-state"
 import { decodePlanDoc, planDescription, planScope } from "@deepagent-code/core/deepagent/plan-store"
 import type { GoalSpec } from "@deepagent-code/core/deepagent/goal-loop"
@@ -43,6 +44,9 @@ export function documentIDs(goalID: string, planID: string) {
     completion: `doc:decision:${goalID}`,
   }
 }
+
+/** Observation-only telemetry; the Core reader never audits provider/tool history. */
+export const progress = GoalPlanRebase.progress
 
 export function fullDocument(
   payload: GoalTickProgram.DocumentPayload,
@@ -128,14 +132,30 @@ export const prepare = (
       extensions: { goal_id: goalID, execution_contract: "owned-goal-v2" },
       body,
     })
-    const plan: GoalTickProgram.DocumentPayload = planSource
+    // The existing parsed plan is the actual source, not an arbitrary model proposal or metadata claim.
+    if (planSource && GoalControl.fingerprint(planSource.plan) !== GoalControl.fingerprint(input.plan))
+      return yield* failure("The selected initial plan changed before preparation")
+    const pending =
+      input.plan.active_step_id === null ? input.plan.steps.find((step) => step.status === "pending") : undefined
+    const original: GoalTickProgram.DocumentPayload = planSource
       ? Schema.decodeUnknownSync(GoalTickProgram.DocumentPayload)(
           Object.fromEntries(Object.entries(planSource.doc).filter(([key]) => key !== "hash")),
         )
       : template(planID, "plan", planDescription(input.sessionID), JSON.stringify(input.plan))
-    // The existing parsed plan is the actual source, not an arbitrary model proposal or metadata claim.
-    if (planSource && GoalControl.fingerprint(planSource.plan) !== GoalControl.fingerprint(input.plan))
-      return yield* failure("The selected initial plan changed before preparation")
+    // Select the controller's first step before its immutable initialization and first permit are frozen.
+    const plan = !pending
+      ? original
+      : {
+          ...original,
+          version: original.version + (planSource ? 1 : 0),
+          body: JSON.stringify({
+            ...input.plan,
+            steps: input.plan.steps.map((step) =>
+              step.step_id === pending.step_id ? { ...step, status: "active" } : step,
+            ),
+            active_step_id: pending.step_id,
+          }),
+        }
     const stateDoc = {
       ...template(ids.state, "run_context", "Goal runtime state", GoalTickProgram.canonical(state)),
       links: Object.values(ids)

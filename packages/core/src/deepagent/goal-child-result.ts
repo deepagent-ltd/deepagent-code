@@ -12,6 +12,7 @@ import { SessionInputTable, SessionMessageTable } from "../session/sql"
 import { SessionSchema } from "../session/schema"
 import { SessionMessage } from "../session/message"
 import { V2ProviderTurnReceiptTable } from "../session/runner/v2-provider-turn.sql"
+import { V2ProviderTurn } from "../session/runner/v2-provider-turn"
 import { V2ToolEffectAdmissionTable, V2ToolEffectTable } from "../session/runner/v2-tool-effect.sql"
 import { CanonicalJson } from "../util/canonical-json"
 import { Hash } from "../util/hash"
@@ -61,11 +62,28 @@ const goalEffectColumns = {
       }
 const fail = (message: string) => new GoalChildSchema.Error({ code: "GOAL_CHILD_RECOVERY_REQUIRED", message })
 
+/** Derive the same trusted root identity before the outer SQL connection is acquired. */
+export const withRuntimeIdentity = (db: GoalTickCheckpoint.Reader) => <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const resolver = yield* V2ProviderTurn.CurrentRuntimeIntegrityIdentity
+    if (!resolver || resolver.current?.() !== undefined) return yield* effect
+    // Reader transactions lack $client; a Db can also be called from an existing transaction.
+    // Neither may wait on the detached composition derivation which reads this same connection.
+    const active = !("$client" in db) || Option.isSome(yield* Effect.serviceOption(db.$client.transactionService))
+    if (active) return yield* fail("Goal runtime identity must be resolved before the outer transaction")
+    const identity = yield* resolver.resolve(yield* Effect.context())
+    return yield* effect.pipe(Effect.provideService(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, {
+      current: () => identity,
+      resolve: () => Effect.succeed(identity),
+    }))
+  })
+
 /** Reads the real activity/attempt/effect authorities. No caller-provided success or digest is accepted. */
 export const inspect = (db: GoalTickCheckpoint.Reader, unitID: string, stage: GoalChildSchema.Stage) =>
   db
     .transaction((tx) => inspectInTransaction(tx, unitID, stage), { behavior: "deferred" })
     .pipe(
+      withRuntimeIdentity(db),
       Effect.catchTag("SqlError", () => fail("Goal result ledger snapshot could not be read")),
       Effect.catchDefect(() => fail("Goal result ledger snapshot could not be decoded")),
     )
@@ -286,10 +304,14 @@ const inspectInTransaction = (db: GoalTickCheckpoint.Reader, unitID: string, sta
       cacheWrite: 0,
     }
     const derived = new Set<"nonCachedInput" | "cacheRead" | "cacheWrite">()
+    const resolver = providers.some((receipt) => receipt.state === "failed")
+      ? yield* V2ProviderTurn.CurrentRuntimeIntegrityIdentity : undefined
+    const runtimeIdentity = resolver?.current?.()
+    const refusals: Array<{ receipt: typeof providers[number]; attempt: typeof attempts[number] }> = []
     for (const receipt of providers) {
       if (
         receipt.user_message_id !== input.inputID ||
-        receipt.state !== "settled" ||
+        !["settled", "failed"].includes(receipt.state) ||
         !receipt.provider_attempt_id ||
         !receipt.outcome_artifact ||
         receipt.outcome_hash !== Hash.sha256(CanonicalJson.stringify(receipt.outcome_artifact))
@@ -303,10 +325,24 @@ const inspectInTransaction = (db: GoalTickCheckpoint.Reader, unitID: string, sta
         attempt.provider_turn_seq !== receipt.provider_turn_seq ||
         attempt.owner_token !== receipt.owner_token ||
         attempt.execution_claim_token !== input.execution.claimToken ||
-        attempt.state !== "settled" ||
+        attempt.state !== receipt.state ||
         attempt.provider_id !== receipt.provider_id
       )
         return yield* fail("Goal provider attempt is not owned by this stage")
+      if (receipt.state === "failed") {
+        if (
+          !V2ProviderTurn.providerRefusalAttempt(
+            V2ProviderTurn.fromRow(receipt), attempt, runtimeIdentity, input.execution.claimToken,
+          )
+        ) return yield* fail("Goal refusal lacks exact terminal attempt and runtime evidence")
+        const obligation = yield* db.get<{ found: number }>(sql`SELECT 1 AS found FROM (
+          SELECT receipt_id FROM session_v2_tool_effect_admission WHERE receipt_id=${receipt.receipt_id}
+          UNION ALL SELECT receipt_id FROM session_v2_tool_effect WHERE receipt_id=${receipt.receipt_id}
+        ) LIMIT 1`).pipe(Effect.orDie)
+        if (obligation) return yield* fail("Goal refusal has a tool obligation")
+        refusals.push({ receipt, attempt })
+        continue
+      }
       const events = Schema.decodeUnknownOption(Schema.Array(LLMEvent))(receipt.outcome_artifact)
       if (Option.isNone(events)) return yield* fail("Goal provider artifact is malformed")
       const finishes = events.value.filter(LLMEvent.is.stepFinish)
@@ -324,6 +360,7 @@ const inspectInTransaction = (db: GoalTickCheckpoint.Reader, unitID: string, sta
       usage.cacheRead += value.usage.cacheRead
       usage.cacheWrite += value.usage.cacheWrite
     }
+    if (refusals.length === providers.length) return yield* fail("Goal result has no settled provider usage")
     const admissions = yield* db
       .select()
       .from(V2ToolEffectAdmissionTable)
@@ -460,7 +497,13 @@ const inspectInTransaction = (db: GoalTickCheckpoint.Reader, unitID: string, sta
       resultHash: GoalControl.fingerprint({ text }),
       schemaHash: decoded.schemaHash,
       usage,
-      usageDerivation: { version: 1, inferredInputCategories: [...derived].sort() },
+      usageDerivation: {
+        version: 1,
+        inferredInputCategories: [...derived].sort(),
+        ...(refusals.length ? {
+          refusals: { version: 1, count: refusals.length, ledgerHash: GoalControl.fingerprint(refusals), billing: "unknown" },
+        } : {}),
+      },
     }
     if (recorded && GoalControl.fingerprint(recorded) !== GoalControl.fingerprint(result))
       return yield* fail("Recorded Goal result differs from its actual ledgers")

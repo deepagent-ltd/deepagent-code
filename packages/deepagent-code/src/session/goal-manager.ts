@@ -2,6 +2,7 @@ import { Effect, Layer, Context, SynchronizedRef, Option, Schedule } from "effec
 import { GoalControl } from "@deepagent-code/core/deepagent/goal-control"
 import { GoalControlSchema } from "@deepagent-code/core/deepagent/goal-control.schema"
 import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
+import { GoalPauseBoundary } from "@deepagent-code/core/deepagent/goal-pause-boundary"
 import { initializeGoal } from "@deepagent-code/core/deepagent/goal-loop"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { Hash } from "@deepagent-code/core/util/hash"
@@ -682,7 +683,19 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const receipt = yield* GoalControl.control(db, { ...input, action })
         // The SQL control lock has been released. Revoke and interrupt only captured old frames.
-        if (Option.isSome(ownedFrames)) yield* ownedFrames.value.control(input.goalId, receipt.revision)
+        if (Option.isSome(ownedFrames)) yield* ownedFrames.value.control(input.goalId, receipt.revision,
+          action === "pause" && receipt.receiptID
+            ? { commandID: receipt.receiptID, directory: goalStoreRoot(input.sessionID) } : undefined)
+        if (action === "pause" && receipt.replayed && receipt.receiptID)
+          yield* GoalPauseBoundary.reconcileProjection(db, {
+            goalID: input.goalId,
+            sessionID: input.sessionID,
+            commandID: receipt.receiptID,
+            directory: goalStoreRoot(input.sessionID),
+          }).pipe(
+            // Historical ACKs cannot recover the lost live registry or authorize another tick.
+            Effect.catchTag("GoalControl.Error", () => Effect.void),
+          )
         yield* Effect.gen(function* () {
           const row = yield* GoalControl.current(db, input.sessionID)
           if (row?.goal_id !== input.goalId) return
@@ -694,8 +707,11 @@ export const layer = Layer.effect(
         }).pipe(Effect.catchCause(() => Effect.void))
         if (action === "resume")
           yield* GoalControlDispatcher.drain(db, eventBus).pipe(Effect.catchCause(() => Effect.void))
-        // inFlight remains explicit. This slice does not claim that a remote/cold child was interrupted.
-        return receipt
+        // Re-read the actual obligations after the narrow, original-frame pause settlement. The
+        // persisted command receipt remains immutable; exact retries expose current status too.
+        const current = yield* GoalControl.requireTarget(db, input.goalId, input.sessionID)
+        return { ...receipt, ...(yield* GoalControl.snapshot(db, current)), replayed: receipt.replayed,
+          receiptID: receipt.receiptID }
       })
     const pause: Interface["pause"] = (input) => applyControl("pause", input)
     const resume: Interface["resume"] = (input) => applyControl("resume", input)
@@ -703,7 +719,11 @@ export const layer = Layer.effect(
     const status: Interface["status"] = (sessionID) =>
       Effect.gen(function* () {
         const row = yield* GoalControl.current(db, sessionID)
-        if (row) return yield* GoalControl.snapshot(db, row)
+        if (row) {
+          const snapshot = yield* GoalControl.snapshot(db, row)
+          const progress = yield* GoalTickProjection.progress(db, row)
+          return { ...snapshot, ...(progress ? { progress } : {}) }
+        }
         const legacy = AgentGateway.DeepAgentSessionState.getActiveGoal(sessionID)
         if (!legacy) return null
         return {

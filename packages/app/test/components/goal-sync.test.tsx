@@ -2,7 +2,6 @@ import { afterEach, expect, it, vi } from "vitest"
 import { createRoot } from "solid-js"
 import { createServerSyncContextInner } from "@/context/server-sync"
 import type { ServerSDK } from "@/context/server-sdk"
-import type { SessionGoal } from "@/context/global-sync/types"
 import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
 
 vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: string) => key }) }))
@@ -28,7 +27,7 @@ const snapshot = (patch: Partial<GoalClient.Snapshot> = {}): GoalClient.Snapshot
   replayed: false,
   ...patch,
 })
-const record = (control: GoalClient.Snapshot): SessionGoal => ({
+const record = (control: GoalClient.Snapshot) => ({
   goalId: control.goalId,
   planDocId: control.planDocId,
   phase: control.phase,
@@ -71,7 +70,7 @@ it("production app state preserves status authority when a legacy terminal or di
   )
   expect(f.sync.data.session_goal.session.control?.revision).toBe(5)
   expect(f.sync.data.session_goal.session.control?.inFlight).toBe(true)
-  expect(f.sync.data.session_goal.session.ledger.tokens).toBe(88)
+  expect(f.sync.data.session_goal.session.ledger?.tokens).toBe(88)
   f.sync.goal.set("session", { ...value, goalId: "other", control: undefined }, { source: "event" })
   expect(f.sync.data.session_goal.session.goalId).toBe("goal-a")
   expect(f.requests).not.toHaveBeenCalled()

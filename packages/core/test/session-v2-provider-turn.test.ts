@@ -515,11 +515,11 @@ describe("V2 provider turn authority", () => {
         errorCode: "provider_stream_failed:transport",
         outcomeHash: Hash.sha256(JSON.stringify(["first"])),
       })
-      // The quarantined row itself is never replayed. A fresh receipt may only be opened by an
-      // explicit recovery/continuation decision outside this provider-turn boundary.
-      const retried = yield* admit(service, "msg-typed-failure")
-      expect(retried.receiptId).not.toBe(receipt.receiptId)
-      expect(retried.state).toBe("preparing")
+      // Same-owner admission is not authority to silently skip an unknown delivery.
+      const retried = yield* admit(service, "msg-typed-failure").pipe(Effect.exit)
+      expect(retried._tag).toBe("Failure")
+      if (retried._tag === "Failure")
+        expect(Cause.squash(retried.cause)).toMatchObject({ _tag: "V2ProviderTurn.UnsafeRetryError" })
       expect(yield* service.get(receipt.receiptId)).toMatchObject({ state: "indeterminate_after_crash" })
     }),
   )

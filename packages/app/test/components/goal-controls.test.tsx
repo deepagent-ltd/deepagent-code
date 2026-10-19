@@ -4,7 +4,7 @@ import { createStore } from "solid-js/store"
 import { GoalStatusBar } from "@/components/deepagent/goal-status-bar"
 import { GoalStartButton } from "@/components/deepagent/goal-start-button"
 import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
-import type { SessionGoal } from "@/context/global-sync/types"
+import { sessionGoalFromStatus, type SessionGoal } from "@/context/global-sync/types"
 import { dict } from "@/i18n/en"
 
 const wiring = vi.hoisted(() => ({ sdk: {} as object, sync: {} as object, toast: vi.fn() }))
@@ -34,7 +34,13 @@ vi.mock("@deepagent-code/ui/v2/dialog-v2", () => ({
   Dialog: (props: { children: import("solid-js").JSX.Element }) => <section>{props.children}</section>,
   DialogFooter: (props: { children: import("solid-js").JSX.Element }) => <footer>{props.children}</footer>,
 }))
-vi.mock("@/components/deepagent/goal-plan-edit-dialog", () => ({ GoalPlanEditDialog: () => null }))
+vi.mock("@/components/deepagent/goal-plan-edit-dialog", () => ({
+  GoalPlanEditDialog: (props: { onClose: () => void }) => (
+    <button aria-label="close-goal-plan-editor" onClick={props.onClose}>
+      Close
+    </button>
+  ),
+}))
 vi.mock("@/utils/toast", () => ({ showToast: (...args: unknown[]) => wiring.toast(...args) }))
 
 const snapshot = (patch: Partial<GoalClient.Snapshot> = {}): GoalClient.Snapshot => ({
@@ -128,7 +134,7 @@ it("stop acknowledgement with inFlight stays explicitly unconfirmed and never ex
   expect(screen.queryByRole("button", { name: dict["composer.goal.resume"] })).toBeNull()
 })
 
-it("recovery and revision-zero legacy controls remain read-only", async () => {
+it("paused recovery is explicitly unconfirmed and revision-zero controls remain read-only", async () => {
   const f = setup(
     snapshot({
       revision: 0,
@@ -139,11 +145,15 @@ it("recovery and revision-zero legacy controls remain read-only", async () => {
     }),
   )
   render(() => <GoalStatusBar sessionID={f.first} />)
-  expect(screen.getByText(dict["goal.control.recovery"])).toBeTruthy()
+  expect(screen.getByText(dict["goal.control.pausedUnconfirmed"])).toBeTruthy()
+  expect(screen.queryByText(dict["goal.control.recovery"])).toBeNull()
   expect(screen.queryByRole("button", { name: dict["composer.goal.resume"] })).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: dict["goal.control.refresh"] }))
   await waitFor(() => expect(f.sync).toHaveBeenCalled())
   expect(postCalls(f.request)).toHaveLength(0)
+  f.setData("session_goal", f.first, record(snapshot({ requestedPhase: "running", recoveryRequired: true })))
+  expect(screen.getByText(dict["goal.control.recovery"])).toBeTruthy()
+  expect(screen.queryByText(dict["goal.control.pausedUnconfirmed"])).toBeNull()
 })
 
 it("old control acknowledgement cannot change a new session/server/directory target", async () => {
@@ -351,4 +361,130 @@ it("a Goal form never carries another conversation's acceptance draft into a new
   expect(postCalls(f.request)[0].body).toMatchObject({ sessionID: "draft-new-session", codeRefs: [] })
   expect(postCalls(f.request)[0].body.criteria).toBeUndefined()
   expect(postCalls(f.request)[0].body.planSource).toBeUndefined()
+})
+
+it("closing plan edit refreshes a terminal Goal to paused without automatically resuming", async () => {
+  const f = setup(
+    snapshot({
+      phase: "needs_human",
+      requestedPhase: "needs_human",
+      running: false,
+    }),
+  )
+  render(() => <GoalStatusBar sessionID={f.first} />)
+  await waitFor(() => expect(f.sync).toHaveBeenCalledTimes(1))
+  expect(screen.queryByRole("button", { name: dict["composer.goal.resume"] })).toBeNull()
+  fireEvent.click(screen.getByRole("button", { name: dict["composer.goal.editPlan"] }))
+  f.sync.mockImplementation((directory: string, sessionID: string) => {
+    expect(directory).toBe("/project-a")
+    expect(sessionID).toBe(f.first)
+    f.setData(
+      "session_goal",
+      f.first,
+      record(
+        snapshot({
+          phase: "paused",
+          requestedPhase: "paused",
+          revision: 3,
+          running: false,
+        }),
+      ),
+    )
+    return Promise.resolve()
+  })
+  fireEvent.click(screen.getByRole("button", { name: "close-goal-plan-editor" }))
+  await screen.findByRole("button", { name: dict["composer.goal.resume"] })
+  expect(f.sync).toHaveBeenCalledTimes(2)
+  expect(postCalls(f.request)).toHaveLength(0)
+})
+
+it("closing an old plan editor never refreshes a replacement placement or Goal", async () => {
+  const f = setup(
+    snapshot({
+      phase: "needs_human",
+      requestedPhase: "needs_human",
+      running: false,
+    }),
+  )
+  render(() => <GoalStatusBar sessionID={f.target.sessionID} />)
+  await waitFor(() => expect(f.sync).toHaveBeenCalledTimes(1))
+  fireEvent.click(screen.getByRole("button", { name: dict["composer.goal.editPlan"] }))
+  f.setData("session_goal", "plan-edit-new-session", record(snapshot({ goalId: "goal-new", revision: 8 })))
+  f.setTarget({
+    sessionID: "plan-edit-new-session",
+    server: "http://server-b",
+    directory: "/project-b",
+  })
+  await waitFor(() => expect(f.sync).toHaveBeenCalledTimes(2))
+  fireEvent.click(screen.getByRole("button", { name: "close-goal-plan-editor" }))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(f.sync).toHaveBeenCalledTimes(2)
+  expect(f.data.session_goal["plan-edit-new-session"]?.control?.revision).toBe(8)
+  expect(postCalls(f.request)).toHaveLength(0)
+})
+
+it("cold Goal progress restores durable statistics without manufacturing unsupported zero counters", () => {
+  const progress = {
+    ledger: { ticks: 1, tokens: 16483, cost: 0.125, wallclockMs: 14257 },
+    stallCount: 2,
+    gaps: ["confirmed historical gap"],
+  }
+  const loaded = sessionGoalFromStatus(undefined, snapshot({ progress }), 0)
+  expect(loaded.ledger).toEqual(progress.ledger)
+  expect(loaded.stallCount).toBe(2)
+  expect(loaded.gaps).toEqual(progress.gaps)
+  expect(loaded.control?.requestedPhase).toBe("running")
+  const unsupported = sessionGoalFromStatus(undefined, snapshot(), 0)
+  expect(unsupported.ledger).toBeUndefined()
+  expect(unsupported.gaps).toEqual([])
+  expect(unsupported.control).toEqual(snapshot())
+})
+
+it("a delayed Goal status keeps newer live counters and same-tick gaps without granting control", () => {
+  const current = {
+    ...record(snapshot()),
+    ledger: { ticks: 3, tokens: 300, cost: 0.25, wallclockMs: 40 },
+    stallCount: 3,
+    gaps: ["new live gap"],
+    eventHint: 2,
+  }
+  const progress = {
+    ledger: { ticks: 2, tokens: 200, cost: 0.125, wallclockMs: 30 },
+    stallCount: 1,
+    gaps: ["old read gap"],
+  }
+  const slow = snapshot({ phase: "paused", requestedPhase: "paused", revision: 2, progress })
+  expect(sessionGoalFromStatus(current, slow, 1)).toMatchObject({
+    ledger: current.ledger,
+    stallCount: 3,
+    gaps: current.gaps,
+    phase: "paused",
+    control: slow,
+  })
+  const sameTick = snapshot({ progress: { ...progress, ledger: { ...progress.ledger, ticks: 3 } } })
+  expect(sessionGoalFromStatus(current, sameTick, 1).gaps).toEqual(current.gaps)
+  expect(sessionGoalFromStatus(current, sameTick, 2).gaps).toEqual(progress.gaps)
+  expect(sessionGoalFromStatus(current, snapshot({ goalId: "goal-other" }), 1).ledger).toBeUndefined()
+})
+
+it("unknown Goal progress hides numeric counters while retaining the original control actions", async () => {
+  const f = setup()
+  f.setData("session_goal", f.first, sessionGoalFromStatus(undefined, snapshot(), 0))
+  render(() => <GoalStatusBar sessionID={f.first} />)
+  expect(document.querySelector('[data-component="goal-status-bar"]')?.textContent).not.toContain("tokens")
+  expect(screen.getByRole("button", { name: dict["composer.goal.pause"] })).toBeTruthy()
+  expect(postCalls(f.request)).toHaveLength(0)
+  f.setData(
+    "session_goal",
+    f.first,
+    sessionGoalFromStatus(
+      undefined,
+      snapshot({
+        progress: { ledger: { ticks: 1, tokens: 16483, cost: 0, wallclockMs: 14257 }, stallCount: 0, gaps: [] },
+      }),
+      0,
+    ),
+  )
+  await waitFor(() => expect(screen.getByText("1 tick \u00b7 16,483 tokens")).toBeTruthy())
+  expect(postCalls(f.request)).toHaveLength(0)
 })

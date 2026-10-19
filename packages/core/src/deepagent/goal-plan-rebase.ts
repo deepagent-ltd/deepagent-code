@@ -1,16 +1,18 @@
 export * as GoalPlanRebase from "./goal-plan-rebase"
 
 import { and, desc, eq, ne, sql } from "drizzle-orm"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import type { Database } from "../database/database"
 import { EventSequenceTable } from "../event/sql"
 import { GoalControl } from "./goal-control"
+import { GoalControlSchema } from "./goal-control.schema"
 import { GoalControlCommandTable, GoalControlTable, GoalTickPermitTable } from "./goal-control.sql"
 import { GoalTickCheckpoint } from "./goal-tick-checkpoint"
 import { GoalTickCheckpointV2 } from "./goal-tick-checkpoint-v2"
 import { GoalChildResult } from "./goal-child-result"
 import { GoalTickProgram } from "./goal-tick-program"
 import { GoalTickState } from "./goal-tick-state"
+import { GoalPauseBoundary } from "./goal-pause-boundary"
 import { GoalPlanRebaseSchema } from "./goal-plan-rebase.schema"
 import { GoalPlanRebaseTable } from "./goal-plan-rebase.sql"
 import { DeepAgentPlanStore } from "./plan-store"
@@ -235,8 +237,8 @@ const active = (db: Reader, goalID: string) =>
     .all()
     .pipe(Effect.orDie)
 
-/** A source is the complete last committed mirror set, never a caller's receipt assertion. */
-export const baseline = (db: Reader, goal: GoalControl.Row) =>
+/** Read bounded committed metadata only. Control callers must still audit the execution source below. */
+const readBaseline = (db: Reader, goal: GoalControl.Row) =>
   Effect.gen(function* () {
     const last = yield* db
       .select()
@@ -255,9 +257,16 @@ export const baseline = (db: Reader, goal: GoalControl.Row) =>
         !rebase.journal.committedReceiptHash)
     )
       return yield* fail("RECOVERY_REQUIRED", "Goal structural generation has no committed edit receipt")
+    const pause = last?.outcome === "paused" ? yield* GoalPauseBoundary.read(db, last.permit_id) : undefined
     const checkpoint = last ? yield* GoalTickCheckpointV2.read(db, last.permit_id) : undefined
+    if (last?.outcome === "paused" && !GoalPauseBoundary.matchesCommittedBaseline(goal, last, pause, checkpoint))
+      return yield* fail("RECOVERY_REQUIRED", "Goal pause has no exact committed safe boundary")
+    const paused = pause
+      ? { documents: pause.record.documents, receiptHash: pause.record_hash,
+          planRevision: pause.record.planRevision, planRebaseID: pause.record.planRebaseID }
+      : undefined
     if (
-      last &&
+      last && !paused &&
       (!checkpoint ||
         checkpoint.state !== "committed" ||
         checkpoint.journal.documents.some((item) => item.state !== "confirmed") ||
@@ -265,10 +274,11 @@ export const baseline = (db: Reader, goal: GoalControl.Row) =>
         last.next_seq !== goal.next_seq)
     )
       return yield* fail("RECOVERY_REQUIRED", "Goal tick is not fully settled with confirmed mirrors")
-    if (checkpoint) yield* GoalChildResult.inspectMany(db, checkpoint.journal.results)
     const edited = rebase && rebase.journal.source?.nextSeq === goal.next_seq
     const documents = edited
       ? rebase.journal.documents
+      : paused
+        ? paused.documents
       : checkpoint
         ? checkpoint.journal.documents
         : goal.initialization.ownedPreparation?.documents
@@ -280,8 +290,11 @@ export const baseline = (db: Reader, goal: GoalControl.Row) =>
     const plan = payloads.find((item) => item.id === goal.plan_doc_id)
     if (!plan || plan.version !== goal.plan_version)
       return yield* fail("RECOVERY_REQUIRED", "Goal plan cursor differs from its source receipt")
+    if (paused && !edited && (paused.planRevision !== goal.plan_revision || paused.planRebaseID !== goal.plan_rebase_id))
+      return yield* fail("RECOVERY_REQUIRED", "Paused Goal belongs to a different structural generation")
     if (
       checkpoint &&
+      !paused &&
       !edited &&
       goal.plan_revision > 0 &&
       (checkpoint.journal.program.version !== 3 ||
@@ -290,14 +303,63 @@ export const baseline = (db: Reader, goal: GoalControl.Row) =>
     )
       return yield* fail("RECOVERY_REQUIRED", "Goal checkpoint belongs to a different structural generation")
     return {
+      last,
+      checkpoint,
+      pauseReceiptHash: paused?.receiptHash,
       documents: payloads,
       receiptHash: edited
         ? rebase.journal.committedReceiptHash!
-        : (checkpoint?.journal_hash ?? hash({ initialization: goal.initialization_hash, documents: payloads })),
+        : (paused?.receiptHash ?? checkpoint?.journal_hash ?? hash({ initialization: goal.initialization_hash, documents: payloads })),
       permitID: last?.permit_id ?? null,
       attemptedStepIDs: rebase?.journal.source?.attemptedStepIDs ?? [],
     }
   })
+
+/** A source is the complete last committed mirror set, never a caller's receipt assertion. */
+export const baseline = (db: Reader, goal: GoalControl.Row) =>
+  Effect.gen(function* () {
+    const data = yield* readBaseline(db, goal)
+    if (data.last?.outcome === "paused") {
+      const audited = yield* GoalPauseBoundary.baseline(db, goal, data.last)
+      if (audited.receiptHash !== data.pauseReceiptHash)
+        return yield* fail("RECOVERY_REQUIRED", "Goal pause changed during execution audit")
+    }
+    if (data.checkpoint && data.last?.outcome !== "paused")
+      yield* GoalChildResult.inspectMany(db, data.checkpoint.journal.results)
+    return {
+      documents: data.documents,
+      receiptHash: data.receiptHash,
+      permitID: data.permitID,
+      attemptedStepIDs: data.attemptedStepIDs,
+    }
+  })
+
+/** Statistics are observations of committed bytes, never an execution or plan-edit proof.
+ * The bounded metadata reader cannot inspect provider/tool history or expose an unaudited document set. */
+export const progress = (db: Reader, row: GoalControl.Row) =>
+  Effect.gen(function* () {
+    if (row.initialization.executionContract !== "owned-goal-v2" || row.preparation !== "ready") return undefined
+    const source = yield* readBaseline(db, row)
+    const document = source.documents.find((item) => item.id === `doc:run_context:${row.goal_id}`)
+    if (!document || document.type !== "run_context" || document.scope !== `run:${row.session_id}`) return undefined
+    const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(GoalTickState.Runtime))(document.body)
+    if (Option.isNone(decoded)) return undefined
+    const state = GoalTickState.requireState(decoded.value)
+    if (state.goalId !== row.goal_id || state.sessionId !== row.session_id ||
+        state.planDocId !== row.plan_doc_id || state.ledger.ticks !== row.next_seq) return undefined
+    const current = yield* GoalControl.current(db, row.session_id)
+    if (!current || current.goal_id !== row.goal_id || current.revision !== row.revision ||
+        current.next_seq !== row.next_seq || current.plan_revision !== row.plan_revision ||
+        current.plan_rebase_id !== row.plan_rebase_id || current.plan_version !== row.plan_version) return undefined
+    // Runtime already enforces these exact Progress field bounds; keep malformed observations optional.
+    const decodedProgress = Schema.decodeUnknownOption(GoalControlSchema.Progress)({
+      ledger: { ticks: state.ledger.ticks, tokens: state.ledger.tokens, cost: state.ledger.cost,
+        wallclockMs: state.ledger.wallclockMs },
+      stallCount: state.stallCount,
+      gaps: [...state.gaps],
+    })
+    return Option.isSome(decodedProgress) ? decodedProgress.value : undefined
+  }).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
 
 const source = (db: Reader, goal: GoalControl.Row) =>
   Effect.gen(function* () {
@@ -611,7 +673,7 @@ export const begin = (db: Db, input: GoalPlanRebaseSchema.Begin, authorize: Auth
         return yield* response(tx, recorded, input.requestID, false, authorize)
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
 
 /** Called only inside checkpoint settlement's SQL transaction, after every mirror and permit commit. */
 export const readyPending = (db: Reader, goalID: string) =>
@@ -949,7 +1011,7 @@ export const prepare = (db: Db, input: GoalPlanRebaseSchema.Apply, directory: st
         return { row: updated, replayed: false }
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
 
 export const project = (db: Db, editID: string, documentID: string, directory: string, authorize: Authority) =>
   Effect.gen(function* () {
@@ -966,7 +1028,7 @@ export const project = (db: Db, editID: string, documentID: string, directory: s
           if (!row.journal.fileStarted) yield* write(tx, row, { ...row.journal, fileStarted: true }, row.state)
         }),
       { behavior: "immediate" },
-    )
+    ).pipe(GoalChildResult.withRuntimeIdentity(db))
     return yield* db.transaction(
       (tx) =>
         Effect.gen(function* () {
@@ -1034,7 +1096,7 @@ export const project = (db: Db, editID: string, documentID: string, directory: s
           )
         }),
       { behavior: "immediate" },
-    )
+    ).pipe(GoalChildResult.withRuntimeIdentity(db))
   })
 
 export const settle = (db: Db, editID: string, directory: string, authorize: Authority) =>
@@ -1121,7 +1183,7 @@ export const settle = (db: Db, editID: string, directory: string, authorize: Aut
         )
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
 
 export const cancel = (db: Db, input: GoalPlanRebaseSchema.Target, authorize: Authority) =>
   db.transaction(
@@ -1182,7 +1244,7 @@ export const cancel = (db: Db, input: GoalPlanRebaseSchema.Target, authorize: Au
         return yield* response(tx, updated, input.requestID, false, authorize)
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
 
 export const reconcile = (db: Db, input: GoalPlanRebaseSchema.Target, authorize: Authority) =>
   db.transaction(
@@ -1226,4 +1288,4 @@ export const reconcile = (db: Db, input: GoalPlanRebaseSchema.Target, authorize:
         }
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
