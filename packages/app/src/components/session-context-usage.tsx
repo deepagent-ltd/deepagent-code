@@ -223,15 +223,21 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
           onOpenChange={change}
           placement="bottom-end"
           class="rounded-2xl bg-surface-raised-base shadow-xl"
-          style={{ width: "360px", "max-width": "calc(100vw - 24px)" }}
+          style={{ width: "360px", "max-width": "calc(100vw - 24px)", "border-radius": "20px" }}
           title={<span class="sr-only">{text("title")}</span>}
           triggerAs="button"
           triggerProps={{
-            ref: (element: HTMLButtonElement) => {
-              trigger = element
-            },
             type: "button",
-            onFocus: () => setState("triggerFocused", true),
+            onFocus: (event) => {
+              trigger = event.currentTarget
+              setState("triggerFocused", true)
+            },
+            onPointerDown: (event) => {
+              trigger = event.currentTarget
+            },
+            onClick: (event) => {
+              trigger = event.currentTarget
+            },
             onBlur: () => setState("triggerFocused", false),
             class:
               "size-8 rounded-lg inline-flex items-center justify-center text-text-base hover:bg-surface-raised-base focus-visible:outline-2 focus-visible:outline-border-strong-base max-sm:min-h-11 max-sm:min-w-11",

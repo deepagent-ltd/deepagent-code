@@ -295,3 +295,23 @@ it("keeps a streaming Session unknown until settlement and distinguishes unrepor
   fireEvent.click(within(content).getByRole("button", { name: /This activity/ }))
   expect(content.textContent).toContain(dict["context.preview.fieldUnknown"])
 })
+
+it("keeps the context card open when its actual trigger receives focus after opening", async () => {
+  mount()
+  await waitFor(() => expect(screen.getByRole("img").getAttribute("aria-label")).toContain("51%"))
+  await card()
+  trigger().focus()
+  fireEvent.focusIn(trigger())
+  expect(trigger().getAttribute("aria-expanded")).toBe("true")
+  expect(screen.getByRole("dialog").hasAttribute("data-expanded")).toBe(true)
+})
+
+it("closes on a second real pointer sequence on the trigger instead of closing and reopening", async () => {
+  mount()
+  await waitFor(() => expect(screen.getByRole("img").getAttribute("aria-label")).toContain("51%"))
+  await card()
+  fireEvent.pointerDown(trigger())
+  expect(trigger().getAttribute("aria-expanded")).toBe("true")
+  fireEvent.click(trigger())
+  await waitFor(() => expect(trigger().getAttribute("aria-expanded")).toBe("false"))
+})
