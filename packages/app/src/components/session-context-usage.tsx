@@ -8,7 +8,7 @@ import type { Part } from "@deepagent-code/sdk/client"
 import { useSync } from "@/context/sync"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
-import { getSessionContextMetrics, getConversationTokens } from "@/components/session/session-context-metrics"
+import { getSessionContextMetrics } from "@/components/session/session-context-metrics"
 import { useSessionLayout } from "@/pages/session/session-layout"
 
 interface SessionContextUsageProps {
@@ -34,10 +34,12 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
     ),
   )
   const context = createMemo(() => metrics().context)
-  // Cumulative tokens across the whole conversation (all turns + subagent child sessions). Distinct
-  // from `context()` which is the current retained-window occupancy. Cost is intentionally not shown
-  // yet — the billing figure is not aligned with our agent system, so it is hidden until it is.
-  const conversationTokens = createMemo(() => getConversationTokens(sync.data.session ?? [], params.id))
+  const usageLabel = () => {
+    const current = context()
+    if (!current) return language.t("context.usage.noData")
+    if (current.usage === null) return language.t("context.usage.unknown")
+    return `${current.source === "compaction" ? "≈ " : ""}${current.usage.toLocaleString(language.intl())}%`
+  }
 
   const openContext = () => {
     if (!params.id) return
@@ -48,31 +50,51 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
   }
 
   const circle = () => (
-    <div class="flex items-center justify-center">
-      <ProgressCircle size={16} strokeWidth={2} percentage={context()?.usage ?? 0} />
+    <div
+      class="flex items-center justify-center"
+      role="img"
+      aria-label={`${language.t("context.usage.window")}: ${usageLabel()}`}
+    >
+      <Show
+        when={context()?.usage !== null && context()?.usage !== undefined}
+        fallback={
+          <div class="size-4 rounded-full border-2 border-border-strong-base" data-slot="context-usage-unknown" />
+        }
+      >
+        <ProgressCircle size={16} strokeWidth={2} percentage={context()!.usage!} />
+      </Show>
     </div>
   )
 
   const tooltipValue = () => (
-    <div>
-      <Show when={context()}>
+    <div class="flex flex-col gap-1" data-component="context-usage-tooltip">
+      <div class="flex items-center gap-2">
+        <span class="text-text-invert-base">{language.t("context.usage.window")}</span>
+        <span class="text-text-invert-strong">{usageLabel()}</span>
+      </div>
+      <Show when={context()} fallback={<div class="text-text-invert-base">{language.t("context.usage.pending")}</div>}>
         {(ctx) => (
           <>
             <div class="flex items-center gap-2">
-              <span class="text-text-invert-strong">{ctx().total.toLocaleString(language.intl())}</span>
+              <span class="text-text-invert-base">{language.t("context.usage.used")}</span>
+              <span class="text-text-invert-strong">
+                {ctx().source === "compaction" ? "≈ " : ""}
+                {ctx().total.toLocaleString(language.intl())}
+              </span>
+              <span class="text-text-invert-base">/ {language.t("context.usage.capacity")}</span>
+              <span class="text-text-invert-strong">
+                {ctx().limit ? ctx().limit!.toLocaleString(language.intl()) : language.t("context.usage.unknown")}
+              </span>
               <span class="text-text-invert-base">{language.t("context.usage.tokens")}</span>
             </div>
-            <div class="flex items-center gap-2">
-              <span class="text-text-invert-strong">{ctx().usage ?? 0}%</span>
-              <span class="text-text-invert-base">{language.t("context.usage.usage")}</span>
+            <div class="max-w-64 text-text-invert-base">
+              {language.t(
+                ctx().source === "compaction" ? "context.usage.compactionEstimate" : "context.usage.lastRequest",
+              )}
             </div>
           </>
         )}
       </Show>
-      <div class="flex items-center gap-2">
-        <span class="text-text-invert-strong">{conversationTokens().toLocaleString(language.intl())}</span>
-        <span class="text-text-invert-base">{language.t("context.usage.totalTokens")}</span>
-      </div>
     </div>
   )
 
