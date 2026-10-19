@@ -237,7 +237,7 @@
   padding-block: 16px;
 }
 [data-component="settings-v2-row"] + [data-component="settings-v2-row"] {
-  border-top: 1px solid color-mix(in srgb, var(--v2-border-border-muted) 35%, transparent);
+  border-top: 1px solid var(--v2-border-border-base);
 }
 [data-slot="settings-v2-row-copy"] {
   display: flex;
