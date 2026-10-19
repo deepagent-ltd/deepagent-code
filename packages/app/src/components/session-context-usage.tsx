@@ -16,6 +16,7 @@ import { usePrompt } from "@/context/prompt"
 import { useLanguage } from "@/context/language"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { contextPercent, contextTokens, contextTokenTotal } from "./session/session-context-preview"
+import { useSessionOverviewLayout } from "./session/session-overview-layout"
 
 interface SessionContextUsageProps {
   variant?: "button" | "indicator"
@@ -35,6 +36,7 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
   const [state, setState] = createStore({
     opened: false,
     triggerFocused: false,
+    trigger: undefined as HTMLButtonElement | undefined,
     section: undefined as "activity" | "session" | "more" | undefined,
     summary: undefined as SessionContextUsageSchema.Summary | undefined,
     key: "",
@@ -98,7 +100,7 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
   const capacity = () => (dirty() ? local.model.current()?.limit.context : state.summary?.estimate.contextLimit)
   const usageLabel = () => (percent() ? `${percent()!.used}%` : text("unknown"))
   let controller: AbortController | undefined
-  let trigger: HTMLButtonElement | undefined
+  const layout = useSessionOverviewLayout(() => state.trigger, "context", opened)
   const read = async () => {
     const sessionID = params.id
     if (!sessionID || document.visibilityState === "hidden") return
@@ -207,7 +209,7 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
     const component = await import("@/components/session-context-dialog")
     if (params.id !== sessionID || identity() !== scope || !opened()) return
     change(false)
-    trigger?.focus()
+    state.trigger?.focus()
     dialog.show(() => <component.SessionContextUsageDialog />)
   }
   return (
@@ -223,20 +225,26 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
           onOpenChange={change}
           placement="bottom-end"
           class="rounded-2xl bg-surface-raised-base shadow-xl"
-          style={{ width: "360px", "max-width": "calc(100vw - 24px)", "border-radius": "20px" }}
+          style={layout()}
+          bodyClass="min-h-0 flex-1 overflow-y-auto"
+          flip={false}
+          slide={false}
+          overlap={false}
+          fitViewport
+          overflowPadding={12}
           title={<span class="sr-only">{text("title")}</span>}
           triggerAs="button"
           triggerProps={{
             type: "button",
             onFocus: (event) => {
-              trigger = event.currentTarget
+              setState("trigger", event.currentTarget)
               setState("triggerFocused", true)
             },
             onPointerDown: (event) => {
-              trigger = event.currentTarget
+              setState("trigger", event.currentTarget)
             },
             onClick: (event) => {
-              trigger = event.currentTarget
+              setState("trigger", event.currentTarget)
             },
             onBlur: () => setState("triggerFocused", false),
             class:
@@ -263,10 +271,7 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
             </span>
           }
         >
-          <div
-            class="flex max-h-[min(560px,70vh)] flex-col gap-4 overflow-y-auto p-1"
-            data-component="context-usage-card"
-          >
+          <div class="flex min-w-0 flex-col gap-4 p-1" data-component="context-usage-card">
             {headline()}
             <Show when={state.summary?.estimate.status !== "complete" || dirty()}>
               <p class="text-12-regular text-text-weak">

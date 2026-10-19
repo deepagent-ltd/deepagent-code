@@ -231,6 +231,9 @@ it("separates the current plan from subtasks and leaves no old plan after close 
   fireEvent.click(trigger)
   await screen.findByText("Review own code and deliver")
   setCurrent("sessionID", "other-session")
+  await waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"))
+  expect(screen.getByRole("dialog").hasAttribute("data-closed")).toBe(true)
+  fireEvent.click(trigger)
   await screen.findByText(dict["workPanel.planEmpty"])
   await waitFor(() =>
     expect(runtime.client.session.taskSummary).toHaveBeenLastCalledWith(
@@ -245,6 +248,9 @@ it("separates the current plan from subtasks and leaves no old plan after close 
     setCurrent("sessionID", "parent")
     setCurrent("plans", reconcile({}))
   })
+  await waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"))
+  expect(screen.getByRole("dialog").hasAttribute("data-closed")).toBe(true)
+  fireEvent.click(trigger)
   await screen.findByText(dict["workPanel.planEmpty"])
   expect(screen.queryByText("Review own code and deliver")).toBeNull()
   result.unmount()
@@ -348,5 +354,35 @@ it("opens comparison details and selects only the reference without running a wo
   expect(choose).toHaveBeenCalledWith("refs/heads/main")
   fireEvent.click(within(region).getByRole("button", { name: /4 changed files/ }))
   expect(compare).toHaveBeenCalledTimes(1)
+  expect(screen.getByRole("dialog")).toBeTruthy()
   expect(screen.queryByRole("button", { name: /checkout|merge|switch worktree/i })).toBeNull()
+})
+
+it("keeps the task card open while the same Session receives messages or the user edits the conversation", async () => {
+  const [state, setState] = createStore({ message: "original message", draft: "" })
+  render(() => (
+    <>
+      <input
+        aria-label="Conversation input"
+        value={state.draft}
+        onInput={(event) => setState("draft", event.currentTarget.value)}
+      />
+      <p>{state.message}</p>
+      <TaskProgressPopover />
+    </>
+  ))
+  const trigger = screen.getByRole("button", { name: dict["workPanel.overview"] })
+  fireEvent.click(trigger)
+  await screen.findByRole("dialog")
+  const input = screen.getByRole("textbox", { name: "Conversation input" })
+  fireEvent.pointerDown(input)
+  input.focus()
+  fireEvent.input(input, { target: { value: "Continue this Session" } })
+  setState("message", "new streamed response")
+  await screen.findByText("new streamed response")
+  expect(screen.getByRole("dialog")).toBeTruthy()
+  expect(document.activeElement).toBe(input)
+  expect((input as HTMLInputElement).value).toBe("Continue this Session")
+  fireEvent.click(trigger)
+  await waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"))
 })

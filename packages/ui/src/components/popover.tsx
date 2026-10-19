@@ -16,7 +16,9 @@ export interface PopoverProps<T extends ValidComponent = "div">
   class?: ComponentProps<"div">["class"]
   classList?: ComponentProps<"div">["classList"]
   style?: ComponentProps<"div">["style"]
+  bodyClass?: ComponentProps<"div">["class"]
   portal?: boolean
+  dismissOnOutside?: boolean
 }
 
 export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>) {
@@ -30,12 +32,14 @@ export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>
     "class",
     "classList",
     "style",
+    "bodyClass",
     "children",
     "portal",
     "open",
     "defaultOpen",
     "onOpenChange",
     "modal",
+    "dismissOnOutside",
   ])
 
   const [state, setState] = createStore({
@@ -83,6 +87,7 @@ export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>
     }
 
     const onPointerDown = (event: PointerEvent) => {
+      if (local.dismissOnOutside === false) return
       const target = event.target
       if (!(target instanceof Node)) return
       if (inside(target)) return
@@ -90,13 +95,15 @@ export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>
     }
 
     const onFocusIn = (event: FocusEvent) => {
+      if (local.dismissOnOutside === false) return
       const target = event.target
       if (!(target instanceof Node)) return
       if (inside(target)) return
       close("outside")
     }
 
-    makeEventListener(window, "keydown", onKeyDown, { capture: true })
+    // A resident card can remain behind another dialog; let Kobalte dismiss only its topmost layer.
+    if (local.dismissOnOutside !== false) makeEventListener(window, "keydown", onKeyDown, { capture: true })
     makeEventListener(window, "pointerdown", onPointerDown, { capture: true })
     makeEventListener(window, "focusin", onFocusIn, { capture: true })
   })
@@ -110,6 +117,12 @@ export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>
         [local.class ?? ""]: !!local.class,
       }}
       style={local.style}
+      onOpenAutoFocus={(event) => {
+        if (local.dismissOnOutside === false) event.preventDefault()
+      }}
+      onInteractOutside={(event) => {
+        if (local.dismissOnOutside === false) event.preventDefault()
+      }}
       onCloseAutoFocus={(event: Event) => {
         if (state.dismiss === "outside") event.preventDefault()
         setState("dismiss", null)
@@ -131,7 +144,9 @@ export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>
       <Show when={local.description}>
         <Kobalte.Description data-slot="popover-description">{local.description}</Kobalte.Description>
       </Show>
-      <div data-slot="popover-body">{local.children}</div>
+      <div data-slot="popover-body" class={local.bodyClass}>
+        {local.children}
+      </div>
     </Kobalte.Content>
   )
 

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, onCleanup, Show, untrack } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { VcsRefs, VcsWorkSummary } from "@deepagent-code/sdk"
 import { Popover } from "@deepagent-code/ui/popover"
@@ -9,6 +9,7 @@ import { Schema } from "effect"
 import { useSDK } from "@/context/sdk"
 import { useLanguage } from "@/context/language"
 import { useServerSync } from "@/context/server-sync"
+import { useSessionOverviewLayout } from "@/components/session/session-overview-layout"
 import { useSessionLayout } from "./session-layout"
 
 type TaskSummaryClient = ReturnType<typeof useSDK>["client"]
@@ -177,6 +178,7 @@ export function TaskProgressPopover(
     opened: false,
     expanded: undefined as "plan" | "tasks" | undefined,
     selected: undefined as string | undefined,
+    trigger: undefined as HTMLElement | undefined,
   })
   const opened = () => props.open ?? ui.opened
   const setOpened = (open: boolean) => {
@@ -184,10 +186,17 @@ export function TaskProgressPopover(
     if (props.open === undefined) setUi("opened", open)
   }
   const scope = createMemo(() => JSON.stringify([sdk.scope, sdk.directory, params.id]))
-  createEffect(() => {
-    scope()
-    setUi({ expanded: undefined, selected: undefined })
-  })
+  createEffect(
+    on(
+      scope,
+      () => {
+        setUi({ expanded: undefined, selected: undefined })
+        setOpened(false)
+      },
+      { defer: true },
+    ),
+  )
+  const layout = useSessionOverviewLayout(() => ui.trigger, "tasks", opened)
   const state = useTaskSummary(opened)
   const plan = createMemo(() => (params.id ? serverSync.data.session_plan[params.id] : undefined))
   const completed = createMemo(
@@ -235,19 +244,29 @@ export function TaskProgressPopover(
         open={opened()}
         onOpenChange={setOpened}
         placement="bottom-end"
+        flip={false}
+        slide={false}
+        overlap={false}
+        fitViewport
+        overflowPadding={12}
+        dismissOnOutside={false}
         title={text("overview")}
         triggerAs="button"
         triggerProps={{
           type: "button",
+          onFocus: (event) => setUi("trigger", event.currentTarget),
+          onPointerDown: (event) => setUi("trigger", event.currentTarget),
+          onClick: (event) => setUi("trigger", event.currentTarget),
           class:
             "inline-flex size-6 items-center justify-center rounded-md p-0 box-border shrink-0 hover:bg-surface-base-hover data-[expanded]:bg-surface-base-active",
           title: text("overview"),
           "aria-label": text("overview"),
         }}
         trigger={<Icon name="checklist" size="small" />}
-        style={{ width: "440px", "max-width": "calc(100vw - 24px)", "border-radius": "20px" }}
+        style={layout()}
+        bodyClass="min-h-0 flex-1 overflow-y-auto"
       >
-        <div class="max-h-[75vh] overflow-y-auto px-2 pb-2 space-y-5" data-slot="task-progress-summary">
+        <div class="px-2 pb-2 space-y-5" data-slot="task-progress-summary">
           <Show when={props.git}>
             <section aria-label={text("changes")} data-slot="task-progress-git" class="space-y-2">
               <div class="flex min-w-0 items-center gap-2 text-13-medium">
@@ -255,10 +274,7 @@ export function TaskProgressPopover(
                 <button
                   type="button"
                   class="min-w-0 truncate hover:text-text-strong"
-                  onClick={() => {
-                    props.git?.onOpenReview()
-                    setOpened(false)
-                  }}
+                  onClick={() => props.git?.onOpenReview()}
                   title={text("compareMeaning")}
                 >
                   {summary()?.branch ?? summary()?.headOID?.slice(0, 8) ?? "—"} →
@@ -288,10 +304,7 @@ export function TaskProgressPopover(
               <button
                 type="button"
                 class="flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-12-regular hover:bg-surface-raised-base-hover"
-                onClick={() => {
-                  props.git?.onOpenReview()
-                  setOpened(false)
-                }}
+                onClick={() => props.git?.onOpenReview()}
               >
                 <Show
                   when={summary()?.state === "ready"}

@@ -1832,7 +1832,7 @@ export function MessageTimeline(props: {
   }
 
   return (
-    <div class="relative w-full h-full min-w-0">
+    <div class="relative w-full h-full min-w-0" data-session-overview-scope>
       <Show when={exportProgress()}>
         <div
           class="absolute left-4 right-4 top-4 z-[70] rounded-md bg-surface-base px-4 py-3 shadow-lg md:left-12 md:right-12"
