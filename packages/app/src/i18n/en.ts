@@ -1219,7 +1219,7 @@ export const dict = {
   "composer.mode.plan": "Design (review before execution)",
   "composer.mode.plan.desc":
     "Explore and prepare a plan within a read-only tool boundary. Explicit approval queues the displayed plan for execution.",
-  "settings.general.row.collaborationMode.effective": "Current activity: {{mode}}",
+  "settings.general.row.collaborationMode.effective": "Running task: {{mode}}",
   "composer.mode.auto": "Auto",
   "composer.mode.loop": "Continuous execution",
   "composer.mode.design": "Execute existing plan (compatibility)",
@@ -2284,8 +2284,9 @@ export const dict = {
   "settings.import.log": "Progress",
   "settings.about.product.title": "Product",
   "settings.about.product.description": "The application name and version.",
-  "settings.about.attribution.title": "Built on deepagent-code",
-  "settings.about.attribution.description": "DeepAgent Code is built on deepagent-code, used under the MIT License.",
+  "settings.about.attribution.title": "Upstream project",
+  "settings.about.attribution.description":
+    "Derived from OpenCode under MIT. DeepAgent Code is distributed under AGPL-3.0-or-later; see the complete notices below.",
   "settings.about.license.title": "License",
   "settings.about.help.title": "Help",
   "settings.about.help.description": "Documentation, guides, and support.",
@@ -2303,17 +2304,18 @@ export const dict = {
 
   "settings.general.row.language.title": "Language",
   "settings.general.row.language.description": "Change the display language for DeepAgent Code",
-  "settings.general.deepagent.mode.title": "Agent",
-  "settings.general.deepagent.mode.description": "Choose the work intensity of DeepAgent.",
-  "settings.general.deepagent.mode.general": "general",
-  "settings.general.deepagent.mode.high": "high",
-  "settings.general.deepagent.mode.xhigh": "xhigh",
-  "settings.general.deepagent.mode.max": "max",
-  "settings.general.deepagent.mode.ultra": "ultra",
+  "settings.general.deepagent.mode.title": "DAC working depth",
+  "settings.general.deepagent.mode.description":
+    "Controls knowledge retrieval and orchestration. Autonomous depth can advance task rounds; existing permission approvals still apply.",
+  "settings.general.deepagent.mode.general": "Basic",
+  "settings.general.deepagent.mode.high": "Standard",
+  "settings.general.deepagent.mode.xhigh": "Enhanced",
+  "settings.general.deepagent.mode.max": "Deep",
+  "settings.general.deepagent.mode.ultra": "Autonomous",
   "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra requires the intelligence scenario mode.",
-  "settings.general.deepagent.subagentMode.title": "Subagent",
+  "settings.general.deepagent.subagentMode.title": "Child task working depth",
   "settings.general.deepagent.subagentMode.description":
-    "Choose the work intensity of subagents relative to the main agent.",
+    "Inherit the parent DAC working depth or use one lower level. This does not change the model reasoning setting.",
   "settings.general.deepagent.subagentMode.inherit": "Inherit from parent",
   "settings.general.deepagent.subagentMode.downgrade": "One level lower",
   "settings.general.deepagent.prompt.title": "Scenario mode",
@@ -2465,9 +2467,9 @@ export const dict = {
   "settings.general.row.showSessionProgressBar.description":
     "Display the animated progress bar at the top of the session when the agent is working",
   "settings.general.row.collaborationMode.title": "New conversation default",
-  "settings.general.row.collaborationMode.currentTitle": "This conversation: next activity",
+  "settings.general.row.collaborationMode.currentTitle": "Current conversation mode",
   "settings.general.row.collaborationMode.currentDescription":
-    "Choose the mode for the next activity only. A running goal must be paused and have no activity in flight before changing execution type.",
+    "Applies to the next task in this conversation. A running task keeps its mode; pause and finish in-flight work before changing its execution type.",
   "settings.general.row.collaborationMode.description":
     "Choose the default for new conversations. Existing conversations and running activities keep their own mode.",
   "settings.general.row.expertPanelDefault.title": "Arm expert panel by default",
@@ -2582,7 +2584,7 @@ export const dict = {
   "settings.shortcuts.group.prompt": "Prompt",
 
   "settings.providers.title": "Providers",
-  "settings.providers.description": "Provider settings will be configurable here.",
+  "settings.providers.description": "Connect an API or a plan with its own credentials.",
   "settings.providers.section.deepagentBackends": "DeepAgent model backends",
   "settings.providers.section.connected": "Connected providers",
   "settings.providers.connected.empty": "No connected providers",
@@ -3132,4 +3134,99 @@ export const dict = {
   "context.preview.generating": "Generating · refreshes after settlement",
   "context.preview.missing.request_in_progress": "request still in progress or awaiting recovery",
   "context.preview.fieldUnknown": "— means this field was not separately reported.",
+
+  // Settings page content and scope labels.
+  "settings.section.common": "Common",
+  "settings.section.models": "Models",
+  "settings.section.collaboration": "Collaboration",
+  "settings.section.extensions": "Extensions",
+  "settings.section.advanced": "Advanced",
+  "settings.section.product": "Product",
+  "settings.navigation.label": "Settings page",
+  "settings.details.title": "Details",
+  "settings.metadata.copy": "Copy complete value",
+  "settings.metadata.copied": "Copied",
+  "settings.metadata.failed": "Copy is unavailable. Select and copy the complete text below.",
+  "settings.about.links.title": "Links",
+  "settings.about.links.description": "Public product resources and support.",
+  "settings.about.homepage": "Website",
+  "settings.about.source": "Source code",
+  "settings.about.support": "Report an issue",
+  "settings.about.license.description": "Product license. Full license and third-party notices are available below.",
+  "settings.plugins.description":
+    "Plugins listed here are configured for this DAC backend. Configuration alone does not prove they loaded successfully.",
+  "settings.plugins.configured": "Configured",
+  "settings.plugins.identifier": "Complete plugin identifier",
+  "settings.capabilities.description":
+    "Built-in guidance and tools available to the agent. Integrated means included in DAC; actual use still depends on permissions and runtime requirements.",
+  "settings.capabilities.diagnostics": "Technical diagnostics and load records",
+  "settings.general.agentAdvanced": "Advanced agent behavior",
+  "settings.general.agentScope":
+    "These defaults are stored for the current DAC backend. Working depth controls DAC knowledge and orchestration, separately from model reasoning effort.",
+  "settings.general.deepagent.intelligenceModel.unset": "Not explicitly configured",
+  "settings.general.deepagent.intelligenceModel.unavailable": "Configured model unavailable",
+  "settings.im.description":
+    "Connect this device to IM, manage its long-term access, and choose the model for /dac tasks.",
+  "settings.im.deviceGroup": "This device and IM access",
+  "settings.im.deviceGroup.description":
+    "Checking this device does not activate or charge. Activation requires your explicit confirmation.",
+  "settings.import.job.select": "Existing job",
+  "settings.providers.catalogPending":
+    "Model catalog is not loaded yet. Connect credentials now; models appear after the catalog updates.",
+  "settings.providers.billing.api": "Usage-based API",
+  "settings.providers.billing.plan": "Coding Plan",
+  "settings.providers.region.global": "Global",
+  "settings.providers.region.cn": "China",
+  "settings.providers.region.intl": "International",
+  "settings.providers.auth.runtime": "Available sign-in methods are supplied by this provider.",
+  "provider.connect.toast.saved.title": "Credentials saved",
+  "provider.connect.toast.saved.description": "Model catalog is not loaded. Update it online before choosing a model.",
+  "settings.capabilities.name.deepagent.code-read": "Read and search code",
+  "settings.capabilities.name.deepagent.code-edit": "Edit code",
+  "settings.capabilities.name.deepagent.shell-execute": "Run terminal commands",
+  "settings.capabilities.name.deepagent.web-research": "Research the web",
+  "settings.capabilities.name.deepagent.context-query": "Find project context",
+  "settings.capabilities.name.deepagent.skill-guidance": "Use skill guidance",
+  "settings.capabilities.name.deepagent.question-clarify": "Ask for clarification",
+  "settings.capabilities.name.deepagent.code-intel": "Understand code relationships",
+  "settings.capabilities.name.deepagent.plan-mode": "Plan a task",
+  "settings.capabilities.name.deepagent.task-orchestration": "Coordinate child tasks",
+  "settings.capabilities.name.deepagent.task-oversight": "Review task progress",
+  "settings.capabilities.name.deepagent.worktree-merge": "Review worktree changes",
+  "settings.capabilities.name.deepagent.pack-manual": "Read domain guidance",
+  "settings.capabilities.name.deepagent.knowledge-propose": "Propose reusable knowledge",
+  "settings.capabilities.name.deepagent.im-send": "Send an IM message",
+  "settings.capabilities.name.deepagent.permission-denial": "Respect denied permissions",
+  "settings.capabilities.name.deepagent.context-survival": "Retain task continuity",
+  "settings.search.clear": "Clear search",
+
+  "settings.capabilities.description.deepagent.code-read": "Read and search files in the active workspace.",
+  "settings.capabilities.description.deepagent.code-edit":
+    "Write and modify workspace files under existing permissions.",
+  "settings.capabilities.description.deepagent.shell-execute":
+    "Run terminal tools under command and workspace permissions.",
+  "settings.capabilities.description.deepagent.web-research": "Search and retrieve online reference material.",
+  "settings.capabilities.description.deepagent.context-query": "Retrieve relevant project code and context.",
+  "settings.capabilities.description.deepagent.skill-guidance": "Read applicable skill guidance for the task.",
+  "settings.capabilities.description.deepagent.question-clarify": "Ask you to clarify missing task information.",
+  "settings.capabilities.description.deepagent.code-intel": "Inspect symbols, references and code relationships.",
+  "settings.capabilities.description.deepagent.plan-mode": "Organize and maintain the steps of a task.",
+  "settings.capabilities.description.deepagent.task-orchestration":
+    "Let the main agent delegate work through existing task controls.",
+  "settings.capabilities.description.deepagent.task-oversight": "Read recorded child task progress and results.",
+  "settings.capabilities.description.deepagent.worktree-merge":
+    "Coordinate worktree changes through existing review and permissions.",
+  "settings.capabilities.description.deepagent.pack-manual": "Read guidance from configured domain packs.",
+  "settings.capabilities.description.deepagent.knowledge-propose":
+    "Propose reusable knowledge under the configured approval policy.",
+  "settings.capabilities.description.deepagent.im-send": "Send messages within the authorized conversation scope.",
+  "settings.capabilities.description.deepagent.permission-denial":
+    "Respect declined permissions and report the limitation.",
+  "settings.capabilities.description.deepagent.context-survival":
+    "Preserve relevant facts during context organization and handoff.",
+
+  "settings.about.upstream.title": "Upstream project",
+  "settings.about.upstream.description":
+    "Derived from OpenCode under MIT. DeepAgent Code is distributed under AGPL-3.0-or-later; see the complete notices below.",
+  "settings.capabilities.integrated": "Integrated",
 }

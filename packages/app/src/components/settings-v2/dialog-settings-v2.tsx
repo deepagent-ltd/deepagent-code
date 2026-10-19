@@ -1,4 +1,7 @@
-import { Component, Show } from "solid-js"
+import { Component, For, Show } from "solid-js"
+import { createStore } from "solid-js/store"
+import { SelectV2 } from "@deepagent-code/ui/v2/select-v2"
+import { SettingsPage } from "./parts/page"
 import { createMediaQuery } from "@solid-primitives/media"
 import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
 import { TabsV2 } from "@deepagent-code/ui/v2/tabs-v2"
@@ -25,91 +28,96 @@ export const DialogSettings: Component<{
 }> = (props) => {
   const language = useLanguage()
   const platform = usePlatform()
-  const compact = createMediaQuery("(max-width: 639px)")
+  const compact = createMediaQuery("(max-width: 767px)")
+  const [state, setState] = createStore({ tab: (props.initialTab ?? "general") as string })
+  const groups = [
+    {
+      title: "settings.section.common",
+      items: [
+        { value: "general", label: "settings.tab.general", icon: "sliders" },
+        { value: "shortcuts", label: "settings.tab.shortcuts", icon: "keyboard" },
+      ],
+    },
+    {
+      title: "settings.section.models",
+      items: [
+        { value: "providers", label: "settings.providers.title", icon: "providers" },
+        { value: "models", label: "settings.models.title", icon: "models" },
+      ],
+    },
+    {
+      title: "settings.section.collaboration",
+      items: [{ value: "im", label: "settings.im.title", icon: "speech-bubble" }],
+    },
+    {
+      title: "settings.section.extensions",
+      items: [
+        { value: "mcp", label: "status.popover.tab.mcp", icon: "mcp" },
+        { value: "capabilities", label: "settings.capabilities.title", icon: "package" },
+        { value: "plugins", label: "status.popover.tab.plugins", icon: "plugin" },
+      ],
+    },
+    {
+      title: "settings.section.advanced",
+      items: [{ value: "servers", label: "status.popover.tab.servers", icon: "server" }],
+    },
+    { title: "settings.section.product", items: [{ value: "about", label: "settings.tab.about", icon: "help" }] },
+  ] as const
+  const pages = groups.flatMap((group) =>
+    group.items.map((page) => ({ value: page.value, label: page.label, icon: page.icon })),
+  )
 
   return (
     <Dialog size="x-large" variant="settings" class="settings-v2-dialog">
       <TabsV2
         orientation={compact() ? "horizontal" : "vertical"}
         variant="settings"
-        defaultValue={props.initialTab ?? "general"}
+        value={state.tab}
+        onChange={(tab) => setState("tab", tab)}
         class="settings-v2"
       >
-        <TabsV2.List>
-          <div class="flex flex-col justify-between h-full w-full">
-            <div class="flex flex-col gap-3 w-full">
-              <div class="flex flex-col gap-3">
-                <div class="flex flex-col gap-1.5">
-                  <TabsV2.SectionTitle>{language.t("settings.section.desktop")}</TabsV2.SectionTitle>
-                  <div class="flex flex-col gap-1.5 w-full">
-                    <TabsV2.Trigger value="general">
-                      <Icon name="sliders" />
-                      {language.t("settings.tab.general")}
-                    </TabsV2.Trigger>
-                    <TabsV2.Trigger value="shortcuts">
-                      <Icon name="keyboard" />
-                      {language.t("settings.tab.shortcuts")}
-                    </TabsV2.Trigger>
+        <Show when={compact()}>
+          <div class="settings-v2-compact-navigation">
+            <SelectV2
+              options={pages}
+              current={pages.find((page) => page.value === state.tab)}
+              value={(page) => page.value}
+              label={(page) => language.t(page.label)}
+              onSelect={(page) => page && setState("tab", page.value)}
+              aria-label={language.t("settings.navigation.label")}
+            />
+          </div>
+        </Show>
+        <TabsV2.List classList={{ "settings-v2-navigation-hidden": compact() }}>
+          <nav class="settings-v2-navigation" aria-label={language.t("settings.navigation.label")}>
+            <div class="settings-v2-navigation-groups">
+              <For each={groups}>
+                {(group) => (
+                  <div class="settings-v2-navigation-group">
+                    <TabsV2.SectionTitle>{language.t(group.title)}</TabsV2.SectionTitle>
+                    <For each={group.items}>
+                      {(page) => (
+                        <TabsV2.Trigger value={page.value}>
+                          <Icon name={page.icon} />
+                          {language.t(page.label)}
+                        </TabsV2.Trigger>
+                      )}
+                    </For>
                   </div>
-                </div>
-
-                <div class="flex flex-col gap-1.5">
-                  <TabsV2.SectionTitle>{language.t("settings.section.server")}</TabsV2.SectionTitle>
-                  <div class="flex flex-col gap-1.5 w-full">
-                    <TabsV2.Trigger value="servers">
-                      <Icon name="server" />
-                      {language.t("status.popover.tab.servers")}
-                    </TabsV2.Trigger>
-                    <TabsV2.Trigger value="providers">
-                      <Icon name="providers" />
-                      {language.t("settings.providers.title")}
-                    </TabsV2.Trigger>
-                    <TabsV2.Trigger value="models">
-                      <Icon name="models" />
-                      {language.t("settings.models.title")}
-                    </TabsV2.Trigger>
-                    <TabsV2.Trigger value="im">
-                      <Icon name="speech-bubble" />
-                      {language.t("settings.im.title")}
-                    </TabsV2.Trigger>
-                    <TabsV2.Trigger value="mcp">
-                      <Icon name="mcp" />
-                      {language.t("status.popover.tab.mcp")}
-                    </TabsV2.Trigger>
-                    <TabsV2.Trigger value="capabilities">
-                      <Icon name="package" />
-                      {language.t("settings.capabilities.title")}
-                    </TabsV2.Trigger>
-                    <TabsV2.Trigger value="plugins">
-                      <Icon name="plugin" />
-                      {language.t("status.popover.tab.plugins")}
-                    </TabsV2.Trigger>
-                  </div>
-                </div>
-
-                <div class="flex flex-col gap-1.5">
-                  <TabsV2.SectionTitle>{language.t("settings.section.about")}</TabsV2.SectionTitle>
-                  <div class="flex flex-col gap-1.5 w-full">
-                    <TabsV2.Trigger value="about">
-                      <Icon name="help" />
-                      {language.t("settings.tab.about")}
-                    </TabsV2.Trigger>
-                  </div>
-                </div>
-              </div>
+                )}
+              </For>
             </div>
             <div class="settings-v2-nav-footer">
               <span>{language.t("app.name.desktop")}</span>
               <span>v{platform.version}</span>
             </div>
-          </div>
+          </nav>
         </TabsV2.List>
         <TabsV2.Content value="general" class="settings-v2-panel">
           <SettingsGeneralV2 session={props.session} />
         </TabsV2.Content>
         <TabsV2.Content value="mcp" class="settings-v2-panel">
-          <div class="settings-v2-tab-body">
-            <h2 class="settings-v2-tab-title">{language.t("status.popover.tab.mcp")}</h2>
+          <SettingsPage title={language.t("status.popover.tab.mcp")}>
             <Show
               when={props.mcp?.current() && props.mcp.directory}
               fallback={<p>{language.t("settings.mcp.selectProject")}</p>}
@@ -120,7 +128,7 @@ export const DialogSettings: Component<{
                 </SDKProvider>
               )}
             </Show>
-          </div>
+          </SettingsPage>
         </TabsV2.Content>
         <TabsV2.Content value="shortcuts" class="settings-v2-panel">
           <SettingsKeybinds v2 />

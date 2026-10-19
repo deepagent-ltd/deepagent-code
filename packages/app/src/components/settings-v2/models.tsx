@@ -10,6 +10,8 @@ import { useModels } from "@/context/models"
 import { popularProviders } from "@/hooks/use-providers"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
+import { SettingsPage } from "./parts/page"
+import { SettingsMetadata } from "./metadata"
 import "./settings-v2.css"
 
 type ModelItem = ReturnType<ReturnType<typeof useModels>["list"]>[number]
@@ -43,9 +45,10 @@ export const SettingsModelsV2: Component = () => {
   })
 
   return (
-    <>
-      <div class="settings-v2-tab-header settings-v2-tab-header--stacked">
-        <h2 class="settings-v2-tab-title">{language.t("settings.models.title")}</h2>
+    <SettingsPage
+      title={language.t("settings.models.title")}
+      class="settings-v2-models"
+      search={
         <div class="settings-v2-tab-search">
           <TextInputV2
             type="search"
@@ -65,74 +68,78 @@ export const SettingsModelsV2: Component = () => {
               variant="ghost-muted"
               size="small"
               class="settings-v2-tab-search-clear"
+              aria-label={language.t("settings.search.clear")}
               icon={<IconV2 name="close" size="large" class="text-v2-icon-icon-muted" />}
               onClick={() => list.clear()}
             />
           </Show>
         </div>
-      </div>
-
-      <div class="settings-v2-tab-body settings-v2-models">
+      }
+    >
+      <Show
+        when={!list.grouped.loading}
+        fallback={
+          <div class="settings-v2-models-status">
+            {language.t("common.loading")}
+            {language.t("common.loading.ellipsis")}
+          </div>
+        }
+      >
         <Show
-          when={!list.grouped.loading}
+          when={list.flat().length > 0}
           fallback={
             <div class="settings-v2-models-status">
-              {language.t("common.loading")}
-              {language.t("common.loading.ellipsis")}
+              <span>{language.t("dialog.model.empty")}</span>
+              <Show when={list.filter()}>
+                <span class="settings-v2-models-status-filter">&quot;{list.filter()}&quot;</span>
+              </Show>
             </div>
           }
         >
-          <Show
-            when={list.flat().length > 0}
-            fallback={
-              <div class="settings-v2-models-status">
-                <span>{language.t("dialog.model.empty")}</span>
-                <Show when={list.filter()}>
-                  <span class="settings-v2-models-status-filter">&quot;{list.filter()}&quot;</span>
-                </Show>
-              </div>
-            }
-          >
-            <For each={list.grouped.latest}>
-              {(group) => (
-                <div class="settings-v2-section" data-component="settings-models-provider">
-                  <div class="settings-v2-models-group-header">
-                    <ProviderIcon
-                      id={group.category}
-                      width={PROVIDER_ICON_SIZE}
-                      height={PROVIDER_ICON_SIZE}
-                      class="settings-v2-models-provider-icon shrink-0"
-                    />
-                    <h3 class="settings-v2-section-title">{group.items[0].provider.name}</h3>
-                  </div>
-                  <SettingsListV2>
-                    <For each={group.items}>
-                      {(item) => {
-                        const key = { providerID: item.provider.id, modelID: item.id }
-                        return (
-                          <SettingsRowV2 title={item.name} description="">
-                            <div>
-                              <Switch
-                                checked={models.visible(key)}
-                                onChange={(checked) => {
-                                  models.setVisibility(key, checked)
-                                }}
-                                hideLabel
-                              >
-                                {item.name}
-                              </Switch>
-                            </div>
-                          </SettingsRowV2>
-                        )
-                      }}
-                    </For>
-                  </SettingsListV2>
+          <For each={list.grouped.latest}>
+            {(group) => (
+              <div class="settings-v2-section" data-component="settings-models-provider">
+                <div class="settings-v2-models-group-header">
+                  <ProviderIcon
+                    id={group.category}
+                    width={PROVIDER_ICON_SIZE}
+                    height={PROVIDER_ICON_SIZE}
+                    class="settings-v2-models-provider-icon shrink-0"
+                  />
+                  <h3 class="settings-v2-section-title">{group.items[0].provider.name}</h3>
                 </div>
-              )}
-            </For>
-          </Show>
+                <SettingsListV2>
+                  <For each={group.items}>
+                    {(item) => {
+                      const key = { providerID: item.provider.id, modelID: item.id }
+                      return (
+                        <SettingsRowV2
+                          title={<span title={item.name}>{item.name}</span>}
+                          description={
+                            <SettingsMetadata title={language.t("settings.details.title")} value={item.id} />
+                          }
+                        >
+                          <div>
+                            <Switch
+                              checked={models.visible(key)}
+                              onChange={(checked) => {
+                                models.setVisibility(key, checked)
+                              }}
+                              hideLabel
+                            >
+                              {item.name}
+                            </Switch>
+                          </div>
+                        </SettingsRowV2>
+                      )
+                    }}
+                  </For>
+                </SettingsListV2>
+              </div>
+            )}
+          </For>
         </Show>
-      </div>
-    </>
+      </Show>
+    </SettingsPage>
   )
 }
