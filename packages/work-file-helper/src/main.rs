@@ -1,4 +1,6 @@
 mod no_follow;
+#[cfg(windows)]
+mod dpapi_windows;
 mod protocol;
 mod root;
 mod write;
@@ -6,6 +8,8 @@ mod write;
 mod linux_write_profile;
 #[cfg(windows)]
 mod write_windows;
+#[cfg(windows)]
+mod browser_windows;
 #[cfg(windows)]
 mod write_windows_cleanup;
 mod binary;
@@ -38,6 +42,12 @@ fn run() -> io::Result<()> {
     let mut output = io::stdout().lock();
     let mut root: Option<root::Root> = None;
     let mut prepared = None;
+    #[cfg(windows)]
+    let mut browser_stage: Option<browser_windows::Stage> = None;
+    #[cfg(windows)]
+    let mut browser_prepared: Option<browser_windows::Prepared> = None;
+    #[cfg(windows)]
+    let mut browser_stage_attempted = false;
     let mut write_started = false;
     #[cfg(target_os = "linux")]
     let mut linux_write_profile: Option<linux_write_profile::Profile> = None;
@@ -52,6 +62,8 @@ fn run() -> io::Result<()> {
     let mut write_stage = None;
     let mut cleanup_allowed = false;
     let mut completed = 0u32;
+    #[cfg(windows)]
+    let mut first_request = true;
     let mut binary_completed = 0u32;
     let mut captures = std::collections::HashMap::new();
     let mut snapshot_started = false;
@@ -60,9 +72,33 @@ fn run() -> io::Result<()> {
     let mut event_tree_started = false;
     let mut event_tree_requests = 0u32;
     while let Some(request) = protocol::read(&mut input)? {
+        #[cfg(windows)]
+        {
+            if let Request::McpDpapiProtect { length, .. } | Request::McpDpapiUnprotect { length, .. } = &request {
+                use std::io::Read;
+                if !first_request || root.is_some() || prepared.is_some() { return Err(io::ErrorKind::PermissionDenied.into()); }
+                let protect = matches!(&request, Request::McpDpapiProtect { .. });
+                if *length > if protect { 65_536 } else { 98_304 } { return Err(io::ErrorKind::InvalidInput.into()); }
+                let mut bytes = dpapi_windows::SecretBytes(vec![0; *length]);
+                input.read_exact(&mut bytes.0)?;
+                // Closing stdin is part of this one-shot operation. Extra bytes
+                // or a second request are refused before doing any DPAPI work.
+                let mut extra = [0u8; 1];
+                let trailing = input.read(&mut extra)?;
+                dpapi_windows::wipe(&mut extra);
+                if trailing != 0 { return Err(io::ErrorKind::InvalidData.into()); }
+                let crypt = dpapi_windows::crypt_secret(&bytes.0, protect)?;
+                let response = Response { version: 1, id: request.id(), status: "dpapi", code: None,
+                    root: None, observation: None, allocated_bytes: None, write: None, preparation: None,
+                    write_stage: None, snapshot: None, destination_parent: None, capture_id: None,
+                    binary_complete: None, browser_stage: None, payload_bytes: crypt.bytes().len() };
+                return protocol::write_binary(&mut output, &response, crypt.bytes());
+            }
+            first_request = false;
+        }
         let tree_request = matches!(request, Request::EventTreeCollect { .. } | Request::EventObjectAllocation { .. } | Request::EventBaselineBegin { .. } | Request::EventBaselineNames { .. } | Request::EventTreeBegin { .. } | Request::EventTreeLeaf { .. } | Request::EventTreeObserveBegin { .. } | Request::EventTreeObserveLeaf { .. } | Request::EventTreeObserveFinish { .. } |
             Request::EventTreeChunk { .. } | Request::EventTreePublish { .. } | Request::EventTreeFinish { .. });
-        let binary_request = matches!(request, Request::InspectBinaryDestination { .. } | Request::ObserveBinary { .. } | Request::OpenBinary { .. } |
+        let binary_request = matches!(request, Request::PrepareBrowserStage { .. } | Request::WriteBrowserStage { .. } | Request::SealBrowserStage { .. } | Request::InspectBrowserStage { .. } | Request::InspectBinaryDestination { .. } | Request::ObserveBinary { .. } | Request::OpenBinary { .. } |
             Request::ReadBinary { .. } | Request::SealBinary { .. } | Request::CleanupBinaryStage { .. } | Request::PrepareBinaryWrite { .. });
         if tree_request {
             event_tree_requests = event_tree_requests.checked_add(1).ok_or(io::ErrorKind::InvalidData)?;
@@ -76,10 +112,20 @@ fn run() -> io::Result<()> {
         }
         let id = request.id();
         let mut response = Response { version: 1, id, status: "refused", code: Some("FILE_SCOPE_UNAVAILABLE"),
-            root: None, observation: None, allocated_bytes: None, write: None, preparation: None, write_stage: None, snapshot: None, destination_parent: None, capture_id: None, binary_complete: None,
+            root: None, observation: None, allocated_bytes: None, write: None, preparation: None, write_stage: None, snapshot: None, destination_parent: None, capture_id: None, binary_complete: None, browser_stage: None,
             #[cfg(target_os = "linux")] linux_write_profile: None, payload_bytes: 0 };
         let mut payload = Vec::new();
+        #[cfg(windows)]
+        if browser_stage.is_some() && !matches!(request, Request::CheckRoot { .. } | Request::ObserveBinary { .. } |
+            Request::OpenBinary { .. } | Request::ReadBinary { .. } | Request::SealBinary { .. } |
+            Request::PrepareBrowserStage { .. } | Request::WriteBrowserStage { .. } | Request::SealBrowserStage { .. } |
+            Request::InspectBrowserStage { .. } | Request::InspectBinaryDestination { .. } | Request::PrepareBinaryWrite { .. } |
+            Request::PublishWrite { .. } | Request::CleanupBinaryStage { .. } | Request::Close { .. }) {
+            protocol::write(&mut output, &response, &[])?; continue;
+        }
         match &request {
+            #[cfg(windows)]
+            Request::McpDpapiProtect { .. } | Request::McpDpapiUnprotect { .. } => return Err(io::ErrorKind::PermissionDenied.into()),
             #[cfg(target_os = "linux")]
             Request::LinuxWriteCapabilities { data, .. } if !write_started && !event_tree_started && !snapshot_started => {
                 if let Some(root) = &root {
@@ -220,11 +266,50 @@ fn run() -> io::Result<()> {
                     }
                 }
             },
+            #[cfg(windows)]
+            Request::PrepareBrowserStage { basename, name, limit, purpose, .. }
+                if !browser_stage_attempted && !write_stage_attempted && !write_started && !event_tree_started && !snapshot_started => {
+                browser_stage_attempted = true;
+                if let Some(root) = &root {
+                    if let Ok(value) = browser_windows::Stage::create(root, basename, name, *limit, *purpose) {
+                        browser_stage = Some(value);
+                        if let Ok(value) = browser_stage.as_ref().unwrap().description(root) {
+                            response.status = "prepared"; response.code = None; response.browser_stage = Some(value);
+                        }
+                    }
+                }
+            },
+            #[cfg(windows)]
+            Request::WriteBrowserStage { offset, length, .. } => {
+                use std::io::Read;
+                if *length == 0 || *length > binary::BINARY_PAGE_LIMIT { return Err(io::ErrorKind::InvalidInput.into()); }
+                let mut bytes = vec![0; *length as usize]; input.read_exact(&mut bytes)?;
+                if let (Some(root), Some(stage)) = (&root, &mut browser_stage) {
+                    if stage.write(root, *offset, &bytes).is_ok() { response.status = "observed"; response.code = None; }
+                }
+            },
+            #[cfg(windows)]
+            Request::SealBrowserStage { bytes, sha256, deadline_ms, .. } => {
+                if let (Some(root), Some(stage)) = (&root, &mut browser_stage) {
+                    if stage.seal(root, *bytes, sha256, *deadline_ms).is_ok() {
+                        if let Ok(value) = stage.description(root) { response.status = "observed"; response.code = None; response.browser_stage = Some(value); }
+                    }
+                }
+            },
+            #[cfg(windows)]
+            Request::InspectBrowserStage { .. } => {
+                if let (Some(root), Some(stage)) = (&root, &browser_stage) {
+                    if let Ok(value) = stage.description(root) { response.status = "observed"; response.code = None; response.browser_stage = Some(value); }
+                }
+            },
             Request::CleanupBinaryStage { stage, stage_identity, .. } if !write_started || cleanup_allowed => {
                 if let Some(root) = &root {
-                    if write::cleanup(root, stage, stage_identity).is_ok() {
-                        response.status = "cleaned"; response.code = None;
-                    }
+                    #[cfg(windows)]
+                    let result = browser_stage.as_mut().ok_or_else(|| io::Error::from(io::ErrorKind::PermissionDenied))
+                        .and_then(|value| value.cleanup(root, stage, stage_identity));
+                    #[cfg(not(windows))]
+                    let result = write::cleanup(root, stage, stage_identity);
+                    if result.is_ok() { response.status = "cleaned"; response.code = None; }
                 }
             },
             Request::InspectBinaryDestination { relative, deadline_ms, .. } => {
@@ -281,8 +366,15 @@ fn run() -> io::Result<()> {
                 write_started = true;
                 write_stage = Some((stage.clone(), stage_identity.clone()));
                 if let Some(root) = &root {
-                    match write::Prepared::prepare_binary(root, id, relative, stage, stage_identity, *bytes, sha256, *deadline_ms) {
-                        Ok(value) => { response.preparation = Some(value.description()); prepared = Some(value);
+                    #[cfg(windows)]
+                    let value = browser_stage.as_mut().ok_or_else(|| io::Error::from(io::ErrorKind::PermissionDenied))
+                        .and_then(|value| value.prepare(root, id, relative, stage, stage_identity, *bytes, sha256, *deadline_ms));
+                    #[cfg(not(windows))]
+                    let value = write::Prepared::prepare_binary(root, id, relative, stage, stage_identity, *bytes, sha256, *deadline_ms);
+                    match value {
+                        Ok(value) => { response.preparation = Some(value.description());
+                            #[cfg(windows)] { browser_prepared = Some(value); }
+                            #[cfg(not(windows))] { prepared = Some(value); }
                             response.status = "prepared"; response.code = None; },
                         Err(_) => { cleanup_allowed = true; },
                     }
@@ -366,6 +458,20 @@ fn run() -> io::Result<()> {
                 }
             },
             Request::PublishWrite { prepared_id, .. } => {
+                #[cfg(windows)]
+                if let Some(value) = browser_prepared.take() {
+                    if value.id() == prepared_id {
+                        if let (Some(root), Some(stage)) = (&root, &mut browser_stage) {
+                            match value.publish(root, stage) {
+                                Ok(value) => { response.status = "published"; response.code = None; response.write = Some(value); cleanup_allowed = true; },
+                                Err(write::Failure::BeforePublish) => { cleanup_allowed = true; },
+                                Err(write::Failure::Unknown) => { response.status = "unknown"; response.code = Some("WRITE_OUTCOME_UNKNOWN"); },
+                            }
+                        }
+                    }
+                    protocol::write(&mut output, &response, &[])?; continue;
+                }
+
                 // Taking the prepared operation before entering the syscall makes every
                 // outcome one-shot, including response loss and uncertain publication.
                 #[cfg(target_os = "linux")]

@@ -10,9 +10,11 @@ import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { ConfigFileWrite } from "@/config/file-write"
 import { Config } from "@/config/config"
+import { SettingsTransaction } from "@/settings/transaction"
 import { SecretStore } from "./secret-store"
 import { SecretRefScope } from "./secret-ref-scope"
 import { McpAuthStore } from "./auth-store"
+import { McpWindowsStorage } from "./windows-storage"
 
 export class Error extends Schema.TaggedErrorClass<Error>()("McpSecretMigrationError", {
   reason: Schema.Literals(["unavailable", "invalid", "changed", "unknown", "capacity", "work_unsettled"]),
@@ -92,6 +94,7 @@ export const layer = Layer.effect(
     const config = yield* Config.Service
     const flock = yield* EffectFlock.Service
     const filesystem = yield* FSUtil.Service
+    const windows = yield* McpWindowsStorage.Current
     const previews = new Map<
       string,
       { captured: SecretRefScope.Capture; fields: Preview["fields"]; expiresAt: number }
@@ -100,11 +103,18 @@ export const layer = Layer.effect(
     const fileWrite = <A, E>(effect: Effect.Effect<A, E, EffectFlock.Service | FSUtil.Service>) =>
       effect.pipe(Effect.provideService(EffectFlock.Service, flock), Effect.provideService(FSUtil.Service, filesystem))
     const capture = (name: string, initialize = false) =>
-      scopes.capture(name, initialize).pipe(Effect.mapError(safeError))
+      scopes.capture(name, initialize).pipe(
+        Effect.mapError(safeError),
+        Effect.flatMap((captured) =>
+          // Receipt v1 persists ordinary file stamps. Never discard an original
+          // Native witness or start storing secrets for an unsupported source.
+          captured.file.nativeStamp ? Effect.fail(new Error({ reason: "unavailable" })) : Effect.succeed(captured),
+        ),
+      )
     const withLedger = <A>(body: (ledger: Ledger) => { ledger?: Ledger; value: A }) =>
       ConfigFileWrite.transaction([ledgerPath()], (tx) =>
         Effect.gen(function* () {
-          const before = yield* safePromise(readLedger)
+          const before = yield* safePromise(() => readLedger(windows))
           const result = yield* Effect.try({ try: () => body(before), catch: safeError })
           if (result.ledger) yield* tx.write(tx.file(ledgerPath()), encode(result.ledger))
           return result.value
@@ -141,58 +151,86 @@ export const layer = Layer.effect(
         const captured = yield* capture(receipt.binding.name)
         if (!same(captured.binding, receipt.binding)) return yield* new Error({ reason: "changed" })
         yield* stored(receipt, captured)
+        const globalFiles = SettingsTransaction.globalFiles()
+        const global = (yield* Effect.forEach(globalFiles, ConfigFileWrite.read).pipe(Effect.mapError(safeError))).some(
+          (file) => file.path === captured.file.path,
+        )
         // A later legitimate sibling migration changes the whole-file digest. An already
         // committed exact retry requires its own current fields and store witnesses only.
         if (receipt.state === "committed") {
           if (!matchesMoves(captured, receipt)) return yield* new Error({ reason: "changed" })
+          if (global) yield* SettingsTransaction.requireSettledEffect.pipe(Effect.mapError(safeError))
           return summary(receipt)
         }
-        if (digest(captured.file.text ?? "") === receipt.afterDigest) {
+        const published = digest(captured.file.text ?? "") === receipt.afterDigest
+        if (published) {
           if (!matchesMoves(captured, receipt)) return yield* new Error({ reason: "changed" })
-          const committed = yield* update(receipt, "committed")
-          return summary(committed)
+          if (!global) {
+            const committed = yield* update(receipt, "committed")
+            return summary(committed)
+          }
         }
-        if (!ConfigFileWrite.sameObservation(captured.file, receipt.before))
+        if (!published && !ConfigFileWrite.sameObservation(captured.file, receipt.before))
           return yield* new Error({ reason: "changed" })
-        const next = patch(captured.file.text!, receipt)
+        const next = published ? captured.file.text! : patch(captured.file.text!, receipt)
         if (digest(next) !== receipt.afterDigest) return yield* new Error({ reason: "changed" })
-        const state = yield* ConfigFileWrite.transaction([captured.file.path, ledgerPath()], (tx) =>
-          Effect.gen(function* () {
-            const current = tx.file(captured.file.path)
-            if (!ConfigFileWrite.sameObservation(current, receipt.before))
-              return yield* new Error({ reason: "changed" })
-            const before = yield* safePromise(readLedger)
-            const known = before.receipts.find((item) => item.requestID === receipt.requestID)
-            if (
-              !known ||
-              !same(known.binding, receipt.binding) ||
-              !same(known.moves, receipt.moves) ||
-              known.state === "changed"
-            )
-              return yield* new Error({ reason: "changed" })
-            const fresh = yield* capture(receipt.binding.name)
-            if (!same(fresh.binding, receipt.binding)) return yield* new Error({ reason: "changed" })
-            yield* stored(receipt, fresh)
-            yield* tx.write(current, next)
-            const committed: Receipt = { ...known, state: "committed", updatedAt: Date.now() }
-            // Config publication precedes the receipt commit. Its uncertain gap is reconciled by
-            // the exact after digest and scoped-store verification, never a blind second put.
-            yield* tx.write(
-              tx.file(ledgerPath()),
-              encode({
-                ...before,
-                receipts: before.receipts.map((item) => (item.requestID === receipt.requestID ? committed : item)),
-              }),
-            )
-            return committed
-          }),
+        const state = yield* ConfigFileWrite.transaction(
+          [
+            captured.file.path,
+            ledgerPath(),
+            ...(global ? [...globalFiles, ...Object.values(SettingsTransaction.paths())] : []),
+          ],
+          (tx) =>
+            Effect.gen(function* () {
+              const current = tx.file(captured.file.path)
+              if (
+                published
+                  ? digest(current.text ?? "") !== receipt.afterDigest
+                  : !ConfigFileWrite.sameObservation(current, receipt.before)
+              )
+                return yield* new Error({ reason: "changed" })
+              const before = yield* safePromise(() => readLedger(windows))
+              const known = before.receipts.find((item) => item.requestID === receipt.requestID)
+              if (
+                !known ||
+                !same(known.binding, receipt.binding) ||
+                !same(known.moves, receipt.moves) ||
+                known.state === "changed"
+              )
+                return yield* new Error({ reason: "changed" })
+              const fresh = yield* capture(receipt.binding.name)
+              if (!same(fresh.binding, receipt.binding)) return yield* new Error({ reason: "changed" })
+              yield* stored(receipt, fresh)
+              if (published && !matchesMoves(fresh, receipt)) return yield* new Error({ reason: "changed" })
+              if (global)
+                yield* SettingsTransaction.applyIn(tx, {
+                  request: { kind: "mcp_secret_migration", requestID: receipt.requestID },
+                  prepare: (tx, settings) => ({
+                    config: { file: tx.file(current.path), text: next },
+                    settings,
+                    value: undefined,
+                  }),
+                })
+              if (!global) yield* tx.write(current, next)
+              const committed: Receipt = { ...known, state: "committed", updatedAt: Date.now() }
+              // Config publication precedes the receipt commit. Its uncertain gap is reconciled by
+              // the exact after digest and scoped-store verification, never a blind second put.
+              yield* tx.write(
+                tx.file(ledgerPath()),
+                encode({
+                  ...before,
+                  receipts: before.receipts.map((item) => (item.requestID === receipt.requestID ? committed : item)),
+                }),
+              )
+              return committed
+            }),
         ).pipe(fileWrite, Effect.mapError(safeError), Effect.uninterruptible)
         yield* config.invalidate()
         return summary(state)
       })
     const readAuthorized = (requestID: string, name?: string) =>
       Effect.gen(function* () {
-        const ledger = yield* safePromise(readLedger)
+        const ledger = yield* safePromise(() => readLedger(windows))
         const receipt = ledger.receipts.find((item) => item.requestID === requestID)
         if (!receipt) return undefined
         if (name !== undefined && name !== receipt.binding.name) return yield* new Error({ reason: "changed" })
@@ -211,7 +249,7 @@ export const layer = Layer.effect(
         const captured = yield* capture(name)
         if (SecretRefScope.value(captured, field, key) !== value) return yield* new Error({ reason: "changed" })
         const account = SecretStore.handleAccount(value)
-        const ledger = yield* safePromise(readLedger)
+        const ledger = yield* safePromise(() => readLedger(windows))
         const receipt = ledger.receipts.find(
           (item) =>
             item.state === "committed" &&
@@ -371,7 +409,7 @@ export const defaultLayer = layer.pipe(
 
 function safeError(error: unknown) {
   if (error instanceof Error) return error
-  if (error instanceof ConfigFileWrite.Error)
+  if (error instanceof ConfigFileWrite.Error || error instanceof SettingsTransaction.Error)
     return new Error({
       reason:
         error.reason === "changed" ||
@@ -441,7 +479,14 @@ function matchesMoves(captured: SecretRefScope.Capture, receipt: Receipt) {
     (move) => SecretRefScope.value(captured, move.field, move.key) === SecretStore.makeHandle(move.account),
   )
 }
-async function readLedger(): Promise<Ledger> {
+async function readLedger(windows?: McpWindowsStorage.Port): Promise<Ledger> {
+  if (process.platform === "win32") {
+    if (!windows) throw new Error({ reason: "unavailable" })
+    const current = await windows.read("mcp_secret_migration")
+    return current
+      ? Schema.decodeUnknownSync(Schema.fromJsonString(Ledger), { onExcessProperty: "error" })(current.text)
+      : { version: 1, receipts: [] }
+  }
   const parent = await fs.lstat(path.dirname(ledgerPath())).catch((error: unknown) => {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return undefined
     throw error

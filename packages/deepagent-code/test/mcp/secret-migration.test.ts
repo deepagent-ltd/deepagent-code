@@ -115,3 +115,107 @@ test("explicit binding repair refuses actual unknown Work custody without changi
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({ rejected: true, code: "work_unsettled", put: 0, network: 0 })
 }, 40_000)
+
+test("global migration preserves the normal Settings transaction and exact request retry", async () => {
+  await using root = await tmpdir()
+  const result = await child(root.path, "global-settings")
+  expect(result.code, result.stderr).toBe(0)
+  expect(summary(result.stdout)).toMatchObject({
+    state: "committed",
+    moved: 1,
+    settingsReadable: true,
+    normalGlobalReadable: true,
+    exactRetryPutDelta: 0,
+    put: 1,
+    network: 0,
+  })
+}, 40_000)
+
+test("global migration invalidates an independently warmed global configuration reader", async () => {
+  await using root = await tmpdir()
+  const result = await child(root.path, "global-cache")
+  expect(result.code, result.stderr).toBe(0)
+  expect(summary(result.stdout)).toMatchObject({
+    state: "committed",
+    independentReaderCurrent: true,
+    exactRetryPutDelta: 0,
+    put: 1,
+    network: 0,
+  })
+}, 40_000)
+
+test("readonly OAuth metadata resolves an owned migrated header without bootstrapping an instance", async () => {
+  await using root = await tmpdir()
+  const result = await child(root.path, "readonly-scoped")
+  expect(result.code, result.stderr).toBe(0)
+  expect(summary(result.stdout)).toMatchObject({
+    state: "committed",
+    readonlyScopedCurrent: true,
+    put: 1,
+    network: 0,
+  })
+}, 40_000)
+
+test("global migration reconciles the original Settings intent after config publication without another put", async () => {
+  await using root = await tmpdir()
+  const result = await child(root.path, "global-settings-gap")
+  expect(result.code, result.stderr).toBe(0)
+  expect(summary(result.stdout)).toMatchObject({
+    state: "committed",
+    moved: 1,
+    settingsReadable: true,
+    normalGlobalReadable: true,
+    gapReconciled: true,
+    originalOperationPreserved: true,
+    exactRetryPutDelta: 0,
+    put: 1,
+    network: 0,
+  })
+}, 40_000)
+
+test("committed global retry retains an unknown Settings outcome without changing original files", async () => {
+  await using root = await tmpdir()
+  const result = await child(root.path, "global-settings-unsettled")
+  expect(result.code, result.stderr).toBe(0)
+  expect(summary(result.stdout)).toMatchObject({
+    state: "committed",
+    moved: 1,
+    retryRejected: true,
+    rejectionReason: "unknown",
+    exactRetryPutDelta: 0,
+    filesUnchanged: true,
+    put: 1,
+    network: 0,
+  })
+}, 40_000)
+
+test("global migration refreshes an independently warmed Location and preserves its project override", async () => {
+  await using root = await tmpdir()
+  const result = await child(root.path, "global-state-cache")
+  expect(result.code, result.stderr).toBe(0)
+  expect(summary(result.stdout)).toMatchObject({
+    state: "committed",
+    independentReaderCurrent: true,
+    put: 1,
+    network: 0,
+  })
+}, 40_000)
+
+test("an invalidation concurrent with a cold global load preserves subsequent published reads", async () => {
+  await using root = await tmpdir()
+  const result = await child(root.path, "global-cache-race")
+  expect(result.code, result.stderr).toBe(0)
+  expect(summary(result.stdout)).toMatchObject({ concurrentLoadCurrent: true, put: 0, network: 0 })
+}, 40_000)
+
+test("fresh config layers in different canonical profile domains invalidate independently", async () => {
+  await using root = await tmpdir()
+  const result = await child(root.path, "global-domain-cache")
+  expect(result.code, result.stderr).toBe(0)
+  expect(summary(result.stdout)).toMatchObject({
+    distinctDomains: true,
+    ownInvalidationCurrent: true,
+    put: 0,
+    network: 0,
+  })
+}, 40_000)

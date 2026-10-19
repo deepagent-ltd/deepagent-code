@@ -45,7 +45,8 @@ export const launch = Effect.fn("WindowsWorkFileHelper.launch")(function* (value
   capacity.opening++
   return yield* Effect.gen(function* () {
     yield* NativeInstallation.requireCurrent(original.installation).pipe(Effect.mapError(unavailable))
-    yield* factory.current.pipe(Effect.mapError(unavailable))
+    // launchHelper checks this same original factory before its Native launch.
+    // Keep that final check instead of repeating its complete image graph here.
     return yield* Effect.acquireRelease(factory.launchHelper.pipe(Effect.mapError(unavailable), Effect.map((child) => {
       const process = new HelperProcess(child)
       children.add(process)
@@ -98,6 +99,14 @@ class HelperProcess extends EventEmitter {
     this.stdout.on("error", () => this.refuse())
     this.stderr.on("error", () => this.refuse())
     this.schedule(0)
+  }
+
+  // Only the original browser-file factory calls this before creating a stage.
+  // This one-way Native mark prevents error/GC/Root retirement from killing a
+  // live file custodian; it never authorizes another read, write or process.
+  retainBrowserCustody() {
+    if (this.state.retired || this.state.stopped || this.state.closed || this.state.failed) throw unavailable()
+    this.child.retainBrowserCustody()
   }
 
   kill(_signal?: NodeJS.Signals | number) {
@@ -154,10 +163,12 @@ class HelperProcess extends EventEmitter {
         if (event.kind === "idle") break
         if (event.kind === "stdout") {
           if (!this.state.retired) this.state.stdoutBlocked = !this.stdout.push(event.bytes)
+          else event.bytes.fill(0)
           continue
         }
         if (event.kind === "stderr") {
           if (!this.state.retired) this.state.stderrBlocked = !this.stderr.push(event.bytes)
+          else event.bytes.fill(0)
           continue
         }
         // read(exit) is Native's joined observation, not a PID or stream error.

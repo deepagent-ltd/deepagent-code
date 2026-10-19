@@ -20,8 +20,15 @@ const OUTPUT_PAGE: usize = 65_536;
 struct Handle(HANDLE);
 impl Drop for Handle { fn drop(&mut self) { if self.0 != 0 { unsafe { CloseHandle(self.0); } } } }
 struct Output { file: File, eof: bool }
-pub struct Child { processes: u32, process: Handle, job: Handle, id: u32, input: Option<SyncSender<Vec<u8>>>, writer: Option<JoinHandle<io::Result<()>>>,
-    stdout: Output, stderr: Output, next_stdout: bool, exited: bool, stopped: bool }
+pub(super) struct PipeBytes(pub Vec<u8>);
+impl Drop for PipeBytes {
+    fn drop(&mut self) {
+        for byte in &mut self.0 { unsafe { ptr::write_volatile(byte, 0); } }
+        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    }
+}
+pub struct Child { processes: u32, process: Handle, job: Handle, id: u32, input: Option<SyncSender<PipeBytes>>, writer: Option<JoinHandle<io::Result<()>>>,
+    stdout: Output, stderr: Output, next_stdout: bool, exited: bool, stopped: bool, browser_custody: bool }
 pub struct Observation { pub kind: &'static str, pub bytes: Vec<u8>, pub exit_code: Option<i32> }
 impl Child {
     pub fn launch(factory: &WorkFactory) -> io::Result<Self> {
@@ -102,20 +109,27 @@ impl Child {
             return Err(error);
         }
         drop(thread_handle); drop((stdin.0,stdout.1,stderr.1));
-        let mut input = File::from(stdin.1); let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(4);
-        let writer = thread::spawn(move || { while let Ok(bytes) = receiver.recv() { input.write_all(&bytes)?; } input.flush() });
+        let mut input = File::from(stdin.1); let (sender, receiver) = mpsc::sync_channel::<PipeBytes>(4);
+        let writer = thread::spawn(move || { while let Ok(bytes) = receiver.recv() { input.write_all(&bytes.0)?; } input.flush() });
         Ok(Self { processes, process: process_handle, job, id: process.dwProcessId, input: Some(sender), writer: Some(writer),
             stdout: Output { file: File::from(stdout.0), eof: false }, stderr: Output { file: File::from(stderr.0), eof: false },
-            next_stdout: true, exited: false, stopped: false })
+            next_stdout: true, exited: false, stopped: false, browser_custody: false })
     }
     pub fn id(&self) -> u32 { self.id }
     pub fn write(&self, bytes: Vec<u8>) -> io::Result<()> {
-        if bytes.len() > INPUT_LIMIT || self.stopped || self.exited { return Err(io::ErrorKind::PermissionDenied.into()); }
+        let bytes = PipeBytes(bytes);
+        if bytes.0.len() > INPUT_LIMIT || self.stopped || self.exited { return Err(io::ErrorKind::PermissionDenied.into()); }
         self.input.as_ref().ok_or(io::ErrorKind::BrokenPipe)?.try_send(bytes).map_err(|error| match error {
             mpsc::TrySendError::Full(_) => io::ErrorKind::WouldBlock.into(), mpsc::TrySendError::Disconnected(_) => io::ErrorKind::BrokenPipe.into() })
     }
     pub fn end(&mut self) -> io::Result<()> { if self.stopped || self.exited { return Err(io::ErrorKind::PermissionDenied.into()); } self.input.take(); Ok(()) }
+    pub fn retain_browser_custody(&mut self) -> io::Result<()> {
+        if self.browser_custody || self.stopped || self.exited { return Err(io::ErrorKind::PermissionDenied.into()); }
+        self.browser_custody = true; Ok(())
+    }
+    pub fn browser_custody(&self) -> bool { self.browser_custody && !self.exited }
     pub fn stop(&mut self) -> io::Result<()> {
+        if self.browser_custody() { return Err(io::ErrorKind::WouldBlock.into()); }
         self.input.take(); self.stopped = true;
         check(unsafe { TerminateJobObject(self.job.0,125) })
     }
@@ -135,7 +149,7 @@ impl Child {
     pub fn close(&mut self) -> io::Result<bool> {
         // Close is also an autonomous drain. An observer that retired or threw
         // cannot strand a full OS pipe and incorrectly free this Job lease.
-        for _ in 0..32 { if self.stdout.read()?.is_empty() && self.stderr.read()?.is_empty() { break; } }
+        for _ in 0..32 { if PipeBytes(self.stdout.read()?).0.is_empty() && PipeBytes(self.stderr.read()?).0.is_empty() { break; } }
         self.joined()
     }
     fn joined(&mut self) -> io::Result<bool> {
@@ -174,8 +188,8 @@ impl Output {
             if error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) { self.eof = true; return Ok(Vec::new()); } return Err(error);
         }
         if available == 0 { return Ok(Vec::new()); }
-        let mut bytes = vec![0u8;(available as usize).min(OUTPUT_PAGE)]; let count = self.file.read(&mut bytes)?;
-        if count == 0 { self.eof = true; } bytes.truncate(count); Ok(bytes)
+        let mut bytes = PipeBytes(vec![0u8;(available as usize).min(OUTPUT_PAGE)]); let count = self.file.read(&mut bytes.0)?;
+        if count == 0 { self.eof = true; } bytes.0.truncate(count); Ok(std::mem::take(&mut bytes.0))
     }
 }
 fn require_inheritance(handle: HANDLE, expected: bool) -> io::Result<()> {

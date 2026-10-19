@@ -49,147 +49,148 @@ export const paths = () => ({
 
 /** The two fixed journals are written once each in this lock window. This is a recoverable
  * file protocol, not a multi-file atomic rename or an authorization/credential receipt. */
-export const apply = <A>(input: {
-  readonly files: readonly string[]
+type Input<A> = {
   readonly request: unknown
   readonly prepare: (tx: ConfigFileWrite.Transaction, settings: SettingsStore.Settings) => Plan<A>
-}) => {
+}
+
+export const apply = <A>(input: Input<A> & { readonly files: readonly string[] }) => {
   const names = paths()
   return ConfigFileWrite.transaction(
     [...input.files, ...globalFiles(), names.settings, names.operation, names.receipt],
-    (tx) =>
-      Effect.gen(function* () {
-        const current = yield* SettingsPrivateFile.readEffect(names.settings).pipe(Effect.mapError(privateError))
-        if ((current?.hash ?? null) !== (ConfigFileWrite.digest(tx.file(names.settings)) ?? null))
-          return yield* Effect.fail(new Error("changed"))
-        const settings = SettingsStore.decode(current?.text)
-        const original = yield* journals(
-          names,
-          globalFiles().map((file) => tx.file(file).path),
-        )
-        // Preparation includes all caller schema/source checks before the intent or settings write.
-        const plan = yield* Effect.try({ try: () => input.prepare(tx, settings), catch: (error) => error }).pipe(
-          Effect.catch((error) => Effect.die(error)),
-        )
-        const text =
-          JSON.stringify(settings) === JSON.stringify(plan.settings)
-            ? current?.text
-            : SettingsStore.encode(plan.settings)
-        const settingsHash = text === undefined ? null : digest(text)
-        const request = JSON.stringify(["dac.settings.cross-store.request.v1", canonical(input.request)])
-        if (Buffer.byteLength(request, "utf8") > 16_777_216) return yield* Effect.fail(new Error("capacity"))
-        const requestHash = digest(request)
-        const config = plan.config && {
-          path: plan.config.file.path,
-          before: plan.config.file.stamp?.digest ?? null,
-          after: digest(plan.config.text),
-        }
-        const priorStates = original.operation
-          ? [
-              { current: current?.hash ?? null, expected: original.operation.settings },
-              ...(original.operation.config
-                ? [
-                    {
-                      current: tx.file(original.operation.config.path).stamp?.digest ?? null,
-                      expected: original.operation.config,
-                    },
-                  ]
-                : []),
-            ]
-          : []
-        const priorMatches = original.operation && priorStates.every((state) => state.current === state.expected.after)
-        const reconcile =
-          original.operation &&
-          (!completed(original.operation, original.receipt) ||
-            (!priorMatches &&
-              priorStates.every(
-                (state) => state.current === state.expected.before || state.current === state.expected.after,
-              )))
-        const pending =
-          original.operation && reconcile && (original.operation.requestHash === requestHash || !priorMatches)
-            ? original.operation
-            : undefined
-        if (pending && pending.requestHash !== requestHash) return yield* Effect.fail(new Error("unknown"))
-        if (pending && pending.config?.path !== config?.path) return yield* Effect.fail(new Error("changed"))
-        const operation = pending ?? {
-          version: 1 as const,
-          id: randomUUID(),
-          requestHash,
-          config: config ?? null,
-          settings: { before: current?.hash ?? null, after: settingsHash },
-          createdAt: Date.now(),
-        }
-        if (pending && (operation.settings.after !== settingsHash || operation.config?.after !== config?.after))
-          return yield* Effect.fail(new Error("changed"))
-        if (
-          operation.config &&
-          !globalFiles()
-            .map((file) => tx.file(file).path)
-            .includes(operation.config.path)
-        )
-          return yield* Effect.fail(new Error("invalid"))
-        const states = [
-          { current: current?.hash ?? null, expected: operation.settings },
-          ...(operation.config
-            ? [{ current: plan.config?.file.stamp?.digest ?? null, expected: operation.config }]
+    (tx) => applyIn(tx, input),
+  )
+}
+
+/** Reuse the same protocol inside a caller's canonical transaction. The caller must
+ * include globalFiles() and all paths() leaves in that transaction's lock set. */
+export const applyIn = <A>(tx: ConfigFileWrite.Transaction, input: Input<A>) => {
+  const names = paths()
+  return Effect.gen(function* () {
+    const current = yield* SettingsPrivateFile.readEffect(names.settings).pipe(Effect.mapError(privateError))
+    if ((current?.hash ?? null) !== (ConfigFileWrite.digest(tx.file(names.settings)) ?? null))
+      return yield* Effect.fail(new Error("changed"))
+    const settings = SettingsStore.decode(current?.text)
+    const original = yield* journals(
+      names,
+      globalFiles().map((file) => tx.file(file).path),
+    )
+    // Preparation includes all caller schema/source checks before the intent or settings write.
+    const plan = yield* Effect.try({ try: () => input.prepare(tx, settings), catch: (error) => error }).pipe(
+      Effect.catch((error) => Effect.die(error)),
+    )
+    const text =
+      JSON.stringify(settings) === JSON.stringify(plan.settings) ? current?.text : SettingsStore.encode(plan.settings)
+    const settingsHash = text === undefined ? null : digest(text)
+    const request = JSON.stringify(["dac.settings.cross-store.request.v1", canonical(input.request)])
+    if (Buffer.byteLength(request, "utf8") > 16_777_216) return yield* Effect.fail(new Error("capacity"))
+    const requestHash = digest(request)
+    const config = plan.config && {
+      path: plan.config.file.path,
+      before: plan.config.file.stamp?.digest ?? null,
+      after: digest(plan.config.text),
+    }
+    const priorStates = original.operation
+      ? [
+          { current: current?.hash ?? null, expected: original.operation.settings },
+          ...(original.operation.config
+            ? [
+                {
+                  current: tx.file(original.operation.config.path).stamp?.digest ?? null,
+                  expected: original.operation.config,
+                },
+              ]
             : []),
         ]
-        if (
-          pending &&
-          states.some((state) => state.current !== state.expected.before && state.current !== state.expected.after)
-        )
-          return yield* Effect.fail(new Error("changed"))
-        const changed = states.some((state) => state.current !== state.expected.after)
-        // An exact completed retry verifies both real files, not the completion marker alone.
-        if (
-          !pending &&
-          original.operation?.requestHash === requestHash &&
-          completed(original.operation, original.receipt)
-        ) {
-          if (
-            original.operation.settings.after !== (current?.hash ?? null) ||
-            original.operation.config?.after !== (plan.config?.file.stamp?.digest ?? undefined)
-          )
-            return yield* Effect.fail(new Error("changed"))
-          return { value: plan.value, changed: false, settings }
-        }
-        if (!changed && !pending) return { value: plan.value, changed: false, settings }
-        yield* SettingsPrivateFile.parentEffect(names.settings).pipe(Effect.mapError(privateError))
-        if (!pending) yield* tx.write(tx.file(names.operation), JSON.stringify(operation))
-        // All post-intent failures keep the durable intent; there is no compensating overwrite.
-        return yield* Effect.gen(function* () {
-          if (text !== undefined && (current?.hash ?? null) !== operation.settings.after)
-            yield* tx.write(tx.file(names.settings), text)
-          if (plan.config && plan.config.file.stamp?.digest !== operation.config?.after)
-            yield* tx.write(plan.config.file, plan.config.text)
-          const actualSettings = yield* SettingsPrivateFile.readEffect(names.settings).pipe(
-            Effect.mapError(privateError),
-          )
-          const actualConfig = plan.config ? yield* ConfigFileWrite.read(plan.config.file.path) : undefined
-          if (!matches(operation, actualSettings?.hash ?? null, actualConfig?.stamp?.digest))
-            return yield* Effect.fail(new Error("changed"))
-          const receipt = { version: 1, id: operation.id, operationHash: digest(JSON.stringify(operation)) }
-          yield* tx.write(tx.file(names.receipt), JSON.stringify(receipt))
-          const actual = yield* journals(
-            names,
-            globalFiles().map((file) => tx.file(file).path),
-          )
-          if (
-            !actual.operation ||
-            !completed(actual.operation, actual.receipt) ||
-            digest(JSON.stringify(actual.operation)) !== digest(JSON.stringify(operation))
-          )
-            return yield* Effect.fail(new Error("changed"))
-          SettingsStore.invalidate()
-          return { value: plan.value, changed, settings: plan.settings }
-        }).pipe(
-          Effect.catchCause(() => {
-            if (process.platform === "win32") console.warn("Settings boundary stage=post-intent outcome=unknown")
-            return Effect.fail(new Error("unknown"))
-          }),
-        )
+      : []
+    const priorMatches = original.operation && priorStates.every((state) => state.current === state.expected.after)
+    const reconcile =
+      original.operation &&
+      (!completed(original.operation, original.receipt) ||
+        (!priorMatches &&
+          priorStates.every(
+            (state) => state.current === state.expected.before || state.current === state.expected.after,
+          )))
+    const pending =
+      original.operation && reconcile && (original.operation.requestHash === requestHash || !priorMatches)
+        ? original.operation
+        : undefined
+    if (pending && pending.requestHash !== requestHash) return yield* Effect.fail(new Error("unknown"))
+    if (pending && pending.config?.path !== config?.path) return yield* Effect.fail(new Error("changed"))
+    const operation = pending ?? {
+      version: 1 as const,
+      id: randomUUID(),
+      requestHash,
+      config: config ?? null,
+      settings: { before: current?.hash ?? null, after: settingsHash },
+      createdAt: Date.now(),
+    }
+    if (pending && (operation.settings.after !== settingsHash || operation.config?.after !== config?.after))
+      return yield* Effect.fail(new Error("changed"))
+    if (
+      operation.config &&
+      !globalFiles()
+        .map((file) => tx.file(file).path)
+        .includes(operation.config.path)
+    )
+      return yield* Effect.fail(new Error("invalid"))
+    const states = [
+      { current: current?.hash ?? null, expected: operation.settings },
+      ...(operation.config ? [{ current: plan.config?.file.stamp?.digest ?? null, expected: operation.config }] : []),
+    ]
+    if (
+      pending &&
+      states.some((state) => state.current !== state.expected.before && state.current !== state.expected.after)
+    )
+      return yield* Effect.fail(new Error("changed"))
+    const changed = states.some((state) => state.current !== state.expected.after)
+    // An exact completed retry verifies both real files, not the completion marker alone.
+    if (
+      !pending &&
+      original.operation?.requestHash === requestHash &&
+      completed(original.operation, original.receipt)
+    ) {
+      if (
+        original.operation.settings.after !== (current?.hash ?? null) ||
+        original.operation.config?.after !== (plan.config?.file.stamp?.digest ?? undefined)
+      )
+        return yield* Effect.fail(new Error("changed"))
+      return { value: plan.value, changed: false, settings }
+    }
+    if (!changed && !pending) return { value: plan.value, changed: false, settings }
+    yield* SettingsPrivateFile.parentEffect(names.settings).pipe(Effect.mapError(privateError))
+    if (!pending) yield* tx.write(tx.file(names.operation), JSON.stringify(operation))
+    // All post-intent failures keep the durable intent; there is no compensating overwrite.
+    return yield* Effect.gen(function* () {
+      if (text !== undefined && (current?.hash ?? null) !== operation.settings.after)
+        yield* tx.write(tx.file(names.settings), text)
+      if (plan.config && plan.config.file.stamp?.digest !== operation.config?.after)
+        yield* tx.write(plan.config.file, plan.config.text)
+      const actualSettings = yield* SettingsPrivateFile.readEffect(names.settings).pipe(Effect.mapError(privateError))
+      const actualConfig = plan.config ? yield* ConfigFileWrite.read(plan.config.file.path) : undefined
+      if (!matches(operation, actualSettings?.hash ?? null, actualConfig?.stamp?.digest))
+        return yield* Effect.fail(new Error("changed"))
+      const receipt = { version: 1, id: operation.id, operationHash: digest(JSON.stringify(operation)) }
+      yield* tx.write(tx.file(names.receipt), JSON.stringify(receipt))
+      const actual = yield* journals(
+        names,
+        globalFiles().map((file) => tx.file(file).path),
+      )
+      if (
+        !actual.operation ||
+        !completed(actual.operation, actual.receipt) ||
+        digest(JSON.stringify(actual.operation)) !== digest(JSON.stringify(operation))
+      )
+        return yield* Effect.fail(new Error("changed"))
+      SettingsStore.invalidate()
+      return { value: plan.value, changed, settings: plan.settings }
+    }).pipe(
+      Effect.catchCause(() => {
+        if (process.platform === "win32") console.warn("Settings boundary stage=post-intent outcome=unknown")
+        return Effect.fail(new Error("unknown"))
       }),
-  )
+    )
+  })
 }
 
 /** Cold and normal reads never repair files. A partial intent gives a safe, retryable error. */
@@ -248,7 +249,7 @@ function decodeJournals(operation: string | undefined, receipt: string | undefin
   return { operation: original, receipt: done }
 }
 
-function globalFiles() {
+export function globalFiles() {
   return ["config.jsonc", "config.json", "deepagent-code.jsonc", "deepagent-code.json"].map((name) =>
     path.join(Global.Path.config, name),
   )

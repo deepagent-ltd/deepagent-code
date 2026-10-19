@@ -13,6 +13,8 @@ import type { Codec } from "./dpapi"
 import { ConfigFileWrite } from "@/config/file-write"
 import { SecretRefScope } from "./secret-ref-scope"
 import { McpAuthStore } from "./auth-store"
+import { McpWindowsStorage } from "./windows-storage"
+import { WindowsPrivateStorage } from "@/installation/windows-private-storage"
 
 const log = Log.create({ service: "mcp.secret" })
 
@@ -30,8 +32,8 @@ const log = Log.create({ service: "mcp.secret" })
  *    an OS keychain (macOS Keychain / Linux libsecret / Windows DPAPI). The handle is
  *    resolved to the real value at connect time only.
  *
- * FAIL-SAFE (never fail-open): when no OS keyring is available (headless / CI /
- * container, no daemon) the store falls back to a `chmod 0600` local credentials file
+ * FAIL-SAFE: production Windows MCP requires original Native custody + DPAPI and
+ * refuses unavailability. On other systems without an OS keyring, the store falls back to a `chmod 0600` local credentials file
  * under the data dir + an explicit warning — it NEVER silently writes secrets into the
  * project config repo.
  *
@@ -105,6 +107,8 @@ export namespace SecretStore {
     readonly available: () => Promise<boolean>
     readonly put: (account: string, secret: string) => Promise<void>
     readonly get: (account: string) => Promise<string | undefined>
+    /** A managed read may validate custody and decrypt together, retaining its intermediate permit fence. */
+    readonly getScoped?: (account: string, beforeDecrypt: () => void) => Promise<string | undefined>
     readonly remove: (account: string) => Promise<void>
     /** Strict custody check for a new scoped reference; legacy APIs retain their platform semantics. */
     readonly validateScoped?: () => Promise<void>
@@ -123,10 +127,11 @@ export namespace SecretStore {
   }
 
   export class FileError extends Schema.TaggedErrorClass<FileError>()("McpSecretFileError", {
-    reason: Schema.Literals(["invalid", "io"]),
+    reason: Schema.Literals(["invalid", "io", "unknown", "legacy_unverified"]),
   }) {
     override get message() {
-      return `MCP secret file ${this.reason}`
+      return this.reason === "legacy_unverified" ? "Legacy MCP credentials require explicit re-entry before use"
+        : `MCP secret file ${this.reason}`
     }
   }
 
@@ -198,58 +203,83 @@ export namespace SecretStore {
    * secret on the command line, so it is briefly visible in this user's process table;
    * this is the documented macOS-CLI limitation, not a value that lands in config/logs.
    */
-  export const macOsKeychainBackend = (service = KEYCHAIN_SERVICE, stdinOnly = false): Backend => ({
-    id: "macos-keychain",
-    available: async () => {
-      if (process.platform !== "darwin") return false
-      const res = await Process.run(["security", "list-keychains"], { nothrow: true, ...(stdinOnly ? { abort: AbortSignal.timeout(10000) } : {}) }).catch(() => undefined)
-      return !!res && res.code === 0
-    },
-    put: async (account, secret) => {
-      if (stdinOnly) {
-        // security's interactive parser reads stdin, not a shell. Hex preserves arbitrary UTF-8
-        // bytes and prevents newlines in a secret from becoming another command.
-        if (/[\r\n\0]/.test(account + service)) throw new Error("Invalid Keychain account")
-        const quote = (value: string) => '"' + value.replace(/[\\"]/g, (character) => "\\" + character) + '"'
-        // Printable envelope avoids security -w's ambiguous hex output for binary/newline data.
-        const encoded = encodeProtectedSecret(secret)
-        const command = `add-generic-password -a ${quote(account)} -s ${quote(service)} -U -X ${Buffer.from(encoded).toString("hex")}\n`
-        // Apple's parser has a 4096-byte line buffer; truncation must never store partial custody.
-        if (Buffer.byteLength(command) >= 4096) throw new Error("Keychain secret exceeds the protected input limit")
-        const proc = Process.spawn(["/usr/bin/security", "-i", "-q"], { stdin: "pipe", stdout: "ignore", stderr: "ignore", abort: AbortSignal.timeout(10000) })
-        if (!proc.stdin) throw new Error("Keychain protected input is unavailable")
-        proc.stdin.end(command)
-        if (await proc.exited !== 0) throw new Error("Keychain protected write failed")
-        return
-      }
-      // -U updates an existing item instead of erroring on a duplicate.
-      const res = await Process.run(
-        ["security", "add-generic-password", "-a", account, "-s", service, "-U", "-w", secret],
-        { nothrow: true, ...(stdinOnly ? { abort: AbortSignal.timeout(10000) } : {}) },
-      )
-      if (res.code !== 0) throw new Error(`security add-generic-password failed (code ${res.code})`)
-    },
-    get: async (account) => {
-      const res = await Process.run(
-        ["security", "find-generic-password", "-a", account, "-s", service, "-w"],
-        { nothrow: true, ...(stdinOnly ? { abort: AbortSignal.timeout(10000) } : {}) },
-      )
-      if (res.code !== 0) {
-        if (stdinOnly && res.code !== 44) throw new Error("Keychain protected read failed")
-        return undefined
-      }
-      // `-w` prints just the password; strip the trailing newline.
-      const value = res.stdout.toString().replace(/\n$/, "")
-      if (!stdinOnly) return value
-      return decodeProtectedSecret(value)
-    },
-    remove: async (account) => {
-      const result = await Process.run(["security", "delete-generic-password", "-a", account, "-s", service], {
-        nothrow: true, ...(stdinOnly ? { abort: AbortSignal.timeout(10000) } : {}),
-      })
-      if (stdinOnly && result.code !== 0 && result.code !== 44) throw new Error("Keychain protected removal failed")
-    },
-  })
+  export const macOsKeychainBackend = (
+    service = KEYCHAIN_SERVICE,
+    stdinOnly = false,
+    credential?: { readonly home: string },
+  ): Backend => {
+    const command = credential ? "/usr/bin/security" : "security"
+    const environment = credential ? { HOME: credential.home } : undefined
+    return {
+      id: "macos-keychain",
+      available: async () => {
+        if (process.platform !== "darwin") return false
+        const res = await Process.run([command, "list-keychains"], {
+          nothrow: true,
+          ...(environment ? { env: environment } : {}),
+          ...(stdinOnly ? { abort: AbortSignal.timeout(10000) } : {}),
+        }).catch(() => undefined)
+        return !!res && res.code === 0
+      },
+      put: async (account, secret) => {
+        if (stdinOnly) {
+          // security's interactive parser reads stdin, not a shell. Hex preserves arbitrary UTF-8
+          // bytes and prevents newlines in a secret from becoming another command.
+          if (/[\r\n\0]/.test(account + service)) throw new Error("Invalid Keychain account")
+          const quote = (value: string) => '"' + value.replace(/[\\"]/g, (character) => "\\" + character) + '"'
+          // Printable envelope avoids security -w's ambiguous hex output for binary/newline data.
+          const encoded = encodeProtectedSecret(secret)
+          const command = `add-generic-password -a ${quote(account)} -s ${quote(service)} -U -X ${Buffer.from(encoded).toString("hex")}\n`
+          // Apple's parser has a 4096-byte line buffer; truncation must never store partial custody.
+          if (Buffer.byteLength(command) >= 4096) throw new Error("Keychain secret exceeds the protected input limit")
+          const proc = Process.spawn(["/usr/bin/security", "-i", "-q"], {
+            stdin: "pipe",
+            stdout: "ignore",
+            stderr: "ignore",
+            ...(environment ? { env: environment } : {}),
+            abort: AbortSignal.timeout(10000),
+          })
+          if (!proc.stdin) throw new Error("Keychain protected input is unavailable")
+          proc.stdin.end(command)
+          if ((await proc.exited) !== 0) throw new Error("Keychain protected write failed")
+          return
+        }
+        // -U updates an existing item instead of erroring on a duplicate.
+        const res = await Process.run(
+          [command, "add-generic-password", "-a", account, "-s", service, "-U", "-w", secret],
+          {
+            nothrow: true,
+            ...(environment ? { env: environment } : {}),
+            ...(stdinOnly ? { abort: AbortSignal.timeout(10000) } : {}),
+          },
+        )
+        if (res.code !== 0) throw new Error(`security add-generic-password failed (code ${res.code})`)
+      },
+      get: async (account) => {
+        const res = await Process.run([command, "find-generic-password", "-a", account, "-s", service, "-w"], {
+          nothrow: true,
+          ...(environment ? { env: environment } : {}),
+          ...(stdinOnly ? { abort: AbortSignal.timeout(10000) } : {}),
+        })
+        if (res.code !== 0) {
+          if (stdinOnly && res.code !== 44) throw new Error("Keychain protected read failed")
+          return undefined
+        }
+        // `-w` prints just the password; strip the trailing newline.
+        const value = res.stdout.toString().replace(/\n$/, "")
+        if (!stdinOnly) return value
+        return decodeProtectedSecret(value)
+      },
+      remove: async (account) => {
+        const result = await Process.run([command, "delete-generic-password", "-a", account, "-s", service], {
+          nothrow: true,
+          ...(environment ? { env: environment } : {}),
+          ...(stdinOnly ? { abort: AbortSignal.timeout(10000) } : {}),
+        })
+        if (stdinOnly && result.code !== 0 && result.code !== 44) throw new Error("Keychain protected removal failed")
+      },
+    }
+  }
 
   /**
    * Linux libsecret (Secret Service) backend — via the `secret-tool` CLI (part of libsecret-tools).
@@ -352,18 +382,152 @@ export namespace SecretStore {
     }
   }
 
+  /** MCP alone uses the original Root's fixed native envelope custody. The
+   * IM device backend retains its separate, already established custody path. */
+  export const windowsBackend = (native: McpWindowsStorage.Port | undefined, codec?: Codec): Backend => {
+    // Node managed credentials require the original Native codec. The separate
+    // legacy DPAPI backend retains its established PowerShell compatibility.
+    const engine = codec ?? native?.codec ?? (process.versions.bun ? dpapiCodec : undefined)
+    const decode = (text: string | undefined): Record<string, string> => {
+      if (text === undefined) return {}
+      if (Buffer.byteLength(text, "utf8") > McpAuthStore.MAX_BYTES) throw new FileError({ reason: "invalid" })
+      const decoded = Option.flatMap(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text),
+        Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.String)))
+      if (Option.isNone(decoded) || Object.keys(decoded.value).length > 512 ||
+        Object.entries(decoded.value).some(([key, value]) => !key || key.length > 4096 ||
+          value.length > 131072 || Buffer.from(value, "base64").toString("base64") !== value))
+        throw new FileError({ reason: "invalid" })
+      return decoded.value
+    }
+    const custody = () => {
+      if (!native) throw new FileError({ reason: "io" })
+      return native
+    }
+    const mutation = async (change: (data: Record<string, string>) => Record<string, string> | undefined | Promise<Record<string, string> | undefined>) => {
+      try {
+        await custody().mutateSecrets(async (text) => {
+          const next = await change(decode(text))
+          return next === undefined ? undefined : JSON.stringify(next, null, 2)
+        })
+      } catch (error) {
+        throw error instanceof FileError ? error : new FileError({
+          reason: error instanceof WindowsPrivateStorage.Error && error.reason === "unknown" ? "unknown" : "io",
+        })
+      }
+    }
+    const secure = async <T>(operation: () => Promise<T>, scopedErrors = false) => {
+      try { return await operation() }
+      catch (error) {
+        throw error instanceof FileError || (scopedErrors && error instanceof SecretRefScope.Error) ? error : new FileError({
+          reason: error instanceof WindowsPrivateStorage.Error && error.reason === "unknown" ? "unknown" : "io",
+        })
+      }
+    }
+    const reads = { sequence: 0, nativeObserved: false }
+    const get = (account: string, beforeDecrypt?: () => void) =>
+      secure(async () => {
+        const started = performance.now()
+        const sequence = ++reads.sequence
+        const timing = {
+          stage: "read" as "read" | "before_current" | "legacy" | "unprotect" | "after_current" | "decode",
+          since: started,
+          success: false,
+          phases: { read: 0, before_current: 0, legacy: 0, unprotect: 0, after_current: 0, decode: 0 },
+        }
+        const phase = (stage: typeof timing.stage) => {
+          const now = performance.now()
+          timing.phases[timing.stage] += now - timing.since
+          timing.stage = stage
+          timing.since = now
+        }
+        try {
+          const original = custody()
+          const data = decode((await original.read("mcp_secret_envelopes"))?.text)
+          phase("before_current")
+          await original.current()
+          beforeDecrypt?.()
+          if (!Object.hasOwn(data, account)) {
+            phase("legacy")
+            if (await original.legacySecrets()) throw new FileError({ reason: "legacy_unverified" })
+            timing.success = true
+            return undefined
+          }
+          phase("unprotect")
+          if (!engine) throw new FileError({ reason: "io" })
+          const bytes = await engine.unprotect(Buffer.from(data[account]!, "base64"))
+          try {
+            phase("after_current")
+            await original.current()
+            phase("decode")
+            if (bytes.length > 65_536) throw new FileError({ reason: "invalid" })
+            const value = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+            timing.success = true
+            return value
+          } finally {
+            bytes.fill(0)
+          }
+        } finally {
+          phase(timing.stage)
+          const elapsedMs = Math.round(performance.now() - started)
+          const firstNative = beforeDecrypt && engine?.id === "native-helper-crypt32-current-user" &&
+            timing.success && timing.stage === "decode" && !reads.nativeObserved
+          if (firstNative) reads.nativeObserved = true
+          if (beforeDecrypt && (firstNative || !timing.success || elapsedMs >= 1000))
+            log.warn("MCP managed credential timing", {
+              sequence,
+              engine: engine?.id === "native-helper-crypt32-current-user" ? "native" : "compat",
+              stage: timing.stage,
+              success: timing.success,
+              elapsedMs,
+              readMs: Math.round(timing.phases.read),
+              beforeCurrentMs: Math.round(timing.phases.before_current),
+              legacyMs: Math.round(timing.phases.legacy),
+              unprotectMs: Math.round(timing.phases.unprotect),
+              afterCurrentMs: Math.round(timing.phases.after_current),
+              decodeMs: Math.round(timing.phases.decode),
+            })
+        }
+      }, beforeDecrypt !== undefined)
+    return {
+      id: "dpapi",
+      available: async () => !!native && process.platform === "win32" && !!engine && await engine.available(),
+      validateScoped: () => secure(async () => {
+        const original = custody()
+        decode((await original.read("mcp_secret_envelopes"))?.text)
+        await original.current()
+      }),
+      put: (account, secret) => secure(async () => {
+        const original = custody()
+        await original.current()
+        const bytes = new TextEncoder().encode(secret)
+        if (bytes.length > 65_536) { bytes.fill(0); throw new FileError({ reason: "invalid" }) }
+        try {
+          if (!engine) throw new FileError({ reason: "io" })
+          const ciphertext = await engine.protect(bytes)
+          await original.current()
+          await mutation((data) => ({ ...data, [account]: Buffer.from(ciphertext).toString("base64") }))
+        } finally { bytes.fill(0) }
+      }),
+      get,
+      getScoped: get,
+      remove: (account) => mutation(async (data) => {
+        if (Object.hasOwn(data, account)) return Object.fromEntries(Object.entries(data).filter(([key]) => key !== account))
+        if (await custody().legacySecrets()) throw new FileError({ reason: "legacy_unverified" })
+        return undefined
+      }),
+    }
+  }
+
   /**
    * Pick the best available backend for the current platform, fail-safe: try the native
    * OS keyring first, and on any unavailability fall back to the 0600 file backend with a
    * loud warning (never fail-open, never write into the project config repo).
    */
-  export const selectBackend = async (): Promise<Backend> => {
+  export const selectBackend = async (windows?: McpWindowsStorage.Port): Promise<Backend> => {
+    // A missing native port or DPAPI never enables plaintext Windows fallback.
+    if (process.platform === "win32") return windowsBackend(windows)
     const native =
-      process.platform === "darwin"
-        ? macOsKeychainBackend()
-        : process.platform === "win32"
-          ? dpapiBackend()
-          : libsecretBackend()
+      process.platform === "darwin" ? macOsKeychainBackend() : libsecretBackend()
     try {
       if (await native.available()) return native
     } catch {
@@ -441,16 +605,30 @@ export namespace SecretStore {
       catch: (error) => error instanceof FileError || error instanceof SecretRefScope.Error ? error : new FileError({ reason: "io" }),
     }),
     resolveScoped: (permit) => Effect.tryPromise({
-      try: async () => { const account = SecretRefScope.account(permit); await backend.validateScoped?.(); SecretRefScope.account(permit); const value = await backend.get(account); SecretRefScope.account(permit); return value },
+      try: async () => {
+        const account = SecretRefScope.account(permit)
+        if (backend.getScoped) {
+          const value = await backend.getScoped(account, () => { SecretRefScope.account(permit) })
+          SecretRefScope.account(permit)
+          log.debug("MCP managed credential read", { backend: backend.id === "dpapi" ? "dpapi" : "other", found: value !== undefined })
+          return value
+        }
+        await backend.validateScoped?.()
+        SecretRefScope.account(permit)
+        const value = await backend.get(account)
+        SecretRefScope.account(permit)
+        return value
+      },
       catch: (error) => error instanceof FileError || error instanceof SecretRefScope.Error ? error : new FileError({ reason: "io" }),
     }),
   })
 
-  /** Default layer: select a real backend at build time (fail-safe to the 0600 file). */
+  /** Windows requires original Native custody; other platforms retain the existing keyring/file selection. */
   export const layer: Layer.Layer<Service> = Layer.effect(
     Service,
     Effect.gen(function* () {
-      const backend = yield* Effect.promise(() => selectBackend())
+      const windows = yield* McpWindowsStorage.Current
+      const backend = yield* Effect.promise(() => selectBackend(windows))
       return Service.of(make(backend))
     }),
   )

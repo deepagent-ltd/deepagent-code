@@ -4,6 +4,7 @@ import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { Dialog } from "@deepagent-code/ui/dialog"
 import { Button } from "@deepagent-code/ui/button"
 import { InlineInput } from "@deepagent-code/ui/inline-input"
+import { Switch } from "@deepagent-code/ui/switch"
 import { useLanguage } from "@/context/language"
 import { useMcpAdd, useMcpCatalog, useMcpCatalogEnable } from "@/context/mcp"
 import { showToast } from "@/utils/toast"
@@ -26,6 +27,7 @@ export const DialogAddMcp: Component = () => {
   const [name, setName] = createSignal("")
   const [command, setCommand] = createSignal("")
   const [url, setUrl] = createSignal("")
+  const [oauthDisabled, setOauthDisabled] = createSignal(false)
 
   const valid = createMemo(() => {
     if (!name().trim()) return false
@@ -37,7 +39,7 @@ export const DialogAddMcp: Component = () => {
     const config: McpLocalConfig | McpRemoteConfig =
       type() === "local"
         ? { type: "local", command: command().trim().split(/\s+/), enabled: true }
-        : { type: "remote", url: url().trim(), enabled: true }
+        : { type: "remote", url: url().trim(), enabled: true, ...(oauthDisabled() ? { oauth: false } : {}) }
     await add.mutateAsync({ name: name().trim(), config })
     dialog.close()
   }
@@ -60,12 +62,14 @@ export const DialogAddMcp: Component = () => {
             type={type()}
             command={command()}
             url={url()}
+            oauthDisabled={oauthDisabled()}
             pending={add.isPending}
             valid={valid()}
             onName={setName}
             onType={setType}
             onCommand={setCommand}
             onUrl={setUrl}
+            onOauthDisabled={setOauthDisabled}
             onSubmit={submit}
             onCancel={() => dialog.close()}
           />
@@ -79,19 +83,19 @@ export const DialogAddMcp: Component = () => {
   )
 }
 
-// MANUAL_FORM_PLACEHOLDER
-
 const ManualForm: Component<{
   name: string
   type: "local" | "remote"
   command: string
   url: string
+  oauthDisabled: boolean
   pending: boolean
   valid: boolean
   onName: (v: string) => void
   onType: (v: "local" | "remote") => void
   onCommand: (v: string) => void
   onUrl: (v: string) => void
+  onOauthDisabled: (v: boolean) => void
   onSubmit: () => void
   onCancel: () => void
 }> = (props) => {
@@ -139,6 +143,16 @@ const ManualForm: Component<{
             onInput={(e) => props.onUrl(e.currentTarget.value)}
           />
         </label>
+        <div class="flex items-center justify-between gap-3 rounded-md bg-surface-base p-3">
+          <span class="text-11-regular text-text-weaker">
+            {props.oauthDisabled
+              ? language.t("dialog.mcp.configure.oauthDisabled")
+              : language.t("dialog.mcp.configure.oauthAuto")}
+          </span>
+          <Switch checked={!props.oauthDisabled} onChange={(value) => props.onOauthDisabled(!value)}>
+            {language.t("dialog.mcp.configure.oauth")}
+          </Switch>
+        </div>
       </Show>
 
       <div class="flex justify-end gap-2 pt-1">

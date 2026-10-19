@@ -1,8 +1,10 @@
 export * as NativeWindowsBootstrap from "./windows-native-bootstrap"
 
 import { Context, Effect, Option, Schema } from "effect"
+import { createHash } from "node:crypto"
 import { WorkWindowsPathSchema } from "@deepagent-code/core/session/work-windows-path.schema"
 import { NativeInstallation } from "./native-installation"
+import { NativeInstallationSchema } from "./native-installation.schema"
 
 const Digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))
 const Image = Schema.Struct({
@@ -45,6 +47,11 @@ export type Port = Readonly<{
   currentPrivateInstallation?: (capture: object, lease: object) => boolean
   publishPrivate?: (capture: object, lease: object, request: string, bytes: Buffer) => string
   closePrivate?: (capture: object, lease: object) => void
+  legacyMcpSecrets?: (capture: object, root: string) => boolean
+  openMcpJournal?: (capture: object, request: string) => object | undefined
+  currentMcpJournal?: (capture: object, lease: object) => boolean
+  flushMcpJournal?: (capture: object, lease: object) => void
+  closeMcpJournal?: (capture: object, lease: object) => void
   openWorkFactory?: (capture: object) => object
   readWorkFactory?: (capture: object, factory: object) => string
   closeWorkFactory?: (capture: object, factory: object) => void
@@ -52,6 +59,7 @@ export type Port = Readonly<{
   writeWorkChild?: (capture: object, factory: object, child: object, bytes: Buffer) => void
   endWorkChild?: (capture: object, factory: object, child: object) => void
   readWorkChild?: (capture: object, factory: object, child: object) => { metadata: string; bytes: Buffer }
+  retainBrowserWorkChild?: (capture: object, factory: object, child: object) => void
   stopWorkChild?: (capture: object, factory: object, child: object) => void
   closeWorkChild?: (capture: object, factory: object, child: object) => boolean
   launchWorkCommand?: (capture: object, factory: object, workspace: object, request: string) => { lease: object; pid: number }
@@ -125,24 +133,26 @@ export async function installCompiledEntry() {
   installed = native
 }
 
-const InstalledFile = Schema.Struct({ identity: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048)),
-  hash: Digest, bytes: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(268_435_456)), text: Schema.NullOr(Schema.String) })
-const InstalledFiles = Schema.Struct({ version: Schema.Literal(1), artifact: InstalledFile, manifest: InstalledFile, runtime: InstalledFile })
-/** Fixed original Native handles only. Caller names/paths cannot select files. */
+/** The original Native capture observes its held installation once. Every
+ * synchronous read checks the complete live graph before returning those facts;
+ * caller names/paths cannot select other files. */
 export function readInstallation() {
   const native = installed
-  if (!native || !native.preloaded(native.capture) || !native.current(native.capture) || typeof native.readInstallation !== "function") throw unavailable()
+  if (!native || typeof native.readInstallation !== "function") throw unavailable()
   const text = native.readInstallation(native.capture)
-  if (typeof text !== "string" || Buffer.byteLength(text) > 131_072) throw unavailable()
+  if (typeof text !== "string" || Buffer.byteLength(text) > NativeInstallationSchema.WINDOWS_OBSERVATION_LIMIT) throw unavailable()
   const decoded = Option.flatMap(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text),
-    Schema.decodeUnknownOption(InstalledFiles, { onExcessProperty: "error" }))
-  if (Option.isNone(decoded) || !native.preloaded(native.capture) || !native.current(native.capture)) throw unavailable()
+    Schema.decodeUnknownOption(NativeInstallationSchema.WindowsObservation, { onExcessProperty: "error" }))
+  if (Option.isNone(decoded)) throw unavailable()
   return decoded.value
 }
 
 declare const originalCapture: unique symbol
 export interface Capture { readonly [originalCapture]: true }
 const originals = new WeakMap<Capture, { description: Description; current: () => boolean }>()
+// Standalone settings and the listener root retain the same original preloader.
+// Closing one scoped adapter must not revoke another still-active adapter.
+const owners = new WeakMap<Port, { count: number; retired: boolean }>()
 /** Pure original-object lookup; descriptions never reconstruct native leases. */
 export function describe(capture: Capture) {
   const entry = originals.get(capture)
@@ -153,7 +163,7 @@ export const make = Effect.fn("NativeWindowsBootstrap.make")(function* (
   installation: NativeInstallation.VerifiedInstalledComponents,
 ) {
   const native = yield* Registered
-  if (process.platform !== "win32" || !native || !Object.isFrozen(native) ||
+  if (process.platform !== "win32" || !native || native !== installed || !Object.isFrozen(native) ||
     typeof native.capture !== "object" || native.capture === null) return yield* unavailable()
   if (typeof native.preloaded !== "function" || !native.preloaded(native.capture)) return yield* unavailable()
   yield* NativeInstallation.requireCurrent(installation).pipe(Effect.mapError(() => unavailable()))
@@ -166,15 +176,29 @@ export const make = Effect.fn("NativeWindowsBootstrap.make")(function* (
     !inventory.some((entry) => entry.path === `packages/work-file-helper/bin/${decoded.value.target}/native-image-factory.node` &&
       entry.sha256 === decoded.value.bootstrap.sha256 && entry.bytes === decoded.value.bootstrap.bytes)) return yield* unavailable()
   const description = freeze(decoded.value)
+  const observedHash = createHash("sha256").update(observed).digest("hex")
   const lifetime = { active: true }
   const current = () => lifetime.active && native.preloaded(native.capture) && native.current(native.capture)
   const capture = Object.freeze(Object.create(null)) as Capture
+  yield* Effect.acquireRelease(
+    Effect.gen(function* () {
+      const owner = owners.get(native) ?? { count: 0, retired: false }
+      if (owner.retired) return yield* unavailable()
+      owner.count++
+      owners.set(native, owner)
+      return owner
+    }),
+    (owner) => Effect.sync(() => {
+      lifetime.active = false
+      originals.delete(capture)
+      owner.count--
+      if (owner.count !== 0) return
+      // A failed close is unknown. Never reacquire or retry this original port.
+      owner.retired = true
+      native.close(native.capture)
+    }),
+  )
   originals.set(capture, { description, current: () => lifetime.active })
-  yield* Effect.addFinalizer(() => Effect.sync(() => {
-    lifetime.active = false
-    originals.delete(capture)
-    native.close(native.capture)
-  }))
   if (!current()) return yield* unavailable()
   return {
     capture,
@@ -232,9 +256,18 @@ export const make = Effect.fn("NativeWindowsBootstrap.make")(function* (
             write: (factory: object, child: object, bytes: Buffer) => native.writeWorkChild!(native.capture, factory, child, bytes),
             end: (factory: object, child: object) => native.endWorkChild!(native.capture, factory, child),
             read: (factory: object, child: object) => native.readWorkChild!(native.capture, factory, child),
+            retainBrowserCustody: native.retainBrowserWorkChild ? (factory: object, child: object) => native.retainBrowserWorkChild!(native.capture, factory, child) : undefined,
             stop: (factory: object, child: object) => native.stopWorkChild!(native.capture, factory, child),
             close: (factory: object, child: object) => native.closeWorkChild!(native.capture, factory, child),
           }) : undefined,
+      }) : undefined,
+    legacyMcpSecrets: native.legacyMcpSecrets ? (root: string) => native.legacyMcpSecrets!(native.capture, root) : undefined,
+    mcpJournal: native.openMcpJournal && native.currentMcpJournal && native.flushMcpJournal && native.closeMcpJournal
+      ? Object.freeze({
+        open: (request: string) => native.openMcpJournal!(native.capture, request),
+        current: (lease: object) => native.currentMcpJournal!(native.capture, lease),
+        flush: (lease: object) => native.flushMcpJournal!(native.capture, lease),
+        close: (lease: object) => native.closeMcpJournal!(native.capture, lease),
       }) : undefined,
     privateStorage: native.openPrivate && native.currentPrivate && native.readPrivate && native.publishPrivate && native.closePrivate
       ? Object.freeze({
@@ -248,10 +281,13 @@ export const make = Effect.fn("NativeWindowsBootstrap.make")(function* (
         publish: (lease: object, request: string, bytes: Buffer) => native.publishPrivate!(native.capture, lease, request, bytes),
         close: (lease: object) => native.closePrivate!(native.capture, lease),
       }) : undefined,
-    requireCurrent: NativeInstallation.requireCurrent(installation).pipe(Effect.mapError(() => unavailable()),
-      Effect.flatMap(() => Effect.try({ try: () => {
-        if (!current() || native.describe(native.capture) !== observed) throw unavailable()
-      }, catch: () => new Error({ code: "WINDOWS_FIRST_LOADER_CHANGED", message: "Original Windows native bootstrap changed" }) }))),
+    requireCurrent: Effect.gen(function* () {
+      if (!lifetime.active || native !== installed) return yield* new Error({ code: "WINDOWS_FIRST_LOADER_CHANGED", message: "Original Windows native bootstrap changed" })
+      // One synchronous Native observation checks the complete held graph and
+      // installation stamps, then binds its immutable description to this port.
+      yield* NativeInstallation.requireCurrent(installation, observedHash).pipe(Effect.mapError(() => unavailable()))
+      if (!lifetime.active || native !== installed) return yield* new Error({ code: "WINDOWS_FIRST_LOADER_CHANGED", message: "Original Windows native bootstrap changed" })
+    }),
   }
 })
 

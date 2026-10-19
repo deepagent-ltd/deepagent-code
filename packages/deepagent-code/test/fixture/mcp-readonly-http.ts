@@ -37,7 +37,7 @@ assert(
     mode === "oversized" ||
     mode === "proxy" ||
     mode === "proxyread" ||
-    mode === "account",
+    mode === "account" || mode === "damaged",
 )
 assert.equal(process.env.DEEPAGENT_CODE_DB, path.join(root, "home", ".deepagent", "code", "authority.sqlite"))
 const connected = mode === "warm" || mode === "oversized"
@@ -129,7 +129,12 @@ await fs.writeFile(
     lsp: false,
     mcp: connected
       ? { fixture: { type: "remote", url: `${remote.url.origin}/mcp`, oauth: false, enabled: false } }
-      : { local: mode === "pending" || mode === "account" ? { ...local, enabled: false } : local },
+      : mode === "damaged" ? {
+          oauth: { type: "remote", url: `${remote.url.origin}/mcp` },
+          public: { type: "remote", url: `${remote.url.origin}/mcp`, oauth: false },
+          disabled: { type: "remote", url: `${remote.url.origin}/mcp`, enabled: false },
+          local,
+        } : { local: mode === "pending" || mode === "account" ? { ...local, enabled: false } : local },
     skills: { urls: [remote.url.origin] },
     command: { fixture: { template: "local fixture text", description: "read-only fixture command" } },
   }),
@@ -148,6 +153,10 @@ const rg = Bun.which("rg")
 assert(rg)
 await fs.mkdir(Global.Path.bin, { recursive: true })
 await fs.copyFile(rg, path.join(Global.Path.bin, "rg"))
+if (mode === "damaged") {
+  await fs.mkdir(Global.Path.config, { recursive: true, mode: 0o700 })
+  await fs.writeFile(path.join(Global.Path.config, "mcp-auth.json"), "damaged credential fixture", { mode: 0o600 })
+}
 await AppRuntime.runPromise(Database.Service)
 const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
 const inventory = async (dir: string): Promise<Record<string, string>> => {
@@ -426,6 +435,16 @@ try {
       continue
     }
     const body: unknown = await response.json()
+    if (mode === "damaged" && route === "/mcp") {
+      assert.equal(response.status, 200)
+      assert.deepEqual(body, {
+        oauth: { status: "failed", error: "MCP authentication storage or scope is unavailable" },
+        public: { status: "disconnected", authStatus: "not_authenticated", reason: "explicit_connect_required" },
+        disabled: { status: "disabled" },
+        local: { status: "disconnected", authStatus: "not_authenticated", reason: "explicit_connect_required" },
+      })
+      assert.deepEqual(requests, previousRequests)
+    }
     if (route === "/command") {
       assert(Array.isArray(body))
       assert.equal(

@@ -319,3 +319,16 @@ if (process.env.DAC_MCP_SECRET_CALLER_CHILD) {
     { config: { mcp: {} } },
   )
 }
+
+test("Windows MCP without original Native custody refuses instead of plaintext fallback or missing credentials", async () => {
+  const backend = SecretStore.windowsBackend(undefined)
+  expect(backend.id).toBe("dpapi")
+  expect(await backend.available()).toBe(false)
+  const store = SecretStore.make(backend)
+  expect(store.isFallback).toBe(false)
+  for (const operation of [store.resolve("fixture-account"), store.put("fixture-account", "fixture-value"), store.remove("fixture-account")]) {
+    const result = await Effect.runPromiseExit(operation)
+    expect(Exit.isFailure(result)).toBe(true)
+    if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toMatchObject({ _tag: "McpSecretFileError", reason: "io" })
+  }
+})

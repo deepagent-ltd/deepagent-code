@@ -29,6 +29,10 @@ export interface McpOAuthConfig {
 export interface McpOAuthCallbacks {
   onRedirect: (url: URL) => void | Promise<void>
   current?: () => boolean | Promise<boolean>
+  // A scoped owner may return the entry from the same fully fenced scope read.
+  currentEntry?: () => Promise<McpAuth.Entry | undefined>
+  // Scoped mutations retain their own full proof; this only fences their local owner.
+  currentLocal?: () => boolean
   authorizationGeneration?: string
   interactive?: boolean
 }
@@ -43,6 +47,16 @@ export class McpOAuthProvider implements OAuthClientProvider {
   private async requireCurrent() {
     const error = McpOAuthState.configurationError(this.config)
     if (error) throw new Error(error)
+    if (this.callbacks.currentEntry) {
+      const entry = await this.callbacks.currentEntry()
+      if (entry && entry.serverUrl !== this.serverUrl) throw new Error("MCP OAuth flow was revoked")
+      if (
+        this.callbacks.authorizationGeneration !== undefined &&
+        entry?.authorizationGeneration !== this.callbacks.authorizationGeneration
+      )
+        throw new Error("MCP OAuth flow was revoked")
+      return entry
+    }
     if (this.callbacks.current && !(await this.callbacks.current())) throw new Error("MCP OAuth flow was revoked")
     if (this.callbacks.authorizationGeneration !== undefined) {
       const entry = await Effect.runPromise(this.auth.getForUrl(this.mcpName, this.serverUrl))
@@ -51,8 +65,33 @@ export class McpOAuthProvider implements OAuthClientProvider {
     }
   }
 
+  private async readEntry(lookup = () => this.auth.getForUrl(this.mcpName, this.serverUrl)) {
+    if (this.callbacks.currentEntry) return this.requireCurrent()
+    await this.requireCurrent()
+    const entry = await Effect.runPromise(lookup())
+    await this.requireCurrent()
+    return entry
+  }
+
+  private requireCurrentLocal() {
+    const error = McpOAuthState.configurationError(this.config)
+    if (error) throw new Error(error)
+    if (!this.callbacks.currentLocal?.()) throw new Error("MCP OAuth flow was revoked")
+  }
+
   private persist(effect: Effect.Effect<void>) {
-    const write = this.requireCurrent().then(() => Effect.runPromise(effect))
+    // The original scoped mutation checks its complete authority immediately before
+    // its durable write. Avoid a duplicate full read, retaining local fences on both
+    // sides of that asynchronous mutation and preserving the legacy path unchanged.
+    const write =
+      this.callbacks.currentEntry && this.callbacks.currentLocal
+        ? Promise.resolve()
+            .then(() => {
+              this.requireCurrentLocal()
+              return Effect.runPromise(effect)
+            })
+            .then(() => this.requireCurrentLocal())
+        : this.requireCurrent().then(() => Effect.runPromise(effect))
     this.writes.add(write)
     return write.finally(() => this.writes.delete(write))
   }
@@ -90,10 +129,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async clientInformation(ctx?: OAuthClientInformationContext): Promise<OAuthClientInformation | undefined> {
-    await this.requireCurrent()
+    const entry = await this.readEntry()
     if (ctx) this.requireIssuer(ctx.issuer)
-    const entry = await Effect.runPromise(this.auth.getForUrl(this.mcpName, this.serverUrl))
-    await this.requireCurrent()
     // Check config first (pre-registered client)
     if (this.config.clientId) {
       const issuer =
@@ -167,10 +204,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async tokens(ctx?: OAuthClientInformationContext): Promise<OAuthTokens | undefined> {
-    await this.requireCurrent()
-    // Use getForUrl to validate tokens are for the current server URL
-    const entry = await Effect.runPromise(this.auth.getForUrl(this.mcpName, this.serverUrl))
-    await this.requireCurrent()
+    // The scoped owner's read validates the URL, generation and current flow together.
+    const entry = await this.readEntry()
     if (!entry?.tokens?.issuer || (ctx && !McpOAuthState.sameIssuer(entry.tokens.issuer, ctx.issuer))) return undefined
     if (this.config.expectedIssuer && !McpOAuthState.sameIssuer(this.config.expectedIssuer, entry.tokens.issuer))
       return undefined
@@ -209,11 +244,14 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
-    await this.requireCurrent()
+    const entry = this.callbacks.currentEntry ? await this.requireCurrent() : undefined
+    if (!this.callbacks.currentEntry) await this.requireCurrent()
     if (this.callbacks.interactive === false) throw new Error("OAuth authorization must be started explicitly")
     if (!this.config.clientId) {
-      const entry = await Effect.runPromise(this.auth.getForUrl(this.mcpName, this.serverUrl))
-      if (!entry?.clientInfo?.registeredRedirectUris?.includes(this.redirectUrl))
+      const registered = this.callbacks.currentEntry
+        ? entry
+        : await Effect.runPromise(this.auth.getForUrl(this.mcpName, this.serverUrl))
+      if (!registered?.clientInfo?.registeredRedirectUris?.includes(this.redirectUrl))
         throw new Error(
           "OAuth callback registration is not verified; explicitly clear authentication before registering again",
         )
@@ -233,9 +271,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async codeVerifier(): Promise<string> {
-    await this.requireCurrent()
-    const entry = await Effect.runPromise(this.auth.get(this.mcpName))
-    await this.requireCurrent()
+    const entry = await this.readEntry(() => this.auth.get(this.mcpName))
     if (!entry?.codeVerifier) {
       throw new Error(`No code verifier saved for MCP server: ${this.mcpName}`)
     }
@@ -249,9 +285,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async state(): Promise<string> {
-    await this.requireCurrent()
-    const entry = await Effect.runPromise(this.auth.get(this.mcpName))
-    await this.requireCurrent()
+    const entry = await this.readEntry(() => this.auth.get(this.mcpName))
     if (entry?.oauthState) {
       return entry.oauthState
     }
@@ -270,9 +304,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async discoveryState(): Promise<OAuthDiscoveryState | undefined> {
-    await this.requireCurrent()
-    const entry = await Effect.runPromise(this.auth.getForUrl(this.mcpName, this.serverUrl))
-    await this.requireCurrent()
+    const entry = await this.readEntry()
     if (!entry?.discoveryState) return undefined
     const state = await McpOAuthState.parse(entry.discoveryState)
     this.requireIssuer(state.authorizationServerMetadata?.issuer ?? state.authorizationServerUrl)
@@ -281,10 +313,12 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async saveDiscoveryState(state: OAuthDiscoveryState): Promise<void> {
-    await this.requireCurrent()
+    if (this.callbacks.currentEntry && this.callbacks.currentLocal) this.requireCurrentLocal()
+    else await this.requireCurrent()
     const parsed = await McpOAuthState.parse(state)
     this.requireIssuer(parsed.authorizationServerMetadata?.issuer ?? parsed.authorizationServerUrl)
-    await this.requireCurrent()
+    if (this.callbacks.currentEntry && this.callbacks.currentLocal) this.requireCurrentLocal()
+    else await this.requireCurrent()
     await this.persist(
       this.auth.updateDiscoveryState(this.mcpName, parsed, this.serverUrl, this.callbacks.authorizationGeneration),
     )
@@ -347,4 +381,13 @@ export function parseRedirectUri(redirectUri?: string): { port: number; path: st
   const port = url.port ? parseInt(url.port, 10) : url.protocol === "https:" ? 443 : 80
   const path = url.pathname || OAUTH_CALLBACK_PATH
   return { port, path }
+}
+
+export function currentEntry(read: () => Promise<McpAuth.Entry | undefined>, current: () => boolean) {
+  return async () => {
+    if (!current()) throw new Error("MCP OAuth flow was revoked")
+    const entry = await read()
+    if (!current()) throw new Error("MCP OAuth flow was revoked")
+    return entry
+  }
 }

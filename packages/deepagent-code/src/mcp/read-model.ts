@@ -8,6 +8,7 @@ import { Project } from "@/project/project"
 import { assertSafeInstanceRoot } from "@/project/instance-context"
 import { MCP } from "."
 import { McpAuthScope } from "./auth-scope"
+import { McpAuthJournalSchema } from "./auth-journal-schema"
 
 export type Input = Readonly<{ directory: string; workspaceID?: WorkspaceV2.ID }>
 export interface Interface {
@@ -38,8 +39,7 @@ export const layer = Layer.effect(
       const observed = candidate?.project.id === actual.project?.id ? candidate : undefined
       if (!configuration.readonlySnapshot)
         return yield* Effect.die(new Error("Readonly configuration observation unavailable"))
-      const snapshot = yield* configuration.readonlySnapshot({ ...actual, observed })
-      return { actual, observed, snapshot }
+      return { actual, observed, snapshot: configuration.readonlySnapshot({ ...actual, observed }) }
     })
     const status = Effect.fn("McpReadModel.status")(function* (input: Input) {
       const view = yield* observe(input)
@@ -50,14 +50,15 @@ export const layer = Layer.effect(
             Effect.provideService(InstanceRef, view.observed),
             Effect.provideService(WorkspaceRef, input.workspaceID),
           )
+      const snapshot = yield* view.snapshot
       const result: Record<string, MCP.Status> = {}
-      for (const [name, config] of Object.entries(view.snapshot.config.mcp ?? {})) {
+      for (const [name, config] of Object.entries(snapshot.config.mcp ?? {})) {
         if (!config || typeof config !== "object" || !("type" in config)) continue
         if (config.enabled === false) {
           result[name] = { status: "disabled" }
           continue
         }
-        const metadata =
+        const observed =
           config.type === "remote" && config.oauth !== false
             ? yield* authentication
                 .metadataAt(name, config, {
@@ -65,10 +66,16 @@ export const layer = Layer.effect(
                   projectID: view.actual.project?.id,
                   projectVcs: view.actual.project?.vcs,
                   workspaceID: input.workspaceID,
-                  snapshot: view.snapshot,
+                  snapshot,
                 })
-                .pipe(Effect.orDie)
+                .pipe(Effect.result)
             : undefined
+        if (observed?._tag === "Failure") {
+          result[name] = { status: "failed", error: observed.failure instanceof McpAuthJournalSchema.Error &&
+            observed.failure.reason === "legacy_unverified" ? observed.failure.message : "MCP authentication storage or scope is unavailable" }
+          continue
+        }
+        const metadata = observed?.success
         result[name] = {
           status: "disconnected",
           authStatus: metadata?.unknown
@@ -96,6 +103,7 @@ export const layer = Layer.effect(
     })
     const commands = Effect.fn("McpReadModel.commands")(function* (input: Input) {
       const view = yield* observe(input)
+      const snapshot = yield* view.snapshot
       if (view.observed && !mcp.observedMetadata)
         return yield* Effect.die(new Error("Readonly MCP metadata unavailable"))
       const prompts = view.observed
@@ -104,7 +112,7 @@ export const layer = Layer.effect(
             Effect.provideService(WorkspaceRef, input.workspaceID),
           )).prompts
         : {}
-      return yield* command.readonlyList(view.snapshot, prompts, view.observed)
+      return yield* command.readonlyList(snapshot, prompts, view.observed)
     })
     return Service.of({ status, resources, commands })
   }),

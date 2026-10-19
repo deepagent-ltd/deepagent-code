@@ -7,7 +7,7 @@ use private_protocol::{Observation, Purpose};
 #[path = "../private_storage/windows.rs"]
 mod storage;
 use serde::{Deserialize, Serialize};
-use std::{collections::{HashMap, HashSet}, ffi::{c_char, c_void}, io, ptr, sync::{Mutex, OnceLock}};
+use std::{collections::{HashMap, HashSet}, ffi::{c_char, c_void}, io, ptr, sync::{Arc, Mutex, OnceLock}};
 type Env = *mut c_void;
 type Value = *mut c_void;
 type Callback = unsafe extern "C" fn(Env, *mut c_void) -> Value;
@@ -104,12 +104,16 @@ impl Api {
 }
 
 struct Entry { capture: usize, capture_reference: usize, lease: storage::Lease, operations: usize, requests: HashSet<String> }
-struct State { api: Api, entries: HashMap<usize, Entry> }
+struct JournalEntry { capture: usize, capture_reference: usize, lease: Arc<storage::JournalLease> }
+struct State { api: Api, entries: HashMap<usize, Entry>, journals: HashMap<usize, JournalEntry> }
 static STATES: OnceLock<Mutex<HashMap<usize, State>>> = OnceLock::new();
 fn states() -> &'static Mutex<HashMap<usize, State>> { STATES.get_or_init(|| Mutex::new(HashMap::new())) }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Open { version: u8, purpose: Purpose, root: String, prepare: bool, deadline_ms: u64 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JournalOpen { version: u8, root: String, write: bool }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Publication { version: u8, id: String, name: String, expected: Option<Observation>, sha256: String, bytes: usize }
@@ -120,12 +124,15 @@ pub fn register(env: Env, exports: Value) -> io::Result<()> {
     let api = Api::load()?;
     let mut all = states().lock().map_err(|_| io::ErrorKind::Other)?;
     if all.contains_key(&(env as usize)) { return Err(io::ErrorKind::PermissionDenied.into()); }
-    all.insert(env as usize, State { api, entries: HashMap::new() }); drop(all);
+    all.insert(env as usize, State { api, entries: HashMap::new(), journals: HashMap::new() }); drop(all);
     if unsafe { (api.cleanup)(env, cleanup, env) } != 0 { cleanup_state(env); return Err(io::ErrorKind::Unsupported.into()); }
     for (name, callback) in [(c"openPrivate", open as Callback), (c"currentPrivate", current as Callback),
         (c"readPrivate", read as Callback), (c"pinPrivateInstallation", pin_installation as Callback),
         (c"currentPrivateInstallation", current_installation as Callback),
-        (c"publishPrivate", publish as Callback), (c"closePrivate", close as Callback)] {
+        (c"publishPrivate", publish as Callback), (c"closePrivate", close as Callback),
+        (c"legacyMcpSecrets", legacy_secrets as Callback),
+        (c"openMcpJournal", open_journal as Callback), (c"currentMcpJournal", current_journal as Callback),
+        (c"flushMcpJournal", flush_journal as Callback), (c"closeMcpJournal", close_journal as Callback)] {
         let mut value = ptr::null_mut();
         if unsafe { (api.create_function)(env,name.as_ptr(),name.to_bytes().len(),callback,ptr::null_mut(),&mut value) } != 0 ||
             unsafe { (api.set_property)(env,exports,name.as_ptr(),value) } != 0 {
@@ -283,6 +290,128 @@ unsafe extern "C" fn close(env: Env, info: *mut c_void) -> Value {
         if unsafe { (api.undefined)(env,&mut value) } != 0 { return Err(io::ErrorKind::Unsupported.into()); } Ok(value)
     })(); result.unwrap_or_else(|_| api.error(env,c"PRIVATE_STORAGE_UNAVAILABLE"))
 }
+unsafe extern "C" fn legacy_secrets(env: Env, info: *mut c_void) -> Value {
+    let Ok(all) = states().lock() else { return ptr::null_mut(); };
+    let Some(state) = all.get(&(env as usize)) else { return ptr::null_mut(); }; let api = state.api;
+    let request = arguments(&api,env,info,2).and_then(|args| {
+        if !napi::current_capture(env,args[0]) { return Err(io::ErrorKind::PermissionDenied.into()); }
+        let root = api.string(env,args[1])?;
+        if root.len() > 2048 || root.chars().any(char::is_control) { return Err(io::ErrorKind::InvalidInput.into()); }
+        Ok((args[0],root))
+    });
+    drop(all);
+    let result = request.and_then(|(capture,root)| {
+        let exists = storage::legacy_mcp_envelope_exists(&root)?;
+        if !napi::current_capture(env,capture) { return Err(io::ErrorKind::PermissionDenied.into()); }
+        let mut value = ptr::null_mut();
+        if unsafe { (api.boolean)(env,exists,&mut value) } != 0 { return Err(io::ErrorKind::Unsupported.into()); }
+        Ok(value)
+    });
+    result.unwrap_or_else(|_| api.error(env,c"MCP_JOURNAL_UNAVAILABLE"))
+}
+
+fn journal(api: &Api, env: Env, args: &[Value; 5], state: &State, active: bool) -> io::Result<Arc<storage::JournalLease>> {
+    let capture = api.pointer(env,args[0])?; let token = api.pointer(env,args[1])?;
+    let entry = state.journals.get(&token).ok_or(io::ErrorKind::PermissionDenied)?;
+    if capture != entry.capture || !napi::same_capture(env,args[0]) || (active && !napi::current_capture(env,args[0])) {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    Ok(Arc::clone(&entry.lease))
+}
+unsafe extern "C" fn open_journal(env: Env, info: *mut c_void) -> Value {
+    let Ok(mut all) = states().lock() else { return ptr::null_mut(); };
+    let Some(state) = all.get_mut(&(env as usize)) else { return ptr::null_mut(); }; let api = state.api;
+    let result = (|| -> io::Result<Value> {
+        let args = arguments(&api,env,info,2)?;
+        if !napi::current_capture(env,args[0]) { return Err(io::ErrorKind::PermissionDenied.into()); }
+        if state.journals.len() >= 64 { return Err(io::ErrorKind::OutOfMemory.into()); }
+        let request: JournalOpen = serde_json::from_str(&api.string(env,args[1])?).map_err(|_| io::ErrorKind::InvalidData)?;
+        if request.version != 1 || request.root.len() > 2048 || request.root.chars().any(char::is_control) {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let lease = match storage::JournalLease::open(&request.root, request.write) {
+            Ok(lease) => lease,
+            Err(error) if !request.write && error.kind() == io::ErrorKind::NotFound => {
+                if !napi::current_capture(env,args[0]) { return Err(io::ErrorKind::PermissionDenied.into()); }
+                let mut value = ptr::null_mut();
+                if unsafe { (api.undefined)(env,&mut value) } != 0 { return Err(io::ErrorKind::Unsupported.into()); }
+                return Ok(value);
+            },
+            Err(error) => return Err(diagnostic("mcp-journal-open", error)),
+        };
+        if !napi::current_capture(env,args[0]) { return Err(io::ErrorKind::PermissionDenied.into()); }
+        let mut reference = ptr::null_mut();
+        if unsafe { (api.create_reference)(env,args[0],1,&mut reference) } != 0 || reference.is_null() {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        let token = Box::into_raw(Box::new(env as usize)); let mut value = ptr::null_mut();
+        if unsafe { (api.create_external)(env,token.cast(),Some(finalize_journal),ptr::null_mut(),&mut value) } != 0 {
+            unsafe { drop(Box::from_raw(token)); (api.delete_reference)(env,reference); }
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        state.journals.insert(token as usize, JournalEntry { capture: api.pointer(env,args[0])?, capture_reference: reference as usize,
+            lease: Arc::new(lease) });
+        Ok(value)
+    })(); result.unwrap_or_else(|error| api.error(env, if error.kind() == io::ErrorKind::OutOfMemory {
+        c"MCP_JOURNAL_CAPACITY"
+    } else { c"MCP_JOURNAL_UNAVAILABLE" }))
+}
+unsafe extern "C" fn current_journal(env: Env, info: *mut c_void) -> Value {
+    let Ok(all) = states().lock() else { return ptr::null_mut(); };
+    let Some(state) = all.get(&(env as usize)) else { return ptr::null_mut(); }; let api = state.api;
+    let args = arguments(&api,env,info,2);
+    let lease = args.as_ref().map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
+        .and_then(|args| journal(&api,env,args,state,true));
+    drop(all);
+    let valid = lease.and_then(|lease| lease.current()).is_ok() &&
+        args.is_ok_and(|args| napi::current_capture(env,args[0]));
+    let mut value = ptr::null_mut();
+    if unsafe { (api.boolean)(env,valid,&mut value) } != 0 { return api.error(env,c"MCP_JOURNAL_UNAVAILABLE"); }
+    value
+}
+unsafe extern "C" fn flush_journal(env: Env, info: *mut c_void) -> Value {
+    let Ok(all) = states().lock() else { return ptr::null_mut(); };
+    let Some(state) = all.get(&(env as usize)) else { return ptr::null_mut(); }; let api = state.api;
+    let args = arguments(&api,env,info,2);
+    let lease = args.as_ref().map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
+        .and_then(|args| journal(&api,env,args,state,true));
+    // File flush may block on storage. It never holds the global NAPI lease table
+    // mutex, and no SQLite or network operation runs under that table lock.
+    drop(all);
+    let result = lease.and_then(|lease| lease.flush());
+    if result.is_err() || !args.is_ok_and(|args| napi::current_capture(env,args[0])) {
+        return api.error(env,c"MCP_JOURNAL_COMMIT_UNKNOWN");
+    }
+    let mut value = ptr::null_mut();
+    if unsafe { (api.undefined)(env,&mut value) } != 0 { return api.error(env,c"MCP_JOURNAL_COMMIT_UNKNOWN"); }
+    value
+}
+unsafe extern "C" fn close_journal(env: Env, info: *mut c_void) -> Value {
+    let Ok(mut all) = states().lock() else { return ptr::null_mut(); };
+    let Some(state) = all.get_mut(&(env as usize)) else { return ptr::null_mut(); }; let api = state.api;
+    let result = (|| -> io::Result<Value> {
+        let args = arguments(&api,env,info,2)?;
+        journal(&api,env,&args,state,false)?;
+        if let Some(entry) = state.journals.remove(&api.pointer(env,args[1])?) {
+            unsafe { (api.delete_reference)(env,entry.capture_reference as *mut c_void); }
+        }
+        let mut value = ptr::null_mut();
+        if unsafe { (api.undefined)(env,&mut value) } != 0 { return Err(io::ErrorKind::Unsupported.into()); }
+        Ok(value)
+    })(); result.unwrap_or_else(|_| api.error(env,c"MCP_JOURNAL_UNAVAILABLE"))
+}
+unsafe extern "C" fn finalize_journal(env: Env, token: *mut c_void, _: *mut c_void) {
+    if token.is_null() { return; }
+    if let Ok(mut all) = states().lock() {
+        if let Some(state) = all.get_mut(&(env as usize)) {
+            if let Some(entry) = state.journals.remove(&(token as usize)) {
+                unsafe { (state.api.delete_reference)(env,entry.capture_reference as *mut c_void); }
+            }
+        }
+    }
+    unsafe { drop(Box::from_raw(token.cast::<usize>())); }
+}
+
 fn diagnostic(stage: &'static str, error: io::Error) -> io::Error {
     eprintln!("PRIVATE_STORAGE_FAILURE stage={stage} kind={:?} os={}", error.kind(), error.raw_os_error().unwrap_or(0));
     error
@@ -291,6 +420,7 @@ fn cleanup_state(env: Env) {
     if let Ok(mut all) = states().lock() {
         if let Some(state) = all.remove(&(env as usize)) {
             for entry in state.entries.into_values() { unsafe { (state.api.delete_reference)(env,entry.capture_reference as *mut c_void); } }
+            for entry in state.journals.into_values() { unsafe { (state.api.delete_reference)(env,entry.capture_reference as *mut c_void); } }
         }
     }
 }

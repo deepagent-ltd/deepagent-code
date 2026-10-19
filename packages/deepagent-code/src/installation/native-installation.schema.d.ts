@@ -63,6 +63,45 @@ declare const NodeManifest_base: Schema.Class<NodeManifest, Schema.Struct<{
 }>, {}>;
 export declare class NodeManifest extends NodeManifest_base {
 }
+export declare const WINDOWS_OBSERVATION_LIMIT = 131328;
+declare const WindowsFile: Schema.Struct<{
+    readonly identity: Schema.String;
+    readonly hash: Schema.String;
+    readonly bytes: Schema.Int;
+    readonly text: Schema.NullOr<Schema.String>;
+}>;
+export declare const WindowsObservation: Schema.Struct<{
+    readonly version: Schema.Literal<1>;
+    readonly artifact: Schema.Struct<{
+        readonly identity: Schema.String;
+        readonly hash: Schema.String;
+        readonly bytes: Schema.Int;
+        readonly text: Schema.NullOr<Schema.String>;
+    }>;
+    readonly manifest: Schema.Struct<{
+        readonly identity: Schema.String;
+        readonly hash: Schema.String;
+        readonly bytes: Schema.Int;
+        readonly text: Schema.NullOr<Schema.String>;
+    }>;
+    readonly runtime: Schema.Struct<{
+        readonly identity: Schema.String;
+        readonly hash: Schema.String;
+        readonly bytes: Schema.Int;
+        readonly text: Schema.NullOr<Schema.String>;
+    }>;
+    readonly bootstrap_sha256: Schema.String;
+}>;
+type WindowsFile = typeof WindowsFile.Type;
+type WindowsFiles = Readonly<{
+    version: number;
+    artifact: WindowsFile;
+    manifest: WindowsFile;
+    runtime: WindowsFile;
+    bootstrap_sha256: string;
+}>;
+/** Exact public-data equality only; this never grants current or installation authority. */
+export declare function sameWindowsFiles(left: WindowsFiles, right: WindowsFiles, expectedBootstrapHash?: string): boolean;
 export declare const ErrorCode: Schema.Literals<readonly ["NATIVE_INSTALLATION_UNAVAILABLE", "NATIVE_MANIFEST_INVALID", "NATIVE_SIGNATURE_INVALID", "NATIVE_COMPONENTS_MISMATCH", "NATIVE_TARGET_MISMATCH", "NATIVE_BYTES_MISMATCH", "NATIVE_IDENTITY_CHANGED", "NATIVE_HANDLE_INVALID"]>;
 declare const Error_base: Schema.Class<Error, Schema.TaggedStruct<"NativeInstallationError", {
     readonly code: Schema.Literals<readonly ["NATIVE_INSTALLATION_UNAVAILABLE", "NATIVE_MANIFEST_INVALID", "NATIVE_SIGNATURE_INVALID", "NATIVE_COMPONENTS_MISMATCH", "NATIVE_TARGET_MISMATCH", "NATIVE_BYTES_MISMATCH", "NATIVE_IDENTITY_CHANGED", "NATIVE_HANDLE_INVALID"]>;
