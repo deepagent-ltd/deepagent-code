@@ -16,6 +16,32 @@ export function deviceConfig(value) {
     url.protocol !== "wss:" && !(value.allowInsecureLoopbackForTests === true && url.protocol === "ws:" && ["127.0.0.1", "[::1]"].includes(url.hostname))) throw deviceError(11025);
   return Object.freeze({ ...value, publicJwk: Object.freeze({ ...value.publicJwk }) });
 }
+// Navigator and the exact signed audience are Host-owned coordinates. An advertised
+// CMP server can confirm that realm, but cannot select another origin or path.
+export function deviceEndpoints(auth, navigator, server) {
+  const clean = value => typeof value === "string" && value.length <= 2048 &&
+    !/[\u0000-\u0020\u007f\\?#]/.test(value) && URL.canParse(value);
+  if (!auth || !clean(navigator) || typeof server !== "string") throw deviceError(11025);
+  const nav = new URL(navigator), socket = new URL(auth.socketAudience);
+  const socketOrigin = socket.origin.replace(/^ws/, "http");
+  const advertisedURL = /^wss?:\/\//.test(server) ? server.replace(/^ws/, "http") :
+    server.includes("://") ? server : `${new URL(socketOrigin).protocol}//${server}`;
+  if (!clean(advertisedURL)) throw deviceError(11025);
+  const advertised = new URL(advertisedURL);
+  const valid = value => !value.username && !value.password && !value.search && !value.hash &&
+    (value.protocol === "https:" || auth.allowInsecureLoopbackForTests === true && value.protocol === "http:" &&
+      ["127.0.0.1", "[::1]"].includes(value.hostname));
+  const prefix = nav.pathname.replace(/\/+$/, "");
+  // Old root Navigator and socket services may have distinct Host-approved origins.
+  // Their authority remains the exact signed audience, never an advertised redirect.
+  const realm = prefix ? nav.href.replace(/\/+$/, "") : socketOrigin;
+  if (!valid(nav) || !valid(advertised) || nav.href.replace(/\/+$/, "") !== navigator.replace(/\/+$/, "") ||
+    advertised.href.replace(/\/+$/, "") !== advertisedURL.replace(/\/+$/, "") || advertised.origin !== new URL(realm).origin ||
+    advertised.pathname.replace(/\/+$/, "") !== "" && advertised.pathname.replace(/\/+$/, "") !== prefix ||
+    socket.href !== `${new URL(realm).origin.replace(/^http/, "ws")}${prefix ? `${prefix}/ws` : "/im"}`)
+    throw deviceError(11025);
+  return Object.freeze({ realm, health: `${realm}/health`, socket: auth.socketAudience });
+}
 export async function signConnect(auth, raw, source, current) {
   if (!current()) throw deviceError();
   if (typeof raw !== "string" || raw.length > 8192) throw deviceError();

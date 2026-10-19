@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "lib/index.js",
-      "sha256": "594b957fd5fed5a54eaf33ce260f4e0ad61d40a62bbee58e36199b798fe93027"
+      "sha256": "75a186931b6d170128738290b0b5a42cdbf779e7f45128931415af1c1127308e"
     },
     {
       "path": "lib/index.d.ts",
@@ -204,6 +204,32 @@
         }
       ],
       "note": "Prior reviewed bytes retained before bounded device-challenge clock handling and ten-second monotonic signer deadline"
+    },
+    {
+      "files": [
+        {
+          "path": "lib/index.js",
+          "sha256": "594b957fd5fed5a54eaf33ce260f4e0ad61d40a62bbee58e36199b798fe93027"
+        },
+        {
+          "path": "lib/index.d.ts",
+          "sha256": "232876ff2c6c43d53188586130dac1d95a7960e1e3b66bac08907ca5a6fc5734"
+        }
+      ],
+      "protocols": [
+        "receipt-v1",
+        "reader-v1",
+        "reader-v2",
+        "mysql-protected-media-v1",
+        "protected-live-origin-v1",
+        "protected-current-link-v1",
+        "dac-media-resumable-v1",
+        "protected-live-read-v1",
+        "protected-live-receiver-baseline-v1",
+        "protected-output-proof-v2",
+        "dac-im-device-v1",
+        "dac-im-connect-proof-v1"
+      ]
     }
   ],
   "buildConfiguration": {

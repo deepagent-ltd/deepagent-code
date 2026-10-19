@@ -17,8 +17,11 @@ const xor = (bytes, key) => Uint8Array.from(bytes, (value, index) => value ^ key
 function fixture(options = {}) {
   const key = IMDeviceProof.identity();
   const token = "fixture-daim2-device-token";
+  const prefix = options.prefix || "";
+  const socketPath = prefix ? `${prefix}/ws` : "/im";
   const state = { connections: [], queries: [], http: [], signCalls: 0, proofPaused: options.pauseProof === true,
     release: undefined, httpPaused: options.pauseNav === true, httpRelease: undefined,
+    healthRelease: undefined, healthPaths: [], socketPaths: [],
     jtis: new Set(), challenges: [], verified: 0, healthTokens: [] };
   const proof = (jwt, expected) => {
     const parts = jwt.split(".");
@@ -40,14 +43,22 @@ function fixture(options = {}) {
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0,
     async fetch(request, owner) {
       const path = new URL(request.url).pathname;
-      if (path === "/im" && owner.upgrade(request, { data: {} })) return;
-      if (path === "/health") { state.healthTokens.push(request.headers.get("x-token")); return Response.json({ code: 0 }); }
-      if (path === "/navigator/general" || path.startsWith("/navigator/protected-media/")) {
+      if (path === socketPath && owner.upgrade(request, { data: {} })) { state.socketPaths.push(path); return; }
+      if (path === `${prefix}/health`) {
+        state.healthPaths.push(path); state.healthTokens.push(request.headers.get("x-token"));
+        expect(request.headers.get("authorization")).toBeNull(); expect(request.headers.get("DPoP")).toBeNull();
+        if (options.pauseHealth) await new Promise(resolve => { state.healthRelease = resolve; });
+        if (options.healthRedirect) return Response.redirect(`${owner.url.origin}/unexpected-health`, 302);
+        return Response.json({ code: 0 });
+      }
+      if (path === "/unexpected-health") { state.healthPaths.push(path); return Response.json({ code: 0 }); }
+      if (path === `${prefix}/navigator/general` || path.startsWith(`${prefix}/navigator/protected-media/`)) {
         state.http.push(path);
         expect(request.headers.get("authorization")).toBe(`DPoP ${token}`);
         expect(request.headers.get("x-token")).toBeNull();
         proof(request.headers.get("DPoP"), { htm: "GET", htu: request.url, ath: IMDeviceProof.credentialHash(token) });
-        if (path === "/navigator/general") return Response.json({ code: 0, data: { user_id: "receiver", servers: [owner.url.origin] } }, { headers: { "cache-control": "no-store" } });
+        if (path === `${prefix}/navigator/general`) return Response.json({ code: 0, data: { user_id: "receiver",
+          servers: [options.advertisedServer ? options.advertisedServer(owner.url.origin) : owner.url.origin + prefix] } }, { headers: { "cache-control": "no-store" } });
         return Response.json({ version: 1, profile: "mysql-protected-media-v1", capability: "dac:media.v1", readerVersion: 2,
           maxFileBytes: 10485760, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true },
           { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } });
@@ -100,7 +111,19 @@ function fixture(options = {}) {
     },
   });
   servers.push(server);
-  const ownerAudience = () => server.url.origin.replace("http:", "ws:") + "/im";
+  const navigator = options.separateNavigator ? Bun.serve({ hostname: "127.0.0.1", port: 0,
+    fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path !== "/navigator/general") return new Response(null, { status: 404 });
+      state.http.push(path);
+      expect(request.headers.get("authorization")).toBe(`DPoP ${token}`);
+      proof(request.headers.get("DPoP"), { htm: "GET", htu: request.url, ath: IMDeviceProof.credentialHash(token) });
+      const advertised = options.advertisedServer ? options.advertisedServer(server.url.origin) : server.url.origin;
+      return Response.json({ code: 0, data: { user_id: "receiver", servers: [advertised] } }, { headers: { "cache-control": "no-store" } });
+    },
+  }) : undefined;
+  if (navigator) servers.push(navigator);
+  const ownerAudience = () => server.url.origin.replace("http:", "ws:") + socketPath;
   const auth = { profile: "dac-im-device-v1", publicJwk: key.publicJwk, jkt: key.jkt,
     entitlementID: "e".repeat(32), bindingVersion: 1, socketAudience: ownerAudience(), allowInsecureLoopbackForTests: true,
     async signConnect(challenge, source) {
@@ -115,7 +138,7 @@ function fixture(options = {}) {
         DPoP: IMDeviceProof.http(key, { method: input.method, url: input.url, nonce: "n".repeat(43), credential: input.credential, allowLoopback: true }) };
     },
   };
-  const config = { appkey: `device_${server.port}`, navList: [server.url.origin], protectedDeliveryReader: true, protectedMedia: true,
+  const config = { appkey: `device_${server.port}`, navList: [(navigator || server).url.origin + prefix], protectedDeliveryReader: true, protectedMedia: true,
     protectedDeviceAuth: auth, log: { isConsole: false } };
   return { state, config, token, make: () => JuggleIM.init(config) };
 }
@@ -201,6 +224,70 @@ test("the configured socket audience must equal the socket actually opened", asy
     await expect(client.connect({ token: f.token })).rejects.toMatchObject({ code: 11025 });
     expect(f.state.connections).toHaveLength(0); expect(f.state.signCalls).toBe(0);
   } finally { await client.disconnect(); }
+});
+
+test("prefixed device realm opens its exact signed socket and derives health and media from the same realm", async () => {
+  const f = fixture({ prefix: "/im" }); const client = f.make();
+  try {
+    await client.connect({ token: f.token }); await client.getProtectedMediaCapabilities();
+    expect(f.state.socketPaths).toEqual(["/im/ws"]);
+    expect(f.state.healthPaths).toEqual(["/im/health"]);
+    expect(f.state.healthTokens).toEqual([null]);
+    expect(f.state.http).toEqual(["/im/navigator/general", "/im/navigator/protected-media/v1/capabilities"]);
+    expect(f.state.connections).toHaveLength(2); expect(f.state.verified).toBe(1);
+    expect(client.captureProtectedCurrentLink()).toBeDefined();
+  } finally { await client.disconnect(); }
+});
+
+test("the old root device tuple retains distinct Host-approved Navigator and socket origins with legacy server spellings", async () => {
+  for (const form of ["http", "ws", "host"]) {
+    const f = fixture({ separateNavigator: true, advertisedServer: origin => form === "http" ? origin :
+      form === "ws" ? origin.replace("http:", "ws:") : new URL(origin).host });
+    const client = f.make();
+    try {
+      await client.connect({ token: f.token });
+      expect(f.state.healthPaths).toEqual(["/health"]); expect(f.state.socketPaths).toEqual(["/im"]);
+      expect(f.state.verified).toBe(1); expect(client.captureProtectedCurrentLink()).toBeDefined();
+    } finally { await client.disconnect(); }
+  }
+});
+
+for (const advertised of ["https://wrong.example/im", "/other", "/im?redirect=1", "/im#other", "/im/../other"])
+  test(`device readiness rejects an advertised origin or path outside its bound realm: ${advertised}`, async () => {
+    const f = fixture({ prefix: "/im", advertisedServer: origin => advertised.startsWith("https:") ? advertised : origin + advertised });
+    const client = f.make();
+    try {
+      await expect(client.connect({ token: f.token })).rejects.toMatchObject({ code: 11025 });
+      expect(f.state.healthPaths).toHaveLength(0); expect(f.state.socketPaths).toHaveLength(0);
+      expect(f.state.signCalls).toBe(0); expect(client.isConnected()).toBe(false);
+    } finally { await client.disconnect(); }
+  });
+
+test("prefixed device readiness cannot change socket paths or follow a health redirect", async () => {
+  const wrong = fixture({ prefix: "/im" });
+  wrong.config.protectedDeviceAuth.socketAudience = wrong.config.protectedDeviceAuth.socketAudience.replace(/\/ws$/, "");
+  const first = wrong.make();
+  try {
+    await expect(first.connect({ token: wrong.token })).rejects.toMatchObject({ code: 11025 });
+    expect(wrong.state.healthPaths).toHaveLength(0); expect(wrong.state.socketPaths).toHaveLength(0);
+  } finally { await first.disconnect(); }
+  const redirected = fixture({ prefix: "/im", healthRedirect: true }); const second = redirected.make();
+  try {
+    await expect(second.connect({ token: redirected.token })).rejects.toMatchObject({ code: 11025 });
+    expect(redirected.state.healthPaths).toEqual(["/im/health"]);
+    expect(redirected.state.socketPaths).toHaveLength(0); expect(redirected.state.signCalls).toBe(0);
+  } finally { await second.disconnect(); }
+});
+
+test("a prefixed health response after authority retirement opens no socket", async () => {
+  const f = fixture({ prefix: "/im", pauseHealth: true }); const client = f.make();
+  const connected = client.connect({ token: f.token }).catch(error => error);
+  try {
+    await wait(() => !!f.state.healthRelease); await client.disconnect();
+    f.state.healthRelease(); await connected; await Bun.sleep(20);
+    expect(f.state.healthPaths).toEqual(["/im/health"]); expect(f.state.socketPaths).toHaveLength(0);
+    expect(f.state.signCalls).toBe(0); expect(client.isConnected()).toBe(false);
+  } finally { f.state.healthRelease?.(); await client.disconnect(); }
 });
 
 for (const serverClockOffsetMs of [300, 29000, -5000])

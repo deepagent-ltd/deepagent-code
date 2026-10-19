@@ -1,4 +1,4 @@
-import { signHttp, deviceError } from "../delivery/device-auth";
+import { signHttp, deviceError, deviceEndpoints } from "../delivery/device-auth";
 import utils from "../utils";
 import Storage from "../common/storage";
 import { STORAGE, ErrorType, LOG_MODULE } from "../enum";
@@ -9,6 +9,32 @@ let detect = (urls, callback, option = {}) => {
   let requests = [], superior = '', errors = []; 
 
   utils.forEach(urls, (domain) => {
+    if (option.deviceAuth) {
+      const controller = new AbortController();
+      requests.push({ abort: () => controller.abort() });
+      const deadline = setTimeout(() => controller.abort(), 10000);
+      (async () => {
+        const current = () => !superior && option.current();
+        try {
+          const target = deviceEndpoints(option.deviceAuth, option.navigator, domain);
+          if (!current()) return;
+          const response = await fetch(target.health, { method: "GET", redirect: "error", cache: "no-store",
+            credentials: "omit", signal: controller.signal });
+          await response.body?.cancel();
+          if (!current()) return;
+          if (controller.signal.aborted) throw deviceError(11025);
+          if (response.status !== 200) throw deviceError(11025);
+          superior = target.realm;
+          callback(superior);
+          abortAll();
+        } catch (error) {
+          if (!current()) return;
+          errors.push(error);
+          if (errors.length === urls.length) callback("", deviceError(11025));
+        } finally { clearTimeout(deadline); }
+      })();
+      return;
+    }
     let { http } = utils.getProtocol(domain);
     
     domain = domain.replace(/http:\/\/|https:\/\/|file:\/\/|wss:\/\/|ws:\/\//g, '');

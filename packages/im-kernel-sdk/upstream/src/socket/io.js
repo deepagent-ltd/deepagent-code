@@ -1,4 +1,4 @@
-import { deviceConfig, deviceError, initialConnectExt, signConnect, signHttp } from "../delivery/device-auth";
+import { deviceConfig, deviceError, deviceEndpoints, initialConnectExt, signConnect, signHttp } from "../delivery/device-auth";
 import LiveRead from "../delivery/live-read";
 import Emitter from "../common/emmit";
 import utils from "../utils";
@@ -230,6 +230,10 @@ export default function IO(config){
 
       Network.detect(servers, (domain, error) => {
         if (deliveryEpoch !== deliveryConnectEpoch) return callback({ error: ErrorType.COMMAND_FAILED });
+        if (deviceAuth && error) {
+          updateState({ state: CONNECT_STATE.CONNECT_FAILED, code: 11025 });
+          return callback({ error: deviceError(11025) });
+        }
         // 如果嗅探失败，返回连接断开，同时清理已缓存的 CMP 地址
         if(error && utils.isEqual(error.status, 200)){
           serverProviderCallback((result) => {
@@ -251,11 +255,7 @@ export default function IO(config){
         currentDomain = domain;
         domain = domain.replace(/http:\/\/|https:\/\/|file:\/\/|wss:\/\/|ws:\/\//g, '');
         let { ws: protocol } = utils.getProtocol(currentDomain);
-        let url = `${protocol}//${domain}/im`;
-        if (deviceAuth && url !== deviceAuth.socketAudience) {
-          updateState({ state: CONNECT_STATE.CONNECT_FAILED, code: 11025 });
-          return callback({ error: deviceError(11025) });
-        }
+        let url = deviceAuth ? deviceEndpoints(deviceAuth, currentDomain, currentDomain).socket : `${protocol}//${domain}/im`;
         ws = new JWebSocket(url);
         const openedSocket = ws;
         wsPools.push(ws);
@@ -296,7 +296,8 @@ export default function IO(config){
             reader.readAsArrayBuffer(data);
           }
         };
-      }, deviceAuth ? {} : options);
+      }, deviceAuth ? { deviceAuth, navigator: deliveryNavigator || navList[0],
+        current: () => deliveryEpoch === deliveryConnectEpoch } : options);
     }
     if(!utils.isEmpty(serverList)){
       return smack({ servers: serverList })
