@@ -19,6 +19,7 @@ import { IMDacSessionSchema } from "@deepagent-code/core/im/dac-session.schema"
 import { IMActivationSchema } from "@deepagent-code/core/im/activation.schema"
 import { IMDeviceSchema } from "@deepagent-code/core/im/device.schema"
 import { ConfigIM } from "@deepagent-code/core/config/im"
+import { IMEntitlementSchema } from "@deepagent-code/core/im/entitlement.schema"
 
 const root = "/api/v1/im"
 
@@ -493,6 +494,8 @@ export const IMResolveQuery = Schema.Struct({
 
 // Paths
 export const IMPaths = {
+  plans: `${root}/plans`,
+  entitlement: `${root}/entitlement`,
   activation: `${root}/activation`,
   activationQuote: `${root}/activation/quote`,
   activationStatus: `${root}/activation/:transactionID`,
@@ -536,6 +539,24 @@ export const IMApi = HttpApi.make("im")
   .add(
     HttpApiGroup.make("im")
       .add(
+        HttpApiEndpoint.get("plans", IMPaths.plans, {
+          query: WorkspaceRoutingQuery,
+          success: IMEntitlementSchema.PlansObservation,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "im.plans",
+            summary: "Read the selected IM service's authoritative plan catalog without purchasing",
+          }),
+        ),
+        HttpApiEndpoint.get("entitlement", IMPaths.entitlement, {
+          query: WorkspaceRoutingQuery,
+          success: IMEntitlementSchema.Observation,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "im.entitlement",
+            summary: "Read this existing device binding's authoritative IM entitlement without logging in",
+          }),
+        ),
         HttpApiEndpoint.get("deviceInfo", IMPaths.deviceInfo, {
           query: WorkspaceRoutingQuery,
           success: IMDeviceSchema.Info,
@@ -743,7 +764,13 @@ export const IMApi = HttpApi.make("im")
           params: { groupId: Schema.String },
           query: ListMessagesQuery,
           success: described(MessagePageResponse, "IM messages"),
-          error: [IMReaderUnavailableError, IMGroupNotFoundError, IMPermissionDeniedError, IMValidationFailedError, IMInternalServerError],
+          error: [
+            IMReaderUnavailableError,
+            IMGroupNotFoundError,
+            IMPermissionDeniedError,
+            IMValidationFailedError,
+            IMInternalServerError,
+          ],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.messages.list",

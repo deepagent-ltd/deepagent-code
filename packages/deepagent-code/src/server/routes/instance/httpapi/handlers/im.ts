@@ -504,6 +504,16 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
 
     return (
       handlers
+        .handle("plans", () =>
+          facade
+            ? facade.plans
+            : Effect.succeed({ state: "unknown" as const, reason: "service_unconfigured" as const }),
+        )
+        .handle("entitlement", () =>
+          facade
+            ? facade.entitlement
+            : Effect.succeed({ state: "unknown" as const, reason: "service_unconfigured" as const }),
+        )
         .handle("deviceInfo", () => activationError(Effect.flatMap(requireActivation, (value) => value.deviceInfo)))
         .handle("migrationPending", () =>
           activationError(Effect.flatMap(requireActivation, (value) => value.migrationPending)),
@@ -950,7 +960,12 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
         )
         .handle("listMessages", ({ params, query }) => {
           if (query.anchorID !== undefined && query.cursor !== undefined)
-            return Effect.fail(new IMValidationFailedError({ name: "VALIDATION_FAILED", data: { message: "anchorID and cursor are mutually exclusive" } }))
+            return Effect.fail(
+              new IMValidationFailedError({
+                name: "VALIDATION_FAILED",
+                data: { message: "anchorID and cursor are mutually exclusive" },
+              }),
+            )
           return mapRepositoryError(
             readRequest(
               query,
@@ -1068,11 +1083,9 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                     ? repo.getMessage(clientMessageID(userID, payload.clientRequestID))
                     : Effect.succeed(undefined)
                   const original = yield* (payload.type === "file" || payload.type === "text") && lease
-                    ? lease.reader.withOutput(
-                        { workspaceID, userID, groupIDs: [groupId] },
-                        originalLookup,
-                        { refreshBeforeEffect: payload.type === "text" },
-                      )
+                    ? lease.reader.withOutput({ workspaceID, userID, groupIDs: [groupId] }, originalLookup, {
+                        refreshBeforeEffect: payload.type === "text",
+                      })
                     : originalLookup
                   if (!original && !rateLimiter.check(rateLimitKey, rateLimit, 60 * 1000)) {
                     return yield* Effect.fail(
@@ -1089,11 +1102,9 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                   // Check if group exists
                   const groupLookup = repo.getGroup({ groupID: groupId, workspaceID, userID })
                   const group = yield* (payload.type === "file" || payload.type === "text") && lease
-                    ? lease.reader.withOutput(
-                        { workspaceID, userID, groupIDs: [groupId] },
-                        groupLookup,
-                        { refreshBeforeEffect: payload.type === "text" },
-                      )
+                    ? lease.reader.withOutput({ workspaceID, userID, groupIDs: [groupId] }, groupLookup, {
+                        refreshBeforeEffect: payload.type === "text",
+                      })
                     : groupLookup
                   if (!group) {
                     return yield* Effect.fail(
@@ -1255,11 +1266,9 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                   // Mutation preparation and queueing do not consume a content proof.
                   // Only this current response runs in its own fresh output frame.
                   return (yield* (payload.type === "file" || payload.type === "text") && lease
-                    ? lease.reader.withOutput(
-                        { workspaceID, userID, groupIDs: [groupId] },
-                        response,
-                        { refreshBeforeEffect: payload.type === "text" },
-                      )
+                    ? lease.reader.withOutput({ workspaceID, userID, groupIDs: [groupId] }, response, {
+                        refreshBeforeEffect: payload.type === "text",
+                      })
                     : response)[0]!
                 }),
               false,

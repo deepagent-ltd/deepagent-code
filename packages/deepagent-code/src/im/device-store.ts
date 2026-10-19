@@ -23,6 +23,7 @@ export function make(input?: { backend?: SecretStore.Backend; directory?: string
     : SecretStore.selectNativeBackend(service, path.join(directory, "secrets.dpapi.json"))
   // Defer unavailable-native errors to IM operations, keeping ordinary coding available.
   void backend.catch(() => undefined)
+  const revision = { value: 0 }
   const ready = () =>
     Effect.tryPromise({
       try: async () => {
@@ -74,6 +75,7 @@ export function make(input?: { backend?: SecretStore.Backend; directory?: string
     }
     if (recorded !== undefined) throw failure()
     const key = IMDeviceProof.identity()
+    revision.value++
     await store.put(installation, key.privateKey)
     if ((await store.get(installation)) !== key.privateKey) throw failure()
     await writeFile(marker, JSON.stringify({ profile: IMDeviceProof.profile, jkt: key.jkt, publicJwk: key.publicJwk }))
@@ -82,6 +84,7 @@ export function make(input?: { backend?: SecretStore.Backend; directory?: string
   const account = (realm: string, name: string) => `${IMDeviceProof.sha256(realm)}:${name}`
   const put = (realm: string, name: string, value: string) =>
     locked(async (store) => {
+      revision.value++
       await store.put(account(realm, name), value)
       if ((await store.get(account(realm, name))) !== value) throw failure()
     })
@@ -90,12 +93,70 @@ export function make(input?: { backend?: SecretStore.Backend; directory?: string
       const store = yield* ready()
       return yield* Effect.tryPromise({ try: () => store.get(account(realm, name)), catch: failure })
     })
-  const remove = (realm: string, name: string) => locked((store) => store.remove(account(realm, name)))
+  const remove = (realm: string, name: string) =>
+    locked((store) => {
+      revision.value++
+      return store.remove(account(realm, name))
+    })
+  const observe = (realm: string, name: string) =>
+    locked(async (store) => {
+      const read = async (current: SecretStore.Backend) => {
+        const value = await current.get(account(realm, name))
+        if (!value) return undefined
+        const saved = await current.get(installation)
+        if (!saved) throw failure()
+        const key = IMDeviceProof.identity(saved)
+        const recorded = await readFile(path.join(directory, "identity.json"), "utf8").catch(
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return undefined
+            throw error
+          },
+        )
+        if (
+          recorded !== undefined &&
+          Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ jkt: Schema.String })))(recorded).jkt !==
+            key.jkt
+        )
+          throw failure()
+        return { value, saved, recorded, key }
+      }
+      const original = await read(store)
+      if (!original) return undefined
+      const captured = revision.value
+      const current = locked(async (backend) => {
+        const fresh = await read(backend)
+        return (
+          revision.value === captured &&
+          !!fresh &&
+          fresh.value === original.value &&
+          fresh.saved === original.saved &&
+          fresh.recorded === original.recorded
+        )
+      })
+      const existing = current.pipe(
+        Effect.flatMap((valid) => (valid ? Effect.succeed(original.key) : Effect.fail(failure()))),
+      )
+      // This signer can only use the captured existing installation. It never
+      // invokes the provisioning identity path, even after custody is removed.
+      return {
+        value: original.value,
+        deviceJkt: original.key.jkt,
+        current,
+        signer: {
+          identity: existing,
+          http: (request: Parameters<typeof IMDeviceProof.http>[1]) =>
+            existing.pipe(Effect.map((key) => IMDeviceProof.http(key, request))),
+          bootstrap: (request: Parameters<typeof IMDeviceProof.bootstrap>[1]) =>
+            existing.pipe(Effect.map((key) => IMDeviceProof.bootstrap(key, request))),
+        },
+      }
+    })
   return {
     identity,
     put,
     get,
     remove,
+    observe,
     acquireOwner: (realm: string) =>
       Effect.tryPromise({
         try: () =>

@@ -13,6 +13,7 @@ export type Purpose =
   | "migration-bind"
   | "migration-status"
   | "kernel-http"
+  | "entitlement-read"
 export type PublicJwk = { kty: "EC"; crv: "P-256"; x: string; y: string }
 export type Identity = { privateKey: string; publicJwk: PublicJwk; jkt: string }
 export type SocketChallenge = {

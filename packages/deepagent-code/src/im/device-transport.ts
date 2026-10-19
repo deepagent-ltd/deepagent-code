@@ -87,7 +87,13 @@ function transportDiagnostic(error: { reason: { _tag: string; cause?: unknown } 
       cause !== null && typeof cause === "object" ? Object.getOwnPropertyDescriptor(cause, "cause")?.value : undefined
     const errors =
       cause !== null && typeof cause === "object" ? Object.getOwnPropertyDescriptor(cause, "errors")?.value : undefined
-    const causeCode = [cause, nested, ...(Array.isArray(errors) ? [0, 1, 2, 3].map((index) => Object.getOwnPropertyDescriptor(errors, String(index))?.value) : [])].flatMap((value) => {
+    const causeCode = [
+      cause,
+      nested,
+      ...(Array.isArray(errors)
+        ? [0, 1, 2, 3].map((index) => Object.getOwnPropertyDescriptor(errors, String(index))?.value)
+        : []),
+    ].flatMap((value) => {
       if (value === null || typeof value !== "object") return []
       const code = Object.getOwnPropertyDescriptor(value, "code")?.value
       return typeof code === "string" &&
@@ -129,9 +135,8 @@ function transportDiagnostic(error: { reason: { _tag: string; cause?: unknown } 
   }
 }
 
-
 export function make(input: {
-  store: ReturnType<typeof IMDeviceStore.make>
+  store: Pick<ReturnType<typeof IMDeviceStore.make>, "identity" | "bootstrap" | "http">
   http?: HttpClient.HttpClient
   allowLoopback?: boolean
 }) {
@@ -168,12 +173,12 @@ export function make(input: {
         HttpClientRequest.post(`${realm}/api/im/device/challenges`).pipe(HttpClientRequest.setHeader("DPoP", proof)),
       ).pipe(Effect.mapError(() => new Error({ code: "im_device_proof_invalid" })))
       trace.stage = "challenge_transport"
-      const response = yield* http
-        .execute(wire)
-        .pipe(Effect.mapError((error) => {
+      const response = yield* http.execute(wire).pipe(
+        Effect.mapError((error) => {
           Object.assign(trace, transportDiagnostic(error))
           return new Error({ code: "im_device_challenge_unavailable" })
-        }))
+        }),
+      )
       trace.stage = "challenge_status"
       trace.status = response.status
       if (response.status !== 200)

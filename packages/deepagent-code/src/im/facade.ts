@@ -45,6 +45,8 @@ import { InstanceState } from "@/effect/instance-state"
 import { InstanceRegistry } from "@/effect/instance-registry"
 import { InstanceStore } from "@/project/instance-store"
 import { IMServiceConfig } from "./service-config"
+import { IMEntitlement } from "./entitlement"
+import type { IMEntitlementSchema } from "@deepagent-code/core/im/entitlement.schema"
 
 // IM 门面运行时（B2）：new-api /api/im/* 的客户端门户 + 内核引擎生命周期的唯一所有者。
 //
@@ -111,6 +113,8 @@ export interface Interface {
   /** 当前内核引擎（boot 建成或 claim/retry 后热启动）；None = 纯本地模式。发送路径每次现读。 */
   readonly engine: Ref.Ref<Option.Option<IMKernelSync.Interface>>
   readonly status: Effect.Effect<StatusSnapshot, KernelReaderSchema.Error>
+  readonly plans: Effect.Effect<IMEntitlementSchema.PlansObservation>
+  readonly entitlement: Effect.Effect<IMEntitlementSchema.Observation>
   readonly acquireReader: (context: ReaderContext) => Effect.Effect<ReaderLease, KernelReaderSchema.Error, Scope.Scope>
   readonly withReader: <A, E, R>(
     context: ReaderContext,
@@ -216,6 +220,14 @@ export const layer = (options?: Options) =>
           })
         : undefined
       const v2Session = Option.getOrUndefined(yield* Effect.serviceOption(SessionV2.Service))
+      const entitlementScope: { value: object | undefined } = { value: {} }
+      const entitlementReads = IMEntitlement.make({
+        resolveURL: serviceConfig.pipe(Effect.map((value) => value.url)),
+        device,
+        http,
+        scope: () => entitlementScope.value,
+        allowLoopback: options?.env?.DEEPAGENT_IM_DEVICE_TEST_LOOPBACK === "true",
+      })
 
       const state = yield* SubscriptionRef.make<State>({ kind: "disabled" })
       const engine = yield* Ref.make<Option.Option<IMKernelSync.Interface>>(Option.none())
@@ -252,7 +264,11 @@ export const layer = (options?: Options) =>
           if (Option.isSome(previous)) yield* closeEngine(previous.value, Exit.void)
         }),
       )
-      yield* Effect.addFinalizer(() => stopEngine)
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          entitlementScope.value = undefined
+        }).pipe(Effect.andThen(stopEngine)),
+      )
 
       // 引擎装配：依赖从本服务构造期上下文现取（与 B1 server.ts 接线等价的 provide 集），
       // 每代引擎独占子 scope；换凭证和 facade 关闭时都先停止旧引擎。
@@ -816,6 +832,7 @@ export const layer = (options?: Options) =>
               const previous = yield* serviceConfig.pipe(Effect.orElseSucceed(() => ({ url: null })))
               if (previous.url === url) return yield* effect
               // Revoke before waiting for asynchronous Native/SDK finalizers or persisting the new realm.
+              entitlementScope.value = undefined
               yield* revokeOwner
               yield* Ref.set(sourceRef, Option.none())
               yield* Ref.set(keyOriginRef, "none")
@@ -832,7 +849,13 @@ export const layer = (options?: Options) =>
                     },
               )
               yield* stopEngine
-              return yield* effect
+              return yield* effect.pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    entitlementScope.value = {}
+                  }),
+                ),
+              )
             }),
           )
           .pipe(
@@ -1091,6 +1114,8 @@ export const layer = (options?: Options) =>
           ),
         retryExchange,
         withServiceConfiguration,
+        plans: entitlementReads.plans,
+        entitlement: entitlementReads.entitlement,
         resolve: (raw) =>
           Effect.gen(function* () {
             const { source } = yield* requireActive
