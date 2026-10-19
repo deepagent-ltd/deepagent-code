@@ -1025,6 +1025,7 @@
 }
 
 .settings-v2-import [data-component="settings-v2-row"] {
+  display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: 12px;

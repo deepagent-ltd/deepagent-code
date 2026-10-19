@@ -18,13 +18,20 @@ export function McpManagement(props: { current?: () => boolean } = {}) {
   const sync = useSync()
   const sdk = useSDK()
   const captured = { directory: sdk.directory, scope: sdk.scope, client: sdk.client }
-  const current = () => props.current?.() !== false && sdk.directory === captured.directory &&
-    sdk.scope === captured.scope && sdk.client === captured.client
+  const current = () =>
+    props.current?.() !== false &&
+    sdk.directory === captured.directory &&
+    sdk.scope === captured.scope &&
+    sdk.client === captured.client
   // Replacing a global Settings dialog retains that dialog's owner. Carry the original
   // project provider explicitly into each child, rather than selecting a new placement.
   const open = (element: () => JSX.Element) => {
     if (!current()) return
-    dialog.show(() => <Show when={current()}><SDKProvider directory={captured.directory}>{element()}</SDKProvider></Show>)
+    dialog.show(() => (
+      <Show when={current()}>
+        <SDKProvider directory={captured.directory}>{element()}</SDKProvider>
+      </Show>
+    ))
   }
   const toggleMcp = useMcpToggle()
   const refreshMcp = useMcpRefresh()
@@ -52,43 +59,51 @@ export function McpManagement(props: { current?: () => boolean } = {}) {
   return (
     <div class="flex min-w-0 flex-col">
       <div class="flex flex-wrap items-center gap-2 px-1 pb-2">
-        <Button variant="secondary" disabled={!selectedMcp() || mcpStatus(selectedMcp()!)?.status !== "connected"} onClick={() => {
-          const name = selectedMcp()
-          if (name) open(() => <DialogMcpApps name={name} />)
-        }}>{language.t("mcp.apps.title")}</Button>
         <Button variant="secondary" icon="plus" onClick={() => open(() => <DialogAddMcp />)}>
           {language.t("dialog.mcp.add")}
         </Button>
-        <Button
-          variant="secondary"
-          icon="settings-gear"
-          disabled={!selectedMcp()}
-          onClick={() => {
-            const name = selectedMcp()
-            if (!name) return
-            open(() => <DialogConfigureMcp name={name} />)
-          }}
-        >
-          {language.t("dialog.mcp.configure")}
-        </Button>
-        <Button
-          variant="secondary"
-          icon="trash"
-          disabled={!selectedMcp() || removeMcp.isPending}
-          onClick={deleteSelectedMcp}
-        >
-          {language.t("dialog.mcp.delete")}
-        </Button>
-        <Button
-          variant="secondary"
-          disabled={!selectedMcp()}
-          onClick={() => {
-            const name = selectedMcp()
-            if (name) open(() => <DialogMcpSecrets name={name} />)
-          }}
-        >
-          {language.t("mcp.secrets.open")}
-        </Button>
+        <Show when={selectedMcp() && mcpStatus(selectedMcp()!)}>
+          <Button
+            variant="secondary"
+            disabled={!selectedMcp() || mcpStatus(selectedMcp()!)?.status !== "connected"}
+            onClick={() => {
+              const name = selectedMcp()
+              if (name) open(() => <DialogMcpApps name={name} />)
+            }}
+          >
+            {language.t("mcp.apps.title")}
+          </Button>
+          <Button
+            variant="secondary"
+            icon="settings-gear"
+            disabled={!selectedMcp()}
+            onClick={() => {
+              const name = selectedMcp()
+              if (!name) return
+              open(() => <DialogConfigureMcp name={name} />)
+            }}
+          >
+            {language.t("dialog.mcp.configure")}
+          </Button>
+          <Button
+            variant="secondary"
+            icon="trash"
+            disabled={!selectedMcp() || removeMcp.isPending}
+            onClick={deleteSelectedMcp}
+          >
+            {language.t("dialog.mcp.delete")}
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={!selectedMcp()}
+            onClick={() => {
+              const name = selectedMcp()
+              if (name) open(() => <DialogMcpSecrets name={name} />)
+            }}
+          >
+            {language.t("mcp.secrets.open")}
+          </Button>
+        </Show>
       </div>
       <div class="flex min-h-14 flex-col rounded-sm bg-background-base p-3">
         <Show
@@ -142,9 +157,13 @@ export function McpManagement(props: { current?: () => boolean } = {}) {
                   </button>
                   <div class="flex shrink-0 items-center gap-2">
                     <Show when={mcpConnectionBlocked(mcpStatus(name))}>
-                      <Button variant="secondary" disabled={refreshMcp.isPending} onClick={() => {
-                        if (current()) refreshMcp.mutate()
-                      }}>
+                      <Button
+                        variant="secondary"
+                        disabled={refreshMcp.isPending}
+                        onClick={() => {
+                          if (current()) refreshMcp.mutate()
+                        }}
+                      >
                         {language.t("mcp.action.refresh")}
                       </Button>
                     </Show>

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
-import { createStore } from "solid-js/store"
+import { createStore, reconcile } from "solid-js/store"
 import { createServer } from "node:http"
 import { createDeepAgentCodeClient, type McpStatus } from "@deepagent-code/sdk/client"
 import { McpManagement } from "@/components/mcp-management"
@@ -12,6 +12,8 @@ const fixture = vi.hoisted(() => ({
   data: undefined as { mcp: Record<string, McpStatus> } | undefined,
   toggle: undefined as ((name: string) => Promise<void>) | undefined,
   refresh: undefined as (() => Promise<void>) | undefined,
+  replace: undefined as ((mcp: Record<string, McpStatus>) => void) | undefined,
+  show: vi.fn(),
 }))
 vi.mock("@/context/sync", () => ({
   useSync: () => ({
@@ -27,7 +29,7 @@ vi.mock("@/context/sdk", async (original) => ({
   ...(await original<typeof import("@/context/sdk")>()),
   useSDK: () => ({ client, directory: "/owned/项目", scope: "mcp-disconnected-fixture" }),
 }))
-vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ show: () => {} }) }))
+vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ show: fixture.show }) }))
 vi.mock("@deepagent-code/ui/context/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
 
@@ -54,6 +56,7 @@ let client: ReturnType<typeof createDeepAgentCodeClient>
 
 beforeEach(async () => {
   requests.length = 0
+  fixture.show.mockClear()
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   const address = server.address()
   if (!address || typeof address === "string") throw new Error("Private test listener missing")
@@ -65,6 +68,7 @@ beforeEach(async () => {
   nextStatus = { status: "disconnected", authStatus: "authenticated", reason: "explicit_connect_required" }
   const [data, setData] = createStore({ mcp: { fixture: nextStatus } as Record<string, McpStatus> })
   fixture.data = data
+  fixture.replace = (mcp) => setData("mcp", reconcile(mcp))
   fixture.refresh = async () => {
     setData("mcp", (await client.mcp.status()).data!)
   }
@@ -90,6 +94,50 @@ afterEach(async () => {
   const closed = new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
   server.closeAllConnections()
   await closed
+})
+
+it("MCP empty settings show only add and explanation without unavailable contextual controls", () => {
+  fixture.replace!({})
+  render(() => (
+    <QueryClientProvider client={query}>
+      <McpManagement />
+    </QueryClientProvider>
+  ))
+  expect(screen.getAllByRole("button")).toHaveLength(1)
+  expect(screen.getByRole("button", { name: dict["dialog.mcp.add"] }).hasAttribute("disabled")).toBe(false)
+  expect(screen.getByText(dict["dialog.mcp.empty"])).toBeTruthy()
+  for (const key of ["mcp.apps.title", "dialog.mcp.configure", "dialog.mcp.delete", "mcp.secrets.open"] as const)
+    expect(screen.queryByRole("button", { name: dict[key] })).toBeNull()
+  expect(requests).toEqual([])
+})
+
+it("MCP selected settings retain actions, connected-only Apps and withdraw them after the last server disappears", () => {
+  fixture.replace!({})
+  render(() => (
+    <QueryClientProvider client={query}>
+      <McpManagement />
+    </QueryClientProvider>
+  ))
+  fixture.replace!({ fixture: nextStatus })
+  const configure = screen.getByRole("button", { name: dict["dialog.mcp.configure"] })
+  const secrets = screen.getByRole("button", { name: dict["mcp.secrets.open"] })
+  const apps = screen.getByRole("button", { name: dict["mcp.apps.title"] })
+  expect(configure.hasAttribute("disabled")).toBe(false)
+  expect(screen.getByRole("button", { name: dict["dialog.mcp.delete"] }).hasAttribute("disabled")).toBe(false)
+  fireEvent.click(configure)
+  fireEvent.click(secrets)
+  expect(fixture.show).toHaveBeenCalledTimes(2)
+  expect(apps.hasAttribute("disabled")).toBe(true)
+  fireEvent.click(apps)
+  expect(fixture.show).toHaveBeenCalledTimes(2)
+  fixture.replace!({ fixture: { status: "connected" } })
+  expect(apps.hasAttribute("disabled")).toBe(false)
+  fireEvent.click(apps)
+  expect(fixture.show).toHaveBeenCalledTimes(3)
+  fixture.replace!({})
+  expect(screen.getAllByRole("button")).toHaveLength(1)
+  expect(screen.queryByRole("button", { name: dict["mcp.apps.title"] })).toBeNull()
+  expect(requests).toEqual([])
 })
 
 it("renders a cold verified connection as disconnected and connects only on an explicit control", async () => {
