@@ -221,7 +221,25 @@ export const configure = (dir: string) => {
 export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState => {
   const existing = activeRuntime().sessions.get(sessionId)
   if (existing) return normalizeState(existing)
-  const state: SessionRunState = {
+  const state = initialSessionState(sessionId, mode)
+  activeRuntime().sessions.set(sessionId, state)
+  saveToDisk()
+  return state
+}
+
+/** A detached observation must never initialize or mutate the execution session. */
+export const snapshot = (sessionId: string, mode: AgentMode, admissionMessageID?: string): SessionRunState => {
+  const state = normalizeState(
+    structuredClone(activeRuntime().sessions.get(sessionId) ?? initialSessionState(sessionId, mode)),
+    false,
+  )
+  if (admissionMessageID && applyUserAdmission(state, admissionMessageID) === "new")
+    state.planLatch = markStale(state.planLatch, "user_appended")
+  return state
+}
+
+function initialSessionState(sessionId: string, mode: AgentMode): SessionRunState {
+  return {
     sessionId,
     mode,
     roundState: createInitialRoundState(mode),
@@ -251,9 +269,6 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     capabilityMode: null,
     observedFiles: {},
   }
-  activeRuntime().sessions.set(sessionId, state)
-  saveToDisk()
-  return state
 }
 
 export const get = (sessionId: string): SessionRunState | undefined => activeRuntime().sessions.get(sessionId)
@@ -621,9 +636,14 @@ export type UserMessageObservation = "initial" | "same" | "new" | "reopened"
 export const observeUserAdmission = (sessionId: string, admissionMessageId: string): UserMessageObservation => {
   const state = activeRuntime().sessions.get(sessionId)
   if (!state) return "initial"
+  const observation = applyUserAdmission(state, admissionMessageId)
+  if (observation !== "same") saveToDisk()
+  return observation
+}
+
+function applyUserAdmission(state: SessionRunState, admissionMessageId: string): UserMessageObservation {
   if (state.lastAdmissionUserMessageId === undefined) {
     state.lastAdmissionUserMessageId = admissionMessageId
-    saveToDisk()
     return "initial"
   }
   if (state.lastAdmissionUserMessageId === admissionMessageId) return "same"
@@ -641,10 +661,8 @@ export const observeUserAdmission = (sessionId: string, admissionMessageId: stri
     state.suppressedValidations = []
     state.completedAt = null
     state.lastPlanGateNudgeFingerprint = null
-    saveToDisk()
     return "reopened"
   }
-  saveToDisk()
   return "new"
 }
 
@@ -767,7 +785,7 @@ function flushToDisk(state: RuntimeState) {
   }
 }
 
-function normalizeState(state: SessionRunState): SessionRunState {
+function normalizeState(state: SessionRunState, register = true): SessionRunState {
   const nextBudget = defaultBudget(state.mode)
   const normalized = {
     ...state,
@@ -839,7 +857,7 @@ function normalizeState(state: SessionRunState): SessionRunState {
   // the `...state` spread above. Once its contents are migrated into `suppressedValidations`, drop the
   // orphan so it is not re-persisted forever as dead data on the next saveToDisk().
   delete (normalized as unknown as Record<string, unknown>).suppressedFingerprints
-  activeRuntime().sessions.set(state.sessionId, normalized)
+  if (register) activeRuntime().sessions.set(state.sessionId, normalized)
   return normalized
 }
 

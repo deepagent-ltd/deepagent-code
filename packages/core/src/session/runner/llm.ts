@@ -27,11 +27,8 @@ import { Location } from "../../location"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
 import { Catalog } from "../../catalog"
-import { CapabilityCatalog } from "../../system-context/capability-catalog"
-import { DeepAgentCodeToolInventory } from "../../system-context/capability-manifest"
 import { PermissionV2 } from "../../permission"
 import { QuestionV2 } from "../../question"
-import { SystemContext } from "../../system-context/index"
 import { SystemContextRegistry } from "../../system-context/registry"
 import { SkillGuidance } from "../../skill/guidance"
 import { ToolRegistry } from "../../tool/registry"
@@ -81,6 +78,7 @@ import { SessionRunnerModel } from "./model"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
 import { ModelHardPolicy } from "./model-hard-policy"
 import { buildDeepAgentPrompt, buildGovernedPlanContext } from "./deepagent-prompt"
+import { loadPromptContext } from "./prompt-context"
 import { V2ToolEffect } from "./v2-tool-effect"
 import { CurrentToolExecution } from "./current-tool-execution"
 import { SharedBrowserUserInput } from "../../browser/shared-user-input"
@@ -544,9 +542,13 @@ export const layer = Layer.effect(
             })
           })
       const effects = yield* db
-        .select({ effect_id: V2ToolEffectTable.effect_id, effect_kind: V2ToolEffectTable.effect_kind,
-          tool_name: V2ToolEffectTable.tool_name, state: V2ToolEffectTable.state,
-          outcome_hash: V2ToolEffectTable.outcome_hash })
+        .select({
+          effect_id: V2ToolEffectTable.effect_id,
+          effect_kind: V2ToolEffectTable.effect_kind,
+          tool_name: V2ToolEffectTable.tool_name,
+          state: V2ToolEffectTable.state,
+          outcome_hash: V2ToolEffectTable.outcome_hash,
+        })
         .from(V2ToolEffectTable)
         .where(eq(V2ToolEffectTable.receipt_id, receipt.receipt_id))
         .all()
@@ -747,52 +749,35 @@ export const layer = Layer.effect(
       selection?: SessionInput.SelectionSnapshot,
       resolvedAgent?: AgentV2.ID,
     ) =>
-      Effect.catchDefect(Effect.fnUntraced(function* (defect) {
-        if (!(defect instanceof SessionInput.SelectionMismatch)) return yield* Effect.die(defect)
-        // A stable contradiction cannot become correct by rebuilding the same request. Only an
-        // actual source/roster change spends the shared, bounded preparation rebuild budget.
-        if (
-          selection &&
-          (yield* SessionInput.requireSelection(db, selection).pipe(
-            Effect.as(true),
-            Effect.catchDefect((error) =>
-              error instanceof SessionInput.SelectionMismatch ? Effect.succeed(false) : Effect.die(error),
-            ),
-          )) &&
-          (yield* agents.select(selection.agent)).id === resolvedAgent
-        )
-          return yield* new SessionContextEpoch.AgentSelectionUnstable({ sessionID: selection.sessionID, attempts: 1 })
-        return yield* Effect.die(rebuildPreparedTurn(promotion, step))
-      }))
+      Effect.catchDefect(
+        Effect.fnUntraced(function* (defect) {
+          if (!(defect instanceof SessionInput.SelectionMismatch)) return yield* Effect.die(defect)
+          // A stable contradiction cannot become correct by rebuilding the same request. Only an
+          // actual source/roster change spends the shared, bounded preparation rebuild budget.
+          if (
+            selection &&
+            (yield* SessionInput.requireSelection(db, selection).pipe(
+              Effect.as(true),
+              Effect.catchDefect((error) =>
+                error instanceof SessionInput.SelectionMismatch ? Effect.succeed(false) : Effect.die(error),
+              ),
+            )) &&
+            (yield* agents.select(selection.agent)).id === resolvedAgent
+          )
+            return yield* new SessionContextEpoch.AgentSelectionUnstable({
+              sessionID: selection.sessionID,
+              attempts: 1,
+            })
+          return yield* Effect.die(rebuildPreparedTurn(promotion, step))
+        }),
+      )
 
     const sameModel = Schema.toEquivalence(Schema.UndefinedOr(ModelV2.Ref))
     const loadSystemContext = (
       agent: AgentV2.Selection,
       session: SessionSchema.Info,
       modelSupportsTools: boolean | undefined,
-    ) =>
-      Effect.gen(function* () {
-        const rulesets = [agent.info?.permissions ?? [], session.permissions, PlanningPermissions.forAgent(agent.id)]
-        const availableToolNames = new Set(
-          modelSupportsTools === false
-            ? []
-            : (yield* tools.materialize({ rulesets, allowedToolIDs: agent.id === "plan" ? PlanningPermissions.allowedTools : undefined })).definitions.map((definition) => definition.name),
-        )
-        return yield* Effect.all([systemContext.load(), skillGuidance.load(agent)], { concurrency: 2 }).pipe(
-          Effect.map(SystemContext.combine),
-          Effect.provideService(CapabilityCatalog.CurrentAvailableToolNames, availableToolNames),
-          Effect.provideService(
-            CapabilityCatalog.CurrentGrantedPermissions,
-            new Set(
-              modelSupportsTools === false
-                ? []
-                : [...DeepAgentCodeToolInventory.permissionActions].filter(
-                    (permission) => !PermissionV2.isActionWhollyDenied(permission, ...rulesets),
-                  ),
-            ),
-          ),
-        )
-      })
+    ) => loadPromptContext({ tools, systemContext, skillGuidance }, agent, session, modelSupportsTools)
 
     // W1.1 — goal_steer delivery (design W1 §1). Each pending goal-directed steer is handed to the
     // ACTIVE goal's durable runtime state via GoalLoop.enqueueGoalSteer; without an active goal (or a
@@ -846,7 +831,10 @@ export const layer = Layer.effect(
       if (parityCampaign && V2ProviderTurn.ownerCampaignFromEnv())
         return yield* new V2ProviderTurn.ConflictError({ reason: "v2_owner_cannot_record_shadow_parity" })
       const existingSession = yield* getSession(sessionID)
-      if (existingSession.location.directory !== location.directory || existingSession.location.workspaceID !== location.workspaceID)
+      if (
+        existingSession.location.directory !== location.directory ||
+        existingSession.location.workspaceID !== location.workspaceID
+      )
         return yield* Effect.interrupt
       const pendingToolEffects = yield* toolEffects.listPendingForSession(existingSession.id)
       if (pendingToolEffects.length > 0)
@@ -858,17 +846,20 @@ export const layer = Layer.effect(
       // batch first. Failed Context observation leaves it pending; a later promotion race retains
       // only the prefix whose individual events already committed.
       const selection = yield* SessionInput.captureSelection(db, existingSession.id, promotion)
-      const pendingReturn = promotion === "queue" ? (yield* SessionInput.pendingQueueInputs(db, existingSession.id))[0] : undefined
-      if (pendingReturn) yield* TaskContinuation.requireExecution(db, existingSession.id, pendingReturn.id).pipe(Effect.orDie)
+      const pendingReturn =
+        promotion === "queue" ? (yield* SessionInput.pendingQueueInputs(db, existingSession.id))[0] : undefined
+      if (pendingReturn)
+        yield* TaskContinuation.requireExecution(db, existingSession.id, pendingReturn.id).pipe(Effect.orDie)
       const session = {
         ...existingSession,
         agent: selection.agent === undefined ? undefined : AgentV2.ID.make(selection.agent),
-        model: selection.model === undefined
-          ? undefined
-          : Schema.decodeUnknownSync(ModelV2.Ref)({
-              ...selection.model,
-              variant: selection.model.variant ?? "default",
-            }),
+        model:
+          selection.model === undefined
+            ? undefined
+            : Schema.decodeUnknownSync(ModelV2.Ref)({
+                ...selection.model,
+                variant: selection.model.variant ?? "default",
+              }),
       }
       const agent = yield* agents.select(session.agent)
       yield* GoalChildExecution.requireAgent(db, session.id, agent.id)
@@ -889,7 +880,12 @@ export const layer = Layer.effect(
         { select: agents.select, snapshot: selection },
       ).pipe(retryAgentMismatch(promotion, step, selection, agent.id))
       const admitted = yield* SessionContextEpoch.promotePrepared(
-        db, events, prepared, session.id, agent.id, agents.select,
+        db,
+        events,
+        prepared,
+        session.id,
+        agent.id,
+        agents.select,
       ).pipe(retryAgentMismatch(promotion, step, prepared.selection, agent.id))
       const promoted = admitted.promoted
       const system = admitted.prepared
@@ -964,30 +960,33 @@ export const layer = Layer.effect(
       // The task tool's bounded schema-conversion turn has a durable prompt marker. Remove
       // tools from the provider request itself; an instruction alone cannot prevent an LLM
       // from re-reading files after the research turn's exact-once contract has settled.
-      const taskFinalizerNoTools = context.findLast((message) => message.type === "user")?.metadata
-        ?.deepagent_code_task_finalizer === true
+      const taskFinalizerNoTools =
+        context.findLast((message) => message.type === "user")?.metadata?.deepagent_code_task_finalizer === true
       const modeOverride = context
         .filter((message): message is SessionMessage.User => message.type === "user")
         .map((message) => message.metadata?.deepagent)
-        .filter((value): value is Record<string, unknown> =>
-          typeof value === "object" && value !== null && !Array.isArray(value),
+        .filter(
+          (value): value is Record<string, unknown> =>
+            typeof value === "object" && value !== null && !Array.isArray(value),
         )
         .map((value) => value.agent_mode_override)
         .findLast((value): value is string => typeof value === "string")
-      const toolDefinitions = taskFinalizerNoTools ? [] : [
-        ...(modelInfo?.capabilities.tools === false ? [] : toolMaterialization.definitions),
-        // RI-126: the synthesized StructuredOutput tool is advertised but never registered —
-        // its call is intercepted before registry settlement and captured as the final answer.
-        ...(syntheticStructuredOutput && jsonSchemaFormat.schema !== undefined
-          ? [
-              ToolDefinition.make({
-                name: STRUCTURED_OUTPUT_TOOL_NAME,
-                description: STRUCTURED_OUTPUT_DESCRIPTION,
-                inputSchema: jsonSchemaFormat.schema,
-              }),
-            ]
-          : []),
-      ]
+      const toolDefinitions = taskFinalizerNoTools
+        ? []
+        : [
+            ...(modelInfo?.capabilities.tools === false ? [] : toolMaterialization.definitions),
+            // RI-126: the synthesized StructuredOutput tool is advertised but never registered —
+            // its call is intercepted before registry settlement and captured as the final answer.
+            ...(syntheticStructuredOutput && jsonSchemaFormat.schema !== undefined
+              ? [
+                  ToolDefinition.make({
+                    name: STRUCTURED_OUTPUT_TOOL_NAME,
+                    description: STRUCTURED_OUTPUT_DESCRIPTION,
+                    inputSchema: jsonSchemaFormat.schema,
+                  }),
+                ]
+              : []),
+          ]
       const offeredToolIDs = toolDefinitions.map((tool) => tool.name)
       const stepLimitReached = loopBudget.stepLimitReached(currentStep)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
@@ -1077,21 +1076,28 @@ export const layer = Layer.effect(
         [system.baseline],
       )
       const volatileSystemParts: string[] = []
-      const approvedActivity = yield* db.select({ trigger: SessionActivityTable.trigger_input_id })
+      const approvedActivity = yield* db
+        .select({ trigger: SessionActivityTable.trigger_input_id })
         .from(SessionActivityTable)
         .where(and(eq(SessionActivityTable.session_id, session.id), eq(SessionActivityTable.state, "active")))
-        .get().pipe(Effect.orDie)
-      const approvedInput = yield* SessionInput.find(db, SessionMessage.ID.make(
-        approvedActivity?.trigger ?? promoted[0] ?? receiptUserMessageID,
-      ))
-      const approval = Schema.decodeUnknownOption(Schema.Struct({
-        documentID: Schema.String,
-        planID: Schema.String,
-        version: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
-        hash: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
-      }))(approvedInput?.prompt.metadata?.dac_plan_approval)
+        .get()
+        .pipe(Effect.orDie)
+      const approvedInput = yield* SessionInput.find(
+        db,
+        SessionMessage.ID.make(approvedActivity?.trigger ?? promoted[0] ?? receiptUserMessageID),
+      )
+      const approval = Schema.decodeUnknownOption(
+        Schema.Struct({
+          documentID: Schema.String,
+          planID: Schema.String,
+          version: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+          hash: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+        }),
+      )(approvedInput?.prompt.metadata?.dac_plan_approval)
       if (Option.isSome(approval))
-        volatileSystemParts.push(`This activity executes the exact user-approved plan ${approval.value.planID}, document ${approval.value.documentID}, version ${approval.value.version}, SHA256 ${approval.value.hash}, carried in its original execution request. Current plan-status and any later draft shown below are observations of progress, not a replacement authorization. Do not expand the approved scope from a later draft; ask the user for a separate approval if scope changes.`)
+        volatileSystemParts.push(
+          `This activity executes the exact user-approved plan ${approval.value.planID}, document ${approval.value.documentID}, version ${approval.value.version}, SHA256 ${approval.value.hash}, carried in its original execution request. Current plan-status and any later draft shown below are observations of progress, not a replacement authorization. Do not expand the approved scope from a later draft; ask the user for a separate approval if scope changes.`,
+        )
       // G3 history projection — durable rows lower to the model-facing view with bounded
       // tool-output budgets (pure function of content ⇒ byte-stable projection ⇒ prompt cache
       // holds). The result carries THIS call's truncation stats (no module-global counters —
@@ -1149,7 +1155,8 @@ export const layer = Layer.effect(
         system: stableSystemParts.map(SystemPart.make),
         messages: requestMessages,
         tools: toolDefinitions,
-        toolChoice: taskFinalizerNoTools || stepLimitReached ? "none" : syntheticStructuredOutput ? "required" : undefined,
+        toolChoice:
+          taskFinalizerNoTools || stepLimitReached ? "none" : syntheticStructuredOutput ? "required" : undefined,
         // RI-126 wire mode: the Responses protocol lowers this onto `text.format` json_schema;
         // `strict` stays unset (session schemas are not authored against OpenAI strict mode).
         ...(wireStructuredOutput && jsonSchemaFormat.schema !== undefined
@@ -1166,10 +1173,11 @@ export const layer = Layer.effect(
           },
         },
       })
-      const durableCheckpoint = entries.findLast((entry) =>
-        entry.message.type === "compaction" && entry.message.reason === "hard_gate")?.message
-      const refreshAfterSelectionID = durableCheckpoint?.type === "compaction" &&
-        durableCheckpoint.checkpointID && durableCheckpoint.checkpointHash
+      const durableCheckpoint = entries.findLast(
+        (entry) => entry.message.type === "compaction" && entry.message.reason === "hard_gate",
+      )?.message
+      const refreshAfterSelectionID =
+        durableCheckpoint?.type === "compaction" && durableCheckpoint.checkpointID && durableCheckpoint.checkpointHash
           ? yield* LongContext.sourceSelectionID(
               db,
               session.id,
@@ -1238,14 +1246,20 @@ export const layer = Layer.effect(
       const selectionEvidence = productionAdaptersEnabled(runtimeFeatures)
         ? yield* SessionRunnerCanonical.selectionGraphEvidence(db, selectionAdmission.selectionId)
         : undefined
-      if (durableCheckpoint?.type === "compaction" && durableCheckpoint.checkpointID && durableCheckpoint.checkpointHash) {
+      if (
+        durableCheckpoint?.type === "compaction" &&
+        durableCheckpoint.checkpointID &&
+        durableCheckpoint.checkpointHash
+      ) {
         const content = yield* LongContext.assertCheckpoint(
           db,
           session.id,
           durableCheckpoint.checkpointID,
           durableCheckpoint.checkpointHash,
         ).pipe(Effect.orDie)
-        volatileSystemParts.push(`Context checkpoint (durable authority references; revalidate before acting):\n${CanonicalJson.stringify(content)}`)
+        volatileSystemParts.push(
+          `Context checkpoint (durable authority references; revalidate before acting):\n${CanonicalJson.stringify(content)}`,
+        )
       }
       if (selectionEvidence !== undefined) {
         volatileSystemParts.push(selectionEvidence)
@@ -1281,12 +1295,17 @@ export const layer = Layer.effect(
       // deliberately EXCLUDES the notice itself, so the warning can never feed back into the
       // percentage that produced it.
       const inputUsage = SessionCompaction.estimateInputUsage(model, request)
-      const physicalBudget = PreparedProviderTurn.budget(model)
+      const physicalBudget = PreparedProviderTurn.budget(model, 0, request.generation?.maxTokens)
       const policyInput = {
         providerID: model.provider,
         runtimeModelID: modelInfo?.id ?? model.id,
         apiModelID: model.id,
-        physicalInputBudget: physicalBudget.provenance === "host_guard" ? 0 :
+        endpointOrigin: model.route.endpoint.baseURL,
+        mode: compaction.mode,
+        bufferTokens: compaction.bufferTokens(model),
+        summaryInputBudget: PreparedProviderTurn.budget(model, 0, compaction.summaryOutputTokens(model))
+          .physicalInputBudget,
+        physicalInputBudget:
           physicalBudget.reason === "context_limit_invalid" ? -1 : physicalBudget.physicalInputBudget,
         limitProvenance: physicalBudget.provenance,
         safetyMargin: physicalBudget.safetyMargin,
@@ -1297,7 +1316,7 @@ export const layer = Layer.effect(
         estimatedFullRequestTokens: PreparedProviderTurn.estimateFullRequestTokens(request),
       })
       const budgetNotice =
-        initialPolicy.state !== "unmanaged" || inputUsage === undefined
+        inputUsage === undefined || (initialPolicy.state === "managed" && initialPolicy.key !== "default")
           ? undefined
           : contextBudgetNotice(inputUsage.tokens / inputUsage.context)
       if (budgetNotice !== undefined) {
@@ -1320,41 +1339,46 @@ export const layer = Layer.effect(
         }),
       )
       const policyReceipt = {
-          sessionID: session.id,
-          activityID: selectionAdmission.activityId,
-          userMessageID: receiptUserMessageID,
-          promptEpoch: historyPromptEpoch,
-          requestHash: requestInputHash,
-          providerID: policyInput.providerID,
-          runtimeModelID: policyInput.runtimeModelID,
-          apiModelID: policyInput.apiModelID,
-          policy: modelPolicy,
-          estimatedFullRequestTokens,
-          reservedOutputTokens: request.generation?.maxTokens ?? model.route.defaults.limits?.output ?? 0,
-          selectionID: selectionAdmission.selectionId,
-          projectionHash: selectionAdmission.projectionHash,
-          graphSnapshotRefs: selectionAdmission.selectedRefs ?? [],
-          offeredToolIDs,
-          degradedToolIDs: toolMaterialization.registeredIDs.filter((id) => !offeredToolIDs.includes(id)),
-        }
+        sessionID: session.id,
+        activityID: selectionAdmission.activityId,
+        userMessageID: receiptUserMessageID,
+        promptEpoch: historyPromptEpoch,
+        requestHash: requestInputHash,
+        providerID: policyInput.providerID,
+        runtimeModelID: policyInput.runtimeModelID,
+        apiModelID: policyInput.apiModelID,
+        policy: modelPolicy,
+        estimatedFullRequestTokens,
+        reservedOutputTokens: request.generation?.maxTokens ?? model.route.defaults.limits?.output ?? 0,
+        selectionID: selectionAdmission.selectionId,
+        projectionHash: selectionAdmission.projectionHash,
+        graphSnapshotRefs: selectionAdmission.selectedRefs ?? [],
+        offeredToolIDs,
+        degradedToolIDs: toolMaterialization.registeredIDs.filter((id) => !offeredToolIDs.includes(id)),
+      }
       if (modelPolicy.state === "unavailable") {
-          const policyReceiptID = yield* LongContext.recordPolicy({ db, ...policyReceipt }).pipe(Effect.orDie)
-          yield* LongContext.settlePolicy(db, policyReceiptID, { blockedReason: modelPolicy.reason }).pipe(Effect.orDie)
-          return yield* new ContextBudgetHardGateError({
-            sessionID: session.id,
-            estimatedTokens: estimatedFullRequestTokens,
-            effectiveHardGate: 0,
-            reason: modelPolicy.reason,
-          })
-        }
+        const policyReceiptID = yield* LongContext.recordPolicy({ db, ...policyReceipt }).pipe(Effect.orDie)
+        yield* LongContext.settlePolicy(db, policyReceiptID, { blockedReason: modelPolicy.reason }).pipe(Effect.orDie)
+        return yield* new ContextBudgetHardGateError({
+          sessionID: session.id,
+          estimatedTokens: estimatedFullRequestTokens,
+          effectiveHardGate: 0,
+          reason: modelPolicy.reason,
+        })
+      }
       if (modelPolicy.state === "managed" && modelPolicy.action.startsWith("hard_gate")) {
-          const policyReceiptID = yield* LongContext.recordPolicy({ db, ...policyReceipt }).pipe(Effect.orDie)
-          const previousHardGate = entries.findLast((entry) =>
-            entry.message.type === "compaction" && entry.message.reason === "hard_gate")
-          const noNewConversation = previousHardGate !== undefined &&
-            !entries.some((entry) => entry.seq > previousHardGate.seq &&
-              (entry.message.type === "user" || entry.message.type === "assistant"))
-          const compacted = modelPolicy.action === "hard_gate_compact" && !noNewConversation
+        const policyReceiptID = yield* LongContext.recordPolicy({ db, ...policyReceipt }).pipe(Effect.orDie)
+        const previousHardGate = entries.findLast(
+          (entry) => entry.message.type === "compaction" && entry.message.reason === "hard_gate",
+        )
+        const noNewConversation =
+          previousHardGate !== undefined &&
+          !entries.some(
+            (entry) =>
+              entry.seq > previousHardGate.seq && (entry.message.type === "user" || entry.message.type === "assistant"),
+          )
+        const compacted =
+          modelPolicy.action === "hard_gate_compact" && !noNewConversation
             ? yield* compaction.compactAfterOverflow({
                 sessionID: session.id,
                 entries,
@@ -1368,36 +1392,52 @@ export const layer = Layer.effect(
                 estimatedInputTokens: estimatedFullRequestTokens,
               })
             : false
-          if (compacted && typeof compacted === "object" && "checkpointID" in compacted &&
-              compacted.checkpointID && compacted.checkpointHash) {
-            yield* LongContext.settlePolicy(db, policyReceiptID, {
-              checkpointID: compacted.checkpointID,
-              checkpointHash: compacted.checkpointHash,
-            }).pipe(Effect.orDie)
-            return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
-          }
-          const reason = noNewConversation ? "post_compaction_budget_still_exceeded" :
-            modelPolicy.action === "hard_gate_blocked" ? "auto_compaction_disabled" : "compaction_unavailable"
-          yield* LongContext.settlePolicy(db, policyReceiptID, { blockedReason: reason }).pipe(Effect.orDie)
-          return yield* new ContextBudgetHardGateError({
-            sessionID: session.id,
-            estimatedTokens: estimatedFullRequestTokens,
-            effectiveHardGate: modelPolicy.effectiveHardGate,
-            reason,
-          })
+        if (
+          compacted &&
+          typeof compacted === "object" &&
+          "checkpointID" in compacted &&
+          compacted.checkpointID &&
+          compacted.checkpointHash
+        ) {
+          yield* LongContext.settlePolicy(db, policyReceiptID, {
+            checkpointID: compacted.checkpointID,
+            checkpointHash: compacted.checkpointHash,
+          }).pipe(Effect.orDie)
+          return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
+        }
+        const reason = noNewConversation
+          ? "post_compaction_budget_still_exceeded"
+          : modelPolicy.action === "hard_gate_blocked"
+            ? "auto_compaction_disabled"
+            : "compaction_unavailable"
+        yield* LongContext.settlePolicy(db, policyReceiptID, { blockedReason: reason }).pipe(Effect.orDie)
+        return yield* new ContextBudgetHardGateError({
+          sessionID: session.id,
+          estimatedTokens: estimatedFullRequestTokens,
+          effectiveHardGate: modelPolicy.effectiveHardGate,
+          reason,
+        })
       }
-      if (modelPolicy.state === "unmanaged" && (yield* compaction.compactIfNeeded({
-        sessionID: session.id,
-        entries,
+      if (
+        modelPolicy.state === "unmanaged" &&
+        (yield* compaction.compactIfNeeded({
+          sessionID: session.id,
+          entries,
+          model,
+          request,
+          userMessageID: receiptUserMessageID,
+          historyPromptEpoch,
+          ownerMode: parityCampaign ? "shadow_v2" : "v2",
+          admission: selectionAdmission,
+          ...(inputUsage === undefined ? {} : { estimatedInputTokens: inputUsage.tokens }),
+        }))
+      )
+        return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
+      const requestBudget = PreparedProviderTurn.budget(
         model,
-        request,
-        userMessageID: receiptUserMessageID,
-        historyPromptEpoch,
-        ownerMode: parityCampaign ? "shadow_v2" : "v2",
-        admission: selectionAdmission,
-        ...(inputUsage === undefined ? {} : { estimatedInputTokens: inputUsage.tokens }),
-      }))) return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
-      const requestBudget = PreparedProviderTurn.budget(model, estimatedFullRequestTokens)
+        estimatedFullRequestTokens,
+        request.generation?.maxTokens,
+      )
       const admittedTurn = yield* SessionRunnerCanonical.commitTurn({
         db,
         contexts,
@@ -1419,9 +1459,14 @@ export const layer = Layer.effect(
         ownerToken: yield* providerTurns.currentOwnerToken(),
       }).pipe(Effect.provideService(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, runtimeIntegrityIdentity))
       const providerReceipt = admittedTurn.receipt
-      yield* SharedBrowserUserInput.recordTurn(db, { sessionID: session.id, receiptID: providerReceipt.receiptId,
-        activityID: selectionAdmission.activityId, selectionID: selectionAdmission.selectionId,
-        projectionHash: selectionAdmission.projectionHash, promotedInputIDs: promoted })
+      yield* SharedBrowserUserInput.recordTurn(db, {
+        sessionID: session.id,
+        receiptID: providerReceipt.receiptId,
+        activityID: selectionAdmission.activityId,
+        selectionID: selectionAdmission.selectionId,
+        projectionHash: selectionAdmission.projectionHash,
+        promotedInputIDs: promoted,
+      })
       // R4 — pricing belongs to the Location catalog and is an explicit runner dependency. A
       // missing catalog model keeps cost 0 rather than guessing, but a composition can no longer
       // silently omit the catalog service and disable accounting for every turn.
@@ -1674,32 +1719,67 @@ export const layer = Layer.effect(
               },
             }
           const admission = yield* admitToolEffect(input)
-          const settlement = input.call.name === "browser"
-            ? CurrentToolExecution.withAdmission(db, {
-                admission,
-                context: { sessionID: input.sessionID, agent: input.agent,
-                  assistantMessageID: input.assistantMessageID, toolCallID: input.call.id },
-                location, provider: providerTurns, input: input.call.input,
-              }, baseSettleTool(input)).pipe(Effect.catchTag("Browser.Error", Effect.die))
-            : input.call.name === "task"
-              ? TaskContinuation.withAdmission({ admission,
-                  context: { sessionID: input.sessionID, agent: input.agent,
-                    assistantMessageID: input.assistantMessageID, toolCallID: input.call.id },
-                  location, provider: providerTurns, input: input.call.input,
-                }, baseSettleTool(input))
-              : baseSettleTool(input)
-          const settleCurrent = input.call.name === BashTool.name &&
+          const settlement =
+            input.call.name === "browser"
+              ? CurrentToolExecution.withAdmission(
+                  db,
+                  {
+                    admission,
+                    context: {
+                      sessionID: input.sessionID,
+                      agent: input.agent,
+                      assistantMessageID: input.assistantMessageID,
+                      toolCallID: input.call.id,
+                    },
+                    location,
+                    provider: providerTurns,
+                    input: input.call.input,
+                  },
+                  baseSettleTool(input),
+                ).pipe(Effect.catchTag("Browser.Error", Effect.die))
+              : input.call.name === "task"
+                ? TaskContinuation.withAdmission(
+                    {
+                      admission,
+                      context: {
+                        sessionID: input.sessionID,
+                        agent: input.agent,
+                        assistantMessageID: input.assistantMessageID,
+                        toolCallID: input.call.id,
+                      },
+                      location,
+                      provider: providerTurns,
+                      input: input.call.input,
+                    },
+                    baseSettleTool(input),
+                  )
+                : baseSettleTool(input)
+          const settleCurrent =
+            input.call.name === BashTool.name &&
             BashTool.isBuiltin(ToolRegistry.inspect(toolMaterialization, input.call.name)?.tool)
-            ? CurrentToolExecution.withPermissionCancellation(admission, {
-                sessionID: input.sessionID, agent: input.agent,
-                assistantMessageID: input.assistantMessageID, toolCallID: input.call.id,
-              }, (cancellation) => settlement.pipe(
-                Effect.onInterrupt(() => CurrentToolExecution.cancelledBeforeEffect(cancellation)
-                  ? recordToolEffect(input, "failed", { type: "error", value: "tool_permission_cancelled" },
-                      "tool_permission_cancelled")
-                  : Effect.void),
-              ))
-            : settlement
+              ? CurrentToolExecution.withPermissionCancellation(
+                  admission,
+                  {
+                    sessionID: input.sessionID,
+                    agent: input.agent,
+                    assistantMessageID: input.assistantMessageID,
+                    toolCallID: input.call.id,
+                  },
+                  (cancellation) =>
+                    settlement.pipe(
+                      Effect.onInterrupt(() =>
+                        CurrentToolExecution.cancelledBeforeEffect(cancellation)
+                          ? recordToolEffect(
+                              input,
+                              "failed",
+                              { type: "error", value: "tool_permission_cancelled" },
+                              "tool_permission_cancelled",
+                            )
+                          : Effect.void,
+                      ),
+                    ),
+                )
+              : settlement
           // G-A/G-B: per-drain tool ledger. Identical repeats and re-reads of an already-read path
           // are the two facts the ablation traces could only be explained by grepping the transcript;
           // crossing a threshold yields an ADVISORY nudge appended to this call's result (the
@@ -1846,9 +1926,9 @@ export const layer = Layer.effect(
         )
         return { needsContinuation: false, step: currentStep, activityId: selectionAdmission.activityId }
       }
-      const epochCurrent = yield* SessionContextEpoch.current(db, session.id, agent.id, system.revision, { select: agents.select }).pipe(
-        Effect.onInterrupt(() => terminalizePreDispatch("turn_aborted_before_dispatch")),
-      )
+      const epochCurrent = yield* SessionContextEpoch.current(db, session.id, agent.id, system.revision, {
+        select: agents.select,
+      }).pipe(Effect.onInterrupt(() => terminalizePreDispatch("turn_aborted_before_dispatch")))
       if (!epochCurrent) {
         yield* terminalizePreDispatch("epoch_mismatch_rebuild")
         return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
@@ -1856,16 +1936,17 @@ export const layer = Layer.effect(
       // The attempt binds the route at admission, before the prepared turn exists. Re-resolve the
       // Location catalog at the actual dispatch seam: a changed endpoint/protocol/capability must
       // terminalize the admitted turn and rebuild; it must never send the old request on a new route.
-      const currentModel = yield* models.resolve(session).pipe(
-        Effect.onError(() => terminalizePreDispatch("config_revalidation_failed")),
-      )
-      const currentIdentity = currentModel.info === undefined
-        ? undefined
-        : protocolAttemptIdentityFor(
-            currentModel.info,
-            currentModel.provider,
-            buildCapabilityEvidence(currentModel.info, currentModel.provider),
-          )
+      const currentModel = yield* models
+        .resolve(session)
+        .pipe(Effect.onError(() => terminalizePreDispatch("config_revalidation_failed")))
+      const currentIdentity =
+        currentModel.info === undefined
+          ? undefined
+          : protocolAttemptIdentityFor(
+              currentModel.info,
+              currentModel.provider,
+              buildCapabilityEvidence(currentModel.info, currentModel.provider),
+            )
       const boundIdentityHash = admittedTurn.attempt.protocolAttemptIdentityHash
       if (
         (boundIdentityHash === undefined && currentIdentity !== undefined) ||
@@ -1927,7 +2008,8 @@ export const layer = Layer.effect(
               toolRegistryIDs: toolMaterialization.registeredIDs,
               toolPermissionFilteredIDs: toolMaterialization.permissionFilteredIDs,
               toolFinalOfferedIDs: toolDefinitions.map((tool) => tool.name),
-              toolChoice: taskFinalizerNoTools || stepLimitReached ? "none" : syntheticStructuredOutput ? "required" : null,
+              toolChoice:
+                taskFinalizerNoTools || stepLimitReached ? "none" : syntheticStructuredOutput ? "required" : null,
               toolResultReferences: context.flatMap((message) =>
                 message.type === "assistant"
                   ? message.content.flatMap((part) =>
@@ -2050,7 +2132,9 @@ export const layer = Layer.effect(
           const providerOverflow = isContextOverflowFailure(overflowFailure ?? failure)
           if (providerOverflow) {
             if (!providerReceipt.providerAttemptId) return yield* Effect.die("provider_overflow_without_attempt")
-            yield* LongContext.markProviderOverflow(db, session.id, providerReceipt.providerAttemptId).pipe(Effect.orDie)
+            yield* LongContext.markProviderOverflow(db, session.id, providerReceipt.providerAttemptId).pipe(
+              Effect.orDie,
+            )
           }
           if (
             recoverOverflow &&
@@ -2080,26 +2164,44 @@ export const layer = Layer.effect(
           if (refusal && !publisher.hasAssistantStarted() && providerRetry < MAX_PROVIDER_ATTEMPT_RETRIES) {
             const failed = yield* providerTurns.get(providerReceipt.receiptId)
             const attempt = providerReceipt.providerAttemptId
-              ? yield* db.select().from(SessionProviderAttemptTable).where(and(
-                eq(SessionProviderAttemptTable.attempt_id, providerReceipt.providerAttemptId),
-                eq(SessionProviderAttemptTable.session_id, session.id),
-                eq(SessionProviderAttemptTable.activity_id, selectionAdmission.activityId),
-                eq(SessionProviderAttemptTable.owner_token, providerReceipt.ownerToken),
-                eq(SessionProviderAttemptTable.state, "failed"),
-                isNotNull(SessionProviderAttemptTable.settled_at),
-              )).get().pipe(Effect.orDie)
+              ? yield* db
+                  .select()
+                  .from(SessionProviderAttemptTable)
+                  .where(
+                    and(
+                      eq(SessionProviderAttemptTable.attempt_id, providerReceipt.providerAttemptId),
+                      eq(SessionProviderAttemptTable.session_id, session.id),
+                      eq(SessionProviderAttemptTable.activity_id, selectionAdmission.activityId),
+                      eq(SessionProviderAttemptTable.owner_token, providerReceipt.ownerToken),
+                      eq(SessionProviderAttemptTable.state, "failed"),
+                      isNotNull(SessionProviderAttemptTable.settled_at),
+                    ),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
               : undefined
-            const proof = failed && V2ProviderTurn.providerRefusalAttempt(
-              failed, attempt, integrityIdentity, yield* store.claimToken(session.id),
-            )
+            const proof =
+              failed &&
+              V2ProviderTurn.providerRefusalAttempt(
+                failed,
+                attempt,
+                integrityIdentity,
+                yield* store.claimToken(session.id),
+              )
             if (
-              proof && failed && failed.ownerToken === providerReceipt.ownerToken &&
+              proof &&
+              failed &&
+              failed.ownerToken === providerReceipt.ownerToken &&
               (yield* providerTurns.currentOwnerToken()) === providerReceipt.ownerToken &&
               (yield* toolEffects.listPendingForSession(session.id)).length === 0 &&
-              !(yield* db.get<{ found: number }>(sql`SELECT 1 AS found FROM (
+              !(yield* db
+                .get<{ found: number }>(
+                  sql`SELECT 1 AS found FROM (
                 SELECT receipt_id FROM session_v2_tool_effect_admission WHERE receipt_id=${failed.receiptId}
                 UNION ALL SELECT receipt_id FROM session_v2_tool_effect WHERE receipt_id=${failed.receiptId}
-              ) LIMIT 1`).pipe(Effect.orDie))
+              ) LIMIT 1`,
+                )
+                .pipe(Effect.orDie))
             ) {
               yield* Effect.logWarning("verified provider refusal before retry", {
                 type: proof.refusal.kind,
@@ -2160,28 +2262,37 @@ export const layer = Layer.effect(
             ) {
               // A known refusal is terminal only for this exact still-owned attempt/activity.
               // Quarantined receipts and unresolved tool effects must retain recovery authority.
-              const terminal = yield* db.select({ activityID: SessionActivityTable.activity_id })
+              const terminal = yield* db
+                .select({ activityID: SessionActivityTable.activity_id })
                 .from(V2ProviderTurnReceiptTable)
-                .innerJoin(SessionProviderAttemptTable,
-                  eq(SessionProviderAttemptTable.attempt_id, V2ProviderTurnReceiptTable.provider_attempt_id))
-                .innerJoin(SessionActivityTable,
-                  eq(SessionActivityTable.activity_id, V2ProviderTurnReceiptTable.activity_id))
-                .where(and(
-                  eq(V2ProviderTurnReceiptTable.receipt_id, providerReceipt.receiptId),
-                  eq(V2ProviderTurnReceiptTable.session_id, session.id),
-                  eq(V2ProviderTurnReceiptTable.activity_id, selectionAdmission.activityId),
-                  eq(V2ProviderTurnReceiptTable.provider_attempt_id, providerReceipt.providerAttemptId),
-                  eq(V2ProviderTurnReceiptTable.owner_token, providerReceipt.ownerToken),
-                  eq(V2ProviderTurnReceiptTable.state, "failed"),
-                  isNotNull(V2ProviderTurnReceiptTable.terminal_at),
-                  eq(SessionProviderAttemptTable.session_id, session.id),
-                  eq(SessionProviderAttemptTable.activity_id, selectionAdmission.activityId),
-                  eq(SessionProviderAttemptTable.owner_token, providerReceipt.ownerToken),
-                  eq(SessionProviderAttemptTable.state, "failed"),
-                  isNotNull(SessionProviderAttemptTable.settled_at),
-                  eq(SessionActivityTable.session_id, session.id),
-                  eq(SessionActivityTable.state, "active"),
-                )).get().pipe(Effect.orDie)
+                .innerJoin(
+                  SessionProviderAttemptTable,
+                  eq(SessionProviderAttemptTable.attempt_id, V2ProviderTurnReceiptTable.provider_attempt_id),
+                )
+                .innerJoin(
+                  SessionActivityTable,
+                  eq(SessionActivityTable.activity_id, V2ProviderTurnReceiptTable.activity_id),
+                )
+                .where(
+                  and(
+                    eq(V2ProviderTurnReceiptTable.receipt_id, providerReceipt.receiptId),
+                    eq(V2ProviderTurnReceiptTable.session_id, session.id),
+                    eq(V2ProviderTurnReceiptTable.activity_id, selectionAdmission.activityId),
+                    eq(V2ProviderTurnReceiptTable.provider_attempt_id, providerReceipt.providerAttemptId),
+                    eq(V2ProviderTurnReceiptTable.owner_token, providerReceipt.ownerToken),
+                    eq(V2ProviderTurnReceiptTable.state, "failed"),
+                    isNotNull(V2ProviderTurnReceiptTable.terminal_at),
+                    eq(SessionProviderAttemptTable.session_id, session.id),
+                    eq(SessionProviderAttemptTable.activity_id, selectionAdmission.activityId),
+                    eq(SessionProviderAttemptTable.owner_token, providerReceipt.ownerToken),
+                    eq(SessionProviderAttemptTable.state, "failed"),
+                    isNotNull(SessionProviderAttemptTable.settled_at),
+                    eq(SessionActivityTable.session_id, session.id),
+                    eq(SessionActivityTable.state, "active"),
+                  ),
+                )
+                .get()
+                .pipe(Effect.orDie)
               if (terminal)
                 yield* Effect.uninterruptible(
                   contexts.settleActivity({ activityId: terminal.activityID, state: "failed" }),
@@ -2338,9 +2449,10 @@ export const layer = Layer.effect(
             step: currentStep,
             activityId: selectionAdmission.activityId,
             failed: publisher.hasProviderError(),
-            finalMessageId: !publisher.hasProviderError() && !needsContinuation && finish === "stop"
-              ? publisher.currentAssistantMessageID()
-              : undefined,
+            finalMessageId:
+              !publisher.hasProviderError() && !needsContinuation && finish === "stop"
+                ? publisher.currentAssistantMessageID()
+                : undefined,
           }
         }),
       )
@@ -2354,7 +2466,13 @@ export const layer = Layer.effect(
       ownerFencedRetries?: number,
       preparationRebuilds?: number,
     ) => Effect.Effect<
-      { readonly needsContinuation: boolean; readonly step: number; readonly activityId?: string; readonly finalMessageId?: string; readonly failed?: boolean },
+      {
+        readonly needsContinuation: boolean
+        readonly step: number
+        readonly activityId?: string
+        readonly finalMessageId?: string
+        readonly failed?: boolean
+      },
       RunError
     >
 
@@ -2407,7 +2525,10 @@ export const layer = Layer.effect(
               )
             }
             if (preparationRebuilds >= 3)
-              return yield* new SessionContextEpoch.AgentSelectionUnstable({ sessionID, attempts: preparationRebuilds + 1 })
+              return yield* new SessionContextEpoch.AgentSelectionUnstable({
+                sessionID,
+                attempts: preparationRebuilds + 1,
+              })
             yield* Effect.yieldNow
             return yield* runAfterOverflowCompaction(
               sessionID,
@@ -2495,11 +2616,19 @@ export const layer = Layer.effect(
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* runAfterOverflowCompaction(
-                sessionID, undefined, defect.transition.step, loopBudget,
-                providerRetry, ownerFencedRetries, preparationRebuilds,
+                sessionID,
+                undefined,
+                defect.transition.step,
+                loopBudget,
+                providerRetry,
+                ownerFencedRetries,
+                preparationRebuilds,
               )
             if (preparationRebuilds >= 3)
-              return yield* new SessionContextEpoch.AgentSelectionUnstable({ sessionID, attempts: preparationRebuilds + 1 })
+              return yield* new SessionContextEpoch.AgentSelectionUnstable({
+                sessionID,
+                attempts: preparationRebuilds + 1,
+              })
             return yield* runTurn(
               sessionID,
               defect.transition.promotion,
@@ -2648,7 +2777,9 @@ export const layer = Layer.effect(
         Effect.provideService(SessionRunnerCanonical.CurrentContinuationActivity, input.activityID),
         Effect.catchTag("SessionRunnerCanonical.AdmissionError", (error) =>
           input.activityID !== undefined && error.reason === "continuation_activity_obsolete"
-            ? Effect.void : Effect.fail(error)),
+            ? Effect.void
+            : Effect.fail(error),
+        ),
         Effect.ensuring(
           Effect.sync(() => {
             turnObservability.emitTurnSummary(input.sessionID)
@@ -2769,7 +2900,14 @@ export const layer = Layer.effect(
         .all()
         .pipe(Effect.orDie)
       const earliest = calls.at(-1)
-      if (!earliest) return { activityID: active.activityID, stepsUsed: spent?.value ?? 0, terminalStop, finalMessageId: terminalStop && typeof lastAssistantMessageID === "string" ? lastAssistantMessageID : undefined }
+      if (!earliest)
+        return {
+          activityID: active.activityID,
+          stepsUsed: spent?.value ?? 0,
+          terminalStop,
+          finalMessageId:
+            terminalStop && typeof lastAssistantMessageID === "string" ? lastAssistantMessageID : undefined,
+        }
       const terminal = yield* db
         .select({ data: EventTable.data })
         .from(EventTable)
@@ -2799,7 +2937,12 @@ export const layer = Layer.effect(
           ),
         )
       }
-      return { activityID: active.activityID, stepsUsed: spent?.value ?? 0, terminalStop, finalMessageId: terminalStop && typeof lastAssistantMessageID === "string" ? lastAssistantMessageID : undefined }
+      return {
+        activityID: active.activityID,
+        stepsUsed: spent?.value ?? 0,
+        terminalStop,
+        finalMessageId: terminalStop && typeof lastAssistantMessageID === "string" ? lastAssistantMessageID : undefined,
+      }
     })
 
     const runRestricted = Effect.fn("SessionRunner.runRestrictedTurn")(function* (work: WorkAuthority.Work, step = 1) {
@@ -2811,11 +2954,25 @@ export const layer = Layer.effect(
           code: "PROFILE_UNAVAILABLE",
           message: "Restricted Work cannot use shadow execution",
         })
-      const turn = yield* RestrictedWorkTurn.prepare({ db, events, contexts, store, models, providerTurns, tools, agents, work, location })
+      const turn = yield* RestrictedWorkTurn.prepare({
+        db,
+        events,
+        contexts,
+        store,
+        models,
+        providerTurns,
+        tools,
+        agents,
+        work,
+        location,
+      })
       const publisher = createLLMEventPublisher(events, {
         sessionID: turn.session.id,
         agent: turn.work.binding.agentID,
-        model: { id: ModelV2.ID.make(turn.request.model.id), providerID: ProviderV2.ID.make(turn.request.model.provider) },
+        model: {
+          id: ModelV2.ID.make(turn.request.model.id),
+          providerID: ProviderV2.ID.make(turn.request.model.provider),
+        },
       })
       const artifact: LLMEvent[] = []
       let bytes = 0
@@ -2856,15 +3013,18 @@ export const layer = Layer.effect(
               contextReadiness: "unavailable",
               contextSelectedRefs: [],
               ...(turn.protocolIdentity === undefined ? {} : { protocolAttemptIdentity: turn.protocolIdentity }),
-              ...(turn.protocolIdentityHash === undefined ? {} : { protocolAttemptIdentityHash: turn.protocolIdentityHash }),
+              ...(turn.protocolIdentityHash === undefined
+                ? {}
+                : { protocolAttemptIdentityHash: turn.protocolIdentityHash }),
               toolDefinitions: turn.definitions,
               toolIDs: turn.definitions.map((definition) => definition.name),
               toolRegistryIDs: turn.materialization ? turn.definitions.map((definition) => definition.name) : [],
               toolPermissionFilteredIDs: [],
               toolFinalOfferedIDs: turn.definitions.map((definition) => definition.name),
               toolChoice: null,
-              toolResultReferences: turn.request.messages.flatMap((message) => message.content.flatMap((part) =>
-                part.type === "tool-result" ? [part.id] : [])),
+              toolResultReferences: turn.request.messages.flatMap((message) =>
+                message.content.flatMap((part) => (part.type === "tool-result" ? [part.id] : [])),
+              ),
               samplingMaxOutputTokens: turn.work.binding.budget.maxCompletionTokens,
               // Diagnostic estimate only. Exact count and final cap are independently authenticated
               // and charged in the actual final-seal transaction, never from this estimate.
@@ -2879,15 +3039,29 @@ export const layer = Layer.effect(
             },
             wireHash,
           ),
-        stream: Stream.unwrap(turn.bind().pipe(Effect.map((seal) => streamRequest(turn.request, artifact).pipe(Stream.provideService(RequestExecutor.CurrentRequestSeal, seal))))).pipe(
+        stream: Stream.unwrap(
+          turn
+            .bind()
+            .pipe(
+              Effect.map((seal) =>
+                streamRequest(turn.request, artifact).pipe(
+                  Stream.provideService(RequestExecutor.CurrentRequestSeal, seal),
+                ),
+              ),
+            ),
+        ).pipe(
           Stream.tap((event) =>
             Effect.gen(function* () {
               if (event.type === "text-delta" || event.type === "reasoning-delta")
                 bytes += Buffer.byteLength(event.text, "utf8")
-              if (artifact.length > 16_384 || bytes > 1_048_576 ||
+              if (
+                artifact.length > 16_384 ||
+                bytes > 1_048_576 ||
                 (turn.work.binding.schemaVersion === "work-execution.v1" && event.type.startsWith("tool-")) ||
                 (event.type === "tool-call" && event.providerExecuted === true) ||
-                event.type === "tool-result" || event.type === "tool-error")
+                event.type === "tool-result" ||
+                event.type === "tool-error"
+              )
                 return yield* new WorkAuthoritySchema.Error({
                   code: "WORK_CEILING_VIOLATION",
                   message: "Restricted response exceeded its transport bounds or attempted a tool",
@@ -2917,44 +3091,117 @@ export const layer = Layer.effect(
         const materialization = turn.materialization
         const attemptID = turn.receipt.providerAttemptId
         if (!materialization || !attemptID || new Set(calls.map((call) => call.id)).size !== calls.length)
-          return yield* new WorkAuthoritySchema.Error({ code: "WORK_RECOVERY_REQUIRED", message: "Project tool calls have no current owned admission" })
+          return yield* new WorkAuthoritySchema.Error({
+            code: "WORK_RECOVERY_REQUIRED",
+            message: "Project tool calls have no current owned admission",
+          })
         // The existing receipt completes before a local tool starts. Only actual registry leaves
         // run; unknown/failed results retain their admission and cannot become a successor turn.
-        yield* Effect.forEach(calls, (call) => Effect.gen(function* () {
-          yield* turn.refreshSource()
-          const admission = yield* toolEffects.admit({ sessionId: turn.session.id, providerAttemptId: attemptID,
-            receiptId: turn.receipt.receiptId, toolCallId: call.id, toolName: call.name,
-            effectKind: materialization.effectKind(call.name), ownerToken: turn.receipt.ownerToken, now: Date.now() })
-          const context = { sessionID: turn.session.id, agent: AgentV2.ID.make(binding.agentID), assistantMessageID, toolCallID: call.id }
-          const settle = Effect.gen(function* () {
-            const result = yield* materialization.settle({ sessionID: context.sessionID, agent: context.agent,
-              assistantMessageID, call, location })
-            if (result.result.type === "error" && !(yield* WorkToolPolicy.isKnownRefusal(result.result)))
-              return yield* new V2ToolEffect.RecoveryRequiredError({ sessionId: turn.session.id, pending: 1 })
-            if (call.name === "task") yield* db.transaction((tx) => WorkChildAuthority.requireTerminal(tx, turn.work, {
-              admissionID: admission.admissionId, inputHash: Hash.sha256(CanonicalJson.stringify(call.input)),
-            }), { behavior: "immediate" })
-            yield* toolEffects.record({ sessionId: turn.session.id, providerAttemptId: attemptID,
-              receiptId: turn.receipt.receiptId, toolCallId: call.id, toolName: call.name,
-              effectKind: materialization.effectKind(call.name), state: "settled",
-              outcomeHash: Hash.sha256(CanonicalJson.stringify(result.result)), ownerToken: turn.receipt.ownerToken, now: Date.now() })
-            yield* publisher.publish(LLMEvent.toolResult({ id: call.id, name: call.name,
-              result: result.result, output: result.output }), result.outputPaths ?? [])
-            yield* publisher.flush()
-            if (call.name !== "task") yield* WorkToolPolicy.cleanupCurrent()
-          })
-          yield* call.name === "task"
-            ? WorkChildAuthority.withAdmission({ binding, controlRevision: turn.work.control_revision,
-                admission, context, location, materialization, input: call.input }, settle)
-            : WorkToolPolicy.withAdmission(db, { binding, controlRevision: turn.work.control_revision,
-                admission, context, location, materialization, input: call.input }, settle)
-        }), { concurrency: 1, discard: true }).pipe(
+        yield* Effect.forEach(
+          calls,
+          (call) =>
+            Effect.gen(function* () {
+              yield* turn.refreshSource()
+              const admission = yield* toolEffects.admit({
+                sessionId: turn.session.id,
+                providerAttemptId: attemptID,
+                receiptId: turn.receipt.receiptId,
+                toolCallId: call.id,
+                toolName: call.name,
+                effectKind: materialization.effectKind(call.name),
+                ownerToken: turn.receipt.ownerToken,
+                now: Date.now(),
+              })
+              const context = {
+                sessionID: turn.session.id,
+                agent: AgentV2.ID.make(binding.agentID),
+                assistantMessageID,
+                toolCallID: call.id,
+              }
+              const settle = Effect.gen(function* () {
+                const result = yield* materialization.settle({
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  assistantMessageID,
+                  call,
+                  location,
+                })
+                if (result.result.type === "error" && !(yield* WorkToolPolicy.isKnownRefusal(result.result)))
+                  return yield* new V2ToolEffect.RecoveryRequiredError({ sessionId: turn.session.id, pending: 1 })
+                if (call.name === "task")
+                  yield* db.transaction(
+                    (tx) =>
+                      WorkChildAuthority.requireTerminal(tx, turn.work, {
+                        admissionID: admission.admissionId,
+                        inputHash: Hash.sha256(CanonicalJson.stringify(call.input)),
+                      }),
+                    { behavior: "immediate" },
+                  )
+                yield* toolEffects.record({
+                  sessionId: turn.session.id,
+                  providerAttemptId: attemptID,
+                  receiptId: turn.receipt.receiptId,
+                  toolCallId: call.id,
+                  toolName: call.name,
+                  effectKind: materialization.effectKind(call.name),
+                  state: "settled",
+                  outcomeHash: Hash.sha256(CanonicalJson.stringify(result.result)),
+                  ownerToken: turn.receipt.ownerToken,
+                  now: Date.now(),
+                })
+                yield* publisher.publish(
+                  LLMEvent.toolResult({ id: call.id, name: call.name, result: result.result, output: result.output }),
+                  result.outputPaths ?? [],
+                )
+                yield* publisher.flush()
+                if (call.name !== "task") yield* WorkToolPolicy.cleanupCurrent()
+              })
+              yield* call.name === "task"
+                ? WorkChildAuthority.withAdmission(
+                    {
+                      binding,
+                      controlRevision: turn.work.control_revision,
+                      admission,
+                      context,
+                      location,
+                      materialization,
+                      input: call.input,
+                    },
+                    settle,
+                  )
+                : WorkToolPolicy.withAdmission(
+                    db,
+                    {
+                      binding,
+                      controlRevision: turn.work.control_revision,
+                      admission,
+                      context,
+                      location,
+                      materialization,
+                      input: call.input,
+                    },
+                    settle,
+                  )
+            }),
+          { concurrency: 1, discard: true },
+        ).pipe(
           Effect.tapCause((cause) => Effect.logError("Project tool terminal validation failed", Cause.pretty(cause))),
-          Effect.mapError((error) => error instanceof WorkAuthoritySchema.Error
-            ? error : new WorkAuthoritySchema.Error({ code: "WORK_RECOVERY_REQUIRED", message: "Project tool execution has no authenticated terminal evidence" })),
+          Effect.mapError((error) =>
+            error instanceof WorkAuthoritySchema.Error
+              ? error
+              : new WorkAuthoritySchema.Error({
+                  code: "WORK_RECOVERY_REQUIRED",
+                  message: "Project tool execution has no authenticated terminal evidence",
+                }),
+          ),
         )
         yield* publisher.flush()
-        return { needsContinuation: true, step, activityId: turn.selected.admission.activityId, finalMessageId: assistantMessageID }
+        return {
+          needsContinuation: true,
+          step,
+          activityId: turn.selected.admission.activityId,
+          finalMessageId: assistantMessageID,
+        }
       }
       yield* turn.refreshSource()
       const completed = yield* db
@@ -2990,16 +3237,28 @@ export const layer = Layer.effect(
         const { WorkExecutionProfile } = yield* Effect.promise(() => import("../work-execution-profile"))
         const installed = yield* Effect.serviceOption(WorkExecutionProfile.Services)
         if (Option.isSome(installed) && installed.value.files?.cleanupCompletedWork)
-          yield* installed.value.files.cleanupCompletedWork({ workID: completed.work_id, bindingHash: completed.binding_hash })
-            .pipe(Effect.catchTag("WorkFileCapability.Error", (error) => Effect.logWarning(
-              "Managed command custody remains after Work completion", { workID: completed.work_id, code: error.code })))
+          yield* installed.value.files
+            .cleanupCompletedWork({ workID: completed.work_id, bindingHash: completed.binding_hash })
+            .pipe(
+              Effect.catchTag("WorkFileCapability.Error", (error) =>
+                Effect.logWarning("Managed command custody remains after Work completion", {
+                  workID: completed.work_id,
+                  code: error.code,
+                }),
+              ),
+            )
       }
       if (completed.outcome !== "succeeded")
         return yield* new WorkAuthoritySchema.Error({
           code: "WORK_CEILING_VIOLATION",
           message: "Restricted response ended without a complete text result",
         })
-      return { needsContinuation: false, step, activityId: turn.selected.admission.activityId, finalMessageId: assistantMessageID }
+      return {
+        needsContinuation: false,
+        step,
+        activityId: turn.selected.admission.activityId,
+        finalMessageId: assistantMessageID,
+      }
     })
 
     const runDrain = Effect.fn("SessionRunner.run")(function* (input: {
@@ -3009,40 +3268,76 @@ export const layer = Layer.effect(
     }) {
       const work = yield* WorkSessionGuard.requireExecution(db, input.sessionID)
       if (input.activityID !== undefined) {
-        const original = yield* db.select({ id: SessionActivityTable.activity_id }).from(SessionActivityTable).where(and(
-          eq(SessionActivityTable.activity_id, input.activityID), eq(SessionActivityTable.session_id, input.sessionID),
-          eq(SessionActivityTable.state, "active"),
-        )).get().pipe(Effect.orDie)
+        const original = yield* db
+          .select({ id: SessionActivityTable.activity_id })
+          .from(SessionActivityTable)
+          .where(
+            and(
+              eq(SessionActivityTable.activity_id, input.activityID),
+              eq(SessionActivityTable.session_id, input.sessionID),
+              eq(SessionActivityTable.state, "active"),
+            ),
+          )
+          .get()
+          .pipe(Effect.orDie)
         if (!original) return
       }
       yield* GoalChildExecution.requireExecution(db, input.sessionID)
       if (work?.binding.schemaVersion === "work-execution.v1")
-        return yield* runRestricted(work).pipe(Effect.asVoid,
+        return yield* runRestricted(work).pipe(
+          Effect.asVoid,
           Effect.scoped,
-          Effect.timeout(Duration.millis(Math.max(1, Math.min(work.binding.deadline, work.created_at + work.binding.budget.maxDurationMs) - Date.now()))),
-          Effect.mapError((error) => error._tag === "TimeoutError"
-            ? new WorkAuthoritySchema.Error({ code: "WORK_EXPIRED", message: "Restricted Work reached its execution deadline" })
-            : error),
+          Effect.timeout(
+            Duration.millis(
+              Math.max(
+                1,
+                Math.min(work.binding.deadline, work.created_at + work.binding.budget.maxDurationMs) - Date.now(),
+              ),
+            ),
+          ),
+          Effect.mapError((error) =>
+            error._tag === "TimeoutError"
+              ? new WorkAuthoritySchema.Error({
+                  code: "WORK_EXPIRED",
+                  message: "Restricted Work reached its execution deadline",
+                })
+              : error,
+          ),
         )
       // App invocations share this coordinator and are complete external effects, not prompts.
       // They can drain with no model configured and never mint a provider activity.
       if (!work) {
         yield* McpAppInvocation.requireAppResolved(db, input.sessionID)
         while ((yield* McpAppInvocation.pending(db, input.sessionID)).length > 0) {
-          yield* McpAppRunner.drain({ db, events, location, permissions: permissionService, sessionID: input.sessionID })
+          yield* McpAppRunner.drain({
+            db,
+            events,
+            location,
+            permissions: permissionService,
+            sessionID: input.sessionID,
+          })
           if (yield* SessionInput.hasPending(db, input.sessionID, "steer")) break
           if (yield* SessionInput.hasPending(db, input.sessionID, "queue")) break
         }
       }
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
-      const hasQueue = hasSteer || input.activityID !== undefined ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
+      const hasQueue =
+        hasSteer || input.activityID !== undefined
+          ? false
+          : yield* SessionInput.hasPending(db, input.sessionID, "queue")
       // W1.1 — a goal_steer admission wakes the drain but is NOT a chat activity: it opens a
       // DRAIN-ONLY turn (no provider dispatch) that delivers the guidance to the active goal.
-      const hasGoalSteer = input.activityID === undefined && !hasSteer && !hasQueue && (yield* SessionInput.hasPending(db, input.sessionID, "goal_steer"))
+      const hasGoalSteer =
+        input.activityID === undefined &&
+        !hasSteer &&
+        !hasQueue &&
+        (yield* SessionInput.hasPending(db, input.sessionID, "goal_steer"))
       // RI-18: a pending manual compaction request drives its own drain — the summary provider
       // turn runs inside SessionCompaction with the full receipt contract.
       const hasManualCompaction =
-        !work && input.activityID === undefined && !hasSteer &&
+        !work &&
+        input.activityID === undefined &&
+        !hasSteer &&
         !hasQueue &&
         !hasGoalSteer &&
         (yield* CompactionRequest.pendingForSession(db, input.sessionID)) !== undefined
@@ -3090,23 +3385,40 @@ export const layer = Layer.effect(
           : hasGoalSteer
             ? "goal_steer"
             : undefined
-      let openActivity = work !== undefined || input.force === true || hasSteer || hasQueue || hasGoalSteer || hasManualCompaction
+      let openActivity =
+        work !== undefined || input.force === true || hasSteer || hasQueue || hasGoalSteer || hasManualCompaction
       // W7: the settle hook references the PRIMARY activity of this drain chain (the trigger input),
       // so a multi-activity drain admits one learning run anchored on the prompt that opened it.
       let settledActivityId: string | undefined
       while (openActivity) {
         if (input.activityID !== undefined) {
-          const original = yield* db.select({ id: SessionActivityTable.activity_id }).from(SessionActivityTable).where(and(
-            eq(SessionActivityTable.activity_id, input.activityID), eq(SessionActivityTable.session_id, input.sessionID),
-            eq(SessionActivityTable.state, "active"),
-          )).get().pipe(Effect.orDie)
+          const original = yield* db
+            .select({ id: SessionActivityTable.activity_id })
+            .from(SessionActivityTable)
+            .where(
+              and(
+                eq(SessionActivityTable.activity_id, input.activityID),
+                eq(SessionActivityTable.session_id, input.sessionID),
+                eq(SessionActivityTable.state, "active"),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
           if (!original) return
         }
         // RI-18: a pending manual compaction request is drain-only work — it runs its own summary
         // turn (one provider dispatch inside SessionCompaction) and never promotes chat inputs.
-        const manualRequest = work || input.activityID !== undefined ? undefined : yield* CompactionRequest.pendingForSession(db, input.sessionID)
-        if (!work && input.activityID === undefined && manualRequest === undefined) yield* CompactionRequest.settleOrphaned(db, input.sessionID)
-        if (!work && promotion === "queue" && (yield* TaskContinuation.discardInvalidQueue(db, events, contexts, input.sessionID).pipe(Effect.orDie))) {
+        const manualRequest =
+          work || input.activityID !== undefined
+            ? undefined
+            : yield* CompactionRequest.pendingForSession(db, input.sessionID)
+        if (!work && input.activityID === undefined && manualRequest === undefined)
+          yield* CompactionRequest.settleOrphaned(db, input.sessionID)
+        if (
+          !work &&
+          promotion === "queue" &&
+          (yield* TaskContinuation.discardInvalidQueue(db, events, contexts, input.sessionID).pipe(Effect.orDie))
+        ) {
           openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
           promotion = openActivity ? "queue" : undefined
           continue
@@ -3126,7 +3438,9 @@ export const layer = Layer.effect(
         const runAgent = runSession === undefined ? undefined : yield* agents.select(runSession.agent)
         const configAgents = work ? undefined : Config.latest(yield* config.entries(), "agents")
         const configSteps = configAgents?.[runSession?.agent ?? "auto"]?.steps
-        const stepCeiling = work ? work.binding.budget.maxProviderDispatches : runAgent?.info?.steps ?? configSteps ?? MAX_STEPS
+        const stepCeiling = work
+          ? work.binding.budget.maxProviderDispatches
+          : (runAgent?.info?.steps ?? configSteps ?? MAX_STEPS)
         const loopBudget = new LoopBudget(stepCeiling)
         const restored = work ? undefined : yield* restoreLoopBudget(input.sessionID, loopBudget)
         if (restored) {
@@ -3155,7 +3469,11 @@ export const layer = Layer.effect(
             Effect.orDie,
           )
           yield* Effect.uninterruptible(
-            contexts.settleActivity({ activityId: restored.activityID, state: "settled", finalMessageId: restored.finalMessageId }),
+            contexts.settleActivity({
+              activityId: restored.activityID,
+              state: "settled",
+              finalMessageId: restored.finalMessageId,
+            }),
           ).pipe(Effect.orDie)
           openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
           promotion = openActivity ? "queue" : undefined
@@ -3169,12 +3487,35 @@ export const layer = Layer.effect(
         while (attempts < stepCeiling) {
           if (!work) {
             yield* McpAppInvocation.requireAppResolved(db, input.sessionID)
-            yield* McpAppRunner.drain({ db, events, location, permissions: permissionService, sessionID: input.sessionID })
+            yield* McpAppRunner.drain({
+              db,
+              events,
+              location,
+              permissions: permissionService,
+              sessionID: input.sessionID,
+            })
           }
-          const result = work ? yield* runRestricted(work, step).pipe(Effect.scoped,
-            Effect.timeout(Duration.millis(Math.max(1, Math.min(work.binding.deadline, work.created_at + work.binding.budget.maxDurationMs) - Date.now()))),
-            Effect.mapError((error) => error._tag === "TimeoutError" ? new WorkAuthoritySchema.Error({ code: "WORK_EXPIRED", message: "Project Work reached its execution deadline" }) : error),
-          ) : yield* runTurn(input.sessionID, promotion, step, loopBudget)
+          const result = work
+            ? yield* runRestricted(work, step).pipe(
+                Effect.scoped,
+                Effect.timeout(
+                  Duration.millis(
+                    Math.max(
+                      1,
+                      Math.min(work.binding.deadline, work.created_at + work.binding.budget.maxDurationMs) - Date.now(),
+                    ),
+                  ),
+                ),
+                Effect.mapError((error) =>
+                  error._tag === "TimeoutError"
+                    ? new WorkAuthoritySchema.Error({
+                        code: "WORK_EXPIRED",
+                        message: "Project Work reached its execution deadline",
+                      })
+                    : error,
+                ),
+              )
+            : yield* runTurn(input.sessionID, promotion, step, loopBudget)
           needsContinuation = result.needsContinuation
           // A steer promotion restarts the chain's step numbering; the budget restarts with it
           // (the pre-configured-era loop's MAX_STEPS headroom made this implicit; an explicit
@@ -3224,7 +3565,11 @@ export const layer = Layer.effect(
           if (!needsContinuation) break
         }
         if (needsContinuation) {
-          if (work) return yield* new WorkAuthoritySchema.Error({ code: "WORK_BUDGET_EXHAUSTED", message: "Project Work reached its provider dispatch ceiling" })
+          if (work)
+            return yield* new WorkAuthoritySchema.Error({
+              code: "WORK_BUDGET_EXHAUSTED",
+              message: "Project Work reached its provider dispatch ceiling",
+            })
           if (activityId === undefined) return yield* Effect.die("step budget exhausted without an admitted activity")
           yield* events.publish(SessionEvent.LoopBudget.Triggered, {
             sessionID: input.sessionID,
@@ -3243,9 +3588,12 @@ export const layer = Layer.effect(
         // finalizer in runTurnAttempt.
         if (!work && activityId !== undefined) {
           settledActivityId = settledActivityId ?? activityId
-          yield* Effect.uninterruptible(contexts.settleActivity({ activityId, state: "settled", finalMessageId })).pipe(Effect.ignore)
+          yield* Effect.uninterruptible(contexts.settleActivity({ activityId, state: "settled", finalMessageId })).pipe(
+            Effect.ignore,
+          )
         }
-        openActivity = work || input.activityID !== undefined ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
+        openActivity =
+          work || input.activityID !== undefined ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = openActivity ? "queue" : undefined
       }
       if (work) return

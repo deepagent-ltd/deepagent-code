@@ -164,6 +164,17 @@ export const getPlanDoc = (sessionId: string): PlanDoc | null => {
   return decodePlanDoc(doc.body)
 }
 
+/** Prompt observations do not create a Session graph directory when no plan exists. */
+export const observe = (sessionId: string) => {
+  if (!hasRoot()) return undefined
+  const view = DocumentStore.observe(planStoreRoot(sessionId))
+  const ref = view.list({ type: "plan", scope: planScope(sessionId) })[0]
+  if (!ref) return undefined
+  const doc = view.get(ref.id)
+  const plan = doc ? decodePlanDoc(doc.body) : null
+  return plan ? { plan, ref: { id: ref.id, version: ref.version } } : undefined
+}
+
 // The doc id + current version for a session's plan (for the SessionRunState latch pointer), or null.
 export const planDocRef = (sessionId: string): { id: string; version: number } | null => {
   const ref = resolveRef(sessionId)

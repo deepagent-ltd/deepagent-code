@@ -1,5 +1,26 @@
 import { expect, test } from "bun:test"
 import { SessionCompaction } from "@deepagent-code/core/session/compaction"
+import { Model } from "@deepagent-code/llm"
+import { route } from "@deepagent-code/llm/protocols/openai-chat"
+import { ConfigCompaction } from "../src/config/compaction"
+import { Schema } from "effect"
+
+test("three summary modes have independent output caps and reject unknown modes", () => {
+  const model = Model.make({ id: "summary", provider: "custom", route: route.with({ limits: { output: 64_000 } }) })
+  expect(SessionCompaction.summaryOutputTokens(model, "adaptive")).toBe(20_000)
+  expect(SessionCompaction.summaryOutputTokens(model, "long")).toBe(32_000)
+  expect(SessionCompaction.summaryOutputTokens(model, "extreme")).toBe(48_000)
+  expect(Schema.decodeUnknownSync(ConfigCompaction.Info)({ mode: "long", auto: true }).mode).toBe("long")
+  expect(() => Schema.decodeUnknownSync(ConfigCompaction.Info)({ mode: "unlimited" })).toThrow()
+})
+
+test("summary caps respect actual output capability and unknown is not advertised as 20K", () => {
+  const limited = Model.make({ id: "summary", provider: "custom", route: route.with({ limits: { output: 8_000 } }) })
+  expect(SessionCompaction.summaryOutputTokens(limited, "extreme")).toBe(8_000)
+  expect(
+    SessionCompaction.summaryOutputTokens(Model.make({ id: "unknown", provider: "custom", route }), "adaptive"),
+  ).toBe(0)
+})
 
 test("compaction describes tool media without embedding base64", () => {
   const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"

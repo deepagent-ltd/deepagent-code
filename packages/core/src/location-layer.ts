@@ -1,5 +1,5 @@
 import { WorkExecutionProfile } from "./session/work-execution-profile"
-import { Context, Effect, Layer, LayerMap } from "effect"
+import { Context, Deferred, Effect, Layer, LayerMap, MutableHashMap, Option } from "effect"
 import { Location } from "./location"
 import { BrowserHost } from "./browser/host"
 import { Policy } from "./policy"
@@ -167,19 +167,31 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
   {
     lookup: (ref: Location.Ref) => {
       const location = Location.layer(ref)
-      const config = Layer.unwrap(Effect.gen(function* () {
-        const host = yield* LocationRuntimeHost
-        const inherited = host.work?.configuration ? yield* host.work.configuration(ref).pipe(Effect.orDie) : undefined
-        return inherited ? Config.inheritedLayer(inherited) : Config.locationLayer
-      }))
+      const config = Layer.unwrap(
+        Effect.gen(function* () {
+          const host = yield* LocationRuntimeHost
+          const inherited = host.work?.configuration
+            ? yield* host.work.configuration(ref).pipe(Effect.orDie)
+            : undefined
+          return inherited ? Config.inheritedLayer(inherited) : Config.locationLayer
+        }),
+      )
       const references = ProjectReference.layer.pipe(Layer.provide(config))
-      const filesystem = Layer.unwrap(Effect.gen(function* () {
-        const { Ripgrep } = yield* Effect.promise(() => import("./filesystem/ripgrep"))
-        return FileSystem.layer.pipe(Layer.provide(Ripgrep.defaultLayer), Layer.provide(references))
-      }))
+      const filesystem = Layer.unwrap(
+        Effect.gen(function* () {
+          const { Ripgrep } = yield* Effect.promise(() => import("./filesystem/ripgrep"))
+          return FileSystem.layer.pipe(Layer.provide(Ripgrep.defaultLayer), Layer.provide(references))
+        }),
+      )
       const runtimeHost = Layer.unwrap(Effect.map(LocationRuntimeHost, (host) => host.layer(ref)))
-      const work = Layer.unwrap(Effect.map(LocationRuntimeHost, (host) => host.work ? WorkExecutionProfile.servicesLayer(host.work) : Layer.empty))
-      const browser = Layer.unwrap(Effect.map(LocationRuntimeHost, (host) => Layer.succeed(BrowserHost.Current, host.browser)))
+      const work = Layer.unwrap(
+        Effect.map(LocationRuntimeHost, (host) =>
+          host.work ? WorkExecutionProfile.servicesLayer(host.work) : Layer.empty,
+        ),
+      )
+      const browser = Layer.unwrap(
+        Effect.map(LocationRuntimeHost, (host) => Layer.succeed(BrowserHost.Current, host.browser)),
+      )
       const client = Layer.unwrap(
         Effect.map(LocationRuntimeHost, (host) =>
           host.client ? Layer.succeed(LLMClient.Service, host.client) : Layer.empty,
@@ -265,7 +277,13 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         model,
         runner,
         builtInTools,
-      ).pipe(Layer.provideMerge(client), Layer.provide(browser), Layer.provide(runtimeHost), Layer.provideMerge(work), Layer.fresh)
+      ).pipe(
+        Layer.provideMerge(client),
+        Layer.provide(browser),
+        Layer.provide(runtimeHost),
+        Layer.provideMerge(work),
+        Layer.fresh,
+      )
     },
     idleTimeToLive: "60 minutes",
     dependencies: locationServiceMapDependencies(
@@ -299,4 +317,26 @@ function normalizeLocationMap<E, R>(layer: Layer.Layer<LocationServiceMap, E, R>
       })
     }),
   )
+}
+
+/** Never acquires a missing Location or starts boot/plugin/MCP work for an observation. */
+export function existingContext<I, E>(locations: LayerMap.LayerMap<Location.Ref, I, E>, ref: Location.Ref) {
+  return Effect.gen(function* () {
+    const state = locations.rcMap.state
+    if (state._tag !== "Open") return undefined
+    const key = Object.freeze({ directory: ref.directory, workspaceID: ref.workspaceID })
+    const found = MutableHashMap.get(state.map, key)
+    if (Option.isNone(found) || found.value.scope.state._tag === "Closed") return undefined
+    const completed = yield* Deferred.poll(found.value.deferred)
+    if (Option.isNone(completed)) return undefined
+    const context = yield* completed.value.pipe(Effect.option)
+    if (Option.isNone(context)) return undefined
+    return {
+      context: context.value,
+      current: () =>
+        locations.rcMap.state === state &&
+        found.value.scope.state._tag !== "Closed" &&
+        Option.getOrUndefined(MutableHashMap.get(state.map, key)) === found.value,
+    }
+  })
 }

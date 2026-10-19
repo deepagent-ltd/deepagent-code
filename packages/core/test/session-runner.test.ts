@@ -54,6 +54,7 @@ import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
 import { SessionContextEpoch } from "@deepagent-code/core/session/context-epoch"
+import { SessionContextUsage } from "@deepagent-code/core/session/context-usage"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
@@ -86,6 +87,7 @@ import { SessionContext } from "@deepagent-code/core/context-federation/session-
 import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
 import { SessionCompaction } from "@deepagent-code/core/session/compaction"
+import { RemoteCompactionBinding } from "../src/session/remote-compaction-binding"
 import { PreparedProviderTurn } from "@deepagent-code/core/session/runner/prepared-provider-turn"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import { createPlanDoc, planScope, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
@@ -118,7 +120,11 @@ import {
   SessionMessageTable,
   SessionTable,
 } from "@deepagent-code/core/session/sql"
-import { SessionActivityTable, SessionContextSelectionTable, SessionProviderAttemptTable } from "@deepagent-code/core/context-federation/session-sql"
+import {
+  SessionActivityTable,
+  SessionContextSelectionTable,
+  SessionProviderAttemptTable,
+} from "@deepagent-code/core/context-federation/session-sql"
 import { SessionActivityProgressObservationTable } from "@deepagent-code/core/deepagent/activity-authority.sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { SystemContext } from "@deepagent-code/core/system-context"
@@ -252,7 +258,7 @@ const budgetModel = Model.make({
 const managedCompactModel = Model.make({
   id: "deepseek-flash",
   provider: "deepseek",
-  route: OpenAIChat.route.with({ limits: { context: 4_000, output: 50 } }),
+  route: OpenAIChat.route.with({ limits: { context: 7_000, output: 50 } }),
 })
 const managedObservationModel = Model.make({
   id: "deepseek-flash",
@@ -378,7 +384,9 @@ const systemContext = Layer.effectDiscard(
     ),
   ),
 ).pipe(Layer.provideMerge(SystemContextRegistry.layer))
-const location = Location.layer({ directory: AbsolutePath.make(testDirectory) }).pipe(Layer.provide(projectLayer(database)))
+const location = Location.layer({ directory: AbsolutePath.make(testDirectory) }).pipe(
+  Layer.provide(projectLayer(database)),
+)
 const skillGuidance = Layer.mock(SkillGuidance.Service, {
   load: (agent) =>
     Effect.succeed(
@@ -417,10 +425,13 @@ const config = Layer.suspend(() =>
 const noAutoConfig = Layer.succeed(
   Config.Service,
   Config.Service.of({
-    entries: () => Effect.succeed([new Config.Document({
-      type: "document",
-      info: new Config.Info({ compaction: new ConfigCompaction.Info({ auto: false }) }),
-    })]),
+    entries: () =>
+      Effect.succeed([
+        new Config.Document({
+          type: "document",
+          info: new Config.Info({ compaction: new ConfigCompaction.Info({ auto: false }) }),
+        }),
+      ]),
   }),
 )
 const catalog = Layer.succeed(
@@ -501,17 +512,36 @@ const historyEpochLookupLayer = Layer.succeedContext(
 // dispatch), "summary" = remote authority produces the summary, "fault" = remote faults (design §5.3:
 // enters compact recovery — the remote result is unknown and is NEVER disguised as a local success),
 // "refused" = the producer raises a TYPED refusal (W1.3: keeps its specific reason code).
-let remoteCompactionMode: "summary" | "fault" | "refused" | undefined
+let remoteCompactionMode: "summary" | "window" | "not_supported" | "fault" | "refused" | undefined
 let remoteCompactionCalls = 0
 const remoteCompactionLayer = Layer.succeedContext(
-  Context.make(SessionCompaction.CurrentRemoteCompaction, (_input) =>
-    Effect.sync(() => remoteCompactionCalls++).pipe(Effect.andThen(
-      remoteCompactionMode === "summary"
-        ? Effect.succeed({ kind: "compacted" as const, summary: "## Remote\n- remote summary" })
-        : remoteCompactionMode === "refused"
-          ? Effect.fail(new SessionCompaction.RemoteCompactRefusedError({ reason: "network_unknown" }))
-          : Effect.fail(new Error("remote compaction unavailable")),
-    )),
+  Context.make(
+    SessionCompaction.CurrentRemoteCompaction,
+    (_input): Effect.Effect<SessionCompaction.RemoteCompactionResult, unknown> =>
+      Effect.gen(function* () {
+        remoteCompactionCalls++
+        if (remoteCompactionMode === "window")
+          return {
+            kind: "remote_window",
+            window: {
+              ...RemoteCompactionBinding.identity(_input.model),
+              output: [
+                { type: "message", role: "user", content: [{ type: "input_text", text: "provider retained input" }] },
+                {
+                  type: "compaction",
+                  id: "opaque-cmp",
+                  encrypted_content: "opaque-state",
+                  retained_field: "preserved",
+                },
+              ],
+            },
+          }
+        if (remoteCompactionMode === "not_supported") return { kind: "not_supported" }
+        if (remoteCompactionMode === "summary") return { kind: "compacted", summary: "## Remote\n- remote summary" }
+        if (remoteCompactionMode === "refused")
+          return yield* Effect.fail(new SessionCompaction.RemoteCompactRefusedError({ reason: "network_unknown" }))
+        return yield* Effect.fail(new Error("remote compaction unavailable"))
+      }),
   ),
 )
 // W7 — settle-hook recorder: verifies the runner invokes the injected hook once per settled drain
@@ -555,9 +585,13 @@ const gateway = Layer.succeed(
 // The runner stack is a function of the runtime-feature registry so a test can run the WHOLE
 // composition against an explicit registry (e.g. the `=false` staged fallback) — the process
 // global is an immutable startup snapshot, so flipping env mid-test is intentionally unobservable.
-const runnerStack = (features?: RuntimeFeatureRegistry, gitLayer = Git.defaultLayer, configLayer = config,
+const runnerStack = (
+  features?: RuntimeFeatureRegistry,
+  gitLayer = Git.defaultLayer,
+  configLayer = config,
   permissionLayer: Layer.Layer<PermissionV2.Service, unknown> = permission,
-  runtimeIdentity?: V2ProviderTurn.RuntimeIntegrityIdentityResolver) => {
+  runtimeIdentity?: V2ProviderTurn.RuntimeIntegrityIdentityResolver,
+) => {
   const base =
     features === undefined
       ? SessionRunnerLLM.layer
@@ -572,9 +606,11 @@ const runnerStack = (features?: RuntimeFeatureRegistry, gitLayer = Git.defaultLa
       ),
     ),
   )
-  return (runtimeIdentity
-    ? gated.pipe(Layer.provide(Layer.succeed(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, runtimeIdentity)))
-    : gated).pipe(
+  return (
+    runtimeIdentity
+      ? gated.pipe(Layer.provide(Layer.succeed(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, runtimeIdentity)))
+      : gated
+  ).pipe(
     Layer.provide(FSUtil.defaultLayer),
     Layer.provide(gitLayer),
     Layer.provide(providerTurns),
@@ -728,39 +764,85 @@ const refusalIdentityResolver = {
   resolve: () => Effect.succeed(refusalRuntimeIdentity),
   current: () => refusalRuntimeIdentity,
 }
-const refusalRunner = runnerStack(undefined, Git.defaultLayer, config, permission, refusalIdentityResolver)
-  .pipe(Layer.provideMerge(database))
-const verifiedRefusal = testEffect(Layer.mergeAll(
-  database, providerTurns, events, projector, store, agents, registry, permission,
-  Layer.succeed(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, refusalIdentityResolver),
-  refusalRunner, locationsFor(refusalRunner), executionFor(refusalRunner), sessionsFor(refusalRunner),
-))
-const localhostProviderStream = () => Stream.unwrap(LLMClient.Service.pipe(Effect.map((client) => {
-  const request = requests.at(-1)
-  if (!request) throw new Error("Actual runner request is missing")
-  return client.stream(request)
-}))).pipe(Stream.provide(LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))))
+const refusalRunner = runnerStack(undefined, Git.defaultLayer, config, permission, refusalIdentityResolver).pipe(
+  Layer.provideMerge(database),
+)
+const verifiedRefusal = testEffect(
+  Layer.mergeAll(
+    database,
+    providerTurns,
+    events,
+    projector,
+    store,
+    agents,
+    registry,
+    permission,
+    Layer.succeed(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, refusalIdentityResolver),
+    refusalRunner,
+    locationsFor(refusalRunner),
+    executionFor(refusalRunner),
+    sessionsFor(refusalRunner),
+  ),
+)
+const localhostProviderStream = () =>
+  Stream.unwrap(
+    LLMClient.Service.pipe(
+      Effect.map((client) => {
+        const request = requests.at(-1)
+        if (!request) throw new Error("Actual runner request is missing")
+        return client.stream(request)
+      }),
+    ),
+  ).pipe(Stream.provide(LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))))
 const useLocalhostModel = (baseURL: string, id: string, provider = "fixture-local") => {
-  currentModel = Model.make({ id, provider, route: OpenAIChat.route.with({
-    endpoint: { baseURL }, limits: { context: 128_000, output: 1_024 },
-  }) })
+  currentModel = Model.make({
+    id,
+    provider,
+    route: OpenAIChat.route.with({
+      endpoint: { baseURL },
+      limits: { context: 128_000, output: 1_024 },
+    }),
+  })
   const info = ModelV2.Info.empty(ProviderV2.ID.make(provider), ModelV2.ID.make(id))
   currentModelInfo = new ModelV2.Info({
     ...info,
-    api: { id: info.id, type: "aisdk", package: "@ai-sdk/openai-compatible", url: baseURL,
-      protocol: "openai-compatible.chat" },
+    api: {
+      id: info.id,
+      type: "aisdk",
+      package: "@ai-sdk/openai-compatible",
+      url: baseURL,
+      protocol: "openai-compatible.chat",
+    },
     limit: { context: 128_000, output: 1_024 },
   })
 }
-const localhostCompletion = () => new Response([
-  { id: "localhost-success", model: "never-called", choices: [{ index: 0, delta: { role: "assistant", content: "Recovered locally" }, finish_reason: null }] },
-  { id: "localhost-success", model: "never-called", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: {
-    prompt_tokens: 20, completion_tokens: 5, total_tokens: 25,
-    prompt_tokens_details: { cached_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 0 },
-  } },
-].map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n", {
-  headers: { "content-type": "text/event-stream" },
-})
+const localhostCompletion = () =>
+  new Response(
+    [
+      {
+        id: "localhost-success",
+        model: "never-called",
+        choices: [{ index: 0, delta: { role: "assistant", content: "Recovered locally" }, finish_reason: null }],
+      },
+      {
+        id: "localhost-success",
+        model: "never-called",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        usage: {
+          prompt_tokens: 20,
+          completion_tokens: 5,
+          total_tokens: 25,
+          prompt_tokens_details: { cached_tokens: 0 },
+          completion_tokens_details: { reasoning_tokens: 0 },
+        },
+      },
+    ]
+      .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+      .join("") + "data: [DONE]\n\n",
+    {
+      headers: { "content-type": "text/event-stream" },
+    },
+  )
 
 const contained = testEffect(
   Layer.mergeAll(
@@ -855,7 +937,9 @@ const governedPermission = PermissionV2.layer.pipe(
   Layer.provide(PermissionSaved.layer.pipe(Layer.provide(database))),
   Layer.provide(database),
 )
-const governedRunner = runnerStack(undefined, unchangedGit, config, governedPermission).pipe(Layer.provideMerge(database))
+const governedRunner = runnerStack(undefined, unchangedGit, config, governedPermission).pipe(
+  Layer.provideMerge(database),
+)
 const governed = testEffect(
   Layer.mergeAll(
     database,
@@ -890,31 +974,46 @@ governed.effect("continues after cancelling the original builtin bash permission
     const events = yield* EventV2.Service
     const context = yield* Effect.context<Config.Service | Location.Service | PermissionV2.Service | Tools.Service>()
     const dependencies = Layer.succeedContext(context)
-    yield* Layer.build(BashTool.layer.pipe(
-      Layer.provide(AppProcess.defaultLayer),
-      Layer.provide(FSUtil.defaultLayer),
-      Layer.provide(Policy.layer.pipe(Layer.provide(dependencies))),
-      Layer.provide(LocationMutation.layer.pipe(Layer.provide(FSUtil.defaultLayer), Layer.provide(dependencies))),
-      Layer.provide(dependencies),
-    ))
+    yield* Layer.build(
+      BashTool.layer.pipe(
+        Layer.provide(AppProcess.defaultLayer),
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(Policy.layer.pipe(Layer.provide(dependencies))),
+        Layer.provide(LocationMutation.layer.pipe(Layer.provide(FSUtil.defaultLayer), Layer.provide(dependencies))),
+        Layer.provide(dependencies),
+      ),
+    )
     const directory = tmpRoot()
     const asked = yield* Deferred.make<PermissionV2.Request>()
     const replies: { requestID: string; reply: string }[] = []
-    const unsubscribe = yield* events.listen((event) => event.type === PermissionV2.Event.Asked.type
-      ? Deferred.succeed(asked, event.data as PermissionV2.Request).pipe(Effect.asVoid)
-      : event.type === PermissionV2.Event.Replied.type
-        ? Effect.sync(() => { replies.push(event.data as typeof replies[number]) }) : Effect.void)
+    const unsubscribe = yield* events.listen((event) =>
+      event.type === PermissionV2.Event.Asked.type
+        ? Deferred.succeed(asked, event.data as PermissionV2.Request).pipe(Effect.asVoid)
+        : event.type === PermissionV2.Event.Replied.type
+          ? Effect.sync(() => {
+              replies.push(event.data as (typeof replies)[number])
+            })
+          : Effect.void,
+    )
     yield* Effect.addFinalizer(() => unsubscribe)
     yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Ask before running the command" }), resume: false })
     requests.length = 0
-    responses = [[
-      LLMEvent.stepStart({ index: 0 }),
-      LLMEvent.toolCall({ id: "call-bash-before-effect", name: "bash", input: {
-        command: "printf forbidden > command-effect.txt", workdir: directory, description: "Await original permission",
-      } }),
-      LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
-      LLMEvent.finish({ reason: "tool-calls" }),
-    ]]
+    responses = [
+      [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolCall({
+          id: "call-bash-before-effect",
+          name: "bash",
+          input: {
+            command: "printf forbidden > command-effect.txt",
+            workdir: directory,
+            description: "Await original permission",
+          },
+        }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ],
+    ]
     const running = yield* session.resume(sessionID).pipe(Effect.exit, Effect.forkChild)
     const request = yield* Deferred.await(asked)
     expect(request.source).toMatchObject({ type: "tool", callID: "call-bash-before-effect" })
@@ -923,29 +1022,53 @@ governed.effect("continues after cancelling the original builtin bash permission
     expect(yield* permissions.list()).toEqual([])
     expect(replies).toEqual([expect.objectContaining({ requestID: request.id, reply: "reject" })])
     const db = (yield* Database.Service).db
-    const effects = yield* db.select().from(V2ToolEffectTable)
-      .where(eq(V2ToolEffectTable.session_id, sessionID)).all().pipe(Effect.orDie)
+    const effects = yield* db
+      .select()
+      .from(V2ToolEffectTable)
+      .where(eq(V2ToolEffectTable.session_id, sessionID))
+      .all()
+      .pipe(Effect.orDie)
     expect(effects).toMatchObject([
       { tool_call_id: "call-bash-before-effect", state: "failed", error_code: "tool_permission_cancelled" },
     ])
-    const admissions = yield* db.select().from(V2ToolEffectAdmissionTable)
-      .where(eq(V2ToolEffectAdmissionTable.session_id, sessionID)).all().pipe(Effect.orDie)
+    const admissions = yield* db
+      .select()
+      .from(V2ToolEffectAdmissionTable)
+      .where(eq(V2ToolEffectAdmissionTable.session_id, sessionID))
+      .all()
+      .pipe(Effect.orDie)
     expect(admissions).toHaveLength(1)
     expect(effects[0]?.receipt_id).toBe(admissions[0]?.receipt_id)
     expect(yield* Effect.promise(() => Bun.file(path.join(directory, "command-effect.txt")).exists())).toBe(false)
-    yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue without replaying the cancelled command" }), resume: false })
-    responses = [[
-      LLMEvent.stepStart({ index: 0 }), LLMEvent.textStart({ id: "continued-bash" }),
-      LLMEvent.textDelta({ id: "continued-bash", text: "Continued explicitly" }), LLMEvent.textEnd({ id: "continued-bash" }),
-      LLMEvent.stepFinish({ index: 0, reason: "stop" }), LLMEvent.finish({ reason: "stop" }),
-    ]]
+    yield* session.prompt({
+      sessionID,
+      prompt: new Prompt({ text: "Continue without replaying the cancelled command" }),
+      resume: false,
+    })
+    responses = [
+      [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "continued-bash" }),
+        LLMEvent.textDelta({ id: "continued-bash", text: "Continued explicitly" }),
+        LLMEvent.textEnd({ id: "continued-bash" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ],
+    ]
     yield* session.resume(sessionID)
     expect(requests).toHaveLength(2)
-    expect(yield* db.select().from(V2ToolEffectTable)
-      .where(eq(V2ToolEffectTable.session_id, sessionID)).all().pipe(Effect.orDie)).toEqual(effects)
+    expect(
+      yield* db
+        .select()
+        .from(V2ToolEffectTable)
+        .where(eq(V2ToolEffectTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie),
+    ).toEqual(effects)
     expect(yield* Effect.promise(() => Bun.file(path.join(directory, "command-effect.txt")).exists())).toBe(false)
     expect((yield* session.context(sessionID)).at(-1)).toMatchObject({
-      type: "assistant", content: [{ type: "text", text: "Continued explicitly" }],
+      type: "assistant",
+      content: [{ type: "text", text: "Continued explicitly" }],
     })
   }),
 )
@@ -959,28 +1082,40 @@ governed.live("retains unknown recovery after interrupting builtin bash after it
     const events = yield* EventV2.Service
     const context = yield* Effect.context<Config.Service | Location.Service | PermissionV2.Service | Tools.Service>()
     const dependencies = Layer.succeedContext(context)
-    yield* Layer.build(BashTool.layer.pipe(
-      Layer.provide(AppProcess.defaultLayer),
-      Layer.provide(FSUtil.defaultLayer),
-      Layer.provide(Policy.layer.pipe(Layer.provide(dependencies))),
-      Layer.provide(LocationMutation.layer.pipe(Layer.provide(FSUtil.defaultLayer), Layer.provide(dependencies))),
-      Layer.provide(dependencies),
-    ))
+    yield* Layer.build(
+      BashTool.layer.pipe(
+        Layer.provide(AppProcess.defaultLayer),
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(Policy.layer.pipe(Layer.provide(dependencies))),
+        Layer.provide(LocationMutation.layer.pipe(Layer.provide(FSUtil.defaultLayer), Layer.provide(dependencies))),
+        Layer.provide(dependencies),
+      ),
+    )
     const marker = path.join(testDirectory, "after-start.txt")
     const asked = yield* Deferred.make<PermissionV2.Request>()
-    const unsubscribe = yield* events.listen((event) => event.type === PermissionV2.Event.Asked.type
-      ? Deferred.succeed(asked, event.data as PermissionV2.Request).pipe(Effect.asVoid) : Effect.void)
+    const unsubscribe = yield* events.listen((event) =>
+      event.type === PermissionV2.Event.Asked.type
+        ? Deferred.succeed(asked, event.data as PermissionV2.Request).pipe(Effect.asVoid)
+        : Effect.void,
+    )
     yield* Effect.addFinalizer(() => unsubscribe)
     yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Run the approved command" }), resume: false })
     requests.length = 0
-    responses = [[
-      LLMEvent.stepStart({ index: 0 }),
-      LLMEvent.toolCall({ id: "call-bash-after-start", name: "bash", input: {
-        command: "printf started > after-start.txt; sleep 30", description: "Observe actual command start",
-      } }),
-      LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
-      LLMEvent.finish({ reason: "tool-calls" }),
-    ]]
+    responses = [
+      [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolCall({
+          id: "call-bash-after-start",
+          name: "bash",
+          input: {
+            command: "printf started > after-start.txt; sleep 30",
+            description: "Observe actual command start",
+          },
+        }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ],
+    ]
     const running = yield* session.resume(sessionID).pipe(Effect.exit, Effect.forkChild)
     const request = yield* Deferred.await(asked)
     yield* permissions.reply({ requestID: request.id, reply: "once" })
@@ -989,10 +1124,22 @@ governed.live("retains unknown recovery after interrupting builtin bash after it
     yield* session.interrupt(sessionID)
     expect((yield* Fiber.join(running))._tag).toBe("Failure")
     const db = (yield* Database.Service).db
-    expect(yield* db.select().from(V2ToolEffectTable)
-      .where(eq(V2ToolEffectTable.session_id, sessionID)).all().pipe(Effect.orDie)).toEqual([])
-    expect(yield* db.select().from(V2ToolEffectAdmissionTable)
-      .where(eq(V2ToolEffectAdmissionTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(1)
+    expect(
+      yield* db
+        .select()
+        .from(V2ToolEffectTable)
+        .where(eq(V2ToolEffectTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie),
+    ).toEqual([])
+    expect(
+      yield* db
+        .select()
+        .from(V2ToolEffectAdmissionTable)
+        .where(eq(V2ToolEffectAdmissionTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie),
+    ).toHaveLength(1)
     const retry = yield* session.resume(sessionID).pipe(Effect.exit)
     expect(Exit.isFailure(retry)).toBe(true)
     if (Exit.isFailure(retry)) expect(Cause.squash(retry.cause)).toBeInstanceOf(V2ToolEffect.RecoveryRequiredError)
@@ -1195,7 +1342,8 @@ const measuredBudgetPercent = (request: LLMRequest, notice: string, model: Model
     messages: request.messages.filter(
       (message) =>
         !(
-          message.role === "system" && message.content.some((content) => content.type === "text" && content.text === notice)
+          message.role === "system" &&
+          message.content.some((content) => content.type === "text" && content.text === notice)
         ),
     ),
     tools: request.tools,
@@ -1411,8 +1559,12 @@ describe("SessionRunnerLLM", () => {
       requests.length = 0
       let contextLoads = 0
       let modelLoads = 0
-      systemLoadHook = Effect.sync(() => { contextLoads += 1 })
-      modelResolveHook = Effect.sync(() => { modelLoads += 1 })
+      systemLoadHook = Effect.sync(() => {
+        contextLoads += 1
+      })
+      modelResolveHook = Effect.sync(() => {
+        modelLoads += 1
+      })
       const runner = yield* SessionRunner.Service
       const exit = yield* runner.run({ sessionID: SessionV2.ID.make(binding.sessionID), force: true }).pipe(Effect.exit)
       expect(contextLoads).toBe(0)
@@ -1490,17 +1642,38 @@ describe("SessionRunnerLLM", () => {
           expect((yield* DeepAgentActivityAuthority.reconstruct(ref)).objective.state).toBe("interrupted")
           yield* session.resume(sessionID)
           expect(requests).toHaveLength(3)
-          expect((yield* db.select().from(SessionActivityTable).where(eq(SessionActivityTable.activity_id, activity!.activity_id)).get().pipe(Effect.orDie))?.state).toBe("interrupted")
+          expect(
+            (yield* db
+              .select()
+              .from(SessionActivityTable)
+              .where(eq(SessionActivityTable.activity_id, activity!.activity_id))
+              .get()
+              .pipe(Effect.orDie))?.state,
+          ).toBe("interrupted")
           return
         }
 
         expect((yield* DeepAgentActivityAuthority.reconstruct(ref)).objective.state).toBe("active")
         yield* session.resume(sessionID)
         expect(requests).toHaveLength(4)
-        expect((yield* db.select().from(SessionActivityTable).where(eq(SessionActivityTable.activity_id, activity!.activity_id)).get().pipe(Effect.orDie))?.state).toBe("settled")
+        expect(
+          (yield* db
+            .select()
+            .from(SessionActivityTable)
+            .where(eq(SessionActivityTable.activity_id, activity!.activity_id))
+            .get()
+            .pipe(Effect.orDie))?.state,
+        ).toBe("settled")
         expect((yield* session.context(sessionID)).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
         if (reply === "always")
-          expect(yield* db.select().from(PermissionTable).where(eq(PermissionTable.action, "doom_loop")).all().pipe(Effect.orDie)).toMatchObject([{ resource: "activity" }])
+          expect(
+            yield* db
+              .select()
+              .from(PermissionTable)
+              .where(eq(PermissionTable.action, "doom_loop"))
+              .all()
+              .pipe(Effect.orDie),
+          ).toMatchObject([{ resource: "activity" }])
       }),
     )
   }
@@ -1527,10 +1700,20 @@ describe("SessionRunnerLLM", () => {
         const hardExit = yield* session.resume(sessionID).pipe(Effect.exit)
         expect(hardExit).toMatchObject({ _tag: "Failure" })
         expect(requests).toHaveLength(0)
-        expect(yield* db.select().from(V2ProviderTurnReceiptTable)
-          .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
-        const [policy] = yield* db.select().from(SessionModelPolicyReceiptTable)
-          .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+        expect(
+          yield* db
+            .select()
+            .from(V2ProviderTurnReceiptTable)
+            .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+            .all()
+            .pipe(Effect.orDie),
+        ).toHaveLength(0)
+        const [policy] = yield* db
+          .select()
+          .from(SessionModelPolicyReceiptTable)
+          .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)
         expect(policy).toMatchObject({
           provider_id: providerID,
           api_model_id: apiModelID,
@@ -1542,27 +1725,45 @@ describe("SessionRunnerLLM", () => {
         expect(policy?.policy).toMatchObject({
           state: "managed",
           key: policyKey,
-          effectiveHardGate: 3_072,
-          physicalInputBudget: 3_072,
+          effectiveHardGate: 22,
+          physicalInputBudget: 3_022,
           safetyMargin: 1_024,
           limitProvenance: "model_limit",
           limitMismatch: true,
         })
-        expect(yield* db.select().from(SessionContextCheckpointTable)
-          .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+        expect(
+          yield* db
+            .select()
+            .from(SessionContextCheckpointTable)
+            .where(eq(SessionContextCheckpointTable.session_id, sessionID))
+            .all()
+            .pipe(Effect.orDie),
+        ).toHaveLength(0)
       }),
     )
   }
 
   for (const target of [
-    { providerID: "deepseek", apiModelID: "deepseek-v4-pro", key: "deepseek-v4-pro", observation: 768_000, hardGate: 896_000 },
-    { providerID: "deepseek", apiModelID: "deepseek-flash", key: "deepseek-v4-flash", observation: 256_000, hardGate: 384_000 },
-    { providerID: "moonshotai", apiModelID: "kimi-k3", key: "kimi-k3", observation: 384_000, hardGate: 512_000 },
-    { providerID: "zai", apiModelID: "glm-5.2", key: "glm-5.2", observation: 300_000, hardGate: 384_000 },
+    {
+      providerID: "deepseek",
+      apiModelID: "deepseek-v4-pro",
+      key: "deepseek-v4-pro",
+      observation: 378_000,
+      hardGate: 384_000,
+    },
+    {
+      providerID: "deepseek",
+      apiModelID: "deepseek-flash",
+      key: "deepseek-v4-flash",
+      observation: 378_000,
+      hardGate: 384_000,
+    },
+    { providerID: "moonshotai", apiModelID: "kimi-k3", key: "kimi-k3", observation: 250_000, hardGate: 256_000 },
+    { providerID: "zai", apiModelID: "glm-5.2", key: "glm-5.2", observation: 250_000, hardGate: 256_000 },
   ] as const) {
     const thresholdPrompt = (tokens: number) =>
       "Reply briefly. The following repeated content is inert test data.\n" +
-      "alpha ".repeat(Math.ceil(((tokens + 4_096) * 4) / 6))
+      "alpha ".repeat(Math.ceil(((tokens + 512) * 4) / 6))
 
     it.effect(`observes ${target.key} at full scale with one fake provider dispatch`, () =>
       Effect.gen(function* () {
@@ -1572,19 +1773,37 @@ describe("SessionRunnerLLM", () => {
           provider: target.providerID,
           route: OpenAIChat.route.with({ limits: { context: 1_000_000, output: 512 } }),
         })
-        responseStreams = [sealedResponse(fragmentFixture("text", "x05-observed", ["Observed"]).completeEvents, target.key)]
+        responseStreams = [
+          sealedResponse(fragmentFixture("text", "x05-observed", ["Observed"]).completeEvents, target.key),
+        ]
         requests.length = 0
         const session = yield* SessionV2.Service
         const { db } = yield* Database.Service
-        yield* session.prompt({ sessionID, prompt: new Prompt({ text: thresholdPrompt(target.observation) }), resume: false })
+        yield* session.prompt({
+          sessionID,
+          prompt: new Prompt({ text: thresholdPrompt(target.observation) }),
+          resume: false,
+        })
         yield* session.resume(sessionID)
 
-        const [policy] = yield* db.select().from(SessionModelPolicyReceiptTable)
-          .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
-        const [attempt] = yield* db.select().from(SessionProviderAttemptTable)
-          .where(eq(SessionProviderAttemptTable.session_id, sessionID)).all().pipe(Effect.orDie)
-        const [turn] = yield* db.select().from(V2ProviderTurnReceiptTable)
-          .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+        const [policy] = yield* db
+          .select()
+          .from(SessionModelPolicyReceiptTable)
+          .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)
+        const [attempt] = yield* db
+          .select()
+          .from(SessionProviderAttemptTable)
+          .where(eq(SessionProviderAttemptTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)
+        const [turn] = yield* db
+          .select()
+          .from(V2ProviderTurnReceiptTable)
+          .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)
         expect(requests).toHaveLength(1)
         expect(policy?.policy).toMatchObject({
           state: "managed",
@@ -1592,7 +1811,7 @@ describe("SessionRunnerLLM", () => {
           action: "observed",
           observationLine: target.observation,
           hardGate: target.hardGate,
-          effectiveHardGate: target.hardGate,
+          effectiveHardGate: target.hardGate - 3_000,
         })
         expect(policy?.estimated_full_request_tokens).toBe(PreparedProviderTurn.estimateFullRequestTokens(requests[0]!))
         expect(policy?.estimated_full_request_tokens).toBeGreaterThanOrEqual(target.observation)
@@ -1602,14 +1821,23 @@ describe("SessionRunnerLLM", () => {
         expect(policy?.context_projection_hash).toBeTruthy()
         expect(policy?.offered_tool_ids).toEqual(requests[0]!.tools.map((tool) => tool.name))
         expect(policy?.degraded_tool_ids).toEqual([])
-        expect(requests[0]!.messages.flatMap((message) => message.content)
-          .filter((part) => part.type === "text" && part.text.includes("Context selection (this turn):"))).toHaveLength(1)
+        expect(
+          requests[0]!.messages
+            .flatMap((message) => message.content)
+            .filter((part) => part.type === "text" && part.text.includes("Context selection (this turn):")),
+        ).toHaveLength(1)
         expect(policy?.provider_attempt_id).toBe(attempt?.attempt_id)
         expect(turn?.provider_attempt_id).toBe(attempt?.attempt_id)
         expect(attempt?.state).toBe("settled")
         expect(turn?.state).toBe("settled")
-        expect(yield* db.select().from(SessionContextCheckpointTable)
-          .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+        expect(
+          yield* db
+            .select()
+            .from(SessionContextCheckpointTable)
+            .where(eq(SessionContextCheckpointTable.session_id, sessionID))
+            .all()
+            .pipe(Effect.orDie),
+        ).toHaveLength(0)
       }),
     )
 
@@ -1624,29 +1852,55 @@ describe("SessionRunnerLLM", () => {
         requests.length = 0
         const session = yield* SessionV2.Service
         const { db } = yield* Database.Service
-        yield* session.prompt({ sessionID, prompt: new Prompt({ text: thresholdPrompt(target.hardGate) }), resume: false })
+        yield* session.prompt({
+          sessionID,
+          prompt: new Prompt({ text: thresholdPrompt(target.hardGate) }),
+          resume: false,
+        })
         expect((yield* session.resume(sessionID).pipe(Effect.exit))._tag).toBe("Failure")
 
-        const [policy] = yield* db.select().from(SessionModelPolicyReceiptTable)
-          .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+        const [policy] = yield* db
+          .select()
+          .from(SessionModelPolicyReceiptTable)
+          .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)
         expect(policy?.policy).toMatchObject({
           state: "managed",
           key: target.key,
           action: "hard_gate_blocked",
           hardGate: target.hardGate,
-          effectiveHardGate: target.hardGate,
+          effectiveHardGate: target.hardGate - 2_048,
         })
         expect(policy?.estimated_full_request_tokens).toBeGreaterThanOrEqual(target.hardGate)
         expect(policy?.trigger_source).toBe("threshold")
         expect(policy?.blocked_reason).toBe("auto_compaction_disabled")
         expect(policy?.provider_attempt_id).toBeNull()
         expect(requests).toHaveLength(0)
-        expect(yield* db.select().from(SessionProviderAttemptTable)
-          .where(eq(SessionProviderAttemptTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
-        expect(yield* db.select().from(V2ProviderTurnReceiptTable)
-          .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
-        expect(yield* db.select().from(SessionContextCheckpointTable)
-          .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+        expect(
+          yield* db
+            .select()
+            .from(SessionProviderAttemptTable)
+            .where(eq(SessionProviderAttemptTable.session_id, sessionID))
+            .all()
+            .pipe(Effect.orDie),
+        ).toHaveLength(0)
+        expect(
+          yield* db
+            .select()
+            .from(V2ProviderTurnReceiptTable)
+            .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+            .all()
+            .pipe(Effect.orDie),
+        ).toHaveLength(0)
+        expect(
+          yield* db
+            .select()
+            .from(SessionContextCheckpointTable)
+            .where(eq(SessionContextCheckpointTable.session_id, sessionID))
+            .all()
+            .pipe(Effect.orDie),
+        ).toHaveLength(0)
       }),
     )
   }
@@ -1668,19 +1922,32 @@ describe("SessionRunnerLLM", () => {
       currentModelInfo = managedNoToolInfo
       requests.length = 0
       responses = [fragmentFixture("text", "unsafe-hard-summary", ["summary must not dispatch"]).completeEvents]
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue after the long history" }), resume: false })
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Continue after the long history" }),
+        resume: false,
+      })
       const exit = yield* session.resume(sessionID).pipe(Effect.exit)
       expect(Exit.isFailure(exit)).toBe(true)
 
-      const policies = yield* db.select().from(SessionModelPolicyReceiptTable)
-        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      const policies = yield* db
+        .select()
+        .from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
       const policy = policies.findLast((row) => row.policy.state === "managed")
       expect(policy?.policy).toMatchObject({ state: "managed", action: "hard_gate_compact" })
       expect(policy?.blocked_reason).toBe("compaction_unavailable")
       expect(requests).toHaveLength(0)
-      expect(yield* db.select().from(V2ProviderTurnReceiptTable)
-        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie))
-        .toHaveLength(1)
+      expect(
+        yield* db
+          .select()
+          .from(V2ProviderTurnReceiptTable)
+          .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(1)
     }),
   )
 
@@ -1715,8 +1982,12 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.tools).toEqual([])
       expect(userTexts(requests[1])[0]).toContain("<summary>\n## Goal\n- Preserve the task\n</summary>")
       expect(JSON.stringify(requests[1]?.messages)).toContain("Context checkpoint (durable authority references")
-      const [checkpoint] = yield* db.select().from(SessionContextCheckpointTable)
-        .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      const [checkpoint] = yield* db
+        .select()
+        .from(SessionContextCheckpointTable)
+        .where(eq(SessionContextCheckpointTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
       expect(checkpoint).toMatchObject({ session_id: sessionID, activity_id: expect.any(String) })
       expect(checkpoint?.content).toMatchObject({
         schema_version: "context_checkpoint.v1",
@@ -1732,22 +2003,41 @@ describe("SessionRunnerLLM", () => {
         evidence_refs: [],
         degraded: expect.arrayContaining(["plan_authority_unavailable", "retained_tail_boundary_unbound"]),
       })
-      const policies = yield* db.select().from(SessionModelPolicyReceiptTable)
-        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
-      expect(policies.some((row) => row.checkpoint_id === checkpoint?.checkpoint_id && row.checkpoint_hash === checkpoint?.content_hash)).toBe(true)
+      const policies = yield* db
+        .select()
+        .from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(
+        policies.some(
+          (row) => row.checkpoint_id === checkpoint?.checkpoint_id && row.checkpoint_hash === checkpoint?.content_hash,
+        ),
+      ).toBe(true)
       expect(policies).toHaveLength(3)
-      expect(policies.filter((row) => row.policy.state === "unmanaged")).toHaveLength(1)
-      const managedPolicies = policies.filter((row) => row.policy.state === "managed")
+      expect(policies.filter((row) => row.policy.state === "managed" && row.policy.key === "default")).toHaveLength(1)
+      const managedPolicies = policies.filter(
+        (row) => row.policy.state === "managed" && row.policy.key === "deepseek-v4-flash",
+      )
       expect(managedPolicies).toHaveLength(2)
       expect(managedPolicies.find((row) => row.checkpoint_id !== null)?.context_selection_id).not.toBe(
         managedPolicies.find((row) => row.checkpoint_id === null)?.context_selection_id,
       )
-      expect((yield* db.select().from(SessionContextSelectionTable)
-        .where(eq(SessionContextSelectionTable.session_id, sessionID)).all().pipe(Effect.orDie)).length).toBeGreaterThanOrEqual(2)
+      expect(
+        (yield* db
+          .select()
+          .from(SessionContextSelectionTable)
+          .where(eq(SessionContextSelectionTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)).length,
+      ).toBeGreaterThanOrEqual(2)
 
       // A modified artifact cannot be projected into another provider turn after restart/resume.
-      yield* db.update(SessionContextCheckpointTable).set({ content: { tampered: true } })
-        .where(eq(SessionContextCheckpointTable.checkpoint_id, checkpoint!.checkpoint_id)).pipe(Effect.orDie)
+      yield* db
+        .update(SessionContextCheckpointTable)
+        .set({ content: { tampered: true } })
+        .where(eq(SessionContextCheckpointTable.checkpoint_id, checkpoint!.checkpoint_id))
+        .pipe(Effect.orDie)
       requests.length = 0
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue after restart" }), resume: false })
       expect(yield* session.resume(sessionID).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
@@ -1767,8 +2057,12 @@ describe("SessionRunnerLLM", () => {
         resume: false,
       })
       yield* session.resume(sessionID)
-      const [before] = yield* db.select().from(SessionContextEpochTable)
-        .where(eq(SessionContextEpochTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      const [before] = yield* db
+        .select()
+        .from(SessionContextEpochTable)
+        .where(eq(SessionContextEpochTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
 
       currentModel = managedCompactModel
       currentModelInfo = managedNoToolInfo
@@ -1781,18 +2075,38 @@ describe("SessionRunnerLLM", () => {
       })
       expect(yield* session.resume(sessionID).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
 
-      const [after] = yield* db.select().from(SessionContextEpochTable)
-        .where(eq(SessionContextEpochTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      const [after] = yield* db
+        .select()
+        .from(SessionContextEpochTable)
+        .where(eq(SessionContextEpochTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
       expect(after?.revision).toBe(before?.revision)
       expect(requests).toHaveLength(1)
       expect(requests[0]?.tools).toEqual([])
-      expect(yield* db.select().from(SessionContextCheckpointTable)
-        .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(1)
-      const policies = yield* db.select().from(SessionModelPolicyReceiptTable)
-        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(
+        yield* db
+          .select()
+          .from(SessionContextCheckpointTable)
+          .where(eq(SessionContextCheckpointTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(1)
+      const policies = yield* db
+        .select()
+        .from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
       expect(policies.find((row) => row.blocked_reason === "compaction_unavailable")?.provider_attempt_id).toBeNull()
-      expect(yield* db.select().from(SessionProviderAttemptTable)
-        .where(eq(SessionProviderAttemptTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(2)
+      expect(
+        yield* db
+          .select()
+          .from(SessionProviderAttemptTable)
+          .where(eq(SessionProviderAttemptTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(2)
     }),
   )
 
@@ -1805,23 +2119,37 @@ describe("SessionRunnerLLM", () => {
       const { db } = yield* Database.Service
       response = fragmentFixture("text", "observed", ["Observed answer"]).completeEvents
       requests.length = 0
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "x".repeat(1_030_000) }), resume: false })
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "x".repeat(1_513_000) }), resume: false })
       expect(yield* session.resume(sessionID).pipe(Effect.exit)).toMatchObject({ _tag: "Success" })
 
       expect(requests).toHaveLength(1)
       expect(budgetNotices(requests[0]!)).toHaveLength(0)
-      const [policy] = yield* db.select().from(SessionModelPolicyReceiptTable)
-        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      const [policy] = yield* db
+        .select()
+        .from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
       expect(policy?.policy).toMatchObject({ state: "managed", action: "observed" })
       expect(policy?.degraded_tool_ids).toEqual(expect.arrayContaining(["echo", "defect", "task"]))
       expect(policy?.trigger_source).toBe("none")
-      const [receipt] = yield* db.select().from(V2ProviderTurnReceiptTable)
-        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      const [receipt] = yield* db
+        .select()
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
       expect(receipt?.provider_id).toBe("deepseek")
       expect(policy?.provider_attempt_id).toBe(receipt?.provider_attempt_id)
       expect(PreparedProviderTurn.estimateFullRequestTokens(requests[0]!)).toBe(policy?.estimated_full_request_tokens)
-      expect(yield* db.select().from(SessionContextCheckpointTable)
-        .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(
+        yield* db
+          .select()
+          .from(SessionContextCheckpointTable)
+          .where(eq(SessionContextCheckpointTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(0)
     }),
   )
 
@@ -1920,6 +2248,113 @@ describe("SessionRunnerLLM", () => {
           ],
         },
       ])
+    }),
+  )
+
+  it.effect("observes next text request without admission and remains within K-level actual prepare tolerance", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const database = yield* Database.Service
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      const before = {
+        epochs: yield* database.db.select().from(SessionContextEpochTable).all().pipe(Effect.orDie),
+        inputs: yield* database.db.select().from(SessionInputTable).all().pipe(Effect.orDie),
+        activities: yield* database.db.select().from(SessionActivityTable).all().pipe(Effect.orDie),
+        receipts: yield* database.db.select().from(V2ProviderTurnReceiptTable).all().pipe(Effect.orDie),
+      }
+      requests.length = 0
+      const preview = yield* SessionContextUsage.read(
+        database.db,
+        {
+          sessionID,
+          projectID: Project.ID.global,
+          directory: testDirectory,
+          draft: "Preview the next complete text request",
+          draftRevision: "preview",
+        },
+        {
+          models: yield* SessionRunnerModel.Service,
+          agents: yield* AgentV2.Service,
+          tools: yield* ToolRegistry.Service,
+          systemContext: yield* SystemContextRegistry.Service,
+          skillGuidance: yield* SkillGuidance.Service,
+          gateway: yield* AgentGateway.Runtime.pipe(Effect.provide(gateway)),
+        },
+      )
+      expect(preview.estimate.status).toBe("complete")
+      expect(preview.estimate.inputTokens).not.toBeNull()
+      expect(requests).toHaveLength(0)
+      expect(yield* session.messages({ sessionID })).toEqual([])
+      expect({
+        epochs: yield* database.db.select().from(SessionContextEpochTable).all().pipe(Effect.orDie),
+        inputs: yield* database.db.select().from(SessionInputTable).all().pipe(Effect.orDie),
+        activities: yield* database.db.select().from(SessionActivityTable).all().pipe(Effect.orDie),
+        receipts: yield* database.db.select().from(V2ProviderTurnReceiptTable).all().pipe(Effect.orDie),
+      }).toEqual(before)
+
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "stop",
+          usage: {
+            inputTokens: 1_000,
+            outputTokens: 300,
+            cacheReadInputTokens: 600,
+            cacheWriteInputTokens: 100,
+            reasoningTokens: 100,
+          },
+        }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+      responseStream = sealedResponse(response, "preview-usage-first")
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Preview the next complete text request" }) })
+      yield* execution.awaitIdle(sessionID)
+      expect(requests).toHaveLength(1)
+      expect(preview.estimate.inputTokens).toBeGreaterThanOrEqual(0)
+      expect(
+        Math.abs(preview.estimate.inputTokens! - PreparedProviderTurn.estimateFullRequestTokens(requests[0]!)),
+      ).toBeLessThanOrEqual(2_048)
+      const first = yield* SessionContextUsage.read(database.db, {
+        sessionID,
+        projectID: Project.ID.global,
+        directory: testDirectory,
+        draftRevision: "first-settled",
+      })
+      expect(first.activity).toMatchObject({
+        calls: 1,
+        reportedCalls: 1,
+        unknownCalls: 0,
+        tokens: { nonCachedInput: 300, cacheRead: 600, cacheWrite: 100, output: 200, reasoning: 100 },
+      })
+      expect(first.totals).toEqual(first.activity!.tokens)
+      expect(first.totalCalls).toBe(1)
+
+      responseStream = sealedResponse(response, "preview-usage-second")
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue with a second ordinary request" }) })
+      yield* execution.awaitIdle(sessionID)
+      expect(requests).toHaveLength(2)
+      const second = yield* SessionContextUsage.read(database.db, {
+        sessionID,
+        projectID: Project.ID.global,
+        directory: testDirectory,
+        draftRevision: "second-settled",
+      })
+      expect(second.activity).toMatchObject({
+        calls: 1,
+        reportedCalls: 1,
+        unknownCalls: 0,
+        tokens: { nonCachedInput: 300, cacheRead: 600, cacheWrite: 100, output: 200, reasoning: 100 },
+      })
+      expect(second.totals).toEqual({
+        nonCachedInput: 600,
+        cacheRead: 1_200,
+        cacheWrite: 200,
+        output: 400,
+        reasoning: 200,
+      })
+      expect(second.totalCalls).toBe(2)
     }),
   )
 
@@ -2384,9 +2819,11 @@ describe("SessionRunnerLLM", () => {
       // Context preparation commits before consuming the frozen input batch. Preserve both
       // exact user prompts once while observing the ContextUpdated event's true chronology.
       expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user", "system"])
-      expect(requests[1]?.messages.filter((message) => message.role === "user").flatMap((message) =>
-        message.content.filter((part) => part.type === "text").map((part) => part.text),
-      )).toEqual(["First", "Second"])
+      expect(
+        requests[1]?.messages
+          .filter((message) => message.role === "user")
+          .flatMap((message) => message.content.filter((part) => part.type === "text").map((part) => part.text)),
+      ).toEqual(["First", "Second"])
       expect(requests[1]?.messages[1]?.content).toEqual([{ type: "text", text: "Changed context" }])
       expect(yield* session.messages({ sessionID })).toHaveLength(3)
       const { db } = yield* Database.Service
@@ -3055,8 +3492,12 @@ describe("SessionRunnerLLM", () => {
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
         withSelection(["Initial context"]),
       ])
-      const policies = yield* (yield* Database.Service).db.select().from(SessionModelPolicyReceiptTable)
-        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      const policies = yield* (yield* Database.Service).db
+        .select()
+        .from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
       expect(policies).toHaveLength(1)
       expect(policies[0]).toMatchObject({ api_model_id: "replacement", policy: { state: "unmanaged" } })
     }),
@@ -3067,8 +3508,12 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const roster = yield* AgentV2.Service
       yield* roster.update((editor) => {
-        editor.update(AgentV2.defaultID, (agent) => { agent.mode = "primary" })
-        editor.update(AgentV2.ID.make("reviewer"), (agent) => { agent.mode = "primary" })
+        editor.update(AgentV2.defaultID, (agent) => {
+          agent.mode = "primary"
+        })
+        editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+          agent.mode = "primary"
+        })
       })
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
@@ -3218,9 +3663,11 @@ describe("SessionRunnerLLM", () => {
       // Context preparation commits before consuming the frozen input batch. Preserve both
       // exact user prompts once while observing the ContextUpdated event's true chronology.
       expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user", "system"])
-      expect(requests[1]?.messages.filter((message) => message.role === "user").flatMap((message) =>
-        message.content.filter((part) => part.type === "text").map((part) => part.text),
-      )).toEqual(["First", "Second"])
+      expect(
+        requests[1]?.messages
+          .filter((message) => message.role === "user")
+          .flatMap((message) => message.content.filter((part) => part.type === "text").map((part) => part.text)),
+      ).toEqual(["First", "Second"])
       expect(requests[1]?.messages[1]?.content).toEqual([
         { type: "text", text: "System context source removed: test/context" },
       ])
@@ -3259,9 +3706,11 @@ describe("SessionRunnerLLM", () => {
       // Context preparation commits before consuming the frozen input batch. Preserve both
       // exact user prompts once while observing the ContextUpdated event's true chronology.
       expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user", "system"])
-      expect(requests[1]?.messages.filter((message) => message.role === "user").flatMap((message) =>
-        message.content.filter((part) => part.type === "text").map((part) => part.text),
-      )).toEqual(["First", "Second"])
+      expect(
+        requests[1]?.messages
+          .filter((message) => message.role === "user")
+          .flatMap((message) => message.content.filter((part) => part.type === "text").map((part) => part.text)),
+      ).toEqual(["First", "Second"])
       expect(requests[2]?.messages.map((message) => message.role)).toEqual(["user", "user", "user", "system"])
       expect((yield* session.context(sessionID)).map((message) => message.type)).toEqual([
         "user",
@@ -3372,13 +3821,20 @@ describe("SessionRunnerLLM", () => {
       const exit = yield* session.resume(sessionID).pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBeTrue()
-      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toMatchObject({
-        _tag: "SessionContextEpoch.AgentSelectionUnstable", sessionID, attempts: 4,
-      })
+      if (Exit.isFailure(exit))
+        expect(Cause.squash(exit.cause)).toMatchObject({
+          _tag: "SessionContextEpoch.AgentSelectionUnstable",
+          sessionID,
+          attempts: 4,
+        })
       expect(invalidations).toBe(4)
       expect(requests).toHaveLength(0)
-      const pending = yield* (yield* Database.Service).db.select().from(SessionInputTable)
-        .where(eq(SessionInputTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      const pending = yield* (yield* Database.Service).db
+        .select()
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
       expect(pending.filter((input) => input.promoted_seq === null)).toHaveLength(1)
       expect(pending.filter((input) => input.promoted_seq !== null)).toHaveLength(1)
     }),
@@ -3458,12 +3914,16 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-first", ["Earlier answer"]).completeEvents
       yield* session.prompt({
         sessionID,
-        prompt: new Prompt({ text: "Earlier question ".repeat(180) }),
+        prompt: new Prompt({ text: "Earlier question ".repeat(600) }),
         resume: false,
       })
       yield* session.resume(sessionID)
 
-      currentModel = compactModel
+      currentModel = Model.make({
+        id: "compact",
+        provider: "fake",
+        route: OpenAIChat.route.with({ limits: { context: 9_000, output: 50 } }),
+      })
       requests.length = 0
       responses = [
         fragmentFixture("text", "text-summary", ["## Goal\n- Preserve the task"]).completeEvents,
@@ -3483,8 +3943,8 @@ describe("SessionRunnerLLM", () => {
           .flatMap(userTexts)
           .join("\n")
           .match(/Earlier question/g)?.length ?? 0
-      expect(earlierQuestionCount).toBeGreaterThanOrEqual(179)
-      expect(earlierQuestionCount).toBeLessThanOrEqual(180)
+      expect(earlierQuestionCount).toBeGreaterThanOrEqual(599)
+      expect(earlierQuestionCount).toBeLessThanOrEqual(600)
       expect(userTexts(requests[1])).toHaveLength(1)
       expect(userTexts(requests[1])[0]).toContain("<summary>\n## Goal\n- Preserve the task\n</summary>")
       expect(userTexts(requests[1])[0]).toContain(`[User]: ${"Recent exact request ".repeat(180)}`)
@@ -3503,7 +3963,7 @@ describe("SessionRunnerLLM", () => {
       ]
       yield* session.prompt({
         sessionID,
-        prompt: new Prompt({ text: "Newest exact request ".repeat(180) }),
+        prompt: new Prompt({ text: "Newest exact request ".repeat(300) }),
         resume: false,
       })
       yield* session.resume(sessionID)
@@ -3581,7 +4041,7 @@ describe("SessionRunnerLLM", () => {
       currentModel = budgetModel
       requests.length = 0
       response = fragmentFixture("text", "text-answer", ["Done"]).completeEvents
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "x".repeat(219_000) }), resume: false })
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "x".repeat(209_000) }), resume: false })
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
@@ -3625,10 +4085,18 @@ describe("SessionRunnerLLM", () => {
         { type: "compaction", summary: "## Goal\n- Recover overflow" },
         { type: "assistant", finish: "stop" },
       ])
-      const policies = yield* (yield* Database.Service).db.select().from(SessionModelPolicyReceiptTable)
-        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
-      expect(policies.filter((row) => row.policy.state === "managed").map((row) => row.trigger_source).sort())
-        .toEqual(["none", "provider_overflow"])
+      const policies = yield* (yield* Database.Service).db
+        .select()
+        .from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(
+        policies
+          .filter((row) => row.policy.state === "managed" && row.policy.key === "deepseek-v4-flash")
+          .map((row) => row.trigger_source)
+          .sort(),
+      ).toEqual(["none", "provider_overflow"])
       yield* replaySessionProjection(sessionID)
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "compaction" },
@@ -3664,6 +4132,76 @@ describe("SessionRunnerLLM", () => {
         type: "compaction",
         summary: "## Remote\n- remote summary",
       })
+    }),
+  )
+
+  it.effect("persists a complete remote window and reuses it in the original Session request", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      remoteCompactionMode = "window"
+      currentModel = responsesRecoveryModel
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          remoteCompactionMode = undefined
+        }),
+      )
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
+        ],
+        fragmentFixture("text", "remote-window-final", ["Continued with the same provider state"]).completeEvents,
+      ]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue" }), resume: false })
+      yield* session.resume(sessionID)
+      expect(remoteCompactionCalls).toBe(1)
+      expect(requests).toHaveLength(2)
+      const context = yield* (yield* SessionStore.Service).context(sessionID)
+      const checkpoint = context.find((message) => message.type === "compaction")
+      expect(checkpoint?.type === "compaction" ? checkpoint.remote?.output : undefined).toEqual([
+        { type: "message", role: "user", content: [{ type: "input_text", text: "provider retained input" }] },
+        { type: "compaction", id: "opaque-cmp", encrypted_content: "opaque-state", retained_field: "preserved" },
+      ])
+      expect(
+        requests[1]?.messages.find((message) => message.metadata?.responsesCompactedWindow)?.metadata
+          ?.responsesCompactedWindow,
+      ).toEqual(checkpoint?.type === "compaction" ? checkpoint.remote?.output : undefined)
+      expect(requests[1]?.messages.some((message) => JSON.stringify(message.content).includes("<summary>"))).toBe(false)
+      expect((yield* session.get(sessionID)).id).toBe(sessionID)
+    }),
+  )
+
+  it.effect("falls back once to a local summary only after definitive remote not_supported", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      remoteCompactionMode = "not_supported"
+      currentModel = responsesRecoveryModel
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          remoteCompactionMode = undefined
+        }),
+      )
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
+        ],
+        fragmentFixture("text", "unsupported-local-summary", ["## Goal\n- Local summary after explicit refusal"])
+          .completeEvents,
+        fragmentFixture("text", "unsupported-final", ["Continued locally"]).completeEvents,
+      ]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue" }), resume: false })
+      yield* session.resume(sessionID)
+      expect(remoteCompactionCalls).toBe(1)
+      expect(requests).toHaveLength(3)
+      expect(requests[1]?.tools).toEqual([])
+      expect(requests[1]?.generation?.maxTokens).toBe(1_000)
+      expect(userTexts(requests[2]!)[0]).toContain("Local summary after explicit refusal")
+      const checkpoints = (yield* (yield* SessionStore.Service).context(sessionID)).filter(
+        (message) => message.type === "compaction",
+      )
+      expect(checkpoints).toHaveLength(1)
+      expect(checkpoints[0]?.type === "compaction" ? checkpoints[0].remote : undefined).toBeUndefined()
     }),
   )
 
@@ -4044,14 +4582,29 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      const policy = yield* (yield* Database.Service).db.select().from(SessionModelPolicyReceiptTable)
-        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
-      const turns = yield* (yield* Database.Service).db.select().from(V2ProviderTurnReceiptTable)
-        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      const policy = yield* (yield* Database.Service).db
+        .select()
+        .from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      const turns = yield* (yield* Database.Service).db
+        .select()
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
       expect(policy).toHaveLength(2)
-      expect(policy.every((row) => row.policy.state === "managed" && row.policy.key === "deepseek-v4-flash" &&
-        row.policy.action === "normal" && row.offered_tool_ids.includes("echo") &&
-        turns.some((turn) => turn.provider_attempt_id === row.provider_attempt_id))).toBe(true)
+      expect(
+        policy.every(
+          (row) =>
+            row.policy.state === "managed" &&
+            row.policy.key === "deepseek-v4-flash" &&
+            row.policy.action === "normal" &&
+            row.offered_tool_ids.includes("echo") &&
+            turns.some((turn) => turn.provider_attempt_id === row.provider_attempt_id),
+        ),
+      ).toBe(true)
       expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "system"])
       expect(authorizations).toMatchObject([{ sessionID, toolCallID: "call-echo" }])
       expect(executions).toEqual(["hello"])
@@ -4171,12 +4724,18 @@ describe("SessionRunnerLLM", () => {
       yield* Fiber.join(run)
 
       expect(requests.map((request) => request.model)).toEqual([managedObservationModel, replacementModel])
-      const policy = yield* (yield* Database.Service).db.select().from(SessionModelPolicyReceiptTable)
-        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      const policy = yield* (yield* Database.Service).db
+        .select()
+        .from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
       expect(policy).toHaveLength(2)
       expect(policy.map((row) => row.policy.state).sort()).toEqual(["managed", "unmanaged"])
       expect(policy.find((row) => row.policy.state === "managed")?.policy).toMatchObject({
-        state: "managed", key: "deepseek-v4-flash", action: "normal",
+        state: "managed",
+        key: "deepseek-v4-flash",
+        action: "normal",
       })
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
         withSelection(["Initial context"]),
@@ -4916,50 +5475,77 @@ describe("SessionRunnerLLM", () => {
       const db = (yield* Database.Service).db
       const observed = { requests: 0 }
       const server = Bun.serve({
-        hostname: "127.0.0.1", port: 0,
+        hostname: "127.0.0.1",
+        port: 0,
         fetch: () => {
           observed.requests++
-          return Response.json({ error: {
-            message: "Fixture request rejected before generation",
-            type: "invalid_request_error", code: "invalid_request_error",
-          } }, { status: 400 })
+          return Response.json(
+            {
+              error: {
+                message: "Fixture request rejected before generation",
+                type: "invalid_request_error",
+                code: "invalid_request_error",
+              },
+            },
+            { status: 400 },
+          )
         },
       })
       yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
-      currentModel = OpenAIChat.route.with({
-        endpoint: { baseURL: `${server.url.origin}/v1` },
-        limits: { context: 128_000, output: 1_024 },
-      }).model({ id: "fixture-local-rejected" })
+      currentModel = OpenAIChat.route
+        .with({
+          endpoint: { baseURL: `${server.url.origin}/v1` },
+          limits: { context: 128_000, output: 1_024 },
+        })
+        .model({ id: "fixture-local-rejected" })
       requests.length = 0
       // Keep the existing runner fixture while using the real encoder/executor
       // and local HTTP response. No generated model events or mocked transport.
-      responseStream = Stream.unwrap(LLMClient.Service.pipe(Effect.map((client) => {
-        const request = requests.at(-1)
-        if (!request) throw new Error("Actual runner request is missing")
-        return client.stream(request)
-      }))).pipe(Stream.provide(LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))))
+      responseStream = Stream.unwrap(
+        LLMClient.Service.pipe(
+          Effect.map((client) => {
+            const request = requests.at(-1)
+            if (!request) throw new Error("Actual runner request is missing")
+            return client.stream(request)
+          }),
+        ),
+      ).pipe(Stream.provide(LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))))
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Reject this fixture request" }), resume: false })
       const failure = yield* session.resume(sessionID).pipe(Effect.flip)
       expect(failure).toBeInstanceOf(LLMError)
-      if (failure instanceof LLMError) expect(failure.reason).toMatchObject({
-        _tag: "InvalidRequest", http: { response: { status: 400 } },
-      })
+      if (failure instanceof LLMError)
+        expect(failure.reason).toMatchObject({
+          _tag: "InvalidRequest",
+          http: { response: { status: 400 } },
+        })
       expect(observed.requests).toBe(1)
       expect(requests).toHaveLength(1)
-      expect(yield* db.select().from(SessionActivityTable)
-        .where(eq(SessionActivityTable.session_id, sessionID)).get()).toMatchObject({ state: "failed", settled_at: expect.any(Number) })
-      const receipts = yield* db.select().from(V2ProviderTurnReceiptTable)
-        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all()
+      expect(
+        yield* db.select().from(SessionActivityTable).where(eq(SessionActivityTable.session_id, sessionID)).get(),
+      ).toMatchObject({ state: "failed", settled_at: expect.any(Number) })
+      const receipts = yield* db
+        .select()
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+        .all()
       expect(receipts).toHaveLength(1)
       expect(receipts[0]).toMatchObject({ state: "failed", first_event_at: null, outcome_artifact: [] })
-      expect(yield* db.select().from(SessionProviderAttemptTable)
-        .where(eq(SessionProviderAttemptTable.attempt_id, receipts[0]!.provider_attempt_id!)).get()).toMatchObject({
-        state: "failed", settled_at: expect.any(Number),
+      expect(
+        yield* db
+          .select()
+          .from(SessionProviderAttemptTable)
+          .where(eq(SessionProviderAttemptTable.attempt_id, receipts[0]!.provider_attempt_id!))
+          .get(),
+      ).toMatchObject({
+        state: "failed",
+        settled_at: expect.any(Number),
       })
-      expect(yield* db.select().from(V2ToolEffectTable)
-        .where(eq(V2ToolEffectTable.session_id, sessionID)).all()).toEqual([])
-      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get())
-        .toMatchObject({ execution_claim_token: null })
+      expect(
+        yield* db.select().from(V2ToolEffectTable).where(eq(V2ToolEffectTable.session_id, sessionID)).all(),
+      ).toEqual([])
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get()).toMatchObject({
+        execution_claim_token: null,
+      })
     }),
   )
 
@@ -5080,103 +5666,157 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  verifiedRefusal.live("a localhost 503 refusal retries once and retains the complete owned Goal result proof", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const db = (yield* Database.Service).db
-      const sessions = yield* SessionV2.Service
-      const observed = { requests: 0 }
-      const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
-        observed.requests++
-        return observed.requests === 1
-          ? Response.json({ error: { message: "Temporarily unavailable", type: "server_error" } }, {
-              status: 503, headers: { "retry-after-ms": "1" },
-            })
-          : localhostCompletion()
-      } })
-      yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
-      useLocalhostModel(`${server.url.origin}/v1`, "never-called", "goal-fixture")
-      const goal = yield* GoalChildC1Fixture.prepare(testDirectory)
-      const policy = yield* GoalChildPolicy.prepare(db, yield* AgentV2.Service, {
-        permitID: goal.permit.permit_id, roleKey: goal.admission.roleKey, agent: "worker", mode: "plain",
-      })
-      const child = yield* GoalChild.admitV2(db, sessions, { ...goal.admission, policy })
-      requests.length = 0
-      responseStreams = Array.from({ length: 4 }, localhostProviderStream)
-      const owned = yield* SessionExecution.requireOwned(yield* SessionExecution.Service)
-      const run = yield* owned.run(GoalChildExecution.target(child.unit))
-      if (run.status !== "started") throw new Error(run.status)
-      const outcome = yield* owned.await(run.receipt)
-      if (outcome.status === "settled" && Exit.isFailure(outcome.exit)) return yield* Effect.failCause(outcome.exit.cause)
-      expect(outcome.status === "settled" && Exit.isSuccess(outcome.exit)).toBe(true)
-      expect(observed.requests).toBe(2)
-      expect(requests).toHaveLength(2)
-      const receipts = yield* db.select().from(V2ProviderTurnReceiptTable)
-        .where(eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(child.unit.child_session_id)))
-        .orderBy(asc(V2ProviderTurnReceiptTable.request_ordinal)).all()
-      expect(receipts.map((row) => row.state)).toEqual(["failed", "settled"])
-      const rejected = V2ProviderTurn.fromRow(receipts[0]!)
-      expect(V2ProviderTurn.providerRefusal(rejected, refusalRuntimeIdentity)?.refusal)
-        .toEqual({ kind: "provider-internal", status: 503 })
-      expect(receipts[0]?.integrity_evidence?.identity).toEqual(refusalRuntimeIdentity)
-      for (const altered of [
-        { ...rejected, errorCode: `provider-refusal.v1:provider-internal:503:${"a".repeat(64)}` },
-        { ...rejected, integrityEvidenceHash: Hash.sha256("modified evidence") },
-        { ...rejected, integrityEvidence: undefined, integrityEvidenceHash: undefined },
-        { ...rejected, state: "indeterminate_after_crash" as const },
-      ]) expect(V2ProviderTurn.providerRefusal(altered, refusalRuntimeIdentity)).toBeUndefined()
-      expect(V2ProviderTurn.providerRefusal(rejected, {
-        ...refusalRuntimeIdentity, rootCompositionDigest: Hash.sha256("different fixture root"),
-      })).toBeUndefined()
-      const facts = yield* GoalChildResult.inspect(db, child.unit.unit_id, "plain").pipe(
-        Effect.flatMap((proof) => GoalChildResult.recheck(db, proof)),
-        Effect.provideService(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, refusalIdentityResolver),
-      )
-      expect(facts.result.providers.count).toBe(2)
-      expect(facts.result.usage).toMatchObject({ input: 20, output: 5 })
-      expect(facts.result.usageDerivation.refusals).toMatchObject({ version: 1, count: 1, billing: "unknown" })
-      expect(facts.result.usageDerivation.refusals?.ledgerHash).toMatch(/^[a-f0-9]{64}$/)
-      expect(facts.text).toBe("Recovered locally")
-      expect((yield* sessions.context(SessionV2.ID.make(child.unit.child_session_id))).at(-1))
-        .toMatchObject({ type: "assistant", finish: "stop" })
-    }), 20_000,
+  verifiedRefusal.live(
+    "a localhost 503 refusal retries once and retains the complete owned Goal result proof",
+    () =>
+      Effect.gen(function* () {
+        yield* setup
+        const db = (yield* Database.Service).db
+        const sessions = yield* SessionV2.Service
+        const observed = { requests: 0 }
+        const server = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch: () => {
+            observed.requests++
+            return observed.requests === 1
+              ? Response.json(
+                  { error: { message: "Temporarily unavailable", type: "server_error" } },
+                  {
+                    status: 503,
+                    headers: { "retry-after-ms": "1" },
+                  },
+                )
+              : localhostCompletion()
+          },
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
+        useLocalhostModel(`${server.url.origin}/v1`, "never-called", "goal-fixture")
+        const goal = yield* GoalChildC1Fixture.prepare(testDirectory)
+        const policy = yield* GoalChildPolicy.prepare(db, yield* AgentV2.Service, {
+          permitID: goal.permit.permit_id,
+          roleKey: goal.admission.roleKey,
+          agent: "worker",
+          mode: "plain",
+        })
+        const child = yield* GoalChild.admitV2(db, sessions, { ...goal.admission, policy })
+        requests.length = 0
+        responseStreams = Array.from({ length: 4 }, localhostProviderStream)
+        const owned = yield* SessionExecution.requireOwned(yield* SessionExecution.Service)
+        const run = yield* owned.run(GoalChildExecution.target(child.unit))
+        if (run.status !== "started") throw new Error(run.status)
+        const outcome = yield* owned.await(run.receipt)
+        if (outcome.status === "settled" && Exit.isFailure(outcome.exit))
+          return yield* Effect.failCause(outcome.exit.cause)
+        expect(outcome.status === "settled" && Exit.isSuccess(outcome.exit)).toBe(true)
+        expect(observed.requests).toBe(2)
+        expect(requests).toHaveLength(2)
+        const receipts = yield* db
+          .select()
+          .from(V2ProviderTurnReceiptTable)
+          .where(eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(child.unit.child_session_id)))
+          .orderBy(asc(V2ProviderTurnReceiptTable.request_ordinal))
+          .all()
+        expect(receipts.map((row) => row.state)).toEqual(["failed", "settled"])
+        const rejected = V2ProviderTurn.fromRow(receipts[0]!)
+        expect(V2ProviderTurn.providerRefusal(rejected, refusalRuntimeIdentity)?.refusal).toEqual({
+          kind: "provider-internal",
+          status: 503,
+        })
+        expect(receipts[0]?.integrity_evidence?.identity).toEqual(refusalRuntimeIdentity)
+        for (const altered of [
+          { ...rejected, errorCode: `provider-refusal.v1:provider-internal:503:${"a".repeat(64)}` },
+          { ...rejected, integrityEvidenceHash: Hash.sha256("modified evidence") },
+          { ...rejected, integrityEvidence: undefined, integrityEvidenceHash: undefined },
+          { ...rejected, state: "indeterminate_after_crash" as const },
+        ])
+          expect(V2ProviderTurn.providerRefusal(altered, refusalRuntimeIdentity)).toBeUndefined()
+        expect(
+          V2ProviderTurn.providerRefusal(rejected, {
+            ...refusalRuntimeIdentity,
+            rootCompositionDigest: Hash.sha256("different fixture root"),
+          }),
+        ).toBeUndefined()
+        const facts = yield* GoalChildResult.inspect(db, child.unit.unit_id, "plain").pipe(
+          Effect.flatMap((proof) => GoalChildResult.recheck(db, proof)),
+          Effect.provideService(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, refusalIdentityResolver),
+        )
+        expect(facts.result.providers.count).toBe(2)
+        expect(facts.result.usage).toMatchObject({ input: 20, output: 5 })
+        expect(facts.result.usageDerivation.refusals).toMatchObject({ version: 1, count: 1, billing: "unknown" })
+        expect(facts.result.usageDerivation.refusals?.ledgerHash).toMatch(/^[a-f0-9]{64}$/)
+        expect(facts.text).toBe("Recovered locally")
+        expect((yield* sessions.context(SessionV2.ID.make(child.unit.child_session_id))).at(-1)).toMatchObject({
+          type: "assistant",
+          finish: "stop",
+        })
+      }),
+    20_000,
   )
 
   for (const phase of ["after-event", "post-dispatch"] as const)
-    verifiedRefusal.live(`a localhost ${phase} socket failure never retries or certifies a refusal`, () =>
-      Effect.gen(function* () {
-        yield* setup
-        const sessions = yield* SessionV2.Service
-        const db = (yield* Database.Service).db
-        const observed = { requests: 0 }
-        const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
-          observed.requests++
-          if (phase === "post-dispatch") {
-            setTimeout(() => { void server.stop(true) }, 25)
-            return new Promise<Response>(() => {})
-          }
-          return new Response(new ReadableStream<Uint8Array>({ start(controller) {
-            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({
-              id: "partial-local", choices: [{ index: 0, delta: { content: "Partial" }, finish_reason: null }],
-            })}\n\n`))
-            setTimeout(() => controller.error(new Error("Local fixture stream interrupted")), 100)
-          } }), { headers: { "content-type": "text/event-stream" } })
-        } })
-        yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
-        useLocalhostModel(`${server.url.origin}/v1`, "fixture-local-interrupted")
-        requests.length = 0
-        responseStreams = Array.from({ length: 4 }, localhostProviderStream)
-        yield* sessions.prompt({ sessionID, prompt: new Prompt({ text: "Keep an unknown delivery unknown" }), resume: false })
-        expect(Exit.isFailure(yield* sessions.resume(sessionID).pipe(Effect.exit))).toBe(true)
-        expect(observed.requests).toBe(1)
-        expect(requests).toHaveLength(1)
-        const receipts = yield* db.select().from(V2ProviderTurnReceiptTable)
-          .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all()
-        expect(receipts).toHaveLength(1)
-        expect(receipts[0]?.state).toBe("indeterminate_after_crash")
-        expect(V2ProviderTurn.providerRefusal(V2ProviderTurn.fromRow(receipts[0]!), refusalRuntimeIdentity)).toBeUndefined()
-        expect(receipts[0]?.first_event_at === null).toBe(phase === "post-dispatch")
-      }), 20_000,
+    verifiedRefusal.live(
+      `a localhost ${phase} socket failure never retries or certifies a refusal`,
+      () =>
+        Effect.gen(function* () {
+          yield* setup
+          const sessions = yield* SessionV2.Service
+          const db = (yield* Database.Service).db
+          const observed = { requests: 0 }
+          const server = Bun.serve({
+            hostname: "127.0.0.1",
+            port: 0,
+            fetch: () => {
+              observed.requests++
+              if (phase === "post-dispatch") {
+                setTimeout(() => {
+                  void server.stop(true)
+                }, 25)
+                return new Promise<Response>(() => {})
+              }
+              return new Response(
+                new ReadableStream<Uint8Array>({
+                  start(controller) {
+                    controller.enqueue(
+                      new TextEncoder().encode(
+                        `data: ${JSON.stringify({
+                          id: "partial-local",
+                          choices: [{ index: 0, delta: { content: "Partial" }, finish_reason: null }],
+                        })}\n\n`,
+                      ),
+                    )
+                    setTimeout(() => controller.error(new Error("Local fixture stream interrupted")), 100)
+                  },
+                }),
+                { headers: { "content-type": "text/event-stream" } },
+              )
+            },
+          })
+          yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
+          useLocalhostModel(`${server.url.origin}/v1`, "fixture-local-interrupted")
+          requests.length = 0
+          responseStreams = Array.from({ length: 4 }, localhostProviderStream)
+          yield* sessions.prompt({
+            sessionID,
+            prompt: new Prompt({ text: "Keep an unknown delivery unknown" }),
+            resume: false,
+          })
+          expect(Exit.isFailure(yield* sessions.resume(sessionID).pipe(Effect.exit))).toBe(true)
+          expect(observed.requests).toBe(1)
+          expect(requests).toHaveLength(1)
+          const receipts = yield* db
+            .select()
+            .from(V2ProviderTurnReceiptTable)
+            .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+            .all()
+          expect(receipts).toHaveLength(1)
+          expect(receipts[0]?.state).toBe("indeterminate_after_crash")
+          expect(
+            V2ProviderTurn.providerRefusal(V2ProviderTurn.fromRow(receipts[0]!), refusalRuntimeIdentity),
+          ).toBeUndefined()
+          expect(receipts[0]?.first_event_at === null).toBe(phase === "post-dispatch")
+        }),
+      20_000,
     )
 
   // Bun fetch may hide the native connection code; absence of positive pre-dispatch proof
@@ -5243,12 +5883,20 @@ describe("SessionRunnerLLM", () => {
         })
 
         const observed = { requests: 0 }
-        const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
-          observed.requests++
-          return Response.json({ error: { message: "Unavailable", type: "server_error" } }, {
-            status: 503, headers: { "retry-after-ms": "1" },
-          })
-        } })
+        const server = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch: () => {
+            observed.requests++
+            return Response.json(
+              { error: { message: "Unavailable", type: "server_error" } },
+              {
+                status: 503,
+                headers: { "retry-after-ms": "1" },
+              },
+            )
+          },
+        })
         yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)))
         useLocalhostModel(`${server.url.origin}/v1`, "fixture-local-retry-exhausted")
         requests.length = 0
@@ -5321,7 +5969,10 @@ describe("SessionRunnerLLM", () => {
               ],
               "unknown-tool-outcome",
             ),
-        sealedResponse(fragmentFixture("text", "unexpected-continuation", ["Must not run"]).completeEvents, "unexpected"),
+        sealedResponse(
+          fragmentFixture("text", "unexpected-continuation", ["Must not run"]).completeEvents,
+          "unexpected",
+        ),
       ]
       if (!recovering) {
         yield* session.create({ id, location: { directory: AbsolutePath.make(testDirectory) } })
@@ -6170,14 +6821,16 @@ describe("SessionRunnerLLM", () => {
       // continue. An unknown interrupted external tool still requires explicit recovery.
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue after question" }), resume: false })
       requests.length = 0
-      responses = [[
-        LLMEvent.stepStart({ index: 0 }),
-        LLMEvent.textStart({ id: "after-question" }),
-        LLMEvent.textDelta({ id: "after-question", text: "Continued" }),
-        LLMEvent.textEnd({ id: "after-question" }),
-        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-        LLMEvent.finish({ reason: "stop" }),
-      ]]
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "after-question" }),
+          LLMEvent.textDelta({ id: "after-question", text: "Continued" }),
+          LLMEvent.textEnd({ id: "after-question" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
       yield* session.resume(sessionID)
       expect(requests).toHaveLength(1)
       expect(yield* session.context(sessionID)).toMatchObject([
@@ -7124,11 +7777,21 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Finish after a tool" }), resume: false })
       requests.length = 0
       responses = [
-        [LLMEvent.stepStart({ index: 0 }), LLMEvent.toolCall({ id: "im-final-tool", name: "echo", input: { text: "work" } }), LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }), LLMEvent.finish({ reason: "tool-calls" })],
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "im-final-tool", name: "echo", input: { text: "work" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
         fragmentFixture("text", "im-final", ["Complete ", "answer"]).completeEvents,
       ]
       yield* session.resume(sessionID)
-      const activity = yield* (yield* Database.Service).db.select().from(SessionActivityTable).where(eq(SessionActivityTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      const activity = yield* (yield* Database.Service).db
+        .select()
+        .from(SessionActivityTable)
+        .where(eq(SessionActivityTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
       const messages = yield* session.context(sessionID)
       expect(requests).toHaveLength(2)
       expect(activity?.state).toBe("settled")
@@ -7152,7 +7815,12 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      const activity = yield* (yield* Database.Service).db.select().from(SessionActivityTable).where(eq(SessionActivityTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      const activity = yield* (yield* Database.Service).db
+        .select()
+        .from(SessionActivityTable)
+        .where(eq(SessionActivityTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
       expect(activity?.state).toBe("failed")
       expect(activity?.final_message_id).toBeNull()
       expect(yield* session.context(sessionID)).toMatchObject([
@@ -7747,6 +8415,36 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("manual summary uses the adaptive cap independently of an ordinary short answer", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualHistory
+      currentModel = Model.make({
+        id: "independent-summary",
+        provider: "fake",
+        route: OpenAIChat.route.with({
+          limits: { context: 128_000, output: 64_000 },
+          generation: { maxTokens: 128 },
+        }),
+      })
+      responses = [fragmentFixture("text", "independent-summary", ["Summary of the first exchange"]).completeEvents]
+      yield* session.compact({
+        sessionID,
+        model: {
+          providerID: ProviderV2.ID.make(currentModel.provider),
+          modelID: ModelV2.ID.make(currentModel.id),
+        },
+      })
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.generation?.maxTokens).toBe(20_000)
+      const budget = PreparedProviderTurn.budget(
+        currentModel,
+        PreparedProviderTurn.estimateFullRequestTokens(requests[0]!),
+        requests[0]?.generation?.maxTokens,
+      )
+      expect(budget).toMatchObject({ decision: "ok", reservedOutputTokens: 20_000, physicalInputBudget: 106_976 })
+    }),
+  )
+
   it.effect("manual compaction does not dispatch a summary beyond the physical input budget", () =>
     Effect.gen(function* () {
       yield* setup
@@ -7770,19 +8468,30 @@ describe("SessionRunnerLLM", () => {
       currentModel = summaryModel
       requests.length = 0
       responses = [fragmentFixture("text", "unsafe-summary", ["summary must not dispatch"]).completeEvents]
-      const refusal = yield* session.compact({
-        sessionID,
-        model: { providerID: ProviderV2.ID.make(summaryModel.provider), modelID: ModelV2.ID.make(summaryModel.id) },
-      }).pipe(Effect.flip)
+      const refusal = yield* session
+        .compact({
+          sessionID,
+          model: { providerID: ProviderV2.ID.make(summaryModel.provider), modelID: ModelV2.ID.make(summaryModel.id) },
+        })
+        .pipe(Effect.flip)
       expect(refusal).toMatchObject({ operation: "compact", reason: "summary_budget_exceeded" })
 
-      const request = yield* db.select().from(CompactionRequestTable)
-        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      const request = yield* db
+        .select()
+        .from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
       expect(request).toMatchObject({ status: "failed", outcome: "summary_budget_exceeded", summary_receipt_id: null })
       expect(requests).toHaveLength(0)
-      expect(yield* db.select().from(V2ProviderTurnReceiptTable)
-        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie))
-        .toHaveLength(2)
+      expect(
+        yield* db
+          .select()
+          .from(V2ProviderTurnReceiptTable)
+          .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(2)
     }),
   )
 
@@ -7803,8 +8512,12 @@ describe("SessionRunnerLLM", () => {
         model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) },
       })
 
-      const request = yield* db.select().from(CompactionRequestTable)
-        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      const request = yield* db
+        .select()
+        .from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
       expect(request).toMatchObject({ status: "settled", outcome: "nothing_to_compact", summary_receipt_id: null })
       expect(requests).toHaveLength(0)
     }),
@@ -7816,7 +8529,11 @@ describe("SessionRunnerLLM", () => {
       const { db } = yield* Database.Service
       currentModel = responsesRecoveryModel
       remoteCompactionMode = "refused"
-      yield* Effect.addFinalizer(() => Effect.sync(() => { remoteCompactionMode = undefined }))
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          remoteCompactionMode = undefined
+        }),
+      )
       const input = {
         sessionID,
         model: { providerID: ProviderV2.ID.make(currentModel.provider), modelID: ModelV2.ID.make(currentModel.id) },
@@ -7824,8 +8541,12 @@ describe("SessionRunnerLLM", () => {
 
       const refusal = yield* session.compact(input).pipe(Effect.flip)
       expect(refusal).toMatchObject({ operation: "compact", reason: "network_unknown" })
-      const request = yield* db.select().from(CompactionRequestTable)
-        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      const request = yield* db
+        .select()
+        .from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
       expect(request).toMatchObject({ status: "recovery_required", outcome: "network_unknown" })
       expect(remoteCompactionCalls).toBe(1)
       expect(requests).toHaveLength(0)
@@ -7844,13 +8565,19 @@ describe("SessionRunnerLLM", () => {
       currentModel = compactModel
       responseStream = sealedResponse([LLMEvent.providerError({ message: "summary rejected" })], "manual-error")
 
-      const refusal = yield* session.compact({
-        sessionID,
-        model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) },
-      }).pipe(Effect.flip)
+      const refusal = yield* session
+        .compact({
+          sessionID,
+          model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) },
+        })
+        .pipe(Effect.flip)
       expect(refusal).toMatchObject({ operation: "compact", reason: "summary_provider_error" })
-      const request = yield* db.select().from(CompactionRequestTable)
-        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      const request = yield* db
+        .select()
+        .from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
       expect(request).toMatchObject({ status: "failed", outcome: "summary_provider_error" })
       expect(request?.summary_receipt_id).toBeTruthy()
       expect(requests).toHaveLength(1)
@@ -7864,13 +8591,19 @@ describe("SessionRunnerLLM", () => {
       currentModel = compactModel
       responseStream = sealedResponse([], "manual-empty")
 
-      const refusal = yield* session.compact({
-        sessionID,
-        model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) },
-      }).pipe(Effect.flip)
+      const refusal = yield* session
+        .compact({
+          sessionID,
+          model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) },
+        })
+        .pipe(Effect.flip)
       expect(refusal).toMatchObject({ operation: "compact", reason: "summary_empty" })
-      const request = yield* db.select().from(CompactionRequestTable)
-        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      const request = yield* db
+        .select()
+        .from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
       expect(request).toMatchObject({ status: "failed", outcome: "summary_empty" })
       expect(request?.summary_receipt_id).toBeTruthy()
       expect(requests).toHaveLength(1)
@@ -7884,25 +8617,39 @@ describe("SessionRunnerLLM", () => {
       currentModel = compactModel
       responseStream = Stream.concat(
         sealedResponse([], "manual-overflow"),
-        Stream.fail(new LLMError({
-          module: "test",
-          method: "stream",
-          reason: new InvalidRequestReason({ message: "prompt too long", classification: "context-overflow" }),
-        })),
+        Stream.fail(
+          new LLMError({
+            module: "test",
+            method: "stream",
+            reason: new InvalidRequestReason({ message: "prompt too long", classification: "context-overflow" }),
+          }),
+        ),
       )
 
-      const refusal = yield* session.compact({
-        sessionID,
-        model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) },
-      }).pipe(Effect.flip)
+      const refusal = yield* session
+        .compact({
+          sessionID,
+          model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) },
+        })
+        .pipe(Effect.flip)
       expect(refusal).toMatchObject({ operation: "compact", reason: "summary_provider_failed" })
-      expect(yield* db.select().from(CompactionRequestTable)
-        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie))
-        .toMatchObject({ status: "failed", outcome: "summary_provider_failed" })
-      expect(yield* db.select().from(V2ProviderTurnReceiptTable)
-        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
-        .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal)).get().pipe(Effect.orDie))
-        .toMatchObject({ state: "failed" })
+      expect(
+        yield* db
+          .select()
+          .from(CompactionRequestTable)
+          .where(eq(CompactionRequestTable.session_id, sessionID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ status: "failed", outcome: "summary_provider_failed" })
+      expect(
+        yield* db
+          .select()
+          .from(V2ProviderTurnReceiptTable)
+          .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+          .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ state: "failed" })
       expect(requests).toHaveLength(1)
     }),
   )
@@ -7920,17 +8667,27 @@ describe("SessionRunnerLLM", () => {
 
       const refusal = yield* session.compact(input).pipe(Effect.flip)
       expect(refusal).toMatchObject({ operation: "compact", reason: "summary_provider_outcome_unknown" })
-      const request = yield* db.select().from(CompactionRequestTable)
-        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      const request = yield* db
+        .select()
+        .from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
       expect(request).toMatchObject({ status: "recovery_required", outcome: "summary_provider_outcome_unknown" })
-      const receipt = yield* db.select().from(V2ProviderTurnReceiptTable)
+      const receipt = yield* db
+        .select()
+        .from(V2ProviderTurnReceiptTable)
         .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
-        .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal)).get().pipe(Effect.orDie)
+        .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal))
+        .get()
+        .pipe(Effect.orDie)
       expect(receipt).toMatchObject({ state: "indeterminate_after_crash" })
       expect(request?.summary_receipt_id).toBe(receipt?.receipt_id)
       expect(requests).toHaveLength(1)
 
-      expect(yield* session.compact(input).pipe(Effect.flip)).toMatchObject({ reason: "summary_provider_outcome_unknown" })
+      expect(yield* session.compact(input).pipe(Effect.flip)).toMatchObject({
+        reason: "summary_provider_outcome_unknown",
+      })
       expect(requests).toHaveLength(1)
     }),
   )
@@ -8058,16 +8815,25 @@ it.effect("approved snapshot scope stays explicit in runner context after later 
     const sessions = yield* SessionV2.Service
     const db = (yield* Database.Service).db
     const root = mkdtempSync(tmpRootShared())
-    yield* Effect.addFinalizer(() => Effect.sync(() => {
-      AgentGateway.configure({ enabled: false, agentMode: "high" })
-      rmSync(root, { recursive: true, force: true })
-    }))
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        AgentGateway.configure({ enabled: false, agentMode: "high" })
+        rmSync(root, { recursive: true, force: true })
+      }),
+    )
     configureSessionState(root)
     AgentGateway.configure({ enabled: true, agentMode: "general", baseDir: root })
-    const original = createPlanDoc(sessionID, "Approved original scope", [{
-      step_id: "approved-step", title: "Implement the original bounded scope", status: "pending",
-      acceptance: null, assigned_agent: null, evidence: [], note: null,
-    }])
+    const original = createPlanDoc(sessionID, "Approved original scope", [
+      {
+        step_id: "approved-step",
+        title: "Implement the original bounded scope",
+        status: "pending",
+        acceptance: null,
+        assigned_agent: null,
+        evidence: [],
+        note: null,
+      },
+    ])
     DeepAgentPlanStore.setPlanDoc(sessionID, original)
     const snapshot = DeepAgentPlanStore.approvalSnapshot(sessionID)!
     yield* sessions.prompt({

@@ -1,3 +1,4 @@
+import { RemoteCompactionWindow } from "./remote-compaction-window"
 export * as SessionMessage from "./message"
 
 import { Schema } from "effect"
@@ -188,6 +189,7 @@ export class Compaction extends Schema.Class<Compaction>("Session.Message.Compac
   recent: Schema.String,
   checkpointID: Schema.String.pipe(Schema.optional),
   checkpointHash: Schema.String.pipe(Schema.optional),
+  remote: RemoteCompactionWindow.State.pipe(Schema.optional),
   ...Base,
 }) {}
 

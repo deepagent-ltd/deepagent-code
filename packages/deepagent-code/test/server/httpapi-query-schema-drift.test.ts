@@ -16,7 +16,7 @@ import {
   SessionListQuery as ExperimentalSessionListQuery,
   ToolListQuery,
 } from "../../src/server/routes/instance/httpapi/groups/experimental"
-import { InstancePaths, VcsDiffQuery } from "../../src/server/routes/instance/httpapi/groups/instance"
+import { InstancePaths, VcsDiffQuery, VcsSummaryQuery } from "../../src/server/routes/instance/httpapi/groups/instance"
 import { WorkspacePaths } from "../../src/server/routes/instance/httpapi/groups/workspace"
 import {
   ListQuery as SessionListQuery,
@@ -54,6 +54,7 @@ const openApiDriftRoutes = [
   { method: "get", path: ExperimentalPaths.session, query: ExperimentalSessionListQuery },
   { method: "get", path: ExperimentalPaths.tool, query: ToolListQuery },
   { method: "get", path: InstancePaths.vcsDiff, query: VcsDiffQuery },
+  { method: "get", path: InstancePaths.vcsSummary, query: VcsSummaryQuery },
   { method: "get", path: "/api/session/:sessionID/message", query: SessionMessagesQuery },
 ] satisfies Array<{ method: Method; path: string; query: QuerySchema }>
 

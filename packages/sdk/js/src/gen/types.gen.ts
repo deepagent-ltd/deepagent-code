@@ -1493,6 +1493,16 @@ export type GlobalEvent = {
           recent: string
           checkpointID?: string
           checkpointHash?: string
+          remote?: {
+            providerID: string
+            modelID: string
+            routeID: string
+            protocol: string
+            endpointHash: string
+            output: Array<{
+              [key: string]: unknown
+            }>
+          }
         }
       }
     | {
@@ -2683,6 +2693,7 @@ export type Config = {
     max_bytes?: number
   }
   compaction?: {
+    mode?: "adaptive" | "long" | "extreme"
     auto?: boolean
     prune?: boolean
     tail_turns?: number
@@ -4803,6 +4814,50 @@ export type VcsFileStatus = {
   additions: number
   deletions: number
   status: "added" | "deleted" | "modified"
+}
+
+export type VcsRef = {
+  name: string
+  ref: string
+  oid: string
+  kind: "local" | "remote"
+}
+
+export type VcsRefs = {
+  directory: string
+  repositoryRoot: string
+  observedAt: number
+  items: Array<VcsRef>
+  truncated: boolean
+}
+
+export type VcsReadError = {
+  name: "VcsReadError"
+  data: {
+    reason: "read_failed" | "ref_invalid" | "no_common_ancestor" | "scope_changed"
+  }
+}
+
+export type VcsWorkSummary = {
+  directory: string
+  repositoryRoot: string
+  branch: string
+  headOID: string
+  baseRef: string
+  baseOID: string
+  mergeBaseOID: string
+  startedAt: number
+  observedAt: number
+  state: "ready" | "non_git" | "unborn" | "base_unavailable" | "no_common_ancestor" | "unavailable"
+  coverage: "complete" | "partial"
+  stale: boolean
+  files: number
+  additions: number
+  deletions: number
+  uncommitted: number
+  binary: number
+  conflicts: number
+  lineStatsComplete: boolean
 }
 
 export type VcsFileDiff = {
@@ -7917,6 +7972,16 @@ export type SyncEventSessionNextCompactionEnded2 = {
       recent: string
       checkpointID?: string
       checkpointHash?: string
+      remote?: {
+        providerID: string
+        modelID: string
+        routeID: string
+        protocol: string
+        endpointHash: string
+        output: Array<{
+          [key: string]: unknown
+        }>
+      }
     }
   }
 }
@@ -8828,6 +8893,16 @@ export type SessionMessageCompaction = {
   recent: string
   checkpointID?: string
   checkpointHash?: string
+  remote?: {
+    providerID: string
+    modelID: string
+    routeID: string
+    protocol: string
+    endpointHash: string
+    output: Array<{
+      [key: string]: unknown
+    }>
+  }
   id: string
   metadata?: {
     [key: string]: unknown
@@ -9560,6 +9635,16 @@ export type EventSessionNextCompactionEnded = {
     recent: string
     checkpointID?: string
     checkpointHash?: string
+    remote?: {
+      providerID: string
+      modelID: string
+      routeID: string
+      protocol: string
+      endpointHash: string
+      output: Array<{
+        [key: string]: unknown
+      }>
+    }
   }
 }
 
@@ -25087,6 +25172,67 @@ export type VcsStatusResponses = {
 
 export type VcsStatusResponse = VcsStatusResponses[keyof VcsStatusResponses]
 
+export type VcsRefsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/vcs/refs"
+}
+
+export type VcsRefsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * VcsReadError
+   */
+  503: VcsReadError
+}
+
+export type VcsRefsError = VcsRefsErrors[keyof VcsRefsErrors]
+
+export type VcsRefsResponses = {
+  /**
+   * VcsRefs
+   */
+  200: VcsRefs
+}
+
+export type VcsRefsResponse = VcsRefsResponses[keyof VcsRefsResponses]
+
+export type VcsSummaryData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    baseRef?: string
+  }
+  url: "/vcs/summary"
+}
+
+export type VcsSummaryErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type VcsSummaryError = VcsSummaryErrors[keyof VcsSummaryErrors]
+
+export type VcsSummaryResponses = {
+  /**
+   * VcsWorkSummary
+   */
+  200: VcsWorkSummary
+}
+
+export type VcsSummaryResponse = VcsSummaryResponses[keyof VcsSummaryResponses]
+
 export type VcsDiffData = {
   body?: never
   path?: never
@@ -25094,6 +25240,9 @@ export type VcsDiffData = {
     directory?: string
     workspace?: string
     mode: "git" | "branch"
+    baseRef?: string
+    baseOID?: string
+    headOID?: string
     context?: number
   }
   url: "/vcs/diff"
@@ -25104,6 +25253,10 @@ export type VcsDiffErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * VcsReadError
+   */
+  503: VcsReadError
 }
 
 export type VcsDiffError = VcsDiffErrors[keyof VcsDiffErrors]
@@ -28152,6 +28305,99 @@ export type SessionTaskSummaryResponses = {
 }
 
 export type SessionTaskSummaryResponse = SessionTaskSummaryResponses[keyof SessionTaskSummaryResponses]
+
+export type SessionContextUsageData = {
+  body?: {
+    providerID?: string
+    modelID?: string
+    variant?: string
+    agent?: string
+    draft?: string
+    draftRevision: string
+    hasAttachments?: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/context-usage"
+}
+
+export type SessionContextUsageErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SessionContextUsageError = SessionContextUsageErrors[keyof SessionContextUsageErrors]
+
+export type SessionContextUsageResponses = {
+  /**
+   * Read-only context preview and durable usage
+   */
+  200: {
+    sessionID: string
+    observedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    revision: string
+    estimate: {
+      status: "complete" | "partial" | "unavailable" | "stale"
+      inputTokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      contextLimit: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      inputLimit: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      physicalInputBudget: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      reservedOutput: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      modelID: string
+      providerID: string
+      draftRevision: string
+      missing: Array<string>
+    }
+    activity: {
+      id: string
+      state: string
+      current: boolean
+      calls: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      reportedCalls: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      unknownCalls: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      reasoningReported: boolean
+      cacheReadReported: boolean
+      cacheWriteReported: boolean
+      tokens: {
+        nonCachedInput: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cacheRead: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cacheWrite: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        output: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        reasoning: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }
+    totals: {
+      nonCachedInput: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cacheRead: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cacheWrite: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      output: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      reasoning: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    totalsReasoningReported: boolean
+    totalsCacheReadReported: boolean
+    totalsCacheWriteReported: boolean
+    totalCalls: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    unknownCalls: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    coverage: "recorded" | "partial"
+  }
+}
+
+export type SessionContextUsageResponse = SessionContextUsageResponses[keyof SessionContextUsageResponses]
 
 export type SessionTodoData = {
   body?: never

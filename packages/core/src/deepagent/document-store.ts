@@ -407,7 +407,14 @@ export class DocumentStore {
     shared = false,
     private readonly exactIDs?: readonly string[],
     private readonly allowAbsent = false,
+    observe = false,
   ) {
+    if (observe) {
+      const existing = sharedIndexRegistry.get(path.resolve(root))?.deref()
+      this.docs = existing ?? new Map()
+      if (!existing) this.rebuildIndex()
+      return
+    }
     if (exactIDs) {
       this.docs = new Map()
       this.rebuildExact()
@@ -463,6 +470,11 @@ export class DocumentStore {
   // an edit written by a request fiber). Cross-process writers are still reconciled by CAS on persist.
   static shared(root: string): DocumentStore {
     return new DocumentStore(root, true)
+  }
+
+  /** Read an existing index or disk without mkdir, shared registration or a writable public view. */
+  static observe(root: string): Pick<DocumentStore, "get" | "list"> {
+    return new DocumentStore(root, false, undefined, false, true)
   }
 
   // Test-only: drop the shared-index registry so a fresh process is simulated. Not part of the durable

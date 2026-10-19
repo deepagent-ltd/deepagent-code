@@ -798,7 +798,7 @@ describe("Config", () => {
                     },
                   },
                 },
-                compaction: { auto: true, tail_turns: 3, preserve_recent_tokens: 2000, reserved: 10000 },
+                compaction: { auto: true, mode: "long", tail_turns: 3, preserve_recent_tokens: 2000, reserved: 10000 },
               }),
             ),
           )
@@ -861,6 +861,7 @@ describe("Config", () => {
             })
             expect(documents[0]?.info.compaction).toEqual({
               auto: true,
+              mode: "long",
               prune: undefined,
               keep: { tokens: 2000 },
               buffer: 10000,

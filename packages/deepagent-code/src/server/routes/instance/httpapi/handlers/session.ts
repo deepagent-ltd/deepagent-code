@@ -27,6 +27,7 @@ import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionSummary } from "@/session/summary"
 import { TaskSummary } from "@deepagent-code/core/session/task-summary"
+import { SessionContextUsageSchema } from "@deepagent-code/core/session/context-usage.schema"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { SessionProviderResolution } from "@/session/provider-resolution"
 import { DevCampaignMint } from "@/effect/dev-campaign-mint"
@@ -132,6 +133,29 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const providerResolutionFacade = yield* SessionProviderResolution.Service
     const flags = yield* RuntimeFlags.Service
     const scope = yield* Scope.Scope
+    const { LocationServiceMap, existingContext } = yield* Effect.promise(
+      () => import("@deepagent-code/core/location-layer"),
+    )
+    const contextUsageLocations = Option.getOrUndefined(yield* Effect.serviceOption(LocationServiceMap))
+    const contextUsageServices = Effect.gen(function* () {
+      const { SessionRunnerModel } = yield* Effect.promise(() => import("@deepagent-code/core/session/runner/model"))
+      const { ToolRegistry } = yield* Effect.promise(() => import("@deepagent-code/core/tool/registry"))
+      const { SystemContextRegistry } = yield* Effect.promise(
+        () => import("@deepagent-code/core/system-context/registry"),
+      )
+      const { SkillGuidance } = yield* Effect.promise(() => import("@deepagent-code/core/skill/guidance"))
+      const { Git } = yield* Effect.promise(() => import("@deepagent-code/core/git"))
+      const models = Option.getOrUndefined(yield* Effect.serviceOption(SessionRunnerModel.Service))
+      const agents = Option.getOrUndefined(yield* Effect.serviceOption(AgentV2.Service))
+      const tools = Option.getOrUndefined(yield* Effect.serviceOption(ToolRegistry.Service))
+      const systemContext = Option.getOrUndefined(yield* Effect.serviceOption(SystemContextRegistry.Service))
+      const skillGuidance = Option.getOrUndefined(yield* Effect.serviceOption(SkillGuidance.Service))
+      const gateway = Option.getOrUndefined(yield* Effect.serviceOption(AgentGateway.Runtime))
+      const git = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
+      return models && agents && tools && systemContext && skillGuidance && gateway
+        ? { models, agents, tools, systemContext, skillGuidance, gateway, git }
+        : undefined
+    })
     // 1.4.8.rN dev campaign mint (env-gated): consume the seam so the merged layer is a real
     // graph requirement and builds with the Database (production: no-op, empty service).
     yield* DevCampaignMint
@@ -267,7 +291,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const taskSummary = Effect.fn("SessionHttpApi.taskSummary")(function* (ctx: {
-      params: { sessionID: SessionID }; query: { cursor?: string; directory?: string; workspace?: string }
+      params: { sessionID: SessionID }
+      query: { cursor?: string; directory?: string; workspace?: string }
     }) {
       yield* requireSession(ctx.params.sessionID)
       const instance = yield* InstanceState.context
@@ -276,20 +301,84 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       // placement instead of silently turning a scoped read into another project's task list.
       const request = yield* HttpServerRequest.HttpServerRequest
       const directory = ctx.query.directory || request.headers["x-deepagent-code-directory"]
-      if ((directory && resolveRoutedDirectory(directory) !== instance.directory) ||
-        (ctx.query.workspace && ctx.query.workspace !== workspaceID))
+      if (
+        (directory && resolveRoutedDirectory(directory) !== instance.directory) ||
+        (ctx.query.workspace && ctx.query.workspace !== workspaceID)
+      )
         return yield* notFound(`Session not found: ${ctx.params.sessionID}`)
-      return yield* database.db.transaction((tx) => TaskSummary.read(tx, {
-        parentSessionID: ctx.params.sessionID,
-        projectID: instance.project.id,
-        directory: instance.directory,
-        workspaceID,
-        cursor: ctx.query.cursor,
-      })).pipe(
+      return yield* database.db
+        .transaction((tx) =>
+          TaskSummary.read(tx, {
+            parentSessionID: ctx.params.sessionID,
+            projectID: instance.project.id,
+            directory: instance.directory,
+            workspaceID,
+            cursor: ctx.query.cursor,
+          }),
+        )
+        .pipe(
+          Effect.mapError(() => notFound(`Session not found: ${ctx.params.sessionID}`)),
+          Effect.catchDefect(() =>
+            Effect.fail(
+              new ServiceUnavailableError({
+                service: "session.task-summary",
+                message: "Task summary could not be read",
+              }),
+            ),
+          ),
+        )
+    })
+
+    const contextUsage = Effect.fn("SessionHttpApi.contextUsage")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof SessionContextUsageSchema.Query.Type
+      query: { directory?: string; workspace?: string }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const instance = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const directory = ctx.query.directory || request.headers["x-deepagent-code-directory"]
+      if (
+        (directory && resolveRoutedDirectory(directory) !== instance.directory) ||
+        (ctx.query.workspace && ctx.query.workspace !== workspaceID)
+      )
+        return yield* notFound(`Session not found: ${ctx.params.sessionID}`)
+      if (!!ctx.payload.providerID !== !!ctx.payload.modelID) return yield* new HttpApiError.BadRequest({})
+      const { SessionContextUsage } = yield* Effect.promise(() => import("@deepagent-code/core/session/context-usage"))
+      // The existing cached Location tree owns these services, just as for the V2 agent roster.
+      const cached = contextUsageLocations
+        ? yield* existingContext(contextUsageLocations, {
+            directory: AbsolutePath.make(instance.directory),
+            ...(workspaceID ? { workspaceID } : {}),
+          })
+        : undefined
+      const services = cached ? yield* contextUsageServices.pipe(Effect.provide(cached.context)) : undefined
+      return yield* SessionContextUsage.read(
+        database.db,
+        {
+          ...ctx.payload,
+          sessionID: ctx.params.sessionID,
+          projectID: instance.project.id,
+          directory: instance.directory,
+          workspaceID,
+        },
+        services,
+      ).pipe(
+        Effect.map((summary) =>
+          cached && !cached.current()
+            ? { ...summary, estimate: { ...summary.estimate, status: "stale" as const } }
+            : summary,
+        ),
         Effect.mapError(() => notFound(`Session not found: ${ctx.params.sessionID}`)),
-        Effect.catchDefect(() => Effect.fail(new ServiceUnavailableError({
-          service: "session.task-summary", message: "Task summary could not be read",
-        }))),
+        Effect.catchDefect(() =>
+          Effect.fail(
+            new ServiceUnavailableError({
+              service: "session.context-usage",
+              message: "Context usage could not be read",
+            }),
+          ),
+        ),
       )
     })
 
@@ -1379,6 +1468,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("get", get)
       .handle("children", children)
       .handle("taskSummary", taskSummary)
+      .handle("contextUsage", contextUsage)
       .handle("todo", todo)
       .handle("plan", plan)
       .handle("diff", diff)

@@ -399,6 +399,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             recent: event.data.recent,
             checkpointID: event.data.checkpointID,
             checkpointHash: event.data.checkpointHash,
+            remote: event.data.remote,
             time: { created: event.data.timestamp },
           }),
         )

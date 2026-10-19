@@ -59,8 +59,21 @@ const PathInfo = Schema.Struct({
 export const VcsDiffQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   mode: Vcs.Mode,
+  baseRef: Schema.optional(Schema.String),
+  baseOID: Schema.optional(Schema.String),
+  headOID: Schema.optional(Schema.String),
   context: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
 })
+
+export const VcsSummaryQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  baseRef: Schema.optional(Schema.String),
+})
+
+export class ApiVcsReadError extends Schema.ErrorClass<ApiVcsReadError>("VcsReadError")(
+  { name: Schema.Literal("VcsReadError"), data: Schema.Struct({ reason: Vcs.ReadError.fields.reason }) },
+  { httpApiStatus: 503 },
+) {}
 
 export class ApiVcsApplyError extends Schema.ErrorClass<ApiVcsApplyError>("VcsApplyError")(
   {
@@ -92,6 +105,8 @@ export const InstancePaths = {
   path: "/path",
   vcs: "/vcs",
   vcsStatus: "/vcs/status",
+  vcsRefs: "/vcs/refs",
+  vcsSummary: "/vcs/summary",
   vcsDiff: "/vcs/diff",
   vcsDiffRaw: "/vcs/diff/raw",
   vcsApply: "/vcs/apply",
@@ -148,9 +163,26 @@ export const InstanceApi = HttpApi.make("instance")
             description: "Retrieve changed files in the current working tree without patches.",
           }),
         ),
+        HttpApiEndpoint.get("vcsRefs", InstancePaths.vcsRefs, {
+          query: WorkspaceRoutingQuery,
+          success: Vcs.Refs,
+          error: ApiVcsReadError,
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "vcs.refs", summary: "List local and cached remote branches" }),
+        ),
+        HttpApiEndpoint.get("vcsSummary", InstancePaths.vcsSummary, {
+          query: VcsSummaryQuery,
+          success: Vcs.WorkSummary,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "vcs.summary",
+            summary: "Read bounded working tree comparison statistics without patches",
+          }),
+        ),
         HttpApiEndpoint.get("vcsDiff", InstancePaths.vcsDiff, {
           query: VcsDiffQuery,
           success: described(Schema.Array(Vcs.FileDiff), "VCS diff"),
+          error: ApiVcsReadError,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "vcs.diff",

@@ -7,6 +7,8 @@ import { AbsolutePath } from "../../schema"
 import { ModelPromptProfile } from "../../deepagent/model-prompt-profile"
 import type { SessionMessage } from "../message"
 import { BuiltInTools } from "../../tool/builtins"
+import { isConfigured, observedProjectStore } from "../../deepagent/knowledge-source"
+import { ProjectBridge } from "../../deepagent/context"
 
 export type Input = {
   readonly runtime: AgentGateway.RuntimeInterface
@@ -19,6 +21,8 @@ export type Input = {
   readonly tools: readonly ToolDefinition[]
   readonly validationCommands?: readonly string[]
   readonly git?: Git.Interface
+  /** Observe the same prompt renderer without admission, plan or runtime writes. */
+  readonly observe?: boolean
 }
 
 export const buildDeepAgentPrompt = Effect.fn("SessionRunner.buildDeepAgentPrompt")(function* (input: Input) {
@@ -55,7 +59,21 @@ export const buildDeepAgentPrompt = Effect.fn("SessionRunner.buildDeepAgentPromp
     latest.content.some(
       (part) => part.type === "tool" && (part.state.status === "completed" || part.state.status === "error"),
     )
+  const missingSources: string[] = []
   const context = input.runtime.withStorage(() => {
+    if (input.observe) {
+      const state = AgentGateway.DeepAgentSessionState.snapshot(
+        input.sessionID,
+        mode,
+        latestUser?.id === input.userMessageID ? input.userMessageID : undefined,
+      )
+      state.userRequest = latestUser?.text ?? state.userRequest
+      state.workspacePath = input.directory
+      if (ProjectBridge.shouldLoadBridge(state.mode) && isConfigured() && !observedProjectStore(input.directory))
+        missingSources.push("project_bridge")
+      if (input.validationCommands?.length) state.validationCommands = [...input.validationCommands]
+      return AgentGateway.DeepAgentOrchestrator.buildPromptContext(orchestratorInput, state)
+    }
     AgentGateway.DeepAgentOrchestrator.initSession(orchestratorInput)
     if (input.validationCommands?.length)
       AgentGateway.DeepAgentOrchestrator.setValidationCommands(input.sessionID, [...input.validationCommands])
@@ -67,8 +85,9 @@ export const buildDeepAgentPrompt = Effect.fn("SessionRunner.buildDeepAgentPromp
   })
   const plan = yield* Effect.sync(() =>
     input.runtime.withStorage(() => {
-      const current = AgentGateway.DeepAgentPlanStore.getPlanDoc(input.sessionID)
-      const ref = AgentGateway.DeepAgentPlanStore.planDocRef(input.sessionID)
+      const observed = input.observe ? AgentGateway.DeepAgentPlanStore.observe(input.sessionID) : undefined
+      const current = input.observe ? observed?.plan : AgentGateway.DeepAgentPlanStore.getPlanDoc(input.sessionID)
+      const ref = input.observe ? observed?.ref : AgentGateway.DeepAgentPlanStore.planDocRef(input.sessionID)
       if (!current || !ref) return undefined
       return AgentGateway.DeepAgentPlanController.renderPlanWriteContext(
         current,
@@ -91,6 +110,7 @@ export const buildDeepAgentPrompt = Effect.fn("SessionRunner.buildDeepAgentPromp
     : input.runtime.volatileRoundContext(context, plan)
   return {
     context,
+    missingSources,
     // Channel 1 (stable short constraint): provider+model keyed ⇒ session-constant ⇒ cache-safe.
     stableSystemParts: [
       ...input.runtime.systemPrompt(input.providerID, context),
@@ -111,10 +131,12 @@ export const buildGovernedPlanContext = (input: {
   readonly runtime: AgentGateway.RuntimeInterface
   readonly sessionID: string
   readonly messages: readonly SessionMessage.Message[]
+  readonly observe?: boolean
 }): string | undefined =>
   input.runtime.withStorage(() => {
-    const current = AgentGateway.DeepAgentPlanStore.getPlanDoc(input.sessionID)
-    const ref = AgentGateway.DeepAgentPlanStore.planDocRef(input.sessionID)
+    const observed = input.observe ? AgentGateway.DeepAgentPlanStore.observe(input.sessionID) : undefined
+    const current = input.observe ? observed?.plan : AgentGateway.DeepAgentPlanStore.getPlanDoc(input.sessionID)
+    const ref = input.observe ? observed?.ref : AgentGateway.DeepAgentPlanStore.planDocRef(input.sessionID)
     if (!current || !ref) return undefined
     const latest = input.messages.at(-1)
     const continuation =

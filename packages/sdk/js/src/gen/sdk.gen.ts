@@ -658,6 +658,8 @@ import type {
   SessionContextCohortResponses,
   SessionContextDiagnosticsErrors,
   SessionContextDiagnosticsResponses,
+  SessionContextUsageErrors,
+  SessionContextUsageResponses,
   SessionContinuationResolutionListErrors,
   SessionContinuationResolutionListResponses,
   SessionContinuationResolutionResolveErrors,
@@ -866,8 +868,12 @@ import type {
   VcsDiffResponses,
   VcsGetErrors,
   VcsGetResponses,
+  VcsRefsErrors,
+  VcsRefsResponses,
   VcsStatusErrors,
   VcsStatusResponses,
+  VcsSummaryErrors,
+  VcsSummaryResponses,
   WebhookCiErrors,
   WebhookCiResponses,
   WebhookGitErrors,
@@ -10074,6 +10080,64 @@ export class Vcs extends HeyApiClient {
   }
 
   /**
+   * List local and cached remote branches
+   */
+  public refs<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<VcsRefsResponses, VcsRefsErrors, ThrowOnError>({
+      url: "/vcs/refs",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read bounded working tree comparison statistics without patches
+   */
+  public summary<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      baseRef?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "baseRef" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<VcsSummaryResponses, VcsSummaryErrors, ThrowOnError>({
+      url: "/vcs/summary",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Get VCS diff
    *
    * Retrieve the current git diff for the working tree or against the default branch.
@@ -10083,6 +10147,9 @@ export class Vcs extends HeyApiClient {
       directory?: string
       workspace?: string
       mode: "git" | "branch"
+      baseRef?: string
+      baseOID?: string
+      headOID?: string
       context?: number
     },
     options?: Options<never, ThrowOnError>,
@@ -10095,6 +10162,9 @@ export class Vcs extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "query", key: "mode" },
+            { in: "query", key: "baseRef" },
+            { in: "query", key: "baseOID" },
+            { in: "query", key: "headOID" },
             { in: "query", key: "context" },
           ],
         },
@@ -12733,6 +12803,59 @@ export class Session2 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  /**
+   * Observe context and recorded usage
+   *
+   * Read the current Session's context estimate and durable usage. POST keeps draft text out of URLs; no input admission, execution, provider or MCP request occurs.
+   */
+  public contextUsage<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      providerID?: string
+      modelID?: string
+      variant?: string
+      agent?: string
+      draft?: string
+      draftRevision: string
+      hasAttachments?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "providerID" },
+            { in: "body", key: "modelID" },
+            { in: "body", key: "variant" },
+            { in: "body", key: "agent" },
+            { in: "body", key: "draft" },
+            { in: "body", key: "draftRevision" },
+            { in: "body", key: "hasAttachments" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionContextUsageResponses, SessionContextUsageErrors, ThrowOnError>(
+      {
+        url: "/session/{sessionID}/context-usage",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
   }
 
   /**

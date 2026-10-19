@@ -1,3 +1,4 @@
+import { RemoteCompactionBinding } from "../remote-compaction-binding"
 import {
   Message,
   ToolCallPart,
@@ -160,6 +161,20 @@ function toLLMMessage(message: SessionMessage.Message, model: Model): Message[] 
     case "assistant":
       return assistant(message, model)
     case "compaction":
+      if (message.remote) {
+        if (!RemoteCompactionBinding.matches(message.remote, model))
+          throw new Error(
+            "Remote compacted context belongs to another provider, model, route, or endpoint. Restore its original model before continuing.",
+          )
+        return [
+          Message.make({
+            id: message.id,
+            role: "user",
+            content: [],
+            metadata: { responsesCompactedWindow: message.remote.output },
+          }),
+        ]
+      }
       return [
         Message.make({
           id: message.id,

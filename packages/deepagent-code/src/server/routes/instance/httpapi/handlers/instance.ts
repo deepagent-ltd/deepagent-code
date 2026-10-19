@@ -14,7 +14,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Effect, Layer } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { ApiVcsApplyError, ApiVcsRawDiffError } from "../groups/instance"
+import { ApiVcsApplyError, ApiVcsRawDiffError, ApiVcsReadError } from "../groups/instance"
 import { markInstanceForDisposal } from "../lifecycle"
 import { Config } from "@/config/config"
 import { snapshotGateway } from "@/deepagent/config"
@@ -96,9 +96,16 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     })
 
     const getVcsDiff = Effect.fn("InstanceHttpApi.vcsDiff")(function* (ctx: {
-      query: { mode: Vcs.Mode; context?: number }
+      query: { mode: Vcs.Mode; context?: number; baseRef?: string; baseOID?: string; headOID?: string }
     }) {
-      return yield* vcs.diff(ctx.query.mode, { context: ctx.query.context })
+      return yield* vcs
+        .diff(ctx.query.mode, {
+          context: ctx.query.context,
+          baseRef: ctx.query.baseRef,
+          baseOID: ctx.query.baseOID,
+          headOID: ctx.query.headOID,
+        })
+        .pipe(Effect.mapError((error) => new ApiVcsReadError({ name: "VcsReadError", data: { reason: error.reason } })))
     })
 
     const getVcsDiffRaw = Effect.fn("InstanceHttpApi.vcsDiffRaw")(function* () {
@@ -172,6 +179,14 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       .handle("path", getPath)
       .handle("vcs", getVcs)
       .handle("vcsStatus", getVcsStatus)
+      .handle("vcsRefs", () =>
+        vcs
+          .refs()
+          .pipe(
+            Effect.mapError((error) => new ApiVcsReadError({ name: "VcsReadError", data: { reason: error.reason } })),
+          ),
+      )
+      .handle("vcsSummary", (ctx) => vcs.summary(ctx.query.baseRef))
       .handle("vcsDiff", getVcsDiff)
       .handle("vcsDiffRaw", getVcsDiffRaw)
       .handle("vcsApply", applyVcs)
