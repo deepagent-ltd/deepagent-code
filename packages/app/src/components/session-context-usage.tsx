@@ -100,7 +100,7 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
   const capacity = () => (dirty() ? local.model.current()?.limit.context : state.summary?.estimate.contextLimit)
   const usageLabel = () => (percent() ? `${percent()!.used}%` : text("unknown"))
   let controller: AbortController | undefined
-  const layout = useSessionOverviewLayout(() => state.trigger, "context", opened)
+  const layout = useSessionOverviewLayout(() => state.trigger, opened)
   const read = async () => {
     const sessionID = params.id
     if (!sessionID || document.visibilityState === "hidden") return

@@ -5,6 +5,8 @@ import { createStore, reconcile } from "solid-js/store"
 import { TaskProgressDetails, TaskProgressPopover } from "@/pages/session/task-progress"
 import { dict } from "@/i18n/en"
 import type { SessionPlan } from "@/context/global-sync/types"
+import userEvent from "@testing-library/user-event"
+import { Dialog } from "@kobalte/core/dialog"
 
 const runtime = vi.hoisted(() => ({
   client: { session: { taskSummary: vi.fn() } },
@@ -64,6 +66,13 @@ beforeEach(() => {
   })
 })
 afterEach(cleanup)
+
+async function closedTask(trigger: HTMLElement) {
+  await waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"))
+  const card = document.querySelector('[data-slot="session-task-dock"]')
+  if (card) fireEvent.animationEnd(card, { animationName: getComputedStyle(card).animationName })
+  await waitFor(() => expect(document.querySelector('[data-slot="session-task-dock"]')).toBeNull())
+}
 
 it("does not display a task trigger or read tasks before a Session exists", () => {
   runtime.sessionID = () => undefined
@@ -232,7 +241,7 @@ it("separates the current plan from subtasks and leaves no old plan after close 
   await screen.findByText("Review own code and deliver")
   setCurrent("sessionID", "other-session")
   await waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"))
-  expect(screen.getByRole("dialog").hasAttribute("data-closed")).toBe(true)
+  expect(document.querySelector('[data-slot="session-task-dock"][data-expanded]')).toBeNull()
   fireEvent.click(trigger)
   await screen.findByText(dict["workPanel.planEmpty"])
   await waitFor(() =>
@@ -249,7 +258,7 @@ it("separates the current plan from subtasks and leaves no old plan after close 
     setCurrent("plans", reconcile({}))
   })
   await waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"))
-  expect(screen.getByRole("dialog").hasAttribute("data-closed")).toBe(true)
+  expect(document.querySelector('[data-slot="session-task-dock"][data-expanded]')).toBeNull()
   fireEvent.click(trigger)
   await screen.findByText(dict["workPanel.planEmpty"])
   expect(screen.queryByText("Review own code and deliver")).toBeNull()
@@ -385,4 +394,99 @@ it("keeps the task card open while the same Session receives messages or the use
   expect((input as HTMLInputElement).value).toBe("Continue this Session")
   fireEvent.click(trigger)
   await waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"))
+})
+
+it("mounts a fixed corner card in its own conversation outside the message scroller, independently of trigger geometry", async () => {
+  render(() => (
+    <>
+      <section data-session-overview-scope data-testid="own-conversation" class="relative">
+        <div data-testid="message-scroller">
+          <TaskProgressPopover />
+        </div>
+      </section>
+      <section data-session-overview-scope data-testid="other-conversation" />
+    </>
+  ))
+  const trigger = screen.getByRole("button", { name: dict["workPanel.overview"] })
+  const bounds = vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(new DOMRect(30, 400, 24, 24))
+  fireEvent.click(trigger)
+  const card = await screen.findByRole("dialog", { name: dict["workPanel.overview"] })
+  expect(screen.getByTestId("own-conversation").contains(card)).toBe(true)
+  expect(screen.getByTestId("other-conversation").contains(card)).toBe(false)
+  expect(screen.getByTestId("message-scroller").contains(card)).toBe(false)
+  expect(card.getAttribute("data-slot")).toBe("session-task-dock")
+  expect(card.classList.contains("absolute")).toBe(true)
+  expect(card.classList.contains("right-3")).toBe(true)
+  expect(card.classList.contains("top-14")).toBe(true)
+  expect(card.style.width).toBe("380px")
+  expect(card.style.maxWidth).toBe("calc(100% - 24px)")
+  expect(card.style.maxHeight).toBe("max(0px, min(560px, 70%, calc(100% - 68px)))")
+  expect(card.querySelector('[data-slot="task-progress-body"]')?.classList.contains("overflow-y-auto")).toBe(true)
+  expect(card.hasAttribute("aria-modal")).toBe(false)
+  expect(bounds).not.toHaveBeenCalled()
+  expect(document.querySelector("[data-popper-positioner]")).toBeNull()
+  fireEvent.scroll(screen.getByTestId("message-scroller"))
+  expect(screen.getByRole("dialog")).toBe(card)
+})
+
+it("keeps scope-less isolated rendering inside its local owner instead of the app body", async () => {
+  const rendered = render(() => <TaskProgressPopover />)
+  fireEvent.click(screen.getByRole("button", { name: dict["workPanel.overview"] }))
+  const card = await screen.findByRole("dialog", { name: dict["workPanel.overview"] })
+  const owner = rendered.container.querySelector('[data-slot="task-progress-owner"]')
+  expect(owner?.contains(card)).toBe(true)
+  expect(card.closest("[data-session-overview-scope]")).toBeNull()
+})
+
+it("does not steal input focus, stays behind a foreground dialog and closes only on its own controls or topmost Escape", async () => {
+  const user = userEvent.setup()
+  const [state, setState] = createStore({ open: false, settings: false })
+  render(() => (
+    <section data-session-overview-scope>
+      <input aria-label="Chat input" />
+      <TaskProgressPopover open={state.open} onOpenChange={(open) => setState("open", open)} />
+      <Dialog open={state.settings} onOpenChange={(settings) => setState("settings", settings)}>
+        <Dialog.Trigger>Settings</Dialog.Trigger>
+        <Dialog.Portal>
+          <Dialog.Content>
+            <Dialog.Title>Foreground settings</Dialog.Title>
+            <Dialog.CloseButton>Dismiss</Dialog.CloseButton>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog>
+    </section>
+  ))
+  const input = screen.getByRole("textbox", { name: "Chat input" })
+  const trigger = screen.getByRole("button", { name: dict["workPanel.overview"] })
+  await user.click(input)
+  setState("open", true)
+  await screen.findByRole("dialog", { name: dict["workPanel.overview"] })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(document.activeElement).toBe(input)
+  expect(document.body.style.pointerEvents).not.toBe("none")
+  expect(document.body.style.overflow).not.toBe("hidden")
+  await user.type(input, "Keep this Session")
+  expect(state.open).toBe(true)
+  expect(document.activeElement).toBe(input)
+  await user.click(screen.getByRole("button", { name: "Settings" }))
+  const settings = await screen.findByRole("dialog", { name: "Foreground settings" })
+  await waitFor(() => expect(settings.contains(document.activeElement)).toBe(true))
+  await user.keyboard("{Escape}")
+  await waitFor(() => expect(state.settings).toBe(false))
+  expect(state.open).toBe(true)
+  fireEvent.animationEnd(settings, { animationName: getComputedStyle(settings).animationName })
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Foreground settings" })).toBeNull())
+  await user.click(input)
+  await user.keyboard("{Escape}")
+  await closedTask(trigger)
+  expect(document.activeElement).toBe(input)
+  await user.click(trigger)
+  await screen.findByRole("dialog", { name: dict["workPanel.overview"] })
+  await user.click(screen.getByRole("button", { name: dict["common.close"] }))
+  await closedTask(trigger)
+  await waitFor(() => expect(document.activeElement).toBe(trigger))
+  await user.click(trigger)
+  await screen.findByRole("dialog", { name: dict["workPanel.overview"] })
+  await user.click(trigger)
+  await closedTask(trigger)
 })

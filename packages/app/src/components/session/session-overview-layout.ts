@@ -1,13 +1,9 @@
 import { createEffect, onCleanup, type Accessor, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 
-/** Keep a portalled Session card inside the conversation that owns its trigger. */
-export function useSessionOverviewLayout(
-  trigger: Accessor<HTMLElement | undefined>,
-  kind: "context" | "tasks",
-  opened: Accessor<boolean>,
-) {
-  const [bounds, setBounds] = createStore({ width: kind === "context" ? 320 : 380, height: 0, offset: 0, hidden: true })
+/** Bound the transient context card to the conversation that owns its trigger. */
+export function useSessionOverviewLayout(trigger: Accessor<HTMLElement | undefined>, opened: Accessor<boolean>) {
+  const [bounds, setBounds] = createStore({ width: 320, height: 0, offset: 0, hidden: true })
   createEffect(() => {
     if (!opened()) return
     const element = trigger()
@@ -38,12 +34,9 @@ export function useSessionOverviewLayout(
       const end = anchor.width ? Math.min(anchor.right, right) : right
       setBounds({
         hidden: false,
-        width: Math.max(0, Math.floor(Math.min(kind === "context" ? 320 : 380, end - left))),
+        width: Math.max(0, Math.floor(Math.min(320, end - left))),
         offset: anchor.width ? Math.min(0, right - anchor.right) : 0,
-        height: Math.max(
-          0,
-          Math.floor(Math.min(kind === "context" ? 480 : 560, (bottom - top) * 0.7, bottom - (anchor.bottom + 4))),
-        ),
+        height: Math.max(0, Math.floor(Math.min(480, (bottom - top) * 0.7, bottom - (anchor.bottom + 4)))),
       })
     }
     measure()

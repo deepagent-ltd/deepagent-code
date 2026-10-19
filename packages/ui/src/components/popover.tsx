@@ -18,7 +18,6 @@ export interface PopoverProps<T extends ValidComponent = "div">
   style?: ComponentProps<"div">["style"]
   bodyClass?: ComponentProps<"div">["class"]
   portal?: boolean
-  dismissOnOutside?: boolean
 }
 
 export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>) {
@@ -39,7 +38,6 @@ export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>
     "defaultOpen",
     "onOpenChange",
     "modal",
-    "dismissOnOutside",
   ])
 
   const [state, setState] = createStore({
@@ -87,7 +85,6 @@ export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>
     }
 
     const onPointerDown = (event: PointerEvent) => {
-      if (local.dismissOnOutside === false) return
       const target = event.target
       if (!(target instanceof Node)) return
       if (inside(target)) return
@@ -95,15 +92,13 @@ export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>
     }
 
     const onFocusIn = (event: FocusEvent) => {
-      if (local.dismissOnOutside === false) return
       const target = event.target
       if (!(target instanceof Node)) return
       if (inside(target)) return
       close("outside")
     }
 
-    // A resident card can remain behind another dialog; let Kobalte dismiss only its topmost layer.
-    if (local.dismissOnOutside !== false) makeEventListener(window, "keydown", onKeyDown, { capture: true })
+    makeEventListener(window, "keydown", onKeyDown, { capture: true })
     makeEventListener(window, "pointerdown", onPointerDown, { capture: true })
     makeEventListener(window, "focusin", onFocusIn, { capture: true })
   })
@@ -117,12 +112,6 @@ export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>
         [local.class ?? ""]: !!local.class,
       }}
       style={local.style}
-      onOpenAutoFocus={(event) => {
-        if (local.dismissOnOutside === false) event.preventDefault()
-      }}
-      onInteractOutside={(event) => {
-        if (local.dismissOnOutside === false) event.preventDefault()
-      }}
       onCloseAutoFocus={(event: Event) => {
         if (state.dismiss === "outside") event.preventDefault()
         setState("dismiss", null)

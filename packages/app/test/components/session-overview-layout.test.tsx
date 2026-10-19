@@ -32,12 +32,12 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function mount(kind: "context" | "tasks", scoped = true) {
+function mount(scoped = true) {
   const geometry = { panel: new DOMRect(100, 50, 800, 700), trigger: new DOMRect(830, 70, 32, 32) }
   const [opened, setOpened] = createSignal(false)
   const fixture = render(() => {
     const [trigger, setTrigger] = createSignal<HTMLElement>()
-    const layout = useSessionOverviewLayout(trigger, kind, opened)
+    const layout = useSessionOverviewLayout(trigger, opened)
     return (
       <section
         data-session-overview-scope={scoped ? "" : undefined}
@@ -59,7 +59,7 @@ function mount(kind: "context" | "tasks", scoped = true) {
 }
 
 it("measures only an open card and releases its observer on close and unmount", () => {
-  const fixture = mount("context")
+  const fixture = mount()
   expect(observers).toHaveLength(0)
   fixture.setOpened(true)
   expect(observers).toHaveLength(1)
@@ -74,9 +74,9 @@ it("measures only an open card and releases its observer on close and unmount", 
 })
 
 it("shrinks and regrows with the conversation while the application viewport stays the same", () => {
-  const fixture = mount("tasks")
+  const fixture = mount()
   fixture.setOpened(true)
-  expect(fixture.card.style.width).toBe("380px")
+  expect(fixture.card.style.width).toBe("320px")
   fixture.geometry.panel = new DOMRect(100, 50, 250, 700)
   fixture.geometry.trigger = new DOMRect(306, 70, 32, 32)
   observers[0].resize()
@@ -85,11 +85,11 @@ it("shrinks and regrows with the conversation while the application viewport sta
   fixture.geometry.panel = new DOMRect(100, 50, 800, 700)
   fixture.geometry.trigger = new DOMRect(830, 70, 32, 32)
   observers[0].resize()
-  expect(fixture.card.style.width).toBe("380px")
+  expect(fixture.card.style.width).toBe("320px")
 })
 
 it("bounds the whole card below its anchor and inside a short conversation without flipping", () => {
-  const fixture = mount("context")
+  const fixture = mount()
   fixture.geometry.panel = new DOMRect(100, 50, 800, 220)
   fixture.geometry.trigger = new DOMRect(830, 120, 32, 32)
   fixture.setOpened(true)
@@ -104,15 +104,15 @@ it("bounds the whole card below its anchor and inside a short conversation witho
 })
 
 it("handles window resizing without a scope and preserves a twelve pixel right inset", () => {
-  const fixture = mount("tasks", false)
+  const fixture = mount(false)
   fixture.geometry.trigger = new DOMRect(350, 30, 32, 32)
   fixture.setOpened(true)
-  expect(fixture.card.style.width).toBe("370px")
-  vi.stubGlobal("innerWidth", 380)
+  expect(fixture.card.style.width).toBe("320px")
+  vi.stubGlobal("innerWidth", 280)
   vi.stubGlobal("innerHeight", 200)
   window.dispatchEvent(new Event("resize"))
-  expect(fixture.card.style.width).toBe("356px")
-  expect(fixture.card.style.getPropertyValue("translate")).toBe("-14px 0")
+  expect(fixture.card.style.width).toBe("256px")
+  expect(fixture.card.style.getPropertyValue("translate")).toBe("-114px 0")
   expect(fixture.card.style.maxHeight).toContain("122px")
   fixture.setOpened(false)
   const retained = fixture.card.style.cssText
@@ -122,7 +122,7 @@ it("handles window resizing without a scope and preserves a twelve pixel right i
 })
 
 it("hides a portalled card while its real workbench is hidden and restores it without reopening", () => {
-  const fixture = mount("tasks")
+  const fixture = mount()
   fixture.setOpened(true)
   expect(fixture.card.style.visibility).toBe("visible")
   fixture.geometry.panel = new DOMRect()
@@ -136,7 +136,7 @@ it("hides a portalled card while its real workbench is hidden and restores it wi
   observers[0].resize()
   expect(fixture.card.style.visibility).toBe("visible")
   expect(fixture.card.style.pointerEvents).toBe("auto")
-  expect(fixture.card.style.width).toBe("380px")
+  expect(fixture.card.style.width).toBe("320px")
   expect(observers).toHaveLength(1)
   fixture.unmount()
   expect(observers[0].disconnect).toHaveBeenCalledOnce()
