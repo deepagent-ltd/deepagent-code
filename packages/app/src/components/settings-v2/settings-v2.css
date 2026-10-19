@@ -98,6 +98,7 @@
   overflow: hidden;
   border-radius: var(--workbench-radius);
   background: var(--v2-background-bg-layer-01);
+  clip-path: inset(0 round var(--workbench-radius));
 }
 
 [data-component="tabs-v2"].settings-v2[data-variant="settings"][data-orientation="vertical"]
@@ -121,6 +122,8 @@
   height: 100%;
   flex: 1 1 0%;
   flex-direction: column;
+  /* Keep the scroll viewport inside the rounded surface even midway through a long page. */
+  padding-bottom: var(--workbench-gap);
 }
 [data-component="settings-v2-page"] {
   display: flex;
@@ -199,6 +202,22 @@
   line-height: 1.45;
   color: var(--v2-text-text-base);
   overflow-wrap: anywhere;
+}
+.settings-v2-section-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.settings-v2-section-heading > .settings-v2-section-title {
+  min-width: 0;
+  flex: 1;
+}
+.settings-v2-section-heading > .settings-v2-actions {
+  flex-shrink: 0;
+  margin-inline-start: auto;
 }
 .settings-v2-section-title + [data-component="settings-v2-list"] {
   margin: 0;
@@ -295,6 +314,7 @@
   gap: 6px;
 }
 .settings-v2-choice-description {
+  display: block;
   color: var(--v2-text-text-muted);
   font-size: 12px;
   line-height: 1.5;
@@ -1013,6 +1033,17 @@
   gap: 24px;
 }
 
+.settings-v2-capabilities:not(.settings-v2-tab-body) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 24px;
+}
+
+[data-component="settings-product-licenses"] {
+  gap: 24px;
+}
+
 .settings-v2-capabilities .settings-v2-section-title {
   padding-bottom: 0;
   font-size: 13px;
@@ -1115,20 +1146,50 @@
   line-height: 1.5;
 }
 
-/* Only this short configuration row follows the shared two-column layout.
+/* Short configuration controls stay opposite their labels; path and receipt rows remain full-width.
    Query the actual panel, since a wide window can still contain a narrow dialog. */
+.settings-v2-import
+  [data-component="settings-v2-row"]:has(
+    [data-action="settings-import-source"],
+    [data-action="settings-import-dry-run"],
+    [data-action="settings-import-copy-db"]
+  )
+  > [data-slot="settings-v2-row-control"] {
+  justify-content: flex-end;
+}
+
 @container settings-import (min-width: 400px) {
-  .settings-v2-import [data-component="settings-v2-row"]:has([data-action="settings-import-source"]) {
+  .settings-v2-import
+    [data-component="settings-v2-row"]:has(
+      [data-action="settings-import-source"],
+      [data-action="settings-import-dry-run"],
+      [data-action="settings-import-copy-db"]
+    ) {
     flex-direction: row;
     align-items: center;
     gap: 16px;
   }
 
   .settings-v2-import
-    [data-component="settings-v2-row"]:has([data-action="settings-import-source"])
+    [data-component="settings-v2-row"]:has(
+      [data-action="settings-import-source"],
+      [data-action="settings-import-dry-run"],
+      [data-action="settings-import-copy-db"]
+    )
+    > [data-slot="settings-v2-row-copy"] {
+    flex: 1;
+  }
+
+  .settings-v2-import
+    [data-component="settings-v2-row"]:has(
+      [data-action="settings-import-source"],
+      [data-action="settings-import-dry-run"],
+      [data-action="settings-import-copy-db"]
+    )
     > [data-slot="settings-v2-row-control"] {
     width: auto;
     flex-shrink: 0;
+    margin-inline-start: auto;
   }
 }
 

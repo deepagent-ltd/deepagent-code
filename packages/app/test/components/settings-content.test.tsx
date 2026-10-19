@@ -56,7 +56,7 @@ it("uses authoritative license bytes and distinguishes product links from OpenCo
     await readFile(path.resolve(process.cwd(), "../../NOTICE"), "utf8"),
   )
   fireEvent.click(screen.getByRole("link", { name: "OpenCode" }))
-  expect(wiring.openLink).toHaveBeenLastCalledWith("https://github.com/sst/opencode")
+  expect(wiring.openLink).toHaveBeenLastCalledWith("https://github.com/anomalyco/opencode")
   fireEvent.click(screen.getByRole("link", { name: dict["settings.about.source"] }))
   expect(wiring.openLink).toHaveBeenLastCalledWith("https://github.com/deepagent-ltd/deepagent-code")
   expect(screen.getByRole("heading", { name: dict["settings.tab.about"] })).toBeTruthy()

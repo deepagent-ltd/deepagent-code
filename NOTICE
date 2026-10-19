@@ -1,7 +1,7 @@
 DeepAgent Code Notices
 ======================
 
-DeepAgent Code is derived from opencode (https://github.com/sst/opencode).
+DeepAgent Code is derived from opencode (https://github.com/anomalyco/opencode).
 The upstream opencode project is licensed under the MIT License. DeepAgent Code
 is licensed under AGPL-3.0-or-later; this NOTICE preserves the upstream MIT
 copyright and permission notice required by that license.

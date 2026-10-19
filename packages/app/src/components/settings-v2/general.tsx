@@ -503,31 +503,32 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
           </SettingsRowV2>
 
           <SettingsRowV2
-            layout="field"
             title={language.t("settings.general.deepagent.prompt.title")}
-            description={language.t("settings.general.deepagent.prompt.description")}
+            description={
+              <>
+                {language.t("settings.general.deepagent.prompt.description")}
+                <span class="settings-v2-choice-description">{scenarioModeDescription()}</span>
+              </>
+            }
           >
-            <div data-action="settings-deepagent-prompt-mode" class="settings-v2-choice-control">
-              <SelectV2
-                appearance="inline"
-                options={scenarioModeCards()}
-                placement="bottom-end"
-                gutter={6}
-                current={scenarioModeCards().find((option) => option.value === deepAgentPromptMode())}
-                value={(option) => option.value}
-                label={(option) => option.label}
-                onSelect={(option) => {
-                  if (!option) return
-                  if (option.value === deepAgentPromptMode()) return
-                  void updateDeepAgentOptions(serverSync, { promptMode: option.value })
-                }}
-              />
-              <div class="settings-v2-choice-description">{scenarioModeDescription()}</div>
-            </div>
+            <SelectV2
+              data-action="settings-deepagent-prompt-mode"
+              appearance="inline"
+              options={scenarioModeCards()}
+              placement="bottom-end"
+              gutter={6}
+              current={scenarioModeCards().find((option) => option.value === deepAgentPromptMode())}
+              value={(option) => option.value}
+              label={(option) => option.label}
+              onSelect={(option) => {
+                if (!option) return
+                if (option.value === deepAgentPromptMode()) return
+                void updateDeepAgentOptions(serverSync, { promptMode: option.value })
+              }}
+            />
           </SettingsRowV2>
 
           <SettingsRowV2
-            layout="field"
             title={language.t("settings.general.deepagent.intelligenceModel.title")}
             description={
               <>
@@ -577,27 +578,29 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
           </SettingsRowV2>
 
           <SettingsRowV2
-            layout="field"
             title={language.t("settings.general.deepagent.selfLearning.title")}
-            description={language.t("settings.general.deepagent.selfLearning.description")}
+            description={
+              <>
+                {language.t("settings.general.deepagent.selfLearning.description")}
+                <span class="settings-v2-choice-description">{selfLearningDescription()}</span>
+              </>
+            }
           >
-            <div data-action="settings-deepagent-self-learning" class="settings-v2-choice-control">
-              <SelectV2
-                appearance="inline"
-                options={selfLearningCards()}
-                placement="bottom-end"
-                gutter={6}
-                current={selfLearningCards().find((option) => option.value === deepAgentSelfLearning())}
-                value={(option) => option.value}
-                label={(option) => option.label}
-                onSelect={(option) => {
-                  if (!option) return
-                  if (option.value === deepAgentSelfLearning()) return
-                  void updateDeepAgentOptions(serverSync, { selfLearning: option.value })
-                }}
-              />
-              <div class="settings-v2-choice-description">{selfLearningDescription()}</div>
-            </div>
+            <SelectV2
+              data-action="settings-deepagent-self-learning"
+              appearance="inline"
+              options={selfLearningCards()}
+              placement="bottom-end"
+              gutter={6}
+              current={selfLearningCards().find((option) => option.value === deepAgentSelfLearning())}
+              value={(option) => option.value}
+              label={(option) => option.label}
+              onSelect={(option) => {
+                if (!option) return
+                if (option.value === deepAgentSelfLearning()) return
+                void updateDeepAgentOptions(serverSync, { selfLearning: option.value })
+              }}
+            />
           </SettingsRowV2>
 
           <SettingsRowV2

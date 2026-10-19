@@ -48,7 +48,7 @@ export const SettingsAboutV2: Component = () => {
             description={language.t("settings.about.upstream.description")}
             layout="field"
           >
-            <Link href="https://github.com/sst/opencode">OpenCode</Link>
+            <Link href="https://github.com/anomalyco/opencode">OpenCode</Link>
           </SettingsRowV2>
           <SettingsRowV2
             title={language.t("settings.about.license.title")}

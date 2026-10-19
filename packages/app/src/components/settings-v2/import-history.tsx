@@ -754,29 +754,6 @@ export const ImportSection: Component = () => {
           </SettingsRowV2>
         </Show>
 
-        <div class="settings-v2-import-actions" data-action="settings-import-run">
-          <ButtonV2
-            size="normal"
-            variant="neutral"
-            class="settings-v2-import-run"
-            disabled={
-              locked() ||
-              (format() === "deepagent"
-                ? !state.snapshotFile
-                : state.capability !== true ||
-                  state.scopes.length === 0 ||
-                  (fileScopes() && (!state.copyLiveDb || (!state.dryRun && state.fileCapability !== true))) ||
-                  (state.mode === "custom" && !sourcePath()) ||
-                  (!state.dryRun && !state.copyLiveDb && !state.confirmLiveMerge))
-            }
-            onClick={() => void run()}
-          >
-            {state.submitting
-              ? t("settings.import.job.submitting", "Submitting…")
-              : t("settings.import.run.btn", "Import")}
-          </ButtonV2>
-        </div>
-
         <Show when={state.unresolved}>
           {(requestID) => (
             <SettingsRowV2
@@ -835,8 +812,50 @@ export const ImportSection: Component = () => {
           )}
         </Show>
       </SettingsListV2>
+      <div class="settings-v2-import-actions" data-action="settings-import-run">
+        <ButtonV2
+          data-action="settings-import-submit"
+          size="normal"
+          variant="neutral"
+          class="settings-v2-import-run"
+          disabled={
+            locked() ||
+            (format() === "deepagent"
+              ? !state.snapshotFile
+              : state.capability !== true ||
+                state.scopes.length === 0 ||
+                (fileScopes() && (!state.copyLiveDb || (!state.dryRun && state.fileCapability !== true))) ||
+                (state.mode === "custom" && !sourcePath()) ||
+                (!state.dryRun && !state.copyLiveDb && !state.confirmLiveMerge))
+          }
+          onClick={() => void run()}
+        >
+          {state.submitting
+            ? t("settings.import.job.submitting", "Submitting…")
+            : t("settings.import.run.btn", "Import")}
+        </ButtonV2>
+      </div>
       <section class="settings-v2-section" data-component="settings-import-history">
-        <h4 class="settings-v2-section-title">{t("settings.import.job.history", "Import jobs")}</h4>
+        <div class="settings-v2-section-heading">
+          <h4 class="settings-v2-section-title">{t("settings.import.job.history", "Import jobs")}</h4>
+          <Show when={state.capability && !state.switched}>
+            <div class="settings-v2-actions">
+              <ButtonV2
+                data-action="settings-import-refresh"
+                variant="neutral"
+                disabled={state.loading}
+                onClick={() => void refresh()}
+              >
+                {t("settings.import.job.refresh", "Refresh jobs")}
+              </ButtonV2>
+              <Show when={state.cursor}>
+                <ButtonV2 variant="ghost" disabled={state.loading} onClick={() => void refresh(true)}>
+                  {t("settings.import.job.more", "Load older jobs")}
+                </ButtonV2>
+              </Show>
+            </div>
+          </Show>
+        </div>
         <SettingsListV2>
           <Show when={state.capability && !state.switched}>
             <SettingsRowV2
@@ -874,16 +893,6 @@ export const ImportSection: Component = () => {
                     }}
                   />
                 </Show>
-                <div class="flex flex-wrap gap-2">
-                  <ButtonV2 variant="ghost" disabled={state.loading} onClick={() => void refresh()}>
-                    {t("settings.import.job.refresh", "Refresh jobs")}
-                  </ButtonV2>
-                  <Show when={state.cursor}>
-                    <ButtonV2 variant="ghost" disabled={state.loading} onClick={() => void refresh(true)}>
-                      {t("settings.import.job.more", "Load older jobs")}
-                    </ButtonV2>
-                  </Show>
-                </div>
               </div>
             </SettingsRowV2>
           </Show>
