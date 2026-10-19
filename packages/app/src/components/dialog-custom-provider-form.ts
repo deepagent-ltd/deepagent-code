@@ -122,6 +122,8 @@ type ValidateArgs = {
 // enter URL + key. Rules:
 //   - id is derived from the registrable host label (api.deepseek.com -> "deepseek",
 //     open.bigmodel.cn -> "bigmodel"), slugified to satisfy PROVIDER_ID.
+//   - IP/localhost endpoints retain their complete normalized address and effective port;
+//     credentials, query parameters and paths never enter the id or display name.
 //   - reserved official ids (openai/deepseek/anthropic/zhipuai/xai/google/...) and any id already in
 //     use are avoided by appending a numeric suffix, since a third-party id that collides with an
 //     official one is rejected by the backend (THIRD_PARTY_PROVIDER_CONFLICT).
@@ -136,34 +138,42 @@ export function deriveProviderIdentity(input: {
   const taken = (id: string) =>
     (input.existingProviderIDs.has(id) && !disabled.has(id)) || (isOfficialProvider(id) && !disabled.has(id))
 
-  const base = baseSlug(input.baseURL)
-  let providerID = base
+  const base = baseIdentity(input.baseURL)
+  let providerID = base.slug
   let n = 2
   while (taken(providerID)) {
-    providerID = `${base}-${n}`
+    providerID = `${base.slug}-${n}`
     n++
   }
-  return { providerID, name: displayName(base) }
+  return { providerID, name: base.name }
 }
 
-function baseSlug(baseURL: string): string {
-  let host = ""
-  try {
-    host = new URL(baseURL.trim()).hostname
-  } catch {
-    host = ""
+function baseIdentity(baseURL: string) {
+  const url = URL.canParse(baseURL.trim()) ? new URL(baseURL.trim()) : undefined
+  const host = url?.hostname ?? ""
+  const ipv6 = host.startsWith("[") && host.endsWith("]")
+  if (ipv6 || /^(\d{1,3}\.){3}\d{1,3}$/.test(host) || host === "localhost" || host.endsWith(".localhost")) {
+    const port = url?.port || (url?.protocol === "https:" ? "443" : url?.protocol === "http:" ? "80" : "")
+    // Keep address boundaries and port identity. IPv6 colon positions must survive
+    // slugging so e.g. [::1] and [1::] cannot collapse to the same endpoint id.
+    const address = ipv6 ? `ipv6-${host.slice(1, -1).replace(/:/g, "_")}` : host.replace(/\./g, "-")
+    return {
+      slug: port ? `${address}-${port}` : address,
+      name: port ? `${host}:${port}` : host,
+    }
   }
   const labels = host.split(".").filter(Boolean)
   // Drop leading generic service labels (api., www., ...) so we land on the brand label.
   while (labels.length > 1 && GENERIC_HOST_LABELS.has(labels[0].toLowerCase())) labels.shift()
-  // Prefer the registrable label: for a.b.com pick "b"; for single-label/localhost keep as-is.
+  // Preserve the domain strategy: for a.b.com pick "b"; keep other single-label hosts as-is.
   const label = labels.length >= 2 ? labels[labels.length - 2] : (labels[0] ?? "")
   const slug = label
     .toLowerCase()
     .replace(/[^a-z0-9-_]+/g, "-")
     .replace(/^-+|-+$/g, "")
   // Must satisfy PROVIDER_ID (starts alphanumeric). Fall back to a safe default.
-  return slug && PROVIDER_ID.test(slug) ? slug : "custom-provider"
+  const base = slug && PROVIDER_ID.test(slug) ? slug : "custom-provider"
+  return { slug: base, name: displayName(base) }
 }
 
 function displayName(slug: string): string {

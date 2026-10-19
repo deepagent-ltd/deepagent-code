@@ -1055,7 +1055,7 @@ export function DialogConnectProvider(props: { provider: string; onBack?: () => 
       }
     >
       <div class="flex h-full min-h-0 min-w-0 flex-col gap-6 overflow-y-auto px-2.5 pb-3">
-        <div class="px-2.5 flex min-w-0 gap-4 items-center">
+        <div class="px-2.5 flex min-w-0 shrink-0 gap-4 items-center">
           <ProviderIcon id={props.provider} class="size-5 shrink-0 icon-strong-base" />
           <div class="min-w-0 break-words text-16-medium text-text-strong">
             <Switch>
@@ -1066,7 +1066,7 @@ export function DialogConnectProvider(props: { provider: string; onBack?: () => 
             </Switch>
           </div>
         </div>
-        <div class="min-h-0 px-2.5 pb-10 flex flex-col gap-6">
+        <div class="min-h-0 shrink-0 px-2.5 pb-3 flex flex-col gap-6">
           <div onKeyDown={handleKey} tabIndex={0} autofocus={store.methodIndex === undefined ? true : undefined}>
             <Switch>
               <Match when={loading()}>
