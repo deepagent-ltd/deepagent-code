@@ -277,6 +277,14 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         model,
         runner,
         builtInTools,
+        // Observers reuse the runner's already-built sources, without acquiring another Location.
+        skillGuidance,
+        Layer.effect(
+          AgentGateway.Runtime,
+          Effect.gen(function* () {
+            return yield* AgentGateway.Runtime
+          }),
+        ),
       ).pipe(
         Layer.provideMerge(client),
         Layer.provide(browser),

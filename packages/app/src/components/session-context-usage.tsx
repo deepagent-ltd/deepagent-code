@@ -222,8 +222,8 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
           open={opened()}
           onOpenChange={change}
           placement="bottom-end"
-          portal={false}
-          class="w-[360px] max-w-[calc(100vw-24px)] rounded-2xl bg-surface-raised-base shadow-xl"
+          class="rounded-2xl bg-surface-raised-base shadow-xl"
+          style={{ width: "360px", "max-width": "calc(100vw - 24px)" }}
           title={<span class="sr-only">{text("title")}</span>}
           triggerAs="button"
           triggerProps={{
