@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import { createHash } from "node:crypto"
@@ -614,9 +614,15 @@ describe("IMFacade", () => {
     }),
   )
 
-  it.live("no facade env and no PoC env → disabled, no engine", () =>
+  it.live("the formal default does not adopt unscoped stored or environment API keys", () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness({ env: {}, http: httpStub(() => ok(payload()), []) })
+      const seen: Seen[] = []
+      const auth = makeAuth({ [IMFacade.AUTH_KEY]: new Auth.Api({ type: "api", key: "old-unscoped-fixture" }) })
+      const harness = yield* makeHarness({
+        env: { DEEPAGENT_IM_FACADE_KEY: "old-environment-fixture" },
+        auth: auth.service,
+        http: httpStub(() => ok(payload()), seen),
+      })
       yield* Effect.gen(function* () {
         const facade = yield* IMFacade.Service
         const status = yield* facade.status
@@ -624,11 +630,76 @@ describe("IMFacade", () => {
         expect(Option.isNone(status.identity)).toBe(true)
         expect(Option.isNone(yield* Ref.get(facade.engine))).toBe(true)
         expect(status.keyOrigin).toBe("none")
+        expect(status.service).toEqual({
+          url: "https://ai.deepagent.ltd/im",
+          source: "default",
+          reconnectRequired: false,
+        })
         // 门面上的操作在 disabled 下 fail-closed im_unavailable
         const error = yield* facade.claim("alice").pipe(Effect.flip)
         expect(error.code).toBe("im_unavailable")
       }).pipe(Effect.provide(harness.layer))
       expect(harness.engineStarts).toEqual([])
+      expect(seen).toEqual([])
+      expect(auth.store.get(IMFacade.AUTH_KEY)).toEqual(new Auth.Api({ type: "api", key: "old-unscoped-fixture" }))
+    }),
+  )
+
+  it.live("the formal default cold boot does not provision a Native identity or send activation requests", () =>
+    Effect.gen(function* () {
+      const directory = yield* Effect.acquireRelease(
+        Effect.sync(() => mkdtempSync(path.join(os.tmpdir(), "dac-im-default-cold-"))),
+        (value) => Effect.sync(() => rmSync(value, { recursive: true, force: true })),
+      )
+      const backend = SecretStore.inMemoryBackend()
+      const device = IMDeviceStore.make({ directory, backend })
+      const seen: Seen[] = []
+      const harness = yield* makeHarness({ env: {}, device, http: httpStub(() => ok(payload()), seen) })
+      yield* Effect.gen(function* () {
+        const facade = yield* IMFacade.Service
+        const status = yield* facade.status
+        expect(status.facade).toBe("blocked")
+        expect(Option.getOrUndefined(status.blocked)?.code).toBe("im_activation_required")
+        expect(status.service?.source).toBe("default")
+        expect(yield* device.get("https://ai.deepagent.ltd/im", "login")).toBeUndefined()
+        expect(yield* Effect.promise(() => backend.get("installation-p256-v1"))).toBeUndefined()
+        expect(existsSync(path.join(directory, "identity.json"))).toBe(false)
+      }).pipe(Effect.provide(harness.layer))
+      expect(harness.engineStarts).toEqual([])
+      expect(seen).toEqual([])
+    }),
+  )
+
+  it.live("the formal prefix default does not adopt an existing root realm device binding", () =>
+    Effect.gen(function* () {
+      const directory = yield* Effect.acquireRelease(
+        Effect.sync(() => mkdtempSync(path.join(os.tmpdir(), "dac-im-default-realm-"))),
+        (value) => Effect.sync(() => rmSync(value, { recursive: true, force: true })),
+      )
+      const device = IMDeviceStore.make({ directory, backend: SecretStore.inMemoryBackend() })
+      const key = yield* device.identity
+      const binding = JSON.stringify({
+        profile: "dac-im-device-v1",
+        imCredential: `iml2.${"a".repeat(64)}`,
+        entitlementID: "e".repeat(32),
+        deviceJkt: key.jkt,
+        bindingVersion: 1,
+        uuid: "u".repeat(32),
+      })
+      yield* device.put("https://ai.deepagent.ltd", "login", binding)
+      const seen: Seen[] = []
+      const harness = yield* makeHarness({ env: {}, device, http: httpStub(() => ok(payload()), seen) })
+      yield* Effect.gen(function* () {
+        const facade = yield* IMFacade.Service
+        const status = yield* facade.status
+        expect(status.facade).toBe("blocked")
+        expect(Option.getOrUndefined(status.blocked)?.code).toBe("im_activation_required")
+        expect(yield* device.get("https://ai.deepagent.ltd", "login")).toBe(binding)
+        expect(yield* device.get("https://ai.deepagent.ltd/im", "login")).toBeUndefined()
+        expect((yield* device.identity).jkt).toBe(key.jkt)
+      }).pipe(Effect.provide(harness.layer))
+      expect(harness.engineStarts).toEqual([])
+      expect(seen).toEqual([])
     }),
   )
 

@@ -3,6 +3,11 @@ import { Schema } from "effect"
 import { ConfigIM } from "../../src/config/im"
 
 test("IM service config preserves absent/null and normalizes only credential-free HTTPS realms", () => {
+  expect(ConfigIM.defaultServiceURL).toBe("https://ai.deepagent.ltd/im")
+  expect(ConfigIM.normalizeServiceURL(ConfigIM.defaultServiceURL)).toBe(ConfigIM.defaultServiceURL)
+  expect(
+    Schema.is(ConfigIM.ServiceStatus)({ url: ConfigIM.defaultServiceURL, source: "default", reconnectRequired: false }),
+  ).toBe(true)
   expect(Schema.decodeUnknownSync(ConfigIM.Info)({ model: "provider/model" }).url).toBeUndefined()
   expect(Schema.decodeUnknownSync(ConfigIM.Info)({ url: null }).url).toBeNull()
   expect(ConfigIM.normalizeServiceURL("HTTPS://Example.COM:443/platform///")).toBe("https://example.com/platform")

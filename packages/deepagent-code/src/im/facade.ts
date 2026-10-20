@@ -61,7 +61,7 @@ import type { IMEntitlementSchema } from "@deepagent-code/core/im/entitlement.sc
 // 凭据策略（项⑥，以 B1 落地方案为准）：kernel_token/navigator_url 只在内存（每次启动重新
 // exchange，短期凭证到期前或断线后续期，不落盘）。sk- key 来源：rebind 成功写入 auth.json（用户配置
 // 目录，0o600，不落仓库）优先；否则 DEEPAGENT_IM_FACADE_KEY env 注入（dev 路径）。URL 只认
-// URL 来自全局 im.url（null 显式关闭），缺省才兼容 DEEPAGENT_IM_FACADE_URL。
+// URL 来自全局 im.url（null 显式关闭），其次 DEEPAGENT_IM_FACADE_URL，均缺省才用正式默认入口。
 
 const log = Log.create({ service: "im-facade" })
 

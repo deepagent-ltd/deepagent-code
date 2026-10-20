@@ -56,5 +56,5 @@ test("IM service OpenAPI keeps explicit disable distinct from absent settings", 
     ),
   ).toBe("#/components/schemas/IMServiceStatus")
   expect(allowsNull(at(service, "properties", "url"))).toBe(true)
-  expect(at(service, "properties", "source", "enum")).toEqual(["config", "environment", "none"])
+  expect(at(service, "properties", "source", "enum")).toEqual(["config", "environment", "default", "none"])
 })

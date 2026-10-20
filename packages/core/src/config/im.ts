@@ -3,6 +3,8 @@ export * as ConfigIM from "./im"
 import { Schema } from "effect"
 import { ModelRef } from "../model/ref"
 
+export const defaultServiceURL = "https://ai.deepagent.ltd/im"
+
 export function normalizeServiceURL(value: string, allowLoopback = false) {
   if (value.length > 2048 || /[\u0000-\u0020\u007f\\?#]/.test(value) || !URL.canParse(value)) return undefined
   const url = new URL(value)
@@ -19,7 +21,7 @@ export function normalizeServiceURL(value: string, allowLoopback = false) {
 export const ServiceURL = Schema.String.check(Schema.makeFilter((value) => normalizeServiceURL(value) !== undefined))
 export const ServiceStatus = Schema.Struct({
   url: Schema.NullOr(Schema.String),
-  source: Schema.Literals(["config", "environment", "none"]),
+  source: Schema.Literals(["config", "environment", "default", "none"]),
   reconnectRequired: Schema.Boolean,
 }).annotate({ identifier: "IMServiceStatus" })
 

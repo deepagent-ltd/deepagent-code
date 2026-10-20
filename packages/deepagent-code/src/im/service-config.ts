@@ -14,9 +14,10 @@ export const read = Effect.fn("IMServiceConfig.read")(function* (
   legacyFixtureHTTP = false,
 ) {
   const saved = config ? (yield* config.getGlobal()).im?.url : undefined
-  const value = saved !== undefined ? saved : env[KernelConfig.facadeEnvKeys.url]
+  const injected = env[KernelConfig.facadeEnvKeys.url]
+  const value = saved !== undefined ? saved : injected ?? ConfigIM.defaultServiceURL
   const source: (typeof ConfigIM.ServiceStatus.Type)["source"] =
-    saved !== undefined ? "config" : value ? "environment" : "none"
+    saved !== undefined ? "config" : injected !== undefined ? "environment" : "default"
   if (value === null || value === undefined || value === "") return { url: null, source }
   // Existing injected-engine fixtures use a non-network HTTP facade. Saved product config stays HTTPS-only.
   const url =
