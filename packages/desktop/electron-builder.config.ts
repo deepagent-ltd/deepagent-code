@@ -136,8 +136,9 @@ const getBase = (): Configuration => ({
   },
   afterPack: async (context) => {
     await verifySharedBrowserComputationAsset(path.join(context.appOutDir,
-      ...(context.electronPlatformName === "darwin" ? [`${context.packager.appInfo.productFilename}.app`, "Contents"] : []),
-      "resources/app.asar.unpacked/out/main/shared-browser-compute"),
+      ...(context.electronPlatformName === "darwin"
+        ? [`${context.packager.appInfo.productFilename}.app`, "Contents", "Resources"] : ["resources"]),
+      "app.asar.unpacked/out/main/shared-browser-compute"),
       await verifySharedBrowserComputationAsset(path.join(path.dirname(fileURLToPath(import.meta.url)), "out/main/shared-browser-compute")))
     const linuxManifestHash = linuxNativeCohorts.get(context.appOutDir)
     if (linuxManifestHash) {
