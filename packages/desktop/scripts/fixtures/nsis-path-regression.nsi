@@ -15,7 +15,9 @@ AutoCloseWindow true
  !error "Define PROBE_RESULTS as an isolated result text path"
 !endif
 OutFile "${PROBE_OUTPUT}"
+!define INSTALL_REGISTRY_KEY "Software\DeepAgentCodeNSISPathProbe"
 !include "${PROBE_INCLUDE}"
+!insertmacro customHeader
 !macro Case NAME INPUT TARGET EXPECTED
  StrCpy $R4 "r4-preserved"
  StrCpy $R5 "r5-preserved"

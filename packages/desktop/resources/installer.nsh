@@ -12,6 +12,31 @@
 !include "LogicLib.nsh"
 !include "WinMessages.nsh"
 
+!ifndef BUILD_UNINSTALLER
+Var UserPathBeforeUpgrade
+Var UserInstallBeforeUpgrade
+!endif
+
+!macro customHeader
+!ifndef BUILD_UNINSTALLER
+; This section runs immediately before electron-builder's main install section.
+; Released 2.0.4 uninstallers can overwrite PATH during an upgrade, so retain the
+; install-time value before electron-builder invokes the old uninstaller.
+Section -CaptureUserPath
+  ClearErrors
+  ReadRegStr $UserPathBeforeUpgrade HKCU "Environment" "Path"
+  ${If} ${Errors}
+    StrCpy $UserPathBeforeUpgrade ""
+  ${EndIf}
+  ClearErrors
+  ReadRegStr $UserInstallBeforeUpgrade HKCU "${INSTALL_REGISTRY_KEY}" "InstallLocation"
+  ${If} ${Errors}
+    StrCpy $UserInstallBeforeUpgrade ""
+  ${EndIf}
+SectionEnd
+!endif
+!macroend
+
 !macro RemovePathSegment UN
 ; Stack: <path> <segment> -> <path without the segment>, empty segments dropped.
 ; NSIS has no string replace builtin, so walk the ;-delimited segments by hand.
@@ -77,11 +102,10 @@ FunctionEnd
 !macroend
 
 !macro customInstall
-  ClearErrors
-  ReadRegStr $R1 HKCU "Environment" "Path"
-  ${If} ${Errors}
-    StrCpy $R1 ""
-  ${EndIf}
+  Push $UserPathBeforeUpgrade
+  Push $UserInstallBeforeUpgrade
+  Call RemovePathSegment
+  Pop $R1
   Push $R1
   Push "$INSTDIR"
   Call RemovePathSegment
