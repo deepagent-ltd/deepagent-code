@@ -16,8 +16,9 @@
 ; Stack: <path> <segment> -> <path without the segment>, empty segments dropped.
 ; NSIS has no string replace builtin, so walk the ;-delimited segments by hand.
 Function ${UN}RemovePathSegment
-  Exch $R9 ; segment to remove; stack top is now the path
-  Exch $R8 ; path; stack top is now stale $R8 content, popped in the epilogue
+  Exch $R9 ; segment to remove; save the caller's $R9 on the stack
+  Exch 1 ; expose the path beneath the saved $R9
+  Exch $R8 ; path; save the caller's $R8 above the saved $R9
   Push $R7 ; rebuilt path (always grows with a trailing ';')
   Push $R6 ; unprocessed remainder (original path + terminator ';')
   Push $R5 ; segment being accumulated
@@ -52,8 +53,9 @@ done:
   Pop $R5
   Pop $R6
   Pop $R7
-  Pop $R9 ; discard the stale $R8 slot
-  Push $R8 ; return the cleaned path
+  Exch $R8 ; return the result while restoring the caller's $R8
+  Exch 1
+  Pop $R9 ; restore the caller's $R9, leaving only the result
 FunctionEnd
 !macroend
 ; electron-builder compiles this include twice (installer pass + BUILD_UNINSTALLER
