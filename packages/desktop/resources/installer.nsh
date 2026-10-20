@@ -3,10 +3,10 @@
 ; PATH — following the VSCode installer convention: a per-user install needs no
 ; elevation, and per-user shells only consult HKCU\Environment anyway.
 ;
-; Everything here uses core NSIS + LogicLib + WinMessages only (no bundled
-; plugins), preserves the REG_EXPAND_SZ value type Windows expects for Path,
-; and broadcasts WM_SETTINGCHANGE so a new terminal sees the change without a
-; reboot. The runtime side of this contract lives in
+; Everything here uses NSIS's bundled System plugin + LogicLib + WinMessages.
+; Successful installs write REG_EXPAND_SZ; failed upgrades restore the original
+; string type and value. WM_SETTINGCHANGE lets new terminals see changes without
+; a reboot. The runtime side of this contract lives in
 ; packages/desktop/src/main/win-env.ts (D-W3).
 
 !include "LogicLib.nsh"
@@ -15,6 +15,10 @@
 !ifndef BUILD_UNINSTALLER
 Var UserPathBeforeUpgrade
 Var UserInstallBeforeUpgrade
+Var UserPathSnapshotCaptured
+Var UserPathBeforeUpgradeExists
+Var UserPathBeforeUpgradeType
+Var UserUninstallBeforeUpgrade
 !endif
 
 !macro customHeader
@@ -23,16 +27,72 @@ Var UserInstallBeforeUpgrade
 ; Released 2.0.4 uninstallers can overwrite PATH during an upgrade, so retain the
 ; install-time value before electron-builder invokes the old uninstaller.
 Section -CaptureUserPath
-  ClearErrors
-  ReadRegStr $UserPathBeforeUpgrade HKCU "Environment" "Path"
-  ${If} ${Errors}
-    StrCpy $UserPathBeforeUpgrade ""
+  StrCpy $UserPathSnapshotCaptured "0"
+  StrCpy $UserPathBeforeUpgrade ""
+  StrCpy $UserPathBeforeUpgradeExists "0"
+  StrCpy $UserPathBeforeUpgradeType "-1"
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  StrCpy $2 "0"
+  StrCpy $3 "0"
+  System::Call 'advapi32::RegOpenKeyExW(p 0x80000001, w "Environment", i 0, i 0x1, *p .r0) i.r1'
+  ${If} $1 == 0
+    System::Call 'advapi32::RegQueryValueExW(p r0, w "Path", p 0, *i .r2, p 0, *i .r3) i.r1'
+    System::Call 'advapi32::RegCloseKey(p r0)'
+  ${EndIf}
+  ${If} $1 == 2
+    ; ERROR_FILE_NOT_FOUND is the only read failure that means no original Path.
+    StrCpy $UserPathBeforeUpgradeType "0"
+  ${ElseIf} $1 == 0
+    ${If} $2 == 1
+    ${OrIf} $2 == 2
+      ; Query the byte length before ReadRegStr can truncate an oversized value.
+      IntOp $0 ${NSIS_MAX_STRLEN} * 2
+      ${If} $3 <= $0
+        ClearErrors
+        ReadRegStr $UserPathBeforeUpgrade HKCU "Environment" "Path"
+        ${IfNot} ${Errors}
+          StrLen $0 $UserPathBeforeUpgrade
+          IntOp $0 $0 + 1
+          IntOp $0 $0 * 2
+          ${If} $0 == $3
+            StrCpy $UserPathBeforeUpgradeType "$2"
+            StrCpy $UserPathBeforeUpgradeExists "1"
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  ${If} $UserPathBeforeUpgradeType == "-1"
+    DetailPrint "User PATH snapshot rejected (registry status $1, type $2, bytes $3)."
+  ${EndIf}
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+  ${If} $UserPathBeforeUpgradeType == "-1"
+    MessageBox MB_OK|MB_ICONSTOP "Unable to safely preserve the user PATH. Installation stopped before removing the existing application." /SD IDOK
+    SetErrorLevel 2
+    Abort
   ${EndIf}
   ClearErrors
   ReadRegStr $UserInstallBeforeUpgrade HKCU "${INSTALL_REGISTRY_KEY}" "InstallLocation"
   ${If} ${Errors}
     StrCpy $UserInstallBeforeUpgrade ""
   ${EndIf}
+  ClearErrors
+  StrCpy $UserUninstallBeforeUpgrade ""
+  ReadRegStr $UserUninstallBeforeUpgrade HKCU "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+  !ifdef UNINSTALL_REGISTRY_KEY_2
+    ${If} $UserUninstallBeforeUpgrade == ""
+      ClearErrors
+      ReadRegStr $UserUninstallBeforeUpgrade HKCU "${UNINSTALL_REGISTRY_KEY_2}" "UninstallString"
+    ${EndIf}
+  !endif
+  ClearErrors
+  StrCpy $UserPathSnapshotCaptured "1"
 SectionEnd
 !endif
 !macroend
@@ -101,6 +161,78 @@ FunctionEnd
   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 !macroend
 
+!macro customUnInstallCheck
+  ; electron-builder calls this immediately after the old uninstaller returns,
+  ; before its failure Quit and before extracting the new application. Restoring
+  ; here also protects PATH when a later install step fails, without callbacks.
+  Push $R0
+  Push $R1
+  ${If} ${Errors}
+    StrCpy $R1 "1"
+  ${Else}
+    StrCpy $R1 "0"
+  ${EndIf}
+  ${If} $UserPathSnapshotCaptured == "1"
+  ${AndIf} $UserUninstallBeforeUpgrade != ""
+    ClearErrors
+    ${If} $UserPathBeforeUpgradeExists == "1"
+      ${If} $UserPathBeforeUpgradeType == "1"
+        WriteRegStr HKCU "Environment" "Path" "$UserPathBeforeUpgrade"
+      ${ElseIf} $UserPathBeforeUpgradeType == "2"
+        WriteRegExpandStr HKCU "Environment" "Path" "$UserPathBeforeUpgrade"
+      ${EndIf}
+    ${Else}
+      DeleteRegValue HKCU "Environment" "Path"
+      ${If} ${Errors}
+        ; Deleting an already-absent value is successful restoration too. Query
+        ; existence without interpreting a type/read failure as a missing value.
+        Push $0
+        Push $1
+        System::Call 'advapi32::RegOpenKeyExW(p 0x80000001, w "Environment", i 0, i 0x1, *p .r0) i.r1'
+        ${If} $1 == 0
+          System::Call 'advapi32::RegQueryValueExW(p r0, w "Path", p 0, p 0, p 0, p 0) i.r1'
+          System::Call 'advapi32::RegCloseKey(p r0)'
+        ${EndIf}
+        ${If} $1 == 2
+          ClearErrors
+        ${Else}
+          SetErrors
+        ${EndIf}
+        Pop $1
+        Pop $0
+      ${EndIf}
+    ${EndIf}
+    ${If} ${Errors}
+      Pop $R1
+      Pop $R0
+      DetailPrint "Unable to restore the user PATH after removing the existing application."
+      MessageBox MB_OK|MB_ICONSTOP "Unable to restore the user PATH. Installation stopped." /SD IDOK
+      SetErrorLevel 2
+      Quit
+    ${EndIf}
+    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+  ${EndIf}
+  ${If} $R1 == "1"
+    SetErrors
+  ${Else}
+    ClearErrors
+  ${EndIf}
+  Pop $R1
+  Pop $R0
+
+  ; Defining this hook replaces upstream's default check (which then Returns).
+  ; Preserve its original launch-error and nonzero-exit behavior exactly.
+  IfErrors 0 +3
+  DetailPrint `Uninstall was not successful. Not able to launch uninstaller!`
+  Return
+  ${If} $R0 != 0
+    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0" /SD IDOK
+    DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
+!macroend
+
 !macro customInstall
   Push $UserPathBeforeUpgrade
   Push $UserInstallBeforeUpgrade
@@ -121,17 +253,18 @@ FunctionEnd
 !macro customUnInstall
   ClearErrors
   ReadRegStr $R1 HKCU "Environment" "Path"
-  ${If} ${Errors}
-    StrCpy $R1 ""
-  ${EndIf}
-  Push $R1
-  Push "$INSTDIR"
-  Call un.RemovePathSegment
-  Pop $R0
-  ${If} $R0 == ""
-    DeleteRegValue HKCU "Environment" "Path"
-    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+  ${IfNot} ${Errors}
+    Push $R1
+    Push "$INSTDIR"
+    Call un.RemovePathSegment
+    Pop $R0
+    ${If} $R0 == ""
+      DeleteRegValue HKCU "Environment" "Path"
+      SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+    ${Else}
+      !insertmacro WriteUserPath
+    ${EndIf}
   ${Else}
-    !insertmacro WriteUserPath
+    DetailPrint "User PATH could not be read safely; PATH left unchanged."
   ${EndIf}
 !macroend

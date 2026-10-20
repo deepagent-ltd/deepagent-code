@@ -16,6 +16,7 @@ AutoCloseWindow true
 !endif
 OutFile "${PROBE_OUTPUT}"
 !define INSTALL_REGISTRY_KEY "Software\DeepAgentCodeNSISPathProbe"
+!define UNINSTALL_REGISTRY_KEY "Software\DeepAgentCodeNSISPathProbe\Uninstall"
 !include "${PROBE_INCLUDE}"
 !insertmacro customHeader
 !macro Case NAME INPUT TARGET EXPECTED
