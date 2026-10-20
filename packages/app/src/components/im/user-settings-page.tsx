@@ -71,7 +71,13 @@ export function IMUserSettingsPage(props: {
           <IdentityCard status={identity()!} onChanged={props.onChanged} compact renameRequest={props.renameRequest} />
         )}
       </Show>
-      <Show when={status()?.facade === "blocked" || status()?.kernel}>
+      <Show
+        when={
+          status()?.facade === "blocked"
+            ? !status()?.blocked || status()?.blocked?.code === "im_activation_required"
+            : status()?.kernel
+        }
+      >
         <p role="status" class="text-12-regular text-text-weak">
           {status()?.facade === "blocked"
             ? language.t("im.facade.blocked.title")

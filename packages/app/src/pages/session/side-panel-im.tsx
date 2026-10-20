@@ -1384,7 +1384,7 @@ export const SidePanelIM: Component<{
                 </div>
               </div>
             </Show>
-            <Show when={availability.groupsFailed}>
+            <Show when={availability.groupsFailed && canOpen()}>
               <div class="m-3 flex flex-col gap-2" role="alert">
                 <p class="text-12-regular text-text-critical">{language.t("im.group.load.failed")}</p>
                 <Button size="small" variant="secondary" disabled={loading()} onClick={() => loadGroups()}>

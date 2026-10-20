@@ -160,6 +160,27 @@ it("opens the existing rename flow only on a contextual request and preserves ca
   expect(runtime.retry).not.toHaveBeenCalled()
 })
 
+it.each(["im_service_changed", "im_kernel_error"])(
+  "shows a single blocked heading while preserving recovery (%s)",
+  (code) => {
+    render(() => (
+      <IMUserSettingsPage
+        status={status({ facade: "blocked", identity: null, kernel: "failed", blocked: { code, message: "" } })}
+        current={() => true}
+        localAvailable
+        onManageIM={vi.fn()}
+        onChanged={vi.fn()}
+      />
+    ))
+    expect(screen.getAllByText(dict["im.facade.blocked.title"])).toHaveLength(1)
+    expect(screen.queryByText(dict["im.facade.kernel.failed"])).toBeNull()
+    const recovery = code === "im_service_changed" ? "im.facade.reconnect" : "im.facade.retry"
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: dict[recovery] }).disabled).toBe(false)
+    expect(runtime.retry).not.toHaveBeenCalled()
+    expect(runtime.rename).not.toHaveBeenCalled()
+  },
+)
+
 it("offers management for activation-required and keeps existing connection recovery explicit", async () => {
   const [state, setState] = createStore({
     status: status({

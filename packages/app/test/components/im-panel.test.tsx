@@ -153,6 +153,33 @@ describe("IM side panel recovery", () => {
     expect(screen.queryByText(dict["im.facade.status.failed"])).toBeNull()
   })
 
+  it.each(["im_service_changed", "im_kernel_error"])(
+    "keeps blocked recovery primary without a redundant conversation error (%s)",
+    async (code) => {
+      client.facadeStatus.mockResolvedValue({
+        ...active,
+        facade: "blocked",
+        identity: null,
+        kernel: null,
+        blocked: { code, message: "" },
+      })
+      client.listGroups.mockRejectedValue(new Error("blocked conversations"))
+      render(() => (
+        <MemoryRouter>
+          <Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} />
+        </MemoryRouter>
+      ))
+      const recovery = code === "im_service_changed" ? "im.facade.reconnect" : "im.facade.retry"
+      expect((await screen.findByRole<HTMLButtonElement>("button", { name: dict[recovery] })).disabled).toBe(false)
+      await waitFor(() => expect(client.listGroupPage).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(screen.queryByText(dict["im.loading"])).toBeNull())
+      expect(screen.getAllByText(dict["im.facade.blocked.title"])).toHaveLength(1)
+      expect(screen.queryByText(dict["im.group.load.failed"])).toBeNull()
+      await openActions()
+      expect(screen.getByRole("menuitem", { name: dict["im.group.create"] }).hasAttribute("data-disabled")).toBe(true)
+    },
+  )
+
   it("shows a failed conversation fetch as an error and retries to the real list", async () => {
     client.facadeStatus.mockResolvedValue(active)
     client.listGroups.mockRejectedValue(new Error("offline"))
