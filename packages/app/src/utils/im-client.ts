@@ -37,7 +37,7 @@ export interface IMFacadeIdentity {
 }
 
 export interface IMFacadeStatus {
-  service?: { url: string | null; source: "config" | "environment" | "none"; reconnectRequired: boolean }
+  service?: { url: string | null; source: "config" | "environment" | "default" | "none"; reconnectRequired: boolean }
   media?: MediaBatch.Policy
   reader?: IMReaderStatus
   facade: "disabled" | "claim_required" | "blocked" | "active"

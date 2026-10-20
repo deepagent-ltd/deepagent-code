@@ -4552,7 +4552,7 @@ export type ImUnsupportedMediaTypeError = {
 
 export type ImServiceStatus = {
   url: string | null
-  source: "config" | "environment" | "none"
+  source: "config" | "environment" | "default" | "none"
   reconnectRequired: boolean
 }
 
