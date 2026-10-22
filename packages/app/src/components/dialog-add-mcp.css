@@ -1,0 +1,182 @@
+.mcp-add-dialog {
+  /* These shared controls still consume the unprefixed token names. */
+  --text-text-base: var(--v2-text-text-base);
+  --text-text-muted: var(--v2-text-text-muted);
+  --text-text-faint: var(--v2-text-text-faint);
+  --background-bg-base: var(--v2-background-bg-base);
+  --background-bg-layer-01: var(--v2-background-bg-layer-01);
+  --border-border-base: var(--v2-border-border-base);
+  --border-border-strong: var(--v2-border-border-strong);
+  --border-border-focus: var(--v2-border-border-focus);
+  --alpha-light-0: var(--v2-alpha-light-0);
+  --alpha-light-2: var(--v2-alpha-light-2);
+  --overlay-simple-overlay-hover: var(--v2-overlay-simple-overlay-hover);
+  --state-fg-danger: var(--v2-state-fg-danger);
+  --elevation-button-neutral: var(--v2-elevation-button-neutral);
+  min-width: 0;
+  min-height: 0;
+  color: var(--v2-text-text-base);
+}
+
+.mcp-add-dialog > [data-slot="dialog-body"] {
+  min-height: 0;
+  overflow: hidden;
+}
+
+[data-component="dialog-v2"]:has(.mcp-add-dialog) [data-slot="dialog-container"] {
+  max-height: min(640px, calc(100dvh - 32px));
+}
+
+[data-component="dialog-v2"] [data-slot="dialog-container"] .mcp-add-dialog[data-slot="dialog-content"] {
+  overflow: hidden;
+}
+
+.mcp-add-mode {
+  flex: none;
+  padding: 0 16px 20px;
+}
+
+.mcp-add-dialog [data-slot="segmented-control-v2"] {
+  width: 100%;
+  height: 32px;
+}
+
+.mcp-add-dialog [data-slot="segmented-control-v2-item"] {
+  height: 32px;
+}
+
+.mcp-add-fields {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 16px 20px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.mcp-add-field,
+.mcp-add-section {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mcp-add-section {
+  gap: 16px;
+}
+
+.mcp-add-label,
+.mcp-add-section-title {
+  color: var(--v2-text-text-base);
+  font-size: 13px;
+  font-weight: 530;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.mcp-add-section-title,
+.mcp-add-description,
+.mcp-add-dialog [data-slot="field-v2-suffix"] {
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.mcp-add-dialog [data-component="field-v2"] {
+  flex: none;
+}
+
+.mcp-add-dialog [data-slot="field-v2-label"] {
+  flex-wrap: wrap;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.mcp-add-dialog [data-component="text-input-v2"],
+.mcp-add-dialog [data-component="textarea-v2"] {
+  width: 100%;
+  min-width: 0;
+  outline-color: var(--v2-border-border-base);
+}
+
+.mcp-add-dialog [data-component="text-input-v2"]:focus-within,
+.mcp-add-dialog [data-component="textarea-v2"]:focus-within {
+  outline-color: var(--v2-border-border-focus);
+}
+
+.mcp-add-oauth {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--v2-border-border-base);
+  border-radius: 8px;
+  background: var(--v2-background-bg-base);
+}
+
+.mcp-add-oauth [data-slot="switch-label"] {
+  color: var(--v2-text-text-base);
+  font-size: 12px;
+}
+
+.mcp-add-catalog {
+  gap: 8px;
+}
+
+.mcp-add-catalog-entry {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--v2-border-border-base);
+  border-radius: 8px;
+  background: var(--v2-background-bg-base);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mcp-add-catalog-entry:hover {
+  background: var(--v2-background-bg-layer-02);
+}
+
+.mcp-add-catalog-entry:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 1px;
+}
+
+.mcp-add-catalog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mcp-add-risk {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--v2-background-bg-layer-02);
+  color: var(--v2-text-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.mcp-add-dialog [data-slot="dialog-footer"] {
+  flex-wrap: wrap;
+  border-top: 1px solid var(--v2-border-border-base);
+}

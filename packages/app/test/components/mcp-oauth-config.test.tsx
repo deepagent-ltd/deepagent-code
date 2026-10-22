@@ -17,7 +17,10 @@ vi.mock("@/context/mcp", () => ({
   useMcpUpdate: () => ({ isPending: false, mutateAsync: fixture.save }),
   useMcpAdd: () => ({ isPending: false, mutateAsync: fixture.add }),
 }))
-vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ close: fixture.close }) }))
+vi.mock("@deepagent-code/ui/context/dialog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@deepagent-code/ui/context/dialog")>()),
+  useDialog: () => ({ close: fixture.close }),
+}))
 vi.mock("@deepagent-code/ui/context/i18n", () => ({ useI18n: () => ({ t: () => "Close" }) }))
 vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
 afterEach(cleanup)
