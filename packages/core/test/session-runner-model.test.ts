@@ -201,15 +201,18 @@ describe("SessionRunnerModel", () => {
 
   it.effect("lowers selected Anthropic Session variants into Messages options", () =>
     Effect.gen(function* () {
-      const catalog = model({ type: "aisdk", package: "@ai-sdk/anthropic", url: "https://anthropic.example/v1" }, [
-        {
-          id: ModelV2.VariantID.make("high"),
-          headers: {},
-          body: {},
-          generation: {},
-          options: { thinking: { type: "enabled", budgetTokens: 12000 } },
-        },
-      ])
+      const catalog = new ModelV2.Info({
+        ...model({ type: "aisdk", package: "@ai-sdk/anthropic", url: "https://anthropic.example/v1" }, [
+          {
+            id: ModelV2.VariantID.make("high"),
+            headers: {},
+            body: {},
+            generation: {},
+            options: { thinking: { type: "enabled", budgetTokens: 12000 } },
+          },
+        ]),
+        limit: { context: 32000, input: 16000, output: 16000 },
+      })
       const session = SessionV2.Info.make({
         id: SessionV2.ID.make("ses_anthropic_variant"),
         projectID: ProjectV2.ID.global,
@@ -350,10 +353,7 @@ describe("W8 production seam: Location resolution is independent of process-loca
         location: { directory: AbsolutePath.make("/project") },
       })
       const resolve = () =>
-        Effect.provide(
-          SessionRunnerModel.Service.pipe(Effect.flatMap((service) => service.resolve(session))),
-          models,
-        )
+        Effect.provide(SessionRunnerModel.Service.pipe(Effect.flatMap((service) => service.resolve(session))), models)
       // Spy: the injection seam counts probe-hook invocations through refreshConfigEvidence.
       const probed: string[] = []
       ModelProtocol.setProbeHook((resolving, provider) => {
