@@ -118,34 +118,88 @@ it("allows automatic discovery without a secret and preserves the existing clien
   expect(fixture.save.mock.calls[0][0].config.oauth).toEqual({ clientId: "public-client", expectedIssuer: undefined })
 })
 
-it.each([false, true])("adds a remote server with explicit OAuth disabled=%s and leaves other credentials out", async (disabled) => {
+it("cancels edited configuration without saving or changing the stored configuration", () => {
+  const original = structuredClone(fixture.config)
   render(() => (
     <Dialog open>
-      <DialogAddMcp />
+      <DialogConfigureMcp name="fixture" />
     </Dialog>
   ))
-  fireEvent.input(screen.getByLabelText(dict["dialog.mcp.add.name"]), { target: { value: "public-peer" } })
-  fireEvent.click(screen.getByRole("button", { name: dict["dialog.mcp.add.typeRemote"] }))
   fireEvent.input(screen.getByLabelText(dict["dialog.mcp.add.url"]), {
-    target: { value: "https://mcp.example.test/public" },
+    target: { value: "https://mcp.example.test/unsaved" },
   })
-  const oauth = screen.getByRole("switch", { name: dict["dialog.mcp.configure.oauth"] })
-  expect(oauth.getAttribute("aria-checked")).toBe("true")
-  if (disabled) fireEvent.click(oauth)
-  expect(oauth.getAttribute("aria-checked")).toBe(String(!disabled))
-  fireEvent.click(screen.getByRole("button", { name: dict["dialog.mcp.add.submit"] }))
-  await waitFor(() => expect(fixture.add).toHaveBeenCalledTimes(1))
-  expect(fixture.add).toHaveBeenCalledWith({
-    name: "public-peer",
-    config: {
-      type: "remote",
-      url: "https://mcp.example.test/public",
-      enabled: true,
-      ...(disabled ? { oauth: false } : {}),
-    },
-  })
-  expect(fixture.close).toHaveBeenCalledTimes(1)
+  fireEvent.click(screen.getByRole("button", { name: dict["dialog.mcp.add.cancel"] }))
+  expect(fixture.close).toHaveBeenCalledOnce()
+  expect(fixture.save).not.toHaveBeenCalled()
+  expect(fixture.config).toEqual(original)
 })
+
+it.each(["add", "configure"] as const)(
+  "a late %s save cannot close a replacement dialog after cancellation",
+  async (mode) => {
+    const pending = Promise.withResolvers<void>()
+    fixture.config = { ...fixture.config!, oauth: false }
+    const mutation = mode === "add" ? fixture.add : fixture.save
+    mutation.mockReturnValueOnce(pending.promise)
+    const view = render(() => (
+      <Dialog open>{mode === "add" ? <DialogAddMcp /> : <DialogConfigureMcp name="fixture" />}</Dialog>
+    ))
+    if (mode === "add") {
+      fireEvent.input(screen.getByLabelText(dict["dialog.mcp.add.name"]), { target: { value: "late-local" } })
+      fireEvent.input(screen.getByLabelText(dict["dialog.mcp.add.command"]), { target: { value: "node peer.js" } })
+    }
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: dict[mode === "add" ? "dialog.mcp.add.submit" : "dialog.mcp.configure.save"],
+      }),
+    )
+    await waitFor(() => expect(mutation).toHaveBeenCalledOnce())
+    fireEvent.click(screen.getByRole("button", { name: dict["dialog.mcp.add.cancel"] }))
+    view.unmount()
+    render(() => (
+      <Dialog open>
+        <p>Replacement dialog</p>
+      </Dialog>
+    ))
+    pending.resolve()
+    await pending.promise
+    await Promise.resolve()
+    expect(fixture.close).toHaveBeenCalledOnce()
+    expect(screen.getByText("Replacement dialog")).toBeTruthy()
+  },
+)
+
+it.each([false, true])(
+  "adds a remote server with explicit OAuth disabled=%s and leaves other credentials out",
+  async (disabled) => {
+    render(() => (
+      <Dialog open>
+        <DialogAddMcp />
+      </Dialog>
+    ))
+    fireEvent.input(screen.getByLabelText(dict["dialog.mcp.add.name"]), { target: { value: "public-peer" } })
+    fireEvent.click(screen.getByRole("button", { name: dict["dialog.mcp.add.typeRemote"] }))
+    fireEvent.input(screen.getByLabelText(dict["dialog.mcp.add.url"]), {
+      target: { value: "https://mcp.example.test/public" },
+    })
+    const oauth = screen.getByRole("switch", { name: dict["dialog.mcp.configure.oauth"] })
+    expect(oauth.getAttribute("aria-checked")).toBe("true")
+    if (disabled) fireEvent.click(oauth)
+    expect(oauth.getAttribute("aria-checked")).toBe(String(!disabled))
+    fireEvent.click(screen.getByRole("button", { name: dict["dialog.mcp.add.submit"] }))
+    await waitFor(() => expect(fixture.add).toHaveBeenCalledTimes(1))
+    expect(fixture.add).toHaveBeenCalledWith({
+      name: "public-peer",
+      config: {
+        type: "remote",
+        url: "https://mcp.example.test/public",
+        enabled: true,
+        ...(disabled ? { oauth: false } : {}),
+      },
+    })
+    expect(fixture.close).toHaveBeenCalledTimes(1)
+  },
+)
 
 it("keeps the remote OAuth choice out of a local command and cancels without adding", async () => {
   render(() => (
@@ -160,10 +214,12 @@ it("keeps the remote OAuth choice out of a local command and cancels without add
   expect(screen.queryByRole("switch")).toBeNull()
   fireEvent.input(screen.getByLabelText(dict["dialog.mcp.add.command"]), { target: { value: "node peer.js" } })
   fireEvent.click(screen.getByRole("button", { name: dict["dialog.mcp.add.submit"] }))
-  await waitFor(() => expect(fixture.add).toHaveBeenCalledWith({
-    name: "local-peer",
-    config: { type: "local", command: ["node", "peer.js"], enabled: true },
-  }))
+  await waitFor(() =>
+    expect(fixture.add).toHaveBeenCalledWith({
+      name: "local-peer",
+      config: { type: "local", command: ["node", "peer.js"], enabled: true },
+    }),
+  )
   expect(fixture.close).toHaveBeenCalledTimes(1)
   cleanup()
   fixture.add.mockClear()

@@ -14,6 +14,7 @@ vi.mock("@deepagent-code/ui/dialog", () => ({
 
 const directory = "/owned/project"
 const requests: { method: string; path: string; directory: string | null; body: Record<string, string> }[] = []
+const close = vi.fn()
 let mode = "normal"
 let changed = false
 let release = () => {}
@@ -108,6 +109,7 @@ const server = createServer(async (request, response) => {
   )
 })
 beforeEach(async () => {
+  close.mockReset()
   requests.length = 0
   migrations.clear()
   mode = "normal"
@@ -139,7 +141,7 @@ const mount = (current = () => true) =>
       directory={directory}
       server={origin}
       current={current}
-      close={() => {}}
+      close={close}
     />
   ))
 const button = (key: keyof typeof dict) => screen.getByRole("button", { name: dict[key] })
@@ -208,12 +210,33 @@ it("a host change permanently invalidates the owner and a late preview cannot re
   expect(requests.filter((request) => request.method === "POST")).toHaveLength(0)
 })
 
+it("cancels a pending credential confirmation and closes without submitting a write", async () => {
+  mount()
+  await screen.findByText("headers.Authorization")
+  fireEvent.click(button("mcp.secrets.commit"))
+  expect(button("mcp.secrets.confirm")).toBeTruthy()
+  fireEvent.click(button("mcp.secrets.cancel"))
+  expect(screen.queryByRole("button", { name: dict["mcp.secrets.confirm"] })).toBeNull()
+  fireEvent.click(button("mcp.secrets.close"))
+  expect(close).toHaveBeenCalledOnce()
+  fireEvent.click(button("mcp.secrets.commit"))
+  fireEvent.click(button("mcp.secrets.confirm"))
+  expect(requests.filter((request) => request.method === "POST")).toHaveLength(0)
+})
 
 it("bounds unknown migration IDs per actual client, retains across remount, and releases a known original receipt", async () => {
   mode = "unknown"
-  const panel = (name: string) => render(() => (
-    <McpSecretsPanel name={name} client={client} directory={directory} server={origin} current={() => true} close={() => {}} />
-  ))
+  const panel = (name: string) =>
+    render(() => (
+      <McpSecretsPanel
+        name={name}
+        client={client}
+        directory={directory}
+        server={origin}
+        current={() => true}
+        close={() => {}}
+      />
+    ))
   for (let i = 0; i < 32; i++) {
     const view = panel(`held-${i}`)
     await screen.findByText("headers.Authorization")

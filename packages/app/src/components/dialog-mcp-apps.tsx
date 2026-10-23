@@ -55,7 +55,11 @@ export function DialogMcpApps(props: { name: string }) {
             sdk.directory === owner.directory &&
             params.id === sessionID
           )
-            dialog.show(() => <SDKProvider directory={owner.directory}><DialogMcpApps name={owner.name} /></SDKProvider>)
+            dialog.show(() => (
+              <SDKProvider directory={owner.directory}>
+                <DialogMcpApps name={owner.name} />
+              </SDKProvider>
+            ))
         })
       }}
       current={() =>
@@ -294,18 +298,25 @@ export function McpAppsPanel(props: {
             }}
           />
         </Show>
-        <SelectV2
-          options={state.resources}
-          current={state.selected}
-          value={(item) => `${item.generation}/${item.tool}`}
-          label={(item) => `${item.tool} · ${item.resourceUri}`}
-          disabled={state.busy || !live()}
-          onSelect={(selected) => {
-            if (selected?.generation === state.selected?.generation && selected?.tool === state.selected?.tool) return
-            invalidate()
-            setState("selected", selected ?? undefined)
-          }}
-        />
+        <Show when={state.resources.length > 0}>
+          <SelectV2
+            options={state.resources}
+            current={state.selected}
+            value={(item) => `${item.generation}/${item.tool}`}
+            label={(item) => `${item.tool} · ${item.resourceUri}`}
+            disabled={state.busy || !live()}
+            onSelect={(selected) => {
+              if (selected?.generation === state.selected?.generation && selected?.tool === state.selected?.tool) return
+              invalidate()
+              setState("selected", selected ?? undefined)
+            }}
+          />
+        </Show>
+        <Show when={!state.busy && !state.error && state.resources.length === 0}>
+          <p role="status" class="rounded-md bg-surface-base p-3 text-13-regular text-text-weak">
+            {language.t("mcp.apps.empty")}
+          </p>
+        </Show>
         <div class="flex flex-wrap gap-2">
           <Button disabled={!live() || state.busy || !state.selected} onClick={() => void open()}>
             {language.t("mcp.apps.open")}

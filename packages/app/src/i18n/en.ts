@@ -343,6 +343,7 @@ export const dict = {
   "browser.control.apiTargetsHint":
     "JSON array of exact HTTPS URLs (including query), allowed contentTypes and maxBodyBytes up to 65536. POST targets must use the primary origin.",
   "mcp.apps.title": "MCP App views",
+  "mcp.apps.empty": "This server does not provide an interactive view. Return to a conversation to use MCP tools.",
   "mcp.apps.open": "Open selected view",
   "mcp.apps.consent":
     "Opening reads a UI resource from {{name}}. The isolated view cannot access this app or your computer.",
@@ -1391,7 +1392,7 @@ export const dict = {
   "mcp.status.needs_auth": "needs auth",
   "mcp.status.needs_client_registration": "needs client registration",
   "mcp.status.disabled": "disabled",
-  "mcp.auth.clickToAuthenticate": "Click to authenticate",
+  "mcp.auth.clickToAuthenticate": "Turn on the switch to authenticate",
 
   "dialog.fork.empty": "No messages to fork from",
 

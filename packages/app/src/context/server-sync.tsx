@@ -339,8 +339,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
           ...(current?.goalId === goal.goalId
             ? { ledger: goal.ledger, stallCount: goal.stallCount, gaps: goal.gaps }
             : {}),
-          eventHint:
-            !current || current.goalId === goal.goalId ? (current?.eventHint ?? 0) + 1 : current.eventHint,
+          eventHint: !current || current.goalId === goal.goalId ? (current?.eventHint ?? 0) + 1 : current.eventHint,
         }),
       )
       return
@@ -738,6 +737,16 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     },
   }))
 
+  const refreshMcpConfiguration = async (key: string) => {
+    const child = children.children[key]
+    const response = await Promise.all([
+      queryClient.refetchQueries(queryOptionsApi.globalConfig(), { throwOnError: true }),
+      sdkFor(key).config.get(),
+    ])
+    if (child && children.children[key] === child && response[1].data)
+      child[1]("config", reconcile(response[1].data, { merge: false }))
+  }
+
   const updateMcpConfig = async (
     directory: string,
     input: { name: string; config: McpLocalConfig | McpRemoteConfig },
@@ -751,10 +760,14 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
         [input.name]: input.config,
       },
     })
-    await queryClient.refetchQueries(queryOptionsApi.globalConfig())
-    if (input.config.enabled === false) await sdk.mcp.disconnect({ name: input.name })
-    else await sdk.mcp.connect({ name: input.name })
-    await queryClient.refetchQueries(queryOptionsApi.mcp(key))
+    await refreshMcpConfiguration(key)
+    await (
+      input.config.enabled === false ? sdk.mcp.disconnect({ name: input.name }) : sdk.mcp.connect({ name: input.name })
+    ).catch(async (error: unknown) => {
+      await queryClient.refetchQueries(queryOptionsApi.mcp(key)).catch(() => {})
+      throw error
+    })
+    await queryClient.refetchQueries(queryOptionsApi.mcp(key), { throwOnError: true })
   }
 
   const removeMcpConfig = async (directory: string, name: string) => {
@@ -762,7 +775,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     const sdk = sdkFor(key)
     const result = await sdk.mcp.removeConfig({ name })
     if (result.data?.removed !== true) throw new Error("MCP configuration removal was not confirmed")
-    await queryClient.refetchQueries(queryOptionsApi.globalConfig())
+    await refreshMcpConfiguration(key)
     await queryClient.refetchQueries(queryOptionsApi.mcp(key))
   }
 
@@ -781,7 +794,10 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   ) => {
     const key = directoryKey(directory)
     const sdk = sdkFor(key)
-    const res = await sdk.mcp.catalogEnable(input)
+    const res = await sdk.mcp.catalogEnable(input).catch(async (error: unknown) => {
+      await queryClient.refetchQueries(queryOptionsApi.mcp(key)).catch(() => {})
+      throw error
+    })
     const enabled = res.data
     if (enabled?.name && enabled.config) {
       // Persist the instantiated config to the global config so it is durable across restarts.
@@ -793,7 +809,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
         },
       })
     }
-    await queryClient.refetchQueries(queryOptionsApi.globalConfig())
+    await refreshMcpConfiguration(key)
     await queryClient.refetchQueries(queryOptionsApi.mcp(key))
   }
 
@@ -829,7 +845,11 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       sessionReloaders.delete(directoryKey(directory))
     },
     mcp: {
-      refresh: (directory: string) => queryClient.refetchQueries(queryOptionsApi.mcp(directoryKey(directory))),
+      refresh: async (directory: string) => {
+        const key = directoryKey(directory)
+        await refreshMcpConfiguration(key)
+        await queryClient.refetchQueries(queryOptionsApi.mcp(key))
+      },
       toggle: async (directory: string, name: string) => {
         const key = directoryKey(directory)
         const sdk = sdkFor(key)

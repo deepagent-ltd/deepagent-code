@@ -318,6 +318,7 @@ export const dict = {
   "browser.control.apiTargetsHint":
     "JSON 数组：精确 HTTPS URL（包括查询参数）、允许的 contentTypes、maxBodyBytes（最多 65536）。POST 目标必须属于主来源。",
   "mcp.apps.title": "MCP 交互界面",
+  "mcp.apps.empty": "此服务器没有提供交互界面。如需使用 MCP 工具，请返回会话。",
   "mcp.apps.open": "打开选中界面",
   "mcp.apps.consent": "打开后将从 {{name}} 读取界面资源。隔离界面无法访问本应用或你的电脑。",
   "mcp.apps.limited": "选择会话后，工具操作使用该会话的权限。请求和结果会保存在对应会话中。",
@@ -1309,7 +1310,7 @@ export const dict = {
   "mcp.status.failed": "失败",
   "mcp.status.needs_auth": "需要授权",
   "mcp.status.needs_client_registration": "需要客户端注册",
-  "mcp.auth.clickToAuthenticate": "点击进行授权",
+  "mcp.auth.clickToAuthenticate": "打开右侧开关以完成授权",
   "mcp.status.disabled": "已禁用",
 
   "dialog.fork.empty": "没有可用于分叉的消息",

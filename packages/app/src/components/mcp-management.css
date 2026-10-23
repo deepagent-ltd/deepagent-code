@@ -1,0 +1,85 @@
+.mcp-management {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px;
+}
+
+.mcp-management-toolbar {
+  display: flex;
+  min-width: 0;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-management-toolbar [data-component="button-v2"] {
+  flex: none;
+  white-space: nowrap;
+}
+
+.mcp-management-list {
+  display: flex;
+  min-width: 0;
+  min-height: 56px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--v2-border-border-base);
+  border-radius: 8px;
+  background: var(--v2-background-bg-base);
+}
+
+.mcp-management-row {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 5px;
+}
+
+.mcp-management-row[data-selected],
+.mcp-management-row:hover {
+  background: var(--v2-background-bg-layer-02);
+}
+
+.mcp-management-server {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mcp-management-server:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.mcp-management-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-management-error {
+  color: var(--v2-text-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.mcp-management-actions [data-component="switch"] {
+  min-width: 32px;
+  min-height: 28px;
+  justify-content: center;
+}

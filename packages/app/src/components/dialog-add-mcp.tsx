@@ -1,4 +1,4 @@
-import { Component, createMemo, For, Show } from "solid-js"
+import { Component, createMemo, For, onCleanup, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { Dialog, DialogFooter } from "@deepagent-code/ui/v2/dialog-v2"
@@ -25,6 +25,15 @@ export const DialogAddMcp: Component = () => {
   const language = useLanguage()
   const dialog = useDialog()
   const add = useMcpAdd()
+  const owner = { live: true }
+  onCleanup(() => {
+    owner.live = false
+  })
+  const close = () => {
+    if (!owner.live) return
+    owner.live = false
+    dialog.close()
+  }
 
   const [state, setState] = createStore({
     tab: "manual" as "manual" | "catalog",
@@ -41,13 +50,13 @@ export const DialogAddMcp: Component = () => {
   })
 
   const submit = async () => {
-    if (!valid() || add.isPending) return
+    if (!owner.live || !valid() || add.isPending) return
     const config: McpLocalConfig | McpRemoteConfig =
       state.type === "local"
         ? { type: "local", command: state.command.trim().split(/\s+/), enabled: true }
         : { type: "remote", url: state.url.trim(), enabled: true, ...(state.oauthDisabled ? { oauth: false } : {}) }
     await add.mutateAsync({ name: state.name.trim(), config })
-    dialog.close()
+    close()
   }
 
   return (
@@ -80,12 +89,12 @@ export const DialogAddMcp: Component = () => {
           onUrl={(value) => setState("url", value)}
           onOauthDisabled={(value) => setState("oauthDisabled", value)}
           onSubmit={submit}
-          onCancel={() => dialog.close()}
+          onCancel={close}
         />
       </Show>
 
       <Show when={state.tab === "catalog"}>
-        <CatalogPicker onDone={() => dialog.close()} />
+        <CatalogPicker onDone={close} />
       </Show>
     </Dialog>
   )
@@ -248,6 +257,10 @@ const CatalogList: Component<{
 const CatalogEntryForm: Component<{ entry: CatalogEntry; onBack: () => void; onDone: () => void }> = (props) => {
   const language = useLanguage()
   const enable = useMcpCatalogEnable()
+  const owner = { live: true }
+  onCleanup(() => {
+    owner.live = false
+  })
   // Param + credential values are keyed by their spec key. multi params are entered one-per-line.
   const [state, setState] = createStore({ params: {} as Record<string, string>, creds: {} as Record<string, string> })
 
@@ -261,7 +274,7 @@ const CatalogEntryForm: Component<{ entry: CatalogEntry; onBack: () => void; onD
   })
 
   const submit = async () => {
-    if (!valid() || enable.isPending) return
+    if (!owner.live || !valid() || enable.isPending) return
     // Expand multi params (one-per-line) into string[]; single params stay strings.
     const paramPayload: Record<string, string | string[]> = {}
     for (const p of props.entry.params) {
@@ -280,6 +293,7 @@ const CatalogEntryForm: Component<{ entry: CatalogEntry; onBack: () => void; onD
       if (raw) credRefs[c.key] = raw
     }
     await enable.mutateAsync({ id: props.entry.id, params: paramPayload, credentialRefs: credRefs })
+    if (!owner.live) return
     showToast({ variant: "success", title: language.t("dialog.mcp.catalog.enabled", { title: props.entry.title }) })
     props.onDone()
   }

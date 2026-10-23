@@ -224,6 +224,7 @@ export const dict = {
   "browser.control.apiTargetsHint":
     "JSON 陣列：精確 HTTPS URL（包括查詢參數）、允許的 contentTypes、maxBodyBytes（最多 65536）。POST 目標必須屬於主要來源。",
   "mcp.apps.title": "MCP 互動介面",
+  "mcp.apps.empty": "此伺服器沒有提供互動介面。如需使用 MCP 工具，請返回對話。",
   "mcp.apps.open": "開啟選取介面",
   "mcp.apps.consent": "開啟後將從 {name} 讀取介面資源。隔離介面無法存取本應用程式或你的電腦。",
   "mcp.apps.limited": "選擇對話後，工具操作使用該對話的權限。請求和結果會保存在對應對話中。",
@@ -860,7 +861,7 @@ export const dict = {
   "mcp.status.connected": "已連線",
   "mcp.status.failed": "失敗",
   "mcp.status.needs_auth": "需要授權",
-  "mcp.auth.clickToAuthenticate": "點擊以進行授權",
+  "mcp.auth.clickToAuthenticate": "開啟右側開關以完成授權",
   "mcp.status.disabled": "已停用",
 
   "dialog.fork.empty": "沒有可用於分支的訊息",
