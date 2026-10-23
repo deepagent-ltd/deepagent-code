@@ -515,6 +515,10 @@ const lowerThinking = Effect.fn("AnthropicMessages.lowerThinking")(function* (re
         ? thinking.budget_tokens
         : undefined
   if (budget === undefined) return yield* invalid("Anthropic thinking provider option requires budgetTokens")
+  if (budget >= (request.generation?.maxTokens ?? request.model.route.defaults.limits?.output ?? 4096))
+    return yield* invalid(
+      "Anthropic thinking budgetTokens must be less than maxTokens; lower the budget or raise the output cap",
+    )
   return { type: "enabled" as const, budget_tokens: budget, display }
 })
 

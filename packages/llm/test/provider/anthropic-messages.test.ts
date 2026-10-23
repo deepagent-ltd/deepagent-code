@@ -89,6 +89,20 @@ describe("Anthropic Messages route", () => {
     }),
   )
 
+  it.effect("rejects a manual thinking budget that cannot fit the configured output cap", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.request({
+          model,
+          prompt: "Hello",
+          generation: { maxTokens: 4096 },
+          providerOptions: { anthropic: { thinking: { type: "enabled", budgetTokens: 16000 } } },
+        }),
+      ).pipe(Effect.flip)
+      expect(error.message).toContain("budgetTokens must be less than maxTokens")
+    }),
+  )
+
   it.effect("prepares Anthropic Messages target", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(request)
