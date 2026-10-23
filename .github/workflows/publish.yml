@@ -649,6 +649,17 @@ jobs:
         timeout-minutes: 5
         run: ./.github/scripts/test-windows-browser-file-stages.ps1
 
+      # Reuse the release's single owner issuance pair across every Desktop target.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: owner-authorization
+          path: ${{ runner.temp }}/owner-auth
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-owner-public-key
+          path: ${{ runner.temp }}/owner-key
+
       - name: Build, package and verify Desktop Native assets
         uses: ./.github/actions/package-desktop
         timeout-minutes: 90
@@ -667,6 +678,8 @@ jobs:
           VITE_SENTRY_ENVIRONMENT: ${{ (github.ref_name == 'beta' && 'beta') || 'production' }}
           VITE_SENTRY_RELEASE: desktop@${{ needs.version.outputs.version }}
           DEEPAGENT_CODE_CLI_ARTIFACT: ${{ (runner.os == 'Windows' && 'deepagent-code-cli-windows') || 'deepagent-code-cli' }}
+          DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: ${{ runner.temp }}/owner-auth/owner-authorization.json
+          DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: ${{ runner.temp }}/owner-key/release-owner-public-key.pem
           RUST_TARGET: ${{ matrix.settings.target }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
           DEEPAGENT_CODE_ALLOW_UNSIGNED: ${{ runner.os == 'Windows' && env.HAS_TRUSTED_SIGNING != 'true' && '1' || '0' }}

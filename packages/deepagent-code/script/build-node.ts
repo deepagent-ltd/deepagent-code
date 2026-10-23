@@ -115,6 +115,21 @@ const nativeDefines = process.env.DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY?.trim
 if (!nativeDefines.DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST)
   await fs.rm(path.join(dir, "dist/node/node.js.native-components.json"), { force: true })
 
+// Desktop uses the same per-release owner issuance pin as the compiled CLI.
+const ownerKeyInput = process.env.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY?.trim()
+if (
+  (process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED === "1" && !ownerKeyInput) ||
+  Boolean(ownerKeyInput) !== Boolean(process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE?.trim())
+)
+  throw new Error("Release owner public key and authorization file must be supplied together")
+const ownerPublicKey = ownerKeyInput
+  ? ownerKeyInput.includes("-----BEGIN")
+    ? ownerKeyInput
+    : await fs.readFile(ownerKeyInput, "utf8")
+  : undefined
+if (ownerKeyInput && !ownerPublicKey?.includes("-----BEGIN PUBLIC KEY-----"))
+  throw new Error("DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY is neither an inline PEM nor a path to one")
+
 const result = await Bun.build({
   target: "node",
   entrypoints: ["./src/node.ts", "./src/im/auth-password-worker.node.ts"],
@@ -135,6 +150,7 @@ const result = await Bun.build({
     // minted v2-owner-<version> authorization row.
     DEEPAGENT_CODE_VERSION: `'${Script.version}'`,
     DEEPAGENT_CODE_CHANNEL: `'${Script.channel}'`,
+    ...(ownerPublicKey ? { DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: JSON.stringify(ownerPublicKey) } : {}),
     ...nativeDefines,
   },
   files: {

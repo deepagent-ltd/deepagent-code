@@ -8,7 +8,11 @@ import { Arch } from "electron-builder"
 import type { Configuration } from "electron-builder"
 import { auditPackageInputs } from "./scripts/audit-package"
 import { verifySharedBrowserComputationAsset } from "./scripts/shared-browser-compute-assets"
-import { prepareWindowsNativeNodePackage, sealInstalledNativeNode, signMacWithNativeNode } from "./scripts/native-node-artifact"
+import {
+  prepareWindowsNativeNodePackage,
+  sealInstalledNativeNode,
+  signMacWithNativeNode,
+} from "./scripts/native-node-artifact"
 import { verifyManagedBrowserInputPackAsset } from "./scripts/managed-browser-input-assets"
 import { verifyLinuxNativeAssets } from "./scripts/linux-native-assets"
 import { prepareLinuxWorkProvisioning } from "./scripts/linux-work-provisioning"
@@ -17,6 +21,12 @@ const execFileAsync = promisify(execFile)
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const signScript = path.join(rootDir, "script", "sign-windows.ps1")
 const linuxNativeCohorts = new Map<string, string>()
+const ownerAuthorizationFile = process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE?.trim()
+if (
+  (process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED === "1" && !ownerAuthorizationFile) ||
+  Boolean(ownerAuthorizationFile) !== Boolean(process.env.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY?.trim())
+)
+  throw new Error("Release owner public key and authorization file must be supplied together")
 
 async function signWindows(configuration: { path: string }) {
   if (process.env.DEEPAGENT_CODE_ALLOW_UNSIGNED === "1" || process.env.DEEPAGENT_CODE_ALLOW_UNSIGNED === "true") return
@@ -120,53 +130,76 @@ const getBase = (): Configuration => ({
     await verifySharedBrowserComputationAsset(path.join(directory, "out/main/shared-browser-compute"))
     const linuxManifest = await lstat(path.join(directory, "out/main/chunks/linux-native-dev-assets.json")).then(
       () => true,
-      (error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return false; throw error },
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return false
+        throw error
+      },
     )
     if (linuxManifest || process.env.DEEPAGENT_CODE_BUILD_LINUX_NATIVE_ASSETS === "1") {
-      if (context.electronPlatformName !== "linux") throw new Error("Linux assets cannot enter another platform package")
-      const captured = await verifyLinuxNativeAssets({ directory: path.join(directory, "out/main/chunks"), target: linuxNativeTarget(context.arch) })
+      if (context.electronPlatformName !== "linux")
+        throw new Error("Linux assets cannot enter another platform package")
+      const captured = await verifyLinuxNativeAssets({
+        directory: path.join(directory, "out/main/chunks"),
+        target: linuxNativeTarget(context.arch),
+      })
       if (!linuxNativeCohorts.has(context.appOutDir) && linuxNativeCohorts.size >= 8)
         throw new Error("Too many concurrent Linux package stages")
       linuxNativeCohorts.set(context.appOutDir, captured.manifestHash)
     }
-    if (context.electronPlatformName === "darwin") await verifyManagedBrowserInputPackAsset({
-      directory: path.join(directory, "out/main/managed-browser-input"),
-      target: managedBrowserInputTarget(context.arch),
-    })
+    if (context.electronPlatformName === "darwin")
+      await verifyManagedBrowserInputPackAsset({
+        directory: path.join(directory, "out/main/managed-browser-input"),
+        target: managedBrowserInputTarget(context.arch),
+      })
   },
   afterPack: async (context) => {
-    await verifySharedBrowserComputationAsset(path.join(context.appOutDir,
-      ...(context.electronPlatformName === "darwin"
-        ? [`${context.packager.appInfo.productFilename}.app`, "Contents", "Resources"] : ["resources"]),
-      "app.asar.unpacked/out/main/shared-browser-compute"),
-      await verifySharedBrowserComputationAsset(path.join(path.dirname(fileURLToPath(import.meta.url)), "out/main/shared-browser-compute")))
+    await verifySharedBrowserComputationAsset(
+      path.join(
+        context.appOutDir,
+        ...(context.electronPlatformName === "darwin"
+          ? [`${context.packager.appInfo.productFilename}.app`, "Contents", "Resources"]
+          : ["resources"]),
+        "app.asar.unpacked/out/main/shared-browser-compute",
+      ),
+      await verifySharedBrowserComputationAsset(
+        path.join(path.dirname(fileURLToPath(import.meta.url)), "out/main/shared-browser-compute"),
+      ),
+    )
     const linuxManifestHash = linuxNativeCohorts.get(context.appOutDir)
     if (linuxManifestHash) {
       try {
         const source = await verifyLinuxNativeAssets({
           directory: path.join(path.dirname(fileURLToPath(import.meta.url)), "out/main/chunks"),
-          target: linuxNativeTarget(context.arch), expectedManifestHash: linuxManifestHash,
+          target: linuxNativeTarget(context.arch),
+          expectedManifestHash: linuxManifestHash,
         })
         await verifyLinuxNativeAssets({
           directory: path.join(context.appOutDir, "resources/app.asar.unpacked/out/main/chunks"),
-          target: source.manifest.target, expectedManifestHash: linuxManifestHash,
+          target: source.manifest.target,
+          expectedManifestHash: linuxManifestHash,
         })
         if (!("executableName" in context.packager) || typeof context.packager.executableName !== "string")
           throw new Error("Linux package executable layout is unavailable")
         await prepareLinuxWorkProvisioning({
-          appOutDir: context.appOutDir, productName: context.packager.appInfo.sanitizedProductName,
-          executable: context.packager.executableName, manifest: source.manifest,
+          appOutDir: context.appOutDir,
+          productName: context.packager.appInfo.sanitizedProductName,
+          executable: context.packager.executableName,
+          manifest: source.manifest,
           resources: path.join(path.dirname(fileURLToPath(import.meta.url)), "resources/linux-work-provisioning"),
         })
       } finally {
         linuxNativeCohorts.delete(context.appOutDir)
       }
     }
-    if (context.electronPlatformName === "darwin") await verifyManagedBrowserInputPackAsset({
-      directory: path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`,
-        "Contents/Resources/app.asar.unpacked/out/main/managed-browser-input"),
-      target: managedBrowserInputTarget(context.arch),
-    })
+    if (context.electronPlatformName === "darwin")
+      await verifyManagedBrowserInputPackAsset({
+        directory: path.join(
+          context.appOutDir,
+          `${context.packager.appInfo.productFilename}.app`,
+          "Contents/Resources/app.asar.unpacked/out/main/managed-browser-input",
+        ),
+        target: managedBrowserInputTarget(context.arch),
+      })
     if (context.electronPlatformName === "win32") {
       await prepareWindowsNativeNodePackage(context)
       return
@@ -183,6 +216,8 @@ const getBase = (): Configuration => ({
       to: "native/",
       filter: ["index.js", "index.d.ts", "build/Release/mac_window.node", "swift-build/**"],
     },
+    // The sidecar's default owner seed resolves the installed Resources root.
+    ...(ownerAuthorizationFile ? [{ from: ownerAuthorizationFile, to: "owner-authorization.json" }] : []),
   ],
   mac: {
     ...(macSigningAvailable ? { sign: signMacWithNativeNode } : {}),
@@ -234,7 +269,18 @@ const getBase = (): Configuration => ({
   },
   deb: {
     // Preserve electron-builder's default runtime libraries and add the CLI used by strict IM custody.
-    depends: ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0", "libsecret-tools"],
+    depends: [
+      "libgtk-3-0",
+      "libnotify4",
+      "libnss3",
+      "libxss1",
+      "libxtst6",
+      "xdg-utils",
+      "libatspi2.0-0",
+      "libuuid1",
+      "libsecret-1-0",
+      "libsecret-tools",
+    ],
     afterInstall: "resources/linux-work-provisioning/after-install.tpl",
     afterRemove: "resources/linux-work-provisioning/after-remove.tpl",
   },
