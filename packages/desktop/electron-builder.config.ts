@@ -23,7 +23,9 @@ const signScript = path.join(rootDir, "script", "sign-windows.ps1")
 const linuxNativeCohorts = new Map<string, string>()
 const ownerAuthorizationFile = process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE?.trim()
 if (
-  (process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED === "1" && !ownerAuthorizationFile) ||
+  (process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED === "1" &&
+    !process.env.DEEPAGENT_CODE_VERSION?.startsWith("0.0.0-") &&
+    !ownerAuthorizationFile) ||
   Boolean(ownerAuthorizationFile) !== Boolean(process.env.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY?.trim())
 )
   throw new Error("Release owner public key and authorization file must be supplied together")

@@ -113,4 +113,8 @@ test("Node builds compile an ephemeral owner public pin and reject incomplete is
   const empty = await build(input, { publicKey: file, authorizationFile })
   expect(empty.code).not.toBe(0)
   expect(empty.logs).toContain("DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY is neither an inline PEM nor a path to one")
+  const dev = await build(input, { required: true, version: "0.0.0-owner-dev-fixture" })
+  expect(dev.code).toBe(0)
+  expect(dev.logs).toContain("Build complete")
+  expect(await Bun.file(path.join(input.output, "node.js")).text()).toContain("0.0.0-owner-dev-fixture")
 }, 60_000)

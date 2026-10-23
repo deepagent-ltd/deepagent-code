@@ -152,7 +152,7 @@ export async function prepare() {
 
 export async function build(
   input: Pick<Awaited<ReturnType<typeof prepare>>, "root" | "copy" | "output" | "home" | "bin">,
-  owner?: { publicKey?: string; authorizationFile?: string; required?: boolean },
+  options?: { publicKey?: string; authorizationFile?: string; required?: boolean; version?: string },
 ) {
   const child = Bun.spawn([path.join(input.bin, "bun"), "script/build-node.ts"], {
     cwd: path.join(input.copy, "packages/deepagent-code"),
@@ -164,10 +164,12 @@ export async function build(
       XDG_DATA_HOME: path.join(input.home, "data"),
       XDG_CACHE_HOME: path.join(input.home, "cache"),
       DEEPAGENT_CODE_CHANNEL: "native-dev-fixture",
-      DEEPAGENT_CODE_VERSION: "2.0.3",
-      ...(owner?.publicKey ? { DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: owner.publicKey } : {}),
-      ...(owner?.authorizationFile ? { DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: owner.authorizationFile } : {}),
-      ...(owner?.required ? { DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED: "1" } : {}),
+      DEEPAGENT_CODE_VERSION: options?.version ?? "2.0.3",
+      ...(options?.publicKey ? { DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: options.publicKey } : {}),
+      ...(options?.authorizationFile
+        ? { DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: options.authorizationFile }
+        : {}),
+      ...(options?.required ? { DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED: "1" } : {}),
     },
     stdin: "ignore",
     stdout: "pipe",

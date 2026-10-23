@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
@@ -22,12 +22,13 @@ const workflows = await Promise.all(
   ["publish", "desktop-build"].map(async (name) => ({
     name,
     document: Bun.YAML.parse(await Bun.file(path.join(root, `.github/workflows/${name}.yml`)).text()) as {
+      on: { workflow_dispatch: { inputs: Record<string, { type: string; required?: boolean }> } }
       jobs: Record<
         string,
         {
           env?: Record<string, string>
           steps: Step[]
-          needs?: string[]
+          needs?: string | string[]
           strategy?: { matrix: { include: { host: string; arch: string; rust_target: string }[] } }
         }
       >
@@ -100,6 +101,128 @@ test("published Desktop targets reuse the CLI release owner row and public pin b
         step.env?.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE !== undefined,
     ),
   ).toBe(false)
+})
+
+test("standalone Desktop release packaging requires one existing publish issuance before cleanup and build", async () => {
+  const workflow = workflows[1].document
+  expect(workflow.on.workflow_dispatch.inputs.owner_issuance_run_id).toMatchObject({ type: "string", required: false })
+  expect(workflow.jobs.cleanup.needs).toBe("setup")
+  const required = workflow.jobs.setup.steps.find(
+    (step) => step.name === "Require the existing publish owner issuance",
+  )!
+  expect(required.env?.OWNER_ISSUANCE_RUN_ID).toBe("${{ inputs.owner_issuance_run_id }}")
+  expect(required.run).toContain('(.path | split("@")[0]) == ".github/workflows/publish.yml"')
+  expect(required.run).toContain('.status == "completed" and .conclusion == "success"')
+  for (const value of ["", "0", "other-workflow", "1/../../", "1\nOTHER=1"]) {
+    const child = Bun.spawn(["/bin/bash", "-c", required.run!], {
+      env: { PATH: "/nonexistent", OWNER_ISSUANCE_RUN_ID: value, REPOSITORY: "fixture/repository", GH_TOKEN: "unused" },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const output = (await new Response(child.stdout).text()) + (await new Response(child.stderr).text())
+    expect(await child.exited).toBe(1)
+    expect(output).toContain("Release Desktop packaging requires owner_issuance_run_id")
+  }
+  const steps = workflow.jobs.build.steps
+  const packaged = steps.findIndex((step) => step.uses === "./.github/actions/package-desktop")
+  const verified = steps.findIndex(
+    (step) => step.name === "Verify the existing owner issuance for this Desktop version",
+  )
+  for (const [name, directory, file, variable] of [
+    [
+      "owner-authorization",
+      "owner-auth",
+      "owner-authorization.json",
+      "DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE",
+    ],
+    [
+      "release-owner-public-key",
+      "owner-key",
+      "release-owner-public-key.pem",
+      "DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY",
+    ],
+  ] as const) {
+    const downloaded = steps.flatMap((step, index) =>
+      step.uses?.startsWith("actions/download-artifact@") && step.with?.name === name ? [{ step, index }] : [],
+    )
+    expect(downloaded).toHaveLength(1)
+    expect(downloaded[0].step.with).toMatchObject({
+      path: `\${{ runner.temp }}/${directory}`,
+      repository: "${{ github.repository }}",
+      "github-token": "${{ github.token }}",
+      "run-id": "${{ needs.setup.outputs.owner_issuance_run_id }}",
+    })
+    expect(downloaded[0].index).toBeLessThan(verified)
+    expect(steps[verified].env?.[variable]).toBe(`\${{ runner.temp }}/${directory}/${file}`)
+    expect(steps[packaged].env?.[variable]).toBe(steps[verified].env?.[variable])
+  }
+  expect(verified).toBeLessThan(packaged)
+  expect(steps.some((step) => step.run?.includes("mint-owner-campaign"))).toBe(false)
+})
+
+test("the actual standalone issuance verifier accepts the signed version and rejects other versions or changed signatures", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "dac-owner-workflow-"))
+  try {
+    const step = workflows[1].document.jobs.build.steps.find(
+      (entry) => entry.name === "Verify the existing owner issuance for this Desktop version",
+    )!
+    const version = "2.0.5"
+    const authorization = path.join(directory, "owner-authorization.json")
+    const pin = path.join(directory, "owner-public.pem")
+    const minted = Bun.spawn(
+      [
+        process.execPath,
+        "script/mint-owner-campaign.ts",
+        "--ephemeral",
+        "--build-identity",
+        version,
+        "--db",
+        path.join(directory, "mint.db"),
+        "--export",
+        authorization,
+      ],
+      {
+        cwd: path.join(root, "packages/deepagent-code"),
+        env: { PATH: process.env.PATH, HOME: directory, TMPDIR: directory },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    )
+    const issued = await Promise.all([
+      new Response(minted.stdout).text(),
+      new Response(minted.stderr).text(),
+      minted.exited,
+    ])
+    expect(issued[2]).toBe(0)
+    const output = JSON.parse(issued[0]) as { public_key_pem: string }
+    const row = (await Bun.file(authorization).json()) as { signature_digest: string }
+    await writeFile(pin, output.public_key_pem)
+    for (const [expectedVersion, signature, accepted] of [
+      [version, row.signature_digest, true],
+      ["2.0.6", row.signature_digest, false],
+      [version, `${row.signature_digest.startsWith("0") ? "1" : "0"}${row.signature_digest.slice(1)}`, false],
+    ] as const) {
+      await writeFile(authorization, JSON.stringify({ ...row, signature_digest: signature }))
+      const child = Bun.spawn(["/bin/bash", "-c", step.run!], {
+        cwd: root,
+        env: {
+          PATH: process.env.PATH,
+          DAC_OWNER_VERSION: expectedVersion,
+          DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: authorization,
+          DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: pin,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const output = (await new Response(child.stdout).text()) + (await new Response(child.stderr).text())
+      expect(await child.exited).toBe(accepted ? 0 : 1)
+      expect(output).toContain(
+        accepted ? "verified_existing_owner_issuance" : "Existing owner issuance does not verify",
+      )
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 test("the shared package action admits one publisher before either prebuild and guards before cleanup", () => {

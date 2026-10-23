@@ -118,7 +118,9 @@ if (!nativeDefines.DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST)
 // Desktop uses the same per-release owner issuance pin as the compiled CLI.
 const ownerKeyInput = process.env.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY?.trim()
 if (
-  (process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED === "1" && !ownerKeyInput) ||
+  (process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED === "1" &&
+    !Script.version.startsWith("0.0.0-") &&
+    !ownerKeyInput) ||
   Boolean(ownerKeyInput) !== Boolean(process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE?.trim())
 )
   throw new Error("Release owner public key and authorization file must be supplied together")

@@ -41,6 +41,10 @@ on:
         options:
           - release
           - test
+      owner_issuance_run_id:
+        description: "Successful publish run containing this version's owner-authorization and release-owner-public-key artifacts (required for release mode)"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -60,6 +64,7 @@ jobs:
       platforms: ${{ inputs.platforms || 'all' }}
 
   cleanup:
+    needs: setup
     if: github.event_name != 'workflow_dispatch' || inputs.artifact_mode != 'test'
     runs-on: ubuntu-24.04
     steps:
@@ -81,7 +86,29 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.gen.outputs.matrix }}
+      owner_issuance_run_id: ${{ steps.owner-source.outputs.owner_issuance_run_id }}
     steps:
+      - name: Require the existing publish owner issuance
+        id: owner-source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          OWNER_ISSUANCE_RUN_ID: ${{ inputs.owner_issuance_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$OWNER_ISSUANCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Release Desktop packaging requires owner_issuance_run_id from the existing successful publish run; no new owner issuer will be created."
+            exit 1
+          fi
+          verified_run=$(gh api "repos/$REPOSITORY/actions/runs/$OWNER_ISSUANCE_RUN_ID" \
+            --jq 'select((.path | split("@")[0]) == ".github/workflows/publish.yml" and .status == "completed" and .conclusion == "success") | .id')
+          if [[ "$verified_run" != "$OWNER_ISSUANCE_RUN_ID" ]]; then
+            echo "::error::owner_issuance_run_id must identify a successful completed publish workflow in this repository."
+            exit 1
+          fi
+          echo "owner_issuance_run_id=$OWNER_ISSUANCE_RUN_ID" >> "$GITHUB_OUTPUT"
+
       - id: gen
         shell: bash
         env:
@@ -146,6 +173,54 @@ jobs:
           dac_release_version=$(node -p 'require("./packages/desktop/package.json").version')
           echo "version=$dac_release_version" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: owner-authorization
+          path: ${{ runner.temp }}/owner-auth
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.setup.outputs.owner_issuance_run_id }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-owner-public-key
+          path: ${{ runner.temp }}/owner-key
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.setup.outputs.owner_issuance_run_id }}
+
+      - name: Verify the existing owner issuance for this Desktop version
+        shell: bash
+        env:
+          DAC_OWNER_VERSION: ${{ steps.release-version.outputs.version }}
+          DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: ${{ runner.temp }}/owner-auth/owner-authorization.json
+          DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: ${{ runner.temp }}/owner-key/release-owner-public-key.pem
+        run: |
+          bun - <<'BUN'
+            import { createHash, createPublicKey, verify } from "node:crypto";
+            import { V2OwnerAuthorization } from "./packages/core/src/session/runner/v2-owner-authorization";
+            import { V2ProviderTurn } from "./packages/core/src/session/runner/v2-provider-turn";
+            const version = process.env.DAC_OWNER_VERSION;
+            const row = await Bun.file(process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE).json();
+            const pin = await Bun.file(process.env.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY).text();
+            const key = createPublicKey(pin);
+            const fields = { authorizationID: row.authorization_id, campaignID: row.campaign_id,
+              subjectCommit: row.subject_commit, subjectTree: row.subject_tree, schemaDigest: row.schema_digest,
+              buildID: row.build_id, packageDigest: row.package_digest, validFrom: row.valid_from, expiresAt: row.expires_at };
+            const identity = V2ProviderTurn.buildIdentityFromVersion(version);
+            const payload = V2OwnerAuthorization.authorizationPayload(fields);
+            if (pin.includes("PRIVATE KEY") || key.asymmetricKeyType !== "ed25519" ||
+                row.build_identity !== version || row.campaign_id !== `v2-owner-${version}` || row.status !== "active" ||
+                !Number.isSafeInteger(row.valid_from) || !Number.isSafeInteger(row.expires_at) ||
+                row.valid_from > Date.now() || row.expires_at <= Date.now() ||
+                Object.entries(identity).some(([name, value]) => fields[name] !== value) ||
+                typeof row.signature_digest !== "string" || !/^[0-9a-f]{128}$/.test(row.signature_digest) ||
+                createHash("sha256").update(payload).digest("hex") !== row.authorization_digest ||
+                !verify(null, Buffer.from(payload), key, Buffer.from(row.signature_digest, "hex")))
+              throw new Error("Existing owner issuance does not verify for the reviewed Desktop version");
+            console.log(JSON.stringify({ state: "verified_existing_owner_issuance", version, campaign: row.campaign_id }));
+          BUN
+
       - name: Download Electron runtime for macOS arm64
         if: matrix.target == 'darwin-arm64'
         working-directory: packages/desktop
@@ -200,6 +275,8 @@ jobs:
           macos-signed: ${{ matrix.group == 'mac' && env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true' }}
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: ${{ runner.temp }}/owner-auth/owner-authorization.json
+          DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: ${{ runner.temp }}/owner-key/release-owner-public-key.pem
           # Preserve the existing opt-in certificate + Apple ID signing contract.
           DEEPAGENT_CODE_ALLOW_UNSIGNED: ${{ ((matrix.group == 'mac' && env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true') || (matrix.group == 'win' && env.HAS_TRUSTED_SIGNING == 'true')) && '0' || '1' }}
           CSC_NAME: ${{ matrix.group == 'mac' && secrets.APPLE_CSC_NAME || '' }}

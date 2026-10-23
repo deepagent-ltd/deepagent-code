@@ -7,6 +7,7 @@ test("Desktop ships the supplied owner authorization at the runtime Resources ro
   const previous = process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE
   const previousKey = process.env.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY
   const previousRequired = process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED
+  const previousVersion = process.env.DEEPAGENT_CODE_VERSION
   try {
     delete process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED
     for (const file of [undefined, "/tmp/dac-owner-input/owner-authorization.json"]) {
@@ -35,9 +36,13 @@ test("Desktop ships the supplied owner authorization at the runtime Resources ro
     )
     delete process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE
     process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED = "1"
+    process.env.DEEPAGENT_CODE_VERSION = "2.0.5"
     await expect(import("../../electron-builder.config.ts?owner=release-missing")).rejects.toThrow(
       "Release owner public key and authorization file must be supplied together",
     )
+    process.env.DEEPAGENT_CODE_VERSION = "0.0.0-owner-dev-fixture"
+    const dev = await import("../../electron-builder.config.ts?owner=dev-self-bootstrap")
+    expect(dev.default.extraResources).toHaveLength(1)
   } finally {
     if (previous === undefined) delete process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE
     if (previous !== undefined) process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE = previous
@@ -45,6 +50,8 @@ test("Desktop ships the supplied owner authorization at the runtime Resources ro
     if (previousKey !== undefined) process.env.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY = previousKey
     if (previousRequired === undefined) delete process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED
     if (previousRequired !== undefined) process.env.DEEPAGENT_CODE_RELEASE_NATIVE_REQUIRED = previousRequired
+    if (previousVersion === undefined) delete process.env.DEEPAGENT_CODE_VERSION
+    if (previousVersion !== undefined) process.env.DEEPAGENT_CODE_VERSION = previousVersion
   }
 })
 
