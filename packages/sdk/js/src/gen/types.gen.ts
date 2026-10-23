@@ -8345,6 +8345,7 @@ export type ConfigV2Model = {
   }
   variants?: Array<{
     id: string
+    disabled?: boolean
     headers?: {
       [key: string]: string
     }

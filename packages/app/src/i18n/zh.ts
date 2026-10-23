@@ -964,6 +964,9 @@ export const dict = {
   "provider.connect.models.empty": "未返回可用模型，尚未保存凭据。",
   "provider.connect.models.save": "保存并启用所选模型",
   "provider.connect.models.selectionRequired": "请至少选择一个模型。",
+  "provider.connect.models.unavailableAfterSave":
+    "配置已保存，但当前项目尚无可用的所选模型。请检查模型启用设置后重试。",
+  "provider.connect.models.catalogVerified": "模型目录已验证，所选模型已启用；尚未调用模型。",
   "provider.connect.models.back": "修改密钥",
   "provider.connect.models.preferencesFailed": "凭据已保存，但模型启用设置保存失败，请重试完成配置。",
   "provider.connect.oauth.catalogUnverified": "授权已保存，尚未验证远端模型目录。",

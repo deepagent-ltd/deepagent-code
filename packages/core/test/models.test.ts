@@ -1,10 +1,11 @@
 import { describe, expect, beforeAll, beforeEach, afterAll } from "bun:test"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Exit, Layer, Ref } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { Global } from "@deepagent-code/core/global"
 import { ModelsDev, mergeVendored } from "@deepagent-code/core/models-dev"
+import { EventV2 } from "@deepagent-code/core/event"
 import { PROVIDER_PRESETS } from "@deepagent-code/core/provider-presets"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { it } from "./lib/effect"
@@ -80,6 +81,7 @@ interface MockState {
   body: string
   status: number
   calls: Array<{ url: string; userAgent: string | null }>
+  responses?: Record<string, string>
 }
 
 const makeMockClient = (state: Ref.Ref<MockState>) =>
@@ -90,11 +92,14 @@ const makeMockClient = (state: Ref.Ref<MockState>) =>
         calls: [...s.calls, { url: request.url, userAgent: request.headers["user-agent"] ?? null }],
       }))
       const s = yield* Ref.get(state)
-      return HttpClientResponse.fromWeb(request, new Response(s.body, { status: s.status }))
+      return HttpClientResponse.fromWeb(
+        request,
+        new Response(s.responses?.[request.url] ?? s.body, { status: s.status }),
+      )
     }),
   )
 
-const buildLayer = (state: Ref.Ref<MockState>, global = testGlobal) => {
+const buildLayer = (state: Ref.Ref<MockState>, global = testGlobal, events = eventLayer()) => {
   const fs = FSUtil.defaultLayer
   const flock = EffectFlock.layer.pipe(Layer.provide(fs), Layer.provide(global))
   // Layer.fresh is required: ModelsDev.layer is a module-level Layer constant,
@@ -103,7 +108,7 @@ const buildLayer = (state: Ref.Ref<MockState>, global = testGlobal) => {
   return Layer.fresh(ModelsDev.layer).pipe(
     Layer.provide(Layer.succeed(HttpClient.HttpClient, makeMockClient(state))),
     Layer.provide(fs),
-    Layer.provide(eventLayer()),
+    Layer.provide(events),
     Layer.provide(global),
     Layer.provide(flock),
   )
@@ -198,6 +203,59 @@ describe("ModelsDev Service", () => {
       expect(yield* Effect.promise(() => readFile(cacheFile, "utf8"))).toBe(JSON.stringify(fixture2))
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBe(1)
+    }),
+  )
+
+  it.live("get() rejects structurally invalid cached JSON while retaining offline provider identities", () =>
+    Effect.gen(function* () {
+      yield* writeCache({ error: "upstream_unavailable" })
+      const state = yield* Ref.make(initialState)
+      const result = yield* provided(
+        state,
+        ModelsDev.Service.use((service) => service.get()),
+      )
+      expect(result).toEqual(merged({}))
+      expect(yield* Effect.promise(() => Bun.file(cacheFile).exists())).toBe(false)
+    }),
+  )
+
+  it.live("get() accepts omitted upstream temperature and preserves extensible catalog metadata", () =>
+    Effect.gen(function* () {
+      const model = { ...fixture.acme!.models["acme-1"]!, temperature: undefined, future: { capability: "retained" } }
+      const catalog = { acme: { ...fixture.acme!, future: "provider-metadata", models: { "acme-1": model } } }
+      yield* writeCache(catalog)
+      const state = yield* Ref.make(initialState)
+      const result = yield* provided(
+        state,
+        ModelsDev.Service.use((service) => service.get()),
+      )
+      expect(result).toEqual(merged(catalog))
+      expect(result.acme!.models["acme-1"]!.temperature).toBeUndefined()
+    }),
+  )
+
+  it.live("refresh(true) skips a JSON error response and uses the next catalog source", () =>
+    Effect.gen(function* () {
+      yield* writeCache(fixture)
+      const state = yield* Ref.make<MockState>({
+        ...initialState,
+        body: JSON.stringify(fixture2),
+        responses: { "https://ai.deepagent.ltd/api.json": JSON.stringify({ error: "upstream_unavailable" }) },
+      })
+      const result = yield* provided(
+        state,
+        Effect.gen(function* () {
+          const service = yield* ModelsDev.Service
+          yield* service.refresh(true)
+          return yield* service.get()
+        }),
+      )
+      expect(result).toEqual(merged(fixture2))
+      expect((yield* Ref.get(state)).calls.map((call) => call.url)).toEqual([
+        "https://ai.deepagent.ltd/api.json",
+        "https://models.dev/api.json",
+      ])
+      expect(yield* Effect.promise(() => readFile(cacheFile, "utf8"))).toBe(JSON.stringify(fixture2))
     }),
   )
 
@@ -332,15 +390,40 @@ describe("ModelsDev Service", () => {
     }),
   )
 
-  it.live("refresh swallows HTTP errors and leaves cache intact", () =>
+  it.live("a failed forced refresh reports failure without changing or publishing the last good catalog", () =>
     Effect.gen(function* () {
       yield* writeCache(fixture)
+      const state = yield* Ref.make({ ...initialState, status: 503, body: "upstream unavailable" })
+      const events = eventLayer()
+      const published: string[] = []
+      yield* Effect.gen(function* () {
+        const service = yield* ModelsDev.Service
+        const event = yield* EventV2.Service
+        const unsubscribe = yield* event.listen((event) =>
+          Effect.sync(() => {
+            if (event.type === ModelsDev.Event.Refreshed.type) published.push(event.type)
+          }),
+        )
+        const before = yield* service.get()
+        const failed = yield* service.refresh(true).pipe(Effect.exit)
+        expect(Exit.isFailure(failed)).toBe(true)
+        expect(yield* service.get()).toEqual(before)
+        expect(yield* Effect.promise(() => readFile(cacheFile, "utf8"))).toBe(JSON.stringify(fixture))
+        expect(published).toEqual([])
+        yield* unsubscribe
+      }).pipe(Effect.provide(Layer.mergeAll(events, buildLayer(state, testGlobal, events))))
+    }),
+  )
+
+  it.live("background refresh swallows HTTP errors and leaves cache intact", () =>
+    Effect.gen(function* () {
+      yield* writeCache(fixture, Date.now() - 10 * 60 * 1000)
       const state = yield* Ref.make({ ...initialState, status: 500, body: "boom" })
       const result = yield* provided(
         state,
         Effect.gen(function* () {
           const svc = yield* ModelsDev.Service
-          yield* svc.refresh(true)
+          yield* svc.refresh(false)
           return yield* svc.get()
         }),
       )

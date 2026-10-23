@@ -706,19 +706,28 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     },
   }
 
-  // Refresh the cached provider lists (global + every directory scope) and re-run bootstrap.
-  // Shared by config updates and by disconnect flows that change provider state on the backend
-  // (e.g. auth.remove + global.dispose) but don't go through updateConfig — without this the
-  // connected-provider list would not re-render after disconnecting a built-in provider.
-  const refreshProviders = () => {
-    bootstrap.refetch()
-    queryClient.invalidateQueries({ queryKey: [serverSDK.scope, null, "providers"] })
-    queryClient.invalidateQueries({
-      predicate: (query) => query.queryKey[0] === serverSDK.scope && query.queryKey[2] === "providers",
-    })
+  // Explicit connection flows await the same global and project snapshots the model picker reads.
+  // Background refreshes retain the last good state without creating an unhandled rejection.
+  const refreshProviders = async (options: { throwOnError?: boolean } = {}) => {
+    const results = await Promise.allSettled([
+      queryClient.refetchQueries(queryOptionsApi.globalConfig(), { throwOnError: true }),
+      queryClient.invalidateQueries(
+        {
+          predicate: (query) => query.queryKey[0] === serverSDK.scope && query.queryKey[2] === "providers",
+        },
+        { throwOnError: true },
+      ),
+      ...Object.entries(children.children).map(async ([key, child]) => {
+        const response = await sdkFor(key).config.get()
+        if (children.children[key] === child && response.data)
+          child[1]("config", reconcile(response.data, { merge: false }))
+      }),
+    ])
+    const failed = results.find((result) => result.status === "rejected")
+    if (options.throwOnError && failed?.status === "rejected") throw failed.reason
   }
 
-  const providerRefreshTimer = setInterval(refreshProviders, PROVIDER_MODEL_REFRESH_INTERVAL_MS)
+  const providerRefreshTimer = setInterval(() => void refreshProviders(), PROVIDER_MODEL_REFRESH_INTERVAL_MS)
   onCleanup(() => clearInterval(providerRefreshTimer))
 
   const updateConfigMutation = useMutation(() => ({

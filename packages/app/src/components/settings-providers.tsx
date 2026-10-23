@@ -111,8 +111,8 @@ const SettingsProvidersContent: Component = () => {
     setRefreshing(providerID, true)
     await serverSDK.client.provider.models
       .refresh({ providerID }, { throwOnError: true })
-      .then((result) => {
-        serverSync.refreshProviders()
+      .then(async (result) => {
+        await serverSync.refreshProviders({ throwOnError: true })
         showToast({
           variant: "success",
           icon: "circle-check",
@@ -189,7 +189,9 @@ const SettingsProvidersContent: Component = () => {
 
       <div class="flex flex-col gap-8 max-w-[720px]">
         <Show
-          when={(consoleState()?.switchableOrgCount ?? 0) > 0 || (consoleState()?.consoleManagedProviders.length ?? 0) > 0}
+          when={
+            (consoleState()?.switchableOrgCount ?? 0) > 0 || (consoleState()?.consoleManagedProviders.length ?? 0) > 0
+          }
         >
           <div class="flex flex-col gap-1" data-component="console-account-section">
             <h3 class="text-14-medium text-text-strong pb-2">

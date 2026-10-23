@@ -195,7 +195,8 @@ function migrateModel(info: typeof ConfigProviderV1.Model.Type, packageName?: st
       info.variants &&
       Object.entries(info.variants).map(([id, options]) => ({
         id,
-        body: ingest(options),
+        ...(options.disabled === undefined ? {} : { disabled: options.disabled }),
+        body: ingest(Object.fromEntries(Object.entries(options).filter(([key]) => key !== "disabled"))),
       })),
     cost: costs,
     disabled: info.status === "deprecated" ? true : undefined,

@@ -61,6 +61,7 @@ class Model extends Schema.Class<Model>("ConfigV2.Model")({
   }).pipe(Schema.optional),
   variants: Schema.Struct({
     id: ModelV2.VariantID,
+    disabled: Schema.Boolean.pipe(Schema.optional),
     ...Request.fields,
   }).pipe(Schema.Array, Schema.optional),
   cost: Schema.Union([Cost, Cost.pipe(Schema.Array)]).pipe(Schema.optional),

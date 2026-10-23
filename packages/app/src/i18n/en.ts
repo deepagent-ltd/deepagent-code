@@ -1021,6 +1021,10 @@ export const dict = {
   "provider.connect.models.empty": "No usable models were returned. Credentials have not been saved.",
   "provider.connect.models.save": "Save and enable selected models",
   "provider.connect.models.selectionRequired": "Select at least one model.",
+  "provider.connect.models.unavailableAfterSave":
+    "Configuration saved, but no selected model is available in this project. Check model settings and retry.",
+  "provider.connect.models.catalogVerified":
+    "The model catalog was verified and selected models are enabled. No model request has been made.",
   "provider.connect.models.back": "Edit key",
   "provider.connect.models.preferencesFailed":
     "Credentials saved, but model preferences could not be saved. Retry to finish setup.",

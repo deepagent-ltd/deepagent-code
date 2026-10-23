@@ -162,7 +162,9 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
     }) {
       const providerID = ctx.params.providerID
       if (OFFICIAL_PROVIDER_ID_SET.has(providerID)) {
-        yield* modelsDev.refresh(true)
+        yield* modelsDev
+          .refresh(true)
+          .pipe(Effect.mapError((error) => new ProviderModelRefreshError({ message: error.message })))
         yield* provider.reload()
         // D2: renamed catalog entries re-home under their official id inside ModelsDev's merge,
         // so the plain official-id lookup below sees the bridged entry.

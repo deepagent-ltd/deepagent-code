@@ -7,6 +7,7 @@ import { ModelV2 } from "../../model"
 import { ModelRequest } from "../../model-request"
 import { PluginV2 } from "../../plugin"
 import { ProviderV2 } from "../../provider"
+import { ProviderVariants } from "../../provider-variants"
 
 export const Plugin = PluginV2.define({
   id: PluginV2.ID.make("config-provider"),
@@ -18,6 +19,10 @@ export const Plugin = PluginV2.define({
     const files = entries.filter((entry): entry is Config.Document => entry.type === "document")
 
     yield* transform((catalog) => {
+      const disabledVariants = new Map<
+        string,
+        { providerID: ProviderV2.ID; modelID: ModelV2.ID; ids: Set<ModelV2.VariantID> }
+      >()
       const configuredDefault = Config.latest(entries, "model")
       if (configuredDefault !== undefined) {
         const model = ModelV2.parse(configuredDefault)
@@ -33,7 +38,16 @@ export const Plugin = PluginV2.define({
             item.env === undefined &&
             item.api === undefined &&
             item.request === undefined &&
-            Object.values(item.models ?? {}).every((model) => Object.keys(model).every((key) => key === "disabled"))
+            Object.values(item.models ?? {}).every((model) =>
+              Object.keys(model).every(
+                (key) =>
+                  key === "disabled" ||
+                  (key === "variants" &&
+                    model.variants?.every((variant) =>
+                      Object.keys(variant).every((field) => field === "id" || field === "disabled"),
+                    )),
+              ),
+            )
           if (!selectionOnly)
             catalog.provider.update(providerID, (provider) => {
               if (item.name !== undefined) provider.name = item.name
@@ -73,6 +87,18 @@ export const Plugin = PluginV2.define({
               }
               if (config.variants !== undefined) {
                 for (const variant of config.variants) {
+                  if (variant.disabled !== undefined) {
+                    const key = JSON.stringify([providerID, model.id])
+                    const disabled = disabledVariants.get(key) ?? {
+                      providerID,
+                      modelID: model.id,
+                      ids: new Set<ModelV2.VariantID>(),
+                    }
+                    if (variant.disabled) disabled.ids.add(variant.id)
+                    if (!variant.disabled) disabled.ids.delete(variant.id)
+                    disabledVariants.set(key, disabled)
+                  }
+                  if (variant.disabled) continue
                   let existing = model.variants.find((item) => item.id === variant.id)
                   if (!existing) {
                     existing = {
@@ -86,7 +112,10 @@ export const Plugin = PluginV2.define({
                   }
                   ModelRequest.assign(existing, {
                     headers: variant.headers,
-                    ...ModelRequest.normalizeAiSdkOptions(packageName, variant.body ?? {}),
+                    ...ModelRequest.normalizeAiSdkOptions(
+                      packageName,
+                      ProviderVariants.normalizeDeepSeekOptions(model.api.id, packageName, variant.body ?? {}),
+                    ),
                   })
                 }
               }
@@ -113,6 +142,13 @@ export const Plugin = PluginV2.define({
             })
           }
         }
+      }
+      // Filter after all files so a later project enable keeps generated options.
+      for (const entry of disabledVariants.values()) {
+        if (!entry.ids.size) continue
+        catalog.model.update(entry.providerID, entry.modelID, (model) => {
+          model.variants = model.variants.filter((variant) => !entry.ids.has(variant.id))
+        })
       }
     })
   }),

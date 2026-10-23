@@ -23,7 +23,7 @@ import { EventV2 } from "../src/event"
 import { Flag } from "../src/flag/flag"
 import { FSUtil } from "../src/fs-util"
 import { Global } from "../src/global"
-import { ModelsDev } from "../src/models-dev"
+import { ModelsDev, mergeVendored } from "../src/models-dev"
 import { Npm } from "../src/npm"
 import { Project } from "../src/project"
 import { ApplicationTools } from "../src/tool/application-tools"
@@ -143,18 +143,17 @@ describe("SessionRunnerModel production Location vertical", () => {
             const resolved = yield* Effect.gen(function* () {
               yield* PluginBoot.Service.use((boot) => boot.wait())
               const catalog = yield* Catalog.Service
-              // The models.dev fetch is disabled; the only catalog entries are the vendored
-              // first-party `deepagent` seed (models-dev OFFICIAL_VENDORED_CATALOG) and the
-              // provider this Location's config file defined.
+              // Offline catalogs retain official connection identities alongside the vendored
+              // first-party models and this Location's configured provider.
               const providers = yield* catalog.provider.all()
               expect(providers.map((provider) => provider.id)).toEqual([
-                ProviderV2.ID.make("deepagent"),
+                ...Object.keys(mergeVendored({})).map((id) => ProviderV2.ID.make(id)),
                 ProviderV2.ID.make("acme"),
               ])
               // Provenance is unique naming (K-04): the vendored first-party seed
               // carries no origin; only the config-ingressed provider does.
               expect(providers[0]?.origin).toBeUndefined()
-              expect(providers[1]?.origin).toBe("config")
+              expect(providers.find((provider) => provider.id === "acme")?.origin).toBe("config")
               // No session model: the config `model` scalar selects the default.
               return yield* SessionRunnerModel.Service.use((service) => service.resolve(session(tmp.path)))
             }).pipe(Effect.scoped, Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(tmp.path) })))

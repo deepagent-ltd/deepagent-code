@@ -108,8 +108,8 @@ export const SettingsProvidersV2: Component = () => {
     setRefreshing(providerID, true)
     await serverSdk.client.provider.models
       .refresh({ providerID }, { throwOnError: true })
-      .then((result) => {
-        serverSync.refreshProviders()
+      .then(async (result) => {
+        await serverSync.refreshProviders({ throwOnError: true })
         showToast({
           variant: "success",
           icon: "circle-check",

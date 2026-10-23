@@ -11,6 +11,7 @@ import { Plugin } from "../plugin"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
+import { ProviderVariants } from "@deepagent-code/core/provider-variants"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
@@ -1735,7 +1736,12 @@ export const layer = Layer.effect(
               release_date: model.release_date ?? existingModel?.release_date ?? catalogModel?.release_date ?? "",
               variants: {},
             }
-            const merged = mergeDeep(ProviderTransform.variants(parsedModel), model.variants ?? {})
+            const merged = mergeDeep(
+              ProviderTransform.variants(parsedModel),
+              mapValues(model.variants ?? {}, (options) =>
+                ProviderVariants.normalizeDeepSeekOptions(parsedModel.api.id, parsedModel.api.npm, options),
+              ),
+            )
             parsedModel.variants = mapValues(
               pickBy(merged, (v) => !v.disabled),
               (v) => omit(v, ["disabled"]),
@@ -1886,7 +1892,12 @@ export const layer = Layer.effect(
                 },
                 variants: {},
               }
-              const merged = mergeDeep(ProviderTransform.variants(parsedModel), model.variants ?? {})
+              const merged = mergeDeep(
+                ProviderTransform.variants(parsedModel),
+                mapValues(model.variants ?? {}, (options) =>
+                  ProviderVariants.normalizeDeepSeekOptions(parsedModel.api.id, parsedModel.api.npm, options),
+                ),
+              )
               parsedModel.variants = mapValues(
                 pickBy(merged, (v) => !v.disabled),
                 (v) => omit(v, ["disabled"]),
@@ -2074,7 +2085,12 @@ export const layer = Layer.effect(
 
             const configVariants = configProvider?.models?.[modelID]?.variants
             if (configVariants && model.variants) {
-              const merged = mergeDeep(model.variants, configVariants)
+              const merged = mergeDeep(
+                model.variants,
+                mapValues(configVariants, (options) =>
+                  ProviderVariants.normalizeDeepSeekOptions(model.api.id, model.api.npm, options),
+                ),
+              )
               model.variants = mapValues(
                 pickBy(merged, (v) => !v.disabled),
                 (v) => omit(v, ["disabled"]),

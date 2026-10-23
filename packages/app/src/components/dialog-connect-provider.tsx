@@ -349,8 +349,9 @@ export function DialogConnectProvider(props: { provider: string; onBack?: () => 
   })
 
   async function complete() {
-    await serverSDK.client.global.dispose()
-    serverSync.refreshProviders()
+    await serverSDK.client.global.dispose({ throwOnError: true })
+    await serverSync.refreshProviders({ throwOnError: true })
+    if (!alive.value) return
     dialog.close()
     showToast({
       variant: "success",
@@ -662,13 +663,18 @@ export function DialogConnectProvider(props: { provider: string; onBack?: () => 
         setFormStore("configured", true)
         await serverSDK.client.global.dispose({ throwOnError: true })
         if (!owner.active) return
-        serverSync.refreshProviders()
+        await serverSync.refreshProviders({ throwOnError: true })
+        if (!owner.active) return
+        const connected = providers.connected().find((provider) => provider.id === props.provider)
+        if (!formStore.manual && !formStore.selectedModels.some((id) => connected?.models[id]))
+          throw new Error(language.t("provider.connect.models.unavailableAfterSave"))
         setFormStore("saved", true)
         showToast({
           variant: "success",
           title: formStore.manual
             ? language.t("provider.connect.models.manualSaved")
             : language.t("provider.connect.toast.connected.title", { provider: provider().name }),
+          description: formStore.manual ? undefined : language.t("provider.connect.models.catalogVerified"),
         })
       } catch (error) {
         if (owner.active) {
@@ -955,7 +961,7 @@ export function DialogConnectProvider(props: { provider: string; onBack?: () => 
         .then((value) => (value.error ? { ok: false as const, error: value.error } : { ok: true as const }))
         .catch((error) => ({ ok: false as const, error }))
       if (result.ok) {
-        await complete()
+        await complete().catch((error) => setFormStore("error", formatError(error, language.t("common.requestFailed"))))
         return
       }
       setFormStore("error", formatError(result.error, language.t("provider.connect.oauth.code.invalid")))
@@ -1016,7 +1022,10 @@ export function DialogConnectProvider(props: { provider: string; onBack?: () => 
           return
         }
 
-        await complete()
+        await complete().catch((error) => {
+          if (alive.value)
+            dispatch({ type: "auth.error", error: formatError(error, language.t("common.requestFailed")) })
+        })
       })()
     })
 

@@ -6,6 +6,7 @@ import { ModelRequest } from "../model-request"
 import { DEEPAGENT_MODEL_PROTOCOL, ModelsDev } from "../models-dev"
 import { PluginV2 } from "../plugin"
 import { ProviderV2 } from "../provider"
+import { ProviderVariants } from "../provider-variants"
 
 function released(date: string) {
   const time = Date.parse(date)
@@ -39,15 +40,36 @@ function cost(input: ModelsDev.Model["cost"]) {
   ]
 }
 
-function variants(model: ModelsDev.Model, packageName?: string) {
-  return Object.entries(model.experimental?.modes ?? {}).map(([id, item]) => {
-    const request = ModelRequest.normalizeAiSdkOptions(packageName, item.provider?.body ?? {})
-    return {
-      id: ModelV2.VariantID.make(id),
-      headers: { ...(item.provider?.headers ?? {}) },
-      ...request,
-    }
+function variants(model: ModelsDev.Model, provider: ModelsDev.Provider) {
+  const packageName = model.provider?.npm ?? provider.npm
+  const generated = ProviderVariants.variants({
+    id: model.id,
+    providerID: provider.id,
+    api: { id: model.id, npm: packageName ?? "" },
+    capabilities: { reasoning: model.reasoning },
+    limit: model.limit,
+    release_date: model.release_date,
   })
+  const result = new Map(
+    Object.entries(generated).map(([id, body]) => [
+      id,
+      {
+        id: ModelV2.VariantID.make(id),
+        headers: {},
+        ...ModelRequest.normalizeAiSdkOptions(packageName, body),
+      },
+    ]),
+  )
+  for (const [id, item] of Object.entries(model.experimental?.modes ?? {})) {
+    // An explicit mode is the catalog's complete request definition. Mixing generated
+    // defaults into it can re-enable thinking that the mode deliberately disabled.
+    result.set(id, {
+      id: ModelV2.VariantID.make(id),
+      headers: { ...item.provider?.headers },
+      ...ModelRequest.normalizeAiSdkOptions(packageName, item.provider?.body ?? {}),
+    })
+  }
+  return Array.from(result.values())
 }
 
 export const ModelsDevPlugin = PluginV2.define({
@@ -90,8 +112,7 @@ export const ModelsDevPlugin = PluginV2.define({
               const modelUrl = model.provider?.api ?? item.api
               // DeepAgent API platform: the OpenAI/DeepSeek families default to the
               // Responses wire (design §5.2; /v1/responses is live).
-              const protocol =
-                item.id === "deepagent" ? DEEPAGENT_MODEL_PROTOCOL[model.id] : undefined
+              const protocol = item.id === "deepagent" ? DEEPAGENT_MODEL_PROTOCOL[model.id] : undefined
               draft.api = modelNpm
                 ? {
                     id: draft.api.id,
@@ -111,7 +132,7 @@ export const ModelsDevPlugin = PluginV2.define({
                 input: [...(model.modalities?.input ?? [])],
                 output: [...(model.modalities?.output ?? [])],
               }
-              draft.variants = variants(model, model.provider?.npm ?? item.npm)
+              draft.variants = variants(model, item)
               draft.time.released = released(model.release_date)
               draft.cost = cost(model.cost)
               draft.status = model.status ?? "active"
