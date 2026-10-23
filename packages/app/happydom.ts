@@ -1,5 +1,8 @@
 import { GlobalRegistrator } from "@happy-dom/global-registrator"
 
+// Bun.serve requires its native Response, which Happy DOM replaces globally.
+export const BunResponse = globalThis.Response
+
 GlobalRegistrator.register()
 
 const originalGetContext = HTMLCanvasElement.prototype.getContext

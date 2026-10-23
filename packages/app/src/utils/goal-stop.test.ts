@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { createOpencodeClient } from "@deepagent-code/sdk"
 import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
+import { BunResponse } from "../../happydom"
 import { createGoalStop } from "./goal-stop"
 
 const servers: ReturnType<typeof Bun.serve>[] = []
@@ -37,19 +38,19 @@ function fixture() {
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
-      if (request.method === "OPTIONS") return new Response(null, { headers })
+      if (request.method === "OPTIONS") return new BunResponse(null, { headers })
       if (request.method === "GET") {
         state.reads++
         await state.waiting
-        return Response.json({ goal: state.goal }, { headers })
+        return BunResponse.json({ goal: state.goal }, { headers })
       }
       state.posts.push(await request.json())
       state.goal = snapshot({ requestedPhase: "paused", phase: "paused", inFlight: true, revision: 2 })
       if (state.fail) {
         state.fail = false
-        return Response.json({ code: "unavailable", message: "lost reply" }, { status: 503, headers })
+        return BunResponse.json({ code: "unavailable", message: "lost reply" }, { status: 503, headers })
       }
-      return Response.json(state.goal, { headers })
+      return BunResponse.json(state.goal, { headers })
     },
   })
   servers.push(server)
