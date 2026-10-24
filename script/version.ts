@@ -24,6 +24,7 @@ if (!Script.preview) {
   const initialRelease = await readRelease()
   if (initialRelease && (!initialRelease.isDraft || initialRelease.publishedAt !== null))
     throw new Error("release candidate is already published")
+  output.push(`owner_reuse_required=${Boolean(initialRelease)}`)
   const body = await $`bun script/raw-changelog.ts --to ${sourceSha}`.cwd(process.cwd()).text()
   const dir = process.env.RUNNER_TEMP ?? "/tmp"
   const notesFile = `${dir}/deepagent-code-release-notes.txt`

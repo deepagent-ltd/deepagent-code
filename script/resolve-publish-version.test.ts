@@ -7,9 +7,23 @@ import { resolvePublishVersion } from "./resolve-publish-version"
 
 const repository = path.resolve(import.meta.dir, "..")
 const workflow = Bun.YAML.parse(await Bun.file(path.join(repository, ".github/workflows/publish.yml")).text()) as {
+  on: { workflow_dispatch: { inputs: Record<string, { type?: string; required?: boolean }> } }
   jobs: Record<
     string,
-    { steps?: { id?: string; run?: string; env?: Record<string, string>; with?: Record<string, string> }[] }
+    {
+      needs?: string | string[]
+      outputs?: Record<string, string>
+      steps?: {
+        id?: string
+        name?: string
+        uses?: string
+        run?: string
+        if?: string
+        "continue-on-error"?: boolean
+        env?: Record<string, string>
+        with?: Record<string, string>
+      }[]
+    }
   >
 }
 
@@ -60,6 +74,102 @@ test("automatic candidate and tag creation uses the job token without changing l
       "deepagent-code-app-id": "${{ vars.DEEPAGENT_CODE_APP_ID }}",
       "deepagent-code-app-secret": "${{ secrets.DEEPAGENT_CODE_APP_SECRET }}",
     })
+})
+
+test("owner retry payloads reach the preparer through env and reruns cannot reuse stale first-attempt outputs", () => {
+  for (const name of ["owner_authorization_json", "owner_public_key_pem"])
+    expect(workflow.on.workflow_dispatch.inputs[name]).toMatchObject({ type: "string", required: false })
+  expect(workflow.jobs.version.outputs?.owner_reuse_required).toBe("${{ steps.version.outputs.owner_reuse_required }}")
+  expect(workflow.jobs["build-cli"].needs).toBe("version")
+  const source = workflow.jobs["build-cli"].steps!.find((step) => step.id === "owner-source")!
+  expect(source.run).toBe("bun script/prepare-release-owner.ts")
+  expect(source.if).toBeUndefined()
+  expect(source["continue-on-error"]).not.toBe(true)
+  expect(source.env).toEqual({
+    DAC_OWNER_VERSION: "${{ needs.version.outputs.version }}",
+    DAC_OWNER_REUSE_REQUIRED: "${{ needs.version.outputs.owner_reuse_required == 'true' || github.run_attempt > 1 }}",
+    DAC_OWNER_AUTHORIZATION_JSON: "${{ inputs.owner_authorization_json }}",
+    DAC_OWNER_PUBLIC_KEY_PEM: "${{ inputs.owner_public_key_pem }}",
+  })
+  for (const step of Object.values(workflow.jobs).flatMap((job) => job.steps ?? [])) {
+    expect(step.run ?? "").not.toMatch(/\$\{\{\s*inputs\.owner_authorization_json\s*\}\}/)
+    expect(step.run ?? "").not.toMatch(/\$\{\{\s*inputs\.owner_public_key_pem\s*\}\}/)
+  }
+})
+
+test("the prepared or newly minted public pair is retained before builds and frozen-candidate checks", () => {
+  const steps = workflow.jobs["build-cli"].steps!
+  const source = steps.findIndex((step) => step.id === "owner-source")
+  const mint = steps.findIndex((step) => step.id === "mint-owner")
+  const build = steps.findIndex((step) => step.id === "build")
+  const guard = steps.findIndex((step) => step.name === "Verify frozen CLI release candidate")
+  expect(source).toBeGreaterThanOrEqual(0)
+  expect(mint).toBeGreaterThan(source)
+  expect(steps[mint].if).toBe("steps.owner-source.outputs.reuse != 'true'")
+  expect(steps[mint]["continue-on-error"]).not.toBe(true)
+  expect(steps[mint].run).toContain("bun script/mint-owner-campaign.ts --ephemeral")
+  expect(guard).toBeGreaterThan(build)
+  for (const entry of [
+    { name: "owner-authorization", file: "owner-authorization.json" },
+    { name: "release-owner-public-key", file: "release-owner-public-key.pem" },
+  ]) {
+    const uploads = steps.filter(
+      (step) => step.uses?.startsWith("actions/upload-artifact@") && step.with?.name === entry.name,
+    )
+    expect(uploads).toHaveLength(1)
+    expect(uploads[0].with).toMatchObject({
+      path: `\${{ runner.temp }}/${entry.file}`,
+      "if-no-files-found": "error",
+    })
+    expect(uploads[0].if).toBeUndefined()
+    expect(uploads[0]["continue-on-error"]).not.toBe(true)
+    expect(steps.indexOf(uploads[0])).toBeGreaterThan(mint)
+    expect(steps.indexOf(uploads[0])).toBeLessThan(build)
+    expect(steps.indexOf(uploads[0])).toBeLessThan(guard)
+  }
+  expect(steps[build].env?.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE).toBe(
+    "${{ runner.temp }}/owner-authorization.json",
+  )
+  expect(steps[build].env?.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY).toBe(
+    "${{ runner.temp }}/release-owner-public-key.pem",
+  )
+})
+
+test("all native and Desktop targets consume the same run's public owner artifacts without reminting", () => {
+  const names = ["owner-authorization", "release-owner-public-key"]
+  for (const step of Object.values(workflow.jobs).flatMap((job) => job.steps ?? [])) {
+    if (!step.uses?.startsWith("actions/download-artifact@") || !names.includes(step.with?.name ?? "")) continue
+    for (const input of ["run-id", "repository", "github-token"]) expect(step.with?.[input]).toBeUndefined()
+  }
+  for (const name of ["build-cli-macos", "build-cli-windows", "build-electron"]) {
+    const job = workflow.jobs[name]
+    expect(job.needs).toContain("build-cli")
+    const steps = job.steps!
+    const consumers = steps.filter((step) => step.env?.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE)
+    expect(consumers.length).toBeGreaterThan(0)
+    for (const consumer of consumers) {
+      expect(consumer.env?.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE).toBe(
+        "${{ runner.temp }}/owner-auth/owner-authorization.json",
+      )
+      expect(consumer.env?.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY).toBe(
+        "${{ runner.temp }}/owner-key/release-owner-public-key.pem",
+      )
+      for (const entry of [
+        { name: "owner-authorization", directory: "owner-auth" },
+        { name: "release-owner-public-key", directory: "owner-key" },
+      ]) {
+        const downloads = steps.filter(
+          (step) => step.uses?.startsWith("actions/download-artifact@") && step.with?.name === entry.name,
+        )
+        expect(downloads).toHaveLength(1)
+        expect(downloads[0].with?.path).toBe(`\${{ runner.temp }}/${entry.directory}`)
+        expect(downloads[0].if).toBeUndefined()
+        expect(downloads[0]["continue-on-error"]).not.toBe(true)
+        expect(steps.indexOf(downloads[0])).toBeLessThan(steps.indexOf(consumer))
+      }
+    }
+    expect(steps.some((step) => step.run?.includes("mint-owner-campaign"))).toBe(false)
+  }
 })
 
 test("tag, explicit version and explicit bump keep precedence while beta and branch previews remain previews", async () => {
