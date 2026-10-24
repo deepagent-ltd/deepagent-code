@@ -682,10 +682,7 @@ function rowValues(envelope: SelectionEnvelope, now: number): typeof SessionCont
   // authority trigger); the runtime extra carries it (contract unchanged). Without the identity the
   // bound columns stay NULL (the pre-W3 writer behavior — only `unavailable` rows were writable).
   const identity = (envelope as RuntimeSelectionEnvelope).releasedKnowledgeIdentity
-  const projectionText = CanonicalJson.stringify({
-    mode: "v2",
-    refs: envelope.selectedRefs.map((ref) => ({ graph: ref.graph, ref: ref.ref })),
-  })
+  const projectionText = buildProjection(envelope.selectedRefs)
   const bound = envelope.releasedKnowledge.binding === "bound"
   return {
     selection_id: envelope.selectionId,
