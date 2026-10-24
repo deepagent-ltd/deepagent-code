@@ -8,6 +8,12 @@ app.setPath("userData", path.join(process.env.DAC_BROWSER_TEST_ROOT!, "electron-
 app.setPath("sessionData", path.join(process.env.DAC_BROWSER_TEST_ROOT!, "electron-session"))
 app.commandLine.appendSwitch("disable-background-networking")
 app.on("window-all-closed", () => {})
+// Keep qualified interaction windows shown without ambient pointer maintenance
+// changing their native generation between readonly script observations.
+app.on("browser-window-created", (_event, window) => {
+  window.on("show", () => window.setPosition(-10_000, -10_000))
+  window.setPosition(-10_000, -10_000)
+})
 async function main() {
 await app.whenReady()
 const requests: string[] = []

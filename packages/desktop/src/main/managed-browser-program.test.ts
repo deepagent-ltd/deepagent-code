@@ -46,7 +46,8 @@ test.skipIf(process.platform !== "darwin")("actual approved readonly planner mut
     stdout: "pipe",
     stderr: "pipe",
   })
-  const timer = setTimeout(() => process.kill(), 50_000)
+  const timeout = { fired: false }
+  const timer = setTimeout(() => { timeout.fired = true; process.kill() }, 50_000)
   const [code, stdout, stderr] = await Promise.all([
     process.exited,
     new Response(process.stdout).text(),
@@ -55,8 +56,15 @@ test.skipIf(process.platform !== "darwin")("actual approved readonly planner mut
   clearTimeout(timer)
   await Bun.write(path.join(root, "process.log"), stdout + "\n" + stderr)
   console.log("MANAGED_BROWSER_PROGRAM_EVIDENCE", root)
-  const result = await Bun.file(path.join(root, "result.json")).json()
-  expect({ code, error: code ? result : null }).toEqual({ code: 0, error: null })
+  const result = await Bun.file(path.join(root, "result.json")).exists()
+    ? await Bun.file(path.join(root, "result.json")).json() : null
+  const stages = (code !== 0 || result === null) && await Bun.file(path.join(root, "stages.json")).exists()
+    ? (await Bun.file(path.join(root, "stages.json")).json()).slice(-80) : null
+  expect({ code, timedOut: timeout.fired, error: code !== 0 || result === null ? { result, stdout, stderr } : null,
+    stages }).toEqual({ code: 0, timedOut: false, error: null, stages: null })
+  expect(result.runtimePaths).toEqual({
+    userData: path.join(root, "electron-user"), sessionData: path.join(root, "electron-session"),
+  })
   expect(result.message.normal.program.totalSteps).toBe(3)
   expect(result.message.normal.program.completedSteps).toBe(3)
   expect(result.message.normal.program.steps).toEqual([

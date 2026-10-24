@@ -45,7 +45,7 @@ test("terminal cancellation runs once while joining an already pending routine s
 })
 
 for (const scenario of ["early", "acquiring", "signal"] as const) {
-  test(`actual Electron ${scenario} shutdown owns original bootstrap and any late-adopted utility`, async () => {
+  test(`actual Electron ${scenario === "signal" && process.platform === "win32" ? "registered signal handler" : scenario} shutdown owns original bootstrap and any late-adopted utility`, async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-desktop-bootstrap-")))
     await fs.chmod(root, 0o700)
     await fs.mkdir(path.join(root, "home"), { mode: 0o700 })

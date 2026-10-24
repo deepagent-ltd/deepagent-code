@@ -595,6 +595,7 @@ it("shared file shell exposes only explicit file policy from the existing user c
 
 it("shared file shell stays folded, routes one exact approval through the original SDK and disables new work after takeover", async () => {
   const calls: { path: string; method: string; body?: Record<string, unknown> }[] = []
+  const listing = Promise.withResolvers<void>()
   let approved = false
   const grant = {
     grantID: "shared-file-shell-grant",
@@ -648,6 +649,7 @@ it("shared file shell stays folded, routes one exact approval through the origin
         state: approved ? "approved" : "missing",
         grant: approved ? grant : null,
       })
+    await listing.promise
     return send({ grants: approved ? [grant] : [], files: [], nextCursor: null })
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -679,10 +681,19 @@ it("shared file shell stays folded, routes one exact approval through the origin
     fireEvent.click(toggle)
     await waitFor(() => expect(calls).toHaveLength(1))
     expect(calls[0]).toMatchObject({ path: "/api/v1/browser/shared/resources/resource-a/files", method: "GET" })
+    // Request arrival is not response completion: edits are fenced while the real list is pending.
+    expect(screen.getByLabelText(dict["browser.files.relative"])).toHaveProperty("disabled", true)
+    listing.resolve()
+    await waitFor(() =>
+      expect(screen.getByLabelText(dict["browser.files.relative"])).toHaveProperty("disabled", false),
+    )
     fireEvent.input(screen.getByLabelText(dict["browser.files.relative"]), { target: { value: "owned.txt" } })
     fireEvent.input(screen.getByLabelText(dict["browser.files.uploadURL"]), {
       target: { value: "https://example.com/upload" },
     })
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: dict["browser.files.preview"] })).toHaveProperty("disabled", false),
+    )
     fireEvent.click(screen.getByRole("button", { name: dict["browser.files.preview"] }))
     await screen.findByText("a".repeat(64))
     fireEvent.click(screen.getByRole("button", { name: dict["browser.files.approve"] }))
@@ -722,6 +733,7 @@ it("shared file shell stays folded, routes one exact approval through the origin
     expect(toggle.getAttribute("aria-expanded")).toBe("false")
     expect(screen.queryByRole("region", { name: dict["browser.files.title"] })).toBeNull()
   } finally {
+    listing.resolve()
     cleanup()
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))

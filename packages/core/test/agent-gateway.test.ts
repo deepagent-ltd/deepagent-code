@@ -57,6 +57,10 @@ describe("AgentGateway", () => {
         durableLearning: false,
         selfLearning: "manual",
       })
+      // Cold corpus installation is setup, not part of the cancellation deadline.
+      const seedStarted = performance.now()
+      await AgentGateway.flushKnowledgeSeed()
+      const seedMs = performance.now() - seedStarted
       const entered = Deferred.makeUnsafe<void>()
       const fiber = Effect.runFork(
         AgentGateway.runAuxiliary(
@@ -69,8 +73,22 @@ describe("AgentGateway", () => {
           Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
         ),
       )
-      await Effect.runPromise(Deferred.await(entered).pipe(Effect.timeout("5 seconds")))
-      await Effect.runPromise(Fiber.interrupt(fiber).pipe(Effect.timeout("5 seconds")))
+      await Effect.runPromise(
+        Deferred.await(entered).pipe(Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () => Effect.fail(new Error(
+            `Auxiliary body entry timed out after knowledge readiness: ${JSON.stringify({ root, seedMs })}`,
+          )),
+        })),
+      )
+      await Effect.runPromise(
+        Fiber.interrupt(fiber).pipe(Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () => Effect.fail(new Error(
+            `Auxiliary cancellation timed out after body entry: ${JSON.stringify({ root, seedMs })}`,
+          )),
+        })),
+      )
       const runDir = await readOnlyRunDir(dir)
       expect(await readJson(runDir, "DEEPAGENT_RUN_STATE.json")).toMatchObject({
         state: "cancelled",
@@ -102,6 +120,9 @@ describe("AgentGateway", () => {
         durableLearning: false,
         selfLearning: "manual",
       })
+      const seedStarted = performance.now()
+      await AgentGateway.flushKnowledgeSeed()
+      const seedMs = performance.now() - seedStarted
       const exit = await Effect.runPromise(
         AgentGateway.runAuxiliary(
           {
@@ -115,7 +136,15 @@ describe("AgentGateway", () => {
             await rename(opened, path.join(root, "original-opened"))
             await writeFile(opened, "Own fixture occupies the original directory path")
           }).pipe(Effect.andThen(Effect.interrupt)),
-        ).pipe(Effect.exit, Effect.timeout("5 seconds")),
+        ).pipe(
+          Effect.exit,
+          Effect.timeoutOrElse({
+            duration: "5 seconds",
+            orElse: () => Effect.fail(new Error(
+              `Auxiliary writer-failure cancellation timed out after knowledge readiness: ${JSON.stringify({ root, seedMs })}`,
+            )),
+          }),
+        ),
       )
       expect(exit._tag).toBe("Failure")
       expect(await readJson(path.join(root, "original-opened"), "DEEPAGENT_RUN_STATE.json")).toMatchObject({

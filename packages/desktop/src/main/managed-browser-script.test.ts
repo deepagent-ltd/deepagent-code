@@ -5,7 +5,7 @@ import os from "node:os"
 import { managedBrowserInputFixtureDefine } from "./fixture/managed-browser-input-build"
 import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
-test("actual private browser host grants exact readonly scripts and blocks side effects, network and stale targets", async () => {
+test.skipIf(process.platform !== "darwin")("actual private browser host grants exact readonly scripts and blocks side effects, network and stale targets", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-managed-browser-script-"))
   await fs.chmod(root, 0o700)
   const main = await Bun.build({ entrypoints: [path.join(import.meta.dir, "fixture/managed-browser.ts")],

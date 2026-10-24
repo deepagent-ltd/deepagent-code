@@ -36,7 +36,7 @@ test("a failed stop is reported once without calling it again or claiming gracef
 })
 
 for (const scenario of ["quit", "signal", "relaunch", "routine"] as const) {
-  test(`actual Electron ${scenario} joins one delayed utility stop before its final action`, async () => {
+  test(`actual Electron ${scenario === "signal" && process.platform === "win32" ? "registered signal handler" : scenario} joins one delayed utility stop before its final action`, async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-desktop-shutdown-")))
     await fs.chmod(root, 0o700)
     await fs.mkdir(path.join(root, "home"), { mode: 0o700 })

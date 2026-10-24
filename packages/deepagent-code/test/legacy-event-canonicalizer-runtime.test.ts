@@ -16,6 +16,7 @@ import { Duration, Effect, Layer } from "effect"
 import { resetDatabase } from "./fixture/db"
 import { disposeAllInstances } from "./fixture/fixture"
 import { pollWithTimeout, testEffect } from "./lib/effect"
+import { EmptySettingsFixture } from "./fixture/empty-settings"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -80,11 +81,12 @@ describe("legacy event canonicalizer durable schedule", () => {
     const daemon = LegacyEventCanonicalizerRuntime.makeLayer({
       pollInterval: Duration.millis(50),
       maxEventsPerTick: 4,
-    }).pipe(
-      Layer.provide(EventV2.defaultLayer),
-      Layer.provide(RuntimeFlags.layer({ legacyEventCanonicalizer: true })),
+    }).pipe(Layer.provide(EventV2.defaultLayer), Layer.provide(RuntimeFlags.layer({ legacyEventCanonicalizer: true })))
+    const it = testEffect(
+      Layer.mergeAll(Session.defaultLayer, Database.defaultLayer, daemon).pipe(
+        Layer.provideMerge(process.platform === "win32" ? EmptySettingsFixture.layer : Layer.empty),
+      ),
     )
-    const it = testEffect(Layer.mergeAll(Session.defaultLayer, Database.defaultLayer, daemon))
 
     it.instance(
       "drains the legacy artifact backlog without a manual maintenance call",
@@ -127,7 +129,11 @@ describe("legacy event canonicalizer durable schedule", () => {
       Layer.provide(EventV2.defaultLayer),
       Layer.provide(RuntimeFlags.layer({ legacyEventCanonicalizer: false })),
     )
-    const it = testEffect(Layer.mergeAll(Session.defaultLayer, Database.defaultLayer, daemon))
+    const it = testEffect(
+      Layer.mergeAll(Session.defaultLayer, Database.defaultLayer, daemon).pipe(
+        Layer.provideMerge(process.platform === "win32" ? EmptySettingsFixture.layer : Layer.empty),
+      ),
+    )
 
     it.instance(
       "leaves the backlog untouched while the flag stays off",

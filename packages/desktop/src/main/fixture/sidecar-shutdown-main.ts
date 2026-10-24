@@ -40,6 +40,8 @@ async function main() {
     child.kill()
     app.exit(70)
   }, 8_000)
+  // This fixture supplies an unsealed test server, never an installed Native cohort.
+  if (process.platform === "win32") child.postMessage({ type: "dac-native-preload-unavailable-v1" })
   child.postMessage({ type: "start", hostname: "127.0.0.1", port: 0, password: "private-fixture-password" })
   await ready.promise
   facts.utilityPID = child.pid ?? 0

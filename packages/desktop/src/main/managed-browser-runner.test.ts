@@ -14,12 +14,16 @@ function readAuthority(root: string) {
     constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI)
 }
 
-async function run(mode: "identity" | "interaction-redirect-denied" | "interaction-path-denied" | "interaction-body-denied" | "interaction" | "happy" | "unknown" | "permission" | "wrong-root" | "wrong-session" | "retired" | "selection-drift" | "cancel" | "crash" | "control-tamper") {
+async function run(mode: "missing-native-cohort" | "identity" | "interaction-redirect-denied" | "interaction-path-denied" | "interaction-body-denied" | "interaction" | "happy" | "unknown" | "permission" | "wrong-root" | "wrong-session" | "retired" | "selection-drift" | "cancel" | "crash" | "control-tamper") {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-managed-browser-runner-")))
   await fs.chmod(root, 0o700)
   await Promise.all(["home", "tmp", "config", "data", "cache", "state", "project", "chunks"].map((name) => fs.mkdir(path.join(root, name), { mode: 0o700 })))
   await fs.symlink(path.resolve(import.meta.dir, "../../node_modules"), path.join(root, "node_modules"), "dir")
-  const server = await Bun.build({ entrypoints: [path.resolve(import.meta.dir, "../../../deepagent-code/src/node.ts")],
+  // Windows source-only unit tests do not contain the publisher-issued cohort.
+  // Their explicit assembly retains real routes/Session/ToolEffect without Native authority.
+  const server = await Bun.build({ entrypoints: [process.platform === "win32"
+    ? path.resolve(import.meta.dir, "../../../deepagent-code/test/fixture/unsealed-canonical-server.ts")
+    : path.resolve(import.meta.dir, "../../../deepagent-code/src/node.ts")],
     outdir: path.join(root, "chunks"), naming: "node.js", target: "node", external: ["@lydell/node-pty", "jsonc-parser", "bun"],
     define: { "Bun.main": '""', DEEPAGENT_CODE_VERSION: '"2.0.3"', DEEPAGENT_CODE_CHANNEL: '"dev"' }, files: { "deepagent-code-web-ui.gen.ts": "" } })
   // The real sidecar imports its physical adjacent chunks/node.js entry.
@@ -42,8 +46,21 @@ async function run(mode: "identity" | "interaction-redirect-denied" | "interacti
   await Bun.write(path.join(root, "process.log"), stdout + "\n" + stderr)
   expect({ code, error: code ? stdout + stderr : null }).toEqual({ code: 0, error: null })
   const result = await Bun.file(path.join(root, "result.json")).json()
+  if (process.platform === "win32" && mode !== "missing-native-cohort") {
+    expect(await Bun.file(path.join(root, "safequalification.json")).json()).toEqual({
+      kind: "unsealed-canonical-test-assembly-v1", productionServerListen: false,
+      privateSettings: "absent-only-read; publish-and-parent-refused", nativeQualification: "not-provided",
+      sealedWorkQualification: "not-provided", routeGraph: "original-HttpApiApp.createRoutes",
+    })
+  }
   return { root, result }
 }
+
+test.skipIf(process.platform !== "win32")("actual production Windows launcher refuses a source-only fixture without the physical native cohort", async () => {
+  const { result } = await run("missing-native-cohort")
+  expect(result).toEqual({ refused: true, code: "MODULE_NOT_FOUND", missingFixedAddon: true,
+    nativeWindowsWitness: false, providerRequests: 0, previewRequests: [] })
+}, 100_000)
 
 test.skipIf(process.platform !== "darwin")("actual Desktop sidecar HTTP canonical runner delivers native Browser PNG to the next provider request", async () => {
   const { root, result } = await run("happy")
@@ -94,7 +111,7 @@ test.skipIf(process.platform !== "darwin")("actual finished provider may wait fo
   expect(result.stopped.stopConfirmed).toBe(true)
 }, 100_000)
 
-for (const mode of ["unknown", "cancel", "crash"] as const) test(`actual dispatched navigation ${mode} keeps pending ToolEffect admission; cold input retry does not replay`, async () => {
+for (const mode of ["unknown", "cancel", "crash"] as const) test(`${process.platform === "win32" ? "unsealed HTTP/Effect unit assembly" : "actual sidecar"}: dispatched navigation ${mode} keeps pending ToolEffect admission; cold input retry does not replay`, async () => {
   const { root, result } = await run(mode)
   expect(result.previewRequests).toEqual(["/slow"])
   expect(result.afterUnknown).toBe(3)
@@ -121,7 +138,7 @@ for (const mode of ["unknown", "cancel", "crash"] as const) test(`actual dispatc
 }, 100_000)
 
 for (const mode of ["wrong-root", "wrong-session", "retired", "selection-drift", "control-tamper"] as const) {
-  test(`actual canonical browser rejects ${mode} before native action or preview network`, async () => {
+  test(`${process.platform === "win32" ? "unsealed HTTP/Effect unit assembly" : "actual sidecar"}: canonical browser rejects ${mode} before native action or preview network`, async () => {
     const { root, result } = await run(mode)
     expect(result.previewRequests).toEqual([])
     expect(result.providerRequests).toBeGreaterThanOrEqual(2)
@@ -144,7 +161,7 @@ for (const mode of ["wrong-root", "wrong-session", "retired", "selection-drift",
 }
 
 
-test("actual interaction profile submits one Chinese form through canonical actions and projects AX plus PNG before cancel", async () => {
+test.skipIf(process.platform !== "darwin")("actual interaction profile submits one Chinese form through canonical actions and projects AX plus PNG before cancel", async () => {
   const { root, result } = await run("interaction")
   expect(result.providerRequests).toBe(10)
   expect(result.browserMissing).toBe(false)
@@ -165,7 +182,7 @@ test("actual interaction profile submits one Chinese form through canonical acti
 
 
 for (const mode of ["interaction-path-denied", "interaction-body-denied", "interaction-redirect-denied"] as const) {
-  test(`actual interaction broker ${mode} sends no upstream POST and never repeats unknown input`, async () => {
+  test.skipIf(process.platform !== "darwin")(`actual interaction broker ${mode} sends no upstream POST and never repeats unknown input`, async () => {
     const { root, result } = await run(mode)
     expect(result.posted).toHaveLength(mode === "interaction-redirect-denied" ? 1 : 0)
     expect(result.outsideRequests).toBe(0)
@@ -181,7 +198,7 @@ for (const mode of ["interaction-path-denied", "interaction-body-denied", "inter
 }
 
 
-test("actual HTTP browser create uses current indexed git and non-git identity and rejects filesystem drift", async () => {
+test(`${process.platform === "win32" ? "unsealed HTTP/Effect unit assembly" : "actual sidecar"}: HTTP browser create uses current indexed git and non-git identity and rejects filesystem drift`, async () => {
   const { result } = await run("identity")
   expect(result.indexed).toHaveLength(2)
   expect(result.indexed.map((item: { kind: string }) => item.kind)).toEqual(["registered_root", "git"])

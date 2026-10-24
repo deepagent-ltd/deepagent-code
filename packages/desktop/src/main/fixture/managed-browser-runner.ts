@@ -6,6 +6,7 @@ import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { writeFile, mkdir, copyFile } from "node:fs/promises"
 import path from "node:path"
 import { spawnLocalServer } from "../server"
+import { spawnUnsealedCanonicalSidecar } from "./unsealed-canonical-sidecar"
 
 const root = process.env.DAC_BROWSER_TEST_ROOT!
 const mode = process.env.DAC_BROWSER_TEST_MODE ?? "happy"
@@ -14,6 +15,12 @@ app.setPath("userData", path.join(root, "electron-user"))
 app.setPath("sessionData", path.join(root, "electron-session"))
 app.on("window-all-closed", () => {})
 app.commandLine.appendSwitch("disable-background-networking")
+// Shown interaction qualifiers must not receive ambient pointer events while
+// their real native source is checked across awaited canonical tool calls.
+if (interaction) app.on("browser-window-created", (_event, window) => {
+  window.on("show", () => window.setPosition(-10_000, -10_000))
+  window.setPosition(-10_000, -10_000)
+})
 async function main() {
   await app.whenReady()
   const bodies: Record<string, unknown>[] = []
@@ -104,7 +111,26 @@ async function main() {
   if (!address || typeof address === "string") throw new Error("No server address")
   await new Promise<void>((resolve) => probe.close(() => resolve()))
   const password = "private-browser-fixture"
-  let server = await spawnLocalServer("127.0.0.1", address.port, password, { onStdout: console.log, onStderr: console.error })
+  if (mode === "missing-native-cohort") {
+    try {
+      const unexpected = await spawnLocalServer("127.0.0.1", address.port, password, { onStdout: console.log, onStderr: console.error })
+      await unexpected.listener.stop()
+      throw new Error("Source-only Windows fixture unexpectedly acquired an installed cohort")
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "MODULE_NOT_FOUND" ||
+        !error.message.includes(path.join(root, "chunks", "native-image-factory.node"))) throw error
+      await writeFile(path.join(root, "result.json"), JSON.stringify({ refused: true, code: error.code, missingFixedAddon: true,
+        nativeWindowsWitness: false, providerRequests: bodies.length, previewRequests }))
+    } finally {
+      provider.closeAllConnections(); preview.closeAllConnections()
+      provider.close(); preview.close()
+    }
+    return
+  }
+  const startServer = () => process.platform === "win32"
+    ? spawnUnsealedCanonicalSidecar(root, address.port, password)
+    : spawnLocalServer("127.0.0.1", address.port, password, { onStdout: console.log, onStderr: console.error })
+  let server = await startServer()
   await server.health.wait
   const url = `http://127.0.0.1:${address.port}`
   const authorization = `Basic ${Buffer.from(`deepagent-code:${password}`).toString("base64")}`
@@ -122,8 +148,10 @@ async function main() {
     try {
       const deadline = Date.now() + duration
       while (Date.now() < deadline) {
-        const activity = database.prepare("SELECT state FROM session_activity WHERE session_id=? ORDER BY ordinal DESC LIMIT 1").get(sessionID)
-        if (bodies.length >= requests && activity?.state === "settled") return
+        const activity = database.prepare("SELECT a.state, s.execution_claim_token FROM session_activity a JOIN session s ON s.id=a.session_id WHERE a.session_id=? ORDER BY a.ordinal DESC LIMIT 1").get(sessionID)
+        // Activity settlement precedes the drain's learning/event finalizers. The
+        // claim is released only with the terminal execution event, before GET snapshots.
+        if (bodies.length >= requests && activity?.state === "settled" && activity.execution_claim_token === null) return
         if (activity && ["failed", "interrupted"].includes(String(activity.state)))
           throw new Error(`Fixture activity did not settle: ${JSON.stringify(activity)}`)
         await new Promise((resolve) => setTimeout(resolve, 25))
@@ -230,7 +258,7 @@ async function main() {
       const sameProcessRequests = bodies.length
       const observed = mode === "crash" ? undefined : await call(`/api/v1/browser/controls/${controlID}`)
       await server.listener.stop()
-      server = await spawnLocalServer("127.0.0.1", address.port, password, { onStdout: console.log, onStderr: console.error })
+      server = await startServer()
       await server.health.wait
       const coldObserved = await call(`/api/v1/browser/controls/${controlID}`)
       const { DatabaseSync } = await import("node:sqlite")
@@ -256,12 +284,18 @@ async function main() {
           if (["retired", "selection-drift"].includes(mode)) {
             const { DatabaseSync } = await import("node:sqlite")
             const db = new DatabaseSync(path.join(root, "authority.sqlite"))
+            // Wait for the real runner's short write before testing its immutable trigger.
+            db.exec("PRAGMA busy_timeout=5000")
             if (mode === "retired")
               db.prepare("UPDATE context_security_namespace SET retired_at = ? WHERE id = ?").run(Date.now(), control.control.scope.securityNamespaceID)
             if (mode === "selection-drift") {
               const before = db.prepare("SELECT projection, projection_hash FROM session_context_selection WHERE session_id = ?").all(session.data.id)
               try { db.prepare("UPDATE session_context_selection SET projection = projection || ' ' WHERE session_id = ?").run(session.data.id) }
-              catch (error) { selectionMutationRejected = error instanceof Error && error.message.includes("immutable") }
+              catch (error) {
+                selectionMutationRejected = error instanceof Error && error.message.includes("immutable")
+                await writeFile(path.join(root, "selection-mutation-error.json"), JSON.stringify({ message: String(error),
+                  code: error && typeof error === "object" && "code" in error ? error.code : null, rows: before.length }))
+              }
               if (JSON.stringify(before) !== JSON.stringify(db.prepare("SELECT projection, projection_hash FROM session_context_selection WHERE session_id = ?").all(session.data.id)))
                 throw new Error("Selection mutated")
             }
@@ -310,7 +344,7 @@ async function main() {
     let coldHistory: unknown
     if (mode === "happy") {
       await server.listener.stop()
-      server = await spawnLocalServer("127.0.0.1", address.port, password, { onStdout: console.log, onStderr: console.error })
+      server = await startServer()
       await server.health.wait
       const beforeRead = { provider: bodies.length, preview: previewRequests.length }
       coldHistory = { control: await call(`/api/v1/browser/controls/${controlID}`),

@@ -16,7 +16,9 @@ for (const scenario of ["merge", "occupied", "failure", "interrupt"]) {
     await fs.symlink(path.resolve(import.meta.dir, "../../node_modules"), path.join(root, "node_modules"), "dir")
     const child = Bun.spawn([managedBrowserInputFixtureExecutable, path.join(root, "startup-entry.js")], {
       cwd: root,
-      env: { ...managedBrowserInputFixtureEnvironment, PATH: process.env.PATH, HOME: path.join(root, "home"), TMPDIR: root, DAC_STARTUP_ROOT: root, DAC_STARTUP_SCENARIO: scenario },
+      env: { ...managedBrowserInputFixtureEnvironment, PATH: process.env.PATH, HOME: path.join(root, "home"), TMPDIR: root,
+        DEEPAGENT_CODE_TEST_ONBOARDING: "1", DEEPAGENT_CODE_TEST_ROOT: path.join(root, "home"),
+        DAC_STARTUP_ROOT: root, DAC_STARTUP_SCENARIO: scenario },
       stdout: "pipe", stderr: "pipe",
     })
     const deadline = setTimeout(() => child.kill(), 10000)

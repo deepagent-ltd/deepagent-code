@@ -5,3 +5,5 @@ packages/im-kernel-sdk/**/*.d.ts text eol=lf
 packages/im-kernel-sdk/lib/index.js text eol=lf
 # Rollup preserves upstream JavaScript line endings in generated reviewed bytes.
 packages/im-kernel-sdk/upstream/**/*.js text eol=lf
+# These vendored bytes are checked against the pinned NAPI inventory on every host.
+packages/desktop/native/managed-browser-input/include/* text eol=lf

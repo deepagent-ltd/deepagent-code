@@ -130,6 +130,8 @@ const mainFiber = Effect.runFork(Effect.gen(function* () {
       facts.actionsWhenStopping = facts.quitActions + facts.exitActions
       assert.equal(facts.actionsWhenStopping, 0)
       if (scenario === "signal") {
+        // Windows SIGTERM kills the process directly; qualify its registered handler explicitly.
+        if (process.platform === "win32") { process.emit("SIGTERM"); process.emit("SIGTERM"); return }
         process.kill(process.pid, "SIGTERM")
         process.kill(process.pid, "SIGTERM")
       }

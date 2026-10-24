@@ -14,9 +14,8 @@ test("original Electron Vite output preserves relative Main preload and sidecar 
   await Bun.write(path.join(root, "build.mjs"), `
 import fs from "node:fs/promises"
 import path from "node:path"
-import { pathToFileURL } from "node:url"
-const { resolveConfig } = await import(pathToFileURL(${JSON.stringify(path.join(desktop, "node_modules/electron-vite/dist/index.js"))}))
-const { build } = await import(pathToFileURL(${JSON.stringify(path.join(desktop, "node_modules/vite/dist/node/index.js"))}))
+const { resolveConfig } = await import(${JSON.stringify(import.meta.resolve("electron-vite"))})
+const { build } = await import(${JSON.stringify(import.meta.resolve("vite"))})
 const resolved = await resolveConfig({ root: ${JSON.stringify(desktop)} }, "build", "development")
 await build({ ...resolved.config.main, plugins: resolved.config.main.plugins.filter(p => p?.name !== "deepagent-code:copy-server-assets"), build: {
   ...resolved.config.main.build, outDir: ${JSON.stringify(path.join(root, "out/main"))}, rollupOptions: {
