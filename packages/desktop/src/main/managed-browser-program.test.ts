@@ -10,7 +10,7 @@ import os from "node:os"
 import { managedBrowserInputFixtureDefine } from "./fixture/managed-browser-input-build"
 import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
-test("actual approved readonly planner mutates only native current leaves, submits once and keeps partial cancellation unknown", async () => {
+test.skipIf(process.platform !== "darwin")("actual approved readonly planner mutates only native current leaves, submits once and keeps partial cancellation unknown", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-managed-browser-program-"))
   await fs.chmod(root, 0o700)
   const main = await Bun.build({

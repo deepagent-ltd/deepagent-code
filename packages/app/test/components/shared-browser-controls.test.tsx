@@ -703,10 +703,12 @@ it("shared file shell stays folded, routes one exact approval through the origin
       agentAccessFenced: true,
       manualEnabled: true,
     })
+    expect(toggle.getAttribute("aria-expanded")).toBe("false")
+    fireEvent.click(toggle)
     expect(screen.getByRole("button", { name: dict["browser.files.preview"] })).toHaveProperty("disabled", true)
-    // Historical exact approval reconciliation remains available; it cannot mint
-    // a new grant under the human-owned lease. New preview/approval stays fenced.
-    expect(screen.getByRole("button", { name: dict["browser.files.retryExact"] })).toHaveProperty("disabled", false)
+    // The original approval is already confirmed. Reopening history after takeover
+    // must not offer a second approval or a new preview under the human-owned lease.
+    expect(screen.getByRole("button", { name: dict["browser.files.retryExact"] })).toHaveProperty("disabled", true)
     fireEvent.click(screen.getByRole("button", { name: dict["browser.files.preview"] }))
     expect(calls.filter((call) => call.path.endsWith("/preview"))).toHaveLength(1)
     expect(calls.every((call) => !/\/actions|file\.upload|file\.download/.test(call.path))).toBe(true)
@@ -729,25 +731,53 @@ it("shared file shell stays folded, routes one exact approval through the origin
 it("approves only manual origins through the trusted bridge and retries the exact unknown request", async () => {
   const service = bridge()
   const calls: SharedBrowserSchema.ApproveOrigin[] = []
-  const initial = view({ state: "human_owned", manualEnabled: true, agentAccessFenced: true, liveLeaseID: null, manualEpoch: 1 })
+  const initial = view({
+    state: "human_owned",
+    manualEnabled: true,
+    agentAccessFenced: true,
+    liveLeaseID: null,
+    manualEpoch: 1,
+  })
   const [state, setState] = createStore({ view: initial })
   service.approveOrigin = async (input) => {
     calls.push(structuredClone(input))
     if (calls.length === 1) throw new Error("Approval outcome unknown")
-    return { resource: { ...initial.resource, revision: initial.resource.revision + 1, policyRevision: 2,
-      policy: { ...initial.resource.policy, manualApprovedOrigins: [...initial.resource.policy.manualApprovedOrigins, input.origin] } } }
+    return {
+      resource: {
+        ...initial.resource,
+        revision: initial.resource.revision + 1,
+        policyRevision: 2,
+        policy: {
+          ...initial.resource.policy,
+          manualApprovedOrigins: [...initial.resource.policy.manualApprovedOrigins, input.origin],
+        },
+      },
+    }
   }
-  render(() => <SharedBrowserPreview view={state.view} bridge={service} onUpdate={(view) => setState("view", view)} onReturnToSession={() => {}} />)
+  render(() => (
+    <SharedBrowserPreview
+      view={state.view}
+      bridge={service}
+      onUpdate={(view) => setState("view", view)}
+      onReturnToSession={() => {}}
+    />
+  ))
   const field = screen.getByLabelText(dict["browser.shared.policy.title"])
   fireEvent.input(field, { target: { value: "https://second.example" } })
   fireEvent.click(screen.getByRole("button", { name: dict["browser.shared.policy.approve"] }))
   await waitFor(() => expect(calls).toHaveLength(1))
-  await waitFor(() => expect(screen.getByRole("button", { name: dict["browser.files.retryExact"] })).toHaveProperty("disabled", false))
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: dict["browser.files.retryExact"] })).toHaveProperty("disabled", false),
+  )
   expect(field).toHaveProperty("disabled", true)
   fireEvent.click(screen.getByRole("button", { name: dict["browser.files.retryExact"] }))
   await waitFor(() => expect(state.view.resource.policyRevision).toBe(2))
   expect(calls[1]).toEqual(calls[0])
-  expect(calls[0]).toMatchObject({ expectedRevision: 1, expectedManualEpoch: 1, expectedPolicyHash: initial.resource.policyHash })
+  expect(calls[0]).toMatchObject({
+    expectedRevision: 1,
+    expectedManualEpoch: 1,
+    expectedPolicyHash: initial.resource.policyHash,
+  })
   expect(state.view.resource.policy.approvedOrigins).toEqual(initial.resource.policy.approvedOrigins)
   expect(state.view.resource.policy.manualApprovedOrigins).toEqual(["https://example.com", "https://second.example"])
 })
@@ -757,11 +787,21 @@ it("ignores a manual origin approval after the original browser scope changes", 
   const pending = Promise.withResolvers<SharedBrowserView>()
   const approve = vi.fn(() => pending.promise)
   service.approveOrigin = approve
-  const initial = view({ state: "human_owned", manualEnabled: true, agentAccessFenced: true, liveLeaseID: null, manualEpoch: 1 })
+  const initial = view({
+    state: "human_owned",
+    manualEnabled: true,
+    agentAccessFenced: true,
+    liveLeaseID: null,
+    manualEpoch: 1,
+  })
   const [state, setState] = createStore({ view: initial })
   const update = vi.fn()
-  render(() => <SharedBrowserPreview view={state.view} bridge={service} onUpdate={update} onReturnToSession={() => {}} />)
-  fireEvent.input(screen.getByLabelText(dict["browser.shared.policy.title"]), { target: { value: "https://second.example" } })
+  render(() => (
+    <SharedBrowserPreview view={state.view} bridge={service} onUpdate={update} onReturnToSession={() => {}} />
+  ))
+  fireEvent.input(screen.getByLabelText(dict["browser.shared.policy.title"]), {
+    target: { value: "https://second.example" },
+  })
   fireEvent.click(screen.getByRole("button", { name: dict["browser.shared.policy.approve"] }))
   await waitFor(() => expect(approve).toHaveBeenCalledTimes(1))
   setState("view", { resource: { ...initial.resource, scope: { ...initial.resource.scope, directory: "/another" } } })
@@ -772,13 +812,28 @@ it("ignores a manual origin approval after the original browser scope changes", 
 
 it("releases a manual origin draft only after trusted Main confirms that exact request did not commit", async () => {
   const service = bridge()
-  const initial = view({ state: "human_owned", manualEnabled: true, agentAccessFenced: true, liveLeaseID: null, manualEpoch: 1 })
+  const initial = view({
+    state: "human_owned",
+    manualEnabled: true,
+    agentAccessFenced: true,
+    liveLeaseID: null,
+    manualEpoch: 1,
+  })
   const [state, setState] = createStore({ view: initial })
   const cancelled = { value: false }
   const cancel = vi.fn(async () => ({ view: initial, cancelled: cancelled.value }))
   service.cancelOrigin = cancel
-  service.approveOrigin = vi.fn(async () => { throw new Error("Unknown acknowledgement") })
-  render(() => <SharedBrowserPreview view={state.view} bridge={service} onUpdate={(view) => setState("view", view)} onReturnToSession={() => {}} />)
+  service.approveOrigin = vi.fn(async () => {
+    throw new Error("Unknown acknowledgement")
+  })
+  render(() => (
+    <SharedBrowserPreview
+      view={state.view}
+      bridge={service}
+      onUpdate={(view) => setState("view", view)}
+      onReturnToSession={() => {}}
+    />
+  ))
   const field = screen.getByLabelText(dict["browser.shared.policy.title"])
   fireEvent.input(field, { target: { value: "https://first.example" } })
   fireEvent.click(screen.getByRole("button", { name: dict["common.cancel"] }))
@@ -787,7 +842,9 @@ it("releases a manual origin draft only after trusted Main confirms that exact r
   fireEvent.input(field, { target: { value: "https://second.example" } })
   fireEvent.click(screen.getByRole("button", { name: dict["browser.shared.policy.approve"] }))
   await waitFor(() => expect(cancel).toHaveBeenCalledTimes(1))
-  await waitFor(() => expect(screen.getByRole("button", { name: dict["common.cancel"] })).toHaveProperty("disabled", false))
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: dict["common.cancel"] })).toHaveProperty("disabled", false),
+  )
   expect(field).toHaveProperty("disabled", true)
   fireEvent.click(screen.getByRole("button", { name: dict["common.cancel"] }))
   await waitFor(() => expect(cancel).toHaveBeenCalledTimes(2))

@@ -9,7 +9,7 @@ import { Database } from "../src/database/database"
 import { EventV2 } from "../src/event"
 import { EventTable } from "../src/event/sql"
 import { Hash } from "../src/util/hash"
-import { SessionActivityTable } from "../src/context-federation/session-sql"
+import { SecurityNamespaceID } from "../src/context-federation/reference"
 import { DeepAgentPlanStore } from "../src/deepagent/plan-store"
 import { DocumentStore } from "../src/deepagent/document-store"
 import { GoalControl } from "../src/deepagent/goal-control"
@@ -43,10 +43,12 @@ import { ToolRegistry } from "../src/tool/registry"
 import { ToolOutputStore } from "../src/tool-output-store"
 import { GoalControlFixture } from "./fixture/goal-control"
 import { location } from "./fixture/location"
+import { openFixtureActivity, settleFixtureActivity } from "./fixture/open-activity"
 import { projectLayer } from "./fixture/project-layer"
 import { testEffect } from "./lib/effect"
 
 const sid = SessionV2.ID.make("ses_collaboration")
+const securityNamespaceId = SecurityNamespaceID.make("sec_collaboration")
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
@@ -265,19 +267,13 @@ describe("collaboration mode authority", () => {
         prompt: new Prompt({ text: "Design the change", agent: "plan" }),
         resume: false,
       })
-      yield* db
-        .insert(SessionActivityTable)
-        .values({
-          activity_id: "activity-plan",
-          session_id: sid,
-          ordinal: 0,
-          trigger_input_id: first.id,
-          delivery: "steer",
-          state: "active",
-          created_at: 1,
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* SessionInput.promoteSteers(db, yield* EventV2.Service, sid, first.admittedSeq)
+      const activity = yield* openFixtureActivity({
+        sessionId: sid,
+        triggerInputId: first.id,
+        securityNamespaceId,
+        now: 1,
+      })
       const before = yield* db.select().from(EventTable).all().pipe(Effect.orDie)
       expect(
         yield* sessions
@@ -303,12 +299,7 @@ describe("collaboration mode authority", () => {
       })
       expect((yield* SessionInput.find(db, queued.id))?.delivery).toBe("queue")
       expect((yield* sessions.get(sid)).agent).toBe(AgentV2.ID.make("plan"))
-      yield* db
-        .update(SessionActivityTable)
-        .set({ state: "settled", settled_at: 2 })
-        .where(eq(SessionActivityTable.activity_id, "activity-plan"))
-        .run()
-        .pipe(Effect.orDie)
+      yield* settleFixtureActivity({ activityId: activity.activityId, securityNamespaceId, now: 2 })
       yield* sessions.switchAgent({ sessionID: sid, agent: "auto" })
       expect((yield* sessions.get(sid)).agent).toBe(AgentV2.ID.make("auto"))
     }),
@@ -333,19 +324,13 @@ describe("collaboration mode authority", () => {
         AgentV2.ID.make("auto"),
         { select: agents.select },
       )
-      yield* db
-        .insert(SessionActivityTable)
-        .values({
-          activity_id: "activity-default",
-          session_id: sid,
-          ordinal: 0,
-          trigger_input_id: first.id,
-          delivery: "steer",
-          state: "active",
-          created_at: 1,
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* SessionInput.promoteSteers(db, yield* EventV2.Service, sid, first.admittedSeq)
+      yield* openFixtureActivity({
+        sessionId: sid,
+        triggerInputId: first.id,
+        securityNamespaceId,
+        now: 1,
+      })
       yield* agents.update((editor) => editor.default(AgentV2.ID.make("plan")))
       expect(
         yield* sessions

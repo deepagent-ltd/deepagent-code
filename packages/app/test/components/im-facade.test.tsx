@@ -27,7 +27,10 @@ vi.mock("@/context/language", () => ({
       Object.entries(values ?? {}).reduce((text, [key, value]) => text.replace(`{{${key}}}`, value), dict[key]),
   }),
 }))
-vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => dialog }))
+vi.mock("@deepagent-code/ui/context/dialog", async (original) => ({
+  ...(await original<typeof import("@deepagent-code/ui/context/dialog")>()),
+  useDialog: () => dialog,
+}))
 vi.mock("@deepagent-code/ui/context/i18n", () => ({ useI18n: () => ({ t: () => "Close" }) }))
 
 beforeEach(() => {

@@ -14,7 +14,10 @@ vi.mock("@/context/global", () => ({
     }),
   }),
 }))
-vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ close: vi.fn() }) }))
+vi.mock("@deepagent-code/ui/context/dialog", async (original) => ({
+  ...(await original<typeof import("@deepagent-code/ui/context/dialog")>()),
+  useDialog: () => ({ close: vi.fn() }),
+}))
 vi.mock("@deepagent-code/ui/context/i18n", () => ({ useI18n: () => ({ t: () => "Close" }) }))
 vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
 afterEach(cleanup)

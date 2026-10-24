@@ -7,6 +7,12 @@ import { installManagedBrowser } from "../managed-browser"
 app.setPath("userData", path.join(process.env.DAC_BROWSER_TEST_ROOT!, "electron-user"))
 app.setPath("sessionData", path.join(process.env.DAC_BROWSER_TEST_ROOT!, "electron-session"))
 app.commandLine.appendSwitch("disable-background-networking")
+// Keep ambient WindowServer pointer events outside this private qualifier while
+// preserving a shown Chromium window for the original CDP/native input path.
+app.on("browser-window-created", (_event, window) => {
+  window.on("show", () => window.setPosition(-10_000, -10_000))
+  window.setPosition(-10_000, -10_000)
+})
 app.on("window-all-closed", () => {})
 
 async function main() {

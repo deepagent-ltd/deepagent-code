@@ -16,6 +16,7 @@ type Step = {
 }
 
 const root = path.resolve(import.meta.dir, "../../../..")
+const bash = Bun.which("bash")
 const action = Bun.YAML.parse(await Bun.file(path.join(root, ".github/actions/package-desktop/action.yml")).text()) as {
   runs: { using: string; steps: Step[] }
 }
@@ -216,8 +217,9 @@ test("standalone Desktop release packaging requires one existing publish issuanc
   expect(required.env?.OWNER_ISSUANCE_RUN_ID).toBe("${{ inputs.owner_issuance_run_id }}")
   expect(required.run).toContain('(.path | split("@")[0]) == ".github/workflows/publish.yml"')
   expect(required.run).toContain('.status == "completed" and .conclusion == "success"')
+  expect(bash).not.toBeNull()
   for (const value of ["", "0", "other-workflow", "1/../../", "1\nOTHER=1"]) {
-    const child = Bun.spawn(["/bin/bash", "-c", required.run!], {
+    const child = Bun.spawn([bash!, "-c", required.run!], {
       env: { PATH: "/nonexistent", OWNER_ISSUANCE_RUN_ID: value, REPOSITORY: "fixture/repository", GH_TOKEN: "unused" },
       stdout: "pipe",
       stderr: "pipe",
@@ -300,13 +302,14 @@ test("the actual standalone issuance verifier accepts the signed version and rej
     const output = JSON.parse(issued[0]) as { public_key_pem: string }
     const row = (await Bun.file(authorization).json()) as { signature_digest: string }
     await writeFile(pin, output.public_key_pem)
+    expect(bash).not.toBeNull()
     for (const [expectedVersion, signature, accepted] of [
       [version, row.signature_digest, true],
       ["2.0.6", row.signature_digest, false],
       [version, `${row.signature_digest.startsWith("0") ? "1" : "0"}${row.signature_digest.slice(1)}`, false],
     ] as const) {
       await writeFile(authorization, JSON.stringify({ ...row, signature_digest: signature }))
-      const child = Bun.spawn(["/bin/bash", "-c", step.run!], {
+      const child = Bun.spawn([bash!, "-c", step.run!], {
         cwd: root,
         env: {
           PATH: process.env.PATH,

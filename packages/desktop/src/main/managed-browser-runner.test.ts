@@ -45,7 +45,7 @@ async function run(mode: "identity" | "interaction-redirect-denied" | "interacti
   return { root, result }
 }
 
-test("actual Desktop sidecar HTTP canonical runner delivers native Browser PNG to the next provider request", async () => {
+test.skipIf(process.platform !== "darwin")("actual Desktop sidecar HTTP canonical runner delivers native Browser PNG to the next provider request", async () => {
   const { root, result } = await run("happy")
   expect(result.providerRequests).toBe(6)
   expect(result.browserMissing).toBe(false)
@@ -54,7 +54,7 @@ test("actual Desktop sidecar HTTP canonical runner delivers native Browser PNG t
   expect(result.unauthorizedStatus).toBe(401)
   expect(result.queryAuthStatus).toBe(401)
   expect(result.forbiddenActionStatus).toBe(404)
-  expect(result.getNoWrites).toBe(true)
+  expect({ unchanged: result.getNoWrites, changedTables: result.getWriteTables }).toEqual({ unchanged: true, changedTables: [] })
   const body = await Bun.file(path.join(root, "provider-6.json")).json()
   const images = body.messages.flatMap((message: { content?: unknown }) => Array.isArray(message.content) ? message.content : [])
     .filter((part: { type?: string }) => part.type === "image_url")
@@ -86,7 +86,7 @@ test("actual Desktop sidecar HTTP canonical runner delivers native Browser PNG t
 }, 100_000)
 
 
-test("actual finished provider may wait for scoped once approval before each browser action", async () => {
+test.skipIf(process.platform !== "darwin")("actual finished provider may wait for scoped once approval before each browser action", async () => {
   const { result } = await run("permission")
   expect(result.providerRequests).toBe(6)
   expect(result.permissions).toHaveLength(4)
@@ -151,7 +151,7 @@ test("actual interaction profile submits one Chinese form through canonical acti
   expect(result.posted).toHaveLength(1)
   expect(new URLSearchParams(result.posted[0]).get("name")).toBe("真实中文表单一次")
   expect(result.stopped.stopConfirmed).toBe(true)
-  expect(result.getNoWrites).toBe(true)
+  expect({ unchanged: result.getNoWrites, changedTables: result.getWriteTables }).toEqual({ unchanged: true, changedTables: [] })
   const body = await Bun.file(path.join(root, "provider-10.json")).json()
   expect(JSON.stringify(body)).toContain("提交成功")
   expect(JSON.stringify(body)).toContain("data:image/png;base64,")

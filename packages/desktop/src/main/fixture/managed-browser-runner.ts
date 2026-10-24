@@ -296,13 +296,14 @@ async function main() {
     const { DatabaseSync } = await import("node:sqlite")
     const database = new DatabaseSync(path.join(root, "authority.sqlite"), { readOnly: true })
     const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()
-    const snapshot = () => JSON.stringify(tables.map((table) => [table.name,
-      database.prepare(`SELECT * FROM "${String(table.name).replaceAll('"', '""')}"`).all()]))
+    const snapshot = () => tables.map((table) => ({ name: String(table.name), rows: JSON.stringify(
+      database.prepare(`SELECT * FROM "${String(table.name).replaceAll('"', '""')}"`).all()) }))
     const beforeGet = snapshot()
     const controlRead = await call(`/api/v1/browser/controls/${controlID}`)
     const actions = database.prepare("SELECT action_id FROM browser_action ORDER BY action_id").all()
     for (const action of actions) await call(`/api/v1/browser/actions/${action.action_id}`)
     const afterGet = snapshot()
+    const getWriteTables = beforeGet.filter((table, index) => table.rows !== afterGet[index]!.rows).map((table) => table.name)
     database.close()
     const forbiddenAction = await fetch(url + "/api/v1/browser/actions", { method: "POST", headers: { authorization, "content-type": "application/json" }, body: JSON.stringify({ effectID: "caller-invented" }) })
     const queryAuth = await fetch(url + `/api/v1/browser/controls/${controlID}?auth_token=untrusted`)
@@ -317,7 +318,7 @@ async function main() {
         beforeRead, afterRead: { provider: bodies.length, preview: previewRequests.length } }
     }
     await writeFile(path.join(root, "result.json"), JSON.stringify({ control, observed, stopped, session, admitted,
-      permissions, previewRequests, posted, outsideRequests, controlRead, getNoWrites: beforeGet === afterGet, forbiddenActionStatus: forbiddenAction.status, queryAuthStatus: queryAuth.status, providerRequests: bodies.length, browserMissing, unauthorizedStatus: denied.status,
+      permissions, previewRequests, posted, outsideRequests, controlRead, getNoWrites: getWriteTables.length === 0, getWriteTables, forbiddenActionStatus: forbiddenAction.status, queryAuthStatus: queryAuth.status, providerRequests: bodies.length, browserMissing, unauthorizedStatus: denied.status,
       coldHistory,
       fixtureDevMint: process.env.DEEPAGENT_CODE_V2_OWNER_DEV_MINT === "1" }, null, 2))
   } finally {

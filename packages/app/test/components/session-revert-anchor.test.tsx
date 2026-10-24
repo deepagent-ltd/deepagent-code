@@ -47,7 +47,7 @@ vi.mock("@/pages/session/session-layout", () => ({
     tabs: () => ({ all: () => [], active: () => undefined }),
     view: () => ({
       panel: { location: () => "bottom", sideAvailable: () => true, bottom: { opened: () => false } },
-      rightPanel: { mode: () => "review" },
+      rightPanel: { mode: () => "review", opened: () => false },
     }),
   }),
 }))

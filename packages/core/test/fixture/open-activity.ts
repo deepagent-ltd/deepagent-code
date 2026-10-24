@@ -29,7 +29,7 @@ export function openFixtureActivity(input: {
 
 export function settleFixtureActivity(input: {
   activityId: string
-  finalMessageId: string
+  finalMessageId?: string
   securityNamespaceId: SecurityNamespaceID
   now: number
 }) {

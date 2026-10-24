@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { createHash } from "node:crypto"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { buildLinuxNativeAssets, inspectLinuxNativeAssets, linuxNativeCargoInvocation, linuxNativeCopyrightCopy, linuxNativeCopyrightMetadata, linuxNativeImageRejection, linuxNativePackageOwnership, linuxNativePackageProvenance, LINUX_NATIVE_DEV_MANIFEST, LINUX_NATIVE_DEV_DOMAIN, type LinuxNativeDevManifest, type LinuxNativeTarget } from "./build-linux-native-assets"
@@ -56,7 +57,7 @@ test("canonical package ownership uses physical metadata and only falls back for
 })
 
 async function fixture(target: LinuxNativeTarget = "linux-x64") {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-linux-dev-asset-core-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-linux-dev-asset-core-")))
   const elf = Buffer.alloc(128)
   elf.writeUInt32LE(0x464c457f, 0)
   elf[4] = 2; elf[5] = 1; elf[6] = 1
@@ -86,14 +87,15 @@ async function fixture(target: LinuxNativeTarget = "linux-x64") {
 
 test("non-Linux host refuses physical build before any output, tool or payload exists", async () => {
   if (process.platform === "linux") return
-  const directory = await fs.mkdtemp("/tmp/dac-linux-dev-asset-guard-")
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-linux-dev-asset-guard-"))
   try {
     await expect(buildLinuxNativeAssets({ destination: path.join(directory, "assets") })).rejects.toThrow("native Linux")
     expect(await fs.readdir(directory)).toEqual([])
   } finally { await fs.rm(directory, { recursive: true, force: true }) }
 })
 
-test("closed image rejection retains hardlink refusal and reveals only fixed copyright metadata", async () => {
+// These physical Linux-asset fixtures require real POSIX permission and no-follow semantics.
+test.skipIf(process.platform === "win32")("closed image rejection retains hardlink refusal and reveals only fixed copyright metadata", async () => {
   const value = await fixture()
   const filename = path.join(value.directory, names[2]!)
   try {
@@ -132,8 +134,8 @@ test("copyright metadata requires its canonical package owner and one registered
   await expect(linuxNativeCopyrightMetadata({ canonical: "/private/credential", query: async () => { throw new Error("query must not run") } })).rejects.toThrow("fixed canonical package path")
 })
 
-test("registered writable copyright copies exact bytes privately while generic assets and source changes remain refused", async () => {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-linux-copyright-copy-"))
+test.skipIf(process.platform === "win32")("registered writable copyright copies exact bytes privately while generic assets and source changes remain refused", async () => {
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-linux-copyright-copy-")))
   const source = path.join(directory, "copyright")
   const destination = path.join(directory, "private.copyright")
   const body = Buffer.from("complete registered copyright\n")
@@ -162,7 +164,7 @@ test("registered writable copyright copies exact bytes privately while generic a
   } finally { await fs.rm(directory, { recursive: true, force: true }) }
 })
 
-test("actual ELF file cohort accepts both native target headers and preserves exact data-only hash", async () => {
+test.skipIf(process.platform === "win32")("actual ELF file cohort accepts both native target headers and preserves exact data-only hash", async () => {
   for (const target of ["linux-x64", "linux-arm64"] as const) {
     const value = await fixture(target)
     try {
@@ -192,7 +194,7 @@ test("captured Cargo invocation uses actual compiler and one three-bin target di
   expect(() => linuxNativeCargoInvocation({ cargo: "/toolchain/bin/cargo", rustc: "/toolchain/bin/rustc", target: "linux-x64", targetDirectory: "/owned/cargo", environment: { RUSTC_WRAPPER: "/unrecorded/wrapper" } })).toThrow("uncaptured")
 })
 
-test("component provenance requires all original license files and only optional captured Rustup metadata", async () => {
+test.skipIf(process.platform === "win32")("component provenance requires all original license files and only optional captured Rustup metadata", async () => {
   const value = await fixture()
   try {
     value.manifest.tools.push({ name: "rustup", bytes: 1, sha256: digest("rustup"), version: "fixture dispatcher metadata; not executed" })
@@ -209,7 +211,7 @@ test("component provenance requires all original license files and only optional
   } finally { await fs.rm(value.directory, { recursive: true, force: true }) }
 })
 
-test("fixed four assets fail on absent supervisor, byte change, wrong ABI, unsafe mode and physical alias", async () => {
+test.skipIf(process.platform === "win32")("fixed four assets fail on absent supervisor, byte change, wrong ABI, unsafe mode and physical alias", async () => {
   const value = await fixture()
   const filename = path.join(value.directory, names[2]!)
   const original = await fs.readFile(filename)
@@ -238,7 +240,7 @@ test("fixed four assets fail on absent supervisor, byte change, wrong ABI, unsaf
   } finally { await fs.rm(value.directory, { recursive: true, force: true }) }
 })
 
-test("data inventory rejects stale signed receipt, unknown grant fields, crossed target and declared over-budget copies", async () => {
+test.skipIf(process.platform === "win32")("data inventory rejects stale signed receipt, unknown grant fields, crossed target and declared over-budget copies", async () => {
   const value = await fixture()
   try {
     await fs.writeFile(path.join(value.directory, "node.js.native-installation.json"), "old", { mode: 0o644 })

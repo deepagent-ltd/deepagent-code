@@ -6,6 +6,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { ImportJob } from "@deepagent-code/core/import-job"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { importServer, importSource } from "./import-job"
+import { importFixtureSourceInventory, publishImportFixturePacket } from "../../../app/test/components/fixture/import-control"
 
 const root = process.argv[2]!
 const count = Number(process.argv[3] ?? "400")
@@ -36,20 +37,36 @@ await Effect.runPromise(
         )
       const before = yield* census()
       const sourcePath = yield* Effect.promise(() => importSource(root, "claude", count))
+      const packetCount = Math.min(count, 2)
+      const packetSourcePath = count
+        ? yield* Effect.promise(() => importSource(path.join(root, "packet"), "claude", packetCount))
+        : sourcePath
       if (count)
         yield* Effect.promise(async () => {
-          await Bun.write(
-            path.join(sourcePath, "projects/fixture/memory/context.md"),
-            "# Private memory\nKeep every import in its copy target.\n",
-          )
-          await Bun.write(
-            path.join(sourcePath, "skills/lifecycle/SKILL.md"),
-            "# Private skill\nInspect the original receipt before using it.\n",
-          )
-          await Bun.write(path.join(sourcePath, "skills/lifecycle/raw.bin"), new Uint8Array([0, 255, 128]))
+          for (const source of [sourcePath, packetSourcePath]) {
+            await Bun.write(
+              path.join(source, "projects/fixture/memory/context.md"),
+              "# Private memory\nKeep every import in its copy target.\n",
+            )
+            await Bun.write(
+              path.join(source, "skills/lifecycle/SKILL.md"),
+              "# Private skill\nInspect the original receipt before using it.\n",
+            )
+            await Bun.write(path.join(source, "skills/lifecycle/raw.bin"), new Uint8Array([0, 255, 128]))
+          }
         })
+      const sources = count ? [sourcePath, packetSourcePath] : []
+      const sourceBefore = yield* Effect.promise(() => Promise.all(sources.map(importFixtureSourceInventory)))
       const url = HttpServer.formatAddress((yield* HttpServer.HttpServer).address)
-      yield* Effect.promise(() => Bun.write(path.join(root, "ready.json"), JSON.stringify({ url, sourcePath, count })))
+      yield* Effect.promise(() =>
+        publishImportFixturePacket(path.join(root, "ready.json"), {
+          url,
+          sourcePath,
+          count,
+          packetSourcePath,
+          packetCount,
+        }),
+      )
       // This only observes real destination receipts. It never pauses a writer,
       // changes a job row, or fabricates a completed/partial state for the UI.
       for (;;) {
@@ -70,10 +87,11 @@ await Effect.runPromise(
             }).pipe(Effect.option)
             if (receipt._tag === "Some" && receipt.value.count > 0)
               yield* Effect.promise(() =>
-                Bun.write(
-                  path.join(root, "first-commit.json"),
-                  JSON.stringify({ jobID: row.job_id, state: row.state, count: receipt.value.count }),
-                ),
+                publishImportFixturePacket(path.join(root, "first-commit.json"), {
+                  jobID: row.job_id,
+                  state: row.state,
+                  count: receipt.value.count,
+                }),
               )
           }
         }
@@ -89,6 +107,7 @@ await Effect.runPromise(
           includeResults: true,
         })
         const after = yield* census()
+        const sourceAfter = yield* Effect.promise(() => Promise.all(sources.map(importFixtureSourceInventory)))
         const target = yield* Effect.promise(async () => {
           const { Database } = await import("bun:sqlite")
           const reader = new Database(row.target!.dbPath, { readonly: true, create: false })
@@ -105,10 +124,17 @@ await Effect.runPromise(
         const liveSessions = yield* db.all("SELECT id FROM session").pipe(Effect.orDie)
         const jobs = yield* db.all("SELECT job_id FROM import_job").pipe(Effect.orDie)
         yield* Effect.promise(() =>
-          Bun.write(
-            path.join(root, `${input.name}.json`),
-            JSON.stringify({ before, after, proof, target, job: ImportJob.info(row), liveSessions, jobs }),
-          ),
+          publishImportFixturePacket(path.join(root, `${input.name}.json`), {
+            before,
+            after,
+            sourceBefore,
+            sourceAfter,
+            proof,
+            target,
+            job: ImportJob.info(row),
+            liveSessions,
+            jobs,
+          }),
         )
         yield* Effect.promise(() => inspect.delete())
       }

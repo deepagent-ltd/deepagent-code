@@ -21,8 +21,9 @@ test("original Electron native input hooks are classified against the raw CDP ca
   const timer = setTimeout(() => child.kill("SIGTERM"), 15_000)
   const code = await child.exited
   clearTimeout(timer)
-  await fs.writeFile(path.join(root, "process.log"), await new Response(child.stdout).text() + await new Response(child.stderr).text(), { mode: 0o600 })
-  expect(code).toBe(0)
+  const diagnostic = await new Response(child.stdout).text() + await new Response(child.stderr).text()
+  await fs.writeFile(path.join(root, "process.log"), diagnostic, { mode: 0o600 })
+  expect({ code, diagnostic: code ? diagnostic : null }).toEqual({ code: 0, diagnostic: null })
   const result = await Bun.file(path.join(root, "result.json")).json()
   expect(result.electron).toBe(managedBrowserInputRuntime.electronVersion)
   expect(result.destroyed).toBe(true)

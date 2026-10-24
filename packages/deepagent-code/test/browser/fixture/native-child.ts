@@ -31,12 +31,20 @@ const execute = (command: BrowserSchema.Command) => {
   }))
 }
 const code = (exit: Exit.Exit<unknown, BrowserSchema.Error>) => Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause))?.code : null
-try {
+async function main() {
   await Effect.runPromise(host.create(control))
   const first = await Effect.runPromise(execute({ type: "tabs.list" }))
   const tab = first.result.tabs[0]!
   const navigated = await Effect.runPromise(execute({ type: "navigate", tabID: tab.tabID, generation: tab.generation, url: control.origin + "/" }))
   const current = navigated.result.tabs[0]!
+  if (process.platform !== "darwin") {
+    const unavailable = code(await Effect.runPromise(Effect.exit(execute({ type: "snapshot", tabID: current.tabID, generation: current.generation }))))
+    const stopped = await Effect.runPromise(host.cancel({ ...control, state: "cancel_requested", revision: 3, epoch: 2,
+      cancel: { requestID: "unsupported-source", expectedRevision: 2, requestedAt: Date.now() } }))
+    port.postMessage({ type: "result", inputSource: "unsupported", first, navigated, snapshotCode: unavailable,
+      stopped, verify: host.verify(control) })
+    return
+  }
   const snapshot = await Effect.runPromise(execute({ type: "snapshot", tabID: current.tabID, generation: current.generation }))
   const png = await Effect.runPromise(execute({ type: "screenshot", tabID: current.tabID, generation: current.generation }))
   const external = code(await Effect.runPromise(Effect.exit(execute({ type: "navigate", tabID: current.tabID, generation: current.generation, url: process.env.DAC_BROWSER_DENIED! }))))
@@ -53,6 +61,7 @@ try {
     runtime: { node: process.versions.node, electron: process.versions.electron,
       argon2: typeof Reflect.get(crypto, "argon2"), argon2Sync: typeof Reflect.get(crypto, "argon2Sync") },
     external, stale, revoked, rotated, stopped, cancellationCount: cancellations.length, checks, verify: host.verify(control), authOld: host.matchesCredentials("deepagent-code", "fixture-password") })
-} catch (error) {
-  port.postMessage({ type: "fixture-error", message: String(error), stack: error instanceof Error ? error.stack : undefined })
 }
+void main().catch((error: unknown) => {
+  port.postMessage({ type: "fixture-error", message: String(error), stack: error instanceof Error ? error.stack : undefined })
+})

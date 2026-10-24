@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library"
+import type { JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { GoalStatusBar } from "@/components/deepagent/goal-status-bar"
 import { GoalStartButton } from "@/components/deepagent/goal-start-button"
@@ -7,7 +8,7 @@ import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
 import type { SessionGoal } from "@/context/global-sync/types"
 import { dict } from "@/i18n/en"
 
-const wiring = vi.hoisted(() => ({ sdk: {} as object, sync: {} as object, toast: vi.fn() }))
+const wiring = vi.hoisted(() => ({ sdk: {} as object, sync: {} as object, toast: vi.fn(), dialog: vi.fn() }))
 vi.mock("@/context/sdk", () => ({ useSDK: () => wiring.sdk }))
 vi.mock("@/context/server-sync", () => ({ useServerSync: () => wiring.sync }))
 vi.mock("@/context/local", () => ({ useLocal: () => ({ agent: { current: () => ({ name: "loop" }) } }) }))
@@ -17,7 +18,11 @@ vi.mock("@/context/language", () => ({
       Object.entries(values ?? {}).reduce((text, [key, value]) => text.replace(`{{${key}}}`, String(value)), dict[key]),
   }),
 }))
-vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ show: vi.fn(), close: vi.fn() }) }))
+vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ show: wiring.dialog, close: vi.fn() }) }))
+vi.mock("@deepagent-code/ui/v2/dialog-v2", () => ({
+  Dialog: (props: { children: JSX.Element }) => <section>{props.children}</section>,
+  DialogFooter: (props: { children: JSX.Element }) => <footer>{props.children}</footer>,
+}))
 vi.mock("@/components/deepagent/goal-plan-edit-dialog", () => ({ GoalPlanEditDialog: () => null }))
 vi.mock("@/utils/toast", () => ({ showToast: (...args: unknown[]) => wiring.toast(...args) }))
 
@@ -88,69 +93,86 @@ function setup(initial: GoalClient.Snapshot | null = snapshot()) {
 }
 const postCalls = (request: ReturnType<typeof vi.fn>) =>
   request.mock.calls.map(([value]) => value).filter((value) => value.method === "POST")
-beforeEach(() => wiring.toast.mockReset())
+beforeEach(() => {
+  wiring.toast.mockReset()
+  wiring.dialog.mockReset()
+})
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
 })
 
-
-for (const kind of ["start", "control"] as const) it(`${kind} admission bounds unknown original commands and exact retry releases one slot`, async () => {
-  const held = [] as { f: ReturnType<typeof setup>; sdk: object; sync: object }[]
-  const mount = (f: ReturnType<typeof setup>) => render(() => kind === "start" ? <GoalStartButton sessionID={f.first} /> : <GoalStatusBar sessionID={f.first} />)
-  const action = () => screen.getByRole("button", { name: dict[kind === "start" ? "goal.start.button" : "composer.goal.pause"] })
-  for (let i = 0; i < 32; i++) {
-    const f = setup(kind === "start" ? null : snapshot())
-    const original = f.request.getMockImplementation()!
-    f.request.mockImplementation((input) => input.method === "POST" ? Promise.reject(new TypeError("lost")) : original(input))
-    held.push({ f, sdk: wiring.sdk, sync: wiring.sync })
-    const view = mount(f)
+for (const kind of ["start", "control"] as const)
+  it(`${kind} admission bounds unknown original commands and exact retry releases one slot`, async () => {
+    const held = [] as { f: ReturnType<typeof setup>; sdk: object; sync: object }[]
+    const mount = (f: ReturnType<typeof setup>) =>
+      render(() => (kind === "start" ? <GoalStartButton sessionID={f.first} /> : <GoalStatusBar sessionID={f.first} />))
+    const action = () =>
+      screen.getByRole("button", { name: dict[kind === "start" ? "goal.start.button" : "composer.goal.pause"] })
+    const activate = () => {
+      fireEvent.click(action())
+      if (kind !== "start") return
+      const form = render(wiring.dialog.mock.lastCall![0])
+      fireEvent.click(within(form.container).getByRole("button", { name: dict["goal.start.button"] }))
+      form.unmount()
+    }
+    for (let i = 0; i < 32; i++) {
+      const f = setup(kind === "start" ? null : snapshot())
+      const original = f.request.getMockImplementation()!
+      f.request.mockImplementation((input) =>
+        input.method === "POST" ? Promise.reject(new TypeError("lost")) : original(input),
+      )
+      held.push({ f, sdk: wiring.sdk, sync: wiring.sync })
+      const view = mount(f)
+      await waitFor(() => expect(action()).toBeTruthy())
+      activate()
+      await screen.findByRole("button", { name: dict["goal.control.retry"] })
+      expect(postCalls(f.request)).toHaveLength(1)
+      view.unmount()
+    }
+    const blocked = setup(kind === "start" ? null : snapshot())
+    const owner = { sdk: wiring.sdk, sync: wiring.sync }
+    const view = mount(blocked)
     await waitFor(() => expect(action()).toBeTruthy())
-    fireEvent.click(action())
-    await screen.findByRole("button", { name: dict["goal.control.retry"] })
-    expect(postCalls(f.request)).toHaveLength(1)
+    activate()
+    await screen.findByText(dict["eventValidation.capacity"])
+    expect(postCalls(blocked.request)).toHaveLength(0)
     view.unmount()
-  }
-  const blocked = setup(kind === "start" ? null : snapshot())
-  const owner = { sdk: wiring.sdk, sync: wiring.sync }
-  const view = mount(blocked)
-  await waitFor(() => expect(action()).toBeTruthy())
-  fireEvent.click(action())
-  await screen.findByText(dict["eventValidation.capacity"])
-  expect(postCalls(blocked.request)).toHaveLength(0)
-  view.unmount()
-  const first = held[0]!
-  wiring.sdk = first.sdk
-  wiring.sync = first.sync
-  first.f.request.mockResolvedValue({ error: { code: "forbidden", message: "Later access denied" }, response: { status: 403 } })
-  const denied = mount(first.f)
-  fireEvent.click(await screen.findByRole("button", { name: dict["goal.control.retry"] }))
-  await screen.findByText("Later access denied")
-  expect(postCalls(first.f.request)).toHaveLength(2)
-  expect(screen.getByRole("button", { name: dict["goal.control.retry"] })).toBeTruthy()
-  denied.unmount()
-  wiring.sdk = owner.sdk
-  wiring.sync = owner.sync
-  const stillFull = mount(blocked)
-  await waitFor(() => expect(action()).toBeTruthy())
-  fireEvent.click(action())
-  await screen.findByText(dict["eventValidation.capacity"])
-  expect(postCalls(blocked.request)).toHaveLength(0)
-  stillFull.unmount()
-  wiring.sdk = first.sdk
-  wiring.sync = first.sync
-  first.f.request.mockResolvedValue(success(snapshot({ revision: 2, phase: "paused", requestedPhase: "paused" })))
-  const retry = mount(first.f)
-  fireEvent.click(await screen.findByRole("button", { name: dict["goal.control.retry"] }))
-  await waitFor(() => expect(first.f.set).toHaveBeenCalledTimes(1))
-  expect(postCalls(first.f.request)).toHaveLength(3)
-  expect(postCalls(first.f.request)[1]).toEqual(postCalls(first.f.request)[0])
-  expect(postCalls(first.f.request)[2]).toEqual(postCalls(first.f.request)[0])
-  retry.unmount()
-  wiring.sdk = owner.sdk
-  wiring.sync = owner.sync
-  mount(blocked)
-  await waitFor(() => expect(action()).toBeTruthy())
-  fireEvent.click(action())
-  await waitFor(() => expect(postCalls(blocked.request)).toHaveLength(1))
-})
+    const first = held[0]!
+    wiring.sdk = first.sdk
+    wiring.sync = first.sync
+    first.f.request.mockResolvedValue({
+      error: { code: "forbidden", message: "Later access denied" },
+      response: { status: 403 },
+    })
+    const denied = mount(first.f)
+    fireEvent.click(await screen.findByRole("button", { name: dict["goal.control.retry"] }))
+    await screen.findByText("Later access denied")
+    expect(postCalls(first.f.request)).toHaveLength(2)
+    expect(screen.getByRole("button", { name: dict["goal.control.retry"] })).toBeTruthy()
+    denied.unmount()
+    wiring.sdk = owner.sdk
+    wiring.sync = owner.sync
+    const stillFull = mount(blocked)
+    await waitFor(() => expect(action()).toBeTruthy())
+    activate()
+    await screen.findByText(dict["eventValidation.capacity"])
+    expect(postCalls(blocked.request)).toHaveLength(0)
+    stillFull.unmount()
+    wiring.sdk = first.sdk
+    wiring.sync = first.sync
+    first.f.request.mockResolvedValue(success(snapshot({ revision: 2, phase: "paused", requestedPhase: "paused" })))
+    const retry = mount(first.f)
+    fireEvent.click(await screen.findByRole("button", { name: dict["goal.control.retry"] }))
+    await waitFor(() => expect(first.f.set).toHaveBeenCalledTimes(1))
+    expect(postCalls(first.f.request)).toHaveLength(3)
+    expect(postCalls(first.f.request)[1]).toEqual(postCalls(first.f.request)[0])
+    expect(postCalls(first.f.request)[2]).toEqual(postCalls(first.f.request)[0])
+    retry.unmount()
+    wiring.sdk = owner.sdk
+    wiring.sync = owner.sync
+    mount(blocked)
+    await waitFor(() => expect(action()).toBeTruthy())
+    activate()
+    await waitFor(() => expect(postCalls(blocked.request)).toHaveLength(1))
+  })

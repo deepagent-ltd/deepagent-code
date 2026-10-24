@@ -14,6 +14,37 @@ import { tmpRoot, tmpRootShared } from "./fixture/fixture"
 const scriptRel = "packages/deepagent-code/script/audit-branding.ts"
 const scriptSrc = path.resolve(import.meta.dir, "../script/audit-branding.ts")
 
+const attributionLines = [
+  {
+    file: "packages/app/src/components/settings-v2/about.tsx",
+    line: '<Link href="https://github.com/anomalyco/opencode">OpenCode</Link>',
+  },
+  {
+    file: "packages/app/src/i18n/en.ts",
+    line: '"Derived from OpenCode under MIT. DeepAgent Code is distributed under AGPL-3.0-or-later; see the complete notices below.",',
+  },
+  {
+    file: "packages/app/src/i18n/zh.ts",
+    line: '"基于 MIT 许可的 OpenCode 派生。DeepAgent Code 以 AGPL-3.0-or-later 发布，完整归因见下方声明。",',
+  },
+  {
+    file: "packages/app/src/i18n/zht.ts",
+    line: '"基於 MIT 授權的 OpenCode 衍生。DeepAgent Code 以 AGPL-3.0-or-later 發布，完整歸屬聲明見下方。",',
+  },
+  {
+    file: "packages/app/test/components/settings-content.test.tsx",
+    line: 'it("uses authoritative license bytes and distinguishes product links from OpenCode attribution", async () => {',
+  },
+  {
+    file: "packages/app/test/components/settings-content.test.tsx",
+    line: 'fireEvent.click(screen.getByRole("link", { name: "OpenCode" }))',
+  },
+  {
+    file: "packages/app/test/components/settings-content.test.tsx",
+    line: 'expect(wiring.openLink).toHaveBeenLastCalledWith("https://github.com/anomalyco/opencode")',
+  },
+]
+
 const reviewedLines = [
   {
     file: ".github/public-source-policy.json",
@@ -37,6 +68,7 @@ const reviewedLines = [
     file: "packages/core/src/plugin/skill/customize-deepagent-code.md",
     line: "provided by DAC's platform path implementation; it is not OpenCode's XDG path.",
   },
+  ...attributionLines,
 ]
 
 const tempDirs: string[] = []
@@ -140,5 +172,10 @@ describe("audit-branding gate", () => {
   test("does not allow reviewed context in another path or an unrelated brand on the same line", () => {
     expect(runAudit({ "other-policy.json": reviewedLines[0].line })).toBe(1)
     expect(runAudit({ "README.md": `${reviewedLines[3].line} lessweb\n` })).toBe(1)
+  })
+
+  test.each(attributionLines)("rejects reviewed attribution outside its exact path in $file", (entry) => {
+    expect(runAudit({ "packages/core/src/unreviewed-attribution.ts": `${entry.line}\n` })).toBe(1)
+    expect(runAudit({ [entry.file]: `${entry.line} "lessweb"\n` })).toBe(1)
   })
 })
