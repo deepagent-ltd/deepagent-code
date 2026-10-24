@@ -327,6 +327,7 @@ it("expires the protected display without extending TTL on a late response; pend
 })
 
 it("protected thread expiry closes the root and its replies; no implicit read write", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] })
   expiry = 120
   const [open, setOpen] = createSignal(true)
   render(() => (
@@ -340,9 +341,15 @@ it("protected thread expiry closes the root and its replies; no implicit read wr
       />
     </Show>
   ))
-  await screen.findByText("protected first")
+  await vi.advanceTimersByTimeAsync(0)
+  expect(screen.getByText("protected first")).toBeTruthy()
   expect(screen.getByText("root body")).toBeTruthy()
-  await waitFor(() => expect(screen.queryByText("root body")).toBeNull())
+  await vi.advanceTimersByTimeAsync(119)
+  expect(screen.getByText("protected first")).toBeTruthy()
+  expect(screen.getByText("root body")).toBeTruthy()
+  expect(reads).toHaveLength(0)
+  await vi.advanceTimersByTimeAsync(1)
+  expect(screen.queryByText("root body")).toBeNull()
   expect(screen.queryByText("protected first")).toBeNull()
   expect(reads).toHaveLength(0)
 })
@@ -1080,6 +1087,8 @@ it("current body success clears only an older refresh failure and fences a late 
 
 it("a verified owner keeps the editor openable during background status while submit remains gated", async () => {
   runtime.connectedPanel = true
+  const clock = { now: performance.now() }
+  vi.spyOn(performance, "now").mockImplementation(() => clock.now)
   const initial = Promise.withResolvers<void>()
   const background = Promise.withResolvers<void>()
   const current = { statuses: 0, refused: false }
@@ -1156,6 +1165,8 @@ it("a verified owner keeps the editor openable during background status while su
   background.resolve()
   await updating
   await waitFor(() => expect(submit.disabled).toBe(false))
+  // A third background refresh belongs to the coalescer's next one-second window.
+  clock.now += 1000
   current.refused = true
   await imSummaryOwner.refresh()
   await waitFor(() => expect(current.statuses).toBeGreaterThanOrEqual(3))

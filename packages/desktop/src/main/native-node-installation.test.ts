@@ -13,6 +13,8 @@ test(process.platform === "win32"
   ? "unsealed Electron unit fixture refuses Windows signing without the physical native publisher cohort"
   : "actual Electron utility interpreter verifies a sealed physical Node entry and adjacent assets", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-native-node-electron-")))
+  const completed = { value: false }
+  console.log("NATIVE_NODE_INSTALLATION_EVIDENCE", root)
   await fs.chmod(root, 0o700)
   const key = generateKeyPairSync("ed25519")
   const fixture = path.join(import.meta.dir, "../../../deepagent-code/test/installation/fixture/native-node-installation-process.ts")
@@ -57,6 +59,7 @@ test(process.platform === "win32"
       const refused = await run(module)
       expect(refused.code).toBe(2)
       expect(JSON.parse(refused.stdout)).toMatchObject({ ok: false, error: { code: "NATIVE_INSTALLATION_UNAVAILABLE" } })
+      completed.value = true
       return
     }
     await signNativeNodeArtifact({ module, runtime: await fs.realpath(runtime.runtime), releaseID: "private-electron-module", privateKey: key.privateKey })
@@ -66,7 +69,8 @@ test(process.platform === "win32"
     expect(inspected.ok).toBe(true)
     expect(inspected.result?.assets).toBe(root)
     expect(inspected.result?.cloneRejected).toBe(true)
+    completed.value = true
   } finally {
-    await fs.rm(root, { recursive: true, force: true })
+    if (completed.value) await fs.rm(root, { recursive: true, force: true })
   }
 }, 45_000)

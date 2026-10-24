@@ -1,37 +1,41 @@
-import * as os from "node:os"
+import os from "node:os"
 
 const sh = (command: string[]) => {
+  if (!Bun.which(command[0])) return { code: null, text: "", unavailable_reason: `Executable unavailable: ${command[0]}` }
   const result = Bun.spawnSync(command, { stdout: "pipe", stderr: "pipe" })
   const text = new TextDecoder().decode(result.stdout).trim()
-  return { code: result.exitCode, text }
+  return { code: result.exitCode, text, unavailable_reason: result.exitCode === 0 ? null : `Command exited ${result.exitCode}: ${command[0]}` }
 }
 
 export const bunVersion = () => Bun.version
 
 export const machineInfo = () => {
-  const cpu = sh(["sysctl", "-n", "machdep.cpu.brand_string"])
+  const darwin = process.platform === "darwin"
   return {
-    hw_model: sh(["sysctl", "-n", "hw.model"]).text,
-    cpu_brand: cpu.text,
+    hw_model: darwin ? sh(["sysctl", "-n", "hw.model"]).text || null : null,
+    cpu_brand: darwin ? sh(["sysctl", "-n", "machdep.cpu.brand_string"]).text || null : os.cpus()[0]?.model ?? null,
     arch: process.arch,
-    physical_cores: Number(sh(["sysctl", "-n", "hw.physicalcpu"]).text),
-    logical_cores: Number(sh(["sysctl", "-n", "hw.ncpu"]).text),
-    memory_bytes: Number(sh(["sysctl", "-n", "hw.memsize"]).text),
+    // node:os exposes logical CPUs only; do not invent a physical-core count on other hosts.
+    physical_cores: darwin ? Number(sh(["sysctl", "-n", "hw.physicalcpu"]).text) || null : null,
+    logical_cores: os.cpus().length || null,
+    memory_bytes: os.totalmem(),
     // os.release() == Darwin kernel (uname -r); os.version() == kernel string (uname -v).
     // sw_vers gives the macOS product/build versions (ProductVersion / BuildVersion),
     // which live on a different numbering layer and must both be recorded explicitly.
     os_release: os.release(),
     os_version: os.version(),
-    macos_product_version: sh(["sw_vers", "-productVersion"]).text,
-    macos_build_version: sh(["sw_vers", "-buildVersion"]).text,
+    macos_product_version: darwin ? sh(["sw_vers", "-productVersion"]).text || null : null,
+    macos_build_version: darwin ? sh(["sw_vers", "-buildVersion"]).text || null : null,
     platform: `${process.platform}`,
   }
 }
 
 /** Battery / power-supply snapshot so readers can judge thermal-Throttle risk on laptops. */
 export const powerState = () => {
+  if (process.platform !== "darwin")
+    return { raw: "", exit_code: null, unavailable_reason: `Power sampler unavailable on ${process.platform}` }
   const battery = sh(["pmset", "-g", "ps"])
-  return { raw: battery.text, exit_code: battery.code }
+  return { raw: battery.text, exit_code: battery.code, unavailable_reason: battery.unavailable_reason }
 }
 
 export interface ProcessRow {
@@ -45,6 +49,7 @@ export interface InterferenceSnapshotRecord {
   readonly captured_at: string
   readonly elapsed_ms: number
   readonly processes: readonly ProcessRow[]
+  readonly unavailable_reason?: string | null
 }
 
 /**
@@ -53,8 +58,10 @@ export interface InterferenceSnapshotRecord {
  * taken when the manifest is built. The two captures are independent samples and are
  * never re-used for the other end; the noise discussion section of the report cites them.
  */
-export const interferenceSnapshot = (): ProcessRow[] => {
-  const ps = sh(["ps", "axo", "pcpu,pmem,comm", "-r"])
+export const interferenceSnapshot = () => {
+  if (process.platform !== "darwin" && process.platform !== "linux")
+    return { processes: [], unavailable_reason: `Process sampler unavailable on ${process.platform}` }
+  const ps = sh(process.platform === "darwin" ? ["ps", "axo", "pcpu,pmem,comm", "-r"] : ["ps", "-eo", "pcpu,pmem,comm", "--sort=-pcpu"])
   const lines = ps.text.split("\n").slice(1)
   const rows = lines
     .filter((line) => line.trim().length > 0)
@@ -62,14 +69,14 @@ export const interferenceSnapshot = (): ProcessRow[] => {
     .map((parts) => ({ pcpu: parts[0], pmem: parts[1], command: parts.slice(2).join(" ") }))
     .filter((row) => !/^\/System\//.test(row.command))
     .slice(0, 15)
-  return rows
+  return { processes: rows, unavailable_reason: ps.unavailable_reason }
 }
 
 /** Capture a timestamped interference snapshot at the given run-wall-clock offset (ms). */
 export const captureInterference = (elapsedMs: number): InterferenceSnapshotRecord => ({
   captured_at: new Date().toISOString(),
   elapsed_ms: Math.round(elapsedMs),
-  processes: interferenceSnapshot(),
+  ...interferenceSnapshot(),
 })
 
 export interface GitIdentity {

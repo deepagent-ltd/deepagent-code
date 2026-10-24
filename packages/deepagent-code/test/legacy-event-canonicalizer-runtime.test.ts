@@ -13,14 +13,14 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { LegacyEventCanonicalizerRuntime } from "@/legacy-event-canonicalizer-runtime"
 import { eq, sql } from "drizzle-orm"
 import { Duration, Effect, Layer } from "effect"
-import { resetDatabase } from "./fixture/db"
-import { disposeAllInstances } from "./fixture/fixture"
+import { rm } from "node:fs/promises"
 import { pollWithTimeout, testEffect } from "./lib/effect"
 import { EmptySettingsFixture } from "./fixture/empty-settings"
 
 afterEach(async () => {
-  await disposeAllInstances()
-  await resetDatabase()
+  // testEffect and withTmpdirInstance close their own store/DB scopes. The
+  // ambient Promise bridge would start a different, unconfigured AppRuntime.
+  await Promise.all(["", "-wal", "-shm"].map((suffix) => rm(`${Database.path()}${suffix}`, { force: true })))
 })
 
 const seedLegacyEvent = Effect.fn("Test.seedLegacyEvent")(function* () {

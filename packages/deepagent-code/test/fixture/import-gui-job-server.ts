@@ -1,4 +1,5 @@
 import path from "node:path"
+import { appendFileSync } from "node:fs"
 import { NodeServices } from "@effect/platform-node"
 import { Effect } from "effect"
 import { Hash } from "@deepagent-code/core/util/hash"
@@ -9,15 +10,21 @@ import { importServer, importSource } from "./import-job"
 import { importFixtureSourceInventory, publishImportFixturePacket } from "../../../app/test/components/fixture/import-control"
 
 const root = process.argv[2]!
+const stage = (phase: string) => appendFileSync(path.join(root, "startup.jsonl"),
+  JSON.stringify({ phase, elapsedMs: performance.now() }) + "\n", { mode: 0o600 })
+stage("fixture-module-loaded")
 const abort = new AbortController()
 process.once("SIGTERM", () => abort.abort())
+stage("acquiring-http-and-database")
 await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+  stage("http-and-database-acquired")
   const db = (yield* Database.Service).db
   const tables = (yield* db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").pipe(Effect.orDie))
     .filter((row) => row.name !== "import_job").map((row) => row.name).sort()
   const census = () => Effect.forEach(tables, (name) => db.all(`SELECT * FROM "${name.replaceAll('"', '""')}"`).pipe(
     Effect.orDie, Effect.map((rows) => ({ name, hash: Hash.sha256(JSON.stringify(rows.map((row) => JSON.stringify(row)).sort())) }))), { concurrency: 1 })
   const before = yield* census()
+  stage("initial-database-census-complete")
   const sourcePath = yield* Effect.promise(() => importSource(root, "claude"))
   yield* Effect.promise(async () => {
     await Bun.write(path.join(sourcePath, "projects/fixture/memory/context.md"), "# Fixture memory\nKeep this private import isolated.\n")
@@ -25,8 +32,10 @@ await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
     await Bun.write(path.join(sourcePath, "skills/gui-fixture/assets/raw.bin"), new Uint8Array([0, 255, 128]))
   })
   const sourceBefore = yield* Effect.promise(() => importFixtureSourceInventory(sourcePath))
+  stage("source-inventory-complete")
   const url = HttpServer.formatAddress((yield* HttpServer.HttpServer).address)
   yield* Effect.promise(() => publishImportFixturePacket(path.join(root, "ready.json"), { url, sourcePath }))
+  stage("ready-published")
   for (;;) {
     yield* Effect.sleep("20 millis")
     if (!(yield* Effect.promise(() => Bun.file(path.join(root, "inspect.json")).exists()))) continue
@@ -45,4 +54,4 @@ await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
     yield* Effect.never
   }
 })).pipe(Effect.provide(importServer(path.join(root, "live.db"), "gui-private-auth")), Effect.provide(NodeServices.layer)), { signal: abort.signal })
-  .catch((error: unknown) => { if (!abort.signal.aborted) throw error })
+  .catch((error: unknown) => { stage(abort.signal.aborted ? "aborted" : "failed"); if (!abort.signal.aborted) throw error })

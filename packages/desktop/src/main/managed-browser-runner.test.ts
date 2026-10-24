@@ -24,7 +24,7 @@ async function run(mode: "missing-native-cohort" | "identity" | "interaction-red
   const server = await Bun.build({ entrypoints: [process.platform === "win32"
     ? path.resolve(import.meta.dir, "../../../deepagent-code/test/fixture/unsealed-canonical-server.ts")
     : path.resolve(import.meta.dir, "../../../deepagent-code/src/node.ts")],
-    outdir: path.join(root, "chunks"), naming: "node.js", target: "node", external: ["@lydell/node-pty", "jsonc-parser", "bun"],
+    outdir: path.join(root, "chunks"), naming: "node.js", target: "node", external: ["@lydell/node-pty", "bun", ...(process.platform === "win32" ? [] : ["jsonc-parser"])],
     define: { "Bun.main": '""', DEEPAGENT_CODE_VERSION: '"2.0.3"', DEEPAGENT_CODE_CHANNEL: '"dev"' }, files: { "deepagent-code-web-ui.gen.ts": "" } })
   // The real sidecar imports its physical adjacent chunks/node.js entry.
   const sidecar = await Bun.build({ entrypoints: [path.join(import.meta.dir, "sidecar.ts")], outdir: root, naming: "sidecar.js", target: "node" })
@@ -72,6 +72,9 @@ test.skipIf(process.platform !== "darwin")("actual Desktop sidecar HTTP canonica
   expect(result.queryAuthStatus).toBe(401)
   expect(result.forbiddenActionStatus).toBe(404)
   expect({ unchanged: result.getNoWrites, changedTables: result.getWriteTables }).toEqual({ unchanged: true, changedTables: [] })
+  expect(Object.values(result.getObservation.pendingBefore).every((count) => count === 0)).toBe(true)
+  expect(result.getObservation.pendingAfter).toEqual(result.getObservation.pendingBefore)
+  expect(result.getObservation.requests.every((item: { status: number; elapsedMs: number }) => item.status === 200 && item.elapsedMs >= 0)).toBe(true)
   const body = await Bun.file(path.join(root, "provider-6.json")).json()
   const images = body.messages.flatMap((message: { content?: unknown }) => Array.isArray(message.content) ? message.content : [])
     .filter((part: { type?: string }) => part.type === "image_url")
@@ -169,6 +172,9 @@ test.skipIf(process.platform !== "darwin")("actual interaction profile submits o
   expect(new URLSearchParams(result.posted[0]).get("name")).toBe("真实中文表单一次")
   expect(result.stopped.stopConfirmed).toBe(true)
   expect({ unchanged: result.getNoWrites, changedTables: result.getWriteTables }).toEqual({ unchanged: true, changedTables: [] })
+  expect(Object.values(result.getObservation.pendingBefore).every((count) => count === 0)).toBe(true)
+  expect(result.getObservation.pendingAfter).toEqual(result.getObservation.pendingBefore)
+  expect(result.getObservation.requests.every((item: { status: number; elapsedMs: number }) => item.status === 200 && item.elapsedMs >= 0)).toBe(true)
   const body = await Bun.file(path.join(root, "provider-10.json")).json()
   expect(JSON.stringify(body)).toContain("提交成功")
   expect(JSON.stringify(body)).toContain("data:image/png;base64,")

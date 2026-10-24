@@ -249,6 +249,8 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
       PATH: process.env.PATH,
       HOME: path.join(root, "home"),
       TMPDIR: root,
+      TEMP: root,
+      TMP: root,
       XDG_DATA_HOME: path.join(root, "data"),
       XDG_CONFIG_HOME: path.join(root, "config"),
       XDG_CACHE_HOME: path.join(root, "cache"),
@@ -268,7 +270,8 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
   const exited = new Promise<number | null>((resolve) => child.once("close", resolve))
   const diagnostic = async () => JSON.stringify({ ...progress, elapsedMs: Date.now() - progress.startedAt,
     root, pid: child.pid, exitCode: child.exitCode, signal: child.signalCode,
-    resultFiles: (await fs.readdir(root)).filter((name) => name.endsWith(".json")), output })
+    resultFiles: (await fs.readdir(root)).filter((name) => name.endsWith(".json")),
+    startup: await fs.readFile(path.join(root, "startup.jsonl"), "utf8").catch(() => null), output })
   const deadline = setTimeout(() => {
     progress.deadlineExpired = true
     child.kill("SIGTERM")

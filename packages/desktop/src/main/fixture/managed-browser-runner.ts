@@ -7,6 +7,23 @@ import { writeFile, mkdir, copyFile } from "node:fs/promises"
 import path from "node:path"
 import { spawnLocalServer } from "../server"
 import { spawnUnsealedCanonicalSidecar } from "./unsealed-canonical-sidecar"
+import type { DatabaseSync } from "node:sqlite"
+
+function backgroundWork(database: DatabaseSync) {
+  const pending = database.prepare(`SELECT
+    (SELECT count(*) FROM learning_generation WHERE (trigger IS NOT NULL AND admitted_at IS NULL) OR (trigger IS NULL AND settled_at <= ?)) AS learningGeneration,
+    (SELECT count(*) FROM learning_admission_outbox WHERE state = 'pending') AS learningAdmission,
+    (SELECT count(*) FROM learning_job WHERE state IN ('queued', 'running', 'reviewing', 'governance')) AS learningJob,
+    (SELECT count(*) FROM learning_governance_plan WHERE state = 'prepared') AS learningPlan,
+    (SELECT count(*) FROM learning_governance_action WHERE state IN ('prepared', 'running')) AS learningAction,
+    (SELECT count(*) FROM deepagent_event_outbox WHERE status IN ('pending', 'publishing')) AS eventOutbox,
+    (SELECT count(*) FROM deepagent_event_outbox o CROSS JOIN deepagent_event_consumer c
+      LEFT JOIN deepagent_event_consumer_delivery d ON d.outbox_id=o.outbox_id AND d.consumer_key=c.consumer_key
+      WHERE o.status='published' AND d.outbox_id IS NULL) AS eventAssignment,
+    (SELECT count(*) FROM deepagent_event_consumer_delivery WHERE status IN ('pending', 'claimed')) AS eventDelivery`).get(Date.now() - 120_000)
+  if (!pending) throw new Error("Fixture background work could not be observed")
+  return pending
+}
 
 const root = process.env.DAC_BROWSER_TEST_ROOT!
 const mode = process.env.DAC_BROWSER_TEST_MODE ?? "happy"
@@ -134,15 +151,18 @@ async function main() {
   await server.health.wait
   const url = `http://127.0.0.1:${address.port}`
   const authorization = `Basic ${Buffer.from(`deepagent-code:${password}`).toString("base64")}`
-  const call = async (route: string, body?: unknown, auth = true, placement = directory) => {
+  const call = async (route: string, body?: unknown, auth = true, placement = directory,
+    observations?: Array<{ route: string; status: number; elapsedMs: number }>) => {
+    const started = performance.now()
     const response = await fetch(url + route, { method: body === undefined ? "GET" : "POST", headers: {
       ...(auth ? { authorization } : {}), "content-type": "application/json", "x-deepagent-code-directory": placement },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
     const text = await response.text()
+    observations?.push({ route, status: response.status, elapsedMs: performance.now() - started })
     if (!response.ok) throw new Error(`${route} HTTP ${response.status}: ${text}`)
     return text ? JSON.parse(text) : undefined
   }
-  const waitForSettled = async (sessionID: string, requests: number, duration: number) => {
+  const waitForSettled = async (sessionID: string, requests: number, duration: number, withBackground = false) => {
     const { DatabaseSync } = await import("node:sqlite")
     const database = new DatabaseSync(path.join(root, "authority.sqlite"), { readOnly: true })
     try {
@@ -151,12 +171,18 @@ async function main() {
         const activity = database.prepare("SELECT a.state, s.execution_claim_token FROM session_activity a JOIN session s ON s.id=a.session_id WHERE a.session_id=? ORDER BY a.ordinal DESC LIMIT 1").get(sessionID)
         // Activity settlement precedes the drain's learning/event finalizers. The
         // claim is released only with the terminal execution event, before GET snapshots.
-        if (bodies.length >= requests && activity?.state === "settled" && activity.execution_claim_token === null) return
+        if (bodies.length >= requests && activity?.state === "settled" && activity.execution_claim_token === null) {
+          if (!withBackground) return
+          // These independent daemons outlive the Session claim. Wait on their
+          // durable completion inside the same deadline before the all-table GET oracle.
+          const pending = backgroundWork(database)
+          if (Object.values(pending).every((count) => count === 0)) return { observedAt: Date.now(), pending }
+        }
         if (activity && ["failed", "interrupted"].includes(String(activity.state)))
           throw new Error(`Fixture activity did not settle: ${JSON.stringify(activity)}`)
         await new Promise((resolve) => setTimeout(resolve, 25))
       }
-      throw new Error(`Fixture activity did not settle after ${bodies.length}/${requests} provider requests`)
+      throw new Error(`Fixture activity did not settle after ${bodies.length}/${requests} provider requests; background=${JSON.stringify(backgroundWork(database))}`)
     } finally { database.close() }
   }
   try {
@@ -323,20 +349,26 @@ async function main() {
       }
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
-    if (!mode.endsWith("-denied")) await waitForSettled(invokeSession.data.id, interaction ? 10 : 6, 40_000)
+    const backgroundBoundary = mode.endsWith("-denied") ? undefined : await waitForSettled(invokeSession.data.id,
+      interaction ? 10 : 6, 40_000, ["happy", "interaction"].includes(mode))
     const observed = await call(`/api/v1/browser/controls/${controlID}`)
     const stopped = await call(`/api/v1/browser/controls/${controlID}/cancel`, { requestID: "canonical-cancel", expectedRevision: observed.control.revision })
     const denied = await fetch(url + `/api/v1/browser/controls/${controlID}`)
     const { DatabaseSync } = await import("node:sqlite")
     const database = new DatabaseSync(path.join(root, "authority.sqlite"), { readOnly: true })
+    const getObservation = { backgroundBoundary, pendingBefore: backgroundWork(database),
+      requests: [] as Array<{ route: string; status: number; elapsedMs: number }>, pendingAfter: {} as ReturnType<typeof backgroundWork> }
+    if (backgroundBoundary && Object.values(getObservation.pendingBefore).some((count) => count !== 0))
+      throw new Error(`Fixture background work resumed before GET: ${JSON.stringify(getObservation.pendingBefore)}`)
     const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()
     const snapshot = () => tables.map((table) => ({ name: String(table.name), rows: JSON.stringify(
       database.prepare(`SELECT * FROM "${String(table.name).replaceAll('"', '""')}"`).all()) }))
     const beforeGet = snapshot()
-    const controlRead = await call(`/api/v1/browser/controls/${controlID}`)
+    const controlRead = await call(`/api/v1/browser/controls/${controlID}`, undefined, true, directory, getObservation.requests)
     const actions = database.prepare("SELECT action_id FROM browser_action ORDER BY action_id").all()
-    for (const action of actions) await call(`/api/v1/browser/actions/${action.action_id}`)
+    for (const action of actions) await call(`/api/v1/browser/actions/${action.action_id}`, undefined, true, directory, getObservation.requests)
     const afterGet = snapshot()
+    getObservation.pendingAfter = backgroundWork(database)
     const getWriteTables = beforeGet.filter((table, index) => table.rows !== afterGet[index]!.rows).map((table) => table.name)
     database.close()
     const forbiddenAction = await fetch(url + "/api/v1/browser/actions", { method: "POST", headers: { authorization, "content-type": "application/json" }, body: JSON.stringify({ effectID: "caller-invented" }) })
@@ -352,7 +384,7 @@ async function main() {
         beforeRead, afterRead: { provider: bodies.length, preview: previewRequests.length } }
     }
     await writeFile(path.join(root, "result.json"), JSON.stringify({ control, observed, stopped, session, admitted,
-      permissions, previewRequests, posted, outsideRequests, controlRead, getNoWrites: getWriteTables.length === 0, getWriteTables, forbiddenActionStatus: forbiddenAction.status, queryAuthStatus: queryAuth.status, providerRequests: bodies.length, browserMissing, unauthorizedStatus: denied.status,
+      permissions, previewRequests, posted, outsideRequests, controlRead, getNoWrites: getWriteTables.length === 0, getWriteTables, getObservation, forbiddenActionStatus: forbiddenAction.status, queryAuthStatus: queryAuth.status, providerRequests: bodies.length, browserMissing, unauthorizedStatus: denied.status,
       coldHistory,
       fixtureDevMint: process.env.DEEPAGENT_CODE_V2_OWNER_DEV_MINT === "1" }, null, 2))
   } finally {

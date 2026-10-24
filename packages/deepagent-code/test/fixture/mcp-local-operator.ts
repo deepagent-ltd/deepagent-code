@@ -144,9 +144,10 @@ async function run() {
   const rg = Bun.which("rg")
   assert(rg)
   await fs.copyFile(rg, path.join(data, "cache", "bin", "rg"))
+  const globalConfig = Buffer.from(JSON.stringify({ $schema: config.$schema }))
   await fs.writeFile(
     path.join(data, mode === "legacy" ? "deepagent-code.jsonc" : "config.jsonc"),
-    JSON.stringify({ $schema: config.$schema }),
+    globalConfig,
   )
   const worker = new Worker(new URL(import.meta.url))
   const probeReady = new Promise<void>((resolve) => {
@@ -223,7 +224,7 @@ async function run() {
     assert.equal(response.status, 401)
     assert.equal(server.calls.length, 0)
     console.log("stage", "prepare")
-    let prepared = await bridge.transport.prepare("fixture")
+    const prepared = await bridge.transport.prepare("fixture")
     assert.equal(server.calls.length, 0)
     assert.equal(prepared.manual, true)
     assert.equal(
@@ -234,13 +235,9 @@ async function run() {
       false,
     )
     if (mode === "legacy") {
-      const before = await fs.readFile(path.join(data, "deepagent-code.jsonc"))
-      await assert.rejects(
-        () => bridge.transport.send({ ticket: prepared.ticket, action: "startAuth" }),
-        (error: unknown) => error instanceof Error && "code" in error && error.code === "SCOPE_CHANGED",
-      )
+      // Normal worker startup migrates global config before the readonly ticket is prepared.
+      assert.deepEqual(await fs.readFile(path.join(data, "config.jsonc")), globalConfig)
       assert.equal(server.calls.length, 0)
-      assert.deepEqual(await fs.readFile(path.join(data, "config.jsonc")), before)
       assert.equal(
         await fs.stat(path.join(data, "deepagent-code.jsonc")).then(
           () => true,
@@ -248,8 +245,6 @@ async function run() {
         ),
         false,
       )
-      await bridge.transport.release(prepared.ticket)
-      prepared = await bridge.transport.prepare("fixture")
     }
     if (mode === "cancel" || mode === "late-source") {
       server.holdRegistration()
@@ -379,7 +374,10 @@ async function run() {
       }),
     )
     const calls = server.calls.length
-    await assert.rejects(() => bridge.transport.send({ ticket: stale.ticket, action: "connect" }))
+    await assert.rejects(
+      () => bridge.transport.send({ ticket: stale.ticket, action: "connect" }),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "SCOPE_CHANGED",
+    )
     assert.equal(server.calls.length, calls)
     await bridge.transport.release(stale.ticket)
     await fs.writeFile(
