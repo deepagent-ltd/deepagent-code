@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { IMKernelExchange } from "@/im/kernel/exchange"
+import { IMDeviceTransport } from "@/im/device-transport"
 
 // The disabled-token response shape was observed from the real Go TokenAuth
 // middleware. This local listener exercises the actual HTTP decoder, without
@@ -66,13 +67,15 @@ describe("real HTTP facade authentication rejection", () => {
   })
   test("empty or forged-success 429 responses stay a known refusal without parsing a body", async () => {
     for (const key of ["429", "429-success", "429-invalid"]) {
+      const started = performance.now()
       const result = await run(key)
       expect(result._tag).toBe("Failure")
       if (result._tag !== "Failure") return
       expect(result.failure.code).toBe("im_unavailable")
       expect(result.failure.status).toBe(429)
       expect(result.failure.retryable).toBe(false)
-      expect(result.failure.retryAfterMs).toBeUndefined()
+      expect(result.failure.retryAfterMs).toBeLessThanOrEqual(30_000)
+      expect(result.failure.retryAfterMs).toBeGreaterThanOrEqual(Math.max(0, 30_000 - Math.ceil(performance.now() - started)))
       expect(JSON.stringify(result.failure)).not.toContain(payload.kernel_token)
     }
   })
@@ -87,6 +90,10 @@ describe("real HTTP facade authentication rejection", () => {
     expect(seconds.failure.retryAfterMs).toBe(2000)
     expect(date.failure.retryAfterMs).toBeGreaterThan(118_000)
     expect(date.failure.retryAfterMs).toBeLessThanOrEqual(120_000)
-    expect(large.failure.retryAfterMs).toBe(Number.MAX_SAFE_INTEGER)
+    expect(IMDeviceTransport.retryAfter("9999999999999999")).toBe(Number.MAX_SAFE_INTEGER)
+    expect(Number.isSafeInteger(large.failure.retryAfterMs)).toBe(true)
+    // HTTP reports time remaining before a capped monotonic deadline, not the raw hint duration.
+    expect(large.failure.retryAfterMs).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER)
+    expect(large.failure.retryAfterMs).toBeGreaterThanOrEqual(Number.MAX_SAFE_INTEGER - Math.ceil(performance.now()))
   })
 })

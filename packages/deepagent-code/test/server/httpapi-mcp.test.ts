@@ -15,13 +15,16 @@ if (!process.env.DAC_MCP_HTTP_COMPAT_CHILD) {
   test("authenticated legacy MCP HTTP oracles run with their own actual auth configuration", async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-mcp-http-compat-")))
     await Promise.all(["home", "tmp"].map((name) => fs.mkdir(path.join(root, name))))
-    const child = Bun.spawn([process.execPath, "test", import.meta.path], {
+    // The isolated process must retain CI's original per-case budget; Bun's
+    // default 5s can interrupt the actual cold application/DB setup mid-write.
+    const child = Bun.spawn([process.execPath, "test", "--timeout", "30000", import.meta.path], {
       cwd: path.resolve(import.meta.dir, "../.."),
       env: {
         PATH: process.env.PATH,
         HOME: path.join(root, "home"),
         TMPDIR: path.join(root, "tmp"),
         DAC_MCP_HTTP_COMPAT_CHILD: "1",
+        DEEPAGENT_IM_FACADE_URL: "",
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -87,6 +90,11 @@ if (process.env.DAC_MCP_HTTP_COMPAT_CHILD) {
 
   const json = <A>(response: Response) => Effect.promise(() => response.json() as Promise<A>)
 
+  const expectStatus = Effect.fnUntraced(function* (response: Response, expected: number) {
+    const diagnostic = response.status === expected ? undefined : yield* Effect.promise(() => response.clone().text())
+    expect(response.status, diagnostic).toBe(expected)
+  })
+
   const readResponse = Effect.fnUntraced(function* (input: { app: TestApp; path: string; headers: HeadersInit }) {
     const response = yield* Effect.promise(() =>
       Promise.resolve(input.app.request(input.path, { method: "POST", headers: input.headers })),
@@ -106,7 +114,7 @@ if (process.env.DAC_MCP_HTTP_COMPAT_CHILD) {
           const handler = HttpApiApp.webHandler()
           const response = yield* request(handler, McpPaths.status, tmp.directory)
 
-          expect(response.status).toBe(200)
+          yield* expectStatus(response, 200)
           expect(yield* json(response)).toEqual({ demo: { status: "disabled" } })
         }),
       {
@@ -140,19 +148,19 @@ if (process.env.DAC_MCP_HTTP_COMPAT_CHILD) {
               },
             }),
           })
-          expect(added.status).toBe(200)
+          yield* expectStatus(added, 200)
           expect(yield* json(added)).toMatchObject({ added: { status: "disabled" } })
 
           const addedDisconnected = yield* request(handler, "/mcp/added/disconnect", tmp.directory, { method: "POST" })
-          expect(addedDisconnected.status).toBe(200)
+          yield* expectStatus(addedDisconnected, 200)
           expect(yield* json(addedDisconnected)).toBe(true)
 
           const connected = yield* request(handler, "/mcp/demo/connect", tmp.directory, { method: "POST" })
-          expect(connected.status).toBe(200)
+          yield* expectStatus(connected, 200)
           expect(yield* json(connected)).toBe(true)
 
           const disconnected = yield* request(handler, "/mcp/demo/disconnect", tmp.directory, { method: "POST" })
-          expect(disconnected.status).toBe(200)
+          yield* expectStatus(disconnected, 200)
           expect(yield* json(disconnected)).toBe(true)
         }),
       {
@@ -186,7 +194,7 @@ if (process.env.DAC_MCP_HTTP_COMPAT_CHILD) {
                 config: { type: "local", command: ["echo", "blocked"], enabled: false },
               }),
             })
-            expect(added.status).toBe(400)
+            yield* expectStatus(added, 400)
           } finally {
             if (original === undefined) delete process.env[KEY]
             else process.env[KEY] = original
@@ -202,13 +210,13 @@ if (process.env.DAC_MCP_HTTP_COMPAT_CHILD) {
           const tmp = yield* TestInstance
           const handler = HttpApiApp.webHandler()
           const start = yield* request(handler, "/mcp/demo/auth", tmp.directory, { method: "POST" })
-          expect(start.status).toBe(400)
+          yield* expectStatus(start, 400)
 
           const authenticate = yield* request(handler, "/mcp/demo/auth/authenticate", tmp.directory, { method: "POST" })
-          expect(authenticate.status).toBe(400)
+          yield* expectStatus(authenticate, 400)
 
           const removed = yield* request(handler, "/mcp/demo/auth", tmp.directory, { method: "DELETE" })
-          expect(removed.status).toBe(200)
+          yield* expectStatus(removed, 200)
           expect(yield* json(removed)).toEqual({ success: true })
         }),
       {
@@ -283,7 +291,7 @@ if (process.env.DAC_MCP_HTTP_COMPAT_CHILD) {
               body: input.body,
             })
 
-            expect(response.status).toBe(404)
+            yield* expectStatus(response, 404)
             expect(yield* json(response)).toEqual({
               _tag: "McpServerNotFoundError",
               name: "missing",

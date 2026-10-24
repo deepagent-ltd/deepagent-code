@@ -1258,6 +1258,12 @@ it.instance(
       yield* config.get()
       let signal = Deferred.makeUnsafe<void>()
       let calls = 0
+      const wait = (phase: string) => Deferred.await(signal).pipe(Effect.timeoutOrElse({
+        duration: "5 seconds",
+        orElse: () => Effect.fail(new Error(
+          `plugin watcher ${phase}: callbacks=${calls}, directory=${existsSync(pluginDir)}, rebuilt=${existsSync(path.join(pluginDir, "rebuilt.ts"))}`,
+        )),
+      }))
       const stop = yield* config.watch!(() =>
         Effect.gen(function* () {
           calls++
@@ -1267,16 +1273,16 @@ it.instance(
       yield* Effect.addFinalizer(() => Effect.sync(stop))
 
       yield* Effect.promise(() => fs.rm(pluginDir, { recursive: true }))
-      yield* Deferred.await(signal).pipe(Effect.timeout("5 seconds"))
+      yield* wait("directory removal")
       signal = Deferred.makeUnsafe<void>()
       yield* FSUtil.use.writeWithDirs(path.join(pluginDir, "rebuilt.ts"), "export default {}\n")
-      yield* Deferred.await(signal).pipe(Effect.timeout("5 seconds"))
+      yield* wait("directory rebuild")
       yield* Effect.sleep("200 millis")
 
       const beforeEdit = calls
       signal = Deferred.makeUnsafe<void>()
       yield* FSUtil.use.writeFileString(path.join(pluginDir, "rebuilt.ts"), "export default { id: 'edited' }\n")
-      yield* Deferred.await(signal).pipe(Effect.timeout("5 seconds"))
+      yield* wait("rebuilt plugin edit")
       expect(calls).toBe(beforeEdit + 1)
     }),
   {
@@ -2451,9 +2457,8 @@ test("parseManagedPlist handles empty config", async () => {
   expect(config.$schema).toBe("https://ai.deepagent.ltd/config.schema.json")
 })
 
-// D3 — `providers` is the Core V2 catalog key. The V1 loader must strip it (not reject the whole
-// file) so both loaders can read the same config; the V2 side keeps consuming it from the file.
-test("config loader strips the Core V2 providers key instead of failing the load", () => {
+// Both config projections retain validated native provider selections for settings HTTP readback.
+test("config loader preserves validated Core V2 providers alongside legacy configuration", () => {
   const file = {
     $schema: "https://ai.deepagent.ltd/config.schema.json",
     provider: { kimi: { name: "Kimi" } },
@@ -2463,13 +2468,13 @@ test("config loader strips the Core V2 providers key instead of failing the load
   const config = ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(file, "test"), "test")
 
   expect(config.provider).toBeDefined()
-  expect((config as Record<string, unknown>)["providers"]).toBeUndefined()
-  // The raw schema still rejects the key — only the loader strips it, so a typo'd key keeps failing.
-  expect(() => ConfigParse.schema(ConfigV1.Info, file, "test")).toThrow()
+  expect(config.providers?.kimi).toMatchObject({ name: "Kimi", models: {} })
+  expect(ConfigParse.schema(ConfigV1.Info, file, "test").providers?.kimi.name).toBe("Kimi")
+  expect(() => ConfigParse.schema(ConfigV1.Info, { ...file, providerz: {} }, "test")).toThrow()
 })
 
 
-it.instance("loads mixed native providers and permissions without changing the legacy consumer or file", () =>
+it.instance("loads mixed native providers while preserving legacy permissions and file bytes", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance
     const file = path.join(test.directory, "deepagent-code.json")
@@ -2485,7 +2490,7 @@ it.instance("loads mixed native providers and permissions without changing the l
     const config = yield* Config.use.get()
     expect(config.provider?.legacy.name).toBe("Legacy provider")
     expect(config.permission).toEqual({ bash: "deny" })
-    expect(Object.hasOwn(config, "providers")).toBe(false)
+    expect(config.providers?.native).toMatchObject({ name: "Native provider", models: {} })
     expect(Object.hasOwn(config, "permissions")).toBe(false)
     expect(yield* FSUtil.use.readFileString(file)).toBe(text)
   }),
