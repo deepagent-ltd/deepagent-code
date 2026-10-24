@@ -33,7 +33,7 @@ test("fixed engine serially completes private media through the official lib, re
       expect(request.headers.get("authorization")).toBe("Bearer private-first-seen-token")
       calls.push(`${request.method} ${pathname}`)
       const value = pathname.endsWith("/capabilities") ? { version: 1, profile: "mysql-protected-media-v1", capability: "dac:media.v1", readerVersion: 2,
-        maxFileBytes: 52428800, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true } : metadata
+        maxFileBytes: 10485760, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true } : metadata
       if (request.method === "POST" && pathname.endsWith("/objects")) metadata.uploadID = (await request.json()).upload.uploadID
       if (request.method === "PUT") {
         expect(Number(pathname.split("/").at(-1))).toBe(metadata.receivedChunks)
@@ -81,7 +81,7 @@ test("fixed engine serially completes private media through the official lib, re
       yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(parent.path, { recursive: true, force: true })))
       const derived = AttachmentStorage.deriveStoragePath({ dataDir: Global.Path.data, workspaceID: instance.directory, attachmentID: "ima_fixed" })
       if (!derived.ok) return yield* Effect.die(new Error("Private media path unavailable"))
-      const attachment = yield* lease.reader.withOutput({ workspaceID: instance.directory, userID: "server", groupIDs: [groupID] }, repo.createAttachment({
+      const attachment = yield* lease.reader.withOutput({ workspaceID: instance.directory, userID: "server", groupIDs: [groupID] }, lease.engine.createAttachment!({
         id: "ima_fixed", workspaceID: instance.directory, groupID, uploadedBy: "server", storagePath: derived.storagePath,
         filename: "private.bin", mime: "application/octet-stream", sizeBytes: bytes.length, checksum,
       }))

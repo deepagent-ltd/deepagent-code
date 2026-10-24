@@ -41,15 +41,21 @@ export const reply = "ReplyCustodyCanary 中文🙂"
 /** Admit and settle a private DAC command through the domain APIs. Execution is
  * explicitly noop: deterministic terminal events are fixture material, with no
  * provider, Native qualification, remote service or attachment started. */
-export const make = (input?: { append?: boolean; projection?: boolean }) =>
+export const make = (input?: {
+  append?: boolean
+  projection?: boolean
+  bindingWorkspaceID?: string
+  finalText?: string
+}) =>
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const repo = yield* IMRepository
+    const workspaceID = input?.bindingWorkspaceID ?? "ws"
     const active = { value: true }
     const observations = new WeakMap<object, { serverNow: number; scopeKey: string; version: 2; deadline: number }>()
     const reader = KernelReader.attach({
       db,
-      workspaceID: "ws",
+      workspaceID,
       userID: "server",
       source,
       current: () => Effect.succeed(active.value),
@@ -111,13 +117,16 @@ export const make = (input?: { append?: boolean; projection?: boolean }) =>
           sql`SELECT id,kernel_conv_id kernelConvID FROM im_groups WHERE id=${existingGroup}`,
         )
       : yield* repo.createGroup({
-          workspaceID: "ws",
+          workspaceID,
           type: "project",
           name: "Reply custody private",
           createdBy: "server",
         })
     if (!group) return yield* Effect.die("Original reader group absent")
-    const command = yield* settledCommand(group.id)
+    const command = yield* settledCommand(group.id, {
+      bindingWorkspaceID: input?.bindingWorkspaceID,
+      finalText: input?.finalText,
+    })
     const now = Date.now()
     const id = "imo_reply_history"
     if (input?.append !== false)
@@ -180,10 +189,33 @@ export const make = (input?: { append?: boolean; projection?: boolean }) =>
         observations.set(handle, { serverNow, scopeKey, version: 2, deadline: performance.now() + 1000 })
         return yield* KernelDelivery.withSenderRetirement(reader, handle, purpose)
       })
-    return { db, repo, id, group, create, dispatch, acknowledge, delivered, retire, active, reader, authority, sessionID: command.sessionID }
+    return {
+      db,
+      repo,
+      id,
+      group,
+      create,
+      dispatch,
+      acknowledge,
+      delivered,
+      retire,
+      active,
+      reader,
+      authority,
+      sessionID: command.sessionID,
+      inputID: command.inputID,
+    }
   })
 
-const settledCommand = (groupID: string) =>
+export const settledCommand = (
+  groupID: string,
+  input?: {
+    directory?: string
+    bindingWorkspaceID?: string
+    finalText?: string
+    scope?: Pick<IMDacSession.Scope, "accountKey" | "executorID" | "conversationKey">
+  },
+) =>
   Effect.gen(function* () {
     const database = Layer.succeed(Database.Service, yield* Database.Service)
     const events = EventV2.layer.pipe(Layer.provide(database))
@@ -196,23 +228,25 @@ const settledCommand = (groupID: string) =>
       Layer.provide(database),
       Layer.provide(projects),
     )
-    const directory = yield* Effect.acquireRelease(
-      Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "dac-reply-command-"))),
-      (directory) => Effect.promise(() => fs.rm(directory, { recursive: true })),
-    )
+    const directory =
+      input?.directory ??
+      (yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "dac-reply-command-"))),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true })),
+      ))
     return yield* Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const project = yield* (yield* ProjectV2.Service).resolve(AbsolutePath.make(directory))
       const command = yield* IMDacSession.make(db, yield* SessionV2.Service).submit(
         {
           ownerID: "server",
-          accountKey: "reply-custody",
-          executorID: "auto",
-          conversationKey: "direct:bob",
+          accountKey: input?.scope?.accountKey ?? "reply-custody",
+          executorID: input?.scope?.executorID ?? "auto",
+          conversationKey: input?.scope?.conversationKey ?? "direct:bob",
           groupID,
           projectID: project.id,
           directory,
-          workspaceID: null,
+          workspaceID: input?.bindingWorkspaceID ?? null,
         },
         { commandID: "reply-custody", text: "Historical admitted input", delivery: "steer" },
         Effect.succeed([]),
@@ -265,7 +299,7 @@ const settledCommand = (groupID: string) =>
         timestamp: yield* DateTime.now,
         assistantMessageID,
         textID,
-        text: reply,
+        text: input?.finalText ?? reply,
       })
       yield* events.publish(SessionEvent.Step.Ended, {
         sessionID,
