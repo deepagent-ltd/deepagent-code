@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
 import { Cause, Effect, Exit, Layer } from "effect"
 import { sql } from "drizzle-orm"
@@ -21,7 +22,7 @@ function code<A, E>(exit: Exit.Exit<A, E>) {
 async function isolated(body: (run: <A, E>(effect: Effect.Effect<A, E, Database.Service>) => Promise<A>, owner: {
   workID: string; acquisitionID: string; expectedRevision: number; ownerToken: string; bootID: string
 }, sendingAt: number) => Promise<void>, deadlineMs = 9_000) {
-  const root = await fs.mkdtemp("/tmp/dac-count-time-")
+  const root = await fs.mkdtemp(path.join(tmpdir(), "dac-count-time-"))
   const proof = WorkRouteApprovalFixture.authority()
   const run = <A, E>(effect: Effect.Effect<A, E, Database.Service>) => Effect.runPromise(effect.pipe(
     Effect.provide(Layer.mergeAll(WorkAuthorityFixture.database(path.join(root, "file.sqlite")), proof.route, proof.count, WorkAuthorityFixture.verifier)),

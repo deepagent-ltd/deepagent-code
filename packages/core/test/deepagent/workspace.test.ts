@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, unlinkSync, symlinkSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, unlinkSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { mkdtempSync } from "node:fs"
@@ -45,6 +45,38 @@ describe("V3.1 DeepAgent Code workspace", () => {
     if (existsSync(first.publicLink)) expect(lstatSync(first.publicLink).isSymbolicLink()).toBe(true)
   })
 
+  test("accepts the strict relative public symlink with host-native separators", () => {
+    const paths = home.ensureProject("projA")
+    if (!existsSync(paths.publicLink)) return
+    unlinkSync(paths.publicLink)
+    symlinkSync(["..", "..", "public"].join(path.sep), paths.publicLink, "dir")
+    expect(home.ensureProject("projA").publicLink).toBe(paths.publicLink)
+  })
+
+  test("rejects a dot-rewritten public target whose internal symlink changes OS resolution", () => {
+    const paths = home.ensureProject("projA")
+    if (!existsSync(paths.publicLink)) return
+    const outside = path.join(root, "outside")
+    mkdirSync(path.join(outside, "deeper"), { recursive: true })
+    mkdirSync(path.join(outside, "public"))
+    symlinkSync(path.join(outside, "deeper"), path.join(root, "x"), "dir")
+    unlinkSync(paths.publicLink)
+    symlinkSync(["..", "..", "x", "..", "public"].join(path.sep), paths.publicLink, "dir")
+    expect(realpathSync(paths.publicLink)).toBe(realpathSync(path.join(outside, "public")))
+    expect(() => home.ensureProject("projA")).toThrow("ProjectStore.InvalidPublicLink")
+  })
+
+  test("rejects absolute public symlinks and ordinary replacement directories", () => {
+    const paths = home.ensureProject("projA")
+    if (!existsSync(paths.publicLink)) return
+    unlinkSync(paths.publicLink)
+    symlinkSync(paths.publicDir, paths.publicLink, "dir")
+    expect(() => home.ensureProject("projA")).toThrow("ProjectStore.InvalidPublicLink")
+    unlinkSync(paths.publicLink)
+    mkdirSync(paths.publicLink)
+    expect(() => home.ensureProject("projA")).toThrow("ProjectStore.InvalidPublicLink")
+  })
+
   test("repairs project root that exists without manifest", () => {
     const paths = home.projectPaths("projA")
     mkdirSync(paths.root, { recursive: true })
@@ -83,7 +115,7 @@ describe("V3.1 DeepAgent Code workspace", () => {
     const paths = home.ensureProject("projA")
     if (!existsSync(paths.publicLink)) return
     unlinkSync(paths.publicLink)
-    symlinkSync("/tmp", paths.publicLink, "dir")
+    symlinkSync(tmpdir(), paths.publicLink, "dir")
     expect(() => home.ensureProject("projA")).toThrow("ProjectStore.InvalidPublicLink")
   })
 })

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
@@ -92,7 +93,7 @@ test("external G0-G8 decisions bind candidate, source run and exact evidence byt
   const child = Bun.spawn(
     [
       process.execPath,
-      gate.pathname,
+      fileURLToPath(gate),
       "--qualification-dir",
       root.path,
       "--qualification-run-id",
@@ -114,7 +115,7 @@ test("external G0-G8 decisions bind candidate, source run and exact evidence byt
   const verify = Bun.spawn(
     [
       process.execPath,
-      verifier.pathname,
+      fileURLToPath(verifier),
       "--ledger",
       out,
       "--artifact-dir",
@@ -130,7 +131,7 @@ test("external G0-G8 decisions bind candidate, source run and exact evidence byt
   const verifyRun = Bun.spawn(
     [
       process.execPath,
-      verifier.pathname,
+      fileURLToPath(verifier),
       "--ledger",
       out,
       "--artifact-dir",

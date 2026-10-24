@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 export * as EventValidationStoreFixture from "./event-validation-store"
 
 import { Effect, Exit, Schema } from "effect"
@@ -75,7 +76,7 @@ export function configuration() {
   return { ...decoded, recipe: Schema.decodeUnknownSync(EventValidationSchema.MacRecipe)(decoded.recipe) }
 }
 export async function fixture(body: (input: { run:<A,E>(effect:Effect.Effect<A,E,Database.Service>)=>Promise<A>; native:ReturnType<typeof native>; configuration:EventValidationSchema.Configuration })=>Promise<void>) {
-  const root=await fs.mkdtemp("/tmp/dac-ev-store-")
+  const root=await fs.mkdtemp(path.join(tmpdir(), "dac-ev-store-"))
   const producer=native()
   const configured=configuration()
   const layer=WorkAuthorityFixture.database(path.join(root,"file.sqlite"))

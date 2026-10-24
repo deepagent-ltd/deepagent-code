@@ -38,8 +38,8 @@ async function files(directory: string, root = directory): Promise<string[]> {
     .sort()
 }
 
-const command = (args: string[]) => {
-  const result = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" })
+const command = (args: string[], cwd?: string) => {
+  const result = Bun.spawnSync(args, { cwd, stdout: "pipe", stderr: "pipe" })
   if (result.exitCode !== 0) throw new Error(`${args[0]} failed: ${result.stderr.toString().trim()}`)
   return result.stdout.toString()
 }
@@ -72,14 +72,23 @@ export async function verifyArchiveAgainstPackage(
     throw new Error(`release archive package binary metadata mismatch: ${archive}`)
   const temporary = await mkdtemp(path.join(os.tmpdir(), "deepagent-release-archive-"))
   try {
-    const listing = command(archive.endsWith(".zip") ? ["unzip", "-Z", "-1", archive] : ["tar", "-tzf", archive])
+    // GNU tar interprets the colon in a Windows drive as a remote archive host.
+    const archiveDirectory = path.dirname(path.resolve(archive))
+    const archiveName = path.basename(archive)
+    const listing = command(
+      archive.endsWith(".zip") ? ["unzip", "-Z", "-1", archiveName] : ["tar", "-tzf", archiveName],
+      archiveDirectory,
+    )
       .split("\n")
       .map((entry) => entry.replace(/^\.\//, ""))
       .filter(Boolean)
     if (listing.some((entry) => entry.startsWith("/") || entry.split("/").includes("..")))
       throw new Error(`release archive contains an unsafe path: ${archive}`)
     command(
-      archive.endsWith(".zip") ? ["unzip", "-qq", archive, "-d", temporary] : ["tar", "-xzf", archive, "-C", temporary],
+      archive.endsWith(".zip")
+        ? ["unzip", "-qq", archiveName, "-d", temporary]
+        : ["tar", "-xzf", archiveName, "-C", temporary],
+      archiveDirectory,
     )
     const extracted = await files(temporary)
     if (extracted.join("\n") !== binFiles.join("\n"))

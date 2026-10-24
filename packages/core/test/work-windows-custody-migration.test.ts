@@ -1,3 +1,5 @@
+import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
@@ -39,7 +41,7 @@ const legacyManifest = Schema.decodeUnknownSync(WorkStorageCleanupSchema.Manifes
 })
 
 test("Windows custody forward preserves v1 bytes, audit objects and restrictive references with atomic rollback", async () => {
-  const directory = await fs.mkdtemp("/tmp/dac-windows-custody-forward-")
+  const directory = await fs.mkdtemp(join(tmpdir(), "dac-windows-custody-forward-"))
   const filename = `${directory}/database.sqlite`
   try {
     const saved = await Effect.runPromise(Effect.gen(function* () {

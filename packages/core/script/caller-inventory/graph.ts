@@ -9,6 +9,7 @@
  */
 import ts from "typescript"
 import { existsSync, readFileSync, readdirSync } from "node:fs"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import type { HandlerSite, Requirement } from "./types"
 import { declarationNodes, moduleAnchorLine, parseModule, refsInSubtree, rootRepoPath } from "./ast"
 import { DELEGATION_CLIENT_BINDINGS, DELEGATION_SPAWN_BINDINGS, PORTS } from "./authority"
@@ -39,7 +40,7 @@ export function resolveSpecifier(fromFile: string, spec: string): string | undef
   if (!spec.startsWith(".") && !spec.startsWith("@deepagent-code/") && !spec.startsWith("@/")) return undefined
   let target: string | undefined
   if (spec.startsWith(".")) {
-    target = new URL(spec, `file://${fromFile}`).pathname
+    target = fileURLToPath(new URL(spec, pathToFileURL(fromFile))).replaceAll("\\", "/")
   } else {
     const ownPackageRoot = (file: string): string => {
       const marker = "/packages/"

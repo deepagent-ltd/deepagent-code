@@ -1,14 +1,15 @@
+import { fileURLToPath } from "node:url"
 import { expect, test } from "bun:test"
 import { mkdir, rm } from "node:fs/promises"
-import { join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { stageReleaseAssets, verifyArchiveAgainstPackage, verifyReleaseAssets } from "../../../../script/release-assets"
 import { tmpdir } from "../fixture/tmpdir"
 
 test("final Linux and signed Windows archives match candidate packages byte for byte", async () => {
   await using root = await tmpdir()
   const commit = "c".repeat(40)
-  const git = (...args: string[]) => {
-    const result = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" })
+  const git = (cwd: string, ...args: string[]) => {
+    const result = Bun.spawnSync(args, { cwd, stdout: "pipe", stderr: "pipe" })
     if (result.exitCode !== 0) throw new Error(result.stderr.toString())
   }
   for (const target of ["linux", "windows"] as const) {
@@ -33,8 +34,8 @@ test("final Linux and signed Windows archives match candidate packages byte for 
       }),
     )
     const archive = join(root.path, target === "linux" ? "linux.tar.gz" : "windows.zip")
-    if (target === "linux") git("tar", "-czf", archive, "-C", binDir, ".")
-    else git("zip", "-j", archive, join(binDir, binary), join(binDir, "owner-authorization.json"))
+    if (target === "linux") git(dirname(archive), "tar", "-czf", basename(archive), "-C", binDir, ".")
+    else git(dirname(archive), "zip", "-j", basename(archive), join(binDir, binary), join(binDir, "owner-authorization.json"))
     await verifyArchiveAgainstPackage(archive, packageDir, commit, "2.0.2")
     await expect(verifyArchiveAgainstPackage(archive, packageDir, "other", "2.0.2")).rejects.toThrow(
       "identity mismatch",
@@ -121,9 +122,9 @@ test("staging covers supported CLI targets, owner row and four desktop targets",
       `${name}${target.startsWith("linux") ? ".tar.gz" : ".zip"}`,
     )
     const command = target.startsWith("linux")
-      ? ["tar", "-czf", archive, "-C", binDir, "."]
-      : ["zip", "-j", archive, join(binDir, binary), join(binDir, "owner-authorization.json")]
-    const result = Bun.spawnSync(command, { stdout: "pipe", stderr: "pipe" })
+      ? ["tar", "-czf", basename(archive), "-C", binDir, "."]
+      : ["zip", "-j", basename(archive), join(binDir, binary), join(binDir, "owner-authorization.json")]
+    const result = Bun.spawnSync(command, { cwd: dirname(archive), stdout: "pipe", stderr: "pipe" })
     if (result.exitCode !== 0) throw new Error(result.stderr.toString())
   }
   await Promise.all(
@@ -230,7 +231,7 @@ test("RI-51 binds staged asset bytes into the archived ledger before NO-GO", asy
   const out = join(root.path, "ledger.json")
   const gate = new URL("../../script/evidence-ledger/release-gate.ts", import.meta.url)
   const child = Bun.spawn(
-    [process.execPath, gate.pathname, "--asset-manifest", manifestPath, "--assets-dir", assetsDir, "--out", out],
+    [process.execPath, fileURLToPath(gate), "--asset-manifest", manifestPath, "--assets-dir", assetsDir, "--out", out],
     { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
   )
   const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited])
@@ -247,7 +248,7 @@ test("RI-51 binds staged asset bytes into the archived ledger before NO-GO", asy
   const verify = Bun.spawn(
     [
       process.execPath,
-      verifier.pathname,
+      fileURLToPath(verifier),
       "--ledger",
       out,
       "--artifact-dir",

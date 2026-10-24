@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -24,7 +25,7 @@ const code = (exit: Exit.Exit<unknown, BrowserFileSchema.Error | BrowserSchema.E
   Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause))?.code : undefined
 
 test("real fileDB: explicit grant ledger, atomic capacity, original-action once and cold unknown zero retransfer", async () => {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-files-store-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "dac-browser-files-store-")))
   await fs.chmod(directory, 0o700)
   const bytes = Buffer.alloc(BrowserFileSchema.MAX_FILE_BYTES, 0xfe)
   await fs.writeFile(path.join(directory, "source.bin"), bytes, { mode: 0o600 })

@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
 import { Cause, Effect, Exit, Layer } from "effect"
 import { sql } from "drizzle-orm"
@@ -17,7 +18,7 @@ function code<A, E>(exit: Exit.Exit<A, E>) {
 }
 
 test("actual count prepare rejects turn 9 before source/route disclosure or any acquisition row", async () => {
-  const directory = await mkdtemp("/tmp/dac-investigation-count-")
+  const directory = await mkdtemp(join(tmpdir(), "dac-investigation-count-"))
   const captured = new WeakSet<WorkCountAcquisitionSchema.ProjectBinding>()
   const state = { source: 0, route: 0 }
   const verifier = Layer.effect(WorkAuthority.Verifier, Effect.gen(function* () {

@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 export * as BrowserFileAuthorityFixture from "./browser-file-authority"
 
 import fs from "node:fs/promises"
@@ -38,7 +39,7 @@ type Services = Database.Service | AgentV2.Service | PermissionV2.Service | Perm
   SessionStore.Service | EventV2.Service | SessionProviderOwner.Service | V2ProviderTurn.Service | V2ToolEffect.Service | Scope.Scope
 
 export async function isolated<A, E>(body: (fixture: Fixture) => Effect.Effect<A, E, Services>, options: { leaseMs?: number } = {}) {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-file-authority-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "dac-browser-file-authority-")))
   const runtimeLocation = location({ directory: AbsolutePath.make(directory) })
   const database = Database.layerFromPath(path.join(directory, "authority.sqlite"))
   const events = EventV2.layer.pipe(Layer.provide(database))
