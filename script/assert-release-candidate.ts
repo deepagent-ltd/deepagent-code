@@ -16,11 +16,12 @@ export async function assertReleaseCandidate(input: {
   const git = (...args: string[]) => {
     const result = Bun.spawnSync(["git", ...args], { cwd: input.repository, stdout: "pipe", stderr: "pipe" })
     if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.toString().trim()}`)
-    return result.stdout.toString().trim()
+    return result.stdout.toString().trimEnd()
   }
   if (git("rev-parse", "HEAD") !== input.commit) throw new Error("release candidate HEAD changed")
   if (git("rev-parse", "HEAD^{tree}") !== input.tree) throw new Error("release candidate tree changed")
-  if (git("status", "--porcelain", "--untracked-files=all")) throw new Error("release candidate tree is dirty")
+  const status = git("status", "--porcelain", "--untracked-files=all")
+  if (status) throw new Error(`release candidate tree is dirty:\n${status}`)
   const tagRef = `refs/tags/${input.tag}`
   const remote = git("ls-remote", "origin", tagRef, `${tagRef}^{}`).split("\n").filter(Boolean)
   const tagCommit = remote.find((line) => line.endsWith(`${tagRef}^{}`)) ?? remote.find((line) => line.endsWith(tagRef))
