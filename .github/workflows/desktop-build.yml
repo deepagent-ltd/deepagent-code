@@ -1,7 +1,8 @@
 name: desktop-build
 
-# Desktop packaging: builds installable packages and publishes the latest main
-# build as an auto-managed GitHub Release.
+# Main pushes validate isolated dev packages through desktop-test-package. The
+# publish workflow owns automatic releases and their shared CLI/Desktop owner.
+# Manual release-mode rebuilds reuse an existing successful publish issuance.
 #
 # macOS signing/notarization is opt-in: if the APPLE_* / CSC_* secrets are present it
 # signs, otherwise it builds an UNSIGNED package (testers right-click → Open to launch).
@@ -51,12 +52,12 @@ permissions:
   actions: write
 
 concurrency:
-  group: desktop-build-${{ github.ref }}-${{ inputs.artifact_mode || 'release' }}
+  group: desktop-build-${{ github.ref }}-${{ github.event_name }}-${{ inputs.artifact_mode || 'test' }}
   cancel-in-progress: ${{ inputs.artifact_mode != 'test' }}
 
 jobs:
   test-candidate:
-    if: github.event_name == 'workflow_dispatch' && inputs.artifact_mode == 'test'
+    if: github.event_name == 'push' || inputs.artifact_mode == 'test'
     permissions:
       contents: read
     uses: ./.github/workflows/desktop-test-package.yml
@@ -65,7 +66,7 @@ jobs:
 
   cleanup:
     needs: setup
-    if: github.event_name != 'workflow_dispatch' || inputs.artifact_mode != 'test'
+    if: github.event_name == 'workflow_dispatch' && inputs.artifact_mode != 'test'
     runs-on: ubuntu-24.04
     steps:
       - name: Delete previous desktop artifacts
@@ -82,7 +83,7 @@ jobs:
   # Build the matrix from the `platforms` input. Job-level `if` cannot read the matrix
   # context, so the selection happens here and the build job consumes the JSON.
   setup:
-    if: github.event_name != 'workflow_dispatch' || inputs.artifact_mode != 'test'
+    if: github.event_name == 'workflow_dispatch' && inputs.artifact_mode != 'test'
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.gen.outputs.matrix }}
@@ -135,6 +136,7 @@ jobs:
           echo "matrix={\"include\":[$items]}" >> "$GITHUB_OUTPUT"
 
   build:
+    if: github.event_name == 'workflow_dispatch' && inputs.artifact_mode != 'test'
     needs:
       - cleanup
       - setup

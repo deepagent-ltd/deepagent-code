@@ -60,6 +60,8 @@ jobs:
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
         if: inputs.platforms == 'all' || inputs.platforms == matrix.group
+        with:
+          ref: ${{ github.sha }}
       - uses: ./.github/actions/setup-bun
         if: inputs.platforms == 'all' || inputs.platforms == matrix.group
         env:
