@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { releaseCheckWorkflows } from "../../../../script/verify-release-checks"
 
 type Step = {
   name?: string
@@ -22,11 +23,21 @@ const workflows = await Promise.all(
   ["publish", "desktop-build"].map(async (name) => ({
     name,
     document: Bun.YAML.parse(await Bun.file(path.join(root, `.github/workflows/${name}.yml`)).text()) as {
-      on: { workflow_dispatch: { inputs: Record<string, { type: string; required?: boolean }> } }
+      on: {
+        push: { branches: string[] }
+        workflow_dispatch: { inputs: Record<string, { type: string; required?: boolean }> }
+      }
+      concurrency: { group: string }
       jobs: Record<
         string,
         {
           env?: Record<string, string>
+          if?: string
+          uses?: string
+          with?: Record<string, string>
+          permissions?: Record<string, string>
+          secrets?: unknown
+          "continue-on-error"?: boolean
           steps: Step[]
           needs?: string | string[]
           strategy?: { matrix: { include: { host: string; arch: string; rust_target: string }[] } }
@@ -35,6 +46,98 @@ const workflows = await Promise.all(
     },
   })),
 )
+
+test("main pushes run isolated QA while manual production builds retain their owner gate", () => {
+  const workflow = workflows[1].document
+  expect(workflow.on.push.branches).toEqual(["main"])
+  expect(workflow.jobs["test-candidate"].if).toBe("github.event_name == 'push' || inputs.artifact_mode == 'test'")
+  for (const name of ["setup", "cleanup", "build"])
+    expect(workflow.jobs[name].if).toBe("github.event_name == 'workflow_dispatch' && inputs.artifact_mode != 'test'")
+  expect(workflow.jobs.release.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/main'")
+  expect(workflow.jobs.release.needs).toBe("build")
+  expect(workflow.concurrency.group).toContain("${{ github.event_name }}")
+  expect(workflow.concurrency.group).toContain("${{ inputs.artifact_mode || 'test' }}")
+
+  const groups = new Set<string>()
+  for (const fixture of [
+    { event: "push", mode: "", expected: [true, false, false, false, false] },
+    { event: "workflow_dispatch", mode: "test", expected: [true, false, false, false, false] },
+    { event: "workflow_dispatch", mode: "release", expected: [false, true, true, true, false] },
+  ]) {
+    // This evaluates only the exact boolean expressions asserted above, with
+    // default needs-success gating. It is not a GitHub Actions scheduler.
+    const runs = ["test-candidate", "setup", "cleanup", "build", "release"].reduce<Record<string, boolean>>(
+      (results, name) => {
+        const job = workflow.jobs[name]
+        const needs = typeof job.needs === "string" ? [job.needs] : (job.needs ?? [])
+        const condition = job
+          .if!.replaceAll("github.event_name", JSON.stringify(fixture.event))
+          .replaceAll("github.ref", JSON.stringify("refs/heads/main"))
+          .replaceAll("inputs.artifact_mode", JSON.stringify(fixture.mode))
+        results[name] = needs.every((dependency) => results[dependency]) && Function(`return (${condition})`)() === true
+        return results
+      },
+      {},
+    )
+    expect(Object.values(runs)).toEqual(fixture.expected)
+    groups.add(
+      workflow.concurrency.group
+        .replaceAll("${{ github.ref }}", "refs/heads/main")
+        .replaceAll("${{ github.event_name }}", fixture.event)
+        .replaceAll("${{ inputs.artifact_mode || 'test' }}", fixture.mode || "test"),
+    )
+  }
+  expect(groups.size).toBe(3)
+  expect(workflow.jobs["test-candidate"]["continue-on-error"]).toBeUndefined()
+})
+
+test("the automatic QA call builds the exact source with all targets and read-only permissions", async () => {
+  const called = workflows[1].document.jobs["test-candidate"]
+  const qa = Bun.YAML.parse(await Bun.file(path.join(root, ".github/workflows/desktop-test-package.yml")).text()) as {
+    on: { workflow_call: { inputs: { platforms: { default: string } } } }
+    permissions: Record<string, string>
+    jobs: {
+      build: {
+        env: Record<string, string>
+        steps: Step[]
+        strategy: { matrix: { include: { target: string }[] } }
+        "continue-on-error"?: boolean
+      }
+    }
+  }
+  expect(called.uses).toBe("./.github/workflows/desktop-test-package.yml")
+  expect(called.with).toEqual({ platforms: "${{ inputs.platforms || 'all' }}" })
+  expect(called.permissions).toEqual({ contents: "read" })
+  expect(called.secrets).toBeUndefined()
+  expect(qa.on.workflow_call.inputs.platforms.default).toBe("all")
+  expect(qa.permissions).toEqual({ contents: "read" })
+  expect(qa.jobs.build["continue-on-error"]).toBeUndefined()
+  expect(qa.jobs.build.env.DEEPAGENT_CODE_CHANNEL).toBe("dev")
+  expect(qa.jobs.build.env.DEEPAGENT_CODE_ALLOW_UNSIGNED).toBe("1")
+  expect(qa.jobs.build.strategy.matrix.include.map((target) => target.target)).toEqual([
+    "darwin-arm64",
+    "darwin-x64",
+    "linux-x64",
+    "win32-x64",
+  ])
+  const steps = qa.jobs.build.steps
+  expect(steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with).toEqual({ ref: "${{ github.sha }}" })
+  expect(steps.find((step) => step.name === "Pin the source version for unsigned test artifacts")?.run).toContain(
+    "DEEPAGENT_CODE_VERSION=0.0.0-dev.",
+  )
+  expect(steps.find((step) => step.name === "Build current Desktop")?.run).toBe("bun run build")
+  expect(steps.find((step) => step.name === "Build unsigned native test installer")?.run).toContain("--publish never")
+  const guard = steps.find((step) => step.name === "Require complete packaged Desktop and CLI Native build proofs")!
+  expect(guard.run).toContain("test-native-publisher.ts guard")
+  expect(guard["continue-on-error"]).toBeUndefined()
+  for (const name of ["Build current Desktop", "Build unsigned native test installer", guard.name])
+    expect(steps.find((step) => step.name === name)?.if).toBe(
+      "inputs.platforms == 'all' || inputs.platforms == matrix.group",
+    )
+  expect(steps.some((step) => step.run?.includes("mint-owner-campaign") || step.run?.includes("gh release"))).toBe(
+    false,
+  )
+})
 
 test("both Desktop workflows use one verified package action before every artifact upload", () => {
   for (const workflow of workflows) {
@@ -458,6 +561,7 @@ test("all nine release CLI targets retain native host prerequisites and sign bef
 })
 
 test("main distribution binds existing checks before upload and never downgrades reviewed qualification", () => {
+  expect(releaseCheckWorkflows).toEqual(["test.yml", "branding-check.yml", "generate.yml", "desktop-build.yml"])
   const steps = workflows[0].document.jobs.publish.steps
   const checks = steps.find((step) => step.name === "Verify existing checks for this exact main source")!
   const gate = steps.find((step) => step.name === "Verify distribution integrity and archive qualification status")!
