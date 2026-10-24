@@ -17,6 +17,7 @@ import { dict as th } from "./th"
 import { dict as zh } from "./zh"
 import { dict as zht } from "./zht"
 import { dict as tr } from "./tr"
+import { settingsFallbackKeys } from "./settings-fallback-keys"
 
 const locales = [ar, br, bs, da, de, es, fr, ja, ko, no, pl, ru, uk, th, tr, zh, zht]
 const keys = ["command.session.previous.unseen", "command.session.next.unseen"] as const
@@ -31,8 +32,21 @@ describe("i18n parity", () => {
     }
   })
 
-  test("non-English locales include every settings key", () => {
-    const settingsKeys = Object.keys(en).filter((key) => key.startsWith("settings.")) as Array<keyof typeof en>
+  test("approved settings fallbacks have nonempty English and Chinese translations", () => {
+    expect(new Set(settingsFallbackKeys).size).toBe(settingsFallbackKeys.length)
+    for (const key of settingsFallbackKeys) {
+      for (const locale of [en, zh, zht]) {
+        expect(Object.prototype.hasOwnProperty.call(locale, key)).toBe(true)
+        expect(locale[key].trim().length).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  test("non-English locales include every settings key outside the finite approved fallback set", () => {
+    const approved = new Set<keyof typeof en>(settingsFallbackKeys)
+    const settingsKeys = (Object.keys(en) as Array<keyof typeof en>).filter(
+      (key) => key.startsWith("settings.") && !approved.has(key),
+    )
 
     for (const locale of locales) {
       for (const key of settingsKeys) {

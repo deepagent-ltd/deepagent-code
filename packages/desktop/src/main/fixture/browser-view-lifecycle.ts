@@ -12,6 +12,15 @@ app.setPath("userData", process.env.DAC_BROWSER_TEST_ROOT!)
 async function main() {
   await app.whenReady()
   registerBrowserViewIpc()
+  const requests: string[] = []
+  const server = createServer((request, response) => {
+    requests.push(request.url ?? "")
+    response.writeHead(200, { "Content-Type": "text/html" })
+    response.end(`<title>${request.url}</title><body>Isolated lifecycle fixture</body>`)
+  })
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   // Trusted fixture hosts drive real ipcRenderer. Actual page views retain sandbox preferences.
   const first = new BrowserWindow({
     show: false,
@@ -29,10 +38,26 @@ async function main() {
   await first.loadURL('data:text/html,<iframe srcdoc="Frame fixture"></iframe>')
   await second.loadURL("data:text/html,Second host")
   const rect = { x: 0, y: 0, width: 320, height: 240 }
-  browserView.show(first, rect)
+  browserView.navigate(first, `${origin}/first-open`)
   const firstView = webContents
     .getAllWebContents()
     .find((item) => item.id !== first.webContents.id && item.id !== second.webContents.id)!
+  const firstChild = first.contentView.children[0]
+  const initiallyHidden = firstChild.getBounds().width === 0
+  const loadingAtFirstShow = firstView.isLoading()
+  const firstOpenLoaded = waitForURL(firstView, `${origin}/first-open`)
+  // No await: show must preserve the first navigation while its commit is still pending.
+  browserView.show(first, rect)
+  await firstOpenLoaded
+  browserView.hide(first)
+  browserView.show(first, rect)
+  const firstNavigation = {
+    initiallyHidden,
+    loadingAtFirstShow,
+    firstURL: firstView.getURL(),
+    firstRequests: requests.filter((url) => url === "/first-open").length,
+    sameContentsAfterHideShow: first.contentView.children[0] === firstChild && !firstView.isDestroyed(),
+  }
   browserView.show(second, rect)
   const secondView = webContents
     .getAllWebContents()
@@ -43,13 +68,6 @@ async function main() {
     separateContents: secondView !== undefined && firstView.id !== secondView.id,
   }
   const originalClosedListeners = first.listenerCount("closed")
-  const server = createServer((request, response) => {
-    response.writeHead(200, { "Content-Type": "text/html" })
-    response.end(`<title>${request.url}</title><body>Isolated lifecycle fixture</body>`)
-  })
-  server.listen(0, "127.0.0.1")
-  await once(server, "listening")
-  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   assert(secondView)
   const firstLoaded = waitForURL(firstView, `${origin}/first`)
   await first.webContents.executeJavaScript(
@@ -156,6 +174,7 @@ async function main() {
         pid: process.pid,
         electron: process.versions.electron,
         initial,
+        firstNavigation,
         navigation,
         subframeRejected,
         afterFirstDestroy,
@@ -168,6 +187,8 @@ async function main() {
     ),
   )
   second.destroy()
+  assert.deepEqual(firstNavigation, { initiallyHidden: true, loadingAtFirstShow: true,
+    firstURL: `${origin}/first-open`, firstRequests: 1, sameContentsAfterHideShow: true })
   assert.deepEqual(initial, { firstChildren: 1, secondChildren: 1, separateContents: true })
   assert.deepEqual(afterFirstDestroy, {
     firstDestroyed: true,

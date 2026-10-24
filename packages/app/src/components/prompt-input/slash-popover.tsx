@@ -17,8 +17,14 @@ export interface SlashCommand {
   source?: "command" | "mcp" | "skill"
 }
 
+export function closePromptPopoverOnBlur(event: FocusEvent, popover: HTMLElement | undefined, close: () => void) {
+  if (event.relatedTarget instanceof Node && popover?.isConnected && popover.contains(event.relatedTarget)) return
+  close()
+}
+
 type PromptPopoverProps = {
   popover: "at" | "slash" | null
+  onClose: () => void
   setSlashPopoverRef: (el: HTMLDivElement) => void
   atFlat: AtOption[]
   atActive?: string
@@ -37,13 +43,12 @@ export const PromptPopover: Component<PromptPopoverProps> = (props) => {
   return (
     <Show when={props.popover}>
       <div
-        ref={(el) => {
-          if (props.popover === "slash") props.setSlashPopoverRef(el)
-        }}
-        class="absolute inset-x-0 -top-2 -translate-y-full origin-bottom-left max-h-80 min-h-10
+        ref={props.setSlashPopoverRef}
+        class="absolute inset-x-0 -top-2 -translate-y-full origin-bottom-left z-[80] max-h-80 min-h-10
                  overflow-auto no-scrollbar flex flex-col p-2 rounded-[12px]
                  bg-surface-raised-stronger-non-alpha shadow-[var(--shadow-lg-border-base)]"
         onMouseDown={(e) => e.preventDefault()}
+        onFocusOut={(event) => closePromptPopoverOnBlur(event, event.currentTarget, props.onClose)}
       >
         <Switch>
           <Match when={props.popover === "at"}>

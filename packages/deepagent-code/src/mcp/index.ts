@@ -1,6 +1,7 @@
 import { dynamicTool, type Tool, type ToolExecutionOptions, jsonSchema, type JSONSchema7 } from "ai"
 import path from "path"
 import { AsyncLocalStorage } from "node:async_hooks"
+import { createHash } from "node:crypto"
 import type { Transport } from "@modelcontextprotocol/client"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { ConfigFileWrite } from "@/config/file-write"
@@ -19,9 +20,10 @@ import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { withTimeout } from "@/util/timeout"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { McpOAuthState } from "./oauth-state"
-import { McpOAuthProvider } from "./oauth-provider"
+import { McpOAuthProvider, currentEntry } from "./oauth-provider"
 import { McpAuth } from "./auth"
 import { McpAuthScope } from "./auth-scope"
+import { McpAuthJournalSchema } from "./auth-journal-schema"
 import { McpLocalOperator } from "./local-operator"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { ToolProvenance } from "@/tool/provenance"
@@ -82,9 +84,8 @@ export async function rewriteMcpEntry(
   )
 }
 
-// mcp_origins records the merge SOURCE: a file path for project configs, but the config DIRECTORY
-// for the global layer, whose loader folds several files into one merge step. A directory origin
-// resolves to the standard candidate files in load order (canonical last, mirroring the loader).
+// Current MCP observations record the exact contributing file. Retain directory
+// candidates for callers holding legacy global origins, in the original load order.
 export function mcpConfigCandidates(origin: string): string[] {
   if (/\.(jsonc?)$/.test(origin)) return [origin]
   return ["config.json", "deepagent-code.json", "deepagent-code.jsonc", "config.jsonc"].map((name) =>
@@ -583,7 +584,8 @@ export const layer = Layer.effect(
             },
             {
               onRedirect: async () => {},
-              current: yield* oauthGuard(s, key, flow),
+              currentEntry: yield* oauthEntry(s, key, flow, mcp.url),
+              currentLocal: () => oauthLocalCurrent(s, key, flow),
               authorizationGeneration: flow.oauthState,
               interactive: false,
             },
@@ -595,7 +597,22 @@ export const layer = Layer.effect(
         // M-CRED (S1-v3.5): resolve `${VAR}` / `secret://` references in headers to real values
         // for the live request only — the persisted config keeps the reference. Missing env vars
         // warn (by name) but don't block; unresolvable handles drop the header.
+        const headersStarted = performance.now()
+        const endpointHash = createHash("sha256").update(url.href).digest("hex")
+        log.debug("MCP remote phase", {
+          stage: "headers.begin", endpointHash, headersProvided: mcp.headers !== undefined,
+        })
         const resolvedHeaders = mcp.headers ? yield* resolveSecrets(key, "headers", mcp.headers) : undefined
+        const headersElapsedMs = Math.round(performance.now() - headersStarted)
+        if (headersElapsedMs >= 1000)
+          log.warn("MCP remote phase", {
+            stage: "headers.end", endpointHash, headersProvided: resolvedHeaders !== undefined,
+            elapsedMs: headersElapsedMs,
+          })
+        log.debug("MCP remote phase", {
+          stage: "headers.end", endpointHash, headersProvided: resolvedHeaders !== undefined,
+          elapsedMs: headersElapsedMs,
+        })
         const requestInit =
           resolvedHeaders && Object.keys(resolvedHeaders).length > 0 ? { headers: resolvedHeaders } : undefined
 
@@ -642,12 +659,17 @@ export const layer = Layer.effect(
           if (owned) localTransports.set(transport, owned)
           yield* localCurrent
           if (flow) flow.transport = transport
+          const connectStarted = performance.now()
           const result = yield* connectTransport(transport, connectTimeout, mcp.protocol).pipe(
             Effect.map((client) => ({ client, transportName: name })),
             Effect.catch((error) => {
               // connectTransport has already closed this failed transport.
               if (flow) flow.transport = undefined
               const lastError = error instanceof Error ? error : new Error(String(error))
+              log.warn("MCP remote phase", {
+                stage: "connect.failed", endpointHash, transport: name,
+                elapsedMs: Math.round(performance.now() - connectStarted),
+              })
               if (lastError instanceof McpOAuthState.IssuerError) {
                 credentialPolicyError = true
                 lastStatus = { status: "failed", error: lastError.message }
@@ -888,7 +910,8 @@ export const layer = Layer.effect(
           ? yield* authScope.value.metadata(name, config).pipe(Effect.result)
           : undefined
       if (value?._tag === "Failure")
-        return { status: "failed", error: "MCP authentication storage or scope is unavailable" } satisfies Status
+        return { status: "failed", error: value.failure instanceof McpAuthJournalSchema.Error &&
+          value.failure.reason === "legacy_unverified" ? value.failure.message : "MCP authentication storage or scope is unavailable" } satisfies Status
       const metadata = value?.success
       return {
         status: "disconnected",
@@ -1128,7 +1151,9 @@ export const layer = Layer.effect(
               : s?.status[key] && s.status[key].status !== "disconnected"
                 ? s.status[key]
                 : s?.status[key]?.status === "disconnected" && s.status[key].reason === "scope_changed"
-                  ? yield* disconnected(key, mcp, "scope_changed")
+                  ? observed.status === "disconnected"
+                    ? { ...observed, reason: "scope_changed" }
+                    : yield* disconnected(key, mcp, "scope_changed")
                   : observed
       }
       return result
@@ -1610,6 +1635,16 @@ export const layer = Layer.effect(
       })
     }
 
+    function oauthLocalCurrent(s: State, name: string, flow: OAuthFlow) {
+      return (
+        flow.valid &&
+        !s.disposed &&
+        s.oauth.get(name) === flow &&
+        (s.versions[name] ?? 0) === flow.version &&
+        (flow.phase === "connected" || Date.now() < flow.expiresAt)
+      )
+    }
+
     const oauthCurrent = Effect.fnUntraced(function* (s: State, name: string, flow: OAuthFlow) {
       if (!flow.valid || s.disposed || s.oauth.get(name) !== flow || (s.versions[name] ?? 0) !== flow.version)
         return false
@@ -1624,16 +1659,33 @@ export const layer = Layer.effect(
       )
     })
 
-    const oauthGuard = Effect.fnUntraced(function* (s: State, name: string, flow: OAuthFlow) {
+    const oauthEntry = Effect.fnUntraced(function* (s: State, name: string, flow: OAuthFlow, url: string) {
       const bridge = yield* EffectBridge.make()
-      return () => bridge.promise(oauthCurrent(s, name, flow))
+      return currentEntry(
+        () => bridge.promise(flow.scope.auth.getForUrl(name, url)),
+        () =>
+          flow.valid &&
+          !s.disposed &&
+          s.oauth.get(name) === flow &&
+          (s.versions[name] ?? 0) === flow.version &&
+          (flow.phase === "connected" || Date.now() < flow.expiresAt),
+      )
     })
 
-    const oauthFetch = Effect.fnUntraced(function* (s: State, name: string, flow: OAuthFlow) {
-      const current = yield* oauthGuard(s, name, flow)
+    const oauthFetch = (s: State, name: string, flow: OAuthFlow) => Effect.sync(() => {
+      const beforeSend = () => {
+        if (
+          !flow.valid ||
+          s.disposed ||
+          s.oauth.get(name) !== flow ||
+          (s.versions[name] ?? 0) !== flow.version ||
+          (flow.phase !== "connected" && Date.now() >= flow.expiresAt)
+        ) throw new Error("MCP OAuth flow was revoked before HTTP dispatch")
+        return undefined
+      }
       return async (url: string | URL, init?: RequestInit) => {
-        if (!(await current())) throw new Error("MCP OAuth flow was revoked before HTTP dispatch")
-        return flow.scope.fetch(url, init)
+        beforeSend()
+        return flow.scope.fetch(url, init, beforeSend)
       }
     })
 
@@ -1721,7 +1773,8 @@ export const layer = Layer.effect(
             onRedirect: async (url) => {
               capturedUrl = url
             },
-            current: yield* oauthGuard(s, mcpName, flow),
+            currentEntry: yield* oauthEntry(s, mcpName, flow, mcpConfig.url),
+            currentLocal: () => oauthLocalCurrent(s, mcpName, flow),
             authorizationGeneration: flow.oauthState,
             interactive: true,
           },

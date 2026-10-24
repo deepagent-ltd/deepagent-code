@@ -13,11 +13,23 @@ bun run build
 ```
 
 The build uses the original protobuf and Rollup pipelines, verifies the pinned
-runtime and declaration hashes before replacing `lib/`, and freezes only the
-generated copyright year. `LICENSE` and `NOTICE` retain upstream attribution
+runtime and declaration hashes before replacing `lib/`, normalizes generated
+comment whitespace, and freezes the generated copyright year. The locked
+minifier retains compression with name mangling disabled because its older
+scope tracker rejects the asynchronous signer code. `LICENSE` and `NOTICE` retain upstream attribution
 and describe the source/generated-banner discrepancy.
 
 Kernel reader methods are bounded and return exact decimal int64 strings.
 They do not automatically publish, mark read, retry unknown effects, or fall
 back to the legacy body-bearing APIs. DAC owns synchronization, current
 permission checks, local projection and user initiated read actions.
+
+Device-enabled connections use `dac-im-device-v1`. The trusted host supplies
+public device metadata, a fixed socket audience and narrow signing callbacks;
+the SDK never receives a private key. The first Connect requests a challenge,
+and the second Connect supplies its proof on the same original socket. A
+challenge ACK does not enable queries or mark the client online. Each reconnect
+requires a new proof, and callbacks from a disconnected source are discarded.
+Navigator and media requests use host-provided DPoP headers with current-source
+checks and bounded cancellation. Connect logs contain command metadata instead
+of tokens, challenges or proofs.

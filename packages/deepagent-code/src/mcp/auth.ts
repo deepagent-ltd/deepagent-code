@@ -5,6 +5,7 @@ import { Effect, Layer, Context, Option, Schema } from "effect"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { McpAuthStore } from "./auth-store"
 import { McpOAuthState } from "./oauth-state"
+import { McpWindowsStorage } from "./windows-storage"
 
 const Secret = Schema.String.check(Schema.isMaxLength(16384))
 const Timestamp = Schema.Number.check(
@@ -109,9 +110,10 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const flock = yield* EffectFlock.Service
+    const native = yield* McpWindowsStorage.Current
 
     const read = Effect.fn("McpAuth.read")(function* () {
-      const file = yield* Effect.promise(() => McpAuthStore.read(filepath))
+      const file = yield* Effect.promise(() => McpAuthStore.read(filepath, native))
       if (!file) return { data: {} as AuthData, stamp: undefined }
       const parsed = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(file.text)
       if (Option.isNone(parsed)) return yield* Effect.die(new McpAuthStore.Error("invalid"))
@@ -132,7 +134,7 @@ export const layer = Layer.effect(
         const text = JSON.stringify(requireData(next), null, 2)
         if (Buffer.byteLength(text, "utf8") > McpAuthStore.MAX_BYTES)
           return yield* Effect.die(new McpAuthStore.Error("capacity"))
-        yield* Effect.promise(() => McpAuthStore.write(filepath, text, before.stamp))
+        yield* Effect.promise(() => McpAuthStore.write(filepath, text, before.stamp, native))
       }).pipe(flock.withLock(lockKey), Effect.orDie)
     })
 

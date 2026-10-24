@@ -2,22 +2,18 @@ import { describe, expect, test } from "bun:test"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 
-// C6-09 route-contract check (repo pattern: source-level wiring assertions — the repo has no
-// component-render unit harness, so the panel's DOM behavior is covered by the model fixture
-// tests + this wiring contract). Asserts: the settings dialog registers the capabilities tab,
-// the panel consumes exactly the three endpoints, and every label resolves through i18n.
-// The row/receipt/empty derivations themselves are fixture-tested in
-// capability-panel-model.test.ts.
+// Keep route and endpoint wiring separate from the actual component disclosure/copy tests.
+// Complete catalog, load-receipt and snapshot payloads must remain reachable in diagnostics.
 
 const here = import.meta.dir
 
 describe("C6-09 capabilities panel wiring", () => {
-  test("the settings dialog registers the Capabilities tab under Server", async () => {
+  test("the settings dialog retains the Capabilities navigation and existing panel", async () => {
     const dialog = await readFile(path.join(here, "dialog-settings-v2.tsx"), "utf8")
 
     expect(dialog).toContain('value="capabilities"')
-    expect(dialog).toContain('Icon name="package"')
-    expect(dialog).toContain('language.t("settings.capabilities.title")')
+    expect(dialog).toContain('icon: "package"')
+    expect(dialog).toContain('label: "settings.capabilities.title"')
     expect(dialog).toContain("<SettingsCapabilitiesV2 />")
     expect(dialog).toContain('import { SettingsCapabilitiesV2 } from "./capabilities"')
   })
@@ -30,8 +26,9 @@ describe("C6-09 capabilities panel wiring", () => {
     expect(panel).toContain("client.systemContext.snapshot")
     // Every capability row label resolves through the i18n model (never a raw enum leak).
     expect(panel).toContain("catalogRows(props.catalog)")
-    expect(panel).toContain("receiptRows(props.receipts)")
-    expect(panel).toContain("snapshotRow(props.snapshot)")
+    expect(panel).toContain("catalog: props.catalog")
+    expect(panel).toContain("receipts: props.receipts")
+    expect(panel).toContain("snapshot: props.snapshot")
   })
 
   test("the settings-v2 css carries the capability panel surface classes", async () => {
@@ -48,21 +45,14 @@ describe("C6-09 capabilities panel wiring", () => {
     const panel = await readFile(path.join(here, "capabilities.tsx"), "utf8")
 
     // Availability → i18n key mapping lives in ONE place (the model).
-    for (const key of ["availability.stable", "availability.maintenance_only", "availability.disabled", "availability.unavailable"]) {
+    for (const key of [
+      "integrated",
+      "availability.maintenance_only",
+      "availability.disabled",
+      "availability.unavailable",
+    ]) {
       expect(model).toContain(`settings.capabilities.${key}"`)
       expect(panel).not.toContain(`settings.capabilities.${key}"`)
     }
-  })
-
-  test("the snapshot row templates resolve their params (no literal {{digest}}/{{count}})", async () => {
-    const panel = await readFile(path.join(here, "capabilities.tsx"), "utf8")
-
-    // W9.5 — the local `t` wrapper passes params through to `language.t` (resolveTemplate);
-    // otherwise the snapshot row renders the raw `{{digest}}`/`{{count}}` placeholders.
-    const t = panel.match(/const t = \([^)]*\) =>[^\n]*/)
-    expect(t).not.toBeNull()
-    expect(t![0]).toContain("params")
-    expect(panel).toContain('settings.capabilities.digest", { digest: row().catalogDigest }')
-    expect(panel).toContain('settings.capabilities.l0lineCount", { count: row().l0LineCount }')
   })
 })

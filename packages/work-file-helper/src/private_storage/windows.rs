@@ -51,6 +51,10 @@ impl Lease {
             Err(error) => return Err(error),
         };
         if prepare && private_directory::require_private(&parent.file).is_err() {
+            // Existing credential parents are never silently repaired by a write.
+            if matches!(purpose, Purpose::McpLegacyAuth | Purpose::McpSecretEnvelopes | Purpose::McpSecretMigration | Purpose::McpOauthJournal) {
+                return Err(io::ErrorKind::PermissionDenied.into());
+            }
             // Windows elevated tokens default newly created directories to their
             // TokenOwner group. Only explicit preparation may adopt that exact
             // current-token owner into the user-owned private DAC directory.
@@ -267,6 +271,108 @@ impl Lease {
     }
 }
 
+/// Metadata only for the one historical MCP envelope. Its original parent and
+/// bytes are never adopted, opened for data access, repaired, copied or removed.
+pub fn legacy_mcp_envelope_exists(value: &str) -> io::Result<bool> {
+    let parent = match LockedPath::open(Path::new(value), true, false) {
+        Ok(parent) => parent,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    parent.current()?;
+    let exists = match open_with_share(&parent.file, "mcp-secrets.dpapi.json", false, FILE_READ_ATTRIBUTES,
+        1, ptr::null(), FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error),
+    };
+    parent.current()?;
+    Ok(exists)
+}
+
+/// Fixed mutable SQLite profile. Unlike JSON snapshots, database content and
+/// timestamps may change. Original handles pin only custody, namespace and FileID.
+pub struct JournalLease {
+    parent: LockedPath,
+    identity: Identity,
+    file: File,
+    file_identity: Identity,
+    write: bool,
+}
+impl JournalLease {
+    pub fn open(value: &str, write: bool) -> io::Result<Self> {
+        let root = Lease::open(value, Purpose::McpOauthJournal, write, 30_000)?;
+        private_directory::require_sqlite_parent(&root.parent.file)?;
+        let access = FILE_GENERIC_READ | if write { FILE_GENERIC_WRITE } else { 0 };
+        let file = match open_with_share(&root.parent.file, "journal.sqlite", false, access, 1, ptr::null(), FILE_SHARE_READ | FILE_SHARE_WRITE) {
+            Ok(file) => file,
+            Err(error) if write && error.kind() == io::ErrorKind::NotFound => {
+                let descriptor = Descriptor::command_input()?;
+                let file = open_with_share(&root.parent.file, "journal.sqlite", false, access, 2,
+                    descriptor.pointer(), FILE_SHARE_READ | FILE_SHARE_WRITE)?;
+                file.sync_all()?;
+                file
+            },
+            Err(error) => return Err(error),
+        };
+        let file_identity = no_follow::identity(&file)?;
+        let lease = Self { parent: root.parent, identity: root.identity, file, file_identity, write };
+        lease.current()?;
+        Ok(lease)
+    }
+    pub fn current(&self) -> io::Result<()> {
+        self.parent.current()?;
+        private_directory::require_sqlite_parent(&self.parent.file)?;
+        if no_follow::identity(&self.parent.file)? != self.identity { return Err(io::ErrorKind::PermissionDenied.into()); }
+        self.require_main(&self.file)?;
+        let named = open_with_share(&self.parent.file, "journal.sqlite", false, FILE_GENERIC_READ, 1, ptr::null(),
+            FILE_SHARE_READ | FILE_SHARE_WRITE)?;
+        self.require_main(&named)?;
+        if no_follow::identity(&named)? != self.file_identity { return Err(io::ErrorKind::PermissionDenied.into()); }
+        for suffix in ["-journal", "-wal", "-shm"] {
+            let name = format!("journal.sqlite{suffix}");
+            match open_with_share(&self.parent.file, &name, false, FILE_READ_ATTRIBUTES | 0x0002_0000, 1, ptr::null(),
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE) {
+                Ok(file) => {
+                    if suffix != "-journal" { return Err(io::ErrorKind::InvalidData.into()); }
+                    private_directory::require_sqlite_sidecar(&file)?;
+                    require_regular_leaf(&file, &self.parent, &name)?;
+                    let size = file.metadata()?.len();
+                    if size > 17_825_792 || (!self.write && size != 0) { return Err(io::ErrorKind::InvalidData.into()); }
+                },
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+    fn require_main(&self, file: &File) -> io::Result<()> {
+        private_directory::require_private(file)?;
+        require_regular_leaf(file, &self.parent, "journal.sqlite")?;
+        if no_follow::identity(file)? != self.file_identity || file.metadata()?.len() > 16_777_216 {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        Ok(())
+    }
+    /// SQLite Win32 FULL xSync is primary. The held writable main handle adds an
+    /// actual post-COMMIT flush; no POSIX directory-fsync emulation is claimed.
+    pub fn flush(&self) -> io::Result<()> {
+        if !self.write { return Err(io::ErrorKind::PermissionDenied.into()); }
+        self.current()?;
+        self.file.sync_all()?;
+        self.current()
+    }
+}
+fn require_regular_leaf(file: &File, parent: &LockedPath, name: &str) -> io::Result<()> {
+    let mut information = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, information.as_mut_ptr()) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if !file.metadata()?.is_file() || unsafe { information.assume_init() }.nNumberOfLinks != 1 ||
+        no_follow::final_path(file)? != parent.canonical().join(name) { return Err(io::ErrorKind::PermissionDenied.into()); }
+    Ok(())
+}
+
 fn diagnostic(stage: &'static str, error: io::Error) -> io::Error {
     if error.kind() != io::ErrorKind::NotFound {
         eprintln!("PRIVATE_STORAGE_FAILURE stage={stage} kind={:?} os={}", error.kind(), error.raw_os_error().unwrap_or(0));
@@ -458,6 +564,103 @@ mod tests {
     }
     fn id(value: u8) -> String { format!("{value:032x}") }
     fn hash(value: &[u8]) -> String { format!("{:x}", Sha256::digest(value)) }
+
+    #[test]
+    fn mcp_new_envelope_directory_does_not_adopt_or_change_historical_parent_or_bytes() {
+        let path = root();
+        std::fs::create_dir(&path).unwrap();
+        let old = path.join("mcp-secrets.dpapi.json");
+        let bytes = b"retained opaque historical envelope";
+        std::fs::write(&old, bytes).unwrap();
+        let outer = LockedPath::open(&path, true, false).unwrap();
+        let identity = no_follow::identity(&outer.file).unwrap();
+        let private_before = private_directory::require_private(&outer.file).is_ok();
+        assert!(legacy_mcp_envelope_exists(path.to_str().unwrap()).unwrap());
+        let new = path.join("mcp-secrets");
+        let lease = Lease::open(new.to_str().unwrap(), Purpose::McpSecretEnvelopes, true, 30_000).unwrap();
+        assert!(lease.read("mcp-secrets.dpapi.json").unwrap().is_none());
+        assert_eq!(std::fs::read(&old).unwrap(), bytes);
+        assert_eq!(no_follow::identity(&outer.file).unwrap(), identity);
+        assert_eq!(private_directory::require_private(&outer.file).is_ok(), private_before);
+        drop(lease); drop(outer);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn mcp_json_purposes_keep_fixed_names_cas_and_never_adopt_existing_unsafe_roots() {
+        let path = root();
+        std::fs::create_dir(&path).unwrap();
+        for purpose in [Purpose::McpLegacyAuth, Purpose::McpSecretEnvelopes, Purpose::McpSecretMigration] {
+            assert!(Lease::open(path.to_str().unwrap(), purpose, true, 30_000).is_err());
+        }
+        std::fs::remove_dir(&path).unwrap();
+        for (index, purpose, name) in [(10, Purpose::McpLegacyAuth, "mcp-auth.json"),
+            (11, Purpose::McpSecretEnvelopes, "mcp-secrets.dpapi.json"),
+            (12, Purpose::McpSecretMigration, "mcp-secret-migration.json")] {
+            let lease = Lease::open(path.to_str().unwrap(), purpose, true, 30_000).unwrap();
+            assert!(lease.read(name).unwrap().is_none());
+            let first = lease.publish(name, &id(index), b"{}", &hash(b"{}"), None).ok().unwrap();
+            assert_eq!(lease.read(name).unwrap().unwrap().0, first);
+            assert!(matches!(lease.publish(name, &id(index + 10), b"{}", &hash(b"{}"), None), Err(Failure::Changed)));
+            assert!(lease.read("settings.json").is_err());
+            assert!(lease.read("../mcp-auth.json").is_err());
+        }
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn mcp_journal_read_missing_is_inert_and_mutable_main_identity_remains_pinned() {
+        let path = root();
+        assert!(matches!(JournalLease::open(path.to_str().unwrap(), false), Err(error) if error.kind() == io::ErrorKind::NotFound));
+        assert!(!path.exists());
+        {
+            let lease = JournalLease::open(path.to_str().unwrap(), true).unwrap();
+            std::fs::write(path.join("journal.sqlite"), b"mutable database bytes").unwrap();
+            lease.current().unwrap();
+            lease.flush().unwrap();
+            assert!(std::fs::remove_file(path.join("journal.sqlite")).is_err());
+            std::fs::hard_link(path.join("journal.sqlite"), path.join("alias.sqlite")).unwrap();
+            assert!(lease.current().is_err());
+            std::fs::remove_file(path.join("alias.sqlite")).unwrap();
+            lease.current().unwrap();
+            let read = JournalLease::open(path.to_str().unwrap(), false).unwrap();
+            read.current().unwrap();
+            assert!(read.flush().is_err());
+            std::fs::OpenOptions::new().write(true).open(path.join("journal.sqlite")).unwrap().set_len(16_777_217).unwrap();
+            assert!(lease.current().is_err());
+        }
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn mcp_journal_fixed_private_sidecar_is_short_lived_and_readonly_refuses_hot_journal() {
+        let path = root();
+        {
+            let lease = JournalLease::open(path.to_str().unwrap(), true).unwrap();
+            let descriptor = Descriptor::command_input().unwrap();
+            let mut sidecar = open_with_share(&lease.parent.file, "journal.sqlite-journal", false,
+                FILE_GENERIC_READ | FILE_GENERIC_WRITE, 2, descriptor.pointer(),
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).unwrap();
+            sidecar.write_all(b"journal bytes").unwrap();
+            drop(sidecar);
+            lease.current().unwrap();
+            assert!(JournalLease::open(path.to_str().unwrap(), false).is_err());
+            std::fs::remove_file(path.join("journal.sqlite-journal")).unwrap();
+            lease.current().unwrap();
+            std::fs::write(path.join("journal.sqlite-wal"), b"forbidden").unwrap();
+            assert!(lease.current().is_err());
+            std::fs::remove_file(path.join("journal.sqlite-wal")).unwrap();
+            let sidecar = open_with_share(&lease.parent.file, "journal.sqlite-journal", false,
+                FILE_GENERIC_READ | FILE_GENERIC_WRITE, 2, descriptor.pointer(),
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).unwrap();
+            drop(sidecar);
+            std::fs::hard_link(path.join("journal.sqlite-journal"), path.join("journal-alias")).unwrap();
+            assert!(lease.current().is_err());
+            std::fs::remove_file(path.join("journal-alias")).unwrap();
+            lease.current().unwrap();
+        }
+        std::fs::remove_dir_all(path).unwrap();
+    }
 
     #[test]
     fn explicit_prepare_adopts_only_default_token_owner_and_keeps_outer_directory() {

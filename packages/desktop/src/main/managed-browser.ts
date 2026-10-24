@@ -5,6 +5,7 @@ import { createServer, request } from "node:http"
 import type { Server, ClientRequest, IncomingMessage } from "node:http"
 import { BrowserSchema } from "@deepagent-code/core/browser/schema"
 import { BrowserProtocol } from "@deepagent-code/core/browser/protocol"
+import { SharedBrowserProtocol } from "@deepagent-code/core/browser/shared-protocol"
 import { BrowserFileSchema } from "@deepagent-code/core/browser/file-exchange.schema"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { Option, Schema } from "effect"
@@ -17,6 +18,8 @@ import { observeManagedBrowserInput } from "./managed-browser-input-observer"
 import type { ManagedBrowserInputAsset } from "./managed-browser-input-observer"
 import { builtManagedBrowserInputAsset } from "./managed-browser-input-asset"
 import type { ProgramInput } from "./managed-browser-program"
+import { sharedBrowserManager, SharedBrowserMainError } from "./shared-browser"
+import { sharedBrowserTuiRegistry } from "./shared-browser-tui"
 
 type ManagedTab = {
   tabID: string
@@ -99,10 +102,22 @@ const immutable = (control: BrowserSchema.Control) =>
     ...(control.profile === BrowserSchema.PUBLIC_READONLY_PROFILE
       ? { approvedOrigins: control.approvedOrigins, resolverPolicy: control.resolverPolicy }
       : {}),
-    ...(control.profile === BrowserSchema.PUBLIC_INTERACTION_PROFILE ? { approvedOrigins: control.approvedOrigins,
-      resolverPolicy: control.resolverPolicy, pageMode: control.pageMode, postTargets: control.postTargets } : {}),
-    ...(control.profile === BrowserSchema.API_POST_PROFILE ? { approvedOrigins: control.approvedOrigins,
-      resolverPolicy: control.resolverPolicy, pageMode: control.pageMode, apiPostTargets: control.apiPostTargets } : {}),
+    ...(control.profile === BrowserSchema.PUBLIC_INTERACTION_PROFILE
+      ? {
+          approvedOrigins: control.approvedOrigins,
+          resolverPolicy: control.resolverPolicy,
+          pageMode: control.pageMode,
+          postTargets: control.postTargets,
+        }
+      : {}),
+    ...(control.profile === BrowserSchema.API_POST_PROFILE
+      ? {
+          approvedOrigins: control.approvedOrigins,
+          resolverPolicy: control.resolverPolicy,
+          pageMode: control.pageMode,
+          apiPostTargets: control.apiPostTargets,
+        }
+      : {}),
     ...(control.profile === BrowserSchema.FILE_EXCHANGE_PROFILE
       ? { postPaths: control.postPaths, filePolicy: control.filePolicy }
       : {}),
@@ -110,8 +125,11 @@ const immutable = (control: BrowserSchema.Control) =>
 
 /** Called with the actual utilityProcess returned by this launch. The transferred port is never
  * exposed to webContents/preload/renderer IPC. Closing it destroys this host's exact resources. */
-export function installManagedBrowser(child: UtilityProcess, password: string,
-  inputAsset = builtManagedBrowserInputAsset()) {
+export function installManagedBrowser(
+  child: UtilityProcess,
+  password: string,
+  inputAsset = builtManagedBrowserInputAsset(),
+) {
   const channel = new MessageChannelMain()
   const manager = createManager(channel.port1, inputAsset)
   const credentialKey = randomBytes(32)
@@ -120,11 +138,13 @@ export function installManagedBrowser(child: UtilityProcess, password: string,
     .update("dac.browser.credentials.v1\0")
     .update(CanonicalJson.stringify({ username, password }))
     .digest("hex")
+  manager.registerTuiCredentials(username, credentialKey, credentialBinding)
   child.postMessage(
     {
       type: "managed-browser-install-v1",
       hostID: manager.hostID,
       hostIncarnation: manager.hostIncarnation,
+      sharedMainIncarnation: sharedBrowserManager().mainIncarnation,
       username,
       credentialBinding,
       credentialKey: credentialKey.toString("hex"),
@@ -142,16 +162,57 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
   const controls = new Map<string, Entry>()
   const checks = new Map<string, (allowed: boolean) => void>()
   const leaves = new Map<string, (response: BrowserProtocol.FileLeafResponse) => void>()
+  const sharedLeaves = new Map<string, (response: SharedBrowserProtocol.FileLeafResponse) => void>()
   let alive = true
   let waiting = 0
+  const shared = sharedBrowserManager()
+  const tui = sharedBrowserTuiRegistry()
+  // The Main registry retains lost hosts until actual cleanup is confirmed.
+  shared.registerLegacyHost(hostIncarnation, {
+    count: () => [...controls.values()].filter((entry) => !entry.confirmed).length,
+    alive: () => alive,
+  })
+  shared.attachHost(hostIncarnation, async (action) => {
+    if (!alive || action.deadline <= Date.now() || checks.size >= 64) return false
+    return new Promise<boolean>((resolve) => {
+      const id = randomUUID()
+      const timer = setTimeout(
+        () => {
+          checks.delete(id)
+          resolve(false)
+        },
+        Math.min(2000, Math.max(1, action.deadline - Date.now())),
+      )
+      checks.set(id, (allowed) => {
+        clearTimeout(timer)
+        checks.delete(id)
+        resolve(allowed && alive)
+      })
+      port.postMessage({
+        type: "shared.check",
+        id,
+        actionID: action.actionID,
+        resourceID: action.resourceID,
+        leaseID: action.leaseID,
+        leaseEpoch: action.leaseEpoch,
+        manualEpoch: action.manualEpoch,
+        commandHash: action.commandHash,
+      })
+    })
+  })
   const close = () => {
     if (!alive) return
     alive = false
+    shared.hostLost(hostIncarnation)
+    tui.hostLost(hostIncarnation)
     for (const entry of controls.values()) void stop(entry)
     for (const resolve of checks.values()) resolve(false)
     checks.clear()
     for (const [id, resolve] of leaves) resolve({ type: "file.leaf.response", id, error: "BROWSER_FILE_UNKNOWN" })
     leaves.clear()
+    for (const [id, resolve] of sharedLeaves)
+      resolve({ type: "shared.file.leaf.response", id, error: "BROWSER_FILE_UNKNOWN" })
+    sharedLeaves.clear()
     port.close()
   }
   const permit = async (entry: Entry, action: BrowserSchema.Action) => {
@@ -226,8 +287,44 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
     })
     if (!allowed || !alive || entry.stopped || request.command.expiresAt <= Date.now()) fail("BROWSER_SCOPE_DENIED")
   }
+  const sharedFileCheck = async (message: Extract<SharedBrowserProtocol.Request, { type: "shared.file.confirm" }>) => {
+    if (!alive || message.lease.sidecarIncarnation !== hostIncarnation) fail("BROWSER_HOST_UNAVAILABLE")
+    shared.fileCurrent(message.resource, message.lease)
+    const allowed = await new Promise<boolean>((resolve) => {
+      const id = randomUUID()
+      const timer = setTimeout(() => {
+        checks.delete(id)
+        resolve(false)
+      }, 2000)
+      checks.set(id, (value) => {
+        clearTimeout(timer)
+        checks.delete(id)
+        resolve(value)
+      })
+      port.postMessage({
+        type: "shared.file.check",
+        id,
+        confirmID: message.id,
+        resourceID: message.resource.resourceID,
+        mainIncarnation: shared.mainIncarnation,
+        sidecarIncarnation: hostIncarnation,
+        leaseID: message.lease.leaseID,
+        leaseEpoch: message.lease.leaseEpoch,
+        manualEpoch: message.lease.manualEpoch,
+        bindingHash: message.preview.bindingHash,
+        previewHash: hash(message.preview),
+        commandHash: hash(message.command),
+      })
+    })
+    if (!allowed || !alive) fail("BROWSER_SCOPE_DENIED")
+    shared.fileCurrent(message.resource, message.lease)
+  }
   const sameOrigin = (entry: Entry, value: string) => {
-    if (entry.control.profile === BrowserSchema.PUBLIC_READONLY_PROFILE || entry.control.profile === BrowserSchema.PUBLIC_INTERACTION_PROFILE || entry.control.profile === BrowserSchema.API_POST_PROFILE) {
+    if (
+      entry.control.profile === BrowserSchema.PUBLIC_READONLY_PROFILE ||
+      entry.control.profile === BrowserSchema.PUBLIC_INTERACTION_PROFILE ||
+      entry.control.profile === BrowserSchema.API_POST_PROFILE
+    ) {
       if (Buffer.byteLength(value) > 2048 || !URL.canParse(value)) return false
       const url = new URL(value)
       return (
@@ -261,21 +358,38 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
       event.preventDefault()
       item.cancel()
     })
-    if (entry.control.profile === BrowserSchema.PUBLIC_READONLY_PROFILE || entry.control.profile === BrowserSchema.PUBLIC_INTERACTION_PROFILE || entry.control.profile === BrowserSchema.API_POST_PROFILE) {
+    if (
+      entry.control.profile === BrowserSchema.PUBLIC_READONLY_PROFILE ||
+      entry.control.profile === BrowserSchema.PUBLIC_INTERACTION_PROFILE ||
+      entry.control.profile === BrowserSchema.API_POST_PROFILE
+    ) {
       entry.network = await createManagedBrowserNetwork({
         partition,
         approvedOrigins: entry.control.approvedOrigins,
         resolverPolicy: entry.control.resolverPolicy,
-        ...(entry.control.profile === BrowserSchema.PUBLIC_INTERACTION_PROFILE ? {
-          interaction: { pageMode: entry.control.pageMode, postTargets: entry.control.postTargets },
-          submitting: () => entry.publicLeaf ? { identity: entry.publicLeaf, frameID: entry.publicLeaf.command.frameID,
-            ...entry.publicLeaf.navigation } : undefined,
-        } : {}),
-        ...(entry.control.profile === BrowserSchema.API_POST_PROFILE ? {
-          interaction: { pageMode: entry.control.pageMode, postTargets: [] },
-          apiPost: { origin: entry.control.origin, targets: entry.control.apiPostTargets,
-            command: () => entry.action?.command.type === "api.post" ? entry.action.command : undefined },
-        } : {}),
+        ...(entry.control.profile === BrowserSchema.PUBLIC_INTERACTION_PROFILE
+          ? {
+              interaction: { pageMode: entry.control.pageMode, postTargets: entry.control.postTargets },
+              submitting: () =>
+                entry.publicLeaf
+                  ? {
+                      identity: entry.publicLeaf,
+                      frameID: entry.publicLeaf.command.frameID,
+                      ...entry.publicLeaf.navigation,
+                    }
+                  : undefined,
+            }
+          : {}),
+        ...(entry.control.profile === BrowserSchema.API_POST_PROFILE
+          ? {
+              interaction: { pageMode: entry.control.pageMode, postTargets: [] },
+              apiPost: {
+                origin: entry.control.origin,
+                targets: entry.control.apiPostTargets,
+                command: () => (entry.action?.command.type === "api.post" ? entry.action.command : undefined),
+              },
+            }
+          : {}),
         actionIdentity: () => entry.action,
         actionDeadline: () => entry.action?.deadline,
         activeContentsID: () => entry.activeContentsID,
@@ -532,8 +646,14 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
   const renewInputSource = (tab: ManagedTab) => {
     if (tab.inputSource?.status === "available") tab.inputSource.release()
     if (!inputAsset) return
-    tab.inputSource = observeManagedBrowserInput({ window: tab.window, asset: inputAsset,
-      invalidate: () => { tab.generation++; tab.inputs?.invalidate() } })
+    tab.inputSource = observeManagedBrowserInput({
+      window: tab.window,
+      asset: inputAsset,
+      invalidate: () => {
+        tab.generation++
+        tab.inputs?.invalidate()
+      },
+    })
     if (tab.inputSource.status !== "available")
       fail(tab.inputSource.reason === "observer_capacity" ? "BROWSER_CAPACITY" : "BROWSER_DRIVER_UNAVAILABLE")
   }
@@ -599,14 +719,18 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
       window.webContents.debugger.attach("1.3")
       await window.webContents.debugger.sendCommand("Page.enable")
     }
-    tab.clipboardPolicy = await installManagedBrowserClipboardPolicy(window.webContents, () => { void stop(entry) })
+    tab.clipboardPolicy = await installManagedBrowserClipboardPolicy(window.webContents, () => {
+      void stop(entry)
+    })
     window.once("close", () => tab.clipboardPolicy?.())
     await window.webContents.debugger.sendCommand("DOM.enable")
     await window.webContents.debugger.sendCommand("Accessibility.enable")
     const debuggerOwner = tab.contents.debugger
     tab.inputs = createManagedBrowserActions({
-      send: (method, params) => tab.contents.isDestroyed()
-        ? Promise.reject(new Failure("BROWSER_CANCELLED")) : debuggerOwner.sendCommand(method, params),
+      send: (method, params) =>
+        tab.contents.isDestroyed()
+          ? Promise.reject(new Failure("BROWSER_CANCELLED"))
+          : debuggerOwner.sendCommand(method, params),
       current: () => (entry.action ? permit(entry, entry.action) : Promise.reject(new Failure("BROWSER_CANCELLED"))),
       generation: () => tab.generation,
       inputSource: () => {
@@ -620,7 +744,9 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
         entry.mutated = true
       },
       origin: entry.control.origin,
-      ...(entry.control.profile === BrowserSchema.PUBLIC_READONLY_PROFILE || entry.control.profile === BrowserSchema.PUBLIC_INTERACTION_PROFILE || entry.control.profile === BrowserSchema.API_POST_PROFILE
+      ...(entry.control.profile === BrowserSchema.PUBLIC_READONLY_PROFILE ||
+      entry.control.profile === BrowserSchema.PUBLIC_INTERACTION_PROFILE ||
+      entry.control.profile === BrowserSchema.API_POST_PROFILE
         ? { approvedOrigins: entry.control.approvedOrigins }
         : {}),
     })
@@ -667,27 +793,47 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
         await entry.network?.beginAction(action)
       }
       if (command.type === "api.post") {
-        if (!entry.network || !tab.inputs || !BrowserSchema.allowsApiPost(entry.control, command)) fail("BROWSER_SCOPE_DENIED")
+        if (!entry.network || !tab.inputs || !BrowserSchema.allowsApiPost(entry.control, command))
+          fail("BROWSER_SCOPE_DENIED")
         await tab.inputs.requireObservation(command)
         await permit(entry, action)
         const currentTabs = tabs(entry)
         // Reserve a durable digest receipt before disclosure, including escaped
         // command bytes and current tabs. Text is optional when both bodies are large.
-        const fits = (apiPost: typeof BrowserSchema.ApiPostResult.Type) => Buffer.byteLength(CanonicalJson.stringify({
-          ...action, outcome: "completed", result: { tabs: currentTabs, apiPost }, revision: action.revision + 1,
-          updatedAt: Number.MAX_SAFE_INTEGER, terminalAt: Number.MAX_SAFE_INTEGER,
-        }), "utf8") <= BrowserSchema.MAX_ACTION_BYTES - 256
+        const fits = (apiPost: typeof BrowserSchema.ApiPostResult.Type) =>
+          Buffer.byteLength(
+            CanonicalJson.stringify({
+              ...action,
+              outcome: "completed",
+              result: { tabs: currentTabs, apiPost },
+              revision: action.revision + 1,
+              updatedAt: Number.MAX_SAFE_INTEGER,
+              terminalAt: Number.MAX_SAFE_INTEGER,
+            }),
+            "utf8",
+          ) <=
+          BrowserSchema.MAX_ACTION_BYTES - 256
         if (!fits({ version: 1, status: 599, contentType: "x".repeat(256), bytes: 65536, sha256: "0".repeat(64) }))
           fail("BROWSER_CAPACITY")
-        const apiPost = await entry.network.postAPI(command, { identity: action, deadline: action.deadline,
-          contentsID: contents.id, frameID: command.frameID }, () => {
-          tab.inputs!.assertObservation(command)
-          dispatched = true
-        })
+        const apiPost = await entry.network.postAPI(
+          command,
+          { identity: action, deadline: action.deadline, contentsID: contents.id, frameID: command.frameID },
+          () => {
+            tab.inputs!.assertObservation(command)
+            dispatched = true
+          },
+        )
         await tab.inputs.requireObservation(command)
         await permit(entry, action)
-        const result = fits(apiPost) ? apiPost : { version: apiPost.version, status: apiPost.status,
-          contentType: apiPost.contentType, bytes: apiPost.bytes, sha256: apiPost.sha256 }
+        const result = fits(apiPost)
+          ? apiPost
+          : {
+              version: apiPost.version,
+              status: apiPost.status,
+              contentType: apiPost.contentType,
+              bytes: apiPost.bytes,
+              sha256: apiPost.sha256,
+            }
         return { result: { tabs: currentTabs, apiPost: result } }
       }
       if (command.type === "clipboard.read" || command.type === "clipboard.write") {
@@ -914,7 +1060,8 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
       if ("ref" in command) {
         if (
           entry.control.profile !== BrowserSchema.INTERACTION_PROFILE &&
-          entry.control.profile !== BrowserSchema.FILE_EXCHANGE_PROFILE && entry.control.profile !== BrowserSchema.PUBLIC_INTERACTION_PROFILE
+          entry.control.profile !== BrowserSchema.FILE_EXCHANGE_PROFILE &&
+          entry.control.profile !== BrowserSchema.PUBLIC_INTERACTION_PROFILE
         )
           fail("BROWSER_SCOPE_DENIED")
         if (!tab.inputs) fail("BROWSER_DRIVER_UNAVAILABLE")
@@ -927,10 +1074,18 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
         })
         let navigated = false
         const publicLeaf: NonNullable<Entry["publicLeaf"]> = { action, command }
-        const onFrame = (method: string, params: { frame?: { id?: string }; frameId?: string; url?: string; reason?: string }) => {
-          if (method === "Page.frameRequestedNavigation" && params.frameId === command.frameID &&
-            !publicLeaf.navigation && params.url && sameOrigin(entry, params.url) &&
-            ["anchorClick", "formSubmissionGet", "formSubmissionPost"].includes(params.reason ?? ""))
+        const onFrame = (
+          method: string,
+          params: { frame?: { id?: string }; frameId?: string; url?: string; reason?: string },
+        ) => {
+          if (
+            method === "Page.frameRequestedNavigation" &&
+            params.frameId === command.frameID &&
+            !publicLeaf.navigation &&
+            params.url &&
+            sameOrigin(entry, params.url) &&
+            ["anchorClick", "formSubmissionGet", "formSubmissionPost"].includes(params.reason ?? "")
+          )
             publicLeaf.navigation = { url: params.url, method: params.reason === "formSubmissionPost" ? "POST" : "GET" }
           if (method === "Page.frameNavigated" && params.frame?.id === command.frameID) navigated = true
           if (method === "Page.navigatedWithinDocument" && params.frameId === command.frameID) finish?.()
@@ -1052,7 +1207,7 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
       if (
         controls.has(control.controlID) ||
         controls.size >= BrowserSchema.MAX_CONTROLS ||
-        [...controls.values()].filter((entry) => !entry.confirmed).length >= BrowserSchema.MAX_ACTIVE_CONTROLS ||
+        shared.physicalCount() >= BrowserSchema.MAX_ACTIVE_CONTROLS ||
         control.state !== "creating" ||
         control.epoch !== 1 ||
         control.expiresAt <= Date.now()
@@ -1208,6 +1363,13 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
     }
   }
   port.on("message", (event) => {
+    const sharedLeaf = Schema.decodeUnknownOption(SharedBrowserProtocol.FileLeafResponse, {
+      onExcessProperty: "error",
+    })(event.data)
+    if (Option.isSome(sharedLeaf)) {
+      sharedLeaves.get(sharedLeaf.value.id)?.(sharedLeaf.value)
+      return
+    }
     const leaf = Schema.decodeUnknownOption(BrowserProtocol.FileLeafResponse, { onExcessProperty: "error" })(event.data)
     if (Option.isSome(leaf)) {
       leaves.get(leaf.value.id)?.(leaf.value)
@@ -1216,6 +1378,174 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
     const permission = Schema.decodeUnknownOption(BrowserProtocol.Permit, { onExcessProperty: "error" })(event.data)
     if (Option.isSome(permission)) {
       checks.get(permission.value.id)?.(permission.value.allowed)
+      return
+    }
+    const sharedRequest = Schema.decodeUnknownOption(SharedBrowserProtocol.Request, { onExcessProperty: "error" })(
+      event.data,
+    )
+    if (Option.isSome(sharedRequest)) {
+      const request = sharedRequest.value
+      const dispatch = async (): Promise<SharedBrowserProtocol.Response> => {
+        if (!alive || ("lease" in request && request.lease.sidecarIncarnation !== hostIncarnation))
+          fail("BROWSER_HOST_UNAVAILABLE")
+        if (request.type === "shared.tui.pair")
+          return {
+            type: "shared.response",
+            id: request.id,
+            tuiView: tui.pair(hostIncarnation, request.transport, request.input),
+          }
+        if (request.type === "shared.tui.open")
+          return {
+            type: "shared.response",
+            id: request.id,
+            tuiView: tui.open(hostIncarnation, request.transport, request.input, request.binding),
+          }
+        if (request.type === "shared.tui.disconnect") {
+          tui.disconnect(hostIncarnation, request.binding)
+          return { type: "shared.response", id: request.id }
+        }
+        if (request.type === "shared.tui.reserve")
+          return { type: "shared.response", id: request.id, inputStamp: tui.reserve(hostIncarnation, request.input) }
+        if (request.type === "shared.tui.seal")
+          return { type: "shared.response", id: request.id, inputStamp: tui.seal(hostIncarnation, request.input) }
+        if (request.type === "shared.tui.detach")
+          return { type: "shared.response", id: request.id, tuiView: tui.detach(hostIncarnation, request.input) }
+        if (request.type === "shared.policy.claim")
+          return { type: "shared.response", id: request.id, policyClaim: shared.claimPolicy(request.resource, request.command) }
+        if (request.type === "shared.policy.check")
+          return { type: "shared.response", id: request.id, observation: shared.checkPolicy(request.resource, request.command, request.claim) }
+        if (request.type === "shared.policy.abort")
+          return { type: "shared.response", id: request.id, observation: shared.abortPolicy(request.resource, request.command, request.claim) }
+        if (request.type === "shared.policy.commit")
+          return { type: "shared.response", id: request.id, observation: shared.commitPolicy(request.resource, request.command) }
+        if (request.type === "shared.file.current")
+          return {
+            type: "shared.response",
+            id: request.id,
+            fileCurrent: shared.fileCurrent(request.resource, request.lease),
+            fileReady: shared.fileReady(request.resource, request.lease),
+          }
+        if (request.type === "shared.file.confirm") {
+          const decision = await shared.confirmFile(
+            request.resource,
+            request.lease,
+            request.preview,
+            request.command,
+            () => sharedFileCheck(request),
+          )
+          return {
+            type: "shared.response",
+            id: request.id,
+            ...("kind" in decision ? { fileCancellation: decision } : { confirmation: decision }),
+          }
+        }
+        if (request.type === "shared.file.confirm.status")
+          return {
+            type: "shared.response",
+            id: request.id,
+            fileCancellation: shared.fileCancellation(
+              request.resource,
+              request.lease,
+              request.preview,
+              request.command,
+            ),
+          }
+        if (request.type === "shared.input.validate")
+          return { type: "shared.response", id: request.id, validInput: shared.validateInput(request.stamp) }
+        if (request.type === "shared.create")
+          return {
+            type: "shared.response",
+            id: request.id,
+            observation: await shared.create(request.resource, request.lease),
+          }
+        if (request.type === "shared.status")
+          return { type: "shared.response", id: request.id, observation: shared.status(request.resourceID) }
+        if (request.type === "shared.projection.sync")
+          return { type: "shared.response", id: request.id, observation: shared.syncProjection(request.resource) }
+        if (request.type === "shared.takeover")
+          return {
+            type: "shared.response",
+            id: request.id,
+            ticket: shared.beginTakeover(request.resource, request.request).ticket,
+          }
+        if (request.type === "shared.barrier.commit")
+          return {
+            type: "shared.response",
+            id: request.id,
+            observation: await shared.confirmBarrier(request.resource, request.ticket),
+          }
+        if (request.type === "shared.acquire")
+          return {
+            type: "shared.response",
+            id: request.id,
+            observation: await shared.acquire(request.resource, request.lease, request.witness),
+          }
+        if (request.type === "shared.execute") {
+          const execution = SharedBrowserProtocol.fileExecution(request.resource, request.lease, request.action)
+          const file = request.files
+            ? {
+                pairs: request.files,
+                ask: (body: Parameters<NonNullable<Parameters<typeof shared.execute>[3]>["ask"]>[0]) =>
+                  new Promise<SharedBrowserProtocol.FileLeafResponse>((resolve) => {
+                    const id = randomUUID()
+                    if (!alive || sharedLeaves.size >= 8 || request.action.deadline <= Date.now()) {
+                      resolve({ type: "shared.file.leaf.response", id, error: "BROWSER_FILE_UNKNOWN" })
+                      return
+                    }
+                    shared.fileCurrent(request.resource, request.lease)
+                    const timer = setTimeout(
+                      () => {
+                        sharedLeaves.delete(id)
+                        resolve({ type: "shared.file.leaf.response", id, error: "BROWSER_FILE_UNKNOWN" })
+                      },
+                      Math.max(1, request.action.deadline - Date.now()),
+                    )
+                    sharedLeaves.set(id, (value) => {
+                      clearTimeout(timer)
+                      sharedLeaves.delete(id)
+                      resolve(value)
+                    })
+                    port.postMessage({
+                      ...body,
+                      type: "shared.file.leaf",
+                      id,
+                      executeID: request.id,
+                      actionID: request.action.actionID,
+                      binding: execution.binding,
+                      executionHash: hash(execution),
+                      commandHash: request.action.commandHash,
+                    })
+                  }),
+              }
+            : undefined
+          return {
+            type: "shared.response",
+            id: request.id,
+            ...(await shared.execute(request.resource, request.lease, request.action, file)),
+          }
+        }
+        if (request.type === "shared.close")
+          return {
+            type: "shared.response",
+            id: request.id,
+            observation: await shared.close(request.resource, request.request),
+          }
+        fail("BROWSER_DRIVER_UNAVAILABLE")
+      }
+      void dispatch().then(
+        (response) => {
+          if (alive) port.postMessage(response)
+        },
+        (error: unknown) => {
+          if (alive)
+            port.postMessage({
+              type: "shared.response",
+              id: request.id,
+              error:
+                error instanceof SharedBrowserMainError || error instanceof Failure ? error.code : "BROWSER_UNKNOWN",
+            })
+        },
+      )
       return
     }
     const message = Schema.decodeUnknownOption(BrowserProtocol.Request, { onExcessProperty: "error" })(event.data)
@@ -1238,7 +1568,26 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
   })
   port.on("close", close)
   port.start()
-  return { hostID, hostIncarnation, close }
+  return {
+    hostID,
+    hostIncarnation,
+    close,
+    registerTuiCredentials(username: string, credentialKey: Buffer, credentialBinding: string) {
+      tui.registerHost(hostIncarnation, {
+        credentialBinding,
+        verifyReady: (server) =>
+          server.username === username &&
+          !!server.password &&
+          createHmac("sha256", credentialKey)
+            .update("dac.browser.credentials.v1\0")
+            .update(CanonicalJson.stringify({ username: server.username, password: server.password }))
+            .digest("hex") === credentialBinding,
+        onState: (state) => {
+          if (alive) port.postMessage(state)
+        },
+      })
+    },
+  }
 }
 
 function documentEvent(

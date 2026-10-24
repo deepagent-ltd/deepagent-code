@@ -11,6 +11,7 @@ import { Plugin } from "../plugin"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
+import { ProviderVariants } from "@deepagent-code/core/provider-variants"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
@@ -25,7 +26,7 @@ import { EffectPromise } from "@/effect/promise"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { discoverModelsCached } from "./discovery-cache"
-import type { DiscoveredModel, ProviderDiscoveryKind } from "./model-discovery"
+import { discoveryKind, type DiscoveredModel } from "./model-discovery"
 import { buildCatalogIndex, catalogSpecFor } from "./catalog-spec"
 import { isRecord } from "@/util/record"
 import { optionalOmitUndefined } from "@deepagent-code/core/schema"
@@ -1057,7 +1058,12 @@ export function toPublicInfo(provider: Info): Info {
 }
 
 export function defaultModelIDs<T extends { models: Record<string, { id: string }> }>(providers: Record<string, T>) {
-  return mapValues(providers, (item) => sort(Object.values(item.models))[0].id)
+  return Object.fromEntries(
+    Object.entries(providers).flatMap(([id, item]) => {
+      const model = sort(Object.values(item.models))[0]
+      return model ? [[id, model.id]] : []
+    }),
+  )
 }
 
 export class ModelNotFoundError extends Schema.TaggedErrorClass<ModelNotFoundError>()("ProviderModelNotFoundError", {
@@ -1475,8 +1481,7 @@ export const layer = Layer.effect(
               const headers = provider.options?.headers as Record<string, string> | undefined
               // A key OR custom auth headers must be present; a bare baseURL can't authenticate.
               if (!apiKey && !headers) return
-              const kind: ProviderDiscoveryKind =
-                (provider.npm ?? modelsDev[providerID]?.npm) === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
+              const kind = discoveryKind(provider.npm ?? modelsDev[providerID]?.npm)
               const models = yield* discoverModelsCached(fs, flock, { providerID, baseURL, apiKey, kind, headers })
               if (!models.length) return
               discoveredModels[providerID] = Object.fromEntries(
@@ -1521,10 +1526,7 @@ export const layer = Layer.effect(
                 ...(group.options?.headers as Record<string, string> | undefined),
               }
               if (!apiKey && Object.keys(headers).length === 0) return
-              const kind: ProviderDiscoveryKind =
-                (group.npm ?? provider.npm ?? modelsDev[providerID]?.npm) === "@ai-sdk/anthropic"
-                  ? "anthropic"
-                  : "openai-compatible"
+              const kind = discoveryKind(group.npm ?? provider.npm ?? modelsDev[providerID]?.npm)
               const models = yield* discoverModelsCached(fs, flock, {
                 providerID: `${providerID}:${groupID}`,
                 baseURL,
@@ -1734,7 +1736,12 @@ export const layer = Layer.effect(
               release_date: model.release_date ?? existingModel?.release_date ?? catalogModel?.release_date ?? "",
               variants: {},
             }
-            const merged = mergeDeep(ProviderTransform.variants(parsedModel), model.variants ?? {})
+            const merged = mergeDeep(
+              ProviderTransform.variants(parsedModel),
+              mapValues(model.variants ?? {}, (options) =>
+                ProviderVariants.normalizeDeepSeekOptions(parsedModel.api.id, parsedModel.api.npm, options),
+              ),
+            )
             parsedModel.variants = mapValues(
               pickBy(merged, (v) => !v.disabled),
               (v) => omit(v, ["disabled"]),
@@ -1885,7 +1892,12 @@ export const layer = Layer.effect(
                 },
                 variants: {},
               }
-              const merged = mergeDeep(ProviderTransform.variants(parsedModel), model.variants ?? {})
+              const merged = mergeDeep(
+                ProviderTransform.variants(parsedModel),
+                mapValues(model.variants ?? {}, (options) =>
+                  ProviderVariants.normalizeDeepSeekOptions(parsedModel.api.id, parsedModel.api.npm, options),
+                ),
+              )
               parsedModel.variants = mapValues(
                 pickBy(merged, (v) => !v.disabled),
                 (v) => omit(v, ["disabled"]),
@@ -2073,7 +2085,12 @@ export const layer = Layer.effect(
 
             const configVariants = configProvider?.models?.[modelID]?.variants
             if (configVariants && model.variants) {
-              const merged = mergeDeep(model.variants, configVariants)
+              const merged = mergeDeep(
+                model.variants,
+                mapValues(configVariants, (options) =>
+                  ProviderVariants.normalizeDeepSeekOptions(model.api.id, model.api.npm, options),
+                ),
+              )
               model.variants = mapValues(
                 pickBy(merged, (v) => !v.disabled),
                 (v) => omit(v, ["disabled"]),

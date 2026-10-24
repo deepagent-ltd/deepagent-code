@@ -7,7 +7,7 @@ import { Context, Effect, Layer, RcMap, Schema } from "effect"
 import { Tool } from "@deepagent-code/core/public"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Catalog } from "@deepagent-code/core/catalog"
-import { LocationServiceMap } from "@deepagent-code/core/location-layer"
+import { LocationServiceMap, existingContext } from "@deepagent-code/core/location-layer"
 import { PluginBoot } from "@deepagent-code/core/plugin/boot"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -26,6 +26,10 @@ import { Project } from "../src/project"
 import { ProjectReference } from "../src/project-reference"
 import { LocationSearch } from "../src/location-search"
 import { ToolRegistry } from "../src/tool/registry"
+import { AgentGateway } from "../src/agent-gateway"
+import { SessionRunnerModel } from "../src/session/runner/model"
+import { SkillGuidance } from "../src/skill/guidance"
+import { SystemContextRegistry } from "../src/system-context/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
 import { Flag } from "../src/flag/flag"
 import { BuiltInTools } from "../src/tool/builtins"
@@ -79,6 +83,42 @@ describe("LocationServiceMap", () => {
       process.env.DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS = ORIGINAL_DISABLE_DEFAULT_PLUGINS
     rmSync(testHome, { recursive: true, force: true })
   })
+
+  it.live(
+    "exposes all existing context-preview services from the real Location tree without acquiring a second tree",
+    () =>
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((directory) =>
+          Effect.gen(function* () {
+            const locations = yield* LocationServiceMap
+            const ref = { directory: AbsolutePath.make(directory.path) }
+            expect(yield* existingContext(locations, ref)).toBeUndefined()
+            expect([...(yield* RcMap.keys(locations.rcMap))]).toHaveLength(0)
+            const actual = yield* locations.contextEffect(ref)
+            const captured = yield* existingContext(locations, ref)
+            expect(captured?.current()).toBe(true)
+            if (!captured) throw new Error("The existing Location context is unavailable")
+            expect(Context.get(captured.context, SessionRunnerModel.Service)).toBe(
+              Context.get(actual, SessionRunnerModel.Service),
+            )
+            expect(Context.get(captured.context, AgentV2.Service)).toBe(Context.get(actual, AgentV2.Service))
+            expect(Context.get(captured.context, ToolRegistry.Service)).toBe(Context.get(actual, ToolRegistry.Service))
+            expect(Context.get(captured.context, SystemContextRegistry.Service)).toBe(
+              Context.get(actual, SystemContextRegistry.Service),
+            )
+            expect(Context.get(captured.context, SkillGuidance.Service)).toBe(
+              Context.get(actual, SkillGuidance.Service),
+            )
+            expect(Context.get(captured.context, AgentGateway.Runtime)).toBe(Context.get(actual, AgentGateway.Runtime))
+            expect([...(yield* RcMap.keys(locations.rcMap))]).toHaveLength(1)
+          }),
+        ),
+      ),
+    15_000,
+  )
 
   it.live(
     "reuses semantic Location identity across SQL-shaped refs and invalidates the same tree",

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
 import { createStore } from "solid-js/store"
+import { createSignal } from "solid-js"
 import { GroupChatPanel } from "@/components/im/group-chat-panel"
 import { MessageItem } from "@/components/im/message-item"
 import { createIMClient, type IMClient } from "@/utils/im-client"
@@ -78,6 +79,21 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   vi.useRealTimers()
+})
+
+it("rejects a late facade response after the selected IM service changes on the same DAC server", async () => {
+  const [serviceURL, setServiceURL] = createSignal("https://first.invalid/im")
+  const client = createIMClient(() => ({ url: "http://same-dac.test", directory: "/owned", serviceURL: serviceURL() }))
+  const pending = Promise.withResolvers<Response>()
+  read = () => pending.promise
+  const observation = client.facadeStatus()
+  setServiceURL("https://second.invalid/im")
+  pending.resolve(
+    Response.json({ service: { url: "https://first.invalid/im", source: "config", reconnectRequired: false } }),
+  )
+  await expect(observation).rejects.toMatchObject({ code: "status_changed", status: 409 })
+  read = async () => Response.json({ service: { url: serviceURL(), source: "config", reconnectRequired: true } })
+  expect((await client.facadeStatus()).service?.url).toBe("https://second.invalid/im")
 })
 const refresh = () => screen.getByRole("button", { name: dict["im.transport.refresh"] })
 async function mount() {

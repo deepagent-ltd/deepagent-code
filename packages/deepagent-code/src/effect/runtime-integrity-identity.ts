@@ -139,6 +139,7 @@ const startDerivation = (slot: RootIdentitySlotService) => {
  * fabricating an identity.
  */
 export const slotResolver = (slot: RootIdentitySlotService): V2ProviderTurn.RuntimeIntegrityIdentityResolver => ({
+  current: () => slot.identity,
   resolve: () =>
     Effect.suspend(() => {
       if (slot.identity !== undefined) return Effect.succeed(slot.identity)

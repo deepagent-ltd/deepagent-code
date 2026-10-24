@@ -16,6 +16,8 @@ import { useServerManagementController } from "../dialog-select-server"
 import { DialogServerV2 } from "./dialog-server-v2"
 import { DialogConnectServer } from "./dialog-connect-server"
 import { SettingsListV2 } from "./parts/list"
+import { SettingsPage } from "./parts/page"
+import { SettingsMetadata } from "./metadata"
 import "./settings-v2.css"
 
 export const SettingsServersV2: Component = () => {
@@ -50,31 +52,25 @@ export const SettingsServersV2: Component = () => {
   }
 
   return (
-    <>
-      <div
-        class="settings-v2-tab-header settings-v2-servers-header"
-        classList={{ "settings-v2-tab-header--stacked": showSearch() }}
-      >
-        <div class="settings-v2-tab-header-row">
-          <h2 class="settings-v2-tab-title">{language.t("status.popover.tab.servers")}</h2>
-          {/* Single "Add server" entry: a menu picks either a direct HTTP server or a Server Edition
-              gateway connection — two distinct flows behind one button (no more duplicate buttons). */}
-          <MenuV2 gutter={4} modal={false} placement="bottom-start">
-            <MenuV2.Trigger as={ButtonV2} variant="ghost-muted" icon="plus">
-              {language.t("dialog.server.add.button")}
-            </MenuV2.Trigger>
-            <MenuV2.Portal>
-              <MenuV2.Content>
-                <MenuV2.Group>
-                  <MenuV2.Item onSelect={openAdd}>{language.t("dialog.server.add.menu.http")}</MenuV2.Item>
-                  <MenuV2.Item onSelect={openConnectServer}>
-                    {language.t("dialog.server.connect.button")}
-                  </MenuV2.Item>
-                </MenuV2.Group>
-              </MenuV2.Content>
-            </MenuV2.Portal>
-          </MenuV2>
-        </div>
+    <SettingsPage
+      title={language.t("status.popover.tab.servers")}
+      class="settings-v2-servers"
+      action={
+        <MenuV2 gutter={4} modal={false} placement="bottom-start">
+          <MenuV2.Trigger as={ButtonV2} variant="ghost-muted" icon="plus">
+            {language.t("dialog.server.add.button")}
+          </MenuV2.Trigger>
+          <MenuV2.Portal>
+            <MenuV2.Content>
+              <MenuV2.Group>
+                <MenuV2.Item onSelect={openAdd}>{language.t("dialog.server.add.menu.http")}</MenuV2.Item>
+                <MenuV2.Item onSelect={openConnectServer}>{language.t("dialog.server.connect.button")}</MenuV2.Item>
+              </MenuV2.Group>
+            </MenuV2.Content>
+          </MenuV2.Portal>
+        </MenuV2>
+      }
+      search={
         <Show when={showSearch()}>
           <div class="settings-v2-tab-search">
             <TextInputV2
@@ -95,63 +91,63 @@ export const SettingsServersV2: Component = () => {
                 variant="ghost-muted"
                 size="small"
                 class="settings-v2-tab-search-clear"
+                aria-label={language.t("settings.search.clear")}
                 icon={<IconV2 name="close" size="large" class="text-v2-icon-icon-muted" />}
                 onClick={() => setStore("filter", "")}
               />
             </Show>
           </div>
         </Show>
-      </div>
-
-      <div class="settings-v2-tab-body settings-v2-servers">
-        <Show
-          when={filtered().length > 0}
-          fallback={
-            <div class="settings-v2-servers-status">
-              <span>{store.filter ? language.t("palette.empty") : language.t("dialog.server.empty")}</span>
-              <Show when={store.filter}>
-                <span class="settings-v2-servers-status-filter">&quot;{store.filter}&quot;</span>
-              </Show>
-            </div>
-          }
-        >
-          <SettingsListV2>
-            <For each={filtered()}>
-              {(item) => {
-                const key = ServerConnection.key(item)
-                const health = () => controller.status()[key]
-                const isDefault = () => controller.defaultKey() === key
-                return (
-                  <div class="settings-v2-servers-row">
-                    <div class="settings-v2-servers-lead">
-                      <ServerHealthIndicator health={health()} />
-                      <div class="settings-v2-servers-copy">
-                        <span class="settings-v2-servers-name">{serverName(item)}</span>
-                        <span class="settings-v2-servers-meta">
-                          <Show when={health()?.version}>v{health()?.version}</Show>
-                          <Show when={health()?.version && item.type === "http"}> • </Show>
-                          <Show
-                            when={item.type === "http" && item.http.username}
-                            fallback={<Show when={item.type === "http"}>{language.t("server.row.noUsername")}</Show>}
-                          >
-                            {item.http.username}
-                          </Show>
-                        </span>
-                      </div>
-                    </div>
-                    <div class="settings-v2-servers-actions">
-                      <Show when={controller.canDefault() && isDefault()}>
-                        <Tag>{language.t("dialog.server.status.default")}</Tag>
-                      </Show>
-                      <ServerRowMenu server={item} controller={controller} onEdit={openEdit} />
+      }
+    >
+      <Show
+        when={filtered().length > 0}
+        fallback={
+          <div class="settings-v2-servers-status">
+            <span>{store.filter ? language.t("palette.empty") : language.t("dialog.server.empty")}</span>
+            <Show when={store.filter}>
+              <span class="settings-v2-servers-status-filter">&quot;{store.filter}&quot;</span>
+            </Show>
+          </div>
+        }
+      >
+        <SettingsListV2>
+          <For each={filtered()}>
+            {(item) => {
+              const key = ServerConnection.key(item)
+              const health = () => controller.status()[key]
+              const isDefault = () => controller.defaultKey() === key
+              return (
+                <div class="settings-v2-servers-row">
+                  <div class="settings-v2-servers-lead">
+                    <ServerHealthIndicator health={health()} />
+                    <div class="settings-v2-servers-copy">
+                      <span class="settings-v2-servers-name">{serverName(item)}</span>
+                      <SettingsMetadata title={item.http.url} value={item.http.url} />
+                      <span class="settings-v2-servers-meta">
+                        <Show when={health()?.version}>v{health()?.version}</Show>
+                        <Show when={health()?.version && item.type === "http"}> • </Show>
+                        <Show
+                          when={item.type === "http" && item.http.username}
+                          fallback={<Show when={item.type === "http"}>{language.t("server.row.noUsername")}</Show>}
+                        >
+                          {item.http.username}
+                        </Show>
+                      </span>
                     </div>
                   </div>
-                )
-              }}
-            </For>
-          </SettingsListV2>
-        </Show>
-      </div>
-    </>
+                  <div class="settings-v2-servers-actions">
+                    <Show when={controller.canDefault() && isDefault()}>
+                      <Tag>{language.t("dialog.server.status.default")}</Tag>
+                    </Show>
+                    <ServerRowMenu server={item} controller={controller} onEdit={openEdit} />
+                  </div>
+                </div>
+              )
+            }}
+          </For>
+        </SettingsListV2>
+      </Show>
+    </SettingsPage>
   )
 }

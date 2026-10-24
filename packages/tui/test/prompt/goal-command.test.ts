@@ -190,3 +190,24 @@ test("503 while only reading status has no mutation outcome and creates no retry
   expect(f.state.bodies).toHaveLength(0)
   await expect(commands.run({ ...f, command: "retry", current: () => true })).rejects.toThrow("No unconfirmed")
 })
+
+test("Goal start captures selected criteria, references and file source without implicit diagnostics", async () => {
+  const f = fixture()
+  const commands = createGoalCommands()
+  await commands.run({
+    client: f.client,
+    scope: f.scope,
+    command: "",
+    current: () => true,
+    start: {
+      criteria: [{ kind: "plan_complete" }, { kind: "tests_pass", commands: ["bun test affected.test.ts"] }],
+      codeRefs: ["src/affected.ts:12"],
+      planSource: "workspace-file",
+    },
+  })
+  expect(f.state.bodies[0]).toMatchObject({
+    codeRefs: ["src/affected.ts:12"],
+    planSource: "workspace-file",
+    criteria: [{ kind: "plan_complete" }, { kind: "tests_pass", commands: ["bun test affected.test.ts"] }],
+  })
+})

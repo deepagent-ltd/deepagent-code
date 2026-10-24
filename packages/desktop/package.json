@@ -1,7 +1,7 @@
 {
   "name": "@deepagent-code/desktop",
   "private": true,
-  "version": "2.0.4",
+  "version": "2.0.5",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://ai.deepagent.ltd",
@@ -43,6 +43,7 @@
   },
   "main": "./out/main/index.js",
   "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "@lydell/node-pty": "catalog:",
     "@zip.js/zip.js": "2.7.62",
     "effect": "catalog:",
@@ -52,7 +53,8 @@
     "electron-updater": "^6",
     "electron-window-state": "^5.0.3",
     "jsonc-parser": "3.3.1",
-    "marked": "^15"
+    "marked": "^15",
+    "quickjs-emscripten-core": "0.32.0"
   },
   "devDependencies": {
     "@actions/artifact": "4.0.0",

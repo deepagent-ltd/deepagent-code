@@ -1,8 +1,12 @@
 export * as IMKernelExchange from "./exchange"
 
 import { Effect, Option, Schema } from "effect"
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import type { KernelConfig } from "./config"
+import { Log } from "@deepagent-code/core/util/log"
+import { IMDeviceTransport } from "../device-transport"
+
+const log = Log.create({ service: "im-kernel-exchange" })
 
 // 门面 /api/im 的 typed 客户端（design §4：sk- key → 内核连接坐标）。B2 用 exchange 替换 B1 的
 // 直连 env 注入：key 已认领 ⇒ exchange 幂等地 RegisterUser + 确保加入全员群后返回内核 token；
@@ -19,6 +23,28 @@ export class ExchangeError extends Schema.TaggedErrorClass<ExchangeError>()("IMK
   retryable: Schema.Boolean,
 }) {}
 
+// Only communication calls share a wait window. A freshly resolved source has
+// a new device object; no nonce, HTTP proof or authority result is retained here.
+const rateLimits = new WeakMap<object, { realm: string; until: number }>()
+const rateLimitError = (retryAfterMs: number) =>
+  new ExchangeError({
+    code: "im_unavailable",
+    status: 429,
+    message: "The IM facade is temporarily rate limited. Retry after the server wait window.",
+    retryable: false,
+    retryAfterMs,
+  })
+const rememberRateLimit = (input: ExchangeInput, delay = 30_000) => {
+  const realm = input.facadeURL.replace(/\/+$/, "")
+  const previous = input.device ? rateLimits.get(input.device) : undefined
+  const until = Math.max(
+    previous?.realm === realm ? previous.until : 0,
+    Math.min(Number.MAX_SAFE_INTEGER, performance.now() + delay),
+  )
+  if (input.device) rateLimits.set(input.device, { realm, until })
+  return rateLimitError(Math.max(0, Math.ceil(until - performance.now())))
+}
+
 export const IdentityPayload = Schema.Struct({
   uuid: Schema.String,
   name: Schema.String,
@@ -33,6 +59,8 @@ export const ExchangePayload = Schema.Struct({
   appkey: Schema.String,
   identity: IdentityPayload,
   ttl: Schema.Struct({ msg_life_time_ms: Schema.Number }),
+  device: Schema.optional(Schema.Struct({ profile: Schema.Literal("dac-im-device-v1"), entitlementID: Schema.String,
+    deviceJkt: Schema.String, bindingVersion: Schema.Int, credentialGeneration: Schema.Int, socketAudience: Schema.String })),
 })
 export type ExchangePayload = Schema.Schema.Type<typeof ExchangePayload>
 
@@ -74,12 +102,7 @@ const Envelope = Schema.Struct({
   data: Schema.optional(Schema.Unknown),
 })
 
-export interface ExchangeInput {
-  /** 门面 base URL（如 http://127.0.0.1:3100），尾斜杠在此归一。 */
-  readonly facadeURL: string
-  /** sk- key（Bearer 头发送；门面的 TokenAuth 同时接受裸 key，Bearer 是规范形）。 */
-  readonly key: string
-}
+export type ExchangeInput = KernelConfig.FacadeSource
 
 // 门面调用的公共半：包络解包 + 业务码透传 + 按调用方给的解码器解 data（v4 Schema 的泛型签名在
 // helper 边界会丢解码类型，故传 Schema.decodeUnknownOption(<具体 schema>) 的部分应用）。各端点
@@ -93,7 +116,37 @@ const call = <A>(
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
     const path = new URL(request.url).pathname
-    const response = yield* http.execute(request).pipe(
+    const limited = input.device ? rateLimits.get(input.device) : undefined
+    if (limited?.realm === input.facadeURL.replace(/\/+$/, "") && limited.until > performance.now())
+      return yield* rateLimitError(Math.ceil(limited.until - performance.now()))
+    const authorized = input.device
+      ? yield* input.device
+          .headers({
+            method: request.method as "GET" | "POST" | "PUT" | "DELETE",
+            url: request.url,
+          })
+          .pipe(
+            Effect.mapError((error) => {
+              log.warn(
+                "IM device authorization failed",
+                IMDeviceTransport.diagnostic(error) ?? { stage: "unclassified", code: "unclassified" },
+              )
+              if (error instanceof IMDeviceTransport.Error && error.status === 429)
+                return rememberRateLimit(input, error.retryAfterMs)
+              return new ExchangeError({
+                code: "im_device_proof_invalid",
+                message: "IM device authorization is unavailable",
+                retryable: false,
+              })
+            }),
+          )
+      : undefined
+    const prepared = authorized ? HttpClientRequest.setHeaders(request, authorized) : request
+    const wire = authorized && path === "/api/im/login" ? yield* HttpClientRequest.bodyJson({ profile: input.device!.profile,
+      challengeID: authorized["X-IM-Challenge-ID"],
+    })(prepared).pipe(Effect.mapError(() => new ExchangeError({ code: "invalid_response", message: "IM login body is invalid", retryable: false }))) : prepared
+    const response = yield* http.execute(wire).pipe(
+      Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error", credentials: "omit" }),
       Effect.mapError(
         (error) =>
           new ExchangeError({
@@ -121,25 +174,7 @@ const call = <A>(
     // a known refusal, not a malformed success envelope or permission to retry
     // through the ordinary one-second transport retry schedule.
     if (response.status === 429) {
-      const hint = response.headers["retry-after"]?.trim()
-      const seconds = hint && /^\d{1,16}$/.test(hint) ? Number(hint) : undefined
-      const date =
-        hint && /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(hint)
-          ? Date.parse(hint)
-          : undefined
-      const delay =
-        seconds !== undefined
-          ? Math.min(seconds * 1000, Number.MAX_SAFE_INTEGER)
-          : date !== undefined && Number.isFinite(date)
-            ? Math.max(0, date - Date.now())
-            : undefined
-      return yield* new ExchangeError({
-        code: "im_unavailable",
-        status: 429,
-        message: "The IM facade is temporarily rate limited. Retry after the server wait window.",
-        retryable: false,
-        ...(delay !== undefined && Number.isSafeInteger(delay) ? { retryAfterMs: delay } : {}),
-      })
+      return yield* rememberRateLimit(input, IMDeviceTransport.retryAfter(response.headers["retry-after"]))
     }
     const authenticationRejected = response.status === 401 || response.status === 403
     const keyRejected = () => new ExchangeError({
@@ -189,8 +224,37 @@ const post = <A>(input: ExchangeInput, path: string, body: unknown, decode: (dat
   )
 
 /** 已认领 key → 内核连接坐标（幂等：每次调用都刷新内核 token 并自愈全员群成员关系）。 */
-export const exchange = (input: ExchangeInput) =>
-  post(input, "/api/im/login", {}, Schema.decodeUnknownOption(ExchangePayload))
+const DeviceLoginPayload = Schema.Struct({
+  profile: Schema.Literal("dac-im-device-v1"), entitlementID: Schema.String.check(Schema.isPattern(/^[a-f0-9]{32}$/)),
+  deviceJkt: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/)), bindingVersion: Schema.Int.check(Schema.isGreaterThan(0)),
+  identity: IdentityPayload,
+  kernel: Schema.Struct({ appkey: Schema.String, navigator: Schema.String, socket_audience: Schema.String, token: Schema.String.check(Schema.isPattern(/^daim2\./)),
+    user_id: Schema.String, credential_expires_at: Schema.Int, credential_generation: Schema.Int.check(Schema.isGreaterThan(0)),
+    device_profile: Schema.Literal("dac-im-device-v1"),
+  }),
+})
+
+function validSocketAudience(value: string) {
+  const url = URL.parse(value)
+  return url && !url.username && !url.password && !url.search && !url.hash && url.href === value &&
+    (url.protocol === "wss:" || url.protocol === "ws:" && ["127.0.0.1", "[::1]"].includes(url.hostname))
+}
+
+export const exchange = (input: ExchangeInput): Effect.Effect<ExchangePayload, ExchangeError, HttpClient.HttpClient> => {
+  if (!input.device) return post(input, "/api/im/login", {}, Schema.decodeUnknownOption(ExchangePayload))
+  return post(input, "/api/im/login", {}, Schema.decodeUnknownOption(DeviceLoginPayload)).pipe(Effect.flatMap((value) => {
+    const audience = validSocketAudience(value.kernel.socket_audience)
+    if (!audience || value.deviceJkt !== input.device!.deviceJkt || value.bindingVersion !== input.device!.bindingVersion ||
+      value.entitlementID !== input.device!.entitlementID || value.identity.uuid !== input.device!.uuid || value.kernel.user_id !== value.identity.uuid ||
+      value.kernel.credential_expires_at * 1000 <= Date.now())
+      return Effect.fail(new ExchangeError({ code: "invalid_response", message: "IM login binding does not match this installation", retryable: false }))
+    return Effect.succeed({ kernel_token: value.kernel.token, credential_expires_at: value.kernel.credential_expires_at,
+      navigator_url: value.kernel.navigator, appkey: value.kernel.appkey, identity: value.identity, ttl: { msg_life_time_ms: 259200000 },
+      device: { profile: value.profile, entitlementID: value.entitlementID, deviceJkt: value.deviceJkt,
+        bindingVersion: value.bindingVersion, credentialGeneration: value.kernel.credential_generation, socketAudience: value.kernel.socket_audience },
+    })
+  }))
+}
 
 /** 认领：把 IM 身份（name，org 内唯一）绑定到 key 并返回内核连接坐标。同 key 重认领幂等。 */
 export const claim = (input: ExchangeInput & { readonly name: string }) =>
@@ -198,7 +262,9 @@ export const claim = (input: ExchangeInput & { readonly name: string }) =>
 
 /** 改名：uuid/群成员关系不变，返回新的内核连接坐标（token 同样刷新）。 */
 export const rename = (input: ExchangeInput & { readonly name: string }) =>
-  post(input, "/api/im/rename", { name: input.name }, Schema.decodeUnknownOption(ExchangePayload))
+  post(input, "/api/im/rename", { name: input.name }, Schema.decodeUnknownOption(ExchangePayload)).pipe(
+    Effect.flatMap((payload) => input.device ? exchange(input) : Effect.succeed(payload)),
+  )
 
 /** 换 key 找回：把当前（auth 头）key 上的 IM 身份迁到 new_key（同 org 有效付费且未绑定）。 */
 export const rebind = (input: ExchangeInput & { readonly newKey: string }) =>

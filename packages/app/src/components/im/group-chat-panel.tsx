@@ -1,4 +1,4 @@
-import { createSignal, createEffect, createMemo, onMount, Show, For, onCleanup, untrack } from "solid-js"
+import { createSignal, createEffect, createMemo, on, onMount, Show, For, onCleanup, untrack } from "solid-js"
 import { createStore, unwrap } from "solid-js/store"
 import { Button } from "@deepagent-code/ui/button"
 import { useLanguage } from "@/context/language"
@@ -25,6 +25,8 @@ import { AttachmentPreview } from "@deepagent-code/core/im/attachment-preview"
 
 interface GroupChatPanelProps {
   groupID: string
+  messageLocation?: { messageID: string }
+  onExitLocation?: () => void
   reader?: IMReaderGroup
   protected?: boolean
   displayEpoch?: string
@@ -33,6 +35,7 @@ interface GroupChatPanelProps {
   readerUnavailable?: boolean
   name?: string
   headerOwned?: boolean
+  refreshRequest?: number
   selfMemberIDs?: readonly string[]
   senderNames?: ReadonlyMap<string, string>
   // §B3 thread — when true, clicking a message opens its reply thread. Gated by the caller on the
@@ -111,6 +114,7 @@ function GroupConversation(
     readPrepared: false,
     readReached: false,
     readResult: undefined as IMReadResult["reader"],
+    locationUnavailable: false,
   })
   const [historicalMessages, setHistoricalMessages] = createSignal<LocalMessage[]>([])
   const [agents, setAgents] = createSignal<AgentDescriptor[]>([])
@@ -121,7 +125,9 @@ function GroupConversation(
     active: false,
     pending: false,
     anchor: "",
+    refreshRevision: 0,
     disposed: false,
+    abort: new AbortController(),
     nextAt: 0,
     direct: true,
     trailing: undefined as ReturnType<typeof setTimeout> | undefined,
@@ -236,6 +242,9 @@ function GroupConversation(
     if (history.disposed || !protectedGroup()) return
     clearTrailing()
     history.generation++
+    history.abort.abort()
+    history.abort = new AbortController()
+    history.active = false
     history.pending = false
     history.anchor = ""
     if (epoch && epoch !== reader.epoch) reader.actionID = undefined
@@ -504,12 +513,31 @@ function GroupConversation(
     const current = () => !history.disposed && history.generation === generation
     const observed = new Map(historicalMessages().map((message) => [message.id, message]))
     const anchor = history.anchor
+    const refreshRevision = history.refreshRevision
     const started = performance.now()
-    if (!background) setLoading(true)
+    // Initial loading is owned by this conversation. A same-conversation seek
+    // must not unmount its composer or interrupt an attachment interaction.
     return client
-      .listMessages(groupID, 50, undefined, AbortSignal.any([requests.signal, AbortSignal.timeout(10_000)]))
+      .listMessages(
+        groupID,
+        50,
+        undefined,
+        AbortSignal.any([requests.signal, history.abort.signal, AbortSignal.timeout(10_000)]),
+        props.messageLocation?.messageID,
+      )
       .then(async (data) => {
         if (!current() || !acceptPage(data, started)) return
+        if (
+          props.messageLocation &&
+          !data.messages.some((message) => message.id === props.messageLocation!.messageID)
+        ) {
+          setHistoricalMessages([])
+          setState({ cursor: null, hasMore: false, locationUnavailable: true, failed: false })
+          result.succeeded = true
+          setLoading(false)
+          return
+        }
+        setState("locationUnavailable", false)
         const historical = [...data.messages]
         // A reconnect can span more than the newest page. Walk back to a known message
         // before merging, so realtime gaps do not become holes in the visible conversation.
@@ -525,7 +553,12 @@ function GroupConversation(
         ) {
           if (count >= 100 || !page.nextCursor) throw new Error("IM history catch-up exceeded its page budget")
           const cursor = page.nextCursor
-          page = await client.listMessages(groupID, 50, cursor, requests.signal)
+          page = await client.listMessages(
+            groupID,
+            50,
+            cursor,
+            AbortSignal.any([requests.signal, history.abort.signal]),
+          )
           if (!current()) return
           if (page.hasMore && page.nextCursor === cursor) throw new Error("IM history cursor did not advance")
           historical.push(...page.messages)
@@ -533,6 +566,8 @@ function GroupConversation(
         setHistoricalMessages((previous) => mergeIMMessages(previous, historical, "snapshot", observed))
         result.succeeded = true
         setState("failed", false)
+        // A current observation can retire an older refresh error, never a newer explicit refresh.
+        if (!state.refreshing && history.refreshRevision === refreshRevision) setState("refreshFailed", false)
         if (!background || !anchor) setState({ cursor: data.nextCursor, hasMore: data.hasMore })
         history.anchor = data.messages.at(-1)?.id ?? anchor
         setLoading(false)
@@ -545,7 +580,7 @@ function GroupConversation(
         setLoading(false)
       })
       .finally(() => {
-        if (history.disposed) return
+        if (!current()) return
         history.active = false
         if (!history.pending) return
         if (!result.succeeded && generation === history.generation) {
@@ -566,7 +601,12 @@ function GroupConversation(
     const started = performance.now()
     setState("loadingOlder", true)
     try {
-      const page = await client.listMessages(groupID, 50, cursor, requests.signal)
+      const page = await client.listMessages(
+        groupID,
+        50,
+        cursor,
+        AbortSignal.any([requests.signal, history.abort.signal]),
+      )
       if (history.disposed || history.generation !== generation || !acceptPage(page, started)) return
       if (
         page.hasMore !== (typeof page.nextCursor === "string" && page.nextCursor.length > 0) ||
@@ -587,6 +627,9 @@ function GroupConversation(
   }
   createEffect(() => {
     props.groupID
+    props.messageLocation
+    history.abort.abort()
+    history.abort = new AbortController()
     history.generation++
     clearTrailing()
     history.active = false
@@ -594,7 +637,7 @@ function GroupConversation(
     history.anchor = ""
     setHistoricalMessages([])
     setThreadRoot(null)
-    setState({ cursor: null, hasMore: false, loadingOlder: false, failed: false })
+    setState({ cursor: null, hasMore: false, loadingOlder: false, failed: false, locationUnavailable: false })
     void untrack(() => load())
   })
   createEffect(() => {
@@ -605,6 +648,7 @@ function GroupConversation(
   })
   onCleanup(() => {
     history.disposed = true
+    history.abort.abort()
     clearTrailing()
     requests.abort()
     if (reader.timer) clearTimeout(reader.timer)
@@ -754,6 +798,7 @@ function GroupConversation(
   // Only explicit refresh updates protected metadata; message observation remains read-only.
   const refreshTransport = async () => {
     if (history.disposed || state.refreshing) return
+    history.refreshRevision++
     const abort = new AbortController()
     const timeout = setTimeout(() => abort.abort(), 10_000)
     const observed = new Map(historicalMessages().map((message) => [message.id, message]))
@@ -785,6 +830,15 @@ function GroupConversation(
       if (!history.disposed) setState("refreshing", false)
     }
   }
+  createEffect(
+    on(
+      () => props.refreshRequest,
+      (request) => {
+        if (request) void refreshTransport()
+      },
+      { defer: true },
+    ),
+  )
 
   const handleTyping = (typing: boolean) => {
     send({ type: "typing", data: { groupID: props.groupID, memberID: selfMemberID(), typing } })
@@ -1099,15 +1153,17 @@ function GroupConversation(
                 </span>
               </Show>
             </div>
-            <Button
-              class="shrink-0"
-              size="small"
-              variant="ghost"
-              disabled={state.refreshing}
-              onClick={() => void refreshTransport()}
-            >
-              {state.refreshing ? language.t("im.transport.refreshing") : language.t("im.transport.refresh")}
-            </Button>
+            <Show when={!props.headerOwned}>
+              <Button
+                class="shrink-0"
+                size="small"
+                variant="ghost"
+                disabled={state.refreshing}
+                onClick={() => void refreshTransport()}
+              >
+                {state.refreshing ? language.t("im.transport.refreshing") : language.t("im.transport.refresh")}
+              </Button>
+            </Show>
           </div>
           <Show when={protectedGroup()}>
             <div class="flex items-center gap-2 flex-wrap mt-1">
@@ -1235,7 +1291,22 @@ function GroupConversation(
           </div>
         </Show>
 
+        <Show when={props.messageLocation}>
+          <div class="flex items-center justify-between gap-2 px-3 py-2" role="status">
+            <span class="text-12-regular text-text-weak">
+              {language.t(
+                state.locationUnavailable ? "im.message.location.unavailable" : "im.message.location.context",
+              )}
+            </span>
+            <Button size="small" variant="ghost" onClick={() => props.onExitLocation?.()}>
+              {language.t("im.message.location.latest")}
+            </Button>
+          </div>
+        </Show>
         <MessageList
+          focusMessageID={
+            !state.locationUnavailable && !state.readerUnavailable ? props.messageLocation?.messageID : undefined
+          }
           mediaEnabled={props.fileUploadEnabled}
           messages={allMessages()}
           agentStatuses={agentStatuses()}

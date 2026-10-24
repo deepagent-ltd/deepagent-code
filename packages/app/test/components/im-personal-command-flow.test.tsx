@@ -66,7 +66,12 @@ vi.mock("@deepagent-code/ui/context/dialog", async (original) => {
 vi.mock("@deepagent-code/ui/dialog", () => ({
   Dialog: (props: { children: JSX.Element }) => <div data-testid="private-editor">{props.children}</div>,
 }))
-vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
+vi.mock("@/context/language", () => ({
+  useLanguage: () => ({
+    t: (key: keyof typeof dict, values?: Record<string, string | number>) =>
+      dict[key].replace(/\{\{(\w+)\}\}/g, (all, name) => (values?.[name] === undefined ? all : String(values[name]))),
+  }),
+}))
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
@@ -188,7 +193,7 @@ it("a changed placement or a remote owner never navigates or submits a replaceme
   expect(runtime.navigate).not.toHaveBeenCalled()
 })
 
-function panel() {
+function panel(scopeOverride?: IMClient["scope"]) {
   const api = client()
   const scope = { directory: "/owned/project", url: "http://127.0.0.1:4096" }
   const group = {
@@ -205,7 +210,7 @@ function panel() {
   }
   runtime.im = {
     ...api,
-    scope: () => scope,
+    scope: scopeOverride ?? (() => scope),
     facadeStatus: async () => ({
       facade: "active",
       identity: { uuid: "viewer", name: "Viewer", orgID: 1, orgAllGroupID: "all" },
@@ -213,6 +218,9 @@ function panel() {
       kernel: "connected",
       keyOrigin: "stored",
       reader: { state: "ready", displayEpoch: "current", legacyMirrorUnavailable: false },
+      ...(scopeOverride
+        ? { service: { url: scopeOverride().serviceURL ?? null, source: "config", reconnectRequired: false } }
+        : {}),
     }),
     listGroupPage: async (lane: "ordinary" | "protected") => ({
       version: 1,
@@ -233,6 +241,42 @@ function panel() {
   ))
   return api
 }
+
+it("starts a new private invocation after service settings change and rejects the retired scope's late result", async () => {
+  const [service, setService] = createSignal<string>()
+  const actual = await vi.importActual<typeof import("@/utils/im-client")>("@/utils/im-client")
+  const scoped = actual.createIMClient(() => ({
+    url: "http://127.0.0.1:4096",
+    directory: "/owned/project",
+    serviceURL: service(),
+  }))
+  const api = panel(scoped.scope)
+  await screen.findByRole("button", { name: /Peer/ })
+  setService("https://first-realm.invalid/im")
+  fireEvent.click(await screen.findByRole("button", { name: /Peer/ }))
+  const first = await screen.findByRole("textbox", { name: dict["im.composer.placeholder"] })
+  const stale = Promise.withResolvers<DacCommand>()
+  api.dacSubmit.mockReturnValueOnce(stale.promise)
+  fireEvent.input(first, { target: { value: "/dac First realm request" } })
+  fireEvent.keyDown(first, { key: "Enter" })
+  await waitFor(() => expect(api.dacSubmit).toHaveBeenCalledTimes(1))
+  expect(runtime.navigate).not.toHaveBeenCalled()
+  fireEvent.keyDown(window, { key: "Escape" })
+  await waitFor(() => expect(screen.queryByTestId("private-editor")).toBeNull())
+  setService("https://second-realm.invalid/im")
+  fireEvent.click(await screen.findByRole("button", { name: /Peer/ }))
+  const second = await screen.findByRole("textbox", { name: dict["im.composer.placeholder"] })
+  fireEvent.input(second, { target: { value: "/dac Second realm request" } })
+  fireEvent.keyDown(second, { key: "Enter" })
+  await waitFor(() => expect(api.dacSubmit).toHaveBeenCalledTimes(2))
+  await waitFor(() => expect(runtime.navigate).toHaveBeenCalledTimes(1))
+  stale.resolve({ ...command, commandID: api.dacSubmit.mock.calls[0][1].commandID, sessionID: "retired-session" })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(runtime.navigate).toHaveBeenCalledTimes(1)
+  expect(runtime.navigate.mock.calls[0][0]).toContain("real-session")
+  expect(api.dacSubmit).toHaveBeenCalledTimes(2)
+  expect(api.dacSubmit.mock.calls[1][1].text).toBe(" Second realm request")
+})
 
 it("reopens the actual panel editor for a new invocation in the same conversation after its first navigation", async () => {
   const api = panel()
@@ -527,4 +571,115 @@ it("cold recent commands cannot replace an unknown admission or dispatch its sav
   expect(draft.state.reference?.content).toBe("Private quote")
   expect(api.dacSubmit).not.toHaveBeenCalled()
   expect(api.dacReplyRetry).not.toHaveBeenCalled()
+})
+
+it("hides the embedded flow return while retaining its status and original-command check", async () => {
+  const api = client()
+  const draft = createDacDraft()
+  const original: DacCommand = {
+    ...command,
+    activityID: "real-activity",
+    finalMessageID: "real-final",
+    replyStatus: "unknown",
+  }
+  draft.setState("command", original)
+  api.dacBinding.mockResolvedValue({
+    ...binding,
+    sessionID: command.sessionID,
+    bindingID: command.bindingID,
+  })
+  api.dacCommand.mockResolvedValue(original)
+  runtime.actualDialogs = true
+  render(() => (
+    <DialogProvider>
+      <PersonalCommandFlow
+        client={api}
+        groupID="conversation"
+        draft={draft}
+        autoSubmit={false}
+        showReturn={false}
+        active={() => true}
+        bookmark={vi.fn()}
+        onClose={vi.fn()}
+      />
+    </DialogProvider>
+  ))
+  fireEvent.click((await screen.findAllByRole("button", { name: dict["im.dac.open"] })).at(-1)!)
+  await waitFor(() => expect(screen.queryByTestId("private-editor")).toBeNull())
+  await screen.findByText(dict["im.dac.reply.unknown"])
+  expect(screen.queryByRole("button", { name: dict["im.dac.returnToChat"] })).toBeNull()
+  const checks = api.dacCommand.mock.calls.length
+  fireEvent.click(screen.getByRole("button", { name: dict["im.dac.check"] }))
+  await waitFor(() => expect(api.dacCommand).toHaveBeenCalledTimes(checks + 1))
+  expect(api.dacCommand).toHaveBeenCalledWith("conversation", original.commandID, expect.any(AbortSignal))
+  expect(screen.getByText(dict["im.dac.reply.unknown"])).toBeTruthy()
+  expect(api.dacSubmit).not.toHaveBeenCalled()
+  expect(api.dacReplyRetry).not.toHaveBeenCalled()
+})
+
+it("explicit receipt reconciliation presents partial parts and never resends or accepts a late scope", async () => {
+  const original = client()
+  const pending: {
+    resolve?: (
+      value: import("@deepagent-code/core/im/dac-session.schema").IMDacSessionSchema.ReplyReconcileResponse,
+    ) => void
+  } = {}
+  const api = {
+    ...original,
+    dacReplyReconcile: vi.fn(
+      async (_group: string, _command: string, _cursor: string | undefined, _signal: AbortSignal) => {
+        return await new Promise<
+          import("@deepagent-code/core/im/dac-session.schema").IMDacSessionSchema.ReplyReconcileResponse
+        >((resolve) => {
+          pending.resolve = resolve
+        })
+      },
+    ),
+  }
+  const draft = await finalReply(api)
+  draft.setState("command", { ...draft.state.command!, replyStatus: "unknown" })
+  expect(api.dacReplyReconcile).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole("button", { name: dict["im.dac.reply.reconcile"] }))
+  expect(api.dacReplyReconcile).toHaveBeenCalledExactlyOnceWith(
+    "conversation",
+    command.commandID,
+    undefined,
+    expect.any(AbortSignal),
+  )
+  const partial = {
+    version: 1 as const,
+    command: { ...draft.state.command! },
+    state: "partial" as const,
+    totalParts: 3,
+    confirmedParts: 1,
+    unconfirmedParts: 2,
+    activeParts: 0,
+    parts: [],
+    hasMore: true,
+    nextCursor: "original-cursor",
+  }
+  pending.resolve!(partial)
+  await screen.findByText("Original parts confirmed by server: 1 / 3")
+  expect(draft.state.command?.replyStatus).toBe("unknown")
+  fireEvent.click(screen.getByRole("button", { name: dict["im.dac.reply.reconcileMore"] }))
+  expect(api.dacReplyReconcile).toHaveBeenLastCalledWith(
+    "conversation",
+    command.commandID,
+    "original-cursor",
+    expect.any(AbortSignal),
+  )
+  runtime.serverScope = {}
+  pending.resolve!({
+    ...partial,
+    state: "confirmed_acceptance",
+    confirmedParts: 3,
+    unconfirmedParts: 0,
+    hasMore: false,
+    nextCursor: null,
+    command: { ...partial.command, replyStatus: "delivered" },
+  })
+  await Promise.resolve()
+  expect(draft.state.command?.replyStatus).toBe("unknown")
+  expect(api.dacReplyRetry).not.toHaveBeenCalled()
+  expect(api.dacSubmit).not.toHaveBeenCalled()
 })

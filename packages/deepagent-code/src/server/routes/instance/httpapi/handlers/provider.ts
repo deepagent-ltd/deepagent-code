@@ -4,7 +4,7 @@ import { Config } from "@/config/config"
 import { Env } from "@/env"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { Provider } from "@/provider/provider"
-import { discoverWithProtocol, isChatModel, normalizeBaseURL } from "@/provider/model-discovery"
+import { discoverWithProtocol, discoveryKind, isChatModel, normalizeBaseURL } from "@/provider/model-discovery"
 import { discoverModelsCached } from "@/provider/discovery-cache"
 import { buildCatalogIndex, projectSpec, specMatchFor } from "@/provider/catalog-spec"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -17,6 +17,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { ProviderAuthApiError, ProviderModelDiscoverError, ProviderModelRefreshError } from "../groups/provider"
 import { OFFICIAL_PROVIDER_ID_SET, ProviderV2 } from "@deepagent-code/core/provider"
+import { providerPreset } from "@deepagent-code/core/provider-presets"
 
 function mapProviderAuthError<A, R>(self: Effect.Effect<A, ProviderAuth.Error, R>) {
   return self.pipe(
@@ -86,12 +87,34 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       } catch {
         return yield* Effect.fail(new ProviderModelDiscoverError({ message: "Invalid provider baseURL" }))
       }
+      const preset = providerPreset(providerID)
+      if (preset && baseURL !== normalizeBaseURL(preset.api))
+        return yield* new ProviderModelDiscoverError({
+          message: "Provider discovery must use its configured product endpoint",
+        })
+      if (ctx.payload.authProviderID?.trim() && ctx.payload.authProviderID.trim() !== providerID)
+        return yield* new ProviderModelDiscoverError({
+          message: "Provider discovery cannot reuse another provider's credential",
+        })
 
       const apiKey = yield* Effect.gen(function* () {
         const inlineKey = ctx.payload.apiKey?.trim()
         if (inlineKey) return inlineKey
-        const authID = ctx.payload.authProviderID?.trim() || providerID
-        const stored = yield* authSvc.get(authID).pipe(Effect.orDie)
+        if (!preset) {
+          const configured = (yield* cfg.get()).provider?.[providerID]?.options?.baseURL
+          const saved =
+            typeof configured === "string"
+              ? yield* Effect.try({
+                  try: () => normalizeBaseURL(configured),
+                  catch: () => new ProviderModelDiscoverError({ message: "Invalid saved provider endpoint" }),
+                })
+              : undefined
+          if (saved !== baseURL)
+            return yield* new ProviderModelDiscoverError({
+              message: "Stored credential discovery requires the saved provider endpoint",
+            })
+        }
+        const stored = yield* authSvc.get(providerID).pipe(Effect.orDie)
         if (stored?.type === "api") return stored.key
         return undefined
       })
@@ -105,7 +128,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
             providerID,
             baseURL,
             apiKey,
-            kind: ctx.payload.kind,
+            kind: ctx.payload.kind ?? (preset ? discoveryKind(preset.npm) : undefined),
             headers: ctx.payload.headers,
           }),
         catch: (error) =>
@@ -125,9 +148,11 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       })
 
       const requested = ctx.payload.modelID?.trim()
-      const selected = requested
-        ? (selectable.find((model) => model.id === requested) ?? { id: requested, name: requested })
-        : selectable[0]
+      const selected = requested ? selectable.find((model) => model.id === requested) : selectable[0]
+      if (!selected)
+        return yield* new ProviderModelDiscoverError({
+          message: "The requested model was not returned by the provider",
+        })
 
       return { providerID, baseURL, kind: result.kind, models: selectable, selected }
     })
@@ -137,7 +162,9 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
     }) {
       const providerID = ctx.params.providerID
       if (OFFICIAL_PROVIDER_ID_SET.has(providerID)) {
-        yield* modelsDev.refresh(true)
+        yield* modelsDev
+          .refresh(true)
+          .pipe(Effect.mapError((error) => new ProviderModelRefreshError({ message: error.message })))
         yield* provider.reload()
         // D2: renamed catalog entries re-home under their official id inside ModelsDev's merge,
         // so the plain official-id lookup below sees the bridged entry.
@@ -194,8 +221,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
                 message: `${target.id} is missing discovery credentials`,
               })
             }
-            const kind =
-              (target.npm ?? catalog[providerID]?.npm) === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
+            const kind = discoveryKind(target.npm ?? catalog[providerID]?.npm)
             const models = yield* discoverModelsCached(
               fs,
               flock,

@@ -27,14 +27,25 @@ export const windowsStorageLayer = Layer.effectContext(Effect.gen(function* () {
   const { WindowsSettingsStorage } = yield* Effect.promise(() => import("@/installation/windows-settings-storage"))
   const { NativeWindowsWorkFactory } = yield* Effect.promise(() => import("@/installation/windows-work-factory"))
   const { WindowsWorkCommandRuntime } = yield* Effect.promise(() => import("@/installation/windows-work-command-runtime"))
+  const { WindowsPrivateStorage } = yield* Effect.promise(() => import("@/installation/windows-private-storage"))
+  const { McpWindowsStorage } = yield* Effect.promise(() => import("@/mcp/windows-storage"))
   const { Global } = yield* Effect.promise(() => import("@deepagent-code/core/global"))
   if (!(yield* NativeWindowsBootstrap.Registered)) return Context.empty()
   const bootstrap = yield* NativeWindowsBootstrap.make(yield* NativeInstallation.current())
   const native = Context.make(NativeWindowsBootstrap.Service, bootstrap)
   const settings = yield* Layer.build(WindowsSettingsStorage.layer.pipe(
     Layer.provide(Layer.succeed(NativeWindowsBootstrap.Service, bootstrap))))
+  // Only this trusted startup phase may create the fixed new private MCP
+  // directory. Ordinary reads/writes never prepare or adopt existing custody.
+  // A refused MCP-only store does not prevent unrelated Desktop use.
+  yield* WindowsPrivateStorage.make("mcp_secret_envelopes", true).pipe(Effect.asVoid, Effect.scoped,
+    Effect.provideService(NativeWindowsBootstrap.Service, bootstrap),
+    Effect.catchTag("WindowsPrivateStorageError", () => Effect.void))
   const work = yield* Layer.build(NativeWindowsWorkFactory.layer.pipe(
     Layer.provide(Layer.succeed(NativeWindowsBootstrap.Service, bootstrap))))
+  const mcp = yield* Layer.build(McpWindowsStorage.layer.pipe(
+    Layer.provide(Layer.succeed(NativeWindowsBootstrap.Service, bootstrap)),
+    Layer.provide(Layer.succeedContext(work))))
   const images = yield* Layer.build(NativeWindowsWorkFactory.imageRegistry.pipe(Layer.provide(Layer.succeedContext(work))))
   const workspace = yield* Layer.build(WindowsWorkCommandRuntime.layer.pipe(
     Layer.provide(Layer.succeedContext(work)), Layer.provide(Global.defaultLayer)))
@@ -47,7 +58,7 @@ export const windowsStorageLayer = Layer.effectContext(Effect.gen(function* () {
     return yield* Layer.build(WindowsWorkCommandCustody.layer.pipe(
       Layer.provide(Layer.succeedContext(ports)), Layer.provide(Database.defaultLayer)))
   })
-  return Context.merge(Context.merge(native, settings), Context.merge(ports, Context.merge(images, custody)))
+  return Context.merge(Context.merge(Context.merge(native, settings), mcp), Context.merge(ports, Context.merge(images, custody)))
 }))
 
 // Both production roots must use these exact Layer objects. Effect memoizes by Layer identity,

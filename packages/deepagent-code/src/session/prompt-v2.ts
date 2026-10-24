@@ -566,6 +566,10 @@ export const layer = Layer.effect(
       // admission the old guard protected lives in the HTTP prepare handler, which skips it under
       // the profile; V2 prompt idempotency is carried by the SessionV2 messageID instead. The
       // LEGACY-EXECUTION-ZERO firewall does not apply (D2 classification: auxiliary_ai_call).
+      // In V2 these files remain preparation/audit snapshots: draft_ready or confirmed_at:null
+      // does not override the original admitted Session input. confirmed_draft_id links that
+      // input to its reviewed draft; metadata and old file state grant no execution authority.
+      // Preserve historical file bytes rather than backfilling confirmation from a projection.
       const ctx = yield* InstanceState.context
       const home = new AgentGateway.DeepAgentWorkspace.DeepAgentCodeHome(Global.Path.agent.data)
       const sessionPath = home.ensureSession(projectIDForDirectory(ctx.directory), input.sessionID)

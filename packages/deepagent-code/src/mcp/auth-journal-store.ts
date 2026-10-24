@@ -11,6 +11,9 @@ import {
 } from "node:fs"
 import path from "node:path"
 import { Schema } from "effect"
+import { Global } from "@deepagent-code/core/global"
+import type { McpWindowsStorage } from "./windows-storage"
+import { WindowsPrivateStorage } from "@/installation/windows-private-storage"
 import { McpAuthJournalSchema } from "./auth-journal-schema"
 
 type Value = string | number | null
@@ -43,53 +46,29 @@ const expected = new Map(
 
 /** No business Root or migration lease is opened. Each operation uses SQLite's
  * actual transaction lock; an expiring filesystem heartbeat is not its CAS. */
-export async function open(file: string, installationTag: string, mode: "read" | "write"): Promise<Store | undefined> {
+export async function open(file: string, installationTag: string, mode: "read" | "write", native?: McpWindowsStorage.Port): Promise<Store | undefined> {
   if (!Schema.is(McpAuthJournalSchema.Tag)(installationTag)) throw new McpAuthJournalSchema.Error("invalid")
-  if (process.platform === "win32" || !process.getuid) throw new McpAuthJournalSchema.Error("unavailable")
-  const parent = path.dirname(file)
-  if (mode === "write") mkdirSync(parent, { recursive: true, mode: 0o700 })
-  const directory = observe(parent, "directory")
-  if (!directory) {
-    if (mode === "read") return undefined
-    throw new McpAuthJournalSchema.Error("unavailable")
-  }
-  const descriptor = openDescriptor(file, mode)
-  if (descriptor === undefined) return undefined
-  const opened = fstatSync(descriptor)
+  const custody = process.platform === "win32" ? await openWindows(file, mode, native) : openPosix(file, mode)
+  if (!custody) return undefined
   let database: Database | undefined
   const lifetime = { closed: false }
   const secure = () => {
     if (lifetime.closed) throw new McpAuthJournalSchema.Error("unavailable")
-    const actual = observe(file, "file")
-    const currentDirectory = observe(parent, "directory")
-    const fd = fstatSync(descriptor)
-    if (
-      !actual ||
-      !currentDirectory ||
-      !sameIdentity(actual, opened) ||
-      !sameIdentity(actual, fd) ||
-      !sameIdentity(currentDirectory, directory, false) ||
-      realpathSync(parent) !== parent ||
-      realpathSync(file) !== file
-    )
-      throw new McpAuthJournalSchema.Error("changed")
-    if (fd.size > McpAuthJournalSchema.LIMITS.pageBytes * McpAuthJournalSchema.LIMITS.maxPages)
-      throw new McpAuthJournalSchema.Error("capacity")
-    // DELETE journaling is fixed. Never open an attacker-selected sidecar or
-    // silently adopt a store that another runtime changed to WAL.
-    for (const suffix of ["-journal", "-wal", "-shm"]) {
-      const sidecar = observe(`${file}${suffix}`, "file")
-      if (sidecar && suffix !== "-journal") throw new McpAuthJournalSchema.Error("invalid")
-      if (
-        sidecar &&
-        sidecar.size > McpAuthJournalSchema.LIMITS.pageBytes * McpAuthJournalSchema.LIMITS.maxPages + 1048576
-      )
-        throw new McpAuthJournalSchema.Error("capacity")
-    }
+    custody.secure()
+  }
+  const close = () => {
+    if (lifetime.closed) return
+    lifetime.closed = true
+    try { database?.close() }
+    finally { custody.close() }
   }
   try {
+    custody.bindClose?.(close)
     secure()
     const { PrivateSqlite } = await import("@deepagent-code/core/database/private-sqlite")
+    // Root may retire while the driver module is loading. Never construct a new
+    // connection after its original native custody has already been released.
+    secure()
     database = new PrivateSqlite.Database(file, {
       readonly: mode === "read",
       readwrite: mode === "write",
@@ -140,13 +119,7 @@ export async function open(file: string, installationTag: string, mode: "read" |
         secure()
         progress.commit = true
         db.exec("COMMIT")
-        fsyncSync(descriptor)
-        const parentDescriptor = openSync(parent, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-        try {
-          fsyncSync(parentDescriptor)
-        } finally {
-          closeSync(parentDescriptor)
-        }
+        custody.afterCommit(true)
       } catch (error) {
         rollback(db)
         if (progress.commit) {
@@ -196,6 +169,7 @@ export async function open(file: string, installationTag: string, mode: "read" |
           secure()
           progress.commit = true
           db.exec("COMMIT")
+          custody.afterCommit(false)
           secure()
           return result
         } catch (error) {
@@ -204,20 +178,79 @@ export async function open(file: string, installationTag: string, mode: "read" |
           throw safeError(error)
         }
       },
-      close: () => {
-        if (lifetime.closed) return
-        lifetime.closed = true
-        try {
-          db.close()
-        } finally {
-          closeSync(descriptor)
-        }
-      },
+      close,
     }
   } catch (error) {
-    database?.close()
-    closeSync(descriptor)
+    close()
     throw safeError(error)
+  }
+}
+
+type Custody = {
+  secure: () => void
+  afterCommit: (initial: boolean) => void
+  close: () => void
+  bindClose?: (close: () => void) => void
+}
+async function openWindows(file: string, mode: "read" | "write", native: McpWindowsStorage.Port | undefined): Promise<Custody | undefined> {
+  if (!native || file !== path.join(Global.Path.config, "mcp-oauth", "journal.sqlite"))
+    throw new McpAuthJournalSchema.Error("unavailable")
+  try {
+    const lease = await native.openJournal(mode)
+    return lease && { secure: lease.current, afterCommit: () => lease.flush(), close: lease.close, bindClose: lease.bindClose }
+  } catch (error) { throw safeError(error) }
+}
+function openPosix(file: string, mode: "read" | "write"): Custody | undefined {
+  if (!process.getuid) throw new McpAuthJournalSchema.Error("unavailable")
+  const parent = path.dirname(file)
+  if (mode === "write") mkdirSync(parent, { recursive: true, mode: 0o700 })
+  const directory = observe(parent, "directory")
+  if (!directory) {
+    if (mode === "read") return undefined
+    throw new McpAuthJournalSchema.Error("unavailable")
+  }
+  const descriptor = openDescriptor(file, mode)
+  if (descriptor === undefined) return undefined
+  const opened = fstatSync(descriptor)
+  const lifetime = { closed: false }
+  const secure = () => {
+    if (lifetime.closed) throw new McpAuthJournalSchema.Error("unavailable")
+    const actual = observe(file, "file")
+    const currentDirectory = observe(parent, "directory")
+    const fd = fstatSync(descriptor)
+    if (
+      !actual ||
+      !currentDirectory ||
+      !sameIdentity(actual, opened) ||
+      !sameIdentity(actual, fd) ||
+      !sameIdentity(currentDirectory, directory, false) ||
+      realpathSync(parent) !== parent ||
+      realpathSync(file) !== file
+    )
+      throw new McpAuthJournalSchema.Error("changed")
+    if (fd.size > McpAuthJournalSchema.LIMITS.pageBytes * McpAuthJournalSchema.LIMITS.maxPages)
+      throw new McpAuthJournalSchema.Error("capacity")
+    // DELETE journaling is fixed. Never open an attacker-selected sidecar or
+    // silently adopt a store that another runtime changed to WAL.
+    for (const suffix of ["-journal", "-wal", "-shm"]) {
+      const sidecar = observe(`${file}${suffix}`, "file")
+      if (sidecar && suffix !== "-journal") throw new McpAuthJournalSchema.Error("invalid")
+      if (
+        sidecar &&
+        sidecar.size > McpAuthJournalSchema.LIMITS.pageBytes * McpAuthJournalSchema.LIMITS.maxPages + 1048576
+      )
+        throw new McpAuthJournalSchema.Error("capacity")
+    }
+  }
+  return {
+    secure,
+    afterCommit: (initial) => {
+      if (!initial) return
+      fsyncSync(descriptor)
+      const parentDescriptor = openSync(parent, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+      try { fsyncSync(parentDescriptor) } finally { closeSync(parentDescriptor) }
+    },
+    close: () => { if (lifetime.closed) return; lifetime.closed = true; closeSync(descriptor) },
   }
 }
 
@@ -408,7 +441,8 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 function safeError(error: unknown) {
-  return error instanceof McpAuthJournalSchema.Error ? error : new McpAuthJournalSchema.Error("unavailable")
+  return error instanceof McpAuthJournalSchema.Error ? error : new McpAuthJournalSchema.Error(
+    error instanceof WindowsPrivateStorage.Error ? error.reason : "unavailable")
 }
 
 export * as McpAuthJournalStore from "./auth-journal-store"

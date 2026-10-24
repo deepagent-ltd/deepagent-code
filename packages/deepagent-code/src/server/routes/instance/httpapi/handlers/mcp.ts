@@ -4,7 +4,6 @@ import { CorsConfig, type CorsOptions } from "@/server/cors"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { MCP } from "@/mcp"
 import { Config } from "@/config/config"
-import { Global } from "@deepagent-code/core/global"
 import { McpAppResource } from "@/mcp/app-resource"
 import { McpAppInvocationSchema } from "@deepagent-code/core/session/mcp-app-invocation.schema"
 import { McpReadModel } from "@/mcp/read-model"
@@ -306,7 +305,7 @@ export const mcpHandlersBase = HttpApiBuilder.group(InstanceHttpApi, "mcp", (han
         return yield* new ServiceUnavailableError({ message: "Scoped MCP configuration removal is unavailable" })
       const original = yield* config.mcpSnapshot()
       if (Object.hasOwn(original.config.mcp ?? {}, ctx.params.name)) {
-        if (original.config.mcp_origins?.[ctx.params.name] !== Global.Path.config)
+        if (original.config.mcp_origins?.[ctx.params.name] !== Config.globalConfigFile())
           return yield* new ConfigRemovalError({ code: "readonly", error: "This MCP server is supplied by another configuration source; remove it at that source." })
         yield* mcp.disconnectForRemoval(ctx.params.name).pipe(
           Effect.catchTag("MCP.RemovalCloseError", () => Effect.fail(new ConfigRemovalError({

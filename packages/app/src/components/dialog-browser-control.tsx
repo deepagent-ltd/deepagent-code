@@ -1,7 +1,6 @@
-import { createEffect, For, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, onCleanup, onMount, Show } from "solid-js"
 import { createStore, type SetStoreFunction, type Store } from "solid-js/store"
 import { Button } from "@deepagent-code/ui/button"
-import { Checkbox } from "@deepagent-code/ui/checkbox"
 import { Dialog } from "@deepagent-code/ui/dialog"
 import { TextField } from "@deepagent-code/ui/text-field"
 import { SelectV2 } from "@deepagent-code/ui/v2/select-v2"
@@ -10,11 +9,16 @@ import { useSDK } from "@/context/sdk"
 import { useLanguage } from "@/context/language"
 import type { DeepAgentCodeClient } from "@deepagent-code/sdk"
 import { BrowserFileExchange } from "./browser-file-exchange"
+import { SharedBrowserCreate } from "./shared-browser-create"
+import type { SharedBrowserPlatform } from "@/context/platform"
+import {
+  BrowserScriptGrantEditor,
+  prepareBrowserScriptGrant,
+  type BrowserScriptGrantDraft,
+  type BrowserValidationScript,
+} from "./browser-script-grant"
 
-const programOperations = ["fill", "select", "click", "press", "scroll", "drag"] as const
-type ProgramOperation = typeof programOperations[number]
-export type BrowserValidationScript = { source: string; argsJSON: string; scriptHash: string; argsHash: string;
-  mode?: "program"; operations?: ProgramOperation[]; maxSteps?: number }
+export type { BrowserValidationScript } from "./browser-script-grant"
 type State = {
   owner: string
   durationMinutes: 5 | 15 | 30
@@ -28,13 +32,14 @@ type State = {
   source: string
   argsJSON: string
   scriptMode: "readonly" | "program"
-  programOperations: ProgramOperation[]
+  programOperations: BrowserScriptGrantDraft["programOperations"]
   programSteps: string
   clipboard: "off" | "read" | "write" | "both"
   script?: BrowserValidationScript
   controlID: string
   busy: boolean
   error: string
+  sharedOpen?: boolean
   request?: Parameters<DeepAgentCodeClient["browser"]["create"]>[0]["body"]
   requestUnknown?: boolean
   cancellation?: Parameters<DeepAgentCodeClient["browser"]["cancel"]>[0]
@@ -46,7 +51,12 @@ const controls = new WeakMap<object, Map<string, [Store<State>, SetStoreFunction
 // The native confirmation gate is under verification; new controls omit this grant.
 const clipboardAvailable = false
 
-export function DialogBrowserControl(props: { sessionID: string; onUse: (controlID: string, script?: BrowserValidationScript) => void }) {
+export function DialogBrowserControl(props: {
+  sessionID: string
+  onUse: (controlID: string, script?: BrowserValidationScript) => void
+  sharedBrowser?: SharedBrowserPlatform
+  onSharedUse?: (resourceID: string) => void
+}) {
   const sdk = useSDK()
   const language = useLanguage()
   const dialog = useDialog()
@@ -137,23 +147,13 @@ export function DialogBrowserControl(props: { sessionID: string; onUse: (control
     run(async () => {
       if (!state.request) {
         if (entries.size >= 64 && !entries.has(key)) throw new Error(text("capacity"))
-        const input = { source: state.profile === "local" ? state.source : "", argsJSON: state.profile === "local" ? state.argsJSON : "null" }
-        if (!input.source.isWellFormed() || !input.argsJSON.isWellFormed()) throw new Error(text("scriptInvalid"))
-        const bytes = [new TextEncoder().encode(input.source), new TextEncoder().encode(input.argsJSON)]
-        if (bytes.some((value) => value.byteLength > 8192)) throw new Error(text("scriptInvalid"))
-        const script = input.source ? await (async () => {
-          const { Option, Schema } = await import("effect")
-          if (Option.isNone(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(input.argsJSON)))
-            throw new Error(text("scriptInvalid"))
-          const hashes = await Promise.all(bytes.map((value) => crypto.subtle.digest("SHA-256", value)))
-          const maxSteps = Number(state.programSteps)
-          if (state.scriptMode === "program" && (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > 16 ||
-            !state.programOperations.length)) throw new Error(text("program.invalid"))
-          return { ...input,
-            scriptHash: Array.from(new Uint8Array(hashes[0])).map((value) => value.toString(16).padStart(2, "0")).join(""),
-            argsHash: Array.from(new Uint8Array(hashes[1])).map((value) => value.toString(16).padStart(2, "0")).join(""),
-            ...(state.scriptMode === "program" ? { mode: "program" as const, operations: [...state.programOperations], maxSteps } : {}) }
-        })() : undefined
+        const script = await prepareBrowserScriptGrant({
+          source: state.profile === "local" ? state.source : "",
+          argsJSON: state.profile === "local" ? state.argsJSON : "null",
+          scriptMode: state.scriptMode,
+          programOperations: [...state.programOperations],
+          programSteps: state.programSteps,
+        }, { script: text("scriptInvalid"), program: text("program.invalid") })
         if (!current()) return
         const fields = {
           requestID: crypto.randomUUID(),
@@ -246,8 +246,8 @@ export function DialogBrowserControl(props: { sessionID: string; onUse: (control
   onMount(() => {
     if (state.controlID) void refresh()
   })
-  return (
-    <Dialog title={text("title")}>
+  const legacy = () => (
+    <>
       <div class="flex min-h-0 w-[520px] max-w-[calc(100vw-32px)] flex-col gap-4 overflow-y-auto px-6 pb-6">
         <p class="text-13-regular text-text-weak">{text("description")}</p>
         <Show when={!state.view}>
@@ -320,30 +320,8 @@ export function DialogBrowserControl(props: { sessionID: string; onUse: (control
             current={state.clipboard} label={(value) => text(`clipboard.${value}`)}
             disabled={state.busy || !!state.request} onSelect={(value) => { if (value) setState("clipboard", value) }} />
             <p class="text-13-regular text-text-weak">{text("clipboard.hint")}</p></div></Show>
-          <div class="flex flex-col gap-2">
-            <span id={`browser-script-mode-${owner}`} class="text-13-regular">{text("program.mode")}</span>
-            <SelectV2 aria-labelledby={`browser-script-mode-${owner}`} options={["readonly", "program"] as const}
-              current={state.scriptMode} label={(value) => text(value === "program" ? "program.name" : "program.readonly")}
-              disabled={state.busy || !!state.request} onSelect={(value) => { if (value) setState("scriptMode", value) }} />
-          </div>
-          <Show when={state.scriptMode === "program"}>
-            <fieldset class="flex flex-col gap-2" disabled={state.busy || !!state.request}>
-              <legend class="text-13-regular">{text("program.operations")}</legend>
-              <div class="grid grid-cols-2 gap-2"><For each={programOperations}>{(operation) =>
-                <Checkbox checked={state.programOperations.includes(operation)} disabled={state.busy || !!state.request}
-                  onChange={(checked) => setState("programOperations", programOperations.filter((value) =>
-                    value === operation ? checked : state.programOperations.includes(value)))}>
-                  {text(`program.operation.${operation}`)}
-                </Checkbox>}
-              </For></div>
-            </fieldset>
-            <TextField label={text("program.steps")} type="number" value={state.programSteps}
-              disabled={state.busy || !!state.request} onChange={(value) => setState("programSteps", value)} />
-          </Show>
-          <TextField label={text("scriptSource")} description={text(state.scriptMode === "program" ? "program.hint" : "scriptHint")} multiline rows={4}
-            value={state.source} disabled={state.busy || !!state.request} onChange={(value) => setState("source", value)} />
-          <TextField label={text("scriptArgs")} multiline rows={2}
-            value={state.argsJSON} disabled={state.busy || !!state.request} onChange={(value) => setState("argsJSON", value)} /></Show>
+          <BrowserScriptGrantEditor draft={state} id={owner} disabled={state.busy || !!state.request}
+            onChange={(value) => setState(value)} /></Show>
         </Show>
         <Show when={state.view?.control.profile === "managed-loopback-exchange-v1" && state.view}>
           {(view) => <BrowserFileExchange view={view()} active={available} />}
@@ -434,6 +412,30 @@ export function DialogBrowserControl(props: { sessionID: string; onUse: (control
           </Button>
         </div>
       </div>
+    </>
+  )
+
+  return (
+    <Dialog title={text("title")}>
+      <Show when={props.sharedBrowser && !state.view && !state.request}>
+        <div class="px-6 pt-4">
+          <Button variant="secondary" onClick={() => setState("sharedOpen", !state.sharedOpen)}>
+            {language.t(state.sharedOpen ? "browser.shared.legacyOptions" : "browser.shared.title")}
+          </Button>
+        </div>
+      </Show>
+      <Show when={state.sharedOpen && props.sharedBrowser} fallback={legacy()}>
+        {(bridge) => (
+          <div class="px-6 py-4">
+            <SharedBrowserCreate bridge={bridge()} sessionID={props.sessionID} directory={directory} scope={scope} advancedGrants
+              onUse={(resourceID) => {
+                if (!current()) return
+                props.onSharedUse?.(resourceID)
+                dialog.close()
+              }} />
+          </div>
+        )}
+      </Show>
     </Dialog>
   )
 }

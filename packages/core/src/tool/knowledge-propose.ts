@@ -13,6 +13,7 @@ import { looksSensitive } from "../deepagent/memory-governance"
 import { SessionSchema } from "../session/schema"
 import { SessionToolQuota } from "../session/tool-quota.schema"
 import { SessionTable } from "../session/sql"
+import { AgentGateway } from "../agent-gateway"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { CanonicalJson } from "../util/canonical-json"
@@ -303,6 +304,15 @@ function resolveStore(
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
-    yield* tools.register({ [name]: makeKnowledgeProposeTool() }).pipe(Effect.orDie)
+    const gateway = yield* Effect.serviceOption(AgentGateway.Runtime)
+    yield* tools
+      .register({
+        [name]: makeKnowledgeProposeTool({
+          globalStore: () => (Option.isSome(gateway) ? gateway.value.withStorage(productionGlobalStore) : null),
+          projectStore: (workspacePath) =>
+            Option.isSome(gateway) ? gateway.value.withStorage(() => productionProjectStore(workspacePath)) : null,
+        }),
+      })
+      .pipe(Effect.orDie)
   }),
 )

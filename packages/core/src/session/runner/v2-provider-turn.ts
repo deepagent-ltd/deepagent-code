@@ -1,6 +1,7 @@
 export * as V2ProviderTurn from "./v2-provider-turn"
 
 import { RequestExecutor } from "@deepagent-code/llm/route"
+import { decodeProviderRefusal, encodeProviderRefusal, retryableProviderRefusal } from "@deepagent-code/llm"
 import { and, eq, inArray, max, or, sql } from "drizzle-orm"
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
 import { Database } from "../../database/database"
@@ -18,6 +19,7 @@ import { join } from "node:path"
 import { InstallationVersion } from "../../installation/version"
 import { Global } from "../../global"
 import { SessionSchema } from "../schema"
+import { SessionTable } from "../sql"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
 import { RuntimeIntegrityEvidenceContract } from "../../contract/runtime-integrity-evidence"
 import {
@@ -106,6 +108,109 @@ export type Receipt = {
   readonly integrityEvidence?: RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidence
   readonly integrityEvidenceHash?: string
   readonly integrityEvidenceSignature?: RuntimeIntegrityEvidenceContract.SignedRuntimeIntegrityEvidence
+}
+
+/** Exact prepared/owner identity for a new zero-event refusal; this digest is not a signature. */
+export function providerRefusalIdentity(receipt: Receipt): string | undefined {
+  const prepared = receipt.preparedTurn
+  // Prepared protocol contracts and LLM adapter IDs deliberately use different vocabularies.
+  const protocol = prepared?.protocol_attempt_identity?.protocol
+  const adapter = protocol === "openai-compatible.chat" ? "openai-chat"
+    : protocol === "openai.responses" || protocol === "openai-compatible.responses" ? "openai-responses"
+    : protocol === "anthropic.messages" ? "anthropic-messages" : undefined
+  if (
+    !prepared || !receipt.providerAttemptId || !receipt.ownerToken || !receipt.activityId ||
+    !receipt.userMessageId || !Number.isSafeInteger(receipt.providerTurnSeq) || receipt.providerTurnSeq < 1 ||
+    ![receipt.requestInputHash, receipt.preparedTurnHash, receipt.wireRequestHash].every(
+      (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
+    ) ||
+    prepared.session_id !== receipt.sessionId || prepared.receipt_id !== receipt.receiptId ||
+    prepared.activity_id !== receipt.activityId || prepared.user_message_id !== receipt.userMessageId ||
+    prepared.provider_turn_seq !== receipt.providerTurnSeq || prepared.request_ordinal !== receipt.requestOrdinal ||
+    prepared.owner !== receipt.ownerMode ||
+    (prepared.provider_attempt_id !== undefined && prepared.provider_attempt_id !== receipt.providerAttemptId) ||
+    prepared.sampling_provider_id !== receipt.providerId || prepared.sampling_model_id !== receipt.modelId ||
+    adapter === undefined || adapter !== receipt.protocol ||
+    prepared.prepared_turn_hash !== receipt.preparedTurnHash || prepared.wire_request_hash !== receipt.wireRequestHash ||
+    PreparedProviderTurn.preparedTurnHash(prepared) !== receipt.preparedTurnHash
+  ) return undefined
+  return Hash.sha256(CanonicalJson.stringify({
+    version: 1,
+    sessionID: receipt.sessionId,
+    activityID: receipt.activityId,
+    receiptID: receipt.receiptId,
+    attemptID: receipt.providerAttemptId,
+    ownerToken: receipt.ownerToken,
+    userMessageID: receipt.userMessageId,
+    providerTurnSeq: receipt.providerTurnSeq,
+    requestInputHash: receipt.requestInputHash,
+    preparedTurnHash: receipt.preparedTurnHash,
+    wireRequestHash: receipt.wireRequestHash,
+    providerID: receipt.providerId,
+    modelID: receipt.modelId,
+    protocol: receipt.protocol,
+  }))
+}
+
+/** Verify the sealed producer's complete runtime binding, not merely an error-code string. */
+export function providerRefusal(
+  receipt: Receipt,
+  identity: RuntimeIntegrityEvidenceContract.RuntimeIdentity | undefined,
+) {
+  const decoded = decodeProviderRefusal(receipt.errorCode)
+  if (
+    !decoded || !identity || !Schema.is(RuntimeIntegrityEvidenceContract.RuntimeIdentity)(identity) ||
+    decoded.identityHash !== providerRefusalIdentity(receipt) || receipt.state !== "failed" ||
+    receipt.firstEventAt !== undefined || !Number.isSafeInteger(receipt.dispatchingAt) ||
+    !Number.isSafeInteger(receipt.terminalAt) || receipt.terminalAt! < receipt.dispatchingAt! || receipt.outcomeArtifact?.length !== 0 ||
+    receipt.outcomeHash !== Hash.sha256(CanonicalJson.stringify([])) ||
+    !Schema.is(RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidence)(receipt.integrityEvidence)
+  ) return undefined
+  // Runtime rows are normally digest-only. Optional externally signed envelopes are admitted by
+  // persistSignedIntegrityEvidence; never create a new signing authority at this read boundary.
+  if (receipt.integrityEvidenceSignature !== undefined && (
+    !Schema.is(RuntimeIntegrityEvidenceContract.SignedRuntimeIntegrityEvidence)(receipt.integrityEvidenceSignature) ||
+    receipt.integrityEvidenceSignature.evidenceDigest !== receipt.integrityEvidenceHash ||
+    CanonicalJson.stringify(receipt.integrityEvidenceSignature.evidence) !== CanonicalJson.stringify(receipt.integrityEvidence)
+  )) return undefined
+  try {
+    const expected = RuntimeIntegrityEvidenceContract.runtimeIntegrityEvidenceFromPreparedTurn({
+      prepared: receipt.preparedTurn!,
+      identity,
+      terminal: { status: "failed_terminal", reason: receipt.errorCode },
+      physicalCallCount: 1,
+    })
+    if (
+      RuntimeIntegrityEvidenceContract.runtimeIntegrityEvidenceDigest(receipt.integrityEvidence) !== receipt.integrityEvidenceHash ||
+      RuntimeIntegrityEvidenceContract.runtimeIntegrityEvidenceDigest(expected) !== receipt.integrityEvidenceHash
+    ) return undefined
+    return decoded
+  } catch {
+    // A corrupted/incomplete prepared record cannot certify a retry or a Goal result.
+    return undefined
+  }
+}
+
+/** The refusal must also belong to the exact durable execution claim, not an orphan RI row. */
+export function providerRefusalAttempt(
+  receipt: Receipt,
+  attempt: typeof SessionProviderAttemptTable.$inferSelect | undefined,
+  identity: RuntimeIntegrityEvidenceContract.RuntimeIdentity | undefined,
+  claimToken: number | undefined,
+) {
+  const proof = providerRefusal(receipt, identity)
+  if (
+    !proof || !attempt || !Number.isSafeInteger(claimToken) || claimToken! < 1 ||
+    attempt.attempt_id !== receipt.providerAttemptId || attempt.session_id !== receipt.sessionId ||
+    attempt.activity_id !== receipt.activityId || attempt.provider_turn_seq !== receipt.providerTurnSeq ||
+    attempt.owner_token !== receipt.ownerToken || attempt.execution_claim_token !== claimToken ||
+    attempt.provider_id !== receipt.providerId || attempt.state !== "failed" ||
+    attempt.first_event_at !== null || attempt.settled_at !== receipt.terminalAt ||
+    attempt.request_hash !== receipt.requestInputHash || attempt.prepared_turn_hash !== receipt.preparedTurnHash ||
+    attempt.wire_request_hash !== receipt.wireRequestHash || attempt.error_code !== receipt.errorCode ||
+    attempt.protocol_attempt_identity_hash !== receipt.preparedTurn?.protocol_attempt_identity_hash
+  ) return undefined
+  return proof
 }
 
 export type IntegrityEvidenceArtifact = {
@@ -265,6 +370,8 @@ export const CurrentBuildIdentity = Context.Reference<BuildIdentity | undefined>
  * remain evidence-optional; the production DeepAgentCode frame provides the resolver explicitly.
  */
 export type RuntimeIntegrityIdentityResolver = {
+  /** Read only an already-derived identity; safe while a SQL transaction owns its connection. */
+  readonly current?: () => RuntimeIntegrityEvidenceContract.RuntimeIdentity | undefined
   readonly resolve: (context: Context.Context<never>) => Effect.Effect<
     RuntimeIntegrityEvidenceContract.RuntimeIdentity,
     RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError
@@ -1368,7 +1475,10 @@ export function stream<A, E, R>(input: {
    * terminal provider outcome and is quarantined as `indeterminate_after_crash` instead of becoming a
    * retryable `failed` receipt.
    */
-  readonly terminalProviderFailure?: (error: unknown) => boolean
+  readonly terminalProviderFailure?: (
+    error: unknown,
+    input: { readonly providerEventsStarted: boolean },
+  ) => boolean
 }) {
   let current = input.receipt
   let reachedEnd = false
@@ -1460,13 +1570,19 @@ export function stream<A, E, R>(input: {
           }
           if (Exit.isFailure(exit) && Cause.findInterrupt(exit.cause)._tag === "Failure") {
             const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
-            if (input.terminalProviderFailure !== undefined && input.terminalProviderFailure(error)) {
+            const refusal = retryableProviderRefusal(error, { providerEventsStarted: current.state === "streaming" })
+            const identityHash = refusal && providerRefusalIdentity(current)
+            const code = refusal && identityHash ? encodeProviderRefusal(refusal, identityHash) : undefined
+            if (
+              input.terminalProviderFailure?.(error, { providerEventsStarted: current.state === "streaming" }) &&
+              (!refusal || (code !== undefined && input.integrityIdentity !== undefined && input.outcomeArtifact().length === 0))
+            ) {
               return finalizeTransition(
                 input.service.settle({
                   receipt: current,
                   outcome: "failed",
                   outcomeArtifact: input.outcomeArtifact(),
-                  errorCode: input.errorCode(exit.cause),
+                  errorCode: code ?? input.errorCode(exit.cause),
                 }),
               )
             }
@@ -1641,19 +1757,30 @@ export function admitInTransaction(
       .get()
     if (existing) {
       if (existing.state !== "preparing") {
-        // A same-owner indeterminate receipt is a live-process transport drop quarantined by this
-        // owner: the bounded runner retry (and an explicit forced continuation) opens a FRESH
-        // receipt at the next ordinal instead of failing the retry — §2.2 keeps the quarantined row
-        // itself untouched (never replayed; explicit resolution still owns its terminal outcome).
-        //
-        // A PRE-dispatch owner-loss recovery is the same situation one generation later: the fenced
-        // owner never reached the provider (no generation, no billing), so the legitimate successor
-        // may open a fresh attempt. A post-dispatch owner loss keeps the typed refusal — its outcome
-        // is unknown, and RI-11 forbids an automatic re-send. A turn abandoned while still
-        // `preparing` (the wire seal never ran) provably never dispatched either, so its exact
-        // retry is the same safe case.
-        const sameOwnerQuarantine =
-          existing.state === "indeterminate_after_crash" && existing.owner_token === ownerToken
+        // Unknown delivery remains quarantined even for the same live owner. Only an exact
+        // proved refusal or an existing before-dispatch recovery may admit a fresh ordinal.
+        const resolver = existing.state === "failed" && decodeProviderRefusal(existing.error_code)
+          ? yield* CurrentRuntimeIntegrityIdentity : undefined
+        // Admission already owns SQL; only the runner's previously resolved root identity is safe here.
+        const identity = resolver?.current?.()
+        const attempt = resolver && existing.provider_attempt_id
+          ? yield* tx.select().from(SessionProviderAttemptTable)
+            .where(eq(SessionProviderAttemptTable.attempt_id, existing.provider_attempt_id)).get()
+          : undefined
+        const session = attempt
+          ? yield* tx.select({ claim: SessionTable.execution_claim_token }).from(SessionTable)
+            .where(eq(SessionTable.id, input.sessionId)).get()
+          : undefined
+        const refusal = existing.owner_token === ownerToken && existing.activity_id === input.activityId &&
+          existing.provider_id === input.providerId && existing.model_id === input.modelId &&
+          existing.protocol === input.protocol && existing.owner_mode === input.ownerMode &&
+          providerRefusalAttempt(fromRow(existing), attempt, identity, session?.claim ?? undefined)
+        const obligation = refusal
+          ? yield* tx.get<{ found: number }>(sql`SELECT 1 AS found FROM (
+            SELECT receipt_id FROM session_v2_tool_effect_admission WHERE receipt_id=${existing.receipt_id}
+            UNION ALL SELECT receipt_id FROM session_v2_tool_effect WHERE receipt_id=${existing.receipt_id}
+          ) LIMIT 1`) : undefined
+        const recoverableRefusal = !!refusal && !obligation
         const recoverablePreDispatchFailure =
           existing.state === "failed" &&
           (existing.error_code === "owner_lost_before_dispatch" ||
@@ -1673,7 +1800,7 @@ export function admitInTransaction(
           !driftedAttempt.prepared_turn_hash &&
           !driftedAttempt.wire_request_hash &&
           !driftedAttempt.first_event_at
-        if (!sameOwnerQuarantine && !recoverablePreDispatchFailure && !recoverableConfigDrift)
+        if (!recoverableRefusal && !recoverablePreDispatchFailure && !recoverableConfigDrift)
           return yield* new UnsafeRetryError({ state: existing.state })
       } else if (
         existing.provider_id !== input.providerId ||
@@ -1801,7 +1928,7 @@ function isError(value: unknown): value is SessionProviderAttempt.Error {
   )
 }
 
-function fromRow(row: typeof V2ProviderTurnReceiptTable.$inferSelect): Receipt {
+export function fromRow(row: typeof V2ProviderTurnReceiptTable.$inferSelect): Receipt {
   return {
     receiptId: row.receipt_id,
     sessionId: row.session_id,

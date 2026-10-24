@@ -81,10 +81,20 @@ const profiles = new Map<string, Profile>([
         ["promptCacheKey", "promptCacheKey"],
         ["reasoningEffort", "reasoningEffort"],
         ["reasoning_effort", "reasoningEffort"],
+        ["thinking", "thinking"],
       ]),
     },
   ],
-  ["@ai-sdk/anthropic", { namespace: "anthropic", semantics: new Map([["thinking", "thinking"]]) }],
+  [
+    "@ai-sdk/anthropic",
+    {
+      namespace: "anthropic",
+      semantics: new Map([
+        ["thinking", "thinking"],
+        ["effort", "effort"],
+      ]),
+    },
+  ],
 ])
 
 export const namespace = (packageName: string) => profiles.get(packageName)?.namespace

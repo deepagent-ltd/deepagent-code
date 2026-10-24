@@ -75,7 +75,7 @@ export function make(options: { outboundPublish?: (request: Record<string, unkno
             data: new TextEncoder().encode(JSON.stringify(response)) })
           return
         }
-        const native = request.topic.startsWith("qry_delivery_") && request.data instanceof Uint8Array ? root.lookup("codec.DeliveryReadQuery").decode(request.data) : {}
+        const native = request.topic.startsWith("qry_delivery_") && request.data instanceof Uint8Array ? root.lookup(request.topic === "qry_delivery_receipt" ? "codec.DeliveryReceiptQuery" : "codec.DeliveryReadQuery").decode(request.data) : {}
         const latest = messages.at(-1)
         const revision = String(state.revision)
         const change = { visibility: "visible", projectionKey, revision, cursor: revision, conversationType: 1, targetId: "sender", readOrdinal: "0", admittedOrdinal: String(messages.length), liveUnread: String(messages.length), storedUnread: String(messages.length), latestMessageId: latest?.messageId ?? "", latestSequence: latest?.sequence ?? "", latestMessageTime: latest?.messageTime ?? 0, nextExpiryAt: latest?.expiresAt ?? 0 }

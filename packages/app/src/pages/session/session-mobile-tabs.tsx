@@ -18,10 +18,20 @@ export function SessionMobileTabs(props: {
   createEffect(() => {
     const opened = messages()
     if (wasMessages && !opened) {
-      // Closing the panel removes its focused button; return keyboard focus to
-      // navigation unless the user already selected another navigation tab.
+      // Restore lost focus after the panel closes, without overriding an explicit
+      // return to the composer or another usable control.
       queueMicrotask(() => {
-        if (!navigation?.isConnected || navigation.contains(document.activeElement)) return
+        const active = document.activeElement
+        if (!navigation?.isConnected || navigation.contains(active)) return
+        if (
+          active instanceof HTMLElement &&
+          active.isConnected &&
+          active !== document.body &&
+          active !== document.documentElement &&
+          !active.closest('[hidden], [inert], [aria-hidden="true"]') &&
+          !active.matches(':disabled, [aria-disabled="true"]')
+        )
+          return
         navigation.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus()
       })
     }

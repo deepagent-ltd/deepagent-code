@@ -21,7 +21,7 @@ rustix = { version = "=1.1.4", features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
 ed25519-dalek = "=2.2.0"
-windows-sys = { version = "=0.52.0", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Kernel", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Pipes", "Win32_System_Diagnostics_ToolHelp", "Win32_Security_Isolation", "Win32_Security_Authorization"] }
+windows-sys = { version = "=0.52.0", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Kernel", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Pipes", "Win32_System_Diagnostics_ToolHelp", "Win32_Security_Isolation", "Win32_Security_Authorization", "Win32_Security_Cryptography"] }
 
 [[bin]]
 name = "deepagent-work-file-helper"

@@ -15,6 +15,7 @@ import { DebugConsole, TerminalActions, TerminalPanes, useTerminalLifecycle } fr
 import { ProblemsPanel } from "@/pages/session/problems-panel"
 
 type Props = {
+  occluded?: boolean
   onOpenFile: (path: string, line: number) => void
 }
 
@@ -32,7 +33,7 @@ function TerminalPanelContent(props: Props) {
   const single = createMemo(() => terminal.root()?.kind === "leaf")
   // Bottom panel only shows the non-terminal dock panels (debug-console, problems).
   // Terminal is no longer a movable dock view — it is bottom-native here.
-  const visible = createMemo(() => opened())
+  const visible = createMemo(() => opened() && !props.occluded)
   const [store, setStore] = createStore({
     view: typeof window === "undefined" ? 1000 : (window.visualViewport?.height ?? window.innerHeight),
   })
@@ -43,7 +44,7 @@ function TerminalPanelContent(props: Props) {
   const close = () => panel().bottom.toggle()
 
   // Bottom terminal is visible when the bottom panel is open with terminal as active view.
-  const terminalVisible = createMemo(() => panel().bottom.opened() && panel().bottom.activeView() === "terminal")
+  const terminalVisible = createMemo(() => visible() && panel().bottom.activeView() === "terminal")
 
   // Lifecycle owner for the bottom host — auto-creates, auto-focuses, closes panel when empty.
   // Gate `active` on runtimeId being set to prevent pty.create firing before the server
@@ -110,7 +111,10 @@ function TerminalPanelContent(props: Props) {
         "transition-[height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[height] motion-reduce:transition-none":
           !size.active() && layout.ready(),
       }}
-      style={{ height: visible() ? `calc(${pane()}px + var(--workbench-gap))` : "0px" }}
+      style={{
+        display: props.occluded ? "none" : undefined,
+        height: visible() ? `calc(${pane()}px + var(--workbench-gap))` : "0px",
+      }}
     >
       <div
         class="absolute inset-x-0 top-0 flex flex-col"

@@ -2,7 +2,7 @@ import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { describe, expect } from "bun:test"
-import { Config, Context, Effect, FileSystem, Layer, Option, Path } from "effect"
+import { Config, Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
@@ -497,6 +497,57 @@ describe("instance HttpApi", () => {
       expect(yield* diff.json).toContainEqual(
         expect.objectContaining({ file: "changed.txt", additions: 1, status: "added" }),
       )
+    }),
+  )
+
+  it.live("serves read-only work overview refs, selected-base summary and the original review diff", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      yield* fs.writeFileString(path.join(dir, "overview.txt"), "one\n")
+      const refsResponse = yield* HttpClientRequest.get(InstancePaths.vcsRefs).pipe(
+        directoryHeader(dir),
+        HttpClient.execute,
+      )
+      expect(refsResponse.status).toBe(200)
+      const decoded = Schema.decodeUnknownSync(Vcs.Refs)(yield* refsResponse.json)
+      expect(decoded.directory).toBe(dir)
+      expect(decoded.repositoryRoot).toBe(dir)
+      expect(Array.isArray(decoded.items)).toBe(true)
+      const base = decoded.items[0]?.ref
+      if (!base) throw new Error("The real Git fixture has no local comparison branch")
+      const response = yield* HttpClientRequest.get(InstancePaths.vcsSummary).pipe(
+        HttpClientRequest.setUrlParam("baseRef", base),
+        directoryHeader(dir),
+        HttpClient.execute,
+      )
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toMatchObject({
+        state: "ready",
+        directory: dir,
+        baseRef: base,
+        files: 1,
+        additions: 1,
+        deletions: 0,
+        stale: false,
+      })
+      const diff = yield* HttpClientRequest.get(InstancePaths.vcsDiff).pipe(
+        HttpClientRequest.setUrlParam("mode", "branch"),
+        HttpClientRequest.setUrlParam("baseRef", base),
+        directoryHeader(dir),
+        HttpClient.execute,
+      )
+      expect(diff.status).toBe(200)
+      expect(yield* diff.json).toContainEqual(expect.objectContaining({ file: "overview.txt", additions: 1 }))
+      const invalid = yield* HttpClientRequest.get(InstancePaths.vcsDiff).pipe(
+        HttpClientRequest.setUrlParam("mode", "branch"),
+        HttpClientRequest.setUrlParam("baseRef", "HEAD~1"),
+        directoryHeader(dir),
+        HttpClient.execute,
+      )
+      expect(invalid.status).toBe(503)
+      expect(yield* invalid.json).toMatchObject({ data: { reason: "ref_invalid" } })
     }),
   )
 

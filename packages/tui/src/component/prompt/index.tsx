@@ -1,5 +1,6 @@
 import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
 import { createGoalCommands } from "./goal-command"
+import { openGoalStart } from "../dialog-goal-start"
 import {
   BoxRenderable,
   RGBA,
@@ -11,7 +12,18 @@ import {
   type Renderable,
 } from "@opentui/core"
 import type { CommandContext } from "@opentui/keymap"
-import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  onMount,
+  createSignal,
+  onCleanup,
+  on,
+  Show,
+  Switch,
+  Match,
+} from "solid-js"
 import "opentui-spinner/solid"
 import path from "path"
 import { fileURLToPath } from "url"
@@ -35,7 +47,10 @@ import { createStore, produce, unwrap } from "solid-js/store"
 import { usePromptHistory, type PromptInfo } from "../../prompt/history"
 import { computePromptTraits } from "../../prompt/traits"
 import { promptIntelligenceMode } from "../../prompt/intelligence-mode"
+import { reviewIntelligenceDraft } from "../../prompt/intelligence-review"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
+import { createInteractiveSubmitGate } from "../../prompt/interactive-submit"
+import type { BrowserOwnerSource, BrowserOwnerTicket } from "../../prompt/browser-owner"
 import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
@@ -51,7 +66,6 @@ import { useDialog } from "../../ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { DialogSelect } from "../../ui/dialog-select"
-import { DialogPrompt } from "../../ui/dialog-prompt"
 import { useToast } from "../../ui/toast"
 import { useTuiI18n } from "../../context/i18n"
 import { useKV } from "../../context/kv"
@@ -173,6 +187,18 @@ export function Prompt(props: PromptProps) {
     (sdk.client as unknown as { client: { request<D>(o: typeof options): Promise<{ data?: D }> } }).client.request<T>(
       options,
     )
+  const [capabilities] = createResource(
+    () => sdk.client,
+    async (client) => {
+      const result = await (client as unknown as GoalClient.Client).client.request<{
+        features?: { expertPanel?: boolean; goalLoop?: boolean }
+      }>({
+        method: "GET",
+        url: "/global/capabilities",
+      })
+      return result.data?.features
+    },
+  )
   const editor = useEditorContext()
   const route = useRoute()
   const project = useProject()
@@ -186,7 +212,10 @@ export function Prompt(props: PromptProps) {
   // /session/:id/prompt_prepare_stream (SSE), then shows the prepared draft in an editable review.
   // Returns the send metadata (confirmed draft, or direct_override on degrade), or false when the
   // user dismissed the review. Mirrors submit.ts prepareDeepAgentPromptDraft + W1-3 fallback.
-  const prepareIntelligenceDraft = async (sessionID: string, text: string): Promise<Record<string, unknown> | false> => {
+  const prepareIntelligenceDraft = async (
+    sessionID: string,
+    text: string,
+  ): Promise<Record<string, unknown> | false> => {
     const intentID = `int_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
     const direct: Record<string, unknown> = {
       deepagent: { agent_mode_override: "general", prompt_pipeline: { mode: "direct_override" } },
@@ -221,7 +250,9 @@ export function Prompt(props: PromptProps) {
       const reader = streamResult.data.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
-      let result: { route?: string; prompt_draft_id?: string; goal?: string; preview?: string; intent_id?: string } | undefined
+      let result:
+        | { route?: string; prompt_draft_id?: string; goal?: string; preview?: string; intent_id?: string }
+        | undefined
       const readEvent = (block: string) => {
         const data = block
           .split("\n")
@@ -246,9 +277,7 @@ export function Prompt(props: PromptProps) {
       if (result.intent_id && result.intent_id !== intentID) throw new Error("prepare returned a different intent")
       const editable = (result.preview ?? result.goal ?? "").trim()
       if (!editable) return direct
-      const edited = await DialogPrompt.show(dialog, i18n.t("tui.intelligence.reviewTitle"), {
-        value: editable,
-      })
+      const edited = await reviewIntelligenceDraft(dialog, i18n.t("tui.intelligence.reviewTitle"), editable)
       if (edited === null) return false
       return {
         deepagent: {
@@ -297,19 +326,25 @@ export function Prompt(props: PromptProps) {
     const text = queue?.[0]
     if (!text) return
     setFollowups(sessionID, queue.slice(1))
-    void sdk.client.v2.session
-      .prompt({ sessionID, prompt: { text } }, { throwOnError: true })
-      .catch((error) => {
-        toast.show({
-          message: error instanceof Error ? error.message : "Failed to send followup",
-          variant: "error",
-          duration: 5000,
-        })
+    void sdk.client.v2.session.prompt({ sessionID, prompt: { text } }, { throwOnError: true }).catch((error) => {
+      toast.show({
+        message: error instanceof Error ? error.message : "Failed to send followup",
+        variant: "error",
+        duration: 5000,
       })
+    })
   })
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
+  const ownerInput = createInteractiveSubmitGate<BrowserOwnerSource>()
+  const offOwnerInput = keymap.intercept("key", (event) => {
+    ownerInput.begin(event.event, sdk.browserSubmit.source(props.sessionID, project.instance.directory()))
+  })
+  onCleanup(() => {
+    offOwnerInput()
+    ownerInput.clear()
+  })
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
   const renderer = useRenderer()
@@ -471,6 +506,68 @@ export function Prompt(props: PromptProps) {
     }
   })
 
+  async function runGoalCommand() {
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    const client = sdk.client
+    const scope = { server: sdk.url, directory: project.instance.path().directory, sessionID }
+    const text = store.prompt.input
+    const command = text
+      .trim()
+      .replace(/^\/goal\b\s*/, "")
+      .trim()
+    const current = () =>
+      !goalDisposed &&
+      props.sessionID === sessionID &&
+      sdk.client === client &&
+      sdk.url === scope.server &&
+      project.instance.path().directory === scope.directory
+    try {
+      const start = command
+        ? undefined
+        : await openGoalStart({
+            dialog,
+            current,
+            text: (key) => i18n.t(`tui.goal.start.${key}` as Parameters<typeof i18n.t>[0]),
+          })
+      if (!command && !start) return
+      const { snapshot } = await goalCommands.run({
+        client: client as unknown as GoalClient.Client,
+        scope,
+        command,
+        start,
+        current,
+      })
+      if (!current()) return
+      const observed = sync.data.session_goal[sessionID]
+      if (observed && observed.goalId !== snapshot.goalId) {
+        await sync.goal.sync(sessionID).catch(() => undefined)
+        return
+      }
+      if (!observed || GoalClient.accepts(observed.control, snapshot)) sync.goal.set(sessionID, snapshot)
+      // A late acknowledgement cannot consume text typed after this command was submitted.
+      if (store.prompt.input === text) {
+        input.setText("")
+        setStore("prompt", { input: "", parts: [] })
+      }
+      toast.show({ variant: "success", message: i18n.t("tui.goal.control.accepted"), duration: 4000 })
+      dialog.clear()
+    } catch (error) {
+      if (!current()) return
+      toast.show({
+        variant: "warning",
+        message:
+          error instanceof GoalClient.RequestError && error.unknownOutcome
+            ? `${i18n.t("tui.goal.control.unknown")} /goal retry`
+            : error instanceof Error
+              ? error.message
+              : i18n.t("tui.goal.control.failed"),
+        duration: 6000,
+      })
+      await sync.goal.sync(sessionID).catch(() => undefined)
+    }
+  }
+
   const promptCommands = createMemo(() =>
     [
       {
@@ -488,9 +585,10 @@ export function Prompt(props: PromptProps) {
         name: "prompt.submit",
         category: "Prompt",
         hidden: true,
-        run: async () => {
+        run: async (event: CommandContext<Renderable, KeyEvent>) => {
           if (!input.focused) return
-          const handled = await submit()
+          if (submitting || scheduledSubmission) return
+          const handled = await submit(captureOwnerInput(ownerInput.take(event.event)))
           if (!handled) return
 
           dialog.clear()
@@ -551,9 +649,40 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
-            })
+            const sessionID = props.sessionID
+            const client = sdk.client
+            const scope = { server: sdk.url, directory: project.instance.path().directory, sessionID }
+            const current = () =>
+              props.sessionID === sessionID &&
+              sdk.client === client &&
+              sdk.url === scope.server &&
+              project.instance.path().directory === scope.directory
+            const goal = sync.data.session_goal[sessionID]
+            if (goal && (!goal.control || !GoalClient.confirmedTerminal(goal.control))) {
+              void goalCommands
+                .run({ client: client as unknown as GoalClient.Client, scope, command: "pause", current })
+                .then(({ snapshot }) => {
+                  if (!current()) return
+                  sync.goal.set(sessionID, snapshot)
+                  toast.show({
+                    variant: "info",
+                    message: i18n.t(
+                      snapshot.inFlight || snapshot.recoveryRequired || snapshot.preparation !== "ready"
+                        ? "tui.goal.control.pausePending"
+                        : "tui.goal.control.accepted",
+                    ),
+                    duration: 4000,
+                  })
+                })
+                .catch((error: unknown) => {
+                  if (current())
+                    toast.show({
+                      variant: "error",
+                      message: error instanceof Error ? error.message : i18n.t("tui.goal.control.failed"),
+                      duration: 6000,
+                    })
+                })
+            } else void client.session.abort({ sessionID })
             setStore("interrupt", 0)
           }
           dialog.clear()
@@ -688,10 +817,10 @@ export function Prompt(props: PromptProps) {
         name: "deepagent.panel",
         category: "Session",
         slashName: "panel",
-        enabled: Flag.DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL,
+        enabled: capabilities()?.expertPanel === true,
         run: async () => {
           const sessionID = props.sessionID
-          if (!sessionID) return
+          if (!sessionID || capabilities()?.expertPanel !== true) return
           toast.show({ variant: "info", message: i18n.t("tui.prompt.conveningExpertPanel"), duration: 3000 })
           try {
             const res = await rawRequest<{ decision: string; confidence: number; rounds: number }>({
@@ -719,66 +848,8 @@ export function Prompt(props: PromptProps) {
         name: "deepagent.goal",
         category: "Session",
         slashName: "goal",
-        enabled: Flag.DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP,
-        run: async () => {
-          const sessionID = props.sessionID
-          if (!sessionID) return
-          const client = sdk.client
-          const scope = { server: sdk.url, directory: project.instance.path().directory, sessionID }
-          const text = store.prompt.input
-          const command = text.replace(/^\/goal\b\s*/, "").trim()
-          const current = () =>
-            !goalDisposed &&
-            props.sessionID === sessionID &&
-            sdk.client === client &&
-            sdk.url === scope.server &&
-            project.instance.path().directory === scope.directory
-          try {
-            const { snapshot } = await goalCommands.run({
-              client: client as unknown as GoalClient.Client,
-              scope,
-              command,
-              current,
-            })
-            if (!current()) return
-            const observed = sync.data.session_goal[sessionID]
-            if (observed && observed.goalId !== snapshot.goalId) {
-              await sync.goal.sync(sessionID).catch(() => undefined)
-              return
-            }
-            if (!observed || GoalClient.accepts(observed.control, snapshot)) sync.goal.set(sessionID, snapshot)
-            // A late acknowledgement cannot consume text typed after this command was submitted.
-            if (store.prompt.input === text) {
-              input.setText("")
-              setStore("prompt", { input: "", parts: [] })
-            }
-            toast.show({ variant: "success", message: i18n.t("tui.goal.control.accepted"), duration: 4000 })
-            dialog.clear()
-          } catch (error) {
-            if (!current()) return
-            toast.show({
-              variant: "warning",
-              message:
-                error instanceof GoalClient.RequestError && error.unknownOutcome
-                  ? `${i18n.t("tui.goal.control.unknown")} /goal retry`
-                  : error instanceof Error
-                    ? error.message
-                    : i18n.t("tui.goal.control.failed"),
-              duration: 6000,
-            })
-            await sync.goal.sync(sessionID).catch(() => undefined)
-          }
-        },
-      },
-      {
-        title: i18n.t("tui.prompt.moveSession"),
-        desc: i18n.t("tui.prompt.moveSessionDesc"),
-        name: "session.move",
-        category: "Session",
-        slashName: "move",
-        run: () => {
-          move.open()
-        },
+        enabled: capabilities()?.goalLoop === true,
+        run: runGoalCommand,
       },
       {
         // GUI D1 parity — the per-session intelligence toggle (scenario-toggle). While on, sends
@@ -886,7 +957,6 @@ export function Prompt(props: PromptProps) {
       "prompt.stash.list",
       "session.interrupt",
       "workspace.set",
-      "session.move",
     ]),
   }))
 
@@ -1156,7 +1226,12 @@ export function Prompt(props: PromptProps) {
       target: inputTarget,
       enabled: inputTarget() !== undefined && store.mode === "shell",
       bindings: [
-        { key: "escape", desc: i18n.t("tui.prompt.exitShellMode"), group: "Prompt", cmd: () => setStore("mode", "normal") },
+        {
+          key: "escape",
+          desc: i18n.t("tui.prompt.exitShellMode"),
+          group: "Prompt",
+          cmd: () => setStore("mode", "normal"),
+        },
       ],
     }
   })
@@ -1169,7 +1244,12 @@ export function Prompt(props: PromptProps) {
         return inputTarget() !== undefined && store.mode === "shell" && input?.visualCursor.offset === 0
       })(),
       bindings: [
-        { key: "backspace", desc: i18n.t("tui.prompt.exitShellMode"), group: "Prompt", cmd: () => setStore("mode", "normal") },
+        {
+          key: "backspace",
+          desc: i18n.t("tui.prompt.exitShellMode"),
+          group: "Prompt",
+          cmd: () => setStore("mode", "normal"),
+        },
       ],
     }
   })
@@ -1243,7 +1323,24 @@ export function Prompt(props: PromptProps) {
   })
 
   let submitting = false
-  async function submit() {
+  let scheduledSubmission = false
+  const captureOwnerInput = (source: BrowserOwnerSource | undefined) => {
+    if (!source || props.disabled || store.mode !== "normal") return undefined
+    const rawInput = input.plainText
+    if (
+      !rawInput ||
+      /^\/goal(?:\s|$)/.test(rawInput.trim()) ||
+      (rawInput.startsWith("/") &&
+        sync.data.command.some((command) => command.name === rawInput.split("\n")[0].split(" ")[0].slice(1)))
+    )
+      return undefined
+    try {
+      return sdk.browserSubmit.capture(source, rawInput)
+    } catch {
+      return undefined
+    }
+  }
+  async function submit(ownerTicket?: BrowserOwnerTicket) {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
     // a second call slips past the empty-input check before the first call
@@ -1253,13 +1350,13 @@ export function Prompt(props: PromptProps) {
     if (submitting) return false
     submitting = true
     try {
-      return await submitInner()
+      return await submitInner(ownerTicket)
     } finally {
       submitting = false
     }
   }
 
-  async function submitInner() {
+  async function submitInner(ownerTicket?: BrowserOwnerTicket) {
     workspace.clearNotice()
 
     // IME: double-defer may fire before onContentChange flushes the last
@@ -1273,8 +1370,40 @@ export function Prompt(props: PromptProps) {
     if (workspace.creating() || move.creating()) return false
     if (auto()?.visible) return false
     if (!store.prompt.input) return false
+    if (props.sessionID && sdk.browserSubmit.pending(props.sessionID)) {
+      toast.show({ variant: "warning", message: i18n.t("tui.browser.owner.pendingInput"), duration: 6000 })
+      return false
+    }
+    // Client Goal commands with arguments do not appear in the server command list.
+    // Dispatch them before model selection or ordinary prompt admission.
+    if (store.mode === "normal" && /^\/goal(?:\s|$)/.test(store.prompt.input.trim())) {
+      if (!props.sessionID || capabilities()?.goalLoop !== true) {
+        toast.show({ variant: "warning", message: i18n.t("tui.goal.control.failed"), duration: 4000 })
+        return false
+      }
+      await runGoalCommand()
+      return false
+    }
     const agent = local.agent.current()
     if (!agent) return false
+    const effectiveAgent = local.agent.effective?.()?.name
+    const goal = props.sessionID ? sync.data.session_goal[props.sessionID] : undefined
+    if (
+      goal &&
+      agent.name !== effectiveAgent &&
+      (!goal.control ||
+        (!GoalClient.confirmedTerminal(goal.control) &&
+          !(
+            goal.control.requestedPhase === "paused" &&
+            !goal.control.inFlight &&
+            !goal.control.recoveryRequired &&
+            goal.control.preparation === "ready"
+          )))
+    ) {
+      toast.show({ variant: "info", message: i18n.t("tui.goal.control.pauseBeforeMode"), duration: 4000 })
+      return false
+    }
+    const queueMode = status().type !== "idle" && agent.name !== effectiveAgent
     const trimmed = store.prompt.input.trim()
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
       destroyRenderer(renderer)
@@ -1335,6 +1464,7 @@ export function Prompt(props: PromptProps) {
         return true
       }
 
+      local.agent.promote(res.data)
       sessionID = res.data.id
     }
 
@@ -1441,27 +1571,33 @@ export function Prompt(props: PromptProps) {
         }
         metadata = prepared
       }
-      sdk.client.v2.session
-        .prompt({
-          sessionID,
-          prompt: toV2Prompt({
-            agent: agent.name,
-            model: selectedModel,
-            variant,
-            metadata,
-            parts: [
-              ...editorParts,
-              {
-                type: "text",
-                text: inputText,
-              },
-              ...nonTextParts,
-            ],
-          }),
-        }, { throwOnError: true })
+      sdk.browserSubmit
+        .submit(
+          {
+            sessionID,
+            delivery: queueMode ? "queue" : undefined,
+            prompt: toV2Prompt({
+              agent: agent.name,
+              model: selectedModel,
+              variant,
+              metadata,
+              parts: [
+                ...editorParts,
+                {
+                  type: "text",
+                  text: inputText,
+                },
+                ...nonTextParts,
+              ],
+            }),
+          },
+          ownerTicket,
+        )
         .then((result) => {
           // V4.1 §S1.2 steer ack: a message sent mid-turn is absorbed as a steer and delivered
           // at the next step boundary — keep that visible instead of appearing dropped.
+          if (result.data.data.delivery === "queue")
+            toast.show({ message: i18n.t("tui.mode.queued"), variant: "info", duration: 4000 })
           if (status().type !== "idle" && result.data.data.delivery === "steer")
             toast.show({
               message: i18n.t("tui.prompt.steered"),
@@ -1646,6 +1782,8 @@ export function Prompt(props: PromptProps) {
     setStore("extmarkToPartIndex", new Map())
   }
 
+  const queueNextMode = () => working() && local.agent.current()?.name !== local.agent.effective()?.name
+
   const highlight = createMemo(() => {
     if (leader()) return theme.border
     if (store.mode === "shell") return theme.primary
@@ -1681,10 +1819,9 @@ export function Prompt(props: PromptProps) {
   })
 
   const spinnerDef = createMemo(() => {
-    const agent =
-      working()
-        ? (local.agent.list().find((a) => a.name === lastUserMessage()?.agent) ?? local.agent.current())
-        : local.agent.current()
+    const agent = working()
+      ? (local.agent.list().find((a) => a.name === lastUserMessage()?.agent) ?? local.agent.current())
+      : local.agent.current()
     const color = agent ? local.agent.color(agent.name) : theme.border
     return {
       frames: createFrames({
@@ -1750,9 +1887,19 @@ export function Prompt(props: PromptProps) {
                 }
               }}
               onSubmit={() => {
+                if (submitting || scheduledSubmission) return
+                const ticket = captureOwnerInput(ownerInput.take())
+                scheduledSubmission = true
                 // IME: double-defer so the last composed character (e.g. Korean
                 // hangul) is flushed to plainText before we read it for submission.
-                setTimeout(() => setTimeout(() => submit(), 0), 0)
+                setTimeout(
+                  () =>
+                    setTimeout(() => {
+                      scheduledSubmission = false
+                      void submit(ticket)
+                    }, 0),
+                  0,
+                )
               }}
               onPaste={async (event: PasteEvent) => {
                 if (props.disabled) {
@@ -1806,7 +1953,9 @@ export function Prompt(props: PromptProps) {
                   {(agent) => (
                     <>
                       <text fg={fadeColor(highlight(), agentMetaAlpha())}>
-                        {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
+                        {store.mode === "shell"
+                          ? "Shell"
+                          : `${i18n.t("tui.mode.next")}: ${Locale.titlecase(agent().name)}`}
                       </text>
                       <Show when={store.mode === "normal"}>
                         <box flexDirection="row" gap={1}>
@@ -1832,6 +1981,9 @@ export function Prompt(props: PromptProps) {
                   )}
                 </Show>
               </box>
+              <Show when={queueNextMode()}>
+                <text fg={theme.warning}>{i18n.t("tui.mode.queueHint")}</text>
+              </Show>
               <Show when={hasRightContent()}>
                 <box flexDirection="row" gap={1} alignItems="center">
                   {props.right}

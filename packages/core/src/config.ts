@@ -281,9 +281,13 @@ export const layer = Layer.effect(
       Effect.map((configs) => configs.flat()),
     )
     const supplementary = yield* Effect.forEach(directories, loadDirectory).pipe(Effect.orDie)
+    // Match the Host's explicit config ingress, including references relative to that file.
+    const custom = Flag.DEEPAGENT_CODE_CONFIG
+      ? yield* loadFile(Flag.DEEPAGENT_CODE_CONFIG).pipe(Effect.orDie)
+      : []
     // Apply general settings first and more specific settings last:
-    // global config, project files, then `.deepagent-code` files.
-    const configs = [...(supplementary[0] ?? []), ...direct, ...supplementary.slice(1).flat()]
+    // global config, the explicit config, project files, then `.deepagent-code` files.
+    const configs = [...(supplementary[0] ?? []), ...custom, ...direct, ...supplementary.slice(1).flat()]
     // Rules use the opposite order so a user-global rule can override a
     // repository rule. Statement order inside each file stays unchanged.
     // User/repo config statements first, then admin-controlled ServerCapabilities

@@ -93,12 +93,24 @@ function fixture(initial: IMFacadeStatus["facade"] = "active") {
           { name: "IM_FACADE_CONFLICT", data: { code: state.failure, message: "fixture failure" } },
           { status: 409 },
         )
+      if (url.pathname.endsWith("/api/v1/im/device/info"))
+        return response({
+          profile: "dac-im-device-v1",
+          storeAvailable: true,
+          deviceJkt: "a".repeat(43),
+          publicJwk: { kty: "EC", crv: "P-256", x: "b".repeat(43), y: "c".repeat(43) },
+        })
+      if (url.pathname.endsWith("/api/v1/im/device/migrations")) return response({ migration: null })
       if (url.pathname.endsWith("/status")) return response(state.status)
       if (url.pathname.endsWith("/activation") && request.method === "GET") return response({ transaction: null })
-      if (url.pathname.endsWith("/activation/quote")) return response({
-        quoteID: "quote_fixture_activation", priceCredits: 1, quotaCost: 500000,
-        expiresAt: Date.now() + 60000, entitlementExpiresAt: null,
-      })
+      if (url.pathname.endsWith("/activation/quote"))
+        return response({
+          quoteID: "quote_fixture_activation",
+          priceCredits: 1,
+          quotaCost: 500000,
+          expiresAt: Date.now() + 60000,
+          entitlementExpiresAt: null,
+        })
       if (url.pathname.endsWith("/groups/page")) {
         const lane = url.searchParams.get("lane")
         return response({
@@ -141,8 +153,10 @@ function fixture(initial: IMFacadeStatus["facade"] = "active") {
       if (url.pathname.endsWith("/invite")) return state.failure ? error() : response({ ok: true })
       if (url.pathname.endsWith("/messages") && request.method === "GET")
         return response({
-          messages: [message("historical", "old hello", 10, url.pathname.split("/").at(-2)),
-            ...[...state.receipts.values()].filter((item) => item.groupID === url.pathname.split("/").at(-2))],
+          messages: [
+            message("historical", "old hello", 10, url.pathname.split("/").at(-2)),
+            ...[...state.receipts.values()].filter((item) => item.groupID === url.pathname.split("/").at(-2)),
+          ],
           nextCursor: null,
           hasMore: false,
           reader: { ...observation(), state: "ready", projectionRevision: "1" },
@@ -152,7 +166,10 @@ function fixture(initial: IMFacadeStatus["facade"] = "active") {
         if (state.failure) return error()
         const receipt = payload.clientRequestID ? state.receipts.get(payload.clientRequestID) : undefined
         if (receipt) return response(receipt)
-        const sent = { ...message(`sent-${state.sends}`, payload.content!, 10, url.pathname.split("/").at(-2)), senderID: "server" }
+        const sent = {
+          ...message(`sent-${state.sends}`, payload.content!, 10, url.pathname.split("/").at(-2)),
+          senderID: "server",
+        }
         if (payload.clientRequestID) state.receipts.set(payload.clientRequestID, sent)
         if (state.loseReceipt) {
           state.loseReceipt = false
@@ -229,7 +246,10 @@ test("unclaimed IM opens explicit activation without legacy admission or credent
   await ui.select("Activate IM")
   await until(() => api.state.calls.some((call) => call.path.endsWith("/activation/quote")))
   await ui.frame("Activate IM")
-  expect(api.state.calls.filter((call) => call.path.includes("/activation")).map((call) => call.method)).toEqual(["GET", "GET"])
+  expect(api.state.calls.filter((call) => call.path.includes("/activation")).map((call) => call.method)).toEqual([
+    "GET",
+    "GET",
+  ])
   expect(api.state.calls.every((call) => call.method === "GET")).toBe(true)
 })
 
@@ -245,7 +265,11 @@ test("activation-required identity opens the quoted manual activation flow", asy
   await until(() => api.state.calls.some((call) => call.path.endsWith("/activation/quote")))
   await ui.frame("Activate IM")
   expect(api.state.calls.filter((call) => call.method !== "GET")).toEqual([])
-  expect(api.state.calls.some((call) => call.path.endsWith("/claim") || call.path.endsWith("/rebind") || call.path.endsWith("/auth/im-facade"))).toBe(false)
+  expect(
+    api.state.calls.some(
+      (call) => call.path.endsWith("/claim") || call.path.endsWith("/rebind") || call.path.endsWith("/auth/im-facade"),
+    ),
+  ).toBe(false)
 })
 
 test("active IM keeps authenticated rename and retry without rebind", async () => {
@@ -261,11 +285,18 @@ test("active IM keeps authenticated rename and retry without rebind", async () =
   await ui.select("Retry connection")
   await until(() => api.state.calls.some((call) => call.path.endsWith("/retry")))
   expect(api.state.calls.filter((call) => call.method !== "GET").map((call) => call.path)).toEqual([
-    "/w/api/v1/im/facade/rename", "/w/api/v1/im/facade/retry",
+    "/w/api/v1/im/facade/rename",
+    "/w/api/v1/im/facade/retry",
   ])
   expect(api.state.calls.find((call) => call.path.endsWith("/rename"))?.body).toEqual({ name: "newalice" })
-  expect(api.state.calls.every((call) => call.auth === "Bearer fixture-token" &&
-    decodeURIComponent(call.directory!) === tmp.path && call.query.get("directory") === tmp.path)).toBe(true)
+  expect(
+    api.state.calls.every(
+      (call) =>
+        call.auth === "Bearer fixture-token" &&
+        decodeURIComponent(call.directory!) === tmp.path &&
+        call.query.get("directory") === tmp.path,
+    ),
+  ).toBe(true)
 })
 
 test("person lookup confirms exact identity before direct chat without creating a shared Agent", async () => {

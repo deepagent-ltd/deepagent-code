@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import { cleanup, render, screen } from "@solidjs/testing-library"
+import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library"
 import { MemoryRouter, Route } from "@solidjs/router"
 import { createSignal } from "solid-js"
 import { createServer } from "node:http"
 import { setImmediate } from "node:timers/promises"
 import { GroupChatPanel } from "@/components/im/group-chat-panel"
+import { MessageSearch } from "@/components/im/message-search"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
 import { createIMClient, type IMClient } from "@/utils/im-client"
 import { dict } from "@/i18n/en"
+import { imSummaryOwner } from "@/components/im/summary-owner"
 
 const runtime = vi.hoisted(() => ({ client: undefined as IMClient | undefined }))
 vi.mock("@/utils/im-client", async (original) => ({
@@ -21,7 +23,15 @@ vi.mock("@/context/command", async (original) => ({
 vi.mock("@/context/sdk", () => ({ useSDK: () => ({ client: {}, directory: "/private/lifecycle" }) }))
 vi.mock("@/context/server", async (original) => ({
   ...(await original<typeof import("@/context/server")>()),
-  useServer: () => ({ key: "lifecycle", all: [], projects: () => ({ list: [] }) }),
+  useServer: () => ({
+    key: "lifecycle",
+    scope: () => "lifecycle",
+    get current() {
+      return runtime.client ? { type: "sidecar", http: { ...runtime.client.scope() } } : undefined
+    },
+    all: [],
+    projects: () => ({ list: [] }),
+  }),
 }))
 vi.mock("@/components/im/capabilities", () => ({ fetchIMCapabilities: async () => ({}) }))
 vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ show: vi.fn() }) }))
@@ -68,6 +78,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  imSummaryOwner.stop()
   vi.unstubAllGlobals()
   vi.useRealTimers()
   delete (document as { visibilityState?: string }).visibilityState
@@ -94,6 +105,7 @@ async function serve() {
     agents: undefined as Promise<void> | undefined,
     agentsClosed: false,
     agentsFinished: 0,
+    search: { cursors: [] as (string | null)[], nextExpiryAt: null as number | null },
   }
   const statusGates: (Promise<void> | undefined)[] = []
   const server = createServer(async (request, response) => {
@@ -111,6 +123,41 @@ async function serve() {
     const epoch = state.epoch
     const group = state.group
     const lane = new URL(request.url ?? "/", "http://localhost").searchParams.get("lane")
+    if (path.endsWith("/search")) {
+      const cursor = new URL(request.url ?? "/", "http://localhost").searchParams.get("cursor")
+      state.search.cursors.push(cursor)
+      await state.gate
+      response.writeHead(200, { "Content-Type": "application/json" })
+      response.end(
+        JSON.stringify({
+          messages: [
+            {
+              id: cursor ? "search-next" : "search-first",
+              groupID: "protected",
+              senderID: "peer",
+              senderType: "user",
+              type: "text",
+              content: content + (cursor ? " search next" : " search first"),
+              mentions: null,
+              metadata: null,
+              replyToID: null,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          hasMore: !cursor,
+          nextCursor: cursor ? null : "search-page-2",
+          reader: {
+            state: "ready",
+            displayEpoch: epoch,
+            projectionRevision: "1",
+            validatedServerNow: 1000,
+            nextExpiryAt: state.search.nextExpiryAt,
+          },
+        }),
+      )
+      return
+    }
     if (path.endsWith("/agents")) {
       response.on("close", () => {
         state.agentsClosed = true
@@ -240,8 +287,11 @@ it("the panel uses one 30-second fallback and merges hidden work into one foregr
     expect(peer.pages()).toBe(6)
     expect(peer.calls.every((call) => call.method === "GET")).toBe(true)
     view.unmount()
+    await flushHTTP(() => peer.status() === 4)
+    expect(peer.pages()).toBe(6)
+    imSummaryOwner.stop()
     await vi.advanceTimersByTimeAsync(90_000)
-    expect(peer.status()).toBe(3)
+    expect(peer.status()).toBe(4)
     expect(vi.getTimerCount()).toBe(0)
   } finally {
     await peer.close()
@@ -491,6 +541,9 @@ it("an explicitly disabled reader keeps ordinary conversations available without
     visibility("visible")
     await flushHTTP(() => peer.status() === 2 && peer.pages() === 2)
     view.unmount()
+    await flushHTTP(() => peer.status() === 3)
+    expect(peer.pages()).toBe(2)
+    imSummaryOwner.stop()
     await vi.advanceTimersByTimeAsync(90_000)
     expect(peer.pages()).toBe(2)
     expect(vi.getTimerCount()).toBe(0)
@@ -498,3 +551,81 @@ it("an explicitly disabled reader keeps ordinary conversations available without
     await peer.close()
   }
 })
+
+it("search pagination keeps appended results across natural refresh and a manual search resets the window", async () => {
+  const peer = await serve()
+  try {
+    render(() => <MessageSearch displayEpoch="e1" />)
+    fireEvent.input(screen.getByPlaceholderText(`${dict["im.search.messages"]}…`), { target: { value: "needle" } })
+    fireEvent.click(screen.getByRole("button", { name: dict["common.search.placeholder"] }))
+    await flushHTTP(() => !!screen.queryByText("first protected body search first"))
+    fireEvent.click(screen.getByRole("button", { name: dict["common.loadMore"] }))
+    await flushHTTP(() => !!screen.queryByText("first protected body search next"))
+    expect(peer.state.search.cursors).toEqual([null, "search-page-2"])
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(screen.queryByText("first protected body search first")).not.toBeNull()
+    expect(screen.queryByText("first protected body search next")).not.toBeNull()
+    expect(peer.state.search.cursors).toHaveLength(2)
+    fireEvent.click(screen.getByRole("button", { name: dict["common.search.placeholder"] }))
+    await flushHTTP(
+      () => peer.state.search.cursors.length === 3 && !screen.queryByText("first protected body search next"),
+    )
+    expect(peer.state.search.cursors.at(-1)).toBeNull()
+    await vi.advanceTimersByTimeAsync(5_000)
+    await flushHTTP(() => peer.state.search.cursors.length === 4)
+    expect(peer.calls.every((call) => call.method === "GET")).toBe(true)
+  } finally {
+    await peer.close()
+  }
+})
+
+it("search pagination still clears every protected page at its earliest expiry", async () => {
+  const peer = await serve()
+  try {
+    peer.state.search.nextExpiryAt = 3000
+    render(() => <MessageSearch displayEpoch="e1" />)
+    fireEvent.input(screen.getByPlaceholderText(`${dict["im.search.messages"]}…`), { target: { value: "needle" } })
+    fireEvent.click(screen.getByRole("button", { name: dict["common.search.placeholder"] }))
+    await flushHTTP(() => !!screen.queryByText("first protected body search first"))
+    fireEvent.click(screen.getByRole("button", { name: dict["common.loadMore"] }))
+    await flushHTTP(() => !!screen.queryByText("first protected body search next"))
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(screen.queryByText("first protected body search next")).not.toBeNull()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(screen.queryByText("first protected body search first")).toBeNull()
+    expect(screen.queryByText("first protected body search next")).toBeNull()
+    expect(screen.queryByRole("status")?.textContent).toBe(dict["im.reader.unavailable"])
+  } finally {
+    await peer.close()
+  }
+})
+
+it.each(["epoch", "invalidation"] as const)(
+  "search pagination rejects a delayed response after %s authority changes",
+  async (kind) => {
+    const peer = await serve()
+    const pending = Promise.withResolvers<void>()
+    try {
+      peer.state.gate = pending.promise
+      const [epoch, setEpoch] = createSignal("e1")
+      const [invalidation, setInvalidation] = createSignal(0)
+      render(() => <MessageSearch displayEpoch={epoch()} invalidation={invalidation()} />)
+      fireEvent.input(screen.getByPlaceholderText(`${dict["im.search.messages"]}…`), { target: { value: "needle" } })
+      fireEvent.click(screen.getByRole("button", { name: dict["common.search.placeholder"] }))
+      await flushHTTP(() => peer.state.search.cursors.length === 1)
+      if (kind === "epoch") setEpoch("e2")
+      if (kind === "invalidation") setInvalidation(1)
+      pending.resolve()
+      await flushHTTP(() => {
+        const button = screen.queryByRole("button", { name: dict["common.search.placeholder"] })
+        return !!button && !button.hasAttribute("disabled")
+      })
+      expect(screen.queryByText("first protected body search first")).toBeNull()
+      expect(screen.queryByRole("status")).toBeNull()
+      expect(peer.state.search.cursors).toHaveLength(1)
+    } finally {
+      pending.resolve()
+      await peer.close()
+    }
+  },
+)

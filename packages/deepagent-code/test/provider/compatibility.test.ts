@@ -23,6 +23,7 @@ describe("provider compatibility", () => {
       model: "deepseek-v4-flash",
       tool_choice: "required",
       thinking: { type: "disabled" },
+      reasoning_effort: "none",
     })
     expect(
       transform({ model: "deepseek-v4-flash", tool_choice: { type: "function", function: { name: "result" } } }),
@@ -30,6 +31,7 @@ describe("provider compatibility", () => {
       model: "deepseek-v4-flash",
       tool_choice: { type: "function", function: { name: "result" } },
       thinking: { type: "disabled" },
+      reasoning_effort: "none",
     })
   })
 
@@ -51,6 +53,22 @@ describe("provider compatibility", () => {
     expect(transform({ tool_choice: "required" })).toEqual({
       tool_choice: "required",
       trace: "kept",
+      thinking: { type: "disabled" },
+      reasoning_effort: "none",
+    })
+  })
+
+  test("recognizes the official DeepSeek Flash alias and clears a thinking effort for forced tools", () => {
+    const options: Record<string, unknown> = {}
+    applyCompatibilityProviderOptions(
+      { providerID: "deepseek", api: { id: "deepseek-flash", npm: "@ai-sdk/openai-compatible" } },
+      options,
+    )
+    const transform = options.transformRequestBody
+    if (typeof transform !== "function") throw new Error("Missing DeepSeek Flash request transformer")
+    expect(transform({ tool_choice: "required", reasoning_effort: "max", thinking: { type: "enabled" } })).toEqual({
+      tool_choice: "required",
+      reasoning_effort: "none",
       thinking: { type: "disabled" },
     })
   })

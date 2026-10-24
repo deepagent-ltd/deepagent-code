@@ -35,6 +35,7 @@ type Snapshot = {
   readonly manifestIdentity: string
   readonly runtimeIdentity?: string
   readonly components: readonly Readonly<{ path: string; bytes: number; sha256: string }>[]
+  readonly windows?: NonNullable<Awaited<ReturnType<typeof originalWindowsRead>>>
 }
 
 const handles = new WeakMap<object, Snapshot>()
@@ -44,6 +45,9 @@ const executablePath = nodeArtifact ? fileURLToPath(import.meta.url) : process.e
 const pin = typeof DEEPAGENT_CODE_NATIVE_RUNTIME_PUBLIC_KEY === "string" ? DEEPAGENT_CODE_NATIVE_RUNTIME_PUBLIC_KEY : ""
 const componentsText =
   typeof DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST === "string" ? DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST : ""
+// Only immutable compile-time input is memoized; every installation observation
+// and its original held-file/current checks still runs on each use.
+const componentInventory: { value?: NativeInstallationSchema.Components } = {}
 // A source invocation cannot turn its Bun interpreter into a DAC artifact, even by setting similarly named globals.
 const windowsCompiled = process.platform === "win32" && !!process.versions.bun &&
   (import.meta.url.startsWith("file:///$bunfs/") || import.meta.url.startsWith("B:/~BUN/") ||
@@ -84,9 +88,38 @@ export const assetDirectory = Effect.fn("NativeInstallation.assetDirectory")(fun
  * A changed identity is never silently adopted. */
 export const requireCurrent = Effect.fn("NativeInstallation.requireCurrent")(function* (
   handle: VerifiedInstalledComponents,
+  expectedBootstrapHash?: string,
 ) {
   const prior = lookup(handle)
   if (!prior) return yield* refusal("NATIVE_HANDLE_INVALID")
+  const windows = prior.windows
+  if (windows) {
+    return yield* Effect.tryPromise({
+      try: () => import("./windows-native-bootstrap"),
+      catch: () => refusal("NATIVE_INSTALLATION_UNAVAILABLE"),
+    }).pipe(
+      Effect.flatMap(({ NativeWindowsBootstrap }) =>
+        Effect.try({
+          try: () => {
+            if (lookup(handle) !== prior) throw refusal("NATIVE_HANDLE_INVALID")
+            if (!compiled || !(nodeArtifact || windowsCompiled)) throw refusal("NATIVE_INSTALLATION_UNAVAILABLE")
+            if (process.platform !== "win32" || prior.description.target !== `${process.platform}-${process.arch}`)
+              throw refusal("NATIVE_TARGET_MISMATCH")
+            // Initial inspect verified these immutable public bytes and signatures.
+            // The original held Native capture still checks its full graph on every
+            // read; compare all facts synchronously, never adopt a new observation.
+            const actual = NativeWindowsBootstrap.readInstallation()
+            if (!NativeInstallationSchema.sameWindowsFiles(windows, actual, expectedBootstrapHash)) throw refusal("NATIVE_IDENTITY_CHANGED")
+            if (lookup(handle) !== prior) throw refusal("NATIVE_HANDLE_INVALID")
+            return prior.description
+          },
+          catch: (error) =>
+            error instanceof NativeInstallationSchema.Error ? error : refusal("NATIVE_INSTALLATION_UNAVAILABLE"),
+        }),
+      ),
+      Effect.tapError(() => Effect.sync(() => handles.delete(handle))),
+    )
+  }
   const actual = yield* inspect().pipe(Effect.tapError(() => Effect.sync(() => handles.delete(handle))))
   if (
     actual.executableIdentity !== prior.executableIdentity ||
@@ -203,18 +236,7 @@ function inspect() {
         Buffer.byteLength(componentsText) > NativeInstallationSchema.COMPONENTS_LIMIT
       )
         throw refusal("NATIVE_INSTALLATION_UNAVAILABLE")
-      const components = Schema.decodeUnknownOption(Schema.fromJsonString(NativeInstallationSchema.Components), {
-        onExcessProperty: "error",
-      })(componentsText)
-      if (Option.isNone(components) || CanonicalJson.stringify(components.value) !== componentsText)
-        throw refusal("NATIVE_MANIFEST_INVALID")
-      const paths = components.value.components.map((entry) => entry.path)
-      if (
-        new Set(paths).size !== paths.length ||
-        paths.some((entry) => entry.split("/").some((part) => part === "." || part === "..")) ||
-        paths.join("\n") !== paths.toSorted().join("\n")
-      )
-        throw refusal("NATIVE_MANIFEST_INVALID")
+      const components = readComponents()
       // One original Native batch already contains all three held files. Keep
       // it local to this inspection and compare a second current batch at the
       // end, rather than repeating the complete image graph for each member.
@@ -243,12 +265,12 @@ function inspect() {
       )
         throw refusal("NATIVE_SIGNATURE_INVALID")
       const payload = decoded.value.payload
-      if (payload.target !== `${process.platform}-${process.arch}` || components.value.target !== payload.target)
+      if (payload.target !== `${process.platform}-${process.arch}` || components.target !== payload.target)
         throw refusal("NATIVE_TARGET_MISMATCH")
       if (
         payload.componentsHash !== digest(componentsText) ||
-        payload.sourceCommit !== components.value.sourceCommit ||
-        payload.sourceTree !== components.value.sourceTree
+        payload.sourceCommit !== components.sourceCommit ||
+        payload.sourceTree !== components.sourceTree
       )
         throw refusal("NATIVE_COMPONENTS_MISMATCH")
       const executable = await readVerifiedFile(executablePath, NativeInstallationSchema.EXECUTABLE_LIMIT, false, windows)
@@ -271,11 +293,7 @@ function inspect() {
       if (
         manifest.identity !== finalManifest.identity ||
         manifest.hash !== finalManifest.hash ||
-        (windows && (!finalWindows || (["artifact", "manifest", "runtime"] as const).some((name) =>
-          windows[name].identity !== finalWindows[name].identity ||
-          windows[name].hash !== finalWindows[name].hash ||
-          windows[name].bytes !== finalWindows[name].bytes ||
-          windows[name].text !== finalWindows[name].text))) ||
+        (windows && (!finalWindows || !NativeInstallationSchema.sameWindowsFiles(windows, finalWindows))) ||
         (process.platform !== "win32" && (identity(await fs.lstat(executablePath, { bigint: true })) !== executable.identity ||
           (runtime && identity(await fs.lstat(process.execPath, { bigint: true })) !== runtime.identity) ||
           (await fs.realpath(executablePath)) !== executablePath))
@@ -283,7 +301,7 @@ function inspect() {
         throw refusal("NATIVE_IDENTITY_CHANGED")
       return {
         components: Object.freeze(
-          components.value.components.map((component) =>
+          components.components.map((component) =>
             Object.freeze({
               path: component.path,
               bytes: component.bytes,
@@ -302,6 +320,11 @@ function inspect() {
           signerHash: digest(key.export({ type: "spki", format: "der" })),
           manifestHash: manifest.hash,
         }),
+        ...(windows ? { windows: Object.freeze({ ...windows,
+          artifact: Object.freeze({ ...windows.artifact }),
+          manifest: Object.freeze({ ...windows.manifest }),
+          runtime: Object.freeze({ ...windows.runtime }),
+        }) } : {}),
         executableIdentity: executable.identity,
         manifestIdentity: manifest.identity,
         ...(runtime ? { runtimeIdentity: runtime.identity } : {}),
@@ -313,3 +336,22 @@ function inspect() {
 }
 
 export * as NativeInstallation from "./native-installation"
+
+function readComponents() {
+  if (componentInventory.value) return componentInventory.value
+  const components = Schema.decodeUnknownOption(Schema.fromJsonString(NativeInstallationSchema.Components), {
+    onExcessProperty: "error",
+  })(componentsText)
+  if (Option.isNone(components) || CanonicalJson.stringify(components.value) !== componentsText)
+    throw refusal("NATIVE_MANIFEST_INVALID")
+  const paths = components.value.components.map((entry) => entry.path)
+  if (
+    new Set(paths).size !== paths.length ||
+    paths.some((entry) => entry.split("/").some((part) => part === "." || part === "..")) ||
+    paths.join("\n") !== paths.toSorted().join("\n")
+  ) throw refusal("NATIVE_MANIFEST_INVALID")
+  components.value.components.forEach((component) => Object.freeze(component))
+  Object.freeze(components.value.components)
+  componentInventory.value = Object.freeze(components.value)
+  return componentInventory.value
+}

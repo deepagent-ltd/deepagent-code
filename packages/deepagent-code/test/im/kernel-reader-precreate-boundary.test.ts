@@ -18,6 +18,7 @@ const selected = process.env.DEEPAGENT_CODE_TEST_NATIVE_PRECREATE_CASE
 const cases = [
   "get-no-sync", "prepare-once", "second-refusal", "effect-no-replay",
   "postframe-no-replay", "delayed-prepared", "consumed-prepared", "changed-identity",
+  "pending-prepare-once", "pending-no-refresh", "pending-refused", "pending-effect-no-replay", "pending-postframe-no-replay",
 ]
 
 afterAll(() => fs.rm(root, { recursive: true, force: true }))
@@ -48,6 +49,8 @@ async function run(name: string, options: Parameters<typeof makeNativeV2Peer>[0]
   db: Database.Interface["db"]
   request: { workspaceID: string; userID: string; groupIDs: string[] }
   probe: Effect.Effect<string, unknown>
+  visibleGroupID: string
+  inspection: { allowed: boolean; current: boolean; retireOnInspect: boolean; count: number; name: string }
 }) => Effect.Effect<void, unknown>) {
   const directory = await fs.mkdtemp(path.join(root, "case-"))
   const native = makeNativeV2Peer(options)
@@ -60,22 +63,41 @@ async function run(name: string, options: Parameters<typeof makeNativeV2Peer>[0]
       if (round === 499) return yield* Effect.die("ACTUAL_NATIVE_SDK_DID_NOT_CONNECT")
       yield* Effect.sleep("10 millis")
     }
-    const reader = yield* IMKernelReader.make(native.config, { workspaceID: directory,
-      inspectConversation: (input) => Effect.succeed({ conversation_type: input.conversationType,
-        conversation_id: input.conversationID, org_id: 1, name: "sender", member_uuids: [native.config.userID, input.conversationID] }) })
+    const inspection = { allowed: true, current: true, retireOnInspect: false, count: 0, name: "sender" }
+    const makeReader = (config: typeof native.config) => IMKernelReader.make(config, { workspaceID: directory,
+      ownerCurrent: () => inspection.current,
+      inspectConversation: (input) => Effect.sync(() => {
+        inspection.count++
+        if (inspection.retireOnInspect) inspection.current = false
+        return { conversation_type: input.conversationType, conversation_id: input.conversationID, org_id: 1,
+          name: inspection.name, member_uuids: inspection.allowed ? [config.userID, input.conversationID] : [input.conversationID] }
+      }) })
+    const reader = yield* makeReader(native.config)
     yield* reader.sync
     const projection = yield* KernelReader.projection(reader.runtime, native.projectionKey)
     if (!projection?.local_group_id || projection.visibility !== "visible") return yield* Effect.die("ACTUAL_PROJECTION_NOT_VISIBLE")
     expect(KernelReader.readerVersion(reader.runtime)).toBe(2)
+    // Keep the real file-backed pending row made by the original production
+    // reader, then replace only its runtime credential snapshot. The original
+    // SDK/native V2 peer remains the controlled protocol boundary, not a live
+    // platform rename or a remote publish acceptance oracle.
+    const active = yield* name.startsWith("pending-") ? Effect.gen(function* () {
+      const groupID = yield* reader.pending({ conversationType: 2, conversationID: `empty-${name}`, name: "sender" })
+      KernelReader.close(reader.runtime)
+      const next = yield* makeReader({ ...native.config, token: "next-controlled-credential" })
+      yield* next.verifyScope
+      return { reader: next, groupID }
+    }) : Effect.succeed({ reader, groupID: projection.local_group_id })
     yield* db.run(sql`CREATE TABLE boundary_effect_probe (id INTEGER PRIMARY KEY, label TEXT NOT NULL)`)
-    const request = { workspaceID: directory, userID: "server", groupIDs: [projection.local_group_id] }
+    const request = { workspaceID: directory, userID: "server", groupIDs: [active.groupID] }
     const probe = Effect.gen(function* () {
-      yield* KernelReader.gateGroup(db, projection.local_group_id!)
+      yield* KernelReader.gateGroup(db, active.groupID)
       yield* db.run(sql`INSERT INTO boundary_effect_probe(label) VALUES (${name})`)
       return "ONE_ACTUAL_SQL_EFFECT"
     })
     native.requests.length = 0
-    yield* scenario({ native, reader, client, db, request, probe })
+    inspection.count = 0
+    yield* scenario({ native, reader: active.reader, client, db, request, probe, inspection, visibleGroupID: projection.local_group_id })
     expect(native.errors).toEqual([])
     expect(native.requests.every((request) => request.requestVersion === 2)).toBe(true)
     expect((yield* db.get<{ count: number }>(sql`SELECT count(*) count FROM session_v2_provider_turn_receipt`))?.count).toBe(0)
@@ -172,4 +194,62 @@ boundary("changed-identity", "current source identity change between preparation
   expect(rejected).toBeInstanceOf(KernelReaderSchema.Error)
   expect(rejected).toMatchObject({ code: "reader_unavailable", operation: "current" })
   expect(yield* db.get(sql`SELECT count(*) count FROM boundary_effect_probe`)).toEqual({ count: 0 })
+})))
+
+
+boundary("pending-prepare-once", "one opted-in text precreate refreshes its current pending mapping before one SQL effect", async () => run("pending-prepare-once", undefined, ({ native, reader, db, request, probe, inspection }) => Effect.gen(function* () {
+  const before = yield* db.get(sql`SELECT local_revision,metadata FROM im_kernel_reader_projection WHERE local_group_id=${request.groupIDs[0]}`)
+  expect(yield* reader.withOutput(request, probe, { refreshBeforeEffect: true })).toBe("ONE_ACTUAL_SQL_EFFECT")
+  expect(inspection.count).toBe(2) // one original refresh inspection, then one new output proof
+  expect(yield* db.get(sql`SELECT count(*) count FROM boundary_effect_probe`)).toEqual({ count: 1 })
+  expect(yield* db.get(sql`SELECT local_revision,metadata FROM im_kernel_reader_projection WHERE local_group_id=${request.groupIDs[0]}`)).not.toEqual(before)
+  expect(native.requests).toEqual([]) // pending refresh never starts delivery sync or publish
+})))
+
+boundary("pending-no-refresh", "read-only and multi-group pending output refusals preserve SQL and never inspect to repair", async () => run("pending-no-refresh", undefined, ({ native, reader, db, request, probe, inspection, visibleGroupID }) => Effect.gen(function* () {
+  const before = yield* db.get(sql`SELECT local_revision,metadata FROM im_kernel_reader_projection WHERE local_group_id=${request.groupIDs[0]}`)
+  expect(yield* reader.withOutput(request, probe).pipe(Effect.flip)).toMatchObject({ code: "reader_scope_mismatch", operation: "pending-output" })
+  expect(yield* reader.withOutput({ ...request, groupIDs: [request.groupIDs[0]!, visibleGroupID] }, probe, { refreshBeforeEffect: true }).pipe(Effect.flip)).toMatchObject({ code: "reader_scope_mismatch", operation: "pending-output" })
+  expect(inspection.count).toBe(0)
+  expect(native.requests).toEqual([])
+  expect(yield* db.get(sql`SELECT local_revision,metadata FROM im_kernel_reader_projection WHERE local_group_id=${request.groupIDs[0]}`)).toEqual(before)
+  expect(yield* db.get(sql`SELECT count(*) count FROM boundary_effect_probe`)).toEqual({ count: 0 })
+})))
+
+boundary("pending-refused", "current membership denial and owner retirement during pending revalidation start no SQL effect", async () => run("pending-refused", undefined, ({ native, reader, db, request, probe, inspection }) => Effect.gen(function* () {
+  const before = yield* db.get(sql`SELECT local_revision,metadata FROM im_kernel_reader_projection WHERE local_group_id=${request.groupIDs[0]}`)
+  inspection.allowed = false
+  expect(yield* reader.withOutput(request, probe, { refreshBeforeEffect: true }).pipe(Effect.flip)).toMatchObject({ code: "reader_scope_mismatch", operation: "inspect" })
+  expect(inspection.count).toBe(1)
+  inspection.allowed = true
+  inspection.retireOnInspect = true
+  expect(yield* reader.withOutput(request, probe, { refreshBeforeEffect: true }).pipe(Effect.flip)).toMatchObject({ code: "reader_unavailable", operation: "current" })
+  expect(inspection.count).toBe(2)
+  expect(native.requests).toEqual([])
+  expect(yield* db.get(sql`SELECT local_revision,metadata FROM im_kernel_reader_projection WHERE local_group_id=${request.groupIDs[0]}`)).toEqual(before)
+  expect(yield* db.get(sql`SELECT count(*) count FROM boundary_effect_probe`)).toEqual({ count: 0 })
+})))
+
+boundary("pending-effect-no-replay", "the same pending-output error from an already-started effect is not refreshed or replayed", async () => run("pending-effect-no-replay", undefined, ({ native, reader, db, request, probe, inspection }) => Effect.gen(function* () {
+  const actual = Effect.gen(function* () {
+    yield* probe
+    return yield* KernelReaderSchema.failure("reader_scope_mismatch", "pending-output")
+  })
+  expect(yield* reader.withOutput(request, actual, { refreshBeforeEffect: true }).pipe(Effect.flip)).toMatchObject({ code: "reader_scope_mismatch", operation: "pending-output" })
+  expect(inspection.count).toBe(2)
+  expect(native.requests).toEqual([])
+  expect(yield* db.get(sql`SELECT count(*) count FROM boundary_effect_probe`)).toEqual({ count: 1 })
+})))
+
+boundary("pending-postframe-no-replay", "a committed pending effect followed by a real projection revision change never replays", async () => run("pending-postframe-no-replay", undefined, ({ native, reader, db, request, probe, inspection }) => Effect.gen(function* () {
+  const actual = Effect.gen(function* () {
+    yield* probe
+    inspection.name = "current renamed group"
+    yield* KernelReader.refreshGroup(reader.runtime, request.groupIDs[0]!)
+    return "BUSINESS_ALREADY_COMMITTED"
+  })
+  expect(yield* reader.withOutput(request, actual, { refreshBeforeEffect: true }).pipe(Effect.flip)).toMatchObject({ code: "reader_stale", operation: "output-revision" })
+  expect(inspection.count).toBe(3)
+  expect(native.requests).toEqual([])
+  expect(yield* db.get(sql`SELECT count(*) count FROM boundary_effect_probe`)).toEqual({ count: 1 })
 })))

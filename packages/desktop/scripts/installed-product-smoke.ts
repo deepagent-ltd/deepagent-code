@@ -6,6 +6,15 @@ import { createHash } from "node:crypto"
 import { Database } from "bun:sqlite"
 import { _electron } from "@playwright/test"
 
+if (process.platform !== "darwin") throw new Error("Installed product smoke currently supports packaged macOS .app only")
+const expectedVersion: unknown =
+  process.env.DEEPAGENT_CODE_SMOKE_EXPECTED_VERSION ??
+  (await Bun.file(new URL("../package.json", import.meta.url)).json()).version
+if (typeof expectedVersion !== "string" || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(expectedVersion))
+  throw new Error(
+    "Installed smoke requires a release version from DEEPAGENT_CODE_SMOKE_EXPECTED_VERSION or the Desktop manifest",
+  )
+
 const executable = process.env.DEEPAGENT_CODE_DESKTOP_EXECUTABLE
 if (!executable || !path.isAbsolute(executable) || (await fs.realpath(executable)) !== executable)
   throw new Error("Installed smoke requires the canonical private candidate executable")
@@ -48,7 +57,7 @@ try {
     application: app.getAppPath(),
     userData: app.getPath("userData"),
   }))
-  assert.equal(actual.version, "2.0.4")
+  assert.equal(actual.version, expectedVersion)
   assert.equal(actual.packaged, true)
   assert.equal(actual.executable, executable)
   assert.ok(actual.application.endsWith("/Contents/Resources/app.asar"))
@@ -79,7 +88,7 @@ try {
   assert.equal(health.status, 200)
   const body = (await health.json()) as { healthy?: boolean; version?: string }
   assert.equal(body.healthy, true)
-  assert.equal(body.version, "2.0.4")
+  assert.equal(body.version, expectedVersion)
   await page.waitForFunction(() => document.readyState === "complete" && document.body.innerText.trim().length > 0, undefined, {
     timeout: 30_000,
   })
@@ -130,7 +139,7 @@ try {
           new Response(child.stderr).text(),
         ])
         assert.equal(result[0], 0)
-        assert.equal(result[1].trim(), "2.0.4")
+        assert.equal(result[1].trim(), expectedVersion)
         const bytes = await fs.readFile(cli)
         return {
           version: result[1].trim(),
@@ -143,7 +152,9 @@ try {
     path.join(root, "safe-result.json"),
     JSON.stringify(
       {
-        version: "2.0.4",
+        version: expectedVersion,
+        expectedVersionSource:
+          process.env.DEEPAGENT_CODE_SMOKE_EXPECTED_VERSION === undefined ? "desktop-manifest" : "explicit-smoke-expectation",
         actual,
         renderer,
         healthy: body.healthy,
@@ -151,6 +162,7 @@ try {
         inventory,
         cli: cliResult,
         limits: [
+          "macOS packaged .app only; not Windows/Linux installation acceptance",
           "single startup sample; not SLO or soak acceptance",
           "no provider/Task/Work execution",
           "local candidate; Developer ID/notarization/release publication assessed separately",

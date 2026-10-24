@@ -1,4 +1,14 @@
-import { For, Show, createSignal, createMemo, createEffect, untrack, onCleanup, onMount } from "solid-js"
+import {
+  For,
+  Show,
+  createSignal,
+  createMemo,
+  createEffect,
+  createResource,
+  untrack,
+  onCleanup,
+  onMount,
+} from "solid-js"
 import { createStore } from "solid-js/store"
 import { validateIMName } from "@deepagent-code/core/im/facade-contract"
 import { DialogSelect } from "../ui/dialog-select"
@@ -11,6 +21,8 @@ import { DialogIMForm, type IMFormField } from "./dialog-im-form"
 import { DialogIMMedia } from "./dialog-im-media"
 import { DialogIMDac } from "./dialog-im-dac"
 import { DialogIMModel } from "./dialog-im-model"
+import { IMDeviceClient } from "@deepagent-code/core/im/device-client"
+import { DialogIMDevice } from "./dialog-im-device"
 import { DialogIMActivation } from "./dialog-im-activation"
 import { createIMActivation } from "./im-activation"
 import { createIMDacDraft, imDacText, type IMDacDraftSnapshot } from "./im-dac-draft"
@@ -73,6 +85,7 @@ export function DialogIM(props: { restore?: IMChatRestore } = {}) {
   const [failure, setFailure] = createSignal("")
   const [form, setForm] = createSignal<Form>()
   const [modelOpen, setModelOpen] = createSignal(false)
+  const [deviceOpen, setDeviceOpen] = createSignal(false)
   const [activationOpen, setActivationOpen] = createSignal<"activate" | "query">()
   const [chat, setChat] = createSignal<IMGroup>()
   const [selectedID, setSelectedID] = createSignal<string>()
@@ -91,6 +104,26 @@ export function DialogIM(props: { restore?: IMChatRestore } = {}) {
   const [view, setView] = createStore({ readerUnavailable: false })
   let disposed = false
   const activation = createIMActivation({ client, current: () => !disposed })
+  const deviceClient = sdk.client
+  const deviceCurrent = () =>
+    !disposed && client.dacAvailable() && client.scope() === restoreScope && sdk.client === deviceClient
+  const device = IMDeviceClient.create({
+    client: deviceClient as unknown as IMDeviceClient.Transport,
+    current: deviceCurrent,
+  })
+  const [deviceStatus, deviceActions] = createResource(
+    () => (activationOpen() === "activate" && deviceCurrent() ? restoreScope : undefined),
+    async () => {
+      const info = await device.info().catch(() => undefined)
+      if (!info) return { ready: false }
+      const pending = await device.pending().catch(() => undefined)
+      return {
+        ready:
+          pending !== undefined &&
+          (!pending || pending.state === "rejected" || (pending.state === "succeeded" && pending.credentialStored)),
+      }
+    },
+  )
   const refresh = { generation: 0, active: false, abort: new AbortController() }
   const clearProtected = (supersede = false) => {
     if (supersede) {
@@ -396,12 +429,13 @@ export function DialogIM(props: { restore?: IMChatRestore } = {}) {
         ]
       : []),
     { title: i18n.t("tui.im.localGroup"), value: "local", category: i18n.t("tui.im.local") },
+    { title: i18n.t("tui.im.device.title"), value: "im-device", category: "IM", disabled: !client.dacAvailable() },
     { title: i18n.t("tui.im.model.title"), value: "im-model", category: "IM", disabled: !client.dacAvailable() },
     {
       title: i18n.t("tui.im.activation.title"),
       value: "im-activate",
       category: "IM",
-      disabled: !client.dacAvailable(),
+      disabled: !client.dacAvailable() || status()?.blocked?.code === "im_device_store_unavailable",
     },
     {
       title: i18n.t("tui.im.activation.resume"),
@@ -457,6 +491,10 @@ export function DialogIM(props: { restore?: IMChatRestore } = {}) {
   }
   const select = (value: string) => {
     if (busy()) return
+    if (value === "im-device") {
+      setDeviceOpen(true)
+      return
+    }
     if (value === "im-model") {
       setModelOpen(true)
       return
@@ -522,127 +560,160 @@ export function DialogIM(props: { restore?: IMChatRestore } = {}) {
   return (
     <box>
       <Show
-        when={!activationOpen()}
+        when={!deviceOpen()}
         fallback={
-          <DialogIMActivation
-            flow={activation}
-            queryOnly={activationOpen() === "query"}
+          <DialogIMDevice
+            client={deviceClient as unknown as IMDeviceClient.Transport}
+            current={deviceCurrent}
             back={() => {
-              setActivationOpen(undefined)
+              setDeviceOpen(false)
+              void Promise.resolve(deviceActions.refetch()).catch(() => undefined)
               void reload()
             }}
           />
         }
       >
-        <Show when={!modelOpen()} fallback={<DialogIMModel client={client} back={() => setModelOpen(false)} />}>
-          <Show
-            when={chat()}
-            fallback={
-              <Show
-                when={form()}
-                fallback={
-                  <DialogSelect
-                    title={i18n.t("tui.im.title")}
-                    titleView={
-                      <box flexGrow={1} flexShrink={1} minWidth={0} maxWidth={Math.max(8, dimensions().width - 12)}>
-                        <text fg={theme.text} wrapMode={compact() ? "none" : "word"}>
-                          {i18n.t("tui.im.title")} ·{" "}
-                          {busy()
-                            ? i18n.t("tui.im.loading")
-                            : status()
-                              ? i18n.t(activationRequired() ? "tui.im.activation.title" : `tui.im.${status()!.facade}`)
-                              : ""}
-                          <Show when={compact() && status()?.kernel}>
-                            {` · ${i18n.t("tui.im.connection", { state: i18n.t(`tui.im.${status()!.kernel!}`) })}`}
-                          </Show>
-                        </text>
-                        <Show when={status()?.identity}>
-                          {(identity) => (
-                            <text fg={theme.textMuted} wrapMode={compact() ? "none" : "word"}>
-                              {identity().name} · {identity().uuid} · org {identity().orgID}
-                            </text>
-                          )}
-                        </Show>
-                        <Show when={!compact() && status()?.kernel}>
-                          <text fg={theme.textMuted}>
-                            {i18n.t("tui.im.connection", { state: i18n.t(`tui.im.${status()!.kernel!}`) })}
-                          </text>
-                        </Show>
-                        <Show when={!compact() && status()?.recovery?.status === "pending"}>
-                          <text fg={theme.textMuted}>{i18n.t("tui.im.recoveryPending")}</text>
-                        </Show>
-                        <Show when={!compact() && status()?.recovery?.status === "failed"}>
-                          <text fg={theme.error}>{i18n.t("tui.im.recoveryFailed")}</text>
-                        </Show>
-                        <Show when={!compact() && status()?.blocked}>
-                          <text fg={theme.error}>
-                            {imErrorText(new IMRequestError(status()!.blocked!.code, ""), i18n)}
-                          </text>
-                        </Show>
-                        <Show
-                          when={compact()}
-                          fallback={<text fg={theme.textMuted}>{i18n.t("tui.im.reader.listObserved")}</text>}
-                        >
-                          <text
-                            fg={
-                              failure() || status()?.blocked || status()?.recovery?.status === "failed"
-                                ? theme.error
-                                : theme.textMuted
-                            }
-                            wrapMode="none"
-                          >
-                            {statusNotice()}
-                          </text>
-                        </Show>
-                        <Show when={!compact() && failure()}>
-                          <text fg={theme.error}>{failure()}</text>
-                        </Show>
-                      </box>
-                    }
-                    locked={busy()}
-                    options={options()}
-                    onSelect={(option) => select(option.value)}
+        <Show
+          when={!activationOpen()}
+          fallback={
+            <Show
+              when={activationOpen() === "query" || deviceStatus()?.ready}
+              fallback={
+                <Show when={!deviceStatus.loading} fallback={<text>{i18n.t("tui.im.loading")}</text>}>
+                  <DialogIMDevice
+                    client={deviceClient as unknown as IMDeviceClient.Transport}
+                    current={deviceCurrent}
+                    back={() => {
+                      setActivationOpen(undefined)
+                      void reload()
+                    }}
                   />
-                }
-              >
-                {(active) => <DialogIMForm {...active()} back={() => setForm(undefined)} />}
-              </Show>
-            }
-          >
-            {(group) => (
-              <DialogIMChat
-                client={client}
-                sdk={sdk}
-                group={group()}
-                metadataRefreshed={loadSelected}
-                displayEpoch={status()?.reader?.displayEpoch}
-                readerUnavailable={view.readerUnavailable}
-                invalidated={() => {
-                  clearProtected(true)
-                  void reload()
-                }}
-                identity={status()?.viewer?.memberID ?? status()?.identity?.uuid}
-                selfMemberIDs={[status()?.viewer?.memberID, status()?.identity?.uuid].filter(
-                  (value): value is string => typeof value === "string",
-                )}
-                restore={pendingRestore()?.groupID === group().id ? pendingRestore() : undefined}
-                restored={() => setPendingRestore(undefined)}
-                openSession={
-                  route && sourceRoute
-                    ? (pointer, restore) => {
-                        if (disposed) return
-                        if (pointer.sessionID) openDacSession(pointer.sessionID, restore)
-                      }
-                    : undefined
-                }
-                back={(restore) => {
-                  setPendingRestore(restore)
-                  setSelectedID(undefined)
-                  setChat(undefined)
+                </Show>
+              }
+            >
+              <DialogIMActivation
+                flow={activation}
+                queryOnly={activationOpen() === "query"}
+                back={() => {
+                  setActivationOpen(undefined)
                   void reload()
                 }}
               />
-            )}
+            </Show>
+          }
+        >
+          <Show when={!modelOpen()} fallback={<DialogIMModel client={client} back={() => setModelOpen(false)} />}>
+            <Show
+              when={chat()}
+              fallback={
+                <Show
+                  when={form()}
+                  fallback={
+                    <DialogSelect
+                      title={i18n.t("tui.im.title")}
+                      titleView={
+                        <box flexGrow={1} flexShrink={1} minWidth={0} maxWidth={Math.max(8, dimensions().width - 12)}>
+                          <text fg={theme.text} wrapMode={compact() ? "none" : "word"}>
+                            {i18n.t("tui.im.title")} ·{" "}
+                            {busy()
+                              ? i18n.t("tui.im.loading")
+                              : status()
+                                ? i18n.t(
+                                    activationRequired() ? "tui.im.activation.title" : `tui.im.${status()!.facade}`,
+                                  )
+                                : ""}
+                            <Show when={compact() && status()?.kernel}>
+                              {` · ${i18n.t("tui.im.connection", { state: i18n.t(`tui.im.${status()!.kernel!}`) })}`}
+                            </Show>
+                          </text>
+                          <Show when={status()?.identity}>
+                            {(identity) => (
+                              <text fg={theme.textMuted} wrapMode={compact() ? "none" : "word"}>
+                                {identity().name} · {identity().uuid} · org {identity().orgID}
+                              </text>
+                            )}
+                          </Show>
+                          <Show when={!compact() && status()?.kernel}>
+                            <text fg={theme.textMuted}>
+                              {i18n.t("tui.im.connection", { state: i18n.t(`tui.im.${status()!.kernel!}`) })}
+                            </text>
+                          </Show>
+                          <Show when={!compact() && status()?.recovery?.status === "pending"}>
+                            <text fg={theme.textMuted}>{i18n.t("tui.im.recoveryPending")}</text>
+                          </Show>
+                          <Show when={!compact() && status()?.recovery?.status === "failed"}>
+                            <text fg={theme.error}>{i18n.t("tui.im.recoveryFailed")}</text>
+                          </Show>
+                          <Show when={!compact() && status()?.blocked}>
+                            <text fg={theme.error}>
+                              {imErrorText(new IMRequestError(status()!.blocked!.code, ""), i18n)}
+                            </text>
+                          </Show>
+                          <Show
+                            when={compact()}
+                            fallback={<text fg={theme.textMuted}>{i18n.t("tui.im.reader.listObserved")}</text>}
+                          >
+                            <text
+                              fg={
+                                failure() || status()?.blocked || status()?.recovery?.status === "failed"
+                                  ? theme.error
+                                  : theme.textMuted
+                              }
+                              wrapMode="none"
+                            >
+                              {statusNotice()}
+                            </text>
+                          </Show>
+                          <Show when={!compact() && failure()}>
+                            <text fg={theme.error}>{failure()}</text>
+                          </Show>
+                        </box>
+                      }
+                      locked={busy()}
+                      options={options()}
+                      onSelect={(option) => select(option.value)}
+                    />
+                  }
+                >
+                  {(active) => <DialogIMForm {...active()} back={() => setForm(undefined)} />}
+                </Show>
+              }
+            >
+              {(group) => (
+                <DialogIMChat
+                  client={client}
+                  sdk={sdk}
+                  group={group()}
+                  metadataRefreshed={loadSelected}
+                  displayEpoch={status()?.reader?.displayEpoch}
+                  readerUnavailable={view.readerUnavailable}
+                  invalidated={() => {
+                    clearProtected(true)
+                    void reload()
+                  }}
+                  identity={status()?.viewer?.memberID ?? status()?.identity?.uuid}
+                  selfMemberIDs={[status()?.viewer?.memberID, status()?.identity?.uuid].filter(
+                    (value): value is string => typeof value === "string",
+                  )}
+                  restore={pendingRestore()?.groupID === group().id ? pendingRestore() : undefined}
+                  restored={() => setPendingRestore(undefined)}
+                  openSession={
+                    route && sourceRoute
+                      ? (pointer, restore) => {
+                          if (disposed) return
+                          if (pointer.sessionID) openDacSession(pointer.sessionID, restore)
+                        }
+                      : undefined
+                  }
+                  back={(restore) => {
+                    setPendingRestore(restore)
+                    setSelectedID(undefined)
+                    setChat(undefined)
+                    void reload()
+                  }}
+                />
+              )}
+            </Show>
           </Show>
         </Show>
       </Show>
@@ -953,7 +1024,8 @@ function IMChatConversation(props: DialogIMChatProps) {
       sessionID,
       AbortSignal.any([requests.signal, AbortSignal.timeout(10_000)]),
       dac.state.command?.state === "admitted" && dac.state.command.sessionID === sessionID
-        ? dac.state.command.commandID : undefined,
+        ? dac.state.command.commandID
+        : undefined,
     )
     if (!dacCurrent() || props.client.scope() !== scope) return
     props.openSession(binding, captureReturn())

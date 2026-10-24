@@ -1,0 +1,2 @@
+Schema baseline checkpoint only. Released backfills remain in their existing TypeScript migrations; payment-fact compatibility executes in 20261014100000_im_activation_payment_fact.
+Drizzle SQLite index-predicate changes are not emitted by generate; this pinned baseline mirrors the separately executed paid-rejection predicate exactly.

@@ -643,6 +643,23 @@ jobs:
           deepagent-code-app-id: ${{ vars.DEEPAGENT_CODE_APP_ID }}
           deepagent-code-app-secret: ${{ secrets.DEEPAGENT_CODE_APP_SECRET }}
 
+      - name: Verify Windows browser file stages
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 5
+        run: ./.github/scripts/test-windows-browser-file-stages.ps1
+
+      # Reuse the release's single owner issuance pair across every Desktop target.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: owner-authorization
+          path: ${{ runner.temp }}/owner-auth
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-owner-public-key
+          path: ${{ runner.temp }}/owner-key
+
       - name: Build, package and verify Desktop Native assets
         uses: ./.github/actions/package-desktop
         timeout-minutes: 90
@@ -661,6 +678,8 @@ jobs:
           VITE_SENTRY_ENVIRONMENT: ${{ (github.ref_name == 'beta' && 'beta') || 'production' }}
           VITE_SENTRY_RELEASE: desktop@${{ needs.version.outputs.version }}
           DEEPAGENT_CODE_CLI_ARTIFACT: ${{ (runner.os == 'Windows' && 'deepagent-code-cli-windows') || 'deepagent-code-cli' }}
+          DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: ${{ runner.temp }}/owner-auth/owner-authorization.json
+          DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: ${{ runner.temp }}/owner-key/release-owner-public-key.pem
           RUST_TARGET: ${{ matrix.settings.target }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
           DEEPAGENT_CODE_ALLOW_UNSIGNED: ${{ runner.os == 'Windows' && env.HAS_TRUSTED_SIGNING != 'true' && '1' || '0' }}
@@ -670,6 +689,35 @@ jobs:
           APPLE_ID: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_ID || '' }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ runner.os == 'macOS' && needs.version.outputs.release != '' && secrets.APPLE_TEAM_ID || '' }}
+
+      # Keep these functional gates identical to desktop-build: the shared action
+      # has already verified this job's packaged Native cohort, and no package is
+      # uploaded unless its existing platform smoke also succeeds.
+      - name: Smoke test packaged macOS app
+        if: runner.os == 'macOS'
+        working-directory: packages/desktop
+        shell: bash
+        run: |
+          executable=$(find dist -maxdepth 5 -type f -path '*/Contents/MacOS/DeepAgent Code*' -perm +111 -print -quit)
+          test -n "$executable"
+          DEEPAGENT_CODE_DESKTOP_EXECUTABLE="$executable" bun run test:subagents-cold-start
+
+      - name: Smoke test packaged Windows sidecar health
+        if: runner.os == 'Windows'
+        working-directory: packages/desktop
+        shell: pwsh
+        run: |
+          # win-unpacked holds the x64 app. Wildcard matches both prod ("DeepAgent Code.exe")
+          # and beta ("DeepAgent Code Beta.exe") artifact names so the beta build
+          # cannot silently fail this smoke because of an exact name filter.
+          $exe = Get-ChildItem -Path "dist/win-unpacked" -Filter "*DeepAgent Code*.exe" -Recurse -File | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "Packaged executable not found under dist/win-unpacked"
+            exit 1
+          }
+          $env:DEEPAGENT_CODE_DESKTOP_EXECUTABLE = $exe.FullName
+          $env:DEEPAGENT_CODE_SMOKE_PORT = "3188"
+          bun run test:sidecar-health-smoke
 
       - name: Create macOS .app.tar.gz
         if: runner.os == 'macOS' && needs.version.outputs.release

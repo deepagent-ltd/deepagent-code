@@ -23,7 +23,9 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
       // evaluate the injected capability set directly from the env (deny-only,
       // fail-open-when-unset). See server-capabilities.ts / docs runtime §3.1.
       if (
-        "provider" in ctx.payload &&
+        ["provider", "providers", "enabled_providers", "disabled_providers"].some((key) =>
+          Object.hasOwn(ctx.payload, key),
+        ) &&
         !ServerCapabilities.isAllowed(ServerCapabilities.Actions.providerConfigWrite)
       )
         return yield* new HttpApiError.BadRequest({})

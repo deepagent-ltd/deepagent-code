@@ -1,13 +1,15 @@
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { Cause, Effect, Exit, Layer, Option } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Option } from "effect"
 import { HttpClient } from "effect/unstable/http"
 import { Global } from "@deepagent-code/core/global"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { Config } from "@/config/config"
+import { SettingsStore } from "@/settings/store"
+import { SettingsTransaction } from "@/settings/transaction"
 import { SecretRefScope } from "@/mcp/secret-ref-scope"
 import { McpSecretMigration } from "@/mcp/secret-migration"
 import { SecretStore } from "@/mcp/secret-store"
@@ -15,14 +17,18 @@ import { AccountRepo } from "@/account/repo"
 import { Project } from "@/project/project"
 import { Env } from "@/env"
 import { AuthTest } from "../../fake/auth"
+import { Auth } from "@/auth"
+import { Npm } from "@deepagent-code/core/npm"
 import { Account } from "@/account/account"
 import { NpmTest } from "../../fake/npm"
 import { parse } from "jsonc-parser"
 import { MCP } from "@/mcp"
 import { McpAuth } from "@/mcp/auth"
+import { McpAuthScope } from "@/mcp/auth-scope"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { InstanceStore } from "@/project/instance-store"
+import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceBootstrap } from "@/project/bootstrap-service"
 import { LocalAuthority } from "@/installation/local-authority"
 import { Database } from "@deepagent-code/core/database/database"
@@ -100,20 +106,30 @@ const backend: SecretStore.Backend = {
     return actual.get(account)
   },
 }
-const config = Config.layer.pipe(
-  Layer.provide(FSUtil.defaultLayer),
-  Layer.provide(EffectFlock.defaultLayer),
-  Layer.provide(Env.defaultLayer),
-  Layer.provide(AuthTest.empty),
-  Layer.provide(Account.defaultLayer),
-  Layer.provide(NpmTest.noop),
-  Layer.provide(
-    Layer.succeed(
-      HttpClient.HttpClient,
-      HttpClient.make(() => {
-        counts.network++
-        return Effect.die("Unexpected network")
-      }),
+class IndependentGlobalConfig extends Context.Service<IndependentGlobalConfig, Config.Interface>()(
+  "test/IndependentGlobalConfig",
+) {}
+const config = Layer.mergeAll(
+  Config.layer,
+  ...(["global-cache", "global-state-cache", "global-cache-race"].includes(mode)
+    ? [Layer.effect(IndependentGlobalConfig, Config.Service).pipe(Layer.provide(Layer.fresh(Config.layer)))]
+    : []),
+).pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      FSUtil.defaultLayer,
+      EffectFlock.defaultLayer,
+      Env.defaultLayer,
+      AuthTest.empty,
+      Account.defaultLayer,
+      NpmTest.noop,
+      Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make(() => {
+          counts.network++
+          return Effect.die("Unexpected network")
+        }),
+      ),
     ),
   ),
 )
@@ -129,8 +145,16 @@ const common = Layer.mergeAll(
 )
 const scoped = SecretRefScope.layer.pipe(Layer.provideMerge(common))
 const migrationLayer = McpSecretMigration.layer.pipe(Layer.provideMerge(scoped))
-const runtimeLayer = MCP.layer.pipe(
+const authenticationLayer = McpAuthScope.layer.pipe(
   Layer.provideMerge(migrationLayer),
+  Layer.provideMerge(McpAuth.defaultLayer),
+  Layer.provideMerge(Account.defaultLayer),
+)
+const migratedMcpLayer = MCP.layer.pipe(Layer.provideMerge(migrationLayer))
+const runtimeLayer = (mode === "readonly-scoped"
+  ? migratedMcpLayer.pipe(Layer.provideMerge(authenticationLayer))
+  : migratedMcpLayer
+).pipe(
   Layer.provideMerge(McpAuth.defaultLayer),
   Layer.provideMerge(EventV2Bridge.defaultLayer),
   Layer.provideMerge(CrossSpawnSpawner.defaultLayer),
@@ -154,6 +178,66 @@ const result = await Effect.runPromiseExit(
     const instances = yield* InstanceStore.Service
     const identities = yield* LocationIdentity.Service
     const database = yield* Database.Service
+    const globalReader = ["global-cache", "global-state-cache", "global-cache-race"].includes(mode)
+      ? yield* IndependentGlobalConfig
+      : undefined
+    const authentication = mode === "readonly-scoped"
+      ? Option.getOrThrow(yield* Effect.serviceOption(McpAuthScope.Service))
+      : undefined
+    const projects = yield* Project.Service
+    if (mode === "global-domain-cache") {
+      const original = Global.Path.config
+      // Only Config is fresh. Reuse the existing authorities and database owner.
+      const authorities = Layer.mergeAll(
+        Layer.succeed(FSUtil.Service, yield* FSUtil.Service),
+        Layer.succeed(Env.Service, yield* Env.Service),
+        Layer.succeed(Auth.Service, yield* Auth.Service),
+        Layer.succeed(Account.Service, yield* Account.Service),
+        Layer.succeed(Npm.Service, yield* Npm.Service),
+        Layer.succeed(HttpClient.HttpClient, yield* HttpClient.HttpClient),
+      )
+      return yield* Effect.gen(function* () {
+        const firstDirectory = path.join(root, "domain-a")
+        const secondDirectory = path.join(root, "domain-b")
+        yield* Effect.promise(() => Promise.all([fs.mkdir(firstDirectory), fs.mkdir(secondDirectory)]))
+        yield* Effect.promise(() =>
+          fs.writeFile(
+            path.join(firstDirectory, "config.jsonc"),
+            JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json", username: "fixture-domain-a" }),
+            { mode: 0o600 },
+          ),
+        )
+        Global.Path.config = firstDirectory
+        const first = Context.get(
+          yield* Layer.build(Layer.fresh(Config.layer).pipe(Layer.provide(authorities))),
+          Config.Service,
+        )
+        assert.equal((yield* first.getGlobal()).username, "fixture-domain-a")
+        yield* Effect.promise(() => fs.unlink(path.join(firstDirectory, "config.jsonc")))
+        Global.Path.config = secondDirectory
+        const second = Context.get(
+          yield* Layer.build(Layer.fresh(Config.layer).pipe(Layer.provide(authorities))),
+          Config.Service,
+        )
+        yield* second.getGlobal()
+        yield* second.updateGlobal({ username: "fixture-domain-b" })
+        Global.Path.config = firstDirectory
+        assert.equal(
+          (yield* first.getGlobal()).username,
+          "fixture-domain-a",
+          "Another config domain must not invalidate this layer's original cache",
+        )
+        yield* first.invalidate()
+        assert.equal((yield* first.getGlobal()).username, undefined)
+        return { mode, distinctDomains: true, ownInvalidationCurrent: true, put: counts.put, network: counts.network }
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            Global.Path.config = original
+          }),
+        ),
+      )
+    }
     const inDirectory = <A, E>(effect: Effect.Effect<A, E>, directory: string) =>
       Effect.runPromise(effect.pipe(Effect.provideService(SecretRefScope.CliDirectory, directory)))
     const setup = (directory: string) => inDirectory(scopes.capture("same", true), directory)
@@ -164,6 +248,221 @@ const result = await Effect.runPromiseExit(
     }
     return yield* Effect.tryPromise({
       try: async () => {
+        if (
+          mode === "global-settings" ||
+          mode === "global-settings-gap" ||
+          mode === "global-settings-unsettled" ||
+          ["global-cache", "global-state-cache", "global-cache-race"].includes(mode) ||
+          mode === "readonly-scoped"
+        ) {
+          await fs.writeFile(
+            path.join(a, "deepagent-code.json"),
+            JSON.stringify({
+              mcp: {
+                local: { type: "local", command: ["project-retained"], enabled: false },
+              },
+            }),
+          )
+          await inDirectory(
+            cfg.updateGlobal({
+              mcp: {
+                same: {
+                  type: "remote",
+                  url: "https://mcp.example.invalid/endpoint",
+                  headers: { Authorization: "fixture-global-header" },
+                  enabled: false,
+                },
+              },
+            }),
+            a,
+          )
+          await setup(a)
+          if (mode === "global-cache-race") {
+            assert(globalReader)
+            await Promise.all([inDirectory(globalReader.getGlobal(), a), inDirectory(cfg.invalidate(), a)])
+            await inDirectory(
+              cfg.updateGlobal({
+                mcp: {
+                  same: {
+                    type: "remote",
+                    url: "https://mcp.example.invalid/endpoint",
+                    headers: { Authorization: "fixture-global-new" },
+                    enabled: false,
+                  },
+                },
+              }),
+              a,
+            )
+            const observed = await inDirectory(globalReader.getGlobal(), a)
+            assert.equal(
+              observed.mcp?.same && "headers" in observed.mcp.same && observed.mcp.same.headers?.Authorization,
+              "fixture-global-new",
+            )
+            return { mode, concurrentLoadCurrent: true, put: counts.put, network: counts.network }
+          }
+          const location =
+            mode === "global-state-cache" ? await Effect.runPromise(instances.load({ directory: a })) : undefined
+          if (location && globalReader) {
+            const before = await Effect.runPromise(
+              globalReader.get().pipe(Effect.provideService(InstanceRef, location)),
+            )
+            assert.equal(
+              before.mcp?.same && "headers" in before.mcp.same && before.mcp.same.headers?.Authorization,
+              "fixture-global-header",
+            )
+            assert.deepEqual(before.mcp?.local && "command" in before.mcp.local && before.mcp.local.command, [
+              "project-retained",
+            ])
+          }
+          if (globalReader) {
+            const before = await inDirectory(globalReader.getGlobal(), a)
+            assert.equal(
+              before.mcp?.same && "headers" in before.mcp.same && before.mcp.same.headers?.Authorization,
+              "fixture-global-header",
+            )
+          }
+          const preview = await inDirectory(migration.preview("same"), a)
+          assert.deepEqual(
+            preview.fields.map((field) => [field.field, field.key]),
+            [["headers", "Authorization"]],
+          )
+          const first = await inDirectory(
+            migration.commit({ name: "same", previewID: preview.previewID, requestID: "global-settings-request" }),
+            a,
+          )
+          assert.equal(first.state, "committed")
+          assert.equal(first.moved, 1)
+          const journals = SettingsTransaction.paths()
+          const operation = await fs.readFile(journals.operation, "utf8")
+          if (mode === "global-settings-unsettled") {
+            await fs.writeFile(journals.settings, "{}", { mode: 0o600 })
+            const files = [
+              journals.operation,
+              journals.receipt,
+              journals.settings,
+              path.join(Global.Path.config, "config.jsonc"),
+              path.join(Global.Path.config, "mcp-secret-migration.json"),
+            ]
+            const before = await Promise.all(files.map((file) => fs.readFile(file, "utf8")))
+            const put = counts.put
+            const retried = await inDirectory(
+              migration
+                .commit({ name: "same", previewID: preview.previewID, requestID: "global-settings-request" })
+                .pipe(Effect.exit),
+              a,
+            )
+            assert(Exit.isFailure(retried))
+            const error = Cause.squash(retried.cause)
+            assert(error instanceof McpSecretMigration.Error)
+            assert.equal(error.reason, "unknown")
+            assert.deepEqual(await Promise.all(files.map((file) => fs.readFile(file, "utf8"))), before)
+            assert.equal(counts.put, put)
+            return {
+              mode,
+              state: first.state,
+              moved: first.moved,
+              retryRejected: true,
+              rejectionReason: error.reason,
+              exactRetryPutDelta: counts.put - put,
+              filesUnchanged: true,
+              ...counts,
+            }
+          }
+          const gap = mode === "global-settings-gap"
+          if (gap) {
+            // Materialize the legal after-config/before-ledger crash image. The real
+            // Settings operation and config bytes remain exactly as published.
+            const file = path.join(Global.Path.config, "mcp-secret-migration.json")
+            const ledger = JSON.parse(await fs.readFile(file, "utf8"))
+            await fs.writeFile(
+              file,
+              JSON.stringify({
+                ...ledger,
+                receipts: ledger.receipts.map((item: { requestID: string }) =>
+                  item.requestID === "global-settings-request" ? { ...item, state: "stored" } : item,
+                ),
+              }),
+            )
+            await fs.unlink(journals.receipt)
+            assert.equal(
+              await fs.stat(journals.receipt).then(
+                () => true,
+                () => false,
+              ),
+              false,
+            )
+            const put = counts.put
+            const reconciled = await inDirectory(migration.reconcile("global-settings-request", "same"), a)
+            assert.equal(reconciled.state, "committed")
+            assert.equal(counts.put, put)
+            assert.equal(await fs.readFile(journals.operation, "utf8"), operation)
+          }
+          await inDirectory(cfg.getGlobal(), a)
+          await inDirectory(SettingsStore.readEffect, a)
+          if (location && globalReader) {
+            const after = await Effect.runPromise(globalReader.get().pipe(Effect.provideService(InstanceRef, location)))
+            const value = after.mcp?.same && "headers" in after.mcp.same && after.mcp.same.headers?.Authorization
+            assert.equal(typeof value, "string")
+            assert(
+              SecretStore.isScoped(value as string),
+              "An independently warmed Location reader retained plaintext after migration",
+            )
+            assert.deepEqual(after.mcp?.local && "command" in after.mcp.local && after.mcp.local.command, [
+              "project-retained",
+            ])
+          }
+          if (globalReader) {
+            const after = await inDirectory(globalReader.getGlobal(), a)
+            const value = after.mcp?.same && "headers" in after.mcp.same && after.mcp.same.headers?.Authorization
+            assert.equal(typeof value, "string")
+            assert(
+              SecretStore.isScoped(value as string),
+              "An independently warmed global reader retained the plaintext credential after committed migration",
+            )
+          }
+          if (authentication) {
+            await Effect.runPromise(projects.fromDirectory(a))
+            const actual = await Effect.runPromise(projects.observeDirectory(a))
+            assert(actual.project)
+            const snapshot = await Effect.runPromise(cfg.readonlySnapshot!(actual))
+            const entry = snapshot.config.mcp?.same
+            assert(entry && "type" in entry)
+            const before = await fs.readFile(path.join(Global.Path.config, "config.jsonc"))
+            assert.equal(await Effect.runPromise(instances.peek(a)), undefined)
+            assert.deepEqual(
+              await Effect.runPromise(
+                authentication.metadataAt("same", entry, {
+                  directory: actual.directory,
+                  projectID: actual.project.id,
+                  projectVcs: actual.project.vcs,
+                  snapshot,
+                }),
+              ),
+              { tokens: false, expired: false, unknown: false, legacy: false },
+            )
+            assert.equal(await Effect.runPromise(instances.peek(a)), undefined)
+            assert.deepEqual(await fs.readFile(path.join(Global.Path.config, "config.jsonc")), before)
+          }
+          const put = counts.put
+          const retry = await inDirectory(
+            migration.commit({ name: "same", previewID: preview.previewID, requestID: "global-settings-request" }),
+            a,
+          )
+          assert.equal(retry.state, "committed")
+          return {
+            mode,
+            state: first.state,
+            moved: first.moved,
+            settingsReadable: true,
+            normalGlobalReadable: true,
+            independentReaderCurrent: !!globalReader,
+            readonlyScopedCurrent: !!authentication,
+            gapReconciled: gap,
+            originalOperationPreserved: true,
+            exactRetryPutDelta: counts.put - put,
+            ...counts,
+          }
+        }
         if (mode === "cold") {
           const before = await awaitBytes()
           const status = await inDirectory(migration.status("first-a"), a)

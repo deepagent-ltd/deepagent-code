@@ -1,4 +1,9 @@
 import { expect, test } from "bun:test"
+import { createHash } from "node:crypto"
+import { Schema } from "effect"
+import { BrowserSchema } from "@deepagent-code/core/browser/schema"
+import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
+import { compileManagedBrowserProgram, compileManagedBrowserProgramPlan } from "./managed-browser-program"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
@@ -96,3 +101,63 @@ test("actual approved readonly planner mutates only native current leaves, submi
     result.requests.filter((value: { url: string }) => ["/program-late-get", "/program-late-post"].includes(value.url)),
   ).toEqual([])
 }, 55_000)
+
+
+// Pure compiler qualification. Neither the v1 data below nor a compiled plan is a Native capability.
+test("pure program compiler preserves v1 bytes and validates shared grants without a fabricated Control", () => {
+  const hash = (text: string) => createHash("sha256").update(text).digest("hex")
+  const source = "return { version: 1, steps: args.steps }"
+  const command: Extract<BrowserSchema.Command, { type: "program" }> = { type: "program", tabID: "tab", generation: 3,
+    frameID: "frame", observationRevision: 9, source, scriptHash: hash(source), argsJSON: '{"value":"中文"}',
+    targets: [{ name: "entry", ref: "opaque-entry" }, { name: "choice", ref: "opaque-choice" },
+      { name: "destination", ref: "opaque-destination" }, { name: "submit", ref: "opaque-submit" }] }
+  const grants: typeof BrowserSchema.ProgramGrants.Type = [{ scriptHash: command.scriptHash, argsHash: hash(command.argsJSON),
+    operations: ["fill", "select", "scroll", "drag", "press", "click"], maxSteps: 6 }]
+  const plan = { version: 1, steps: [{ type: "fill", target: "entry", text: "中文" },
+    { type: "select", target: "choice", values: ["b"] }, { type: "scroll", target: "entry", deltaX: 0, deltaY: 120 },
+    { type: "drag", target: "entry", targetTo: "destination", steps: 2 }, { type: "press", target: "entry", key: "Tab" },
+    { type: "click", target: "submit", waitForNavigation: true }] }
+  const json = JSON.stringify(plan)
+  const fail = (code: BrowserSchema.Error["code"]): never => { throw new Error(code) }
+  const compiled = compileManagedBrowserProgramPlan(grants, command, json, fail)
+  expect(compiled.inputs.map((value) => value.type)).toEqual(["fill", "select", "scroll", "drag", "press", "click"])
+  expect(compiled.inputs.every((value) => value.tabID === "tab" && value.generation === 3 && value.frameID === "frame" && value.observationRevision === 9)).toBe(true)
+  expect(compiled.inputs[0]).toMatchObject({ ref: "opaque-entry", text: "中文" })
+  expect(compiled.inputs[3]).toMatchObject({ ref: "opaque-entry", targetRef: "opaque-destination", steps: 2 })
+  expect(compiled.inputs[5]).toMatchObject({ ref: "opaque-submit", waitForNavigation: true })
+  expect(compiled.planHash).toBe(hash(CanonicalJson.stringify(plan)))
+  expect(compileManagedBrowserProgramPlan(grants, command, JSON.stringify(plan, null, 2), fail)).toEqual(compiled)
+  const control: BrowserSchema.Control = { version: 1, profile: BrowserSchema.INTERACTION_PROFILE, controlID: "v1-control", requestID: "v1-create",
+    requestDigest: "a".repeat(64), hostID: "v1-host", hostIncarnation: "v1-incarnation", resourceID: "v1-resource", credentialBinding: "b".repeat(64),
+    origin: "http://127.0.0.1:4455", revision: 1, epoch: 1, policyRevision: 1, state: "active", expiresAt: Date.now() + 30_000,
+    createdAt: 1, updatedAt: 1, cancel: null, stopConfirmedAt: null, postPaths: [], programGrants: grants,
+    scope: { principal: "owner", securityNamespaceID: "namespace", namespaceBindingHash: "c".repeat(64), locationKey: "location", projectScopeKey: "project-scope",
+      sessionID: "session", projectID: "project", directory: "/tmp/v1-program-pure-data", workspaceID: null } }
+  expect(compileManagedBrowserProgram(control, command, json, fail)).toEqual(compiled)
+  const readonly = Schema.decodeUnknownSync(BrowserSchema.Control)({ ...control, profile: BrowserSchema.PROFILE })
+  expect(() => compileManagedBrowserProgram(readonly, command, json, fail)).toThrow("BROWSER_SCOPE_DENIED")
+  expect(() => compileManagedBrowserProgramPlan(undefined, command, json, fail)).toThrow("BROWSER_SCOPE_DENIED")
+  expect(() => compileManagedBrowserProgramPlan(grants, { ...command, source: source + " " }, json, fail)).toThrow("BROWSER_SCOPE_DENIED")
+  expect(() => compileManagedBrowserProgramPlan(grants, { ...command, argsJSON: '{ "value":"中文"}' }, json, fail)).toThrow("BROWSER_SCOPE_DENIED")
+  expect(() => compileManagedBrowserProgramPlan([{ ...grants[0]!, maxSteps: 5 }], command, json, fail)).toThrow("BROWSER_SCOPE_DENIED")
+  expect(() => compileManagedBrowserProgramPlan([{ ...grants[0]!, operations: ["fill", "select", "scroll", "press", "click"] }], command, json, fail))
+    .toThrow("BROWSER_SCOPE_DENIED")
+  const invalidGrant = [{ ...grants[0]!, unexpected: true }]
+  expect(() => compileManagedBrowserProgramPlan(invalidGrant, command, json, fail)).toThrow("BROWSER_SCOPE_DENIED")
+  expect(() => compileManagedBrowserProgramPlan(grants, command, JSON.stringify({ ...plan, unexpected: true }), fail)).toThrow("BROWSER_INVALID_RECORD")
+  expect(() => compileManagedBrowserProgramPlan(grants, command, JSON.stringify({ version: 1, steps: [{ ...plan.steps[0], selector: "#secret" }] }), fail))
+    .toThrow("BROWSER_INVALID_RECORD")
+  expect(() => compileManagedBrowserProgramPlan(grants, command, JSON.stringify({ version: 1, steps: [{ ...plan.steps[0], target: "missing" }] }), fail))
+    .toThrow("BROWSER_STALE_TARGET")
+  expect(() => compileManagedBrowserProgramPlan(grants, command, JSON.stringify({ version: 1, steps: [{ type: "drag", target: "entry", targetTo: "missing" }] }), fail))
+    .toThrow("BROWSER_STALE_TARGET")
+  expect(() => compileManagedBrowserProgramPlan(grants, command, JSON.stringify({ version: 1, steps: [{ type: "click", target: "submit", waitForNavigation: true }, plan.steps[0]] }), fail))
+    .toThrow("BROWSER_INVALID_RECORD")
+  expect(() => compileManagedBrowserProgramPlan(grants, command, JSON.stringify({ version: 1, steps: [{ type: "press", target: "entry", key: "Tab", waitForNavigation: true }] }), fail))
+    .toThrow("BROWSER_INVALID_RECORD")
+  expect(compileManagedBrowserProgramPlan(grants, command, JSON.stringify({ version: 1, steps: [plan.steps[0], { type: "press", target: "entry", key: "Enter", waitForNavigation: true }] }), fail)
+    .inputs[1]).toMatchObject({ type: "press", key: "Enter", waitForNavigation: true })
+  expect(() => compileManagedBrowserProgramPlan(grants, { ...command, targets: [...command.targets, command.targets[0]!] }, json, fail)).toThrow("BROWSER_INVALID_RECORD")
+  expect(() => compileManagedBrowserProgramPlan([{ ...grants[0]!, argsHash: hash("not-json") }], { ...command, argsJSON: "not-json" }, json, fail)).toThrow("BROWSER_INVALID_RECORD")
+  expect(() => compileManagedBrowserProgramPlan(grants, command, " ".repeat(BrowserSchema.MAX_SCRIPT_RESULT_BYTES + 1), fail)).toThrow("BROWSER_OUTPUT_LIMIT")
+})

@@ -1,0 +1,264 @@
+--- a/ui/base/ime/input_method_observer.h
++++ b/ui/base/ime/input_method_observer.h
+@@ -32,6 +32,14 @@
+   //  - the TextInputType of the TextInputClient changes
+   virtual void OnTextInputStateChanged(const TextInputClient* client) = 0;
+ 
++  // DAC Linux original-runtime hook. No text/key/coordinates cross this seam.
++  // Runs before a focused client is changed or an original native IME mutates it.
++  virtual void OnBeforeFocusedTextInputClientChange(
++      const InputMethod* method, const TextInputClient* before,
++      const TextInputClient* after) {}
++  virtual void OnBeforeNativeInputMethodMutation(
++      const InputMethod* method, const TextInputClient* client) {}
++
+   // Called when the observed InputMethod is being destroyed.
+   virtual void OnInputMethodDestroyed(const InputMethod* input_method) = 0;
+ 
+--- a/ui/base/ime/input_method.h
++++ b/ui/base/ime/input_method.h
+@@ -54,6 +54,7 @@
+ #endif
+ 
+   virtual ~InputMethod() = default;
++  virtual const char* DacManagedInputBackend() const { return nullptr; }
+ 
+   // Sets the key event dispatcher used by this InputMethod instance. It should
+   // only be called by an object which manages the whole UI.
+--- a/ui/base/ime/linux/linux_input_method_context.h
++++ b/ui/base/ime/linux/linux_input_method_context.h
+@@ -44,6 +44,7 @@
+   };
+ 
+   virtual ~LinuxInputMethodContext() = default;
++  virtual const char* DacManagedInputBackend() const { return nullptr; }
+ 
+   // Dispatches the key event to an underlying IME.  Returns true if the key
+   // event is handled, otherwise false.  A client must set the text input type
+--- a/ui/gtk/input_method_context_impl_gtk.h
++++ b/ui/gtk/input_method_context_impl_gtk.h
+@@ -37,6 +37,7 @@
+   ~InputMethodContextImplGtk() override;
+ 
+   // Overridden from ui::LinuxInputMethodContext
++  const char* DacManagedInputBackend() const override;
+   bool DispatchKeyEvent(const ui::KeyEvent& key_event) override;
+   bool IsPeekKeyEvent(const ui::KeyEvent& key_event) override;
+   void SetCursorLocation(const gfx::Rect& rect) override;
+--- a/ui/gtk/input_method_context_impl_gtk.cc
++++ b/ui/gtk/input_method_context_impl_gtk.cc
+@@ -189,6 +189,10 @@
+ 
+ InputMethodContextImplGtk::~InputMethodContextImplGtk() = default;
+ 
++const char* InputMethodContextImplGtk::DacManagedInputBackend() const {
++  return GtkCheckVersion(4) ? nullptr : "gtk3";
++}
++
+ // Overridden from ui::LinuxInputMethodContext
+ bool InputMethodContextImplGtk::DispatchKeyEvent(
+     const ui::KeyEvent& key_event) {
+--- a/ui/base/ime/input_method_base.h
++++ b/ui/base/ime/input_method_base.h
+@@ -10,6 +10,7 @@
+ 
+ #include "base/component_export.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/observer_list.h"
+ #include "build/build_config.h"
+ #include "ui/base/ime/composition_text.h"
+@@ -85,6 +86,8 @@
+   [[nodiscard]] virtual ui::EventDispatchDetails DispatchKeyEventPostIME(
+       ui::KeyEvent* event) const;
+ 
++  bool NotifyBeforeNativeInputMethodMutation();
++
+   // Convenience method to notify all observers of TextInputClient changes.
+   void NotifyTextInputStateChanged(const TextInputClient* client);
+ 
+@@ -109,6 +112,7 @@
+   gfx::Rect keyboard_bounds_;
+ 
+   std::unique_ptr<VirtualKeyboardController> keyboard_controller_;
++  base::WeakPtrFactory<InputMethodBase> dac_weak_ptr_factory_{this};
+ };
+ 
+ }  // namespace ui
+--- a/ui/base/ime/input_method_base.cc
++++ b/ui/base/ime/input_method_base.cc
+@@ -138,6 +138,14 @@
+              : ui::EventDispatchDetails();
+ }
+ 
++bool InputMethodBase::NotifyBeforeNativeInputMethodMutation() {
++  const auto alive = dac_weak_ptr_factory_.GetWeakPtr();
++  const TextInputClient* client = GetTextInputClient();
++  observer_list_.Notify(&InputMethodObserver::OnBeforeNativeInputMethodMutation,
++                        this, client);
++  return alive && GetTextInputClient() == client;
++}
++
+ void InputMethodBase::NotifyTextInputStateChanged(
+     const TextInputClient* client) {
+   observer_list_.Notify(&InputMethodObserver::OnTextInputStateChanged, client);
+@@ -153,10 +161,18 @@
+   TextInputClient* old = text_input_client_;
+   if (old == client)
+     return;
++  const auto alive = dac_weak_ptr_factory_.GetWeakPtr();
++  observer_list_.Notify(
++      &InputMethodObserver::OnBeforeFocusedTextInputClientChange,
++      this, old, client);
++  if (!alive || GetTextInputClient() != old) return;
+   OnWillChangeFocusedClient(old, client);
++  if (!alive || GetTextInputClient() != old) return;
+   text_input_client_ = client;  // nullptr allowed.
+   OnDidChangeFocusedClient(old, client);
++  if (!alive) return;
+   NotifyTextInputStateChanged(text_input_client_);
++  if (!alive) return;
+ 
+   // Move new focused window if necessary.
+   if (text_input_client_ && !keyboard_bounds_.IsEmpty())
+--- a/ui/base/ime/linux/input_method_auralinux.h
++++ b/ui/base/ime/linux/input_method_auralinux.h
+@@ -30,6 +30,7 @@
+   ~InputMethodAuraLinux() override;
+ 
+   LinuxInputMethodContext* GetContextForTesting();
++  const char* DacManagedInputBackend() const override;
+ 
+   // Overridden from InputMethod.
+   ui::EventDispatchDetails DispatchKeyEvent(ui::KeyEvent* event) override;
+@@ -46,7 +47,7 @@
+   void OnDeleteSurroundingText(size_t before, size_t after) override;
+   void OnPreeditChanged(const CompositionText& composition_text) override;
+   void OnPreeditEnd() override;
+-  void OnPreeditStart() override {}
++  void OnPreeditStart() override;
+   void OnSetPreeditRegion(const gfx::Range& range,
+                           const std::vector<ImeTextSpan>& spans) override;
+   void OnSetVirtualKeyboardOccludedBounds(
+--- a/ui/base/ime/linux/input_method_auralinux.cc
++++ b/ui/base/ime/linux/input_method_auralinux.cc
+@@ -55,6 +55,10 @@
+ }
+ 
+ InputMethodAuraLinux::~InputMethodAuraLinux() = default;
++
++const char* InputMethodAuraLinux::DacManagedInputBackend() const {
++  return context_ ? context_->DacManagedInputBackend() : nullptr;
++}
+ 
+ LinuxInputMethodContext* InputMethodAuraLinux::GetContextForTesting() {
+   return context_.get();
+@@ -465,6 +469,7 @@
+ }
+ 
+ void InputMethodAuraLinux::OnCommit(const std::u16string& text) {
++  if (!NotifyBeforeNativeInputMethodMutation()) return;
+   if (IgnoringNonKeyInput() || !GetTextInputClient())
+     return;
+ 
+@@ -501,17 +506,20 @@
+ }
+ 
+ void InputMethodAuraLinux::OnInsertImage(const GURL& src) {
++  if (!NotifyBeforeNativeInputMethodMutation()) return;
+   if (auto* text_input_client = GetTextInputClient()) {
+     text_input_client->InsertImage(src);
+   }
+ }
+ 
+ void InputMethodAuraLinux::OnConfirmCompositionText(bool keep_selection) {
++  if (!NotifyBeforeNativeInputMethodMutation()) return;
+   ConfirmCompositionText(keep_selection);
+ }
+ 
+ void InputMethodAuraLinux::OnDeleteSurroundingText(size_t before,
+                                                    size_t after) {
++  if (!NotifyBeforeNativeInputMethodMutation()) return;
+   auto* client = GetTextInputClient();
+   if (client && composition_.text.empty())
+     client->ExtendSelectionAndDelete(before, after);
+@@ -519,10 +527,16 @@
+ 
+ void InputMethodAuraLinux::OnPreeditChanged(
+     const CompositionText& composition_text) {
++  if (!NotifyBeforeNativeInputMethodMutation()) return;
+   OnPreeditUpdate(composition_text, !is_sync_mode_);
+ }
+ 
++void InputMethodAuraLinux::OnPreeditStart() {
++  NotifyBeforeNativeInputMethodMutation();
++}
++
+ void InputMethodAuraLinux::OnPreeditEnd() {
++  if (!NotifyBeforeNativeInputMethodMutation()) return;
+   TextInputClient* client = GetTextInputClient();
+   OnPreeditUpdate(CompositionText(),
+                   !is_sync_mode_ && client && client->HasCompositionText());
+@@ -531,6 +545,7 @@
+ void InputMethodAuraLinux::OnSetPreeditRegion(
+     const gfx::Range& range,
+     const std::vector<ImeTextSpan>& spans) {
++  if (!NotifyBeforeNativeInputMethodMutation()) return;
+   auto* text_input_client = GetTextInputClient();
+   if (!text_input_client)
+     return;
+--- a/ui/aura/window_tree_host_observer.h
++++ b/ui/aura/window_tree_host_observer.h
+@@ -12,12 +12,18 @@
+ #include "ui/aura/window.h"
+ 
+ class SkRegion;
++namespace ui { class Event; }
+ 
+ namespace aura {
+ class WindowTreeHost;
+ 
+ class AURA_EXPORT WindowTreeHostObserver : public base::CheckedObserver {
+  public:
++  // DAC Linux original PlatformWindow dispatch, before SendEventToSink/IME.
++  // A callback may retire its lease or destroy the host; dispatch checks lifetime.
++  virtual void OnHostWillDispatchNativeInput(WindowTreeHost* host,
++                                             const ui::Event* event) {}
++
+   // Called when the host's client size has changed.
+   virtual void OnHostResized(WindowTreeHost* host) {}
+ 
+--- a/ui/aura/window_tree_host_platform.cc
++++ b/ui/aura/window_tree_host_platform.cc
+@@ -297,6 +297,10 @@
+ 
+ void WindowTreeHostPlatform::DispatchEvent(ui::Event* event) {
+   TRACE_EVENT0("input", "WindowTreeHostPlatform::DispatchEvent");
++  const auto alive = GetWeakPtr();
++  observers().Notify(&WindowTreeHostObserver::OnHostWillDispatchNativeInput,
++                     this, event);
++  if (!alive) return;
+   ui::EventDispatchDetails details = SendEventToSink(event);
+   if (details.dispatcher_destroyed)
+     event->SetHandled();
+--- a/electron/BUILD.gn
++++ b/electron/BUILD.gn
+@@ -590,6 +590,10 @@
+   }
+   if (is_linux) {
+     sources += filenames.lib_sources_linux
++    sources += [
++      "shell/browser/dac_managed_input_bridge.cc",
++      "shell/browser/dac_managed_input_bridge.h",
++    ]
+   }
+   if (!is_mac) {
+     sources += filenames.lib_sources_views
+@@ -1336,6 +1340,7 @@
+     if (is_linux) {
+       ldflags = [
+         "-pie",
++        "-Wl,--export-dynamic-symbol=dac_managed_input_observer_v1",
+ 
+         # Required for exporting all symbols of libuv.
+         "-Wl,--whole-archive",

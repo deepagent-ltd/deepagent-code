@@ -1,10 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { DateTime } from "effect"
+import { DateTime, Effect } from "effect"
 import { SessionHistoryProjection } from "../src/session/runner/session-history-projection"
 import { SessionMessage } from "../src/session/message"
 import { ToolOutput } from "@deepagent-code/core/tool-output"
 import { ModelV2 } from "../src/model"
 import { ProviderV2 } from "../src/provider"
+import { LLM, Model, ToolDefinition } from "@deepagent-code/llm"
+import { LLMClient } from "@deepagent-code/llm/route"
+import { OpenAICompatibleChat } from "@deepagent-code/llm/protocols/openai-compatible-chat"
+import type { OpenAIChat } from "@deepagent-code/llm/protocols/openai-chat"
+import { stepLimitMessage, toLLMMessages } from "../src/session/runner/to-llm-message"
+import { SessionSchema } from "../src/session/schema"
 
 // G3 history projection — the contracts that make it cache-safe:
 //   determinism (same rows ⇒ same bytes), error preservation, uniform caps with no
@@ -292,6 +298,88 @@ describe("session history projection — reasoning replay", () => {
       const result = SessionHistoryProjection.projectForModel(rows, { reasoningKeep: 0 })
       expect(reasoningCount(result.messages)).toBe(1)
     })
+  })
+
+  const thinkingModel = Model.make({
+    provider: "deepseek",
+    id: "deepseek-flash",
+    route: OpenAICompatibleChat.route.with({ endpoint: { baseURL: "https://api.deepseek.test/v1" } }),
+  })
+  const user = (id: string) => SessionMessage.User.make({
+    type: "user",
+    id: SessionMessage.ID.make(id),
+    text: id,
+    time: { created: DateTime.makeUnsafe(1) },
+  })
+  const turn = (index: number, reasoning: string) => {
+    const tool = assistantWithTool(index === 1 ? "write" : "read", "DAC_LOOP_RUNTIME_OK\n")
+    if (tool.type !== "assistant") throw new Error("Expected a durable assistant fixture")
+    return SessionMessage.Assistant.make({
+      ...tool,
+      id: SessionMessage.ID.make(`msg_continuation_${index}`),
+      model: { providerID: ProviderV2.ID.make("deepseek"), id: ModelV2.ID.make("deepseek-flash") },
+      content: [SessionMessage.AssistantReasoning.make({ type: "reasoning", id: `rsn_${index}`, text: reasoning }), ...tool.content],
+    })
+  }
+
+  test("DeepSeek Chat preserves both durable tool-turn reasons through projection and final wire lowering", async () => {
+    const rows = [user("msg_user_current"), turn(1, "第一轮：写入准确文件。\n"), turn(2, "第二轮：读取并核对。\n")]
+    const original = JSON.stringify(rows)
+    const required = SessionHistoryProjection.requiresReasoningContinuation("deepseek", "openai-compatible.chat")
+    const projected = SessionHistoryProjection.projectForModel(rows, { reasoningKeep: 0, reasoningContinuation: required })
+    const prepared = await Effect.runPromise(LLMClient.prepare<OpenAIChat.OpenAIChatBody>(LLM.request({
+      model: thinkingModel,
+      messages: [...toLLMMessages(projected.messages, thinkingModel), stepLimitMessage(required)],
+      tools: [ToolDefinition.make({ name: "read", description: "Read the owned result", inputSchema: { type: "object" } })],
+      toolChoice: "none",
+    })))
+    const assistants = prepared.body.messages.filter((message) => message.role === "assistant")
+    expect(assistants.map((message) => message.reasoning_content)).toEqual([
+      "第一轮：写入准确文件。\n", "第二轮：读取并核对。\n", "",
+    ])
+    expect(assistants.at(-1)?.content).toContain("CRITICAL - MAXIMUM STEPS REACHED")
+    expect(assistants.at(-1)?.tool_calls).toBeUndefined()
+    expect(prepared.body.tool_choice).toBe("none")
+    expect(prepared.body.tools).toHaveLength(1)
+    expect(JSON.stringify(rows)).toBe(original)
+    expect(projected.truncated).toBe(0)
+  })
+
+  test("DeepSeek Chat starts mandatory reasoning at the latest real user, never synthetic context", () => {
+    const synthetic = SessionMessage.Synthetic.make({
+      type: "synthetic", id: SessionMessage.ID.make("msg_runtime_context"),
+      sessionID: SessionSchema.ID.make("ses_reasoning"), text: "Runtime context, not a new operator request",
+      time: { created: DateTime.makeUnsafe(1) },
+    })
+    const rows = [user("msg_previous_user"), turn(0, "Earlier user reasoning"), user("msg_next_user"), turn(1, "Current first"), synthetic, turn(2, "Current second")]
+    const projected = SessionHistoryProjection.projectForModel(rows, { reasoningKeep: 0, reasoningContinuation: true })
+    const reasons = projected.messages.flatMap((message) => message.type === "assistant"
+      ? message.content.flatMap((part) => part.type === "reasoning" ? [part.text] : []) : [])
+    expect(reasons).toEqual(["Current first", "Current second"])
+    expect(projected.truncated).toBe(1)
+    expect(reasoningCount(rows)).toBe(3)
+  })
+
+  test("an explicit keep-zero override cannot remove required DeepSeek continuation", () => {
+    withReasoning("0", () => {
+      const projected = SessionHistoryProjection.projectForModel([user("msg_user_zero"), turn(1, "原文一"), turn(2, "原文二")], {
+        reasoningKeep: 0, reasoningContinuation: true,
+      })
+      expect(reasoningCount(projected.messages)).toBe(2)
+      expect(projected.truncated).toBe(0)
+      expect(projected.savedChars).toBe(0)
+    })
+  })
+
+  test("other providers and Responses retain the ordinary reasoning and control-message policy", async () => {
+    for (const [provider, protocol] of [["openai", "openai-compatible.chat"], ["deepseek", "openai-compatible.responses"], ["proxy-deepseek", "openai-compatible.chat"]]) {
+      const required = SessionHistoryProjection.requiresReasoningContinuation(provider!, protocol)
+      expect(required).toBe(false)
+      const projected = SessionHistoryProjection.projectForModel([user("msg_user_plain"), turn(1, "Original")], { reasoningKeep: 0, reasoningContinuation: required })
+      expect(reasoningCount(projected.messages)).toBe(0)
+      expect(stepLimitMessage(required).native).toBeUndefined()
+      expect(stepLimitMessage(required).role).toBe("assistant")
+    }
   })
 })
 

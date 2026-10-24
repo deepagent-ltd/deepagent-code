@@ -300,7 +300,7 @@ export const run = (input: {
       if (role.scratch && stage === "plain") yield* GoalChildPolicyHost.prepareScratch(admitted.unit.unit_id, policy)
       yield* frames.current(input.frame)
       const started = yield* owned.run(GoalChildExecution.target(admitted.unit), {
-        registered: (receipt) => frames.registered(input.frame, receipt),
+        registered: (receipt) => frames.registered(input.frame, receipt, GoalChildExecution.target(admitted.unit)),
       })
       if (started.status !== "started" && started.status !== "joined") return yield* failure()
       const settled = yield* owned.await(started.receipt)

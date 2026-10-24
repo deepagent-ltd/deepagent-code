@@ -5,6 +5,14 @@ import path from "node:path"
 import { createHash } from "node:crypto"
 import { Database } from "bun:sqlite"
 
+const expectedVersion: unknown =
+  process.env.DEEPAGENT_CODE_SMOKE_EXPECTED_VERSION ??
+  (await Bun.file(new URL("../package.json", import.meta.url)).json()).version
+if (typeof expectedVersion !== "string" || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(expectedVersion))
+  throw new Error(
+    "Installed smoke requires a release version from DEEPAGENT_CODE_SMOKE_EXPECTED_VERSION or the Desktop manifest",
+  )
+
 const executable = process.env.DEEPAGENT_CODE_CLI_EXECUTABLE
 if (!executable || !path.isAbsolute(executable) || (await fs.realpath(executable)) !== executable)
   throw new Error("TUI smoke requires the canonical private installed CLI artifact")
@@ -110,7 +118,7 @@ try {
   assert.throws(() => process.kill(child.pid, 0), "The owned CLI process must have exited")
   const bytes = await fs.readFile(executable)
   await fs.writeFile(path.join(root, "safe-result.json"), JSON.stringify({
-    version: "2.0.4", executable, executableBytes: bytes.length,
+    version: expectedVersion, executable, executableBytes: bytes.length,
     executableHash: createHash("sha256").update(bytes).digest("hex"),
     terminal: { columns: 100, rows: 40, before, after, originalExitCode: ended, restored: true },
     startupMs, inventory, capturedOutputBytes: state.bytes,

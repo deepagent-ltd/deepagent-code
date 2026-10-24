@@ -1,8 +1,17 @@
 export * as SessionCompaction from "./compaction"
 
-import { LLM, LLMError, LLMEvent, Message, LLMRequest, isTerminalProviderFailure, type Model } from "@deepagent-code/llm"
+import {
+  LLM,
+  LLMError,
+  LLMEvent,
+  Message,
+  LLMRequest,
+  isTerminalProviderFailure,
+  type Model,
+} from "@deepagent-code/llm"
 import { Context, DateTime, Effect, Schema, Stream } from "effect"
 import type { Config } from "../config"
+import { ConfigCompaction } from "../config/compaction"
 import type { SessionContext } from "../context-federation/session-context"
 import type { Database } from "../database/database"
 import type { EventV2 } from "../event"
@@ -12,20 +21,18 @@ import { Hash } from "../util/hash"
 import { SessionEvent } from "./event"
 import { LongContext } from "./long-context"
 import { SessionMessage } from "./message"
+import { RemoteCompaction } from "./remote-compaction"
+import type { RemoteCompactionWindow } from "./remote-compaction-window"
 import { SessionSchema } from "./schema"
 import { SessionRunnerCanonical, type SelectionAdmission } from "./runner/canonical-turn"
 import { PreparedProviderTurn } from "./runner/prepared-provider-turn"
+import { ModelHardPolicy } from "./runner/model-hard-policy"
 import { V2ProviderTurn } from "./runner/v2-provider-turn"
 import { Log } from "../util/log"
 import { Token } from "../util/token"
 
-// Compaction budgets. Measured from the ablation runs: the previous absolute 20k buffer put the
-// trigger at ~92% of the window, which a 133-turn session never reached (compactions: 0 for the
-// whole run) — so nothing ever relieved the replay. The reference agents all trigger earlier and
-// scale the buffer with the window: Codex at `window*9/10`, deepseek-harness at `window*0.8`,
-// Claude Code at `effective − buffer` with the buffer TIERED by window size (13k/30k/50k). This
-// adopts the proportional form with a floor, which is the same shape for small windows and does not
-// hand a 1M-window model a 200k buffer.
+// Preserve the explicit legacy ratio setting. Three-mode defaults use bounded headroom in
+// ModelHardPolicy; reapplying this ratio to the new work lines would compact much earlier.
 const DEFAULT_BUFFER_RATIO = 0.18
 /** Floor so a tiny window cannot make the trigger fire immediately. */
 const MIN_BUFFER_TOKENS = 2_000
@@ -43,7 +50,6 @@ const MAX_KEEP_TOKENS = 32_000
 // deepagent-code/src/session/compaction.ts imports this constant (it used to keep a duplicate
 // 2_000 copy); keep the two call sites in sync by editing ONLY this definition.
 export const TOOL_OUTPUT_MAX_CHARS = 2_000
-const SUMMARY_OUTPUT_TOKENS = 4_096
 const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <template> and keep the section order unchanged. Do not include the <template> tags in your response.
 <template>
 ## Goal
@@ -121,10 +127,12 @@ type Entry = {
 
 type Settings = {
   readonly auto: boolean
+  readonly mode: ConfigCompaction.Mode
   readonly buffer: number
   readonly bufferRatio: number
   readonly tokens: number
   readonly keepRatio: number | undefined
+  readonly explicitBufferRatio: boolean
 }
 
 type Dependencies = {
@@ -181,6 +189,14 @@ export const resolvedKeepTokens = (context: number, settings: { tokens: number; 
 }
 
 const modelInputLimit = (model: Model) => model.route.defaults.limits?.input ?? model.route.defaults.limits?.context
+
+/** A summary has its own generation budget; a short ordinary answer must not cap it. */
+export const summaryOutputTokens = (model: Model, mode: ConfigCompaction.Mode) => {
+  const output = model.route.defaults.limits?.output
+  return output === undefined || !Number.isFinite(output) || output <= 0
+    ? 0
+    : Math.min(ConfigCompaction.SummaryTokens[mode], Math.floor(output))
+}
 
 const estimateRequestTokens = (request: Pick<LLMRequest, "system" | "messages" | "tools">) =>
   estimate({ system: request.system, messages: request.messages, tools: request.tools })
@@ -243,17 +259,21 @@ const settings = (documents: readonly Config.Entry[]) => {
   return configured.reduce<Settings>(
     (result, current) => ({
       auto: current.auto ?? result.auto,
+      mode: current.mode ?? result.mode,
       buffer: current.buffer ?? result.buffer,
       bufferRatio: current.buffer_ratio ?? result.bufferRatio,
       tokens: current.keep?.tokens ?? result.tokens,
       keepRatio: current.keep_ratio ?? result.keepRatio,
+      explicitBufferRatio: current.buffer_ratio === undefined ? result.explicitBufferRatio : true,
     }),
     {
       auto: true,
+      mode: "adaptive",
       buffer: 0,
       bufferRatio: DEFAULT_BUFFER_RATIO,
       tokens: DEFAULT_KEEP_TOKENS,
       keepRatio: undefined,
+      explicitBufferRatio: false,
     },
   )
 }
@@ -355,28 +375,25 @@ export const reconstructSettledSummary = (existing: {
   return { chunks, failed }
 }
 
-// §16.3 order 5 F3 — remote compaction seam. When provided, the overflow pipeline first offers the
-// summary to a REMOTE compaction authority (typed command → typed result adapter); a produced
-// summary short-circuits the local provider dispatch. The remote authority keeps its own durable
-// state (plan §5: the remote state machine stays an independent authority exchanging typed
-// command/result), so no local V2ProviderTurn receipt is created for a remote-produced summary.
-// Unwired (default) keeps the local summary dispatch — that is the V2-native local path, NOT a
-// fallback to legacy orchestration. Delivery is at-least-once: a crash between the remote result and
-// the Compaction.Ended publish re-sends the same deterministic command, so the remote authority MUST
-// be idempotent / dedupe by command content.
-//
-// design §5.3 (C2-05): remote compact is a Responses-only feature. A non-Responses route must be
-// reported as `not_supported` and never silently routed to a `/responses` compact, and a remote
-// compact whose provider result is unknown must surface as `recovery_required` (keeping the original
-// history readable) rather than be disguised as a successful local summary. The in-process seam
-// narrows the frozen `Contract.RemoteCompactOutcome` to a closeable result projection: a genuinely
-// compacted run carries the summary text so the caller may publish Compaction.Ended.
+// Native provider compact is a separate durable provider operation. It may return a
+// canonical opaque window, a definite unsupported result, or an unknown outcome.
+// Only unsupported may fall through to local summary generation. The legacy text
+// result remains for explicitly injected adapters and historical tests.
 export type RemoteCompactionRequest = {
   readonly sessionID: SessionSchema.ID
   readonly summaryPrompt: string
+  readonly mode: ConfigCompaction.Mode
   readonly model: Model
+  readonly request: LLMRequest
+  readonly userMessageID: string
+  readonly historyPromptEpoch: number
+  readonly ownerMode: "shadow_v2" | "v2"
+  readonly admission: SelectionAdmission
 }
 export type RemoteCompactionResult =
+  | { readonly kind: "unavailable"; readonly reason: string }
+  | { readonly kind: "not_supported" }
+  | { readonly kind: "remote_window"; readonly window: RemoteCompactionWindow.State }
   | { readonly kind: "compacted"; readonly summary: string }
   | { readonly kind: "recovery_required"; readonly reason: Contract.RemoteCompactRecoveryReason }
 /**
@@ -393,10 +410,7 @@ export const CurrentRemoteCompaction = Context.Reference<
   ((input: RemoteCompactionRequest) => Effect.Effect<RemoteCompactionResult, unknown>) | undefined
 >(
   "@deepagent-code/v2/SessionCompaction/CurrentRemoteCompaction",
-  // W1.3 — NO production provider is registered in this package yet (the only wiring today is the
-  // test seam). Honest posture: the reference stays `undefined` ⇒ the V2-native LOCAL summary path
-  // dispatches, and a caller that wants a remote compact must provide a producer explicitly (the
-  // Responses-only gate + recovery differentiation below then apply).
+  // Hosts may inject a typed authority; otherwise make() installs the canonical native adapter.
   { defaultValue: () => undefined },
 )
 
@@ -415,6 +429,8 @@ export function isRemoteCompactUnsupported(model: Model): boolean {
 
 export const make = (dependencies: Dependencies) => {
   const config = settings(dependencies.config)
+  const bufferTokens = (model: Model) =>
+    config.buffer > 0 || config.explicitBufferRatio ? resolvedBuffer(modelInputLimit(model) ?? 0, config) : 2_048
   const compactAfterOverflow = Effect.fn("SessionCompaction.compactAfterOverflow")(function* (input: Input) {
     // Manual requests need a durable terminal classification. Automatic compaction keeps its
     // existing skip contract so the surrounding turn can apply its own hard-gate policy.
@@ -422,7 +438,14 @@ export const make = (dependencies: Dependencies) => {
       input.reason === "manual" ? { kind, reason, ...(receiptID ? { receiptID } : {}) } : false
     const context = modelInputLimit(input.model)
     if (context === undefined || context <= 0) return manualUnavailable("failed", "model_input_limit_unavailable")
-    const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
+    // A lone necessary user input is not compressible history. Splitting it into an artificial
+    // summary head would spend a provider request without making the required new input fit.
+    if (
+      input.entries.filter((entry) => entry.message.type !== "compaction").length === 1 &&
+      input.entries.some((entry) => entry.message.type === "user") &&
+      !input.entries.some((entry) => entry.message.type === "compaction")
+    )
+      return false
     const selected =
       input.reason === "manual"
         ? selectForManual(input.entries)
@@ -433,9 +456,7 @@ export const make = (dependencies: Dependencies) => {
       previousSummary: previousSummary?.type === "compaction" ? previousSummary.summary : undefined,
       context: [previousSummary?.type === "compaction" ? previousSummary.recent : "", selected.head].filter(Boolean),
     })
-    const summaryOutput = Math.min(output || SUMMARY_OUTPUT_TOKENS, SUMMARY_OUTPUT_TOKENS)
-    if (Token.estimate(summaryPrompt) > Math.max(0, context - summaryOutput))
-      return manualUnavailable("failed", "summary_budget_exceeded")
+    const summaryOutput = summaryOutputTokens(input.model, config.mode)
     const messageID = SessionMessage.ID.create()
     yield* dependencies.events.publish(SessionEvent.Compaction.Started, {
       sessionID: input.sessionID,
@@ -443,19 +464,20 @@ export const make = (dependencies: Dependencies) => {
       timestamp: yield* DateTime.now,
       reason: input.reason ?? "auto",
     })
-    const checkpoint = input.reason === "hard_gate"
-      ? yield* LongContext.writeCheckpoint({
-          db: dependencies.db,
-          sessionID: input.sessionID,
-          activityID: input.admission.activityId,
-          checkpointID: messageID,
-          promptEpoch: input.historyPromptEpoch,
-          sourceEndMessageID: input.entries.at(-1)?.message.id ?? null,
-          selectionID: input.admission.selectionId,
-        }).pipe(Effect.orDie)
-      : undefined
+    const checkpoint =
+      input.reason === "hard_gate"
+        ? yield* LongContext.writeCheckpoint({
+            db: dependencies.db,
+            sessionID: input.sessionID,
+            activityID: input.admission.activityId,
+            checkpointID: messageID,
+            promptEpoch: input.historyPromptEpoch,
+            sourceEndMessageID: input.entries.at(-1)?.message.id ?? null,
+            selectionID: input.admission.selectionId,
+          }).pipe(Effect.orDie)
+        : undefined
 
-    const remote = dependencies.remoteCompaction
+    const remote = dependencies.remoteCompaction ?? RemoteCompaction.make(dependencies)
     // design §5.3 Responses-only gate (C2-05): remote compact is only applicable on an explicit
     // Responses route and must never be silently routed to a `/responses` compact for a Chat-only or
     // Anthropic route. A non-Responses route short-circuits the REMOTE attempt and falls through to
@@ -464,7 +486,13 @@ export const make = (dependencies: Dependencies) => {
       const remoteResult: RemoteCompactionResult = yield* remote({
         sessionID: input.sessionID,
         summaryPrompt,
+        mode: config.mode,
         model: input.model,
+        request: input.request,
+        userMessageID: input.userMessageID,
+        historyPromptEpoch: input.historyPromptEpoch,
+        ownerMode: input.ownerMode,
+        admission: input.admission,
       }).pipe(
         // design §5.3: an unknown/faulted remote result never degrades to a fake local success — it
         // enters compact recovery (the original history stays readable). Typed failures first, then
@@ -488,6 +516,22 @@ export const make = (dependencies: Dependencies) => {
           return Effect.succeed({ kind: "recovery_required", reason: "provider_error" })
         }),
       )
+      if (remoteResult.kind === "unavailable") return manualUnavailable("failed", remoteResult.reason)
+      if (remoteResult.kind === "not_supported" && previousSummary?.type === "compaction" && previousSummary.remote)
+        return manualUnavailable("failed", "remote_checkpoint_provider_unavailable")
+      if (remoteResult.kind === "remote_window") {
+        yield* dependencies.events.publish(SessionEvent.Compaction.Ended, {
+          sessionID: input.sessionID,
+          messageID,
+          timestamp: yield* DateTime.now,
+          reason: input.reason ?? "auto",
+          text: "[Provider compacted context; opaque state retained for the original model.]",
+          recent: "",
+          remote: remoteResult.window,
+          ...(checkpoint ?? {}),
+        })
+        return { receiptID: null, ...(checkpoint ?? {}) }
+      }
       if (remoteResult.kind === "compacted") {
         if (remoteResult.summary.trim().length > 0) {
           yield* dependencies.events.publish(SessionEvent.Compaction.Ended, {
@@ -508,19 +552,22 @@ export const make = (dependencies: Dependencies) => {
       }
       // recovery_required: never publish a fake Compaction.Ended. The original history stays readable
       // and we do NOT fall through to the local summary dispatch — the compact result is unknown.
-      log.warn("remote compaction entered recovery", {
-        sessionID: input.sessionID,
-        reason: remoteResult.reason,
-      })
-      return manualUnavailable("recovery_required", remoteResult.reason)
+      if (remoteResult.kind === "recovery_required") {
+        log.warn("remote compaction entered recovery", {
+          sessionID: input.sessionID,
+          reason: remoteResult.reason,
+        })
+        return manualUnavailable("recovery_required", remoteResult.reason)
+      }
     }
-    if (remote && isRemoteCompactUnsupported(input.model)) {
+    if (dependencies.remoteCompaction && isRemoteCompactUnsupported(input.model)) {
       log.warn("remote compact not applicable for a non-Responses route; using the local summary", {
         sessionID: input.sessionID,
         route: input.model.route.id,
       })
     }
 
+    if (summaryOutput <= 0) return manualUnavailable("failed", "summary_output_limit_unknown")
     const summaryRequest = LLM.request({
       model: input.model,
       messages: [Message.user(summaryPrompt)],
@@ -528,8 +575,21 @@ export const make = (dependencies: Dependencies) => {
       generation: { maxTokens: summaryOutput },
     })
     const summaryEstimatedTokens = PreparedProviderTurn.estimateFullRequestTokens(summaryRequest)
-    const summaryBudget = PreparedProviderTurn.budget(input.model, summaryEstimatedTokens)
+    const summaryBudget = PreparedProviderTurn.budget(input.model, summaryEstimatedTokens, summaryOutput)
     if (summaryBudget.decision !== "ok") return manualUnavailable("failed", "summary_budget_exceeded")
+    const summaryPolicy = ModelHardPolicy.decide({
+      providerID: input.model.provider,
+      runtimeModelID: input.model.id,
+      apiModelID: input.model.id,
+      endpointOrigin: input.model.route.endpoint.baseURL,
+      mode: config.mode,
+      physicalInputBudget: summaryBudget.provenance === "host_guard" ? 0 : summaryBudget.physicalInputBudget,
+      estimatedFullRequestTokens: summaryEstimatedTokens,
+      autoCompact: false,
+      bufferTokens: 0,
+    })
+    if (summaryPolicy.state !== "managed" || summaryEstimatedTokens >= summaryPolicy.policyInputLimit)
+      return manualUnavailable("failed", "summary_policy_budget_exceeded")
     const summaryRequestInputHash = Hash.sha256(
       CanonicalJson.stringify({
         ...LLMRequest.input(summaryRequest),
@@ -645,7 +705,8 @@ export const make = (dependencies: Dependencies) => {
           const receipt = summaryReceiptID
             ? yield* V2ProviderTurn.receiptByIdentity(dependencies.db, summaryIdentity).pipe(Effect.orDie)
             : undefined
-          const knownFailed = receipt !== undefined && receipt.receipt_id === summaryReceiptID && receipt.state === "failed"
+          const knownFailed =
+            receipt !== undefined && receipt.receipt_id === summaryReceiptID && receipt.state === "failed"
           return manualUnavailable(
             !summaryReceiptID || knownFailed ? "failed" : "recovery_required",
             !summaryReceiptID
@@ -677,13 +738,30 @@ export const make = (dependencies: Dependencies) => {
     if (!config.auto) return false
     const context = modelInputLimit(input.model)
     if (context === undefined || context <= 0) return false
-    const tokens = input.estimatedInputTokens ?? estimateRequestTokens(input.request)
-    if (tokens <= inputBudget(context, resolvedBuffer(context, config))) return false
+    const tokens = input.estimatedInputTokens ?? PreparedProviderTurn.estimateFullRequestTokens(input.request)
+    const policy = ModelHardPolicy.decide({
+      providerID: input.model.provider,
+      runtimeModelID: input.model.id,
+      apiModelID: input.model.id,
+      endpointOrigin: input.model.route.endpoint.baseURL,
+      mode: config.mode,
+      bufferTokens: bufferTokens(input.model),
+      physicalInputBudget: PreparedProviderTurn.budget(input.model, tokens, input.request.generation?.maxTokens)
+        .physicalInputBudget,
+      summaryInputBudget: PreparedProviderTurn.budget(input.model, 0, summaryOutputTokens(input.model, config.mode))
+        .physicalInputBudget,
+      estimatedFullRequestTokens: tokens,
+      autoCompact: config.auto,
+    })
+    if (policy.state !== "managed" || policy.action !== "hard_gate_compact") return false
     const compacted = yield* compactAfterOverflow(input)
     return compacted && "kind" in compacted ? false : compacted
   })
   return {
     autoEnabled: config.auto,
+    mode: config.mode,
+    bufferTokens,
+    summaryOutputTokens: (model: Model) => summaryOutputTokens(model, config.mode),
     compactIfNeeded,
     compactAfterOverflow,
   }

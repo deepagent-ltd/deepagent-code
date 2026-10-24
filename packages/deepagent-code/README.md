@@ -2,7 +2,7 @@
 
 This package provides the agent runtime behind DeepAgent Code's terminal interface, web interface, and Electron desktop app. It brings durable sessions, streaming model output, tools, permissions, context management, and agent coordination into one execution path.
 
-The current source release line and package version are **2.0.4**. Release builds use the version selected by the build pipeline; development builds may use a preview identifier. See the [repository README](../../README.md) for product features, installation, and release downloads.
+The current source release line and package version are **2.0.5**. Release builds use the version selected by the build pipeline; development builds may use a preview identifier. See the [repository README](../../README.md) for product features, installation, and release downloads.
 
 ## One runtime, several interfaces
 

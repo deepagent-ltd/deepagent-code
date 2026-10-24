@@ -3,7 +3,7 @@ import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { Dialog } from "@deepagent-code/ui/dialog"
 import { Switch } from "@deepagent-code/ui/switch"
 import { TextField } from "@deepagent-code/ui/text-field"
-import { Component, createMemo, createSignal, Match, Show, Switch as SolidSwitch } from "solid-js"
+import { Component, createMemo, createSignal, Match, onCleanup, Show, Switch as SolidSwitch } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { useMcpUpdate } from "@/context/mcp"
 import { useSync } from "@/context/sync"
@@ -34,6 +34,15 @@ export const DialogConfigureMcp: Component<{ name: string }> = (props) => {
   const language = useLanguage()
   const dialog = useDialog()
   const update = useMcpUpdate()
+  const owner = { live: true }
+  onCleanup(() => {
+    owner.live = false
+  })
+  const close = () => {
+    if (!owner.live) return
+    owner.live = false
+    dialog.close()
+  }
 
   const config = createMemo(() => {
     const value = sync.data.config.mcp?.[props.name]
@@ -94,7 +103,7 @@ export const DialogConfigureMcp: Component<{ name: string }> = (props) => {
 
   const submit = async () => {
     const current = config()
-    if (!current || !valid() || update.isPending) return
+    if (!owner.live || !current || !valid() || update.isPending) return
 
     try {
       const parsedTimeout = timeout().trim() ? Number(timeout()) : undefined
@@ -123,8 +132,9 @@ export const DialogConfigureMcp: Component<{ name: string }> = (props) => {
             }
 
       await update.mutateAsync({ name: props.name, config: next })
-      dialog.close()
+      close()
     } catch (error) {
+      if (!owner.live) return
       showToast({
         variant: "error",
         title: language.t("common.requestFailed"),
@@ -236,7 +246,7 @@ export const DialogConfigureMcp: Component<{ name: string }> = (props) => {
             />
 
             <div class="flex justify-end gap-2 pt-1">
-              <Button variant="ghost" onClick={() => dialog.close()}>
+              <Button variant="ghost" onClick={close}>
                 {language.t("dialog.mcp.add.cancel")}
               </Button>
               <Button variant="primary" disabled={!valid() || update.isPending} onClick={submit}>

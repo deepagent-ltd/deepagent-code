@@ -229,6 +229,56 @@ describe("discoverModelsCached", () => {
     expect(calls).toBe(2)
   })
 
+  test("keeps different valid header tuples in separate discovery caches", async () => {
+    let calls = 0
+    const fetch = async () => [model(`tenant-${++calls}`)]
+    const input = baseInput("header-tuples")
+
+    const first = await run((fs, flock) =>
+      discoverModelsCached(fs, flock, { ...input, headers: { a: "1&b=2" } }, fetch),
+    )
+    const second = await run((fs, flock) =>
+      discoverModelsCached(fs, flock, { ...input, headers: { a: "1", b: "2" } }, fetch),
+    )
+
+    expect(first.map((item) => item.id)).toEqual(["tenant-1"])
+    expect(second.map((item) => item.id)).toEqual(["tenant-2"])
+    expect(calls).toBe(2)
+  })
+
+  test("reuses equivalent header order without changing header names", async () => {
+    let calls = 0
+    const fetch = async () => [model(`ordered-${++calls}`)]
+    const input = baseInput("header-order")
+
+    const first = await run((fs, flock) =>
+      discoverModelsCached(fs, flock, { ...input, headers: { a: "1", b: "2" } }, fetch),
+    )
+    const second = await run((fs, flock) =>
+      discoverModelsCached(fs, flock, { ...input, headers: { b: "2", a: "1" } }, fetch),
+    )
+
+    expect(second).toEqual(first)
+    expect(calls).toBe(1)
+  })
+
+  test("keeps a missing api key separate from the literal undefined credential", async () => {
+    let calls = 0
+    const fetch = async () => [model(`credential-${++calls}`)]
+    const input = baseInput("missing-key")
+
+    const first = await run((fs, flock) =>
+      discoverModelsCached(fs, flock, { ...input, apiKey: undefined }, fetch),
+    )
+    const second = await run((fs, flock) =>
+      discoverModelsCached(fs, flock, { ...input, apiKey: "undefined" }, fetch),
+    )
+
+    expect(first.map((item) => item.id)).toEqual(["credential-1"])
+    expect(second.map((item) => item.id)).toEqual(["credential-2"])
+    expect(calls).toBe(2)
+  })
+
   test("discovers with header-only auth (no api key)", async () => {
     let received: DiscoverModelsCachedInput | undefined
     const fetch = async (input: DiscoverModelsCachedInput) => {

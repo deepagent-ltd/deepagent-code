@@ -413,7 +413,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         const result = yield* deepagentCode.run(objective, {
           agent: "loop",
           format: "json",
-          extraArgs: ["--goal"],
+          extraArgs: ["--goal", "--goal-diagnostics", "error", "--goal-code-ref", "missing-reference.ts"],
           env: { ...goalEnvironment, DEEPAGENT_CODE_DB: databasePath },
           timeoutMs: 30_000,
         })
@@ -446,6 +446,11 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         expect(events.some((event) => event.type === "session_terminal" && event.phase === "done")).toBe(false)
         expect(events.some((event) => event.type === "permission" || event.type === "question")).toBe(false)
         using database = new Database(databasePath, { readonly: true })
+        const frozen = database.query("SELECT initialization FROM goal_control").get() as { initialization: string }
+        expect(JSON.parse(frozen.initialization).ownedPreparation.panel.codeRefs).toEqual(["missing-reference.ts"])
+        expect(JSON.parse(frozen.initialization).spec.criteria).toEqual([
+          { kind: "plan_complete" }, { kind: "no_diagnostics", severityAtMost: "error" },
+        ])
         expect(database.query("SELECT v2_authority FROM session").all()).toEqual([
           { v2_authority: 1 }, { v2_authority: 1 },
         ])
@@ -490,7 +495,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         })
 
         const result = yield* deepagentCode.spawn(
-          ["run", "--goal", "--agent", "loop", "--model", "test/test-model", "--format", "json"],
+          ["run", "--goal", "--goal-plan", "--agent", "loop", "--model", "test/test-model", "--format", "json"],
           { env: goalEnvironment, timeoutMs: 30_000 },
         )
         deepagentCode.expectExit(result, 0)

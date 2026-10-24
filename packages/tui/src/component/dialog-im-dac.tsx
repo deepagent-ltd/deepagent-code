@@ -20,7 +20,7 @@ export function DialogIMDac(props: {
   const [failure, setFailure] = createSignal<unknown>()
   const [selecting, setSelecting] = createSignal(false)
   const replyStatus = (command: IMDacCommand) =>
-    command.replyStatus === "unknown" ? i18n.t("tui.im.transport.unknown") : command.replyStatus ?? "—"
+    command.replyStatus === "unknown" ? i18n.t("tui.im.transport.unknown") : (command.replyStatus ?? "—")
   let disposed = false
   onCleanup(() => {
     disposed = true
@@ -33,7 +33,7 @@ export function DialogIMDac(props: {
   }
   const submit = () =>
     run(async () => {
-      const checkingReply = props.draft.state.command?.replyStatus === "unknown"
+      const checkingReply = props.draft.state.command?.replyStatus === "unknown" && !props.draft.state.text.trim()
       const command = await props.draft.submit()
       if (disposed || checkingReply || command?.state !== "admitted" || !command.sessionID) return
       await props.openSession(command.sessionID)
@@ -55,6 +55,7 @@ export function DialogIMDac(props: {
       { key: "ctrl+r", cmd: () => run(() => props.draft.refresh()) },
       { key: "ctrl+o", cmd: open },
       { key: "ctrl+y", cmd: () => run(() => props.draft.retryReply()) },
+      { key: "ctrl+k", cmd: () => run(() => props.draft.reconcileReply()) },
       {
         key: "ctrl+h",
         cmd: () => {
@@ -109,7 +110,11 @@ export function DialogIMDac(props: {
             onContentChange={() => props.draft.update({ text: target()?.plainText ?? "" })}
           />
           <Show
-            when={props.draft.state.uncertain || props.draft.state.replyUncertain || props.draft.state.command?.replyStatus === "unknown"}
+            when={
+              props.draft.state.uncertain ||
+              props.draft.state.replyUncertain ||
+              props.draft.state.command?.replyStatus === "unknown"
+            }
           >
             <text fg={theme.warning} wrapMode="word">
               {i18n.t("tui.im.dac.unknown")}
@@ -131,6 +136,31 @@ export function DialogIMDac(props: {
                 </Show>
                 <Show when={command().finalMessageID}>
                   <text fg={theme.textMuted}>{i18n.t("tui.im.dac.final")}</text>
+                </Show>
+                <Show
+                  when={
+                    command().state === "admitted" && command().finalMessageID && command().replyStatus !== "delivered"
+                  }
+                >
+                  <text fg={theme.primary} onMouseUp={() => run(() => props.draft.reconcileReply())}>
+                    {i18n.t(
+                      props.draft.state.reconciliation?.hasMore ? "tui.im.dac.reconcileMore" : "tui.im.dac.reconcile",
+                    )}{" "}
+                    (Ctrl+K)
+                  </text>
+                  <text fg={theme.textMuted} wrapMode="word">
+                    {i18n.t("tui.im.dac.reconcileHelp")}
+                  </text>
+                </Show>
+                <Show when={props.draft.state.reconciliation}>
+                  {(value) => (
+                    <text fg={theme.textMuted} wrapMode="word">
+                      {i18n.t("tui.im.dac.reconcileCount", {
+                        confirmed: value().confirmedParts,
+                        total: value().totalParts,
+                      })}
+                    </text>
+                  )}
                 </Show>
                 <Show
                   when={
@@ -158,7 +188,9 @@ export function DialogIMDac(props: {
           <text fg={theme.primary} onMouseUp={submit}>
             {props.draft.state.busy
               ? i18n.t("tui.im.working")
-              : props.draft.state.uncertain || props.draft.state.replyUncertain || props.draft.state.command?.replyStatus === "unknown"
+              : props.draft.state.uncertain ||
+                  props.draft.state.replyUncertain ||
+                  (props.draft.state.command?.replyStatus === "unknown" && !props.draft.state.text.trim())
                 ? i18n.t("tui.im.dac.refresh")
                 : i18n.t("tui.im.dac.submit")}
           </text>

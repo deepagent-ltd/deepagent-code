@@ -24,7 +24,7 @@ export class Error extends Schema.TaggedErrorClass<Error>()("WindowsPrivateStora
 }) {
   override get message() { return `Windows private storage ${this.reason}` }
 }
-export type Purpose = "settings" | "local_operator"
+export type Purpose = "settings" | "local_operator" | "mcp_legacy_auth" | "mcp_secret_envelopes" | "mcp_secret_migration"
 declare const originalSnapshot: unique symbol
 export interface Snapshot { readonly [originalSnapshot]: true }
 const originals = new WeakMap<Snapshot, { purpose: Purpose; name: string; capture: NativeWindowsBootstrap.Capture;
@@ -35,6 +35,9 @@ export function describe(snapshot: Snapshot) {
   return original && NativeWindowsBootstrap.describe(original.capture) ? original.observation : undefined
 }
 const permitted = (purpose: Purpose, name: string) => purpose === "local_operator" ? name === "installation.json"
+  : purpose === "mcp_legacy_auth" ? name === "mcp-auth.json"
+  : purpose === "mcp_secret_envelopes" ? name === "mcp-secrets.dpapi.json"
+  : purpose === "mcp_secret_migration" ? name === "mcp-secret-migration.json"
   : ["settings.json", ".settings-operation.json", ".settings-receipt.json"].includes(name)
 const limit = (purpose: Purpose) => purpose === "local_operator" ? 1024 : 1_048_576
 
@@ -46,7 +49,8 @@ export const make = Effect.fn("WindowsPrivateStorage.make")(function* (purpose: 
     !NativeWindowsBootstrap.describe(available.value.capture)) return yield* new Error({ reason: "unavailable" })
   const bootstrap = available.value
   const native = bootstrap.privateStorage!
-  const root = purpose === "settings" ? Global.Path.config : path.join(Global.Path.data, "local-operator")
+  const root = purpose === "local_operator" ? path.join(Global.Path.data, "local-operator")
+    : purpose === "mcp_secret_envelopes" ? path.join(Global.Path.data, "mcp-secrets") : Global.Path.config
   if (!Schema.is(WorkWindowsPathSchema.Absolute)(root)) return yield* new Error({ reason: "unavailable" })
   yield* bootstrap.requireCurrent.pipe(Effect.mapError(() => new Error({ reason: "changed" })))
   const lease = yield* Effect.acquireRelease(Effect.try({ try: () => native.open(JSON.stringify({ version: 1,

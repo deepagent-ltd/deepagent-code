@@ -4,7 +4,6 @@ import path from "path"
 import { Effect } from "effect"
 import { AgentV2 } from "../agent"
 import { Global } from "../global"
-import { Location } from "../location"
 import { PermissionV2 } from "../permission"
 import { PluginV2 } from "../plugin"
 
@@ -193,8 +192,6 @@ export const Plugin = PluginV2.define({
   id: PluginV2.ID.make("agent"),
   effect: Effect.gen(function* () {
     const agent = yield* AgentV2.Service
-    const location = yield* Location.Service
-    const worktree = location.directory
     const whitelistedDirs = [TRUNCATION_GLOB, path.join(Global.Path.tmp, "*")]
     const readonlyExternalDirectory: PermissionV2.Ruleset = [
       { action: "external_directory", resource: "*", effect: "ask" },
@@ -221,21 +218,14 @@ export const Plugin = PluginV2.define({
       })
 
       editor.update(AgentV2.ID.make("plan"), (item) => {
-        item.description = "Plan mode. Disallows all edit tools."
+        item.description = "Design a plan without implementing it; explicitly approve the displayed plan before queued execution."
+        item.system = "You are in planning mode. Inspect the project with the available read tools, clarify requirements, and save the proposed plan with the plan tool. Explain the design and acceptance criteria. Do not execute the implementation, change project files, spawn executors, or send messages. When the plan is ready, call plan_exit to display its exact version and ask the user to approve a separate execution activity. A refusal keeps the current planning activity."
         item.mode = "primary"
-        // NOT hidden (unlike V1): V2's admission-side selectable check rejects hidden agents, and
-        // plan stays explicitly selectable via config/API for callers that want a pure planning turn.
+        // Planning is selectable; its independent runtime permission ceiling survives config overrides.
         item.permissions.push(
           ...PermissionV2.merge(defaults, [
             { action: "question", resource: "*", effect: "allow" },
-            { action: "external_directory", resource: path.join(Global.Path.data, "plans", "*"), effect: "allow" },
             { action: "edit", resource: "*", effect: "deny" },
-            { action: "edit", resource: path.join(".deepagent-code", "plans", "*.md"), effect: "allow" },
-            {
-              action: "edit",
-              resource: path.relative(worktree, path.join(Global.Path.data, "plans", "*.md")),
-              effect: "allow",
-            },
           ]),
         )
       })

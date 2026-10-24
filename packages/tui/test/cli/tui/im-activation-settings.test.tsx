@@ -19,41 +19,85 @@ function activationFixture(directory: string) {
     calls: [] as { method: string; path: string; auth: string | null; directory: string | null }[],
     transaction: null as IMActivationSchema.Transaction | null,
     pending: null as IMActivationSchema.Transaction | null,
-    loseResponse: false, wrongReceipt: false, expiredQuote: false, pendingConflict: false,
+    loseResponse: false,
+    wrongReceipt: false,
+    expiredQuote: false,
+    pendingConflict: false,
     beforeResponse: undefined as (() => void) | undefined,
   }
-  const server = Bun.serve({ port: 0, async fetch(request) {
-    const url = new URL(request.url)
-    state.calls.push({ method: request.method, path: url.pathname, auth: request.headers.get("authorization"),
-      directory: url.searchParams.get("directory") })
-    if (url.pathname === "/api/v1/im/activation" && request.method === "GET")
-      return Response.json({ transaction: state.pending })
-    if (url.pathname === "/api/v1/im/activation/quote") return Response.json({ quoteID: "fixture-quote", priceCredits: 1,
-      quotaCost: 500_000, expiresAt: Date.now() + (state.expiredQuote ? -1_000 : 60_000), entitlementExpiresAt: null })
-    if (url.pathname === "/api/v1/im/activation" && request.method === "POST") {
-      const body = Schema.decodeUnknownSync(IMActivationSchema.Submit)(await request.json())
-      state.posts.push(body)
-      if (state.pendingConflict) {
-        state.transaction = { transactionID: "retained-other-transaction", name: "originalpayer", method: "api_key",
-          quoteID: "original-quote", state: "unknown", chargedCredits: null, credentialStored: false }
-        state.pending = state.transaction
-        return Response.json({ name: "IM_FACADE_CONFLICT", data: { code: "im_activation_pending",
-          message: "An existing transaction is retained" } }, { status: 409 })
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url)
+      state.calls.push({
+        method: request.method,
+        path: url.pathname,
+        auth: request.headers.get("authorization"),
+        directory: url.searchParams.get("directory"),
+      })
+      if (url.pathname === "/api/v1/im/activation" && request.method === "GET")
+        return Response.json({ transaction: state.pending })
+      if (url.pathname === "/api/v1/im/activation/quote")
+        return Response.json({
+          quoteID: "fixture-quote",
+          priceCredits: 1,
+          quotaCost: 500_000,
+          expiresAt: Date.now() + (state.expiredQuote ? -1_000 : 60_000),
+          entitlementExpiresAt: null,
+        })
+      if (url.pathname === "/api/v1/im/activation" && request.method === "POST") {
+        const body = Schema.decodeUnknownSync(IMActivationSchema.Submit)(await request.json())
+        state.posts.push(body)
+        if (state.pendingConflict) {
+          state.transaction = {
+            transactionID: "retained-other-transaction",
+            name: "originalpayer",
+            method: "api_key",
+            quoteID: "original-quote",
+            state: "unknown",
+            chargedCredits: null,
+            credentialStored: false,
+          }
+          state.pending = state.transaction
+          return Response.json(
+            {
+              name: "IM_FACADE_CONFLICT",
+              data: { code: "im_activation_pending", message: "An existing transaction is retained" },
+            },
+            { status: 409 },
+          )
+        }
+        state.transaction = {
+          transactionID: state.wrongReceipt ? "foreign-transaction-original" : body.transactionID,
+          name: body.name,
+          method: body.method,
+          quoteID: body.quoteID,
+          state: "succeeded",
+          chargedCredits: body.method === "api_key" ? 1 : 0,
+          credentialStored: true,
+        }
+        state.pending = { ...state.transaction, state: "unknown", chargedCredits: null, credentialStored: false }
+        state.beforeResponse?.()
+        if (state.loseResponse) return Response.json({ code: "response_lost" }, { status: 503 })
+        return Response.json(state.transaction)
       }
-      state.transaction = { transactionID: state.wrongReceipt ? "foreign-transaction-original" : body.transactionID,
-        name: body.name, method: body.method, quoteID: body.quoteID, state: "succeeded",
-        chargedCredits: body.method === "api_key" ? 1 : 0, credentialStored: true }
-      state.pending = { ...state.transaction, state: "unknown", chargedCredits: null, credentialStored: false }
-      state.beforeResponse?.()
-      if (state.loseResponse) return Response.json({ code: "response_lost" }, { status: 503 })
-      return Response.json(state.transaction)
-    }
-    if (url.pathname.startsWith("/api/v1/im/activation/")) return Response.json(state.transaction)
-    return Response.json({ code: "unexpected_path" }, { status: 404 })
-  } })
-  const sdk = { url: server.url.origin, directory,
-    client: createOpencodeClient({ baseUrl: server.url.origin, headers: { Authorization: "Basic fixture-only" } }) }
-  return { state, server, client: createIMClient(sdk), [Symbol.dispose]() { server.stop(true) } }
+      if (url.pathname.startsWith("/api/v1/im/activation/")) return Response.json(state.transaction)
+      return Response.json({ code: "unexpected_path" }, { status: 404 })
+    },
+  })
+  const sdk = {
+    url: server.url.origin,
+    directory,
+    client: createOpencodeClient({ baseUrl: server.url.origin, headers: { Authorization: "Basic fixture-only" } }),
+  }
+  return {
+    state,
+    server,
+    client: createIMClient(sdk),
+    [Symbol.dispose]() {
+      server.stop(true)
+    },
+  }
 }
 
 test("credential input keeps raw key out of the renderer buffer and supports explicit clear", async () => {
@@ -61,8 +105,18 @@ test("credential input keeps raw key out of the renderer buffer and supports exp
   const state = { value: "" }
   function View() {
     const [value, setValue] = createSignal("")
-    return <IMSecretInput label="Manual credential" value={value()} active locked={false}
-      setValue={(next) => { state.value = next; setValue(next) }} />
+    return (
+      <IMSecretInput
+        label="Manual credential"
+        value={value()}
+        active
+        locked={false}
+        setValue={(next) => {
+          state.value = next
+          setValue(next)
+        }}
+      />
+    )
   }
   using ui = await mountIM(tmp.path, "http://127.0.0.1:1", View)
   await ui.frame("Manual credential")
@@ -80,35 +134,65 @@ test("credential input keeps raw key out of the renderer buffer and supports exp
 test("IM model menu writes only the independent field and fresh reopening observes it", async () => {
   await using tmp = await tmpdir()
   const configFile = `${tmp.path}/config.json`
-  await Bun.write(configFile, JSON.stringify({ model: "ordinary/original", im: { model: "deepseek/old" },
-    provider: { ordinary: { options: { retained: true } } } }))
+  await Bun.write(
+    configFile,
+    JSON.stringify({
+      model: "ordinary/original",
+      im: { model: "deepseek/old" },
+      provider: { ordinary: { options: { retained: true } } },
+    }),
+  )
   const calls: { path: string; method: string; auth: string | null; directory: string | null }[] = []
   const patches: unknown[] = []
-  const server = Bun.serve({ port: 0, async fetch(request) {
-    const url = new URL(request.url)
-    calls.push({ path: url.pathname, method: request.method, auth: request.headers.get("authorization"),
-      directory: url.searchParams.get("directory") })
-    if (url.pathname === "/config") return Response.json(await Bun.file(configFile).json())
-    if (url.pathname === "/provider") return Response.json({ all: [
-      { id: "deepseek", name: "DeepSeek", models: {
-        "deepseek-flash": { id: "deepseek-flash", name: "Available Flash", status: "active" },
-        "retired": { id: "retired", name: "Retired model", status: "deprecated" },
-      } },
-      { id: "not-connected", name: "Not connected", models: {
-        hidden: { id: "hidden", name: "Unconnected model", status: "active" },
-      } },
-    ], connected: ["deepseek"], default: {} })
-    if (url.pathname === "/global/config" && request.method === "PATCH") {
-      const body = await request.json() as { im: { model: string } }
-      patches.push(body)
-      const original = await Bun.file(configFile).json()
-      const config = { ...original, im: { ...original.im, model: body.im.model } }
-      await Bun.write(configFile, JSON.stringify(config))
-      return Response.json(config)
-    }
-    return Response.json({ code: "unexpected_path" }, { status: 404 })
-  } })
-  using cleanup = { [Symbol.dispose]() { server.stop(true) } }
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url)
+      calls.push({
+        path: url.pathname,
+        method: request.method,
+        auth: request.headers.get("authorization"),
+        directory: url.searchParams.get("directory"),
+      })
+      if (url.pathname === "/config") return Response.json(await Bun.file(configFile).json())
+      if (url.pathname === "/provider")
+        return Response.json({
+          all: [
+            {
+              id: "deepseek",
+              name: "DeepSeek",
+              models: {
+                "deepseek-flash": { id: "deepseek-flash", name: "Available Flash", status: "active" },
+                retired: { id: "retired", name: "Retired model", status: "deprecated" },
+              },
+            },
+            {
+              id: "not-connected",
+              name: "Not connected",
+              models: {
+                hidden: { id: "hidden", name: "Unconnected model", status: "active" },
+              },
+            },
+          ],
+          connected: ["deepseek"],
+          default: {},
+        })
+      if (url.pathname === "/global/config" && request.method === "PATCH") {
+        const body = (await request.json()) as { im: { model: string } }
+        patches.push(body)
+        const original = await Bun.file(configFile).json()
+        const config = { ...original, im: { ...original.im, model: body.im.model } }
+        await Bun.write(configFile, JSON.stringify(config))
+        return Response.json(config)
+      }
+      return Response.json({ code: "unexpected_path" }, { status: 404 })
+    },
+  })
+  using cleanup = {
+    [Symbol.dispose]() {
+      server.stop(true)
+    },
+  }
   function View() {
     const client = createIMClient(useSDK())
     return <DialogIMModel client={client} back={() => {}} />
@@ -126,8 +210,11 @@ test("IM model menu writes only the independent field and fresh reopening observ
     await ui.frame("Current IM model: deepseek/deepseek-flash")
   }
   expect(patches).toEqual([{ im: { model: "deepseek/deepseek-flash" } }])
-  expect(await Bun.file(configFile).json()).toMatchObject({ model: "ordinary/original",
-    im: { model: "deepseek/deepseek-flash" }, provider: { ordinary: { options: { retained: true } } } })
+  expect(await Bun.file(configFile).json()).toMatchObject({
+    model: "ordinary/original",
+    im: { model: "deepseek/deepseek-flash" },
+    provider: { ordinary: { options: { retained: true } } },
+  })
   expect(calls.every((call) => call.auth === "Bearer fixture-token" && call.directory === tmp.path)).toBe(true)
   expect(calls.filter((call) => call.path.startsWith("/auth") || call.path.includes("activation"))).toHaveLength(0)
 })
@@ -153,16 +240,24 @@ test("actual activation form requires the explicit 1 credit confirmation and nev
   ui.app.mockInput.pressEnter()
   await ui.frame("Activation completed")
   expect(peer.state.posts).toHaveLength(1)
-  expect(peer.state.posts[0]).toMatchObject({ name: "ownfixture", method: "api_key",
-    credential: "fixture-payment-key", quoteID: "fixture-quote" })
+  expect(peer.state.posts[0]).toMatchObject({
+    name: "ownfixture",
+    method: "api_key",
+    credential: "fixture-payment-key",
+    quoteID: "fixture-quote",
+  })
   expect(ui.app.captureCharFrame()).not.toContain("fixture-payment-key")
   ui.app.mockInput.pressKey("r", { ctrl: true })
   await ui.frame("Activation completed")
   expect(peer.state.posts).toHaveLength(1)
   expect(peer.state.calls.at(-1)?.path).toBe(`/api/v1/im/activation/${peer.state.posts[0].transactionID}`)
   expect(ui.app.captureCharFrame()).not.toContain("IM name")
-  expect(peer.state.calls.every((call) => call.directory === tmp.path && call.auth === "Bearer fixture-token")).toBe(true)
-  expect(peer.state.calls.filter((call) => call.path.startsWith("/provider") || call.path.startsWith("/auth"))).toHaveLength(0)
+  expect(peer.state.calls.every((call) => call.directory === tmp.path && call.auth === "Bearer fixture-token")).toBe(
+    true,
+  )
+  expect(
+    peer.state.calls.filter((call) => call.path.startsWith("/provider") || call.path.startsWith("/auth")),
+  ).toHaveLength(0)
 })
 
 test("unknown charge locks the original intent and cold pending restores status-only recovery", async () => {
@@ -196,8 +291,12 @@ test("unknown charge locks the original intent and cold pending restores status-
       expect(cold.state.uncertain).toBe(false)
       expect(cold.state.credential).toBe("")
       expect(peer.state.posts).toHaveLength(1)
-    } finally { cold.dispose() }
-  } finally { flow.dispose() }
+    } finally {
+      cold.dispose()
+    }
+  } finally {
+    flow.dispose()
+  }
 })
 
 test("dedicated IM code redemption is explicit and quote expiry prevents any activation dispatch", async () => {
@@ -211,7 +310,9 @@ test("dedicated IM code redemption is explicit and quote expiry prevents any act
     expect((await flow.submit())?.chargedCredits).toBe(0)
     expect(peer.state.posts[0].method).toBe("activation_code")
     expect(flow.state.credential).toBe("")
-  } finally { flow.dispose() }
+  } finally {
+    flow.dispose()
+  }
   peer.state.pending = null
   peer.state.expiredQuote = true
   const expired = createIMActivation({ client: peer.client, current: () => true })
@@ -220,7 +321,9 @@ test("dedicated IM code redemption is explicit and quote expiry prevents any act
     expired.update({ name: "OwnFixture", method: "activation_code", credential: "fixture-im-code" })
     await expect(expired.submit()).rejects.toThrow("expired")
     expect(peer.state.posts).toHaveLength(1)
-  } finally { expired.dispose() }
+  } finally {
+    expired.dispose()
+  }
 })
 
 test("foreign transaction and late scope observations cannot report successful activation", async () => {
@@ -237,10 +340,14 @@ test("foreign transaction and late scope observations cannot report successful a
     expect(flow.state.transaction).toBeUndefined()
     expect(flow.state.transactionID).toBe(peer.state.posts[0].transactionID)
     expect(flow.state.uncertain).toBe(true)
-  } finally { flow.dispose() }
+  } finally {
+    flow.dispose()
+  }
   peer.state.pending = null
   peer.state.wrongReceipt = false
-  peer.state.beforeResponse = () => { owner.current = false }
+  peer.state.beforeResponse = () => {
+    owner.current = false
+  }
   owner.current = true
   const late = createIMActivation({ client: peer.client, current: () => owner.current })
   try {
@@ -250,7 +357,9 @@ test("foreign transaction and late scope observations cannot report successful a
     await expect(late.submit()).rejects.toThrow("scope changed")
     expect(late.state.transaction).toBeUndefined()
     expect(peer.state.posts).toHaveLength(2)
-  } finally { late.dispose() }
+  } finally {
+    late.dispose()
+  }
 })
 
 test("pending conflict recovers the retained transaction by GET without another purchase", async () => {
@@ -263,17 +372,109 @@ test("pending conflict recovers the retained transaction by GET without another 
     flow.update({ name: "OwnFixture", method: "activation_code", credential: "fixture-new-code" })
     await flow.submit()
     expect(flow.state.transactionID).toBe("retained-other-transaction")
-    expect(flow.state.transaction).toMatchObject({ name: "originalpayer", method: "api_key",
-      quoteID: "original-quote", state: "unknown", chargedCredits: null })
+    expect(flow.state.transaction).toMatchObject({
+      name: "originalpayer",
+      method: "api_key",
+      quoteID: "original-quote",
+      state: "unknown",
+      chargedCredits: null,
+    })
     expect(flow.state.uncertain).toBe(true)
     expect(flow.state.credential).toBe("")
     expect(peer.state.calls.map((call) => [call.method, call.path])).toEqual([
-      ["GET", "/api/v1/im/activation"], ["GET", "/api/v1/im/activation/quote"],
-      ["POST", "/api/v1/im/activation"], ["GET", "/api/v1/im/activation"],
+      ["GET", "/api/v1/im/activation"],
+      ["GET", "/api/v1/im/activation/quote"],
+      ["POST", "/api/v1/im/activation"],
+      ["GET", "/api/v1/im/activation"],
     ])
     await flow.submit()
     await flow.refresh()
     expect(peer.state.posts).toHaveLength(1)
     expect(peer.state.calls.at(-1)?.path).toBe("/api/v1/im/activation/retained-other-transaction")
-  } finally { flow.dispose() }
+  } finally {
+    flow.dispose()
+  }
+})
+
+test("TUI cold unknown activation preserves original fields and uses explicit Alt+S instead of Enter for a resend", async () => {
+  await using tmp = await tmpdir()
+  using peer = activationFixture(tmp.path)
+  const original: IMActivationSchema.Transaction = {
+    transactionID: "original-transaction-123",
+    name: "originalpayer",
+    method: "api_key",
+    quoteID: "original-expired-quote",
+    state: "unknown",
+    chargedCredits: null,
+    credentialStored: false,
+  }
+  peer.state.pending = original
+  peer.state.transaction = original
+  const flow = createIMActivation({ client: peer.client, current: () => true })
+  try {
+    using ui = await mountIM(
+      tmp.path,
+      peer.server.url.origin,
+      () => <DialogIMActivation flow={flow} back={() => {}} />,
+      160,
+    )
+    await ui.frame("original-transaction-123")
+    expect(flow.update({ name: "differentpayer" })).toBe(false)
+    await ui.type("fixture-original-payment-key")
+    ui.app.mockInput.pressEnter()
+    await ui.frame("unknown")
+    expect(peer.state.posts).toHaveLength(0)
+    expect(peer.state.calls.at(-1)?.path).toBe(`/api/v1/im/activation/${original.transactionID}`)
+    ui.app.mockInput.pressKey("s", { meta: true })
+    await ui.app.renderOnce()
+    expect(peer.state.posts).toHaveLength(0)
+    ui.app.mockInput.pressKey("c", { meta: true })
+    await ui.app.renderOnce()
+    ui.app.mockInput.pressKey("s", { meta: true })
+    await ui.frame("Activation completed")
+    expect(peer.state.posts).toHaveLength(1)
+    expect(peer.state.posts[0]).toEqual({
+      transactionID: original.transactionID,
+      name: original.name,
+      method: original.method,
+      quoteID: original.quoteID,
+      credential: "fixture-original-payment-key",
+      retryOriginal: true,
+    })
+    expect(flow.state.credential).toBe("")
+    expect(ui.app.captureCharFrame()).not.toContain("fixture-original-payment-key")
+  } finally {
+    flow.dispose()
+  }
+})
+
+test("TUI paid pending receipt is retained, cannot be reposted and never loses an observed credit", async () => {
+  await using tmp = await tmpdir()
+  using peer = activationFixture(tmp.path)
+  const original: IMActivationSchema.Transaction = {
+    transactionID: "original-transaction-123",
+    name: "originalpayer",
+    method: "api_key",
+    quoteID: "original-quote",
+    state: "pending",
+    chargedCredits: 1,
+    credentialStored: false,
+  }
+  peer.state.pending = original
+  peer.state.transaction = original
+  const flow = createIMActivation({ client: peer.client, current: () => true })
+  try {
+    await flow.load()
+    expect(flow.state.transaction).toEqual(original)
+    expect(flow.canRetryOriginal()).toBe(false)
+    expect(flow.update({ credential: "another-key", confirmed: true })).toBe(false)
+    await flow.retryOriginal()
+    peer.state.transaction = { ...original, state: "unknown", chargedCredits: 0 }
+    await expect(flow.refresh()).rejects.toThrow()
+    expect(flow.state.transaction?.chargedCredits).toBe(1)
+    expect(flow.state.transactionID).toBe(original.transactionID)
+    expect(peer.state.posts).toHaveLength(0)
+  } finally {
+    flow.dispose()
+  }
 })

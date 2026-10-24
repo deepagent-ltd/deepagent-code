@@ -53,9 +53,12 @@ type Input = Extract<BrowserSchema.Command, { ref: string }>
 
 export function createManagedBrowserActions(input: {
   send: Send
+  cleanupSend?: Send
+  watchContext?: (contextID: number) => { retired: () => boolean; dispose: () => void }
   current: () => Promise<void>
   generation: () => number
   inputSource?: () => void
+  sharedDocument?: boolean
   origin?: string
   approvedOrigins?: readonly string[]
   fail: (code: BrowserSchema.Error["code"]) => never
@@ -225,6 +228,7 @@ export function createManagedBrowserActions(input: {
     mutate = false,
     hitBackendID?: number,
     awaitPromise = false,
+    onResult?: (value: unknown) => void,
   ) => {
     const target = await requireTarget(command)
     // Driver scripts run in a named isolated world; page replacements of DOM prototypes
@@ -235,13 +239,15 @@ export function createManagedBrowserActions(input: {
       grantUniveralAccess: false,
     })) as { executionContextId?: number }
     if (!Number.isSafeInteger(world.executionContextId)) return input.fail("BROWSER_STALE_TARGET")
-    const resolved = (await send("DOM.resolveNode", {
-      backendNodeId: target.backendID,
-      executionContextId: world.executionContextId,
-    })) as { object?: { objectId?: string } }
-    if (!resolved.object?.objectId) return input.fail("BROWSER_STALE_TARGET")
-    const objects = [resolved.object.objectId]
+    const lifetime = onResult ? input.watchContext?.(world.executionContextId!) : undefined
+    const objects: string[] = []
     try {
+      const resolved = (await send("DOM.resolveNode", {
+        backendNodeId: target.backendID,
+        executionContextId: world.executionContextId,
+      })) as { object?: { objectId?: string } }
+      if (!resolved.object?.objectId) return input.fail("BROWSER_STALE_TARGET")
+      objects.push(resolved.object.objectId)
       const hit =
         hitBackendID === undefined
           ? undefined
@@ -252,25 +258,40 @@ export function createManagedBrowserActions(input: {
       if (hitBackendID !== undefined && !hit?.object?.objectId) return input.fail("BROWSER_STALE_TARGET")
       if (hit?.object?.objectId) objects.push(hit.object.objectId)
       await requireTarget(command)
-      const result = (await dispatchTarget(command, target, "Runtime.callFunctionOn", {
-        objectId: resolved.object.objectId,
-        functionDeclaration: declaration,
-        arguments: [
-          ...args.map((value) => ({ value })),
-          ...(hit?.object?.objectId ? [{ objectId: hit.object.objectId }] : []),
-        ],
-        returnByValue: true,
-        awaitPromise,
-        userGesture: mutate,
-      }, mutate)) as {
+      const result = (await dispatchTarget(
+        command,
+        target,
+        "Runtime.callFunctionOn",
+        {
+          objectId: resolved.object.objectId,
+          functionDeclaration: declaration,
+          arguments: [
+            ...args.map((value) => ({ value })),
+            ...(hit?.object?.objectId ? [{ objectId: hit.object.objectId }] : []),
+          ],
+          returnByValue: true,
+          awaitPromise,
+          userGesture: mutate,
+        },
+        mutate,
+      )) as {
         exceptionDetails?: unknown
         result?: { value?: unknown }
       }
       if (result.exceptionDetails) return input.fail("BROWSER_STALE_TARGET")
+      onResult?.(result.result?.value)
       return result.result?.value
     } finally {
       // Releasing this captured remote object cannot mutate the page or authorize new input.
-      await Promise.allSettled(objects.map((objectId) => input.send("Runtime.releaseObject", { objectId })))
+      try {
+        const released = await Promise.allSettled(
+          objects.map((objectId) => input.send("Runtime.releaseObject", { objectId })),
+        )
+        if (onResult && released.some((result) => result.status === "rejected") && !lifetime?.retired())
+          return input.fail("BROWSER_UNKNOWN")
+      } finally {
+        lifetime?.dispose()
+      }
     }
   }
   const leaf = async (command: Input, method: string, params: Record<string, unknown>) => {
@@ -387,6 +408,29 @@ export function createManagedBrowserActions(input: {
       held.clear()
       await Promise.allSettled(releases.map((value) => input.send(value.method, value.params)))
     },
+    async releaseConfirmed(cleanup: Send) {
+      const results = await Promise.all(
+        [...held].map(async ([key, value]) => {
+          const confirmed = await cleanup(value.method, value.params).then(
+            () => true,
+            () => false,
+          )
+          if (confirmed && held.get(key) === value) held.delete(key)
+          return { key, confirmed }
+        }),
+      )
+      return { confirmed: results.every((value) => value.confirmed) && held.size === 0, results }
+    },
+    retireRef(ref: string) {
+      refs.delete(ref)
+    },
+    preflight,
+    async targetWitness(command: Pick<Input, "ref" | "frameID" | "generation" | "observationRevision">) {
+      return call(
+        command as Input,
+        "function() { if (!this.isConnected) return null; const editable = this instanceof HTMLInputElement || this instanceof HTMLTextAreaElement; return {tag:this.tagName,type:this.type || '',disabled:!!this.disabled,readOnly:!!this.readOnly,value:editable ? this.value : this.isContentEditable ? this.textContent : '',checked:!!this.checked,selected:this instanceof HTMLSelectElement ? Array.from(this.selectedOptions, o=>o.value) : [],active:document.activeElement === this,start:editable ? this.selectionStart : null,end:editable ? this.selectionEnd : null}; }",
+      )
+    },
     async fileTarget(command: Extract<Input, { type: "file.upload" | "file.download" }>) {
       if (command.type === "file.download") {
         const url = await call(
@@ -397,14 +441,16 @@ export function createManagedBrowserActions(input: {
           typeof url !== "string" ||
           Buffer.byteLength(url) > 2048 ||
           !URL.canParse(url) ||
-          new URL(url).origin !== input.origin
+          (input.sharedDocument
+            ? !input.approvedOrigins?.includes(new URL(url).origin)
+            : new URL(url).origin !== input.origin)
         )
           return input.fail("BROWSER_STALE_TARGET")
         return { direction: "download" as const, url }
       }
       const value = await call(
         command,
-        "function() { if (!this.isConnected || !(this instanceof HTMLInputElement) || this.type !== 'file' || this.disabled || !this.form || this.form.method.toUpperCase() !== 'POST' || this.form.enctype !== 'multipart/form-data') return null; const url = new URL(this.form.action); return {path:url.pathname,origin:url.origin,search:url.search,multiple:this.multiple,field:this.name}; }",
+        "function() { if (!this.isConnected || !(this instanceof HTMLInputElement) || this.type !== 'file' || this.disabled || !this.form || this.form.method.toUpperCase() !== 'POST' || this.form.enctype !== 'multipart/form-data') return null; const url = new URL(this.form.action); return {path:url.pathname,url:url.href,origin:url.origin,search:url.search,multiple:this.multiple,field:this.name}; }",
       )
       if (
         !value ||
@@ -412,9 +458,11 @@ export function createManagedBrowserActions(input: {
         !("path" in value) ||
         typeof value.path !== "string" ||
         !("origin" in value) ||
-        value.origin !== input.origin ||
+        (input.sharedDocument
+          ? !input.approvedOrigins?.includes(String(value.origin))
+          : value.origin !== input.origin) ||
         !("search" in value) ||
-        value.search !== "" ||
+        (!input.sharedDocument && value.search !== "") ||
         !("field" in value) ||
         typeof value.field !== "string" ||
         !value.field ||
@@ -423,7 +471,13 @@ export function createManagedBrowserActions(input: {
         typeof value.multiple !== "boolean"
       )
         return input.fail("BROWSER_STALE_TARGET")
-      return { direction: "upload" as const, targetPath: value.path, multiple: value.multiple, field: value.field }
+      return {
+        direction: "upload" as const,
+        targetPath: value.path,
+        multiple: value.multiple,
+        field: value.field,
+        ...(input.sharedDocument && "url" in value && typeof value.url === "string" ? { targetURL: value.url } : {}),
+      }
     },
     async selectFiles(
       command: Extract<Input, { type: "file.upload" }>,
@@ -444,11 +498,34 @@ export function createManagedBrowserActions(input: {
       )
       if (verified !== true) return input.fail("BROWSER_UNKNOWN")
     },
-    async submitFiles(command: Extract<Input, { type: "file.upload" }>, targetPath: string) {
+    async submitFiles(
+      command: Extract<Input, { type: "file.upload" }>,
+      targetPath: string,
+      targetURL?: string,
+      onSelectionCleared?: () => void,
+    ) {
+      if (input.sharedDocument) {
+        // HTML constructs the File entry list before firing formdata. Reduce the
+        // original selection in that synchronous call, before navigation can
+        // suspend later CDP cleanup behind its held network request.
+        const cleared = await call(
+          command,
+          "function(path,href) { if (!this.isConnected || !(this instanceof HTMLInputElement) || this.type !== 'file' || !this.form || this.disabled || this.form.method.toUpperCase() !== 'POST' || this.form.enctype !== 'multipart/form-data' || new URL(this.form.action).pathname !== path || !href || new URL(this.form.action).href !== href) return false; const file=this, form=this.form; let observed=false, empty=false; const clear=function(event) { if (!event.isTrusted || event.target !== form || !(event instanceof FormDataEvent)) return; observed=true; file.value=''; empty=file.files.length === 0; }; EventTarget.prototype.addEventListener.call(form,'formdata',clear,{capture:true}); try { HTMLFormElement.prototype.requestSubmit.call(form); return observed && empty && file.files.length === 0; } finally { EventTarget.prototype.removeEventListener.call(form,'formdata',clear,true); } }",
+          [targetPath, targetURL],
+          true,
+          undefined,
+          false,
+          (value) => {
+            if (value === true) onSelectionCleared?.()
+          },
+        )
+        if (cleared !== true) return input.fail("BROWSER_UNKNOWN")
+        return true
+      }
       const submitted = await call(
         command,
-        "function(path) { if (!this.isConnected || !(this instanceof HTMLInputElement) || this.type !== 'file' || !this.form || this.disabled || this.form.method.toUpperCase() !== 'POST' || this.form.enctype !== 'multipart/form-data' || new URL(this.form.action).pathname !== path) return false; this.form.requestSubmit(); return true; }",
-        [targetPath],
+        "function(path,href) { if (!this.isConnected || !(this instanceof HTMLInputElement) || this.type !== 'file' || !this.form || this.disabled || this.form.method.toUpperCase() !== 'POST' || this.form.enctype !== 'multipart/form-data' || new URL(this.form.action).pathname !== path || href && new URL(this.form.action).href !== href) return false; this.form.requestSubmit(); return true; }",
+        [targetPath, targetURL],
         true,
       )
       if (submitted !== true) return input.fail("BROWSER_UNKNOWN")
@@ -459,20 +536,20 @@ export function createManagedBrowserActions(input: {
       // Reducing cleanup uses only the originally observed backend node, even after navigation.
       // It grants no new input and never follows an arbitrary selector supplied by a caller.
       try {
-        await input.send("DOM.setFileInputFiles", { backendNodeId: target.backendID, files: [] })
-        const world = (await input.send("Page.createIsolatedWorld", {
+        await (input.cleanupSend ?? input.send)("DOM.setFileInputFiles", { backendNodeId: target.backendID, files: [] })
+        const world = (await (input.cleanupSend ?? input.send)("Page.createIsolatedWorld", {
           frameId: target.frameID,
           worldName: "dac-managed-file-cleanup-v1",
           grantUniveralAccess: false,
         })) as { executionContextId?: number }
         if (!Number.isSafeInteger(world.executionContextId)) return false
-        const resolved = (await input.send("DOM.resolveNode", {
+        const resolved = (await (input.cleanupSend ?? input.send)("DOM.resolveNode", {
           backendNodeId: target.backendID,
           executionContextId: world.executionContextId,
         })) as { object?: { objectId?: string } }
         if (!resolved.object?.objectId) return false
         try {
-          const result = (await input.send("Runtime.callFunctionOn", {
+          const result = (await (input.cleanupSend ?? input.send)("Runtime.callFunctionOn", {
             objectId: resolved.object.objectId,
             functionDeclaration:
               "function() { return this instanceof HTMLInputElement && this.type === 'file' && this.files.length === 0; }",
@@ -482,7 +559,7 @@ export function createManagedBrowserActions(input: {
           })) as { result?: { value?: unknown }; exceptionDetails?: unknown }
           return !result.exceptionDetails && result.result?.value === true
         } finally {
-          await input.send("Runtime.releaseObject", { objectId: resolved.object.objectId })
+          await (input.cleanupSend ?? input.send)("Runtime.releaseObject", { objectId: resolved.object.objectId })
         }
       } catch {
         return false
@@ -506,8 +583,8 @@ export function createManagedBrowserActions(input: {
       const lines: string[] = []
       let bytes = 0
       let referenceBytes = 0
-      let truncated = tree.nodes.length > (command.limit ?? 500)
-      for (const node of tree.nodes.slice(0, command.limit ?? 500)) {
+      let truncated = tree.nodes.length > (command.limit ?? BrowserSchema.MAX_SNAPSHOT_TARGETS)
+      for (const node of tree.nodes.slice(0, command.limit ?? BrowserSchema.MAX_SNAPSHOT_TARGETS)) {
         if (node.ignored) continue
         const role = String(node.role?.value ?? "")
         const name = String(node.name?.value ?? "")
@@ -738,9 +815,28 @@ export function createManagedBrowserActions(input: {
       if (command.type === "file.upload" || command.type === "file.download") return input.fail("BROWSER_SCOPE_DENIED")
       await preflight(command)
       if (command.type === "fill") {
+        const read = () =>
+          call(
+            command,
+            "function() { return {value:this instanceof HTMLInputElement || this instanceof HTMLTextAreaElement ? this.value : this.textContent,active:document.activeElement === this,start:this.selectionStart === undefined ? null : this.selectionStart,end:this.selectionEnd === undefined ? null : this.selectionEnd}; }",
+          ) as Promise<{ value: string; active: boolean; start: number | null; end: number | null }>
+        const before = input.sharedDocument ? await read() : undefined
         await leaf(command, "DOM.focus", { backendNodeId: (await requireTarget(command)).backendID })
         await key(command, "SelectAll")
+        if (before) {
+          const selected = await read()
+          if (
+            !selected.active ||
+            selected.value !== before.value ||
+            (selected.start !== null && (selected.start !== 0 || selected.end !== before.value.length))
+          )
+            return input.fail("BROWSER_UNKNOWN")
+        }
         await key(command, "Backspace")
+        if (before) {
+          const erased = await read()
+          if (!erased.active || erased.value !== "") return input.fail("BROWSER_UNKNOWN")
+        }
         if (
           (await call(
             command,
@@ -750,6 +846,10 @@ export function createManagedBrowserActions(input: {
           return input.fail("BROWSER_STALE_TARGET")
         await leaf(command, "Input.insertText", { text: command.text })
         await input.current()
+        if (before) {
+          const result = await read()
+          if (!result.active || result.value !== command.text) return input.fail("BROWSER_UNKNOWN")
+        }
         return
       }
       if (command.type === "select") {

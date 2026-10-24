@@ -691,16 +691,12 @@ const scenarios: Scenario[] = [
     .seeded(() =>
       Effect.acquireRelease(
         Effect.promise(async () => {
-          await Bun.write(
-            path.join(exerciseDataDirectory, "auth.json"),
-            JSON.stringify({ test: { type: "api", key: "stored-provider-key" } }),
-          )
           const server = Bun.serve({
             port: 0,
             fetch(request) {
               const url = new URL(request.url)
               if (url.pathname === "/models") {
-                if (request.headers.get("authorization") !== "Bearer stored-provider-key") {
+                if (request.headers.get("authorization") !== "Bearer discovery-probe-fixture") {
                   return new Response("unauthorized", { status: 401 })
                 }
                 return Response.json({ data: [{ id: "model-a", name: "Model A" }] })
@@ -719,7 +715,7 @@ const scenarios: Scenario[] = [
       body: {
         providerID: "test",
         baseURL: ctx.state.baseURL,
-        authProviderID: "test",
+        apiKey: "discovery-probe-fixture",
       },
     }))
     .json(200, (body) => {
@@ -1155,6 +1151,23 @@ const scenarios: Scenario[] = [
         body.some((item) => isRecord(item) && item.id === ctx.state.child.id && item.parentID === ctx.state.parent.id),
         "children should include seeded child",
       )
+    }),
+  http.protected
+    .get("/session/{sessionID}/task-summary", "session.taskSummary")
+    .seeded((ctx) => Effect.gen(function* () {
+      const parent = yield* ctx.session({ title: "Task summary parent" })
+      const child = yield* ctx.session({ title: "Historical child", parentID: parent.id })
+      return { parent, child }
+    }))
+    .at((ctx) => ({ path: route("/session/{sessionID}/task-summary", { sessionID: ctx.state.parent.id }),
+      headers: ctx.headers() }))
+    .json(200, (body, ctx) => {
+      object(body)
+      array(body.items)
+      check(body.parentSessionID === ctx.state.parent.id, "summary should retain the original parent")
+      check(body.items.some((item) => isRecord(item) && item.childSessionID === ctx.state.child.id &&
+        item.state === "unknown"), "historical child without a TaskRun should remain unknown")
+      check(body.hasMore === false && body.nextCursor === null, "complete summary should not advertise another page")
     }),
   http.protected
     .get("/session/{sessionID}/todo", "session.todo")

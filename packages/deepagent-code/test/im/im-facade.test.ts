@@ -1,5 +1,9 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Fiber, Layer, Option, Ref, Stream, SubscriptionRef } from "effect"
+import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import path from "node:path"
+import os from "node:os"
+import { createHash } from "node:crypto"
+import { Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Stream, SubscriptionRef } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { Database } from "@deepagent-code/core/database/database"
 import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
@@ -11,7 +15,10 @@ import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { WorkspaceRef } from "@/effect/instance-ref"
 import { ReaderInstanceFixture } from "./reader-instance-fixture"
 import { Auth } from "@/auth"
+import { Config } from "@/config/config"
 import { IMFacade } from "@/im/facade"
+import { IMDeviceStore } from "@/im/device-store"
+import { SecretStore } from "@/mcp/secret-store"
 import { IMKernelExchange } from "@/im/kernel/exchange"
 import { IMKernelSync } from "@/im/kernel/sync"
 import { IMKernelReader } from "@/im/kernel/reader"
@@ -108,32 +115,75 @@ const makeHarness = (options: {
   buildEngine?: IMFacade.EngineBuilder
   protectedReader?: boolean
   readerUnavailable?: boolean
+  device?: ReturnType<typeof IMDeviceStore.make>
+  configuration?: Layer.Layer<Config.Service>
+  observeEngine?: (options: NonNullable<Parameters<IMFacade.EngineBuilder>[1]>) => void
 }): Effect.Effect<Harness, never, never> =>
   Effect.gen(function* () {
     const engineStarts: KernelConfig.Info[] = []
     const engineStops: KernelConfig.Info[] = []
-    const engineState = yield* SubscriptionRef.make<KernelClient.ConnectionState>(options.protectedReader ? "connected" : "disconnected")
+    const engineState = yield* SubscriptionRef.make<KernelClient.ConnectionState>(
+      options.protectedReader ? "connected" : "disconnected",
+    )
     const buildEngine: IMFacade.EngineBuilder = (config, layerOptions) =>
       Layer.unwrap(
         Effect.gen(function* () {
           engineStarts.push(config)
+          if (layerOptions) options.observeEngine?.(layerOptions)
           yield* Effect.addFinalizer(() => Effect.sync(() => void engineStops.push(config)))
           if (options.engineBehavior) yield* options.engineBehavior(config)
-          if (options.protectedReader) return IMKernelSync.layer(config, layerOptions).pipe(Layer.provide(Layer.mock(KernelClient.Service, {
-            state: engineState, messages: Stream.empty,
-            getDeliveryReader: () => options.readerUnavailable ? Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryReader", message: "Actual reader API is unavailable" })) : Effect.succeed({ version: 1, scopeKey: "a".repeat(64), currentCursor: "0", serverNow: Date.now(), maxPageItems: 32, maxChangeBytes: 65536, maxMessageBytes: 4194304, maxWindowPages: 100000 }),
-            getDeliveryChanges: (request) => Effect.succeed({ version: 1, scopeKey: request.scopeKey, after: request.after, upper: "0", scanCursor: "0", scanProjectionKey: "", pageToken: "", windowComplete: true, caughtUp: true, serverNow: Date.now(), items: [] }),
-          })))
+          if (options.protectedReader)
+            return IMKernelSync.layer(config, layerOptions).pipe(
+              Layer.provide(
+                Layer.mock(KernelClient.Service, {
+                  state: engineState,
+                  messages: Stream.empty,
+                  disconnect: Effect.void,
+                  getDeliveryReader: () =>
+                    options.readerUnavailable
+                      ? Effect.fail(
+                          new KernelSdk.KernelError({
+                            operation: "getDeliveryReader",
+                            message: "Actual reader API is unavailable",
+                          }),
+                        )
+                      : Effect.succeed({
+                          version: 1,
+                          scopeKey: "a".repeat(64),
+                          currentCursor: "0",
+                          serverNow: Date.now(),
+                          maxPageItems: 32,
+                          maxChangeBytes: 65536,
+                          maxMessageBytes: 4194304,
+                          maxWindowPages: 100000,
+                        }),
+                  getDeliveryChanges: (request) =>
+                    Effect.succeed({
+                      version: 1,
+                      scopeKey: request.scopeKey,
+                      after: request.after,
+                      upper: "0",
+                      scanCursor: "0",
+                      scanProjectionKey: "",
+                      pageToken: "",
+                      windowComplete: true,
+                      caughtUp: true,
+                      serverNow: Date.now(),
+                      items: [],
+                    }),
+                }),
+              ),
+            )
           const instance = IMKernelSync.Service.of({
-              createMessage: () => Effect.die("unused delivery creation"),
-              deliveryStatuses: () => Effect.die("unused transport statuses"),
-              deliveryStatus: () => Effect.die("unused delivery receipt"),
-              state: engineState,
-              send: () => Effect.void,
-              drainPending: Effect.void,
-              recovery: yield* SubscriptionRef.make<IMKernelSync.RecoveryState>({ status: "ready" }),
-              catchUp: Effect.void,
-            })
+            createMessage: () => Effect.die("unused delivery creation"),
+            deliveryStatuses: () => Effect.die("unused transport statuses"),
+            deliveryStatus: () => Effect.die("unused delivery receipt"),
+            state: engineState,
+            send: () => Effect.void,
+            drainPending: Effect.void,
+            recovery: yield* SubscriptionRef.make<IMKernelSync.RecoveryState>({ status: "ready" }),
+            catchUp: Effect.void,
+          })
           return Layer.succeed(IMKernelSync.Service, instance)
         }),
       )
@@ -152,6 +202,8 @@ const makeHarness = (options: {
       Layer.provide(Layer.succeed(HttpClient.HttpClient, options.http)),
       Layer.provide(ReaderInstanceFixture.layer),
       Layer.provide(ReaderInstanceFixture.registry),
+      Layer.provide(options.device ? Layer.succeed(IMDeviceStore.Service, options.device) : Layer.empty),
+      Layer.provide(options.configuration ?? Layer.empty),
     )
     return { layer: Layer.mergeAll(facade, repo, ReaderInstanceFixture.layer), engineStarts, engineStops, engineState }
   })
@@ -162,74 +214,415 @@ const exchangeFail =
     fail(code, message, status)
 
 describe("IMFacade", () => {
-  it.live("revokes the captured reader owner before an old native request settles during a credential switch", () => Effect.gen(function* () {
-    const started = yield* Deferred.make<void>()
-    const release = { native: () => {} }
-    const native = new Promise<void>((resolve) => { release.native = resolve })
-    const nativeSettled = yield* Deferred.make<void>()
-    const state = yield* SubscriptionRef.make<KernelClient.ConnectionState>("connected")
-    const generations: (() => boolean)[] = []
-    const calls = { cut: 0, mark: 0, output: 0 }
-    const invalidations: string[] = []
-    const scopeKey = "a".repeat(64)
-    const projectionKey = "b".repeat(64)
-    const harness = yield* makeHarness({ env: FACADE_ENV, http: httpStub((request) => ok(request.url.endsWith("/inspect") ? { conversation_type: 1, conversation_id: "bob", org_id: 7, member_uuids: ["uuid-alice", "bob"], name: "bob" } : payload()), []), buildEngine: (config, options) => Layer.effect(IMKernelSync.Service, Effect.gen(function* () {
-      if (!options?.ownerCurrent) return yield* Effect.die("production owner was not captured")
-      generations.push(options.ownerCurrent)
-      if (generations.length > 1) return yield* Effect.fail("fixture build failure")
-      const reader = yield* IMKernelReader.make(config, { workspaceID: "workspace", ownerCurrent: options.ownerCurrent, onOwnerRevoked: options.onOwnerRevoked, inspectConversation: options.inspectConversation }).pipe(Effect.provide(Layer.merge(Layer.mock(IMBroadcasterService, { ...broadcaster, broadcast: (groupID, event) => { if (event.type === "reader_invalidated") invalidations.push(groupID) } }), Layer.mock(KernelClient.Service, {
-        state,
-        getDeliveryReadCut: (request) => Effect.gen(function* () {
-          calls.cut++
-          yield* Deferred.succeed(started, undefined)
-          const cut = yield* KernelSdk.request("getDeliveryReadCut", () => native.then(() => ({ ...request, throughOrdinal: "1", targetAdmittedOrdinal: "1", readOrdinal: "0", liveUnread: "1", storedUnread: "1", serverNow: Date.now(), complete: false })))
-          yield* Deferred.succeed(nativeSettled, undefined)
-          return cut
-        }),
-        markDeliveryRead: () => Effect.sync(() => { calls.mark++; throw new Error("revoked generation dispatched a mark") }),
-      }))))
-      return IMKernelSync.Service.of({ createMessage: () => Effect.die("unused creation"), deliveryStatuses: () => Effect.die("unused statuses"), deliveryStatus: () => Effect.die("unused receipt"), state, send: () => Effect.void, drainPending: Effect.void, recovery: yield* SubscriptionRef.make<IMKernelSync.RecoveryState>({ status: "ready" }), catchUp: Effect.void, reader })
-    })) })
-    yield* Effect.gen(function* () {
-      const facade = yield* IMFacade.Service
-      const engine = Option.getOrThrow(yield* Ref.get(facade.engine))
-      const reader = engine.reader!
-      const now = Date.now()
-      yield* KernelReader.bind(reader.runtime, scopeKey)
-      yield* KernelReader.ensureScope(reader.runtime)
-      yield* KernelReader.applyChanges(reader.runtime, { version: 1, scopeKey, after: "0", upper: "1", scanCursor: "1", scanProjectionKey: projectionKey, pageToken: "", windowComplete: true, caughtUp: true, serverNow: now, items: [{ visibility: "visible", projectionKey, revision: "1", cursor: "1", conversationType: 1, targetId: "bob", readOrdinal: "0", admittedOrdinal: "1", liveUnread: "1", storedUnread: "1", latestMessageId: "original", latestSequence: "1", latestMessageTime: now, nextExpiryAt: now + 60000 }] })
-      const groupID = (yield* KernelReader.projection(reader.runtime, projectionKey))!.local_group_id!
-      reader.watchGroup(groupID)
-      const output = yield* Effect.forkChild(reader.withOutput({ workspaceID: "workspace", userID: "server", groupIDs: [groupID] }, Effect.sync(() => { calls.output++; return "old body" })).pipe(Effect.result))
-      yield* Deferred.await(started)
-      const switching = yield* Effect.forkChild(facade.retryExchange)
-      yield* pollWithTimeout(Ref.get(facade.engine).pipe(Effect.map((value) => Option.isNone(value) ? true : undefined)), "credential switch did not revoke the old engine")
-      expect(generations[0]()).toBe(false)
-      expect(invalidations).toEqual([groupID])
-      expect((yield* Deferred.await(nativeSettled).pipe(Effect.timeoutOption("20 millis")))._tag).toBe("None")
-      const current = yield* KernelReader.current(reader.runtime).pipe(Effect.result, Effect.timeoutOption("20 millis"))
-      expect(current._tag).toBe("Some")
-      if (current._tag === "Some") expect(current.value._tag).toBe("Failure")
-      const lateGet = yield* reader.withOutput({ workspaceID: "workspace", userID: "server", groupIDs: [groupID] }, Effect.succeed("old body")).pipe(Effect.result, Effect.timeoutOption("20 millis"))
-      expect(lateGet._tag).toBe("Some")
-      if (lateGet._tag === "Some") expect(lateGet.value._tag).toBe("Failure")
-      const read = yield* reader.read({ groupID, actionID: "revoked-read-action" }).pipe(Effect.result, Effect.timeoutOption("20 millis"))
-      expect(read._tag).toBe("Some")
-      if (read._tag === "Some") expect(read.value._tag).toBe("Failure")
-      expect(calls).toEqual({ cut: 1, mark: 0, output: 0 })
-      release.native()
-      expect((yield* Fiber.join(output))._tag).toBe("Failure")
-      yield* Fiber.join(switching)
-      expect(generations).toHaveLength(2)
-      expect(generations.every((current) => !current())).toBe(true)
-      expect(Option.isNone(yield* Ref.get(facade.engine))).toBe(true)
-      expect(calls).toEqual({ cut: 1, mark: 0, output: 0 })
-    }).pipe(Effect.provide(harness.layer))
-  }))
-
-  it.live("no facade env and no PoC env → disabled, no engine", () =>
+  it.live("service configuration closes the old realm before saving and reconnects only by explicit request", () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness({ env: {}, http: httpStub(() => ok(payload()), []) })
+      const configured = { url: undefined as string | null | undefined }
+      const auth = makeAuth()
+      const seen: Seen[] = []
+      const harness = yield* makeHarness({
+        env: FACADE_ENV,
+        auth: auth.service,
+        http: httpStub(() => ok(payload()), seen),
+        configuration: Layer.mock(Config.Service, { getGlobal: () => Effect.succeed({ im: { url: configured.url } }) }),
+      })
+      yield* Effect.gen(function* () {
+        const facade = yield* IMFacade.Service
+        expect((yield* facade.status).facade).toBe("active")
+        expect(harness.engineStarts).toHaveLength(1)
+        yield* facade.withServiceConfiguration("http://facade.local", Effect.void)
+        expect(harness.engineStops).toHaveLength(0)
+        yield* facade.withServiceConfiguration(
+          "https://new.invalid/platform",
+          Effect.sync(() => {
+            expect(harness.engineStops).toHaveLength(1)
+            configured.url = "https://new.invalid/platform"
+          }),
+        )
+        expect((yield* facade.status).service).toEqual({
+          url: "https://new.invalid/platform",
+          source: "config",
+          reconnectRequired: true,
+        })
+        expect(Option.isNone(yield* Ref.get(facade.engine))).toBe(true)
+        expect(seen).toHaveLength(1)
+        // An environment key is not implicitly sent to a newly configured service.
+        expect((yield* Effect.flip(facade.retryExchange)).code).toBe("im_unavailable")
+        expect(seen).toHaveLength(1)
+        yield* auth.service.set(
+          IMFacade.AUTH_KEY,
+          new Auth.Api({
+            type: "api",
+            key: "new-realm-fixture-only",
+            metadata: { imSource: createHash("sha256").update(JSON.stringify(configured.url)).digest("hex") },
+          }),
+        )
+        yield* facade.retryExchange
+        expect(seen.at(-1)?.url).toBe("https://new.invalid/platform/api/im/login")
+        expect(harness.engineStarts).toHaveLength(2)
+        yield* facade.withServiceConfiguration(
+          null,
+          Effect.sync(() => {
+            configured.url = null
+          }),
+        )
+        expect((yield* facade.status).service).toEqual({ url: null, source: "config", reconnectRequired: false })
+        expect((yield* facade.status).facade).toBe("disabled")
+        expect((yield* Effect.flip(facade.retryExchange)).code).toBe("im_unavailable")
+        expect((yield* facade.status).facade).toBe("disabled")
+        expect(seen).toHaveLength(2)
+      }).pipe(Effect.provide(harness.layer))
+    }),
+  )
+
+  it.live("service configuration rejects a busy identity and leaves failed persistence safely disconnected", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const http = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          if (request.url.endsWith("/rename")) {
+            yield* Deferred.succeed(entered, undefined)
+            yield* Deferred.await(release)
+          }
+          return HttpClientResponse.fromWeb(request, ok(payload()))
+        }),
+      )
+      const harness = yield* makeHarness({ env: FACADE_ENV, http })
+      yield* Effect.gen(function* () {
+        const facade = yield* IMFacade.Service
+        const saving = { count: 0 }
+        const rename = yield* facade.rename("alice").pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Deferred.await(entered)
+        expect(
+          (yield* Effect.flip(
+            facade.withServiceConfiguration(
+              "https://new.invalid",
+              Effect.sync(() => {
+                saving.count++
+              }),
+            ),
+          )).code,
+        ).toBe("im_service_busy")
+        expect(saving.count).toBe(0)
+        expect(harness.engineStops).toHaveLength(0)
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(rename)
+        const failed = yield* facade
+          .withServiceConfiguration("https://new.invalid", Effect.fail(new Error("owned save failure")))
+          .pipe(Effect.exit)
+        expect(failed._tag).toBe("Failure")
+        expect((yield* facade.status).facade).toBe("blocked")
+        expect(Option.isNone(yield* Ref.get(facade.engine))).toBe(true)
+        expect(harness.engineStops).toHaveLength(2)
+      }).pipe(Effect.provide(harness.layer))
+    }),
+  )
+
+  it.live(
+    "releases the actual device owner lease when engine construction is interrupted",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* Effect.acquireRelease(
+          Effect.sync(() => mkdtempSync(path.join(os.tmpdir(), "dac-im-owner-cancel-"))),
+          (value) => Effect.sync(() => rmSync(value, { recursive: true, force: true })),
+        )
+        const native = IMDeviceStore.make({ directory, backend: SecretStore.inMemoryBackend() })
+        const leases = { acquired: 0, released: 0 }
+        const device = {
+          ...native,
+          acquireOwner: (realm: string) =>
+            native.acquireOwner(realm).pipe(
+              Effect.map((lease) => {
+                leases.acquired++
+                return {
+                  ...lease,
+                  release: async () => {
+                    await lease.release()
+                    leases.released++
+                  },
+                }
+              }),
+            ),
+        }
+        const key = yield* device.identity
+        const realm = "https://facade.example"
+        const uuid = "f".repeat(32)
+        yield* device.put(
+          realm,
+          "login",
+          JSON.stringify({
+            profile: "dac-im-device-v1",
+            imCredential: `iml2.${"a".repeat(64)}`,
+            entitlementID: "e".repeat(32),
+            deviceJkt: key.jkt,
+            bindingVersion: 1,
+            uuid,
+          }),
+        )
+        const started = yield* Deferred.make<void>()
+        const counts = { builds: 0 }
+        const harness = yield* makeHarness({
+          env: { DEEPAGENT_IM_FACADE_URL: realm },
+          device,
+          engineBehavior: () =>
+            Effect.gen(function* () {
+              if (++counts.builds === 1) return
+              yield* Deferred.succeed(started, undefined)
+              yield* Effect.never
+            }),
+          http: httpStub(
+            (request) =>
+              request.url.endsWith("/device/challenges")
+                ? ok({
+                    profile: "dac-im-device-v1",
+                    challengeID: "c".repeat(32),
+                    nonce: "n".repeat(43),
+                    expiresAt: Date.now() + 59000,
+                    deviceJkt: key.jkt,
+                    purpose: (request.body as { purpose: string }).purpose,
+                  })
+                : ok({
+                    profile: "dac-im-device-v1",
+                    entitlementID: "e".repeat(32),
+                    deviceJkt: key.jkt,
+                    bindingVersion: 1,
+                    identity: { uuid, name: "alice", org_id: 7, org_all_group_id: "org7" },
+                    kernel: {
+                      appkey: "appkey_1",
+                      navigator: "https://kernel.example",
+                      socket_audience: "wss://kernel.example/im",
+                      token: "daim2.fixture",
+                      user_id: uuid,
+                      credential_expires_at: Math.floor(Date.now() / 1000) + 600,
+                      credential_generation: 1,
+                      device_profile: "dac-im-device-v1",
+                    },
+                  }),
+            [],
+          ),
+        })
+        // Keep credential refresh idle so the second build belongs to the fork below.
+        yield* SubscriptionRef.set(harness.engineState, "connected")
+        yield* Effect.gen(function* () {
+          const facade = yield* IMFacade.Service
+          expect(Option.isSome(yield* Ref.get(facade.engine))).toBe(true)
+          expect((yield* device.acquireOwner(realm).pipe(Effect.result))._tag).toBe("Failure")
+          const switching = yield* Effect.forkChild(facade.retryExchange)
+          yield* Deferred.await(started)
+          expect((yield* device.acquireOwner(realm).pipe(Effect.result))._tag).toBe("Failure")
+          yield* Fiber.interrupt(switching)
+          expect(Option.isNone(yield* Ref.get(facade.engine))).toBe(true)
+          const recovered = yield* pollWithTimeout(
+            device.acquireOwner(realm).pipe(
+              Effect.result,
+              Effect.map((result) => (result._tag === "Success" ? result.success : undefined)),
+            ),
+            "Interrupted engine did not release its actual owner lease",
+            "2 seconds",
+          )
+          expect(leases).toEqual({ acquired: 3, released: 2 })
+          yield* Effect.promise(() => recovered.release())
+          expect(leases).toEqual({ acquired: 3, released: 3 })
+          expect(harness.engineStarts).toHaveLength(2)
+          expect(harness.engineStops).toHaveLength(2)
+        }).pipe(Effect.provide(harness.layer))
+      }),
+    10000,
+  )
+
+  it.live("revokes the captured reader owner before an old native request settles during a credential switch", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const release = { native: () => {} }
+      const native = new Promise<void>((resolve) => {
+        release.native = resolve
+      })
+      const nativeSettled = yield* Deferred.make<void>()
+      const state = yield* SubscriptionRef.make<KernelClient.ConnectionState>("connected")
+      const generations: (() => boolean)[] = []
+      const calls = { cut: 0, mark: 0, output: 0 }
+      const invalidations: string[] = []
+      const scopeKey = "a".repeat(64)
+      const projectionKey = "b".repeat(64)
+      const harness = yield* makeHarness({
+        env: FACADE_ENV,
+        http: httpStub(
+          (request) =>
+            ok(
+              request.url.endsWith("/inspect")
+                ? {
+                    conversation_type: 1,
+                    conversation_id: "bob",
+                    org_id: 7,
+                    member_uuids: ["uuid-alice", "bob"],
+                    name: "bob",
+                  }
+                : payload(),
+            ),
+          [],
+        ),
+        buildEngine: (config, options) =>
+          Layer.effect(
+            IMKernelSync.Service,
+            Effect.gen(function* () {
+              if (!options?.ownerCurrent) return yield* Effect.die("production owner was not captured")
+              generations.push(options.ownerCurrent)
+              if (generations.length > 1) return yield* Effect.fail("fixture build failure")
+              const reader = yield* IMKernelReader.make(config, {
+                workspaceID: "workspace",
+                ownerCurrent: options.ownerCurrent,
+                onOwnerRevoked: options.onOwnerRevoked,
+                inspectConversation: options.inspectConversation,
+              }).pipe(
+                Effect.provide(
+                  Layer.merge(
+                    Layer.mock(IMBroadcasterService, {
+                      ...broadcaster,
+                      broadcast: (groupID, event) => {
+                        if (event.type === "reader_invalidated") invalidations.push(groupID)
+                      },
+                    }),
+                    Layer.mock(KernelClient.Service, {
+                      state,
+                      disconnect: Effect.void,
+                      getDeliveryReadCut: (request) =>
+                        Effect.gen(function* () {
+                          calls.cut++
+                          yield* Deferred.succeed(started, undefined)
+                          const cut = yield* KernelSdk.request("getDeliveryReadCut", () =>
+                            native.then(() => ({
+                              ...request,
+                              throughOrdinal: "1",
+                              targetAdmittedOrdinal: "1",
+                              readOrdinal: "0",
+                              liveUnread: "1",
+                              storedUnread: "1",
+                              serverNow: Date.now(),
+                              complete: false,
+                            })),
+                          )
+                          yield* Deferred.succeed(nativeSettled, undefined)
+                          return cut
+                        }),
+                      markDeliveryRead: () =>
+                        Effect.sync(() => {
+                          calls.mark++
+                          throw new Error("revoked generation dispatched a mark")
+                        }),
+                    }),
+                  ),
+                ),
+              )
+              return IMKernelSync.Service.of({
+                createMessage: () => Effect.die("unused creation"),
+                deliveryStatuses: () => Effect.die("unused statuses"),
+                deliveryStatus: () => Effect.die("unused receipt"),
+                state,
+                send: () => Effect.void,
+                drainPending: Effect.void,
+                recovery: yield* SubscriptionRef.make<IMKernelSync.RecoveryState>({ status: "ready" }),
+                catchUp: Effect.void,
+                reader,
+              })
+            }),
+          ),
+      })
+      yield* Effect.gen(function* () {
+        const facade = yield* IMFacade.Service
+        const engine = Option.getOrThrow(yield* Ref.get(facade.engine))
+        const reader = engine.reader!
+        const now = Date.now()
+        yield* KernelReader.bind(reader.runtime, scopeKey)
+        yield* KernelReader.ensureScope(reader.runtime)
+        yield* KernelReader.applyChanges(reader.runtime, {
+          version: 1,
+          scopeKey,
+          after: "0",
+          upper: "1",
+          scanCursor: "1",
+          scanProjectionKey: projectionKey,
+          pageToken: "",
+          windowComplete: true,
+          caughtUp: true,
+          serverNow: now,
+          items: [
+            {
+              visibility: "visible",
+              projectionKey,
+              revision: "1",
+              cursor: "1",
+              conversationType: 1,
+              targetId: "bob",
+              readOrdinal: "0",
+              admittedOrdinal: "1",
+              liveUnread: "1",
+              storedUnread: "1",
+              latestMessageId: "original",
+              latestSequence: "1",
+              latestMessageTime: now,
+              nextExpiryAt: now + 60000,
+            },
+          ],
+        })
+        const groupID = (yield* KernelReader.projection(reader.runtime, projectionKey))!.local_group_id!
+        reader.watchGroup(groupID)
+        const output = yield* Effect.forkChild(
+          reader
+            .withOutput(
+              { workspaceID: "workspace", userID: "server", groupIDs: [groupID] },
+              Effect.sync(() => {
+                calls.output++
+                return "old body"
+              }),
+            )
+            .pipe(Effect.result),
+        )
+        yield* Deferred.await(started)
+        const switching = yield* Effect.forkChild(facade.retryExchange)
+        yield* pollWithTimeout(
+          Ref.get(facade.engine).pipe(Effect.map((value) => (Option.isNone(value) ? true : undefined))),
+          "credential switch did not revoke the old engine",
+        )
+        expect(generations[0]()).toBe(false)
+        expect(invalidations).toEqual([groupID])
+        expect((yield* Deferred.await(nativeSettled).pipe(Effect.timeoutOption("20 millis")))._tag).toBe("None")
+        const current = yield* KernelReader.current(reader.runtime).pipe(
+          Effect.result,
+          Effect.timeoutOption("20 millis"),
+        )
+        expect(current._tag).toBe("Some")
+        if (current._tag === "Some") expect(current.value._tag).toBe("Failure")
+        const lateGet = yield* reader
+          .withOutput({ workspaceID: "workspace", userID: "server", groupIDs: [groupID] }, Effect.succeed("old body"))
+          .pipe(Effect.result, Effect.timeoutOption("20 millis"))
+        expect(lateGet._tag).toBe("Some")
+        if (lateGet._tag === "Some") expect(lateGet.value._tag).toBe("Failure")
+        const read = yield* reader
+          .read({ groupID, actionID: "revoked-read-action" })
+          .pipe(Effect.result, Effect.timeoutOption("20 millis"))
+        expect(read._tag).toBe("Some")
+        if (read._tag === "Some") expect(read.value._tag).toBe("Failure")
+        expect(calls).toEqual({ cut: 1, mark: 0, output: 0 })
+        release.native()
+        expect((yield* Fiber.join(output))._tag).toBe("Failure")
+        yield* Fiber.join(switching)
+        expect(generations).toHaveLength(2)
+        expect(generations.every((current) => !current())).toBe(true)
+        expect(Option.isNone(yield* Ref.get(facade.engine))).toBe(true)
+        expect(calls).toEqual({ cut: 1, mark: 0, output: 0 })
+      }).pipe(Effect.provide(harness.layer))
+    }),
+  )
+
+  it.live("the formal default does not adopt unscoped stored or environment API keys", () =>
+    Effect.gen(function* () {
+      const seen: Seen[] = []
+      const auth = makeAuth({ [IMFacade.AUTH_KEY]: new Auth.Api({ type: "api", key: "old-unscoped-fixture" }) })
+      const harness = yield* makeHarness({
+        env: { DEEPAGENT_IM_FACADE_KEY: "old-environment-fixture" },
+        auth: auth.service,
+        http: httpStub(() => ok(payload()), seen),
+      })
       yield* Effect.gen(function* () {
         const facade = yield* IMFacade.Service
         const status = yield* facade.status
@@ -237,11 +630,76 @@ describe("IMFacade", () => {
         expect(Option.isNone(status.identity)).toBe(true)
         expect(Option.isNone(yield* Ref.get(facade.engine))).toBe(true)
         expect(status.keyOrigin).toBe("none")
+        expect(status.service).toEqual({
+          url: "https://ai.deepagent.ltd/im",
+          source: "default",
+          reconnectRequired: false,
+        })
         // 门面上的操作在 disabled 下 fail-closed im_unavailable
         const error = yield* facade.claim("alice").pipe(Effect.flip)
         expect(error.code).toBe("im_unavailable")
       }).pipe(Effect.provide(harness.layer))
       expect(harness.engineStarts).toEqual([])
+      expect(seen).toEqual([])
+      expect(auth.store.get(IMFacade.AUTH_KEY)).toEqual(new Auth.Api({ type: "api", key: "old-unscoped-fixture" }))
+    }),
+  )
+
+  it.live("the formal default cold boot does not provision a Native identity or send activation requests", () =>
+    Effect.gen(function* () {
+      const directory = yield* Effect.acquireRelease(
+        Effect.sync(() => mkdtempSync(path.join(os.tmpdir(), "dac-im-default-cold-"))),
+        (value) => Effect.sync(() => rmSync(value, { recursive: true, force: true })),
+      )
+      const backend = SecretStore.inMemoryBackend()
+      const device = IMDeviceStore.make({ directory, backend })
+      const seen: Seen[] = []
+      const harness = yield* makeHarness({ env: {}, device, http: httpStub(() => ok(payload()), seen) })
+      yield* Effect.gen(function* () {
+        const facade = yield* IMFacade.Service
+        const status = yield* facade.status
+        expect(status.facade).toBe("blocked")
+        expect(Option.getOrUndefined(status.blocked)?.code).toBe("im_activation_required")
+        expect(status.service?.source).toBe("default")
+        expect(yield* device.get("https://ai.deepagent.ltd/im", "login")).toBeUndefined()
+        expect(yield* Effect.promise(() => backend.get("installation-p256-v1"))).toBeUndefined()
+        expect(existsSync(path.join(directory, "identity.json"))).toBe(false)
+      }).pipe(Effect.provide(harness.layer))
+      expect(harness.engineStarts).toEqual([])
+      expect(seen).toEqual([])
+    }),
+  )
+
+  it.live("the formal prefix default does not adopt an existing root realm device binding", () =>
+    Effect.gen(function* () {
+      const directory = yield* Effect.acquireRelease(
+        Effect.sync(() => mkdtempSync(path.join(os.tmpdir(), "dac-im-default-realm-"))),
+        (value) => Effect.sync(() => rmSync(value, { recursive: true, force: true })),
+      )
+      const device = IMDeviceStore.make({ directory, backend: SecretStore.inMemoryBackend() })
+      const key = yield* device.identity
+      const binding = JSON.stringify({
+        profile: "dac-im-device-v1",
+        imCredential: `iml2.${"a".repeat(64)}`,
+        entitlementID: "e".repeat(32),
+        deviceJkt: key.jkt,
+        bindingVersion: 1,
+        uuid: "u".repeat(32),
+      })
+      yield* device.put("https://ai.deepagent.ltd", "login", binding)
+      const seen: Seen[] = []
+      const harness = yield* makeHarness({ env: {}, device, http: httpStub(() => ok(payload()), seen) })
+      yield* Effect.gen(function* () {
+        const facade = yield* IMFacade.Service
+        const status = yield* facade.status
+        expect(status.facade).toBe("blocked")
+        expect(Option.getOrUndefined(status.blocked)?.code).toBe("im_activation_required")
+        expect(yield* device.get("https://ai.deepagent.ltd", "login")).toBe(binding)
+        expect(yield* device.get("https://ai.deepagent.ltd/im", "login")).toBeUndefined()
+        expect((yield* device.identity).jkt).toBe(key.jkt)
+      }).pipe(Effect.provide(harness.layer))
+      expect(harness.engineStarts).toEqual([])
+      expect(seen).toEqual([])
     }),
   )
 
@@ -249,6 +707,7 @@ describe("IMFacade", () => {
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         env: {
+          DEEPAGENT_IM_ALLOW_UNPAID_DEV_KERNEL: "true",
           DEEPAGENT_IM_KERNEL_APPKEY: "appkey",
           DEEPAGENT_IM_KERNEL_NAVIGATOR: "http://127.0.0.1:9002",
           DEEPAGENT_IM_KERNEL_TOKEN: "tok",
@@ -279,7 +738,7 @@ describe("IMFacade", () => {
         expect(status.keyOrigin).toBe("env")
       }).pipe(Effect.provide(harness.layer))
       expect(seen).toEqual([
-        { method: "POST", url: "http://facade.local/api/im/exchange", authorization: "Bearer sk-alice", body: {} },
+        { method: "POST", url: "http://facade.local/api/im/login", authorization: "Bearer sk-alice", body: {} },
       ])
       expect(harness.engineStarts.length).toBe(1)
       expect(harness.engineStarts[0]).toMatchObject({ token: "kt_uuid-alice", userID: "uuid-alice" })
@@ -296,8 +755,13 @@ describe("IMFacade", () => {
   it.live("the exact construction media profile opts the single actual facade engine into typed media", () =>
     Effect.gen(function* () {
       const seen: Seen[] = []
-      const harness = yield* makeHarness({ env: { ...FACADE_ENV, DEEPAGENT_IM_KERNEL_MEDIA_PROFILE: "mysql-protected-media-v1" }, http: httpStub(() => ok(payload()), seen) })
-      yield* Effect.gen(function* () { yield* (yield* IMFacade.Service).status }).pipe(Effect.provide(harness.layer))
+      const harness = yield* makeHarness({
+        env: { ...FACADE_ENV, DEEPAGENT_IM_KERNEL_MEDIA_PROFILE: "mysql-protected-media-v1" },
+        http: httpStub(() => ok(payload()), seen),
+      })
+      yield* Effect.gen(function* () {
+        yield* (yield* IMFacade.Service).status
+      }).pipe(Effect.provide(harness.layer))
       expect(harness.engineStarts).toHaveLength(1)
       expect(harness.engineStarts[0].protectedMedia).toBe(true)
       expect(seen).toHaveLength(1)
@@ -326,7 +790,7 @@ describe("IMFacade", () => {
       const seen: Seen[] = []
       let claimed = false
       const http = httpStub((req) => {
-        if (req.url.endsWith("/api/im/exchange"))
+        if (req.url.endsWith("/api/im/login"))
           return fail("im_not_claimed", "im identity not claimed for this key", 409)
         if (req.url.endsWith("/api/im/claim")) {
           claimed = true
@@ -361,7 +825,7 @@ describe("IMFacade", () => {
     Effect.gen(function* () {
       const seen: Seen[] = []
       const http = httpStub(
-        (req) => (req.url.endsWith("/api/im/exchange") ? fail("im_not_claimed", "unclaimed", 409) : ok(payload())),
+        (req) => (req.url.endsWith("/api/im/login") ? fail("im_not_claimed", "unclaimed", 409) : ok(payload())),
         seen,
       )
       const harness = yield* makeHarness({ env: FACADE_ENV, http })
@@ -379,7 +843,7 @@ describe("IMFacade", () => {
     Effect.gen(function* () {
       const http = httpStub(
         (req) =>
-          req.url.endsWith("/api/im/exchange")
+          req.url.endsWith("/api/im/login")
             ? fail("im_not_claimed", "unclaimed", 409)
             : fail("im_name_taken", "name taken in org", 409),
         [],
@@ -399,7 +863,7 @@ describe("IMFacade", () => {
     Effect.gen(function* () {
       let healed = false
       const http = httpStub((req) => {
-        if (!req.url.endsWith("/api/im/exchange")) return fail("http_error", "unexpected", 500)
+        if (!req.url.endsWith("/api/im/login")) return fail("http_error", "unexpected", 500)
         return healed ? ok(payload()) : fail("im_key_invalid", "key deleted", 403)
       }, [])
       const harness = yield* makeHarness({ env: FACADE_ENV, http })
@@ -424,25 +888,27 @@ describe("IMFacade", () => {
     }),
   )
 
-  it.live("retry re-reads a replaced stored key, closes the old connection, and exposes recovery state", () =>
-    Effect.gen(function* () {
-      const auth = makeAuth({ [IMFacade.AUTH_KEY]: new Auth.Api({ type: "api", key: "sk-old" }) })
-      const seen: Seen[] = []
-      const harness = yield* makeHarness({
-        env: FACADE_ENV,
-        auth: auth.service,
-        http: httpStub(() => ok(payload()), seen),
-      })
-      yield* Effect.gen(function* () {
-        const facade = yield* IMFacade.Service
-        auth.store.set(IMFacade.AUTH_KEY, new Auth.Api({ type: "api", key: "sk-recovered" }))
-        yield* facade.retryExchange
-        expect(seen.map((request) => request.authorization)).toEqual(["Bearer sk-old", "Bearer sk-recovered"])
-        expect(harness.engineStarts).toHaveLength(2)
-        expect(harness.engineStops).toHaveLength(1)
-        expect((yield* facade.status).recovery).toEqual({ status: "ready" })
-      }).pipe(Effect.provide(harness.layer))
-    }),
+  it.live(
+    "retry re-reads a replaced stored key and closes the old connection; an engine without a reader exposes no recovery claim",
+    () =>
+      Effect.gen(function* () {
+        const auth = makeAuth({ [IMFacade.AUTH_KEY]: new Auth.Api({ type: "api", key: "sk-old" }) })
+        const seen: Seen[] = []
+        const harness = yield* makeHarness({
+          env: FACADE_ENV,
+          auth: auth.service,
+          http: httpStub(() => ok(payload()), seen),
+        })
+        yield* Effect.gen(function* () {
+          const facade = yield* IMFacade.Service
+          auth.store.set(IMFacade.AUTH_KEY, new Auth.Api({ type: "api", key: "sk-recovered" }))
+          yield* facade.retryExchange
+          expect(seen.map((request) => request.authorization)).toEqual(["Bearer sk-old", "Bearer sk-recovered"])
+          expect(harness.engineStarts).toHaveLength(2)
+          expect(harness.engineStops).toHaveLength(1)
+          expect((yield* facade.status).recovery).toBeUndefined()
+        }).pipe(Effect.provide(harness.layer))
+      }),
   )
 
   it.live("a rejected replacement key leaves no old connection or active identity", () =>
@@ -503,20 +969,33 @@ describe("IMFacade", () => {
   it.live("honors a real HTTP 429 wait window and recovers the revoked engine through original exchange", () =>
     Effect.gen(function* () {
       const received = { count: 0 }
-      const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
-        received.count++
-        if (received.count === 2) return new Response(null, { status: 429, headers: { "Retry-After": "1" } })
-        return ok({ ...payload(), kernel_token: `rate_lease_${received.count}`,
-          credential_expires_at: Math.floor(Date.now() / 1000) + 3600 })
-      } })
-      const harness = yield* makeHarness({ env: { ...FACADE_ENV, DEEPAGENT_IM_FACADE_URL: server.url.origin },
-        credentialRefreshInterval: 10, engineBehavior: () => Effect.void,
-        http: yield* HttpClient.HttpClient.pipe(Effect.provide(FetchHttpClient.layer)) })
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch() {
+          received.count++
+          if (received.count === 2) return new Response(null, { status: 429, headers: { "Retry-After": "1" } })
+          return ok({
+            ...payload(),
+            kernel_token: `rate_lease_${received.count}`,
+            credential_expires_at: Math.floor(Date.now() / 1000) + 3600,
+          })
+        },
+      })
+      const harness = yield* makeHarness({
+        env: { ...FACADE_ENV, DEEPAGENT_IM_FACADE_URL: server.url.origin },
+        credentialRefreshInterval: 10,
+        engineBehavior: () => Effect.void,
+        http: yield* HttpClient.HttpClient.pipe(Effect.provide(FetchHttpClient.layer)),
+      })
       yield* SubscriptionRef.set(harness.engineState, "connected")
       yield* Effect.gen(function* () {
         const facade = yield* IMFacade.Service
         expect((yield* facade.retryExchange.pipe(Effect.flip)).status).toBe(429)
-        yield* pollWithTimeout(Effect.sync(() => received.count === 2 ? true : undefined), "rate limit was not observed")
+        yield* pollWithTimeout(
+          Effect.sync(() => (received.count === 2 ? true : undefined)),
+          "rate limit was not observed",
+        )
         const refused = yield* facade.retryExchange.pipe(Effect.flip)
         expect(refused.status).toBe(429)
         expect(refused.retryAfterMs).toBeGreaterThan(0)
@@ -525,7 +1004,10 @@ describe("IMFacade", () => {
         expect((yield* facade.status).facade).toBe("blocked")
         yield* Effect.sleep("100 millis")
         expect(received.count).toBe(2)
-        yield* pollWithTimeout(Effect.sync(() => harness.engineStarts.length === 2 ? true : undefined), "original exchange did not recover after backoff")
+        yield* pollWithTimeout(
+          Effect.sync(() => (harness.engineStarts.length === 2 ? true : undefined)),
+          "original exchange did not recover after backoff",
+        )
         expect(received.count).toBe(3)
         expect(harness.engineStops).toHaveLength(1)
         expect(harness.engineStarts[1].token).toBe("rate_lease_3")
@@ -537,7 +1019,7 @@ describe("IMFacade", () => {
   it.live("rename replaces the engine with the new name and retires the prior credential", () =>
     Effect.gen(function* () {
       const http = httpStub((req) => {
-        if (req.url.endsWith("/api/im/exchange")) return ok(payload())
+        if (req.url.endsWith("/api/im/login")) return ok(payload())
         if (req.url.endsWith("/api/im/rename")) return ok(payload("alice2", "uuid-alice"))
         return fail("http_error", "unexpected", 500)
       }, [])
@@ -568,7 +1050,15 @@ describe("IMFacade", () => {
       yield* Effect.gen(function* () {
         const facade = yield* IMFacade.Service
         yield* facade.rebind(" sk-new-key ")
-        expect(auth.store.get(IMFacade.AUTH_KEY)).toEqual(new Auth.Api({ type: "api", key: "sk-new-key" }))
+        expect(auth.store.get(IMFacade.AUTH_KEY)).toEqual(
+          new Auth.Api({
+            type: "api",
+            key: "sk-new-key",
+            metadata: {
+              imSource: createHash("sha256").update(JSON.stringify(FACADE_ENV.DEEPAGENT_IM_FACADE_URL)).digest("hex"),
+            },
+          }),
+        )
         expect((yield* facade.status).keyOrigin).toBe("stored")
         // 后续门面调用（resolve）已用新 key
         yield* facade.resolve("bob")
@@ -631,43 +1121,100 @@ describe("IMFacade", () => {
     }),
   )
 
-  it.live("a missing SDK reader rejects protected create, direct and invite before any platform side effect", () => Effect.gen(function* () {
-    const seen: Seen[] = []
-    const harness = yield* makeHarness({ env: FACADE_ENV, http: httpStub(() => ok(payload()), seen), protectedReader: true, readerUnavailable: true })
-    yield* InstanceStore.Service.use((store) => store.provide({ directory: "/tmp/dac-im-facade-owned-fixture", worktree: "/tmp/dac-im-facade-owned-fixture", project: ReaderInstanceFixture.project("/tmp/dac-im-facade-owned-fixture") }, Effect.gen(function* () {
-      const facade = yield* IMFacade.Service
-      expect(yield* facade.withReader({ workspaceID: "wrk_wrong", userID: "server" }, () => Effect.void).pipe(Effect.flip)).toMatchObject({ code: "reader_scope_mismatch" })
-      expect(yield* facade.createGroup({ workspaceID: "wrk_im_facade", name: "group", memberNames: ["bob"] }).pipe(Effect.flip)).toMatchObject({ code: "im_unavailable" })
-      expect(yield* facade.openDirect({ workspaceID: "wrk_im_facade", name: "bob" }).pipe(Effect.flip)).toMatchObject({ code: "im_unavailable" })
-      expect(yield* facade.invite({ groupID: "missing-group", name: "bob" }).pipe(Effect.flip)).toMatchObject({ code: "im_unavailable" })
-      expect(seen.filter((request) => request.url.includes("/groups") || request.url.includes("/resolve"))).toHaveLength(0)
-      expect(seen).toHaveLength(1)
-    }).pipe(Effect.provideService(WorkspaceRef, WorkspaceV2.ID.make("wrk_im_facade"))))).pipe(Effect.provide(harness.layer))
-  }))
+  it.live("a missing SDK reader rejects protected create, direct and invite before any platform side effect", () =>
+    Effect.gen(function* () {
+      const seen: Seen[] = []
+      const harness = yield* makeHarness({
+        env: FACADE_ENV,
+        http: httpStub(() => ok(payload()), seen),
+        protectedReader: true,
+        readerUnavailable: true,
+      })
+      yield* InstanceStore.Service.use((store) =>
+        store.provide(
+          {
+            directory: "/tmp/dac-im-facade-owned-fixture",
+            worktree: "/tmp/dac-im-facade-owned-fixture",
+            project: ReaderInstanceFixture.project("/tmp/dac-im-facade-owned-fixture"),
+          },
+          Effect.gen(function* () {
+            const facade = yield* IMFacade.Service
+            expect(
+              yield* facade
+                .withReader({ workspaceID: "wrk_wrong", userID: "server" }, () => Effect.void)
+                .pipe(Effect.flip),
+            ).toMatchObject({ code: "reader_scope_mismatch" })
+            expect(
+              yield* facade
+                .createGroup({ workspaceID: "wrk_im_facade", name: "group", memberNames: ["bob"] })
+                .pipe(Effect.flip),
+            ).toMatchObject({ code: "im_unavailable" })
+            expect(
+              yield* facade.openDirect({ workspaceID: "wrk_im_facade", name: "bob" }).pipe(Effect.flip),
+            ).toMatchObject({ code: "im_unavailable" })
+            expect(yield* facade.invite({ groupID: "missing-group", name: "bob" }).pipe(Effect.flip)).toMatchObject({
+              code: "im_unavailable",
+            })
+            expect(
+              seen.filter((request) => request.url.includes("/groups") || request.url.includes("/resolve")),
+            ).toHaveLength(0)
+            expect(seen).toHaveLength(1)
+          }).pipe(Effect.provideService(WorkspaceRef, WorkspaceV2.ID.make("wrk_im_facade"))),
+        ),
+      ).pipe(Effect.provide(harness.layer))
+    }),
+  )
 
   it.live("createGroup inspects and persists a protected pending mapping before any projection or receipt exists", () =>
     Effect.gen(function* () {
       const http = httpStub((req) => {
         if (req.url.endsWith("/api/im/groups"))
           return ok({ group_id: "kg1", name: "设计群", member_uuids: ["uuid-bob", "uuid-carol"] })
-        if (req.url.endsWith("/inspect")) return ok({ conversation_type: 2, conversation_id: "kg1", org_id: 7, member_uuids: ["uuid-alice", "uuid-bob", "uuid-carol"], name: "设计群" })
+        if (req.url.endsWith("/inspect"))
+          return ok({
+            conversation_type: 2,
+            conversation_id: "kg1",
+            org_id: 7,
+            member_uuids: ["uuid-alice", "uuid-bob", "uuid-carol"],
+            name: "设计群",
+          })
         return ok(payload())
       }, [])
       const harness = yield* makeHarness({ env: FACADE_ENV, http, protectedReader: true })
-      yield* InstanceStore.Service.use((store) => store.provide({ directory: "/tmp/dac-im-facade-owned-fixture", worktree: "/tmp/dac-im-facade-owned-fixture", project: ReaderInstanceFixture.project("/tmp/dac-im-facade-owned-fixture") }, Effect.gen(function* () {
-        const facade = yield* IMFacade.Service
-        const repo = yield* IMRepository
-        const group = yield* facade.createGroup({ workspaceID: "wrk_im_facade", name: "设计群", memberNames: ["bob", "carol"] })
-        expect(group.kernelConvID?.startsWith("kr1:")).toBe(true)
-        expect(group.projectID).toBeNull()
-        expect(group.reader).toEqual({ mode: "protected", state: "pending", liveUnread: null })
-        const reader = yield* facade.withReader({ workspaceID: "wrk_im_facade", userID: "server" }, (lease) => Effect.succeed(lease.reader))
-        const listed = yield* reader.withOutput({ workspaceID: "wrk_im_facade", userID: "server", groupIDs: [group.id] }, repo.listGroups({ workspaceID: "wrk_im_facade", userID: "server" }))
-        expect(listed.map((g) => g.id)).toContain(group.id)
-        const bound = yield* repo.getGroupByKernelConvID(group.kernelConvID!)
-        expect(bound?.id).toBe(group.id)
-        expect(yield* reader.read({ groupID: group.id, actionID: "pending-no-mark" }).pipe(Effect.flip)).toMatchObject({ code: "reader_required" })
-      }).pipe(Effect.provideService(WorkspaceRef, WorkspaceV2.ID.make("wrk_im_facade"))))).pipe(Effect.provide(harness.layer))
+      yield* InstanceStore.Service.use((store) =>
+        store.provide(
+          {
+            directory: "/tmp/dac-im-facade-owned-fixture",
+            worktree: "/tmp/dac-im-facade-owned-fixture",
+            project: ReaderInstanceFixture.project("/tmp/dac-im-facade-owned-fixture"),
+          },
+          Effect.gen(function* () {
+            const facade = yield* IMFacade.Service
+            const repo = yield* IMRepository
+            const group = yield* facade.createGroup({
+              workspaceID: "wrk_im_facade",
+              name: "设计群",
+              memberNames: ["bob", "carol"],
+            })
+            expect(group.kernelConvID?.startsWith("kr1:")).toBe(true)
+            expect(group.projectID).toBeNull()
+            expect(group.reader).toEqual({ mode: "protected", state: "pending", liveUnread: null })
+            const reader = yield* facade.withReader({ workspaceID: "wrk_im_facade", userID: "server" }, (lease) =>
+              Effect.succeed(lease.reader),
+            )
+            const listed = yield* reader.withOutput(
+              { workspaceID: "wrk_im_facade", userID: "server", groupIDs: [group.id] },
+              repo.listGroups({ workspaceID: "wrk_im_facade", userID: "server" }),
+            )
+            expect(listed.map((g) => g.id)).toContain(group.id)
+            const bound = yield* repo.getGroupByKernelConvID(group.kernelConvID!)
+            expect(bound?.id).toBe(group.id)
+            expect(
+              yield* reader.read({ groupID: group.id, actionID: "pending-no-mark" }).pipe(Effect.flip),
+            ).toMatchObject({ code: "reader_required" })
+          }).pipe(Effect.provideService(WorkspaceRef, WorkspaceV2.ID.make("wrk_im_facade"))),
+        ),
+      ).pipe(Effect.provide(harness.layer))
     }),
   )
 
@@ -679,23 +1226,39 @@ describe("IMFacade", () => {
           const name = new URL(req.url).searchParams.get("name")
           return ok(name === "alice" ? { uuid: "uuid-alice", name: "alice" } : { uuid: "uuid-bob", name: "bob" })
         }
-        if (req.url.endsWith("/inspect")) return ok({ conversation_type: 1, conversation_id: "uuid-bob", org_id: 7, member_uuids: ["uuid-alice", "uuid-bob"], name: "bob" })
+        if (req.url.endsWith("/inspect"))
+          return ok({
+            conversation_type: 1,
+            conversation_id: "uuid-bob",
+            org_id: 7,
+            member_uuids: ["uuid-alice", "uuid-bob"],
+            name: "bob",
+          })
         return ok(payload())
       }, [])
       const harness = yield* makeHarness({ env: FACADE_ENV, http, protectedReader: true })
-      yield* InstanceStore.Service.use((store) => store.provide({ directory: "/tmp/dac-im-facade-owned-fixture", worktree: "/tmp/dac-im-facade-owned-fixture", project: ReaderInstanceFixture.project("/tmp/dac-im-facade-owned-fixture") }, Effect.gen(function* () {
-        const facade = yield* IMFacade.Service
-        const first = yield* facade.openDirect({ workspaceID: "wrk_im_facade", name: "bob" })
-        expect(first.type).toBe("direct")
-        expect(first.name).toBe("bob")
-        expect(first.kernelConvID?.startsWith("kr1:")).toBe(true)
-        expect(first.reader).toEqual({ mode: "protected", state: "pending", liveUnread: null, peerID: "uuid-bob" })
-        const second = yield* facade.openDirect({ workspaceID: "wrk_im_facade", name: "bob" })
-        expect(second.id).toBe(first.id)
-        const self = yield* facade.openDirect({ workspaceID: "wrk_im_facade", name: "alice" }).pipe(Effect.flip)
-        expect(self).toBeInstanceOf(IMKernelExchange.ExchangeError)
-        expect((self as IMKernelExchange.ExchangeError).code).toBe("invalid_request")
-      }).pipe(Effect.provideService(WorkspaceRef, WorkspaceV2.ID.make("wrk_im_facade"))))).pipe(Effect.provide(harness.layer))
+      yield* InstanceStore.Service.use((store) =>
+        store.provide(
+          {
+            directory: "/tmp/dac-im-facade-owned-fixture",
+            worktree: "/tmp/dac-im-facade-owned-fixture",
+            project: ReaderInstanceFixture.project("/tmp/dac-im-facade-owned-fixture"),
+          },
+          Effect.gen(function* () {
+            const facade = yield* IMFacade.Service
+            const first = yield* facade.openDirect({ workspaceID: "wrk_im_facade", name: "bob" })
+            expect(first.type).toBe("direct")
+            expect(first.name).toBe("bob")
+            expect(first.kernelConvID?.startsWith("kr1:")).toBe(true)
+            expect(first.reader).toEqual({ mode: "protected", state: "pending", liveUnread: null, peerID: "uuid-bob" })
+            const second = yield* facade.openDirect({ workspaceID: "wrk_im_facade", name: "bob" })
+            expect(second.id).toBe(first.id)
+            const self = yield* facade.openDirect({ workspaceID: "wrk_im_facade", name: "alice" }).pipe(Effect.flip)
+            expect(self).toBeInstanceOf(IMKernelExchange.ExchangeError)
+            expect((self as IMKernelExchange.ExchangeError).code).toBe("invalid_request")
+          }).pipe(Effect.provideService(WorkspaceRef, WorkspaceV2.ID.make("wrk_im_facade"))),
+        ),
+      ).pipe(Effect.provide(harness.layer))
     }),
   )
 
@@ -709,32 +1272,131 @@ describe("IMFacade", () => {
         }
         if (req.url.includes("/api/im/resolve")) return ok({ uuid: "uuid-carol", name: "carol" })
         if (req.url.endsWith("/api/im/groups")) return ok({ group_id: "kg1", name: "g", member_uuids: [] })
-        if (req.url.endsWith("/inspect")) return ok({ conversation_type: 2, conversation_id: "kg1", org_id: 7, member_uuids: ["uuid-alice", "uuid-carol"], name: "g" })
+        if (req.url.endsWith("/inspect"))
+          return ok({
+            conversation_type: 2,
+            conversation_id: "kg1",
+            org_id: 7,
+            member_uuids: ["uuid-alice", "uuid-carol"],
+            name: "g",
+          })
         return ok(payload())
       }, [])
       const harness = yield* makeHarness({ env: FACADE_ENV, http, protectedReader: true })
-      yield* InstanceStore.Service.use((store) => store.provide({ directory: "/tmp/dac-im-facade-owned-fixture", worktree: "/tmp/dac-im-facade-owned-fixture", project: ReaderInstanceFixture.project("/tmp/dac-im-facade-owned-fixture") }, Effect.gen(function* () {
-        const facade = yield* IMFacade.Service
-        // 未绑定群 ⇒ GroupLookupError
-        const repo = yield* IMRepository
-        const local = yield* repo.createGroup({
-          workspaceID: "wrk_im_facade",
-          type: "project",
-          name: "local-only",
-          createdBy: "server",
-        })
-        const unbound = yield* facade.invite({ groupID: local.id, name: "carol" }).pipe(Effect.flip)
-        expect(unbound).toBeInstanceOf(IMFacade.GroupLookupError)
+      yield* InstanceStore.Service.use((store) =>
+        store.provide(
+          {
+            directory: "/tmp/dac-im-facade-owned-fixture",
+            worktree: "/tmp/dac-im-facade-owned-fixture",
+            project: ReaderInstanceFixture.project("/tmp/dac-im-facade-owned-fixture"),
+          },
+          Effect.gen(function* () {
+            const facade = yield* IMFacade.Service
+            // 未绑定群 ⇒ GroupLookupError
+            const repo = yield* IMRepository
+            const local = yield* repo.createGroup({
+              workspaceID: "wrk_im_facade",
+              type: "project",
+              name: "local-only",
+              createdBy: "server",
+            })
+            const unbound = yield* facade.invite({ groupID: local.id, name: "carol" }).pipe(Effect.flip)
+            expect(unbound).toBeInstanceOf(IMFacade.GroupLookupError)
 
-        const group = yield* facade.createGroup({ workspaceID: "wrk_im_facade", name: "g", memberNames: [] })
-        yield* facade.invite({ groupID: group.id, name: "carol" })
-        // 重复邀请幂等（本地成员行唯一索引兜底）
-        yield* facade.invite({ groupID: group.id, name: "carol" })
-      }).pipe(Effect.provideService(WorkspaceRef, WorkspaceV2.ID.make("wrk_im_facade"))))).pipe(Effect.provide(harness.layer))
+            const group = yield* facade.createGroup({ workspaceID: "wrk_im_facade", name: "g", memberNames: [] })
+            yield* facade.invite({ groupID: group.id, name: "carol" })
+            // 重复邀请幂等（本地成员行唯一索引兜底）
+            yield* facade.invite({ groupID: group.id, name: "carol" })
+          }).pipe(Effect.provideService(WorkspaceRef, WorkspaceV2.ID.make("wrk_im_facade"))),
+        ),
+      ).pipe(Effect.provide(harness.layer))
       expect(invited).toEqual([
         { group_id: "kg1", name: "carol" },
         { group_id: "kg1", name: "carol" },
       ])
+    }),
+  )
+  it.live("coalesces only current in-flight readonly inspections and rejects a retired epoch", () =>
+    Effect.gen(function* () {
+      const inspections: NonNullable<NonNullable<Parameters<IMFacade.EngineBuilder>[1]>["inspectConversation"]>[] = []
+      const requests: { conversation: string; resolve: (response: Response) => void }[] = []
+      const answer = (conversation: string) =>
+        ok({
+          conversation_type: 1,
+          conversation_id: conversation,
+          org_id: 7,
+          member_uuids: ["uuid-alice", conversation],
+          name: conversation,
+        })
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        async fetch(request) {
+          if (!new URL(request.url).pathname.endsWith("/conversations/inspect")) return ok(payload())
+          const body = await request.json()
+          return new Promise<Response>((resolve) => requests.push({ conversation: body.conversation_id, resolve }))
+        },
+      })
+      yield* Effect.addFinalizer(() => Effect.sync(() => server.stop(true)))
+      const harness = yield* makeHarness({
+        env: { ...FACADE_ENV, DEEPAGENT_IM_FACADE_URL: server.url.origin },
+        http: yield* HttpClient.HttpClient.pipe(Effect.provide(FetchHttpClient.layer)),
+        observeEngine: (options) => {
+          if (options.inspectConversation) inspections.push(options.inspectConversation)
+        },
+      })
+      yield* Effect.gen(function* () {
+        const facade = yield* IMFacade.Service
+        expect(inspections).toHaveLength(1)
+        const input = { conversationType: 1 as const, conversationID: "uuid-bob", senderID: "uuid-alice" }
+        const entered = { count: 0 }
+        const first = yield* Effect.forEach(
+          [0, 1],
+          () => Effect.sync(() => entered.count++).pipe(Effect.andThen(inspections[0](input))),
+          { concurrency: "unbounded" },
+        ).pipe(Effect.forkChild)
+        yield* pollWithTimeout(
+          Effect.sync(() => (entered.count === 2 && requests.length === 1 ? true : undefined)),
+          "inspection did not coalesce",
+        )
+        expect(requests).toHaveLength(1)
+        const other = yield* inspections[0]({ ...input, conversationID: "uuid-carol" }).pipe(Effect.forkChild)
+        yield* pollWithTimeout(
+          Effect.sync(() => (requests.length === 2 ? true : undefined)),
+          "different conversation was coalesced",
+        )
+        requests[0].resolve(answer("uuid-bob"))
+        requests[1].resolve(answer("uuid-carol"))
+        expect(yield* Fiber.join(first)).toHaveLength(2)
+        expect((yield* Fiber.join(other)).conversation_id).toBe("uuid-carol")
+        const fresh = yield* inspections[0](input).pipe(Effect.forkChild)
+        yield* pollWithTimeout(
+          Effect.sync(() => (requests.length === 3 ? true : undefined)),
+          "settled inspection was cached",
+        )
+        requests[2].resolve(answer("uuid-bob"))
+        expect((yield* Fiber.join(fresh)).conversation_id).toBe("uuid-bob")
+        const retired = yield* inspections[0](input).pipe(Effect.forkChild)
+        yield* pollWithTimeout(
+          Effect.sync(() => (requests.length === 4 ? true : undefined)),
+          "old epoch request was not sent",
+        )
+        yield* facade.retryExchange
+        expect(inspections).toHaveLength(2)
+        requests[3].resolve(answer("uuid-bob"))
+        expect(Exit.isFailure(yield* Fiber.await(retired))).toBe(true)
+        expect((yield* Effect.flip(inspections[0](input))).code).toBe("im_unavailable")
+        expect(requests).toHaveLength(4)
+        const current = yield* inspections[1](input).pipe(Effect.forkChild)
+        yield* pollWithTimeout(
+          Effect.sync(() => (requests.length === 5 ? true : undefined)),
+          "new epoch reused old in-flight response",
+        )
+        requests[4].resolve(answer("uuid-bob"))
+        expect((yield* Fiber.join(current)).conversation_id).toBe("uuid-bob")
+        expect(harness.engineStarts).toHaveLength(2)
+        expect(harness.engineStops).toHaveLength(1)
+      }).pipe(Effect.provide(harness.layer))
     }),
   )
 })

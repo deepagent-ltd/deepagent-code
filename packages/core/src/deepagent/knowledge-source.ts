@@ -265,6 +265,10 @@ export const environmentFactAdoptionFor = (workspacePath: string): EnvironmentFa
 // Open the project store for a workspace path. Throws if not configured.
 export const projectStoreFor = (workspacePath: string): DurableKnowledgeStore => projectStore(workspacePath)
 
+/** Read-side previews may use an already-open store, but must not bootstrap a new one. */
+export const observedProjectStore = (workspacePath: string): DurableKnowledgeStore | undefined =>
+  activeRuntime().projectCache.get(projectIdForWorkspace(workspacePath))
+
 // Union the review queue across ALL review-relevant statuses (candidate/active/rejected) for the
 // workspace — the Review UI shows all three so an already-approved doc can be revoked (DAP-7 P0-1b).
 export const listAllForWorkspace = (workspacePath: string): readonly ReviewItem[] => {
@@ -280,9 +284,8 @@ export const listAllForWorkspace = (workspacePath: string): readonly ReviewItem[
   }
   const inbox = inboxMetadataForWorkspace(workspacePath)
   return out.map((item) => {
-    const metadata = item.sourceStore === "project" && item.approval_status === "pending"
-      ? inbox.get(item.candidateId)
-      : undefined
+    const metadata =
+      item.sourceStore === "project" && item.approval_status === "pending" ? inbox.get(item.candidateId) : undefined
     return metadata ? { ...item, ...metadata } : item
   })
 }
@@ -332,12 +335,18 @@ const inboxMetadataForWorkspace = (workspacePath: string) => {
             item.project_id !== projectID ||
             item.status !== "pending" ||
             typeof item.reason !== "string"
-          ) return []
-          return [[candidateID, {
-            inboxID: item.id,
-            reviewReason: item.reason,
-            reasonGroup: typeof item.reason_group === "string" ? item.reason_group : item.reason,
-          }]]
+          )
+            return []
+          return [
+            [
+              candidateID,
+              {
+                inboxID: item.id,
+                reviewReason: item.reason,
+                reasonGroup: typeof item.reason_group === "string" ? item.reason_group : item.reason,
+              },
+            ],
+          ]
         } catch {
           return []
         }

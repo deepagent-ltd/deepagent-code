@@ -3,10 +3,12 @@ export * as BrowserProtocol from "./protocol"
 import { Schema } from "effect"
 import { BrowserSchema } from "./schema"
 import { BrowserFileSchema } from "./file-exchange.schema"
+import { WorkWindowsPathSchema } from "../session/work-windows-path.schema"
 
 // Private utility-process wire only. Public HTTP exposes no action dispatch endpoint.
 export const Bootstrap = Schema.Struct({ type: Schema.Literal("managed-browser-install-v1"),
   hostID: BrowserSchema.ID, hostIncarnation: BrowserSchema.ID, username: BrowserSchema.ID,
+  sharedMainIncarnation: Schema.optional(BrowserSchema.ID),
   credentialBinding: BrowserSchema.Digest, credentialKey: BrowserSchema.Digest })
 export const Request = Schema.Union([
   Schema.Struct({ type: Schema.Literal("create"), id: BrowserSchema.ID, control: BrowserSchema.Control }),
@@ -31,11 +33,17 @@ export const Permit = Schema.Struct({ type: Schema.Literal("permit"), id: Browse
 
 const LeafFields = { type: Schema.Literal("file.leaf"), id: BrowserSchema.ID, executeID: BrowserSchema.ID,
   actionID: BrowserSchema.ID, controlID: BrowserSchema.ID, digest: BrowserSchema.Digest, artifactID: BrowserFileSchema.ID }
-const Base64Chunk = Schema.String.check(Schema.isMaxLength(Math.ceil(BrowserFileSchema.CHUNK_BYTES / 3) * 4),
+export const UploadStage = Schema.Struct({ artifactID: BrowserSchema.ID,
+  path: WorkWindowsPathSchema.Absolute,
+  stageIdentity: BrowserFileSchema.Identity, fileIdentity: BrowserFileSchema.Identity,
+  bytes: BrowserFileSchema.FileBytes, sha256: BrowserFileSchema.Digest })
+export type UploadStage = typeof UploadStage.Type
+export const Base64Chunk = Schema.String.check(Schema.isMaxLength(Math.ceil(BrowserFileSchema.CHUNK_BYTES / 3) * 4),
   Schema.isPattern(/^[A-Za-z0-9+/]*={0,2}$/),
   Schema.makeFilter((value) => value.length % 4 === 0 &&
     value.length / 4 * 3 - (value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0) <= BrowserFileSchema.CHUNK_BYTES))
 export const FileLeaf = Schema.Union([
+  Schema.Struct({ ...LeafFields, operation: Schema.Literal("upload.stage") }),
   Schema.Struct({ ...LeafFields, operation: Schema.Literal("upload.read"), offset: BrowserFileSchema.Count,
     length: BrowserFileSchema.Revision.check(Schema.isLessThanOrEqualTo(BrowserFileSchema.CHUNK_BYTES)) }),
   Schema.Struct({ ...LeafFields, operation: Schema.Literals(["upload.seal", "upload.observe", "download.publish"]),
@@ -45,7 +53,7 @@ export const FileLeaf = Schema.Union([
 export type FileLeaf = typeof FileLeaf.Type
 export const FileLeafResponse = Schema.Struct({ type: Schema.Literal("file.leaf.response"), id: BrowserSchema.ID,
   error: Schema.optional(Schema.Literals(BrowserFileSchema.ErrorCodes)), payload: Schema.optional(Base64Chunk),
-  publication: Schema.optional(BrowserFileSchema.Publication) })
+  publication: Schema.optional(BrowserFileSchema.Publication), stage: Schema.optional(UploadStage) })
 export type FileLeafResponse = typeof FileLeafResponse.Type
 export const FileCheck = Schema.Struct({ type: Schema.Literal("file.check"), id: BrowserSchema.ID,
   confirmID: BrowserSchema.ID, controlID: BrowserSchema.ID, previewHash: BrowserSchema.Digest, commandHash: BrowserSchema.Digest })

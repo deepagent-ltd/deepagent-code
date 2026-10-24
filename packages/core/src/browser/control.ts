@@ -14,6 +14,8 @@ import { BrowserFileExchange } from "./file-exchange"
 import { BrowserControlTable, BrowserActionTable } from "./browser.sql"
 import type { V2ToolEffect } from "../session/runner/v2-tool-effect"
 import { V2ToolEffectTable } from "../session/runner/v2-tool-effect.sql"
+import { SharedBrowserCapacity } from "./shared-capacity"
+import { BrowserSharedResourceTable } from "./shared.sql"
 
 type Db = Database.Interface["db"]
 type Reader = Pick<Db, "select">
@@ -99,6 +101,7 @@ export const create = Effect.fn("BrowserControl.create")(function* (db: Db, inpu
   hostID: string
   hostIncarnation: string
   credentialBinding: string
+  sharedMainIncarnation?: string
 }) {
   yield* decode(BrowserSchema.Create, input.request)
   yield* decode(BrowserSchema.Scope, input.scope)
@@ -119,7 +122,10 @@ export const create = Effect.fn("BrowserControl.create")(function* (db: Db, inpu
     const active = yield* query(() => tx.select({ count: sql<number>`count(*)` }).from(BrowserControlTable)
       .where(and(eq(BrowserControlTable.host_incarnation, input.hostIncarnation),
         sql`${BrowserControlTable.state} IN ('creating','active','cancel_requested','unknown')`)).get())
-    if (!active || active.count >= BrowserSchema.MAX_ACTIVE_CONTROLS) return yield* failure("BROWSER_CAPACITY")
+    const shared = yield* query(() => tx.select({ count: sql<number>`count(*)` }).from(BrowserSharedResourceTable)
+      .where(and(eq(BrowserSharedResourceTable.main_incarnation, input.sharedMainIncarnation ?? input.hostIncarnation),
+        sql`${BrowserSharedResourceTable.state} NOT IN ('closed','resource_lost')`)).get())
+    if (!active || !shared || active.count + shared.count >= BrowserSchema.MAX_ACTIVE_CONTROLS) return yield* failure("BROWSER_CAPACITY")
     const record: BrowserSchema.Control = { version: 1, controlID: crypto.randomUUID(),
       requestID: input.request.requestID, requestDigest: hash(input.request), scope: input.scope,
       hostID: input.hostID, hostIncarnation: input.hostIncarnation, resourceID: crypto.randomUUID(),
@@ -308,16 +314,7 @@ export const actionView = Effect.fn("BrowserControl.actionView")(function* (db: 
 })
 
 function reserve(tx: Tx, kind: "control" | "action") {
-  return Effect.gen(function* () {
-    const controls = yield* query(() => tx.select({ count: sql<number>`count(*)` }).from(BrowserControlTable).get())
-    const actions = yield* query(() => tx.select({ count: sql<number>`count(*)` }).from(BrowserActionTable).get())
-    const c = (controls?.count ?? Number.NaN) + Number(kind === "control")
-    const a = (actions?.count ?? Number.NaN) + Number(kind === "action")
-    if (!Number.isSafeInteger(c) || !Number.isSafeInteger(a) || c > BrowserSchema.MAX_CONTROLS || a > BrowserSchema.MAX_ACTIONS ||
-      c * (BrowserSchema.MAX_CONTROL_BYTES + BrowserSchema.ROW_OVERHEAD_BYTES) +
-      a * (BrowserSchema.MAX_ACTION_BYTES + BrowserSchema.ROW_OVERHEAD_BYTES) > BrowserSchema.MAX_RESERVED_BYTES)
-      return yield* failure("BROWSER_CAPACITY")
-  })
+  return SharedBrowserCapacity.reserve(tx, kind).pipe(Effect.mapError(() => failure("BROWSER_CAPACITY")))
 }
 function encoded<A>(schema: Schema.Decoder<A>, record: A, max: number) {
   return decode(schema, record).pipe(Effect.flatMap(() =>

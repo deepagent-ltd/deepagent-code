@@ -37,6 +37,7 @@ export function SessionComposerRegion(props: {
   onSubmit: () => void
   onResponseSubmit: () => void
   inputDisabled?: boolean
+  taskProgressAvailable?: boolean
   inputControlRef?: (control: PromptInputControl | undefined) => void
   followup?: {
     queue: () => boolean
@@ -86,13 +87,22 @@ export function SessionComposerRegion(props: {
   const showComposer = createMemo(() => !props.state.blocked() || child())
   const [recoveryStore, setRecoveryStore] = createStore({
     sessionID: route.params.id,
-    pending: !!route.params.id,
+    legacyPending: !!route.params.id,
+    maintenancePending: !!route.params.id,
   })
+  // A stopped provider's unknown receipt remains diagnostic history. Only a complete
+  // current runtime snapshot proving idle lets new input proceed past that history;
+  // legacy recovery, incomplete status and live recovery authority still block it.
+  const maintenanceBlocked = createMemo(
+    () =>
+      recoveryStore.maintenancePending &&
+      (sync.status !== "complete" || (executionStatus()?.type ?? "idle") !== "idle"),
+  )
 
   createEffect(() => {
     const sessionID = route.params.id
     if (recoveryStore.sessionID === sessionID) return
-    setRecoveryStore({ sessionID, pending: !!sessionID })
+    setRecoveryStore({ sessionID, legacyPending: !!sessionID, maintenancePending: !!sessionID })
   })
 
   const previewPrompt = () =>
@@ -151,10 +161,14 @@ export function SessionComposerRegion(props: {
 
   onCleanup(clear)
 
-  const open = createMemo(() => store.ready && props.state.dock() && !props.state.closing())
+  const open = createMemo(
+    () => !props.taskProgressAvailable && store.ready && props.state.dock() && !props.state.closing(),
+  )
   const progress = useSpring(() => (open() ? 1 : 0), { visualDuration: 0.3, bounce: 0 })
-  const value = createMemo(() => Math.max(0, Math.min(1, progress())))
-  const dock = createMemo(() => (store.ready && props.state.dock()) || value() > 0.001)
+  const value = createMemo(() => (props.taskProgressAvailable ? 0 : Math.max(0, Math.min(1, progress()))))
+  const dock = createMemo(
+    () => !props.taskProgressAvailable && ((store.ready && props.state.dock()) || value() > 0.001),
+  )
   const rolled = createMemo(() => (props.revert?.items.length ? props.revert : undefined))
   const lift = createMemo(() => (rolled() ? 18 : 36 * value()))
   const full = createMemo(() => Math.max(78, store.height))
@@ -225,7 +239,7 @@ export function SessionComposerRegion(props: {
             sessionID={route.params.id!}
             onPendingChange={(pending) => {
               if (recoveryStore.sessionID !== route.params.id) return
-              setRecoveryStore("pending", pending)
+              setRecoveryStore("legacyPending", pending)
             }}
           />
         </Show>
@@ -236,7 +250,7 @@ export function SessionComposerRegion(props: {
             client={maintenanceClient()!}
             onPendingChange={(pending) => {
               if (recoveryStore.sessionID !== route.params.id) return
-              setRecoveryStore("pending", pending)
+              setRecoveryStore("maintenancePending", pending)
             }}
           />
         </Show>
@@ -340,7 +354,9 @@ export function SessionComposerRegion(props: {
                       onQueue={props.followup?.onQueue}
                       onAbort={props.followup?.onAbort}
                       onSubmit={props.onSubmit}
-                      disabled={props.inputDisabled || recoveryStore.pending || recoveryRequired()}
+                      disabled={
+                        props.inputDisabled || recoveryStore.legacyPending || maintenanceBlocked() || recoveryRequired()
+                      }
                       controlRef={props.inputControlRef}
                     />
                   </Show>

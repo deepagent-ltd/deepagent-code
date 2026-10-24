@@ -4,7 +4,7 @@ import { constants } from "node:fs"
 import fs from "node:fs/promises"
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import path from "node:path"
-import { Cause, Effect, Option, Schema } from "effect"
+import { Cause, Context, Effect, Option, Schema } from "effect"
 import type { HttpServerRequest } from "effect/unstable/http"
 import type { Database } from "@deepagent-code/core/database/database"
 import { Global } from "@deepagent-code/core/global"
@@ -20,6 +20,10 @@ const Installation = Schema.Struct({
   secret: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
 })
 export type Installation = typeof Installation.Type
+const InstallationRead = Context.Reference<object | undefined>("LocalAuthority.InstallationRead", {
+  defaultValue: () => undefined,
+})
+const installationReads = new WeakMap<object, Effect.Success<typeof holdWindowsInstallation>>()
 export const installationPath = () => path.join(Global.Path.data, "local-operator", "installation.json")
 const denied = () =>
   new LocalOperatorSchema.Error({
@@ -113,6 +117,14 @@ export const initializeInstallation = Effect.fn("LocalAuthority.initializeInstal
 export const readInstallation = Effect.suspend(() =>
   process.platform === "win32"
     ? Effect.gen(function* () {
+        const token = yield* InstallationRead
+        if (token) {
+          const original = installationReads.get(token)
+          if (!original) return yield* unavailable()
+          yield* original.current
+          if (installationReads.get(token) !== original) return yield* unavailable()
+          return original.installation
+        }
         const { WindowsPrivateStorage } = yield* Effect.promise(() => import("../installation/windows-private-storage"))
         const privateFiles = yield* WindowsPrivateStorage.make("local_operator")
         const current = yield* privateFiles.read("installation.json")
@@ -190,6 +202,28 @@ export const holdWindowsInstallation = Effect.gen(function* () {
   const installation = yield* decodeInstallation(held.text)
   return Object.freeze({ installation, current: held.current.pipe(Effect.mapError(unavailable)) })
 })
+
+/** Share one original Native leaf only inside this bounded operation. Every read
+ * still checks the held bytes; the opaque token expires before its Scope closes. */
+export function withWindowsInstallation<A, E, R>(effect: Effect.Effect<A, E, R>) {
+  if (process.platform !== "win32") return effect
+  return Effect.scoped(Effect.gen(function* () {
+    const active = yield* InstallationRead
+    if (active) {
+      if (!installationReads.has(active)) return yield* unavailable()
+      return yield* effect
+    }
+    const original = yield* holdWindowsInstallation
+    Object.freeze(original.installation)
+    const token = Object.freeze({})
+    installationReads.set(token, original)
+    return yield* effect.pipe(
+      Effect.tap(() => original.current),
+      Effect.provideService(InstallationRead, token),
+      Effect.ensuring(Effect.sync(() => installationReads.delete(token))),
+    )
+  }))
+}
 
 function decodeInstallation(text: string) {
   const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Installation), { onExcessProperty: "error" })(text)

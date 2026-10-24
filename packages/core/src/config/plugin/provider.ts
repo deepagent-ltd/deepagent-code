@@ -7,6 +7,7 @@ import { ModelV2 } from "../../model"
 import { ModelRequest } from "../../model-request"
 import { PluginV2 } from "../../plugin"
 import { ProviderV2 } from "../../provider"
+import { ProviderVariants } from "../../provider-variants"
 
 export const Plugin = PluginV2.define({
   id: PluginV2.ID.make("config-provider"),
@@ -18,6 +19,10 @@ export const Plugin = PluginV2.define({
     const files = entries.filter((entry): entry is Config.Document => entry.type === "document")
 
     yield* transform((catalog) => {
+      const disabledVariants = new Map<
+        string,
+        { providerID: ProviderV2.ID; modelID: ModelV2.ID; ids: Set<ModelV2.VariantID> }
+      >()
       const configuredDefault = Config.latest(entries, "model")
       if (configuredDefault !== undefined) {
         const model = ModelV2.parse(configuredDefault)
@@ -26,19 +31,37 @@ export const Plugin = PluginV2.define({
       for (const file of files) {
         for (const [id, item] of Object.entries(file.info.providers ?? {})) {
           const providerID = ProviderV2.ID.make(id)
-          catalog.provider.update(providerID, (provider) => {
-            if (item.name !== undefined) provider.name = item.name
-            if (item.env !== undefined) provider.env = [...item.env]
-            // K-04 contract: config-ingressed providers carry a dedicated origin
-            // provenance; `enabled.via: "custom"` stays an availability fact only.
-            provider.origin = "config"
-            provider.enabled = { via: "custom", data: {} }
-            if (item.api !== undefined) provider.api = { ...item.api }
-            if (item.request !== undefined) {
-              Object.assign(provider.request.headers, item.request.headers)
-              Object.assign(provider.request.body, item.request.body)
-            }
-          })
+          // Enabling a model must not manufacture an authenticated provider or
+          // replace its existing credential provenance with a custom origin.
+          const selectionOnly =
+            item.name === undefined &&
+            item.env === undefined &&
+            item.api === undefined &&
+            item.request === undefined &&
+            Object.values(item.models ?? {}).every((model) =>
+              Object.keys(model).every(
+                (key) =>
+                  key === "disabled" ||
+                  (key === "variants" &&
+                    model.variants?.every((variant) =>
+                      Object.keys(variant).every((field) => field === "id" || field === "disabled"),
+                    )),
+              ),
+            )
+          if (!selectionOnly)
+            catalog.provider.update(providerID, (provider) => {
+              if (item.name !== undefined) provider.name = item.name
+              if (item.env !== undefined) provider.env = [...item.env]
+              // K-04 contract: config-ingressed providers carry a dedicated origin
+              // provenance; `enabled.via: "custom"` stays an availability fact only.
+              provider.origin = "config"
+              provider.enabled = { via: "custom", data: {} }
+              if (item.api !== undefined) provider.api = { ...item.api }
+              if (item.request !== undefined) {
+                Object.assign(provider.request.headers, item.request.headers)
+                Object.assign(provider.request.body, item.request.body)
+              }
+            })
           const providerApi = catalog.provider.get(providerID)?.provider.api
           const providerPackage = providerApi?.type === "aisdk" ? providerApi.package : undefined
 
@@ -64,6 +87,18 @@ export const Plugin = PluginV2.define({
               }
               if (config.variants !== undefined) {
                 for (const variant of config.variants) {
+                  if (variant.disabled !== undefined) {
+                    const key = JSON.stringify([providerID, model.id])
+                    const disabled = disabledVariants.get(key) ?? {
+                      providerID,
+                      modelID: model.id,
+                      ids: new Set<ModelV2.VariantID>(),
+                    }
+                    if (variant.disabled) disabled.ids.add(variant.id)
+                    if (!variant.disabled) disabled.ids.delete(variant.id)
+                    disabledVariants.set(key, disabled)
+                  }
+                  if (variant.disabled) continue
                   let existing = model.variants.find((item) => item.id === variant.id)
                   if (!existing) {
                     existing = {
@@ -77,7 +112,10 @@ export const Plugin = PluginV2.define({
                   }
                   ModelRequest.assign(existing, {
                     headers: variant.headers,
-                    ...ModelRequest.normalizeAiSdkOptions(packageName, variant.body ?? {}),
+                    ...ModelRequest.normalizeAiSdkOptions(
+                      packageName,
+                      ProviderVariants.normalizeDeepSeekOptions(model.api.id, packageName, variant.body ?? {}),
+                    ),
                   })
                 }
               }
@@ -104,6 +142,13 @@ export const Plugin = PluginV2.define({
             })
           }
         }
+      }
+      // Filter after all files so a later project enable keeps generated options.
+      for (const entry of disabledVariants.values()) {
+        if (!entry.ids.size) continue
+        catalog.model.update(entry.providerID, entry.modelID, (model) => {
+          model.variants = model.variants.filter((variant) => !entry.ids.has(variant.id))
+        })
       }
     })
   }),

@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto"
 import { Schema } from "effect"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { McpAuthJournalSchema } from "./auth-journal-schema"
+import type { McpWindowsStorage } from "./windows-storage"
 import { McpAuthJournalStore } from "./auth-journal-store"
 
 export type Handle = Readonly<{ slot: string; generation: string; flow: string; owner: string }>
@@ -10,8 +11,8 @@ export type Snapshot = ReturnType<typeof McpAuthJournalSchema.decodeSlot>
 
 /** Storage boundary only. Production callers must obtain their binding and current
  * identity from McpAuthScope; strings submitted by an HTTP client are not authority. */
-export async function open(file: string, installationTag: string, mode: "read" | "write") {
-  const store = await McpAuthJournalStore.open(file, installationTag, mode)
+export async function open(file: string, installationTag: string, mode: "read" | "write", native?: McpWindowsStorage.Port) {
+  const store = await McpAuthJournalStore.open(file, installationTag, mode, native)
   if (!store) return undefined
 
   const read = (slot: string) => store.read((db) => select(db, slot))

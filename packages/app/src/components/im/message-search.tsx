@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, untrack, For, Show, type Component } from "solid-js"
+import { createEffect, createMemo, on, onCleanup, untrack, For, Show, type Component } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
 import { Button } from "@deepagent-code/ui/button"
@@ -13,6 +13,11 @@ export const MessageSearch: Component<{
   localGroupIDs?: readonly string[]
   displayEpoch?: string
   invalidation?: number
+  query?: string
+  submitRequest?: number
+  active?: boolean
+  hideInput?: boolean
+  groupID?: string
 }> = (props) => {
   const client = useIMClient()
   const language = useLanguage()
@@ -30,36 +35,44 @@ export const MessageSearch: Component<{
   const lifecycle = {
     disposed: false,
     generation: 0,
-    active: false,
+    active: undefined as number | undefined,
+    appended: false,
     deadline: Infinity,
     timer: undefined as ReturnType<typeof setTimeout> | undefined,
   }
-  const clearProtected = () => {
+  const clearProtected = (retireAll = false) => {
     lifecycle.generation++
+    lifecycle.appended = false
     lifecycle.deadline = Infinity
     if (lifecycle.timer) clearTimeout(lifecycle.timer)
     setState({
-      results: state.results.filter((row) => props.localGroupIDs?.includes(row.groupID)),
+      results: retireAll ? [] : state.results.filter((row) => props.localGroupIDs?.includes(row.groupID)),
       cursor: null,
       hasMore: false,
+      loading: false,
       partial: state.searched || state.results.length > 0,
       unavailable: true,
+      ...(retireAll ? { searched: false } : {}),
     })
   }
-  createEffect(() => {
-    client.scope()
-    props.displayEpoch
-    props.invalidation
-    untrack(clearProtected)
+  // Fresh status objects do not retire an unchanged reader authority.
+  const authority = createMemo(() => [client.scope(), props.displayEpoch, props.invalidation] as const, undefined, {
+    equals: (prior, next) => prior?.[0] === next[0] && prior?.[1] === next[1] && prior?.[2] === next[2],
   })
+  createEffect(
+    on(authority, (next, prior) => {
+      untrack(() => clearProtected(!!prior && prior[0] !== next[0]))
+    }),
+  )
   onCleanup(() => {
     lifecycle.disposed = true
     if (lifecycle.timer) clearTimeout(lifecycle.timer)
   })
   const run = async (append: boolean) => {
     const q = state.query.trim()
-    if (!q || lifecycle.active || lifecycle.disposed) return
-    lifecycle.active = true
+    if (!q || lifecycle.active === lifecycle.generation || lifecycle.disposed || props.active === false) return
+    lifecycle.active = lifecycle.generation
+    if (!append) lifecycle.appended = false
     const generation = lifecycle.generation
     const scope = client.scope()
     const started = performance.now()
@@ -67,6 +80,7 @@ export const MessageSearch: Component<{
     try {
       const page = await client.searchMessages({
         q,
+        groupId: props.groupID,
         limit: 30,
         cursor: append ? (state.cursor ?? undefined) : undefined,
       })
@@ -89,11 +103,15 @@ export const MessageSearch: Component<{
           clearProtected()
           return
         }
-        lifecycle.deadline = Math.min(lifecycle.deadline, started + remaining)
-        if (lifecycle.timer) clearTimeout(lifecycle.timer)
-        if (Number.isFinite(lifecycle.deadline))
-          lifecycle.timer = setTimeout(clearProtected, Math.max(0, lifecycle.deadline - performance.now()))
+        lifecycle.deadline = append ? Math.min(lifecycle.deadline, started + remaining) : started + remaining
       }
+      if (!append && !page.reader) lifecycle.deadline = Infinity
+      if (lifecycle.timer) clearTimeout(lifecycle.timer)
+      if (Number.isFinite(lifecycle.deadline))
+        lifecycle.timer = setTimeout(clearProtected, Math.max(0, lifecycle.deadline - performance.now()))
+      // A loaded result window stays put until a new search or its authority expires.
+      // Refreshing only page one would silently discard the appended pages.
+      if (append) lifecycle.appended = true
       setState({
         results: append
           ? Array.from(new Map([...state.results, ...page.messages].map((row) => [row.id, row])).values())
@@ -110,40 +128,82 @@ export const MessageSearch: Component<{
         setState("failed", true)
       }
     } finally {
-      lifecycle.active = false
-      if (!lifecycle.disposed) setState("loading", false)
+      if (lifecycle.active === generation) lifecycle.active = undefined
+      if (!lifecycle.disposed && lifecycle.generation === generation) setState("loading", false)
     }
   }
+  const updateQuery = (query: string) => {
+    lifecycle.generation++
+    lifecycle.appended = false
+    lifecycle.deadline = Infinity
+    if (lifecycle.timer) clearTimeout(lifecycle.timer)
+    setState({
+      query,
+      results: [],
+      searched: false,
+      cursor: null,
+      hasMore: false,
+      failed: false,
+      partial: false,
+      unavailable: false,
+      loading: false,
+    })
+  }
+  createEffect(
+    on(
+      () => [props.query, props.groupID] as const,
+      ([query]) => {
+        if (query !== undefined) updateQuery(query)
+      },
+    ),
+  )
+  createEffect(
+    on(
+      () => props.submitRequest,
+      (request) => {
+        if (request) void run(false)
+      },
+      { defer: true },
+    ),
+  )
   const timer = setInterval(() => {
-    if (state.searched && state.query.trim()) void run(false)
+    // The sidebar's shared input submits explicitly; restoring its view never repeats a completed query.
+    if (props.query !== undefined || props.active === false) return
+    if (!lifecycle.appended && state.searched && state.query.trim()) void run(false)
   }, 5000)
   onCleanup(() => clearInterval(timer))
 
   return (
     <div class="flex flex-col gap-2 p-2">
-      <div class="flex items-center gap-2">
-        <input
-          class="flex-1 min-w-0 rounded-md border border-border-weak-base bg-surface-base px-2 py-1 text-13-regular text-text-strong outline-none focus:ring-2 focus:ring-accent-base"
-          placeholder={`${language.t("im.search.messages")}…`}
-          value={state.query}
-          onInput={(e) => {
-            lifecycle.generation++
-            setState({ query: e.currentTarget.value, results: [], searched: false, cursor: null, hasMore: false, failed: false })
-          }}
-          onKeyDown={(e) => {
-            e.stopPropagation()
-            if (e.key === "Enter") void run(false)
-          }}
-        />
-        <Button
-          variant="secondary"
-          size="small"
-          onClick={() => run(false)}
-          disabled={!state.query.trim() || state.loading}
-        >
-          {state.loading ? language.t("common.loading.ellipsis") : language.t("common.search.placeholder")}
-        </Button>
-      </div>
+      <Show when={!props.hideInput}>
+        <div class="flex items-center gap-2">
+          <input
+            class="flex-1 min-w-0 rounded-md border border-border-weak-base bg-surface-base px-2 py-1 text-13-regular text-text-strong outline-none focus:ring-2 focus:ring-accent-base"
+            placeholder={`${language.t("im.search.messages")}…`}
+            value={state.query}
+            onInput={(e) => {
+              updateQuery(e.currentTarget.value)
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) void run(false)
+            }}
+          />
+          <Button
+            variant="secondary"
+            size="small"
+            onClick={() => run(false)}
+            disabled={!state.query.trim() || state.loading}
+          >
+            {state.loading ? language.t("common.loading.ellipsis") : language.t("common.search.placeholder")}
+          </Button>
+        </div>
+      </Show>
+      <Show when={props.hideInput && state.loading}>
+        <p role="status" class="text-12-regular text-text-weak">
+          {language.t("common.loading")}
+        </p>
+      </Show>
 
       <Show when={state.partial}>
         <p role="status" class="text-12-regular text-text-weak">

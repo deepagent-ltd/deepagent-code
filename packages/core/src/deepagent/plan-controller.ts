@@ -168,6 +168,7 @@ const MUTATING_TOOLS = new Set([
   "pr_finalize",
   "knowledge_propose",
   "im_send",
+  "plan_exit",
 ])
 const ALWAYS_ALLOWED_TOOLS = new Set(["read", "grep", "glob", "list", "ls", "search", "task", "webfetch"])
 

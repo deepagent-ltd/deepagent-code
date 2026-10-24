@@ -47,6 +47,7 @@ const configs = {
         minify({
           banner,
           removeConsole: true,
+          mangle: false,
           simplifyComparisons: false
         }),
         babel({
@@ -80,6 +81,7 @@ const configs = {
       plugins: [ 
         minify({
           removeConsole: true,
+          mangle: false,
           simplifyComparisons: false
         }),
         babel({

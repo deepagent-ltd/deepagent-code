@@ -74,14 +74,16 @@ it.instance("build agent has correct default properties", () =>
   }),
 )
 
-it.instance("plan agent denies edits except .deepagent-code/plans/*", () =>
+it.instance("plan agent denies all project edits and execution tools", () =>
   Effect.gen(function* () {
     const plan = yield* load((svc) => svc.get("plan"))
     expect(plan).toBeDefined()
-    // Wildcard is denied
-    expect(evalPerm(plan, "edit")).toBe("deny")
-    // But specific path is allowed
-    expect(Permission.evaluate("edit", ".deepagent-code/plans/foo.md", plan!.permission).action).toBe("allow")
+    expect(plan?.hidden).toBe(false)
+    for (const action of ["edit", "write", "bash", "task", "browser", "mcp_server__tool"])
+      expect(evalPerm(plan, action)).toBe("deny")
+    expect(Permission.evaluate("edit", ".deepagent-code/plans/foo.md", plan!.permission).action).toBe("deny")
+    for (const action of ["read", "grep", "glob", "git_read", "plan", "question", "plan_exit"])
+      expect(evalPerm(plan, action)).toBe("allow")
   }),
 )
 
@@ -777,8 +779,8 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const agent = yield* load((svc) => svc.defaultAgent())
-      // auto is disabled; plan is hidden, so the next VISIBLE primary is loop (a goal-loop mode).
-      expect(agent).toBe("loop")
+      // Planning is now the next visible primary; legacy design keeps its own identity.
+      expect(agent).toBe("plan")
     }),
   {
     config: {

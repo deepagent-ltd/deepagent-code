@@ -21,6 +21,7 @@ export const Submit = Schema.Struct({
   method: Method,
   credential: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
   quoteID: Quote.fields.quoteID,
+  retryOriginal: Schema.optional(Schema.Boolean),
 })
 export type Submit = typeof Submit.Type
 

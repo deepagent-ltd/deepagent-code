@@ -1,6 +1,8 @@
 export * as KernelConfig from "./config"
 
 import { createHash } from "node:crypto"
+import type { IMDeviceProof } from "../device-proof"
+import { Effect } from "effect"
 import type { KernelDeliverySchema } from "@deepagent-code/core/im/kernel-delivery.schema"
 
 /** An irreversible snapshot of the actual credential, not a claimed platform identity revision. */
@@ -40,8 +42,23 @@ export interface Info {
   readonly userID: string
   /** Independent deployment capability; never a current media permission. */
   readonly protectedMedia?: boolean
+  /** Server-only callbacks; native custody never exports a private key to the SDK. */
+  readonly protectedDeviceAuth?: ProtectedDeviceAuth
+  readonly socketAudience?: string
   /** 门面组织身份（exchange 返回）；PoC 直连路径缺席。 */
   readonly identity?: Identity
+}
+
+export interface ProtectedDeviceAuth {
+  readonly profile: "dac-im-device-v1"
+  readonly publicJwk: IMDeviceProof.PublicJwk
+  readonly jkt: string
+  readonly socketAudience: string
+  readonly allowInsecureLoopbackForTests?: boolean
+  readonly entitlementID: string
+  readonly bindingVersion: number
+  readonly signConnect: (challenge: IMDeviceProof.SocketChallenge, source: { audience: string; token: string; connectionEpoch: number }) => Promise<string>
+  readonly signHttp: (request: { method: "GET" | "POST" | "PUT" | "DELETE"; url: string; credential: string; currentSourceEpoch: number }) => Promise<Record<string, string>>
 }
 
 export interface Identity {
@@ -71,6 +88,15 @@ export const facadeEnvKeys = FACADE_ENV_KEYS
 export interface FacadeSource {
   readonly facadeURL: string
   readonly key: string
+  readonly device?: {
+    readonly profile: "dac-im-device-v1"
+    readonly publicJwk: IMDeviceProof.PublicJwk
+    readonly entitlementID: string
+    readonly deviceJkt: string
+    readonly bindingVersion: number
+    readonly uuid: string
+    readonly headers: (request: { method: "GET" | "POST" | "PUT" | "DELETE"; url: string }) => Effect.Effect<Record<string, string>, unknown>
+  }
 }
 
 // 门面坐标：URL 缺席 ⇒ undefined（走 PoC env 路径）；URL 在而 key 缺席 ⇒ undefined + 警告

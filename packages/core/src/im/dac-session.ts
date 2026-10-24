@@ -15,6 +15,7 @@ import { WorkspaceV2 } from "../workspace"
 import { IMDacSessionSchema } from "./dac-session.schema"
 import { IMDacBindingTable, IMDacCommandTable } from "./dac-session.sql"
 import { IMReplyOutboxTable } from "./reply-outbox.sql"
+import { ReplyReconciliation } from "./reply-reconciliation"
 import { ReplyBodyRetirement } from "./reply-body-retirement"
 import { ReplyBodyRetirementModel } from "./reply-body-retirement.model"
 
@@ -97,6 +98,12 @@ export function make(db: Database.Interface["db"], sessions: SessionV2.Interface
       return { version: 1 as const, ...placement(scope), bindingID: row?.id ?? null, sessionID: row?.current_session_id ?? null, recentCommands }
     }),
     command,
+    reconcileReply: (
+      scope: Scope,
+      commandID: string,
+      request: IMDacSessionSchema.ReplyReconcileRequest,
+      transport: ReplyReconciliation.Transport,
+    ) => ReplyReconciliation.run({ db, sessions, scope, command: () => command(scope, commandID), request, transport }),
     submit: (scope: Scope, input: IMDacSessionSchema.Submit, references: Effect.Effect<readonly { messageID: string; content: string }[], IMDacSessionSchema.Error>) => Effect.gen(function* () {
       const requestHash = digest([input.text, input.delivery, input.referenceMessageIDs ?? [], input.newSession ?? false])
       // Capture reference bytes outside SQL while the Host's current reader owns

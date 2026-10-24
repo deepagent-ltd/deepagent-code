@@ -125,3 +125,42 @@ test("moves a model to the front, deduplicates, and limits recents", () => {
     ...recent.slice(6, 10),
   ])
 })
+
+test("conversation mode drafts are scoped and persist independently of another conversation", () => {
+  createRoot((dispose) => {
+    const [scope, setScope] = createSignal("server:/project:session-a")
+    const saved: Record<string, string> = {}
+    const selected = createAgentSelection({
+      agents: () => [
+        { ...primary, name: "auto" },
+        { ...primary, name: "plan" },
+        { ...primary, name: "loop" },
+      ],
+      loading: () => false,
+      scope,
+      selected: () => saved[scope()],
+      preferred: () => "auto",
+      save: (name) => {
+        saved[scope()] = name
+      },
+      warn: () => {},
+    })
+    selected.set("plan")
+    setScope("server:/project:session-b")
+    expect(selected.current()?.name).toBe("auto")
+    selected.set("loop")
+    setScope("server:/project:session-a")
+    expect(selected.current()?.name).toBe("plan")
+    expect(saved).toEqual({ "server:/project:session-a": "plan", "server:/project:session-b": "loop" })
+    const reopened = createAgentSelection({
+      agents: selected.list,
+      loading: () => false,
+      scope,
+      selected: () => saved[scope()],
+      preferred: () => "auto",
+      warn: () => {},
+    })
+    expect(reopened.current()?.name).toBe("plan")
+    dispose()
+  })
+})

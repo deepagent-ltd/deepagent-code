@@ -205,6 +205,19 @@ describe("IM B2 facade HttpApi", () => {
       delete process.env.DEEPAGENT_IM_FACADE_KEY
     })
 
+    it.live("plans and entitlement GET routes expose unknown without bootstrapping an identity or mutation", () =>
+      Effect.gen(function* () {
+        const directory = yield* tmpdirScoped({ git: true })
+        const q = `directory=${encodeURIComponent(directory)}`
+        const mutations = platformMutations
+        const plans = yield* requestRaw(`/api/v1/im/plans?${q}`)
+        const entitlement = yield* requestRaw(`/api/v1/im/entitlement?${q}`)
+        expect(plans).toEqual({ status: 200, body: { state: "unknown", reason: "service_unconfigured" } })
+        expect(entitlement).toEqual({ status: 200, body: { state: "unknown", reason: "service_unconfigured" } })
+        expect(platformMutations).toBe(mutations)
+      }),
+    )
+
     it.live("status reports disabled; mutations fail-closed im_unavailable", () =>
       Effect.gen(function* () {
         const directory = yield* tmpdirScoped({ git: true })

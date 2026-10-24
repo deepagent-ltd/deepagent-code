@@ -22,7 +22,7 @@ type Projection = typeof IMKernelReaderProjectionTable.$inferSelect
 type Scope = typeof IMKernelReaderScopeTable.$inferSelect
 type ReadIntent = typeof IMKernelReaderReadIntentTable.$inferSelect
 export type Runtime = { readonly incarnation: string; readonly displayEpoch: string }
-type Engine = { outputProof?: (input: KernelReaderSchema.OutputProofRequest) => Effect.Effect<KernelReaderSchema.OutputProofResult, KernelReaderSchema.Error>; db: Db; workspaceID: string; userID: string; source: KernelDeliverySchema.Source; current: () => Effect.Effect<boolean>; readCut: (input: { version: 1 | 2; scopeKey: string; projectionKey: string; projectionRevision: string }) => Effect.Effect<KernelReaderSchema.Cut, KernelReaderSchema.Error>; inspect: (input: { conversationType: 1 | 2; conversationID: string }) => Effect.Effect<{ name: string }, KernelReaderSchema.Error>; liveObservation?: (handle: object) => KernelReaderSchema.LiveObservation | undefined; retirementObservation?: (handle: object) => { serverNow: number; scopeKey: string; version: 1 | 2; deadline: number } | undefined; active: boolean; scopeKey?: string; readerKey?: string; readerVersion?: 1 | 2 }
+type Engine = { outputProof?: (input: KernelReaderSchema.OutputProofRequest) => Effect.Effect<KernelReaderSchema.OutputProofResult, KernelReaderSchema.Error>; db: Db; workspaceID: string; userID: string; source: KernelDeliverySchema.Source; current: () => Effect.Effect<boolean>; readCut: (input: { version: 1 | 2; scopeKey: string; projectionKey: string; projectionRevision: string }, observeStarted?: (started: number) => void) => Effect.Effect<KernelReaderSchema.Cut, KernelReaderSchema.Error>; inspect: (input: { conversationType: 1 | 2; conversationID: string }) => Effect.Effect<{ name: string }, KernelReaderSchema.Error>; liveObservation?: (handle: object) => KernelReaderSchema.LiveObservation | undefined; retirementObservation?: (handle: object) => { serverNow: number; scopeKey: string; version: 1 | 2; deadline: number } | undefined; active: boolean; scopeKey?: string; readerKey?: string; readerVersion?: 1 | 2 }
 const engines = new WeakMap<Runtime, Engine>()
 const Output = Context.Reference<object | undefined>("IMKernelReader.private-output", { defaultValue: () => undefined })
 type Frame = { runtime: Runtime; db: Db; workspaceID: string; userID: string; readerKey?: string; started: number; emptyProofDeadline?: number; projections: Map<string, { row: Projection; deadline: number; serverNow: number; started: number; cut?: KernelReaderSchema.Cut }>; active: boolean }
@@ -353,15 +353,20 @@ export const prepareOutput = <A, E, R>(runtime: Runtime, input: { workspaceID: s
       return
     }
     if (!engine.scopeKey || !row.projection_key || !row.server_revision) return yield* failure("reader_mapping_conflict", "output")
-    const cut = yield* engine.readCut({ version: readerVersion(runtime), scopeKey: engine.scopeKey, projectionKey: row.projection_key, projectionRevision: row.server_revision })
+    const flight = { started }
+    const cut = yield* engine.readCut({ version: readerVersion(runtime), scopeKey: engine.scopeKey, projectionKey: row.projection_key, projectionRevision: row.server_revision }, (originalStarted) => {
+      // Joining an in-flight cut retains its full original flight for message
+      // expiry. This internal monotonic clock may only shorten that bound.
+      flight.started = Math.min(flight.started, Number.isFinite(originalStarted) && originalStarted >= 0 ? originalStarted : 0)
+    })
     if (cut.version !== readerVersion(runtime) || cut.scopeKey !== engine.scopeKey || cut.projectionKey !== row.projection_key || cut.projectionRevision !== row.server_revision || cut.serverNow < row.last_server_now) return yield* failure("reader_stale", "output-clock")
     // The local consumption window starts after this current authenticated cut
     // settles. Message expiry still conservatively includes the RPC's full flight.
-    const deadline = Math.min(performance.now() + outputProofWindowMs, !row.next_expiry_at ? Infinity : started + row.next_expiry_at - cut.serverNow)
+    const deadline = Math.min(performance.now() + outputProofWindowMs, !row.next_expiry_at ? Infinity : flight.started + row.next_expiry_at - cut.serverNow)
     const returned = performance.now()
-    if (observations.length < 4) observations.push({ index, visibility: "visible", phase, flightMs: Math.max(0, Math.floor(returned - started)), settledAt: returned, deadline })
+    if (observations.length < 4) observations.push({ index, visibility: "visible", phase, flightMs: Math.max(0, Math.floor(returned - flight.started)), settledAt: returned, deadline })
     if (performance.now() >= deadline) return yield* failure("reader_stale", "output-deadline")
-    frame.projections.set(row.local_group_id, { row, deadline, serverNow: cut.serverNow, started, cut })
+    frame.projections.set(row.local_group_id, { row, deadline, serverNow: cut.serverNow, started: flight.started, cut })
   })
   const guarded = Effect.gen(function* () {
     const selected = rows.filter((row) => row.local_group_id && row.visibility !== "revoked")

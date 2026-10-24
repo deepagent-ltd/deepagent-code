@@ -1,13 +1,18 @@
-import { Component, createMemo, createSignal, For, Show } from "solid-js"
-import { useSync } from "@/context/sync"
+import { Component, createMemo, For, onCleanup, Show } from "solid-js"
+import { createStore } from "solid-js/store"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
-import { Dialog } from "@deepagent-code/ui/dialog"
-import { Button } from "@deepagent-code/ui/button"
-import { InlineInput } from "@deepagent-code/ui/inline-input"
+import { Dialog, DialogFooter } from "@deepagent-code/ui/v2/dialog-v2"
+import { ButtonV2 } from "@deepagent-code/ui/v2/button-v2"
+import { FieldV2 } from "@deepagent-code/ui/v2/field-v2"
+import { SegmentedControlV2, SegmentedControlItemV2 } from "@deepagent-code/ui/v2/segmented-control-v2"
+import { TextInputV2 } from "@deepagent-code/ui/v2/text-input-v2"
+import { TextareaV2 } from "@deepagent-code/ui/v2/textarea-v2"
+import { Switch } from "@deepagent-code/ui/v2/switch-v2"
 import { useLanguage } from "@/context/language"
 import { useMcpAdd, useMcpCatalog, useMcpCatalogEnable } from "@/context/mcp"
 import { showToast } from "@/utils/toast"
 import type { McpLocalConfig, McpRemoteConfig, McpCatalogResponses } from "@deepagent-code/sdk/client"
+import "./dialog-add-mcp.css"
 
 type CatalogEntry = McpCatalogResponses[200][number]
 
@@ -20,135 +25,168 @@ export const DialogAddMcp: Component = () => {
   const language = useLanguage()
   const dialog = useDialog()
   const add = useMcpAdd()
-
-  const [tab, setTab] = createSignal<"manual" | "catalog">("manual")
-  const [type, setType] = createSignal<"local" | "remote">("local")
-  const [name, setName] = createSignal("")
-  const [command, setCommand] = createSignal("")
-  const [url, setUrl] = createSignal("")
-
-  const valid = createMemo(() => {
-    if (!name().trim()) return false
-    return type() === "local" ? command().trim().length > 0 : url().trim().length > 0
+  const owner = { live: true }
+  onCleanup(() => {
+    owner.live = false
   })
-
-  const submit = async () => {
-    if (!valid() || add.isPending) return
-    const config: McpLocalConfig | McpRemoteConfig =
-      type() === "local"
-        ? { type: "local", command: command().trim().split(/\s+/), enabled: true }
-        : { type: "remote", url: url().trim(), enabled: true }
-    await add.mutateAsync({ name: name().trim(), config })
+  const close = () => {
+    if (!owner.live) return
+    owner.live = false
     dialog.close()
   }
 
+  const [state, setState] = createStore({
+    tab: "manual" as "manual" | "catalog",
+    type: "local" as "local" | "remote",
+    name: "",
+    command: "",
+    url: "",
+    oauthDisabled: false,
+  })
+
+  const valid = createMemo(() => {
+    if (!state.name.trim()) return false
+    return state.type === "local" ? state.command.trim().length > 0 : state.url.trim().length > 0
+  })
+
+  const submit = async () => {
+    if (!owner.live || !valid() || add.isPending) return
+    const config: McpLocalConfig | McpRemoteConfig =
+      state.type === "local"
+        ? { type: "local", command: state.command.trim().split(/\s+/), enabled: true }
+        : { type: "remote", url: state.url.trim(), enabled: true, ...(state.oauthDisabled ? { oauth: false } : {}) }
+    await add.mutateAsync({ name: state.name.trim(), config })
+    close()
+  }
+
   return (
-    <Dialog title={language.t("dialog.mcp.add.title")}>
-      <div class="flex flex-col gap-3 px-3 pb-3">
-        <div class="flex gap-2">
-          <Button variant={tab() === "manual" ? "primary" : "secondary"} onClick={() => setTab("manual")}>
-            {language.t("dialog.mcp.add.tabManual")}
-          </Button>
-          <Button variant={tab() === "catalog" ? "primary" : "secondary"} onClick={() => setTab("catalog")}>
-            {language.t("dialog.mcp.add.tabCatalog")}
-          </Button>
-        </div>
-
-        <Show when={tab() === "manual"}>
-          <ManualForm
-            name={name()}
-            type={type()}
-            command={command()}
-            url={url()}
-            pending={add.isPending}
-            valid={valid()}
-            onName={setName}
-            onType={setType}
-            onCommand={setCommand}
-            onUrl={setUrl}
-            onSubmit={submit}
-            onCancel={() => dialog.close()}
-          />
-        </Show>
-
-        <Show when={tab() === "catalog"}>
-          <CatalogPicker onDone={() => dialog.close()} />
-        </Show>
+    <Dialog title={language.t("dialog.mcp.add.title")} fit class="mcp-add-dialog">
+      <div class="mcp-add-mode">
+        <SegmentedControlV2
+          value={state.tab}
+          aria-label={language.t("dialog.mcp.add.title")}
+          onChange={(value) => {
+            if (value === "manual" || value === "catalog") setState("tab", value)
+          }}
+        >
+          <SegmentedControlItemV2 value="manual">{language.t("dialog.mcp.add.tabManual")}</SegmentedControlItemV2>
+          <SegmentedControlItemV2 value="catalog">{language.t("dialog.mcp.add.tabCatalog")}</SegmentedControlItemV2>
+        </SegmentedControlV2>
       </div>
+
+      <Show when={state.tab === "manual"}>
+        <ManualForm
+          name={state.name}
+          type={state.type}
+          command={state.command}
+          url={state.url}
+          oauthDisabled={state.oauthDisabled}
+          pending={add.isPending}
+          valid={valid()}
+          onName={(value) => setState("name", value)}
+          onType={(value) => setState("type", value)}
+          onCommand={(value) => setState("command", value)}
+          onUrl={(value) => setState("url", value)}
+          onOauthDisabled={(value) => setState("oauthDisabled", value)}
+          onSubmit={submit}
+          onCancel={close}
+        />
+      </Show>
+
+      <Show when={state.tab === "catalog"}>
+        <CatalogPicker onDone={close} />
+      </Show>
     </Dialog>
   )
 }
-
-// MANUAL_FORM_PLACEHOLDER
 
 const ManualForm: Component<{
   name: string
   type: "local" | "remote"
   command: string
   url: string
+  oauthDisabled: boolean
   pending: boolean
   valid: boolean
   onName: (v: string) => void
   onType: (v: "local" | "remote") => void
   onCommand: (v: string) => void
   onUrl: (v: string) => void
+  onOauthDisabled: (v: boolean) => void
   onSubmit: () => void
   onCancel: () => void
 }> = (props) => {
   const language = useLanguage()
   return (
     <>
-      <label class="flex flex-col gap-1">
-        <span class="text-11-regular text-text-weaker">{language.t("dialog.mcp.add.name")}</span>
-        <InlineInput
-          value={props.name}
-          placeholder={language.t("dialog.mcp.add.namePlaceholder")}
-          onInput={(e) => props.onName(e.currentTarget.value)}
-        />
-      </label>
+      <div class="mcp-add-fields">
+        <FieldV2>
+          <FieldV2.Label>{language.t("dialog.mcp.add.name")}</FieldV2.Label>
+          <TextInputV2
+            appearance="large"
+            value={props.name}
+            placeholder={language.t("dialog.mcp.add.namePlaceholder")}
+            onInput={(e) => props.onName(e.currentTarget.value)}
+          />
+        </FieldV2>
 
-      <div class="flex flex-col gap-1">
-        <span class="text-11-regular text-text-weaker">{language.t("dialog.mcp.add.type")}</span>
-        <div class="flex gap-2">
-          <Button variant={props.type === "local" ? "primary" : "secondary"} onClick={() => props.onType("local")}>
-            {language.t("dialog.mcp.add.typeLocal")}
-          </Button>
-          <Button variant={props.type === "remote" ? "primary" : "secondary"} onClick={() => props.onType("remote")}>
-            {language.t("dialog.mcp.add.typeRemote")}
-          </Button>
+        <div class="mcp-add-field">
+          <span class="mcp-add-label">{language.t("dialog.mcp.add.type")}</span>
+          <SegmentedControlV2
+            value={props.type}
+            aria-label={language.t("dialog.mcp.add.type")}
+            onChange={(value) => {
+              if (value === "local" || value === "remote") props.onType(value)
+            }}
+          >
+            <SegmentedControlItemV2 value="local">{language.t("dialog.mcp.add.typeLocal")}</SegmentedControlItemV2>
+            <SegmentedControlItemV2 value="remote">{language.t("dialog.mcp.add.typeRemote")}</SegmentedControlItemV2>
+          </SegmentedControlV2>
         </div>
+
+        <Show when={props.type === "local"}>
+          <FieldV2>
+            <FieldV2.Label>{language.t("dialog.mcp.add.command")}</FieldV2.Label>
+            <TextInputV2
+              appearance="large"
+              value={props.command}
+              placeholder={language.t("dialog.mcp.add.commandPlaceholder")}
+              onInput={(e) => props.onCommand(e.currentTarget.value)}
+            />
+          </FieldV2>
+        </Show>
+
+        <Show when={props.type === "remote"}>
+          <FieldV2>
+            <FieldV2.Label>{language.t("dialog.mcp.add.url")}</FieldV2.Label>
+            <TextInputV2
+              appearance="large"
+              value={props.url}
+              placeholder={language.t("dialog.mcp.add.urlPlaceholder")}
+              onInput={(e) => props.onUrl(e.currentTarget.value)}
+            />
+          </FieldV2>
+          <div class="mcp-add-oauth">
+            <span class="mcp-add-description">
+              {props.oauthDisabled
+                ? language.t("dialog.mcp.configure.oauthDisabled")
+                : language.t("dialog.mcp.configure.oauthAuto")}
+            </span>
+            <Switch checked={!props.oauthDisabled} onChange={(value) => props.onOauthDisabled(!value)}>
+              {language.t("dialog.mcp.configure.oauth")}
+            </Switch>
+          </div>
+        </Show>
       </div>
 
-      <Show when={props.type === "local"}>
-        <label class="flex flex-col gap-1">
-          <span class="text-11-regular text-text-weaker">{language.t("dialog.mcp.add.command")}</span>
-          <InlineInput
-            value={props.command}
-            placeholder={language.t("dialog.mcp.add.commandPlaceholder")}
-            onInput={(e) => props.onCommand(e.currentTarget.value)}
-          />
-        </label>
-      </Show>
-
-      <Show when={props.type === "remote"}>
-        <label class="flex flex-col gap-1">
-          <span class="text-11-regular text-text-weaker">{language.t("dialog.mcp.add.url")}</span>
-          <InlineInput
-            value={props.url}
-            placeholder={language.t("dialog.mcp.add.urlPlaceholder")}
-            onInput={(e) => props.onUrl(e.currentTarget.value)}
-          />
-        </label>
-      </Show>
-
-      <div class="flex justify-end gap-2 pt-1">
-        <Button variant="ghost" onClick={props.onCancel}>
+      <DialogFooter>
+        <ButtonV2 variant="neutral" onClick={props.onCancel}>
           {language.t("dialog.mcp.add.cancel")}
-        </Button>
-        <Button variant="primary" disabled={!props.valid || props.pending} onClick={props.onSubmit}>
+        </ButtonV2>
+        <ButtonV2 variant="contrast" disabled={!props.valid || props.pending} onClick={props.onSubmit}>
           {language.t("dialog.mcp.add.submit")}
-        </Button>
-      </div>
+        </ButtonV2>
+      </DialogFooter>
     </>
   )
 }
@@ -161,13 +199,17 @@ const riskLabel = (tier: CatalogEntry["riskTier"], t: ReturnType<typeof useLangu
       : t("dialog.mcp.catalog.externalFetch")
 
 const CatalogPicker: Component<{ onDone: () => void }> = (props) => {
-  const language = useLanguage()
   const catalog = useMcpCatalog()
-  const [selected, setSelected] = createSignal<CatalogEntry | null>(null)
+  const [state, setState] = createStore({ selected: null as CatalogEntry | null })
 
   return (
-    <Show when={selected()} fallback={<CatalogList query={catalog} onSelect={setSelected} />}>
-      {(entry) => <CatalogEntryForm entry={entry()} onBack={() => setSelected(null)} onDone={props.onDone} />}
+    <Show
+      when={state.selected}
+      fallback={
+        <CatalogList query={catalog} onSelect={(entry) => setState("selected", entry)} onCancel={props.onDone} />
+      }
+    >
+      {(entry) => <CatalogEntryForm entry={entry()} onBack={() => setState("selected", null)} onDone={props.onDone} />}
     </Show>
   )
 }
@@ -175,61 +217,68 @@ const CatalogPicker: Component<{ onDone: () => void }> = (props) => {
 const CatalogList: Component<{
   query: ReturnType<typeof useMcpCatalog>
   onSelect: (entry: CatalogEntry) => void
+  onCancel: () => void
 }> = (props) => {
   const language = useLanguage()
   return (
-    <div class="flex flex-col gap-2">
-      <Show
-        when={!props.query.isLoading}
-        fallback={<span class="text-11-regular text-text-weaker">{language.t("dialog.mcp.catalog.loading")}</span>}
-      >
+    <>
+      <div class="mcp-add-fields mcp-add-catalog">
         <Show
-          when={(props.query.data ?? []).length > 0}
-          fallback={<span class="text-11-regular text-text-weaker">{language.t("dialog.mcp.catalog.empty")}</span>}
+          when={!props.query.isLoading}
+          fallback={<span class="mcp-add-description">{language.t("dialog.mcp.catalog.loading")}</span>}
         >
-          <For each={props.query.data ?? []}>
-            {(entry) => (
-              <button
-                type="button"
-                class="flex flex-col items-start gap-0.5 rounded-md border border-border-weak px-3 py-2 text-left hover:bg-surface-hover"
-                onClick={() => props.onSelect(entry)}
-              >
-                <span class="flex w-full items-center justify-between gap-2">
-                  <span class="text-12-medium text-text">{entry.title}</span>
-                  <span class="text-10-regular text-text-weaker">{riskLabel(entry.riskTier, language.t)}</span>
-                </span>
-                <span class="text-11-regular text-text-weaker">{entry.description}</span>
-              </button>
-            )}
-          </For>
+          <Show
+            when={(props.query.data ?? []).length > 0}
+            fallback={<span class="mcp-add-description">{language.t("dialog.mcp.catalog.empty")}</span>}
+          >
+            <For each={props.query.data ?? []}>
+              {(entry) => (
+                <button type="button" class="mcp-add-catalog-entry" onClick={() => props.onSelect(entry)}>
+                  <span class="mcp-add-catalog-heading">
+                    <span class="mcp-add-label">{entry.title}</span>
+                    <span class="mcp-add-risk">{riskLabel(entry.riskTier, language.t)}</span>
+                  </span>
+                  <span class="mcp-add-description">{entry.description}</span>
+                </button>
+              )}
+            </For>
+          </Show>
         </Show>
-      </Show>
-    </div>
+      </div>
+      <DialogFooter>
+        <ButtonV2 variant="neutral" onClick={props.onCancel}>
+          {language.t("dialog.mcp.add.cancel")}
+        </ButtonV2>
+      </DialogFooter>
+    </>
   )
 }
 
 const CatalogEntryForm: Component<{ entry: CatalogEntry; onBack: () => void; onDone: () => void }> = (props) => {
   const language = useLanguage()
   const enable = useMcpCatalogEnable()
+  const owner = { live: true }
+  onCleanup(() => {
+    owner.live = false
+  })
   // Param + credential values are keyed by their spec key. multi params are entered one-per-line.
-  const [params, setParams] = createSignal<Record<string, string>>({})
-  const [creds, setCreds] = createSignal<Record<string, string>>({})
+  const [state, setState] = createStore({ params: {} as Record<string, string>, creds: {} as Record<string, string> })
 
-  const setParam = (key: string, v: string) => setParams((p) => ({ ...p, [key]: v }))
-  const setCred = (key: string, v: string) => setCreds((c) => ({ ...c, [key]: v }))
+  const setParam = (key: string, v: string) => setState("params", key, v)
+  const setCred = (key: string, v: string) => setState("creds", key, v)
 
   const valid = createMemo(() => {
-    for (const p of props.entry.params) if (p.required && !params()[p.key]?.trim()) return false
-    for (const c of props.entry.credentials) if (c.required && !creds()[c.key]?.trim()) return false
+    for (const p of props.entry.params) if (p.required && !state.params[p.key]?.trim()) return false
+    for (const c of props.entry.credentials) if (c.required && !state.creds[c.key]?.trim()) return false
     return true
   })
 
   const submit = async () => {
-    if (!valid() || enable.isPending) return
+    if (!owner.live || !valid() || enable.isPending) return
     // Expand multi params (one-per-line) into string[]; single params stay strings.
     const paramPayload: Record<string, string | string[]> = {}
     for (const p of props.entry.params) {
-      const raw = params()[p.key]?.trim()
+      const raw = state.params[p.key]?.trim()
       if (!raw) continue
       paramPayload[p.key] = p.multi
         ? raw
@@ -240,92 +289,93 @@ const CatalogEntryForm: Component<{ entry: CatalogEntry; onBack: () => void; onD
     }
     const credRefs: Record<string, string> = {}
     for (const c of props.entry.credentials) {
-      const raw = creds()[c.key]?.trim()
+      const raw = state.creds[c.key]?.trim()
       if (raw) credRefs[c.key] = raw
     }
     await enable.mutateAsync({ id: props.entry.id, params: paramPayload, credentialRefs: credRefs })
+    if (!owner.live) return
     showToast({ variant: "success", title: language.t("dialog.mcp.catalog.enabled", { title: props.entry.title }) })
     props.onDone()
   }
 
   return (
-    <div class="flex flex-col gap-3">
-      <div class="flex flex-col gap-0.5">
-        <span class="text-12-medium text-text">{props.entry.title}</span>
-        <span class="text-11-regular text-text-weaker">{props.entry.description}</span>
-        <Show when={props.entry.repo}>
-          <span class="text-10-regular text-text-weaker">{props.entry.repo}</span>
-        </Show>
-      </div>
+    <>
+      <div class="mcp-add-fields">
+        <div class="mcp-add-field">
+          <span class="mcp-add-label">{props.entry.title}</span>
+          <span class="mcp-add-description">{props.entry.description}</span>
+          <Show when={props.entry.repo}>
+            <span class="mcp-add-description">{props.entry.repo}</span>
+          </Show>
+        </div>
 
-      <Show when={props.entry.params.length > 0}>
-        <div class="flex flex-col gap-2">
-          <span class="text-11-regular text-text-weaker">{language.t("dialog.mcp.catalog.paramsTitle")}</span>
-          <For each={props.entry.params}>
-            {(p) => (
-              <label class="flex flex-col gap-1">
-                <span class="text-11-regular text-text-weaker">
-                  {p.key}
-                  <Show when={!p.required}> ({language.t("dialog.mcp.catalog.optional")})</Show>
-                  <Show when={p.multi}> · {language.t("dialog.mcp.catalog.multiHint")}</Show>
-                </span>
-                <Show
-                  when={p.multi}
-                  fallback={
-                    <InlineInput
-                      value={params()[p.key] ?? ""}
+        <Show when={props.entry.params.length > 0}>
+          <div class="mcp-add-section">
+            <span class="mcp-add-section-title">{language.t("dialog.mcp.catalog.paramsTitle")}</span>
+            <For each={props.entry.params}>
+              {(p) => (
+                <FieldV2>
+                  <FieldV2.Label>
+                    {p.key}
+                    <Show when={!p.required}> ({language.t("dialog.mcp.catalog.optional")})</Show>
+                    <Show when={p.multi}> · {language.t("dialog.mcp.catalog.multiHint")}</Show>
+                  </FieldV2.Label>
+                  <Show
+                    when={p.multi}
+                    fallback={
+                      <TextInputV2
+                        appearance="large"
+                        value={state.params[p.key] ?? ""}
+                        placeholder={p.description}
+                        onInput={(e) => setParam(p.key, e.currentTarget.value)}
+                      />
+                    }
+                  >
+                    {/* multi-value params are one-per-line, so they need a multi-line input */}
+                    <TextareaV2
+                      value={state.params[p.key] ?? ""}
                       placeholder={p.description}
                       onInput={(e) => setParam(p.key, e.currentTarget.value)}
                     />
-                  }
-                >
-                  {/* multi-value params are one-per-line, so they need a multi-line input */}
-                  <textarea
-                    class="min-h-16 resize-y rounded-md border border-border-weak bg-surface px-2 py-1 text-12-regular text-text"
-                    value={params()[p.key] ?? ""}
-                    placeholder={p.description}
-                    onInput={(e) => setParam(p.key, e.currentTarget.value)}
+                  </Show>
+                </FieldV2>
+              )}
+            </For>
+          </div>
+        </Show>
+
+        <Show when={props.entry.credentials.length > 0}>
+          <div class="mcp-add-section">
+            <span class="mcp-add-section-title">{language.t("dialog.mcp.catalog.credentialsTitle")}</span>
+            <For each={props.entry.credentials}>
+              {(c) => (
+                <FieldV2>
+                  <FieldV2.Label>
+                    {c.key}
+                    <Show when={!c.required}> ({language.t("dialog.mcp.catalog.optional")})</Show>
+                  </FieldV2.Label>
+                  <TextInputV2
+                    appearance="large"
+                    type="password"
+                    value={state.creds[c.key] ?? ""}
+                    placeholder={c.description}
+                    onInput={(e) => setCred(c.key, e.currentTarget.value)}
                   />
-                </Show>
-              </label>
-            )}
-          </For>
-        </div>
-      </Show>
-
-      <Show when={props.entry.credentials.length > 0}>
-        <div class="flex flex-col gap-2">
-          <span class="text-11-regular text-text-weaker">{language.t("dialog.mcp.catalog.credentialsTitle")}</span>
-          <For each={props.entry.credentials}>
-            {(c) => (
-              <label class="flex flex-col gap-1">
-                <span class="text-11-regular text-text-weaker">
-                  {c.key}
-                  <Show when={!c.required}> ({language.t("dialog.mcp.catalog.optional")})</Show>
-                </span>
-                <InlineInput
-                  type="password"
-                  value={creds()[c.key] ?? ""}
-                  placeholder={c.description}
-                  onInput={(e) => setCred(c.key, e.currentTarget.value)}
-                />
-                <span class="text-10-regular text-text-weaker">
-                  {language.t("dialog.mcp.catalog.credentialSecret")}
-                </span>
-              </label>
-            )}
-          </For>
-        </div>
-      </Show>
-
-      <div class="flex justify-end gap-2 pt-1">
-        <Button variant="ghost" onClick={props.onBack}>
-          {language.t("dialog.mcp.catalog.back")}
-        </Button>
-        <Button variant="primary" disabled={!valid() || enable.isPending} onClick={submit}>
-          {enable.isPending ? language.t("dialog.mcp.catalog.enabling") : language.t("dialog.mcp.catalog.enable")}
-        </Button>
+                  <FieldV2.Suffix>{language.t("dialog.mcp.catalog.credentialSecret")}</FieldV2.Suffix>
+                </FieldV2>
+              )}
+            </For>
+          </div>
+        </Show>
       </div>
-    </div>
+      <DialogFooter>
+        <ButtonV2 variant="neutral" onClick={props.onBack}>
+          {language.t("dialog.mcp.catalog.back")}
+        </ButtonV2>
+        <ButtonV2 variant="contrast" disabled={!valid() || enable.isPending} onClick={submit}>
+          {enable.isPending ? language.t("dialog.mcp.catalog.enabling") : language.t("dialog.mcp.catalog.enable")}
+        </ButtonV2>
+      </DialogFooter>
+    </>
   )
 }

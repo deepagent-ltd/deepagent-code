@@ -173,23 +173,27 @@ export function GoalStatusBar(props: { sessionID: string }) {
           target().sessionID === captured.sessionID &&
           control()?.goalId === goalID
         }
-        onClose={() => dialog.close()}
+        onClose={() => {
+          dialog.close()
+          if (disposed || target() !== captured || control()?.goalId !== goalID) return
+          void serverSync.goal.sync(captured.directory, captured.sessionID).catch(() => undefined)
+        }}
       />
     ))
   }
   const phaseLabel = () => {
     const value = control()
     if (!value) return language.t("goal.control.checking")
-    if (value.recoveryRequired || value.preparation === "recovery_required") return language.t("goal.control.recovery")
+    if (value.recoveryRequired || value.preparation === "recovery_required") {
+      if (value.requestedPhase === "paused") return language.t("goal.control.pausedUnconfirmed")
+      return language.t("goal.control.recovery")
+    }
     if (value.preparation === "preparing") return language.t("goal.control.preparing")
     if (value.inFlight && value.requestedPhase === "paused") return language.t("goal.control.pauseRequested")
     if (value.inFlight && value.requestedPhase === "stopped") return language.t("goal.control.stopRequested")
     if (value.wakeState === "pending") return language.t("goal.control.pending")
     return PHASE_LABEL_KEY[value.phase] ? language.t(PHASE_LABEL_KEY[value.phase] as never) : value.phase
   }
-
-  const tokens = () => goal()?.ledger.tokens ?? 0
-  const ticks = () => goal()?.ledger.ticks ?? 0
 
   return (
     <Show when={goal()}>
@@ -200,12 +204,16 @@ export function GoalStatusBar(props: { sessionID: string }) {
         >
           <Icon name={PHASE_ICON[g().phase] ?? "goal"} class="size-4 shrink-0 text-text-weak" />
           <span class="text-text-base font-medium">{phaseLabel()}</span>
-          <span class="text-text-weak truncate">
-            {language.t(ticks() === 1 ? "composer.goal.budget.one" : "composer.goal.budget.other", {
-              ticks: ticks(),
-              tokens: tokens().toLocaleString(),
-            })}
-          </span>
+          <Show when={g().ledger}>
+            {(ledger) => (
+              <span class="text-text-weak truncate">
+                {language.t(ledger().ticks === 1 ? "composer.goal.budget.one" : "composer.goal.budget.other", {
+                  ticks: ledger().ticks,
+                  tokens: ledger().tokens.toLocaleString(),
+                })}
+              </span>
+            )}
+          </Show>
           <Show when={g().gaps.length > 0}>
             <span class="text-text-weak truncate italic">— {g().gaps[0]}</span>
           </Show>

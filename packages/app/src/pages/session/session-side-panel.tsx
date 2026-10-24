@@ -1,13 +1,12 @@
 import {
-  For,
   Match,
   Show,
   Switch,
   createEffect,
   createMemo,
   createSignal,
+  onCleanup,
   onMount,
-  type Component,
   type ComponentProps,
   type JSX,
 } from "solid-js"
@@ -15,11 +14,10 @@ import { createMediaQuery } from "@solid-primitives/media"
 import { Tabs } from "@deepagent-code/ui/tabs"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Icon } from "@deepagent-code/ui/icon"
-import { Tooltip } from "@deepagent-code/ui/tooltip"
+import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { ResizeHandle } from "@deepagent-code/ui/resize-handle"
 import type { SnapshotFileDiff, VcsFileDiff } from "@deepagent-code/sdk"
-import { RIGHT_PANEL_RAIL_PX, type RightPanelWidthBucket, type DockPanelID } from "@/context/layout"
-import { useTerminalHosts } from "@/context/terminal"
+import { type RightPanelWidthBucket } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 
 import FileTree from "@/components/file-tree"
@@ -29,19 +27,23 @@ import { useFile, type SelectedLineRange } from "@/context/file"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { useSync } from "@/context/sync"
+import { useSDK } from "@/context/sdk"
 import { createOpenSessionFileTab, createSessionTabs, type Sizing } from "@/pages/session/helpers"
 import { IdeFileEditor } from "@/pages/session/ide-file-editor"
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
-import { SidePanelSubagents } from "@/pages/session/side-panel-subagents"
-import { isSubagentInterrupted } from "@/pages/session/subagent-state"
 import { SidePanelBrowser } from "@/pages/session/side-panel-browser"
 import { SidePanelWorktree } from "@/pages/session/side-panel-worktree"
 import { SidePanelDev } from "@/pages/session/side-panel-dev"
+import { SidePanelProfile } from "./side-panel-profile"
+import { SidePanelContext } from "./side-panel-context"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
 import { SidePanelDockHeader, SidePanelTerminal, SidePanelDebugConsole } from "@/pages/session/side-panel-terminal"
 import { ProblemsPanel } from "@/pages/session/problems-panel"
-import { PanelErrorBoundary } from "@/pages/session/panel-error-boundary"
+import { WorkPanelHome } from "./work-panel-home"
+import { TaskProgressDetails } from "./task-progress"
+import { WorkPanelTabs } from "./work-panel-tabs"
+import type { WorkPanelView } from "@/context/work-panel-state"
 
 type RenderDiff = (SnapshotFileDiff & { file: string }) | VcsFileDiff
 
@@ -50,6 +52,7 @@ type RenderDiff = (SnapshotFileDiff & { file: string }) | VcsFileDiff
 // list, so adding a panel means adding ONE entry (not editing 5 parallel places as before). T3.3 adds
 // `group` (rail sectioning) and `bucket` (which remembered width this panel uses).
 type PanelMode =
+  | "home"
   | "review"
   | "files"
   | "subagents"
@@ -57,6 +60,8 @@ type PanelMode =
   | "browser"
   | "worktree"
   | "dev"
+  | "profile"
+  | "context"
   | "terminal"
   | "debug-console"
   | "problems"
@@ -65,7 +70,6 @@ type PanelGroup = "code" | "agents" | "env" | "dev" | "dock"
 
 // Phase 3: terminal is now side-native and always visible in the rail.
 // Only debug-console and problems are still movable dock views.
-const MOVABLE_DOCK_MODES: readonly DockPanelID[] = ["debug-console", "problems"]
 
 type PanelDef = {
   readonly mode: PanelMode
@@ -80,6 +84,7 @@ type PanelDef = {
 
 // Order = rail order. Groups are contiguous so the rail can draw a divider between them.
 const PANELS: readonly PanelDef[] = [
+  { mode: "home", icon: "link", titleKey: "workPanel.home", group: "code", bucket: "wide" },
   // Code
   {
     mode: "review",
@@ -101,11 +106,13 @@ const PANELS: readonly PanelDef[] = [
   { mode: "subagents", icon: "agent-tree", titleKey: "session.subagents.title", group: "agents", bucket: "narrow" },
   { mode: "im", icon: "bubble-5", titleKey: "session.tab.im", group: "agents", bucket: "narrow" },
   // Env — browser is registered on the desktop build only (see `panels()` below).
-  { mode: "browser", icon: "window-cursor", titleKey: "browser.title", group: "env", bucket: "narrow" },
+  { mode: "browser", icon: "window-cursor", titleKey: "browser.title", group: "env", bucket: "wide" },
   { mode: "worktree", icon: "branch", titleKey: "worktree.title", group: "env", bucket: "narrow" },
   // Dev — WS1: debug + profiler + context-evidence merged into one tabbed panel. Plugins moved
   // to a Settings tab; Usage & cost moved into the SessionContextUsage dialog.
-  { mode: "dev", icon: "debug", titleKey: "session.panel.dev", group: "dev", bucket: "narrow" },
+  { mode: "dev", icon: "debug", titleKey: "session.panel.debug", group: "dev", bucket: "narrow" },
+  { mode: "profile", icon: "profile", titleKey: "session.panel.profile", group: "dev", bucket: "narrow" },
+  { mode: "context", icon: "brain", titleKey: "session.context.title", group: "dev", bucket: "narrow" },
   // Dock — the movable panels; only surface here when docked to the side (see gating below).
   {
     mode: "terminal",
@@ -125,15 +132,8 @@ const PANELS: readonly PanelDef[] = [
   { mode: "problems", icon: "warning", titleKey: "session.panel.problems", group: "dock", bucket: "narrow" },
 ]
 
-const GROUP_ORDER: readonly PanelGroup[] = ["code", "agents", "env", "dev", "dock"]
-
 function renderDiff(value: SnapshotFileDiff | VcsFileDiff): value is RenderDiff {
   return typeof value.file === "string"
-}
-
-const GuardedSubagents: Component<{ onClose: () => void; onReady: () => void }> = (props) => {
-  onMount(props.onReady)
-  return <SidePanelSubagents onClose={props.onClose} />
 }
 
 export function SessionSidePanel(props: {
@@ -157,29 +157,29 @@ export function SessionSidePanel(props: {
   const command = useCommand()
   const platform = usePlatform()
   const sync = useSync()
-  const terminalHosts = useTerminalHosts()
+  const sdk = useSDK()
+  const dialog = useDialog()
   const { params, sessionKey, tabs, view } = useSessionLayout()
+  const settings = { disposed: false, generation: 0 }
+  onCleanup(() => {
+    settings.disposed = true
+  })
+  const manageIM = async () => {
+    const generation = ++settings.generation
+    const directory = sdk.directory
+    const scope = sdk.scope
+    const current = () =>
+      !settings.disposed && settings.generation === generation && sdk.directory === directory && sdk.scope === scope
+    const { DialogSettings } = await import("@/components/settings-v2")
+    if (!current() || view().rightPanel.mode() !== "im") return
+    dialog.show(() => <DialogSettings initialTab="im" mcp={{ directory, current }} />)
+  }
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
 
   // WS1: the browser rail entry is registered on the desktop build only — its content is an
   // Electron WebContentsView bridge (platform.browser), so on web there is nothing to show.
   const panels = createMemo(() => PANELS.filter((p) => p.mode !== "browser" || platform.platform === "desktop"))
-
-  // Subagents = child sessions (parentID === current). Surface a live count on the sidebar icon so
-  // the user sees a spawn happened without opening the panel.
-  // Phase 2 (§3.5): badge covers running + interrupted so the user notices any subagent that needs
-  // attention without opening the panel.
-  const subagentChildren = createMemo(() => {
-    const id = params.id
-    if (!id) return []
-    return sync.data.session.filter((s) => s.parentID === id)
-  })
-  const runningSubagentCount = createMemo(
-    () => subagentChildren().filter((s) => sync.data.session_working(s.id)).length,
-  )
-  const interruptedSubagentCount = createMemo(() => subagentChildren().filter(isSubagentInterrupted).length)
-  const subagentAttentionCount = createMemo(() => runningSubagentCount() + interruptedSubagentCount())
 
   // Narrow windows share the same IM panel and selection as the desktop rail.
   // Other tools retain their existing desktop layout.
@@ -194,8 +194,12 @@ export function SessionSidePanel(props: {
   const activeBucket = createMemo<RightPanelWidthBucket>(
     () => panels().find((p) => p.mode === activeMode())?.bucket ?? "wide",
   )
-  const contentWidth = createMemo(() => layout.rightPanel.width(activeBucket()))
-  const panelWidth = createMemo(() => (!isDesktop() ? "100%" : open() ? `${contentWidth()}px` : "0px"))
+  const contentWidth = createMemo(() =>
+    view().workPanel.expanded() ? layout.rightPanel.maxWidth() : layout.rightPanel.width(activeBucket()),
+  )
+  const panelWidth = createMemo(() =>
+    !isDesktop() || (open() && view().workPanel.expanded()) ? "100%" : open() ? `${contentWidth()}px` : "0px",
+  )
 
   const diffs = createMemo(() => props.diffs().filter(renderDiff))
   const diffFiles = createMemo(() => diffs().map((d) => d.file))
@@ -329,84 +333,7 @@ export function SessionSidePanel(props: {
     layout.fileTree.setTab(value)
   }
 
-  // T3.2: switch to a panel with ONE click (was 2 — return-to-menu then pick). Clicking the active
-  // panel's rail icon closes the panel (toggle), matching the titlebar toggle.
-  const openPanel = (mode: PanelMode) => {
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    // Phase 3: terminal is side-native — create a side PTY if needed, then open the panel.
-    if (mode === "terminal") {
-      if (isActive("terminal")) {
-        view().rightPanel.close()
-        return
-      }
-      view().rightPanel.open("terminal")
-      return
-    }
-    if (MOVABLE_DOCK_MODES.includes(mode as DockPanelID)) {
-      view().panel.toggle(mode as DockPanelID)
-      return
-    }
-    if (isActive(mode)) {
-      view().rightPanel.close()
-      return
-    }
-    view().rightPanel.open(mode)
-  }
-  // T3.2: a content panel's close button now CLOSES the panel (was: return to the menu list). The rail
-  // stays visible, so the user re-opens with one click.
   const closePanel = () => view().rightPanel.close()
-  const panelBuild = platform.version ?? "dev"
-  let lastSubagentPanelError: unknown
-  let recoveringSubagentPanel = false
-
-  const recordSubagentPanelError = (error: unknown) => {
-    if (lastSubagentPanelError === error) return
-    lastSubagentPanelError = error
-    recoveringSubagentPanel = true
-    view().rightPanel.reportFailure("subagents", panelBuild)
-    const text =
-      error instanceof Error
-        ? `${error.name}: ${error.message}${error.stack ? `\n${error.stack.slice(0, 4000)}` : ""}`
-        : String(error).slice(0, 4000)
-    console.error("ui.panel.render_failed", { mode: "subagents", route: location.href, build_hash: panelBuild, error })
-    void platform
-      .recordFatalRendererError?.({
-        error: `[panel:subagents] ${text}`,
-        url: location.href,
-        version: platform.version,
-        platform: platform.platform,
-        os: platform.os,
-      })
-      .catch(() => undefined)
-  }
-
-  // T3.1/T3.3: the rail entries, derived from PANELS — with a live badge count per panel.
-  // review-change-count / subagent-attention-count feed `item.badge`; the rail renders whatever
-  // number is present.
-  // Phase 2: subagent badge = running + interrupted (§3.5 — covers all states needing attention).
-  const badgeFor = (mode: PanelMode): number | undefined => {
-    if (mode === "review") return props.hasReview() ? props.reviewCount() : undefined
-    if (mode === "subagents") return subagentAttentionCount() > 0 ? subagentAttentionCount() : undefined
-    return undefined
-  }
-  const railItems = createMemo(() =>
-    panels()
-      // Phase 3: terminal is side-native — always show in the rail.
-      // Other movable dock panels (debug-console, problems) only appear when docked to the side.
-      .filter((p) =>
-        MOVABLE_DOCK_MODES.includes(p.mode as DockPanelID)
-          ? view().panel.location(p.mode as DockPanelID) === "side"
-          : true,
-      )
-      .map((p) => ({
-        ...p,
-        title: language.t(p.titleKey),
-        keybindLabel: p.keybind ? command.keybind(p.keybind) : undefined,
-        active: isActive(p.mode),
-        badge: badgeFor(p.mode),
-      })),
-  )
 
   createEffect(() => {
     if (!file.ready()) return
@@ -438,17 +365,9 @@ export function SessionSidePanel(props: {
         aria-label={language.t(isDesktop() ? "session.panel.reviewAndFiles" : "session.tab.im")}
         data-prevent-autofocus
         class="relative min-w-0 min-h-0 h-full flex shrink-0"
-        classList={{ "flex-1 w-full": !isDesktop() }}
+        classList={{ "flex-1 w-full": !isDesktop() || (open() && view().workPanel.expanded()) }}
         style={{ gap: isDesktop() && open() ? "var(--workbench-gap)" : undefined }}
       >
-        <Show when={isDesktop()}>
-          <SidePanelRail
-            items={railItems}
-            groupOrder={GROUP_ORDER}
-            onSelect={openPanel}
-            collapseLabel={language.t("common.close")}
-          />
-        </Show>
         <div
           class="workbench-panel relative min-w-0 h-full overflow-hidden"
           aria-hidden={!open()}
@@ -462,7 +381,7 @@ export function SessionSidePanel(props: {
         >
           <Show when={open()}>
             <div class="size-full flex">
-              <Show when={isDesktop()}>
+              <Show when={isDesktop() && !view().workPanel.expanded()}>
                 <div onPointerDown={() => props.size.start()}>
                   <ResizeHandle
                     direction="horizontal"
@@ -477,305 +396,257 @@ export function SessionSidePanel(props: {
                   />
                 </div>
               </Show>
-              <Switch>
-                <Match when={isActive("review")}>
-                  <div class="h-full w-full min-w-0 overflow-hidden bg-background-base">{props.reviewPanel()}</div>
-                </Match>
-                <Match when={isActive("files")}>
-                  <Show
-                    when={previewPath()}
-                    fallback={
-                      <div id="file-tree-panel" class="h-full w-full min-w-0 overflow-hidden bg-background-base">
-                        <Tabs
-                          variant="pill"
-                          value={fileTreeTab()}
-                          onChange={setFileTreeTabValue}
-                          class="h-full"
-                          data-scope="filetree"
-                        >
-                          <Tabs.List>
-                            <Tabs.Trigger value="changes" class="flex-1" classes={{ button: "w-full" }}>
-                              {props.reviewCount()}{" "}
-                              {language.t(
-                                props.reviewCount() === 1 ? "session.review.change.one" : "session.review.change.other",
-                              )}
-                            </Tabs.Trigger>
-                            <Tabs.Trigger value="all" class="flex-1" classes={{ button: "w-full" }}>
-                              {language.t("session.files.all")}
-                            </Tabs.Trigger>
-                          </Tabs.List>
-                          <Tabs.Content value="changes" class="px-3 py-0">
-                            <Switch>
-                              <Match when={props.hasReview() || !props.diffsReady()}>
-                                <Show
-                                  when={props.diffsReady()}
-                                  fallback={
-                                    <div class="px-2 py-2 text-12-regular text-text-weak">
-                                      {language.t("common.loading")}
-                                      {language.t("common.loading.ellipsis")}
-                                    </div>
-                                  }
-                                >
-                                  <FileTree
-                                    path=""
-                                    class="pt-3"
-                                    allowed={diffFiles()}
-                                    kinds={kinds()}
-                                    draggable={false}
-                                    active={props.activeDiff}
-                                    onFileClick={(node) => props.focusReviewDiff(node.path)}
-                                  />
-                                </Show>
-                              </Match>
-                            </Switch>
-                          </Tabs.Content>
-                          <Tabs.Content value="all" class="px-3 py-0">
-                            {/* V3.6 Phase 1B F5: file ops toolbar */}
-                            <div class="flex items-center gap-1 py-1.5 -mx-3 px-3 border-b border-border-weaker-base">
-                              <span class="flex-1 text-12-regular text-text-weak">
-                                {language.t("session.files.heading")}
-                              </span>
-                              <IconButton
-                                icon="plus"
-                                variant="ghost"
-                                size="small"
-                                class="h-6 w-6 rounded-md"
-                                onClick={() => startNewItem("file")}
-                                aria-label={language.t("session.files.newFile")}
-                              />
-                              <IconButton
-                                icon="folder"
-                                variant="ghost"
-                                size="small"
-                                class="h-6 w-6 rounded-md"
-                                onClick={() => startNewItem("dir")}
-                                aria-label={language.t("session.files.newFolder")}
-                              />
-                            </div>
-                            <Show when={newItemState()}>
-                              {(s) => (
-                                <div class="flex items-center gap-1 py-1">
-                                  <input
-                                    class="flex-1 min-w-0 bg-surface-base-active rounded px-2 py-0.5 text-12-regular text-text-strong outline-none border border-border-weak-base"
-                                    placeholder={
-                                      s().type === "file"
-                                        ? language.t("session.files.newFile.placeholder")
-                                        : language.t("session.files.newFolder.placeholder")
-                                    }
-                                    value={s().name}
-                                    onInput={(e) => setNewItemState({ ...s(), name: e.currentTarget.value })}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") void commitNewItem()
-                                      if (e.key === "Escape") cancelNewItem()
-                                    }}
-                                    ref={(el) => setTimeout(() => el?.focus(), 0)}
-                                  />
+              <div class="size-full min-w-0 flex flex-col">
+                <WorkPanelTabs
+                  compact={!isDesktop()}
+                  tabs={view().workPanel.tabs()}
+                  active={view().workPanel.active()?.id}
+                  expanded={view().workPanel.expanded()}
+                  title={(tab: WorkPanelView) =>
+                    tab.kind === "subagents"
+                      ? language.t("workPanel.tasks" as Parameters<typeof language.t>[0])
+                      : tab.kind === "browser" && tab.resourceID
+                        ? `${language.t("browser.title")} ${
+                            view()
+                              .workPanel.tabs()
+                              .filter((item) => item.kind === "browser" && item.resourceID)
+                              .findIndex((item) => item.id === tab.id) + 1
+                          }`
+                        : language.t(panels().find((panel) => panel.mode === tab.kind)?.titleKey ?? "workPanel.home")
+                  }
+                  focus={(id) => view().workPanel.focus(id)}
+                  close={(id) => view().workPanel.closeView(id)}
+                  home={() => view().workPanel.open("home")}
+                  expand={() => view().workPanel.setExpanded(!view().workPanel.expanded())}
+                  hide={closePanel}
+                />
+                <div class="min-h-0 flex-1 overflow-hidden">
+                  <Switch>
+                    <Match when={isActive("home")}>
+                      <WorkPanelHome
+                        sessionID={params.id}
+                        directory={sdk.directory}
+                        open={(kind, options) => {
+                          if (kind === "browser") view().rightPanel.selectSharedBrowser(options?.resourceID)
+                          if (kind === "files") layout.fileTree.setTab("all")
+                          view().workPanel.open(kind, options)
+                        }}
+                      />
+                    </Match>
+                    <Match when={isActive("review")}>
+                      <div class="h-full w-full min-w-0 overflow-hidden bg-background-base">{props.reviewPanel()}</div>
+                    </Match>
+                    <Match when={isActive("files")}>
+                      <Show
+                        when={previewPath()}
+                        fallback={
+                          <div id="file-tree-panel" class="h-full w-full min-w-0 overflow-hidden bg-background-base">
+                            <Tabs
+                              variant="pill"
+                              value={fileTreeTab()}
+                              onChange={setFileTreeTabValue}
+                              class="h-full"
+                              data-scope="filetree"
+                            >
+                              <Tabs.List>
+                                <Tabs.Trigger value="changes" class="flex-1" classes={{ button: "w-full" }}>
+                                  {props.reviewCount()}{" "}
+                                  {language.t(
+                                    props.reviewCount() === 1
+                                      ? "session.review.change.one"
+                                      : "session.review.change.other",
+                                  )}
+                                </Tabs.Trigger>
+                                <Tabs.Trigger value="all" class="flex-1" classes={{ button: "w-full" }}>
+                                  {language.t("session.files.all")}
+                                </Tabs.Trigger>
+                              </Tabs.List>
+                              <Tabs.Content value="changes" class="px-3 py-0">
+                                <Switch>
+                                  <Match when={props.hasReview() || !props.diffsReady()}>
+                                    <Show
+                                      when={props.diffsReady()}
+                                      fallback={
+                                        <div class="px-2 py-2 text-12-regular text-text-weak">
+                                          {language.t("common.loading")}
+                                          {language.t("common.loading.ellipsis")}
+                                        </div>
+                                      }
+                                    >
+                                      <FileTree
+                                        path=""
+                                        class="pt-3"
+                                        allowed={diffFiles()}
+                                        kinds={kinds()}
+                                        draggable={false}
+                                        active={props.activeDiff}
+                                        onFileClick={(node) => props.focusReviewDiff(node.path)}
+                                      />
+                                    </Show>
+                                  </Match>
+                                </Switch>
+                              </Tabs.Content>
+                              <Tabs.Content value="all" class="px-3 py-0">
+                                {/* V3.6 Phase 1B F5: file ops toolbar */}
+                                <div class="flex items-center gap-1 py-1.5 -mx-3 px-3 border-b border-border-weaker-base">
+                                  <span class="flex-1 text-12-regular text-text-weak">
+                                    {language.t("session.files.heading")}
+                                  </span>
                                   <IconButton
-                                    icon="check"
+                                    icon="plus"
                                     variant="ghost"
                                     size="small"
-                                    class="h-6 w-6 rounded-md shrink-0"
-                                    onClick={commitNewItem}
-                                    aria-label={language.t("session.files.create.confirm")}
+                                    class="h-6 w-6 rounded-md"
+                                    onClick={() => startNewItem("file")}
+                                    aria-label={language.t("session.files.newFile")}
                                   />
                                   <IconButton
-                                    icon="close-small"
+                                    icon="folder"
                                     variant="ghost"
                                     size="small"
-                                    class="h-6 w-6 rounded-md shrink-0"
-                                    onClick={cancelNewItem}
-                                    aria-label={language.t("session.files.create.cancel")}
+                                    class="h-6 w-6 rounded-md"
+                                    onClick={() => startNewItem("dir")}
+                                    aria-label={language.t("session.files.newFolder")}
                                   />
                                 </div>
-                              )}
-                            </Show>
-                            <Switch>
-                              <Match when={nofiles()}>{empty(language.t("session.files.empty"))}</Match>
-                              <Match when={true}>
-                                <FileTree
-                                  path=""
-                                  class="pt-1"
-                                  modified={diffFiles()}
-                                  kinds={kinds()}
-                                  onFileClick={(node) => openTab(file.tab(node.path))}
-                                />
-                              </Match>
-                            </Switch>
-                          </Tabs.Content>
-                        </Tabs>
-                      </div>
-                    }
-                  >
-                    {(_p) => (
-                      <IdeFileEditor
-                        tab={previewTab()!}
-                        onClose={closePreview}
-                        class="h-full w-full min-w-0"
-                        breakpoints={debug.breakpointsFor(previewPath() ?? "")}
-                        pausedLine={(() => {
-                          const paused = debug.state.pausedLocation
-                          return paused && paused.file === previewPath() ? paused.line : undefined
-                        })()}
-                        onToggleBreakpoint={(line) => {
-                          const p = previewPath()
-                          if (p) void debug.toggleBreakpoint(p, line)
-                        }}
-                        onNavigate={openFileAt}
-                        gotoLine={gotoLine()}
-                      />
-                    )}
-                  </Show>
-                </Match>
-                <Match when={isActive("subagents")}>
-                  <PanelErrorBoundary
-                    onError={recordSubagentPanelError}
-                    fallback={(reset) => (
-                      <div class="h-full w-full flex flex-col items-center justify-center gap-3 px-6 text-center">
-                        <p class="text-12-regular text-text-weak">{language.t("session.subagents.panelError")}</p>
-                        <div class="flex items-center gap-2">
-                          <button
-                            type="button"
-                            class="px-3 py-1.5 rounded-md bg-surface-raised-base hover:bg-surface-raised-base-hover text-12-medium"
-                            onClick={() => {
-                              lastSubagentPanelError = undefined
-                              reset()
+                                <Show when={newItemState()}>
+                                  {(s) => (
+                                    <div class="flex items-center gap-1 py-1">
+                                      <input
+                                        class="flex-1 min-w-0 bg-surface-base-active rounded px-2 py-0.5 text-12-regular text-text-strong outline-none border border-border-weak-base"
+                                        placeholder={
+                                          s().type === "file"
+                                            ? language.t("session.files.newFile.placeholder")
+                                            : language.t("session.files.newFolder.placeholder")
+                                        }
+                                        value={s().name}
+                                        onInput={(e) => setNewItemState({ ...s(), name: e.currentTarget.value })}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") void commitNewItem()
+                                          if (e.key === "Escape") cancelNewItem()
+                                        }}
+                                        ref={(el) => setTimeout(() => el?.focus(), 0)}
+                                      />
+                                      <IconButton
+                                        icon="check"
+                                        variant="ghost"
+                                        size="small"
+                                        class="h-6 w-6 rounded-md shrink-0"
+                                        onClick={commitNewItem}
+                                        aria-label={language.t("session.files.create.confirm")}
+                                      />
+                                      <IconButton
+                                        icon="close-small"
+                                        variant="ghost"
+                                        size="small"
+                                        class="h-6 w-6 rounded-md shrink-0"
+                                        onClick={cancelNewItem}
+                                        aria-label={language.t("session.files.create.cancel")}
+                                      />
+                                    </div>
+                                  )}
+                                </Show>
+                                <Switch>
+                                  <Match when={nofiles()}>{empty(language.t("session.files.empty"))}</Match>
+                                  <Match when={true}>
+                                    <FileTree
+                                      path=""
+                                      class="pt-1"
+                                      modified={diffFiles()}
+                                      kinds={kinds()}
+                                      onFileClick={(node) => openTab(file.tab(node.path))}
+                                    />
+                                  </Match>
+                                </Switch>
+                              </Tabs.Content>
+                            </Tabs>
+                          </div>
+                        }
+                      >
+                        {(_p) => (
+                          <IdeFileEditor
+                            tab={previewTab()!}
+                            onClose={closePreview}
+                            class="h-full w-full min-w-0"
+                            breakpoints={debug.breakpointsFor(previewPath() ?? "")}
+                            pausedLine={(() => {
+                              const paused = debug.state.pausedLocation
+                              return paused && paused.file === previewPath() ? paused.line : undefined
+                            })()}
+                            onToggleBreakpoint={(line) => {
+                              const p = previewPath()
+                              if (p) void debug.toggleBreakpoint(p, line)
                             }}
-                          >
-                            {language.t("session.subagents.retry")}
-                          </button>
-                          <button
-                            type="button"
-                            class="px-3 py-1.5 rounded-md text-12-medium text-text-link hover:underline"
-                            onClick={closePanel}
-                          >
-                            {language.t("common.close")}
-                          </button>
+                            onNavigate={openFileAt}
+                            gotoLine={gotoLine()}
+                          />
+                        )}
+                      </Show>
+                    </Match>
+                    <Match when={isActive("subagents")}>
+                      <TaskProgressDetails />
+                    </Match>
+                    <Match when={isActive("browser")}>
+                      <SidePanelBrowser
+                        onClose={closePanel}
+                        sessionID={params.id}
+                        directory={sdk.directory}
+                        selection={
+                          view().workPanel.active()?.resourceID
+                            ? {
+                                resourceID: view().workPanel.active()!.resourceID!,
+                                nonce: view().workPanel.active()!.id,
+                              }
+                            : undefined
+                        }
+                        personal={!view().workPanel.active()?.resourceID}
+                        hideTabs
+                        onSelectResource={(resourceID) => {
+                          view().rightPanel.selectSharedBrowser(resourceID)
+                          if (resourceID) view().workPanel.open("browser", { resourceID })
+                        }}
+                      />
+                    </Match>
+                    <Match when={isActive("worktree")}>
+                      <SidePanelWorktree onClose={closePanel} />
+                    </Match>
+                    <Match when={isActive("dev")}>
+                      <SidePanelDev standalone onClose={closePanel} onNavigate={openFileAt} />
+                    </Match>
+                    <Match when={isActive("profile")}>
+                      <SidePanelProfile onClose={closePanel} />
+                    </Match>
+                    <Match when={isActive("context")}>
+                      <SidePanelContext onClose={closePanel} />
+                    </Match>
+                    <Match when={isActive("im")}>
+                      <SidePanelIM onClose={closePanel} chromeOwned={isDesktop()} onManageIM={() => void manageIM()} />
+                    </Match>
+                    <Match when={isActive("terminal")}>
+                      <SidePanelTerminal onClose={() => view().rightPanel.close()} />
+                    </Match>
+                    <Match when={isActive("debug-console")}>
+                      <SidePanelDebugConsole onClose={closePanel} />
+                    </Match>
+                    <Match when={isActive("problems")}>
+                      <div class="h-full w-full min-w-0 flex flex-col overflow-hidden bg-background-base">
+                        <SidePanelDockHeader
+                          id="problems"
+                          title={language.t("session.panel.problems")}
+                          onClose={closePanel}
+                        />
+                        <div class="flex-1 min-h-0">
+                          <ProblemsPanel active={() => isActive("problems")} onOpenFile={openFileAt} />
                         </div>
                       </div>
-                    )}
-                    content={() => (
-                      <GuardedSubagents
-                        onClose={closePanel}
-                        onReady={() => {
-                          lastSubagentPanelError = undefined
-                          view().rightPanel.clearFailure("subagents", panelBuild)
-                          if (recoveringSubagentPanel) {
-                            recoveringSubagentPanel = false
-                            console.info("ui.panel.recovered", { mode: "subagents", build_hash: panelBuild })
-                          }
-                        }}
-                      />
-                    )}
-                  />
-                </Match>
-                <Match when={isActive("browser")}>
-                  <SidePanelBrowser onClose={closePanel} />
-                </Match>
-                <Match when={isActive("worktree")}>
-                  <SidePanelWorktree onClose={closePanel} />
-                </Match>
-                <Match when={isActive("dev")}>
-                  <SidePanelDev onClose={closePanel} onNavigate={openFileAt} />
-                </Match>
-                <Match when={isActive("im")}>
-                  <SidePanelIM onClose={closePanel} />
-                </Match>
-                <Match when={isActive("terminal")}>
-                  <SidePanelTerminal onClose={() => view().rightPanel.close()} />
-                </Match>
-                <Match when={isActive("debug-console")}>
-                  <SidePanelDebugConsole onClose={() => view().panel.toggle("debug-console")} />
-                </Match>
-                <Match when={isActive("problems")}>
-                  <div class="h-full w-full min-w-0 flex flex-col overflow-hidden bg-background-base">
-                    <SidePanelDockHeader
-                      id="problems"
-                      title={language.t("session.panel.problems")}
-                      onClose={() => view().panel.toggle("problems")}
-                    />
-                    <div class="flex-1 min-h-0">
-                      <ProblemsPanel active={() => isActive("problems")} onOpenFile={openFileAt} />
-                    </div>
-                  </div>
-                </Match>
-              </Switch>
+                    </Match>
+                  </Switch>
+                </div>
+              </div>
             </div>
           </Show>
         </div>
       </aside>
     </Show>
-  )
-}
-
-type RailItem = {
-  readonly mode: PanelMode
-  readonly icon: ComponentProps<typeof Icon>["name"]
-  readonly title: string
-  readonly group: PanelGroup
-  readonly active: boolean
-  readonly badge?: number
-  readonly keybindLabel?: string
-}
-
-// T3.2/T3.3 — the always-on vertical icon rail. ~44px fixed strip; one icon per panel, grouped with a
-// divider between groups (T3.3). A click switches the content panel in ONE step (or closes it if that
-// panel is already active). Each icon carries a tooltip (title + keybind) and an optional badge count.
-function SidePanelRail(props: {
-  items: () => RailItem[]
-  groupOrder: readonly PanelGroup[]
-  onSelect: (mode: PanelMode) => void
-  collapseLabel: string
-}) {
-  return (
-    <div
-      class="workbench-panel workbench-side-panel-rail h-full shrink-0 flex flex-col items-center gap-[5px] py-[9px] overflow-y-auto"
-      style={{ width: `${RIGHT_PANEL_RAIL_PX}px` }}
-      role="tablist"
-      aria-label={props.collapseLabel}
-    >
-      <For each={props.groupOrder}>
-        {(group, gi) => {
-          const groupItems = () => props.items().filter((it) => it.group === group)
-          return (
-            <Show when={groupItems().length > 0}>
-              {/* divider between non-empty groups (not before the first) */}
-              <Show when={gi() > 0}>
-                <div data-slot="side-panel-divider" class="my-1 h-px w-[22px] shrink-0" aria-hidden />
-              </Show>
-              <For each={groupItems()}>
-                {(item) => (
-                  <Tooltip
-                    placement="left"
-                    gutter={6}
-                    value={item.keybindLabel ? `${item.title} · ${item.keybindLabel}` : item.title}
-                  >
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={item.active}
-                      aria-label={item.title}
-                      class="relative size-[34px] shrink-0 rounded-md flex items-center justify-center transition-colors"
-                      onClick={() => props.onSelect(item.mode)}
-                    >
-                      <Icon name={item.icon} size="normal" class="shrink-0" />
-                      <Show when={item.badge}>
-                        {(badge) => (
-                          <span
-                            data-slot="side-panel-badge"
-                            class="absolute top-0 right-0 min-w-[14px] h-3.5 px-1 rounded text-10-regular text-text-strong flex items-center justify-center"
-                          >
-                            {badge()}
-                          </span>
-                        )}
-                      </Show>
-                    </button>
-                  </Tooltip>
-                )}
-              </For>
-            </Show>
-          )
-        }}
-      </For>
-    </div>
   )
 }

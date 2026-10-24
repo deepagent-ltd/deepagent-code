@@ -26,6 +26,7 @@ import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { MessageV2 } from "../../src/session/message-v2"
 import { Database } from "@deepagent-code/core/database/database"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { CapabilityLoadAdapter } from "@deepagent-code/core/system-context/capability-load-adapter"
 import { EventTable } from "@deepagent-code/core/event/sql"
@@ -42,6 +43,10 @@ import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.s
 import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
 import { CompactionRequestTable } from "@deepagent-code/core/session/compaction-request.sql"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { TaskRunAuthority } from "@deepagent-code/core/session/task-run"
+import { TaskSummarySchema } from "@deepagent-code/core/session/task-summary.schema"
+import { Prompt } from "@deepagent-code/core/session/prompt"
+import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { builtinToolNames } from "@deepagent-code/core/tool/builtins"
 import { V2ToolEffectAdmissionTable, V2ToolEffectTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
@@ -707,6 +712,40 @@ describe("session HttpApi", () => {
           data: { message: `Message not found: ${missingMessage}` },
         })
       }),
+    { git: true, config: { formatter: false, lsp: false } },
+    15_000,
+  )
+
+  it.instance(
+    "serves direct TaskRun summaries only in the parent routed directory",
+    () => Effect.gen(function* () {
+      const test = yield* TestInstance
+      const parent = yield* createSession({ title: "summary parent" })
+      const db = (yield* Database.Service).db
+      const admitted = yield* TaskRunAuthority.admitRun(db, {
+        parentSessionID: SessionSchema.ID.make(parent.id),
+        parentMessageID: SessionMessage.ID.make("msg_http_task_summary"), toolCallID: "call_http_task_summary",
+        deliveryMode: "background", prompt: new Prompt({ text: "Read this scoped task" }), agent: "general",
+        child: { title: "scoped child", location: { directory: AbsolutePath.make(test.directory) }, permissions: [] },
+      })
+      const headers = { "x-deepagent-code-directory": test.directory }
+      const summary = yield* requestJson<TaskSummarySchema.Summary>(pathFor(SessionPaths.taskSummary,
+        { sessionID: parent.id }), { headers })
+      expect(summary.parentSessionID).toBe(parent.id)
+      expect(summary.items).toHaveLength(1)
+      expect(summary.items[0]?.childSessionID).toBe(admitted.run.childSessionID)
+      expect(summary.items[0]?.state).toBe("admitted")
+      expect(summary.items[0]?.notification.state).toBe("not_established")
+      expect(summary.items[0]?.progress).toBeNull()
+      const other = path.join(test.directory, "other-directory")
+      yield* Effect.promise(() => mkdir(other))
+      const foreign = yield* request(pathFor(SessionPaths.taskSummary, { sessionID: parent.id }), {
+        headers: { "x-deepagent-code-directory": other },
+      })
+      expect(foreign.status).toBe(404)
+      const unknown = yield* request(pathFor(SessionPaths.taskSummary, { sessionID: "ses_no_summary_parent" }), { headers })
+      expect(unknown.status).toBe(404)
+    }),
     { git: true, config: { formatter: false, lsp: false } },
     15_000,
   )

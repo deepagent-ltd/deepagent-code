@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import MediaClient, { mediaCapability, mediaTransferCapability } from "../upstream/src/delivery/media-client";
+import { signHttp } from "../upstream/src/delivery/device-auth";
 import { mediaUploadProgress } from "../upstream/src/delivery/media-contract";
 
 const servers = [];
@@ -70,7 +71,8 @@ test("10MiB progress and chunk indices stop at the fortieth chunk without extra 
   } });
   servers.push(server);
   const client = MediaClient({ isConnected: () => true, deliveryMediaContext: () => ({ generation: 1,
-    user: "bounded-user", token: "private-chunk-token", navigator: server.url.origin }) }, true);
+    user: "bounded-user", token: "private-chunk-token", navigator: server.url.origin }),
+    deviceHttpHeaders: input => signHttp(undefined, input, () => true) }, true);
   expect((await client.putProtectedMediaChunk({ objectID: checkpoint.object.objectID, index: 39, body: new Uint8Array([1]) })).sizeBytes).toBe(10485760);
   await expect(client.putProtectedMediaChunk({ objectID: checkpoint.object.objectID, index: 40, body: new Uint8Array([1]) }))
     .rejects.toMatchObject({ operation: "media_chunk", kind: "invalid_request" });
@@ -96,7 +98,8 @@ test("original MediaClient sends bounded authenticated progress GETs and rejects
   } });
   servers.push(server);
   const state = { generation: 1, user: "private-resume-user", token: "private-resume-token", navigator: server.url.origin };
-  const io = { isConnected: () => true, deliveryMediaContext: () => state };
+  const io = { isConnected: () => true, deliveryMediaContext: () => state,
+    deviceHttpHeaders: input => signHttp(undefined, input, () => true) };
   const client = MediaClient(io, true);
   expect(await client.getProtectedMediaTransferCapabilities()).toEqual(transfer);
   expect(await client.getProtectedMediaUploadProgress({ objectID: checkpoint.object.objectID })).toEqual(checkpoint);

@@ -137,3 +137,65 @@ test("unknown and incomplete cold metadata from a real HTTP response cannot issu
     await closed
   }
 })
+
+test.each([200, 503])(
+  "a failed connection refreshes its original scope and retains its error when refresh returns %d",
+  async (refreshStatus) => {
+    const requests: string[] = []
+    const server = createServer((request, response) => {
+      response.setHeader("Access-Control-Allow-Origin", "*")
+      response.setHeader("Access-Control-Allow-Headers", "*")
+      response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+      if (request.method === "OPTIONS") {
+        response.writeHead(204).end()
+        return
+      }
+      const url = new URL(request.url!, "http://127.0.0.1")
+      requests.push(`${request.method} ${url.pathname}`)
+      response.setHeader("Content-Type", "application/json")
+      if (request.method === "POST") {
+        response.writeHead(404).end(JSON.stringify({ name: "removed", message: "MCP server not found: removed" }))
+        return
+      }
+      response
+        .writeHead(refreshStatus)
+        .end(JSON.stringify(refreshStatus === 200 ? {} : { message: "Status unavailable" }))
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("Private MCP listener missing")
+    try {
+      const client = createDeepAgentCodeClient({
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        directory: "/owned/project",
+        throwOnError: true,
+      })
+      const state = { servers: { removed: { status: "disabled" } } as Record<string, unknown> }
+      await expect(
+        toggleMcp({
+          status: { status: "disabled" },
+          connect: async () => {
+            await client.mcp.connect({ name: "removed" })
+          },
+          disconnect: async () => {
+            throw new Error("Unexpected disconnect")
+          },
+          authenticate: async () => {
+            throw new Error("Unexpected OAuth")
+          },
+          refresh: async () => {
+            state.servers = (await client.mcp.status()).data!
+          },
+        }),
+      ).rejects.toThrow("MCP server not found: removed")
+      expect(state.servers).toEqual(refreshStatus === 200 ? {} : { removed: { status: "disabled" } })
+      expect(requests).toEqual(["POST /mcp/removed/connect", "GET /mcp"])
+    } finally {
+      const closed = new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      )
+      server.closeAllConnections()
+      await closed
+    }
+  },
+)

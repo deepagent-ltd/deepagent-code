@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { createServer } from "node:http"
 import { createRoot } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { Message, Part } from "@deepagent-code/sdk/client"
+import { createDeepAgentCodeClient } from "@deepagent-code/sdk/client"
 import { ServerScope } from "@/utils/server-scope"
 import { applyOptimisticAdd, createDirSyncContext, mergeOptimisticPage, runInflight } from "./directory-sync"
 
@@ -45,36 +47,156 @@ const assistantMessage = (
   }) as Extract<Message, { role: "assistant" }>
 
 describe("directory optimistic targeting", () => {
+  test("preserves event-delivered history when a non-authoritative first page is older than the store", async () => {
+    const current = state()
+    const sessionID = "ses_page_race"
+    const user = userMessage("msg_page_user", sessionID)
+    const assistant = { ...assistantMessage("msg_live_assistant", sessionID), time: { created: 2 } }
+    const text: Part = {
+      id: "prt_live_result",
+      sessionID,
+      messageID: assistant.id,
+      type: "text",
+      text: "completed live answer",
+      time: { start: 2, end: 3 },
+    }
+    const wire = {
+      received: Promise.withResolvers<void>(),
+      response: Promise.withResolvers<void>(),
+      rows: [{ info: user, parts: [] as Part[] }],
+    }
+    const server = createServer(async (request, responseStream) => {
+      responseStream.setHeader("content-type", "application/json")
+      responseStream.setHeader("access-control-allow-origin", "*")
+      if (new URL(request.url!, "http://127.0.0.1").pathname.endsWith("/message")) {
+        const rows = wire.rows
+        wire.received.resolve()
+        await wire.response.promise
+        responseStream.end(JSON.stringify(rows))
+        return
+      }
+      responseStream.end(JSON.stringify({ id: sessionID }))
+    }).listen(0, "127.0.0.1")
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("No loopback listener")
+    const client = createDeepAgentCodeClient({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      directory: "/repo/main",
+      throwOnError: true,
+    })
+    const sync = createDirSyncContext(
+      "/repo/main",
+      {
+        child() {
+          return current
+        },
+        plan: {
+          async sync() {},
+        },
+      } as unknown as Parameters<typeof createDirSyncContext>[1],
+      {
+        scope: ServerScope.local,
+        createClient() {
+          return client
+        },
+      } as unknown as Parameters<typeof createDirSyncContext>[2],
+    )
+
+    try {
+      const pending = sync.session.sync(sessionID)
+      await wire.received.promise
+      current[1]("message", sessionID, [user, assistant])
+      wire.response.resolve()
+      await pending
+      expect(current[0].message[sessionID]?.map((message) => message.id)).toEqual([user.id, assistant.id])
+
+      wire.received = Promise.withResolvers<void>()
+      wire.response = Promise.withResolvers<void>()
+      wire.rows = [
+        { info: user, parts: [] },
+        { info: assistant, parts: [{ ...text, text: "partial" }] },
+      ]
+      current[1]("part", assistant.id, [{ ...text, text: "partial" }])
+      const streaming = sync.session.sync(sessionID, { force: true })
+      await wire.received.promise
+      current[1]("part", assistant.id, [{ ...text, text: "new live delta with unchanged message info" }])
+      wire.response.resolve()
+      await streaming
+      expect(current[0].part[assistant.id]?.[0]).toMatchObject({ text: "new live delta with unchanged message info" })
+
+      wire.received = Promise.withResolvers<void>()
+      wire.response = Promise.withResolvers<void>()
+      wire.rows = [
+        { info: user, parts: [] },
+        { info: assistant, parts: [{ ...text, text: "partial" }] },
+      ]
+      const updating = sync.session.sync(sessionID, { force: true })
+      await wire.received.promise
+      current[1]("message", sessionID, 1, { ...assistant, time: { created: 2, completed: 3 }, finish: "stop" })
+      current[1]("part", assistant.id, [text])
+      wire.response.resolve()
+      await updating
+      const completed = current[0].message[sessionID]?.[1]
+      expect(completed?.role).toBe("assistant")
+      if (completed?.role === "assistant") expect(completed.time.completed).toBe(3)
+      expect(current[0].part[assistant.id]?.[0]).toEqual(text)
+
+      wire.received = Promise.withResolvers<void>()
+      wire.response = Promise.withResolvers<void>()
+      wire.rows = [{ info: user, parts: [] }]
+      const deleting = sync.session.sync(sessionID, { force: true })
+      await wire.received.promise
+      wire.response.resolve()
+      await deleting
+      expect(current[0].message[sessionID]?.map((message) => message.id)).toEqual([user.id])
+    } finally {
+      wire.response.resolve()
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
   test("refreshes after an empty first page with a positive message limit", async () => {
     const limits: number[] = []
     const current = state()
     const sessionID = "ses_empty_then_prompt"
     current[1]("session", 0, { id: sessionID })
-    const sync = createDirSyncContext("/repo/main", {
-      child() {
-        return current
-      },
-      plan: {
-        async sync() {},
-      },
-    } as unknown as Parameters<typeof createDirSyncContext>[1], {
-      scope: ServerScope.local,
-      createClient() {
-        return {
-          session: {
-            async get() {
-              return { data: { id: sessionID } }
+    const sync = createDirSyncContext(
+      "/repo/main",
+      {
+        child() {
+          return current
+        },
+        plan: {
+          async sync() {},
+        },
+      } as unknown as Parameters<typeof createDirSyncContext>[1],
+      {
+        scope: ServerScope.local,
+        createClient() {
+          return {
+            session: {
+              async get() {
+                return { data: { id: sessionID } }
+              },
+              async messages(input: { limit: number }) {
+                limits.push(input.limit)
+                if (input.limit < 1) throw new Error("message limit must be positive")
+                return { data: [], response: { headers: new Headers() } }
+              },
             },
-            async messages(input: { limit: number }) {
-              limits.push(input.limit)
-              if (input.limit < 1) throw new Error("message limit must be positive")
-              return { data: [], response: { headers: new Headers() } }
+            v2: {
+              session: {
+                async messages() {
+                  return { data: { data: [] } }
+                },
+              },
             },
-          },
-          v2: { session: { async messages() { return { data: { data: [] } } } } },
-        }
-      },
-    } as unknown as Parameters<typeof createDirSyncContext>[2])
+          }
+        },
+      } as unknown as Parameters<typeof createDirSyncContext>[2],
+    )
 
     await sync.session.sync(sessionID)
     await sync.session.sync(sessionID, { force: true })
@@ -631,11 +753,16 @@ describe("directory optimistic targeting", () => {
 
     const forced = sync.session.sync(sessionID, { force: true })
     await Promise.resolve()
-    current[1]("message", sessionID, 1, assistantMessage("msg_revision_2", sessionID, {
-      activityID: "activity-1",
-      revision: 2,
-      state: "final",
-    }))
+    current[1](
+      "message",
+      sessionID,
+      1,
+      assistantMessage("msg_revision_2", sessionID, {
+        activityID: "activity-1",
+        revision: 2,
+        state: "final",
+      }),
+    )
     release?.()
     await forced
 

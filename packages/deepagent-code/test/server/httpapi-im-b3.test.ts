@@ -14,6 +14,7 @@ import { Config, ConfigProvider, Effect, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { Flag } from "@deepagent-code/core/flag/flag"
+import { createDeepAgentCodeClient } from "@deepagent-code/sdk/client"
 import { Workspace } from "../../src/control-plane/workspace"
 import { InstanceBootstrap } from "../../src/project/bootstrap"
 import { InstanceBootstrap as InstanceBootstrapService } from "../../src/project/bootstrap-service"
@@ -114,6 +115,45 @@ type IMMessage = { id: string; content: string; replyToID: string | null }
 type IMMessagePage = { messages: IMMessage[]; nextCursor: string | null; hasMore: boolean }
 
 describe("IM §B3 HttpApi — Thread / Direct / Search", () => {
+  it.live("anchorID SDK HTTP returns bounded context and rejects cursor ambiguity without falling back", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped({ git: true })
+      const q = `directory=${encodeURIComponent(directory)}`
+      const headers = { "content-type": "application/json" }
+      const base = new URL(HttpServer.formatAddress((yield* HttpServer.HttpServer).address))
+      base.hostname = "127.0.0.1"
+      const client = createDeepAgentCodeClient({ baseUrl: base.href, directory })
+      const group = yield* requestJson<IMGroup>(`/api/v1/im/groups?${q}`, {
+        method: "POST", headers, body: JSON.stringify({ type: "project", name: "Anchor HTTP" }),
+      })
+      const messages = yield* Effect.forEach([0, 1, 2, 3, 4, 5], (index) =>
+        Effect.promise(() => client.im.messages.create({ groupId: group.id, senderType: "user", type: "text", content: `owned anchor ${index}` })).pipe(
+          Effect.map((response) => { expect(response.response!.status).toBe(200); return response.data! }),
+        ),
+      )
+      const ordered = messages.toSorted((a, b) => Number(b.createdAt) - Number(a.createdAt) || (a.id < b.id ? 1 : -1))
+      const middle = yield* Effect.promise(() => client.im.messages.list({ groupId: group.id, anchorID: ordered[2]!.id, limit: "4" }))
+      expect(middle.response!.status).toBe(200)
+      expect(middle.data?.messages.map((message) => message.id)).toEqual(ordered.slice(0, 4).map((message) => message.id))
+      expect(middle.data?.hasMore).toBe(true)
+      const older = yield* Effect.promise(() => client.im.messages.list({ groupId: group.id, cursor: middle.data!.nextCursor!, limit: "4" }))
+      expect(older.data?.messages.map((message) => message.id)).toEqual(ordered.slice(4).map((message) => message.id))
+      const earliest = yield* Effect.promise(() => client.im.messages.list({ groupId: group.id, anchorID: ordered.at(-1)!.id, limit: "4" }))
+      expect(earliest.data?.messages.map((message) => message.id)).toEqual(ordered.slice(-4).map((message) => message.id))
+      expect(earliest.data?.hasMore).toBe(false)
+      const absent = yield* Effect.promise(() => client.im.messages.list({ groupId: group.id, anchorID: "missing-target" }))
+      expect(absent.data).toMatchObject({ messages: [], nextCursor: null, hasMore: false })
+      const foreign = yield* requestJson<IMGroup>(`/api/v1/im/groups?${q}`, {
+        method: "POST", headers, body: JSON.stringify({ type: "project", name: "Other anchor group" }),
+      })
+      const crossed = yield* Effect.promise(() => client.im.messages.list({ groupId: foreign.id, anchorID: ordered[2]!.id }))
+      expect(crossed.data).toMatchObject({ messages: [], nextCursor: null, hasMore: false })
+      const invalid = yield* Effect.promise(() => client.im.messages.list({ groupId: "missing-group", anchorID: ordered[2]!.id, cursor: "" }))
+      expect(invalid.response!.status).toBe(400)
+      expect(invalid.error).toMatchObject({ name: "VALIDATION_FAILED" })
+    }),
+  )
+
   it.live("thread endpoint returns replies to a parent, paginated and ordered", () =>
     Effect.gen(function* () {
       const directory = yield* tmpdirScoped({ git: true })

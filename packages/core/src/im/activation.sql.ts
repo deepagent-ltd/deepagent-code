@@ -16,9 +16,9 @@ export const IMActivationTable = sqliteTable("im_activation", {
   created_at: integer().notNull(),
   updated_at: integer().notNull(),
 }, (table) => [
-  uniqueIndex("im_activation_pending_idx").on(table.source_hash).where(sql`${table.state} IN ('pending','unknown') OR (${table.state} = 'succeeded' AND ${table.credential_stored} = 0)`),
+  uniqueIndex("im_activation_pending_idx").on(table.source_hash).where(sql`${table.state} IN ('pending','unknown') OR (${table.state} = 'succeeded' AND ${table.credential_stored} = 0) OR (${table.state} = 'rejected' AND ${table.charged_credits} = 1)`),
   index("im_activation_source_idx").on(table.source_hash, table.created_at),
   check("im_activation_state_check", sql`${table.state} IN ('pending','unknown','succeeded','rejected')`),
   check("im_activation_method_check", sql`${table.method} IN ('api_key','activation_code')`),
-  check("im_activation_charge_check", sql`(${table.state} IN ('pending','unknown') AND ${table.charged_credits} IS NULL) OR (${table.state} = 'rejected' AND ${table.charged_credits} = 0) OR (${table.state} = 'succeeded' AND ${table.charged_credits} IN (0,1))`),
+  check("im_activation_charge_check", sql`(${table.state} IN ('pending','unknown','rejected') AND (${table.charged_credits} IS NULL OR ${table.charged_credits} IN (0,1))) OR (${table.state} = 'succeeded' AND ${table.charged_credits} IN (0,1))`),
 ])

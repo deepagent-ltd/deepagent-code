@@ -13,7 +13,7 @@
 import { For, Match, Show, Switch, batch, createSignal, onCleanup, onMount, type Component } from "solid-js"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Icon } from "@deepagent-code/ui/icon"
-import { useServerSDK } from "@/context/server-sdk"
+import { useSDK } from "@/context/sdk"
 import { useFile } from "@/context/file"
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -223,7 +223,7 @@ const POLL_INTERVAL_MS = 2000
 // ── SidePanelProfile (main export) ───────────────────────────────────────────
 
 export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
-  const sdk = useServerSDK()
+  const sdk = useSDK()
   const file = useFile()
 
   // ── signals ──────────────────────────────────────────────────────────────
@@ -238,11 +238,15 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
   const [error, setError] = createSignal<string | undefined>(undefined)
 
   let pollTimer: ReturnType<typeof setInterval> | undefined
+  let selection = 0
+  let disposed = false
+  const current = (runId: string, generation: number) => !disposed && generation === selection && runId === selectedRunId()
 
   // ── load run list ─────────────────────────────────────────────────────────
   const loadRuns = async () => {
     try {
       const res = await (sdk.client.profile.runs() as Promise<{ data?: unknown }>)
+      if (disposed) return
       const data = (res as any)?.data as RunEntry[] | undefined
       if (Array.isArray(data)) {
         setRuns(data)
@@ -261,17 +265,19 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
   const pollSelectedRun = async () => {
     const runId = selectedRunId()
     if (!runId) return
-    const current = runs().find((r) => r.runId === runId)
-    if (!current || current.status !== "running") return
+    const entry = runs().find((r) => r.runId === runId)
+    if (!entry || entry.status !== "running") return
+    const generation = selection
 
     try {
       const res = await (sdk.client.profile.result({ runId }) as Promise<{ data?: unknown }>)
+      if (!current(runId, generation)) return
       const data = (res as any)?.data as { status?: string; error?: string } | undefined
       if (data?.status === "done") {
         // Refresh the run list and load hotspots
         await loadRuns()
-        await loadHotspots(runId)
-        await loadArtifact(runId)
+        await loadHotspots(runId, generation)
+        await loadArtifact(runId, generation)
       } else if (data?.status === "error") {
         setError(data.error ?? "run failed")
         setRuns((prev) => prev.map((r) => (r.runId === runId ? { ...r, status: "error", error: data.error } : r)))
@@ -282,24 +288,28 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
   }
 
   // ── load hotspots ─────────────────────────────────────────────────────────
-  const loadHotspots = async (runId: string) => {
+  const loadHotspots = async (runId: string, generation: number) => {
+    if (!current(runId, generation)) return
     setLoadingHotspots(true)
     setError(undefined)
     try {
       const res = await (sdk.client.profile.hotspots({ runId, limit: "15" }) as Promise<{ data?: unknown }>)
+      if (!current(runId, generation)) return
       const data = (res as any)?.data as ProfileHotspot[] | undefined
       setHotspots(Array.isArray(data) ? data : [])
     } catch (e) {
-      setError(e instanceof Error ? e.message : "load hotspots failed")
+      if (current(runId, generation)) setError(e instanceof Error ? e.message : "load hotspots failed")
     } finally {
-      setLoadingHotspots(false)
+      if (current(runId, generation)) setLoadingHotspots(false)
     }
   }
 
   // ── load artifact (full result for MetricCards + DiffBadge) ──────────────
-  const loadArtifact = async (runId: string) => {
+  const loadArtifact = async (runId: string, generation: number) => {
+    if (!current(runId, generation)) return
     try {
       const res = await (sdk.client.profile.result({ runId }) as Promise<{ data?: unknown }>)
+      if (!current(runId, generation)) return
       const data = (res as any)?.data as (ProfileArtifact & { status?: string }) | undefined
       if (data?.status === "done" || data?.evidence_kind === "profile") {
         setArtifact(data as ProfileArtifact)
@@ -311,14 +321,17 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
 
   // ── select run ────────────────────────────────────────────────────────────
   const selectRun = async (runId: string) => {
+    if (disposed) return
+    const generation = ++selection
     setSelectedRunId(runId)
+    setLoadingHotspots(false)
     setHotspots([])
     setArtifact(undefined)
     setError(undefined)
     const entry = runs().find((r) => r.runId === runId)
     if (entry?.status === "done") {
-      await loadHotspots(runId)
-      await loadArtifact(runId)
+      await loadHotspots(runId, generation)
+      await loadArtifact(runId, generation)
     } else if (entry?.status === "error") {
       setError(entry.error ?? "run failed")
     }
@@ -338,15 +351,18 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
           ...(profiler().trim() ? { profiler: profiler().trim() } : {}),
         },
       }) as Promise<{ data?: unknown }>)
+      if (disposed) return
       const data = (res as any)?.data as RunEntry | undefined
       if (data?.runId) {
+        // Keep the list refresh from selecting an older completed run during launch.
+        setSelectedRunId(data.runId)
         await loadRuns()
         await selectRun(data.runId)
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "launch failed")
+      if (!disposed) setError(e instanceof Error ? e.message : "launch failed")
     } finally {
-      setLaunching(false)
+      if (!disposed) setLaunching(false)
     }
   }
 
@@ -367,6 +383,8 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
   })
 
   onCleanup(() => {
+    disposed = true
+    selection++
     if (pollTimer !== undefined) clearInterval(pollTimer)
   })
 

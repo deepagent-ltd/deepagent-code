@@ -26,6 +26,7 @@ import { resetZoom, setPinchZoomEnabled, setZoom, webviewZoom, zoomIn, zoomOut }
 import "./styles.css"
 import { Splash } from "@deepagent-code/ui/logo"
 import { useTheme } from "@deepagent-code/ui/theme/context"
+import { createSharedBrowserPlatform } from "./shared-browser"
 
 const STARTUP_SLOW_MS = 15_000
 const STARTUP_HARD_TIMEOUT_MS = 120_000
@@ -85,6 +86,9 @@ const listenForDeepLinks = () => {
 }
 
 const createPlatform = (): Platform => {
+  const sharedBrowser = createSharedBrowserPlatform(window.api.sharedBrowser)
+  onCleanup(sharedBrowser.dispose)
+  import.meta.hot?.dispose(sharedBrowser.dispose)
   const os = (() => {
     const ua = navigator.userAgent
     if (ua.includes("Mac")) return "macos"
@@ -249,6 +253,7 @@ const createPlatform = (): Platform => {
     },
 
     browser: window.api.browser,
+    sharedBrowser: sharedBrowser.platform,
 
     getDisplayBackend: async () => {
       return window.api.getDisplayBackend().catch(() => null)

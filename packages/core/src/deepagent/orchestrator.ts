@@ -57,11 +57,18 @@ export const ensureSession = (sessionId: string, mode: AgentMode): void => {
   SessionState.getOrCreate(sessionId, mode)
 }
 
-export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
-  const state = SessionState.getOrCreate(input.sessionId, input.mode)
+export const buildPromptContext = (
+  input: OrchestratorInput,
+  observation?: SessionState.SessionRunState,
+): PromptContext => {
+  const state = observation ?? SessionState.getOrCreate(input.sessionId, input.mode)
   const knowledgeSnapshotId = input.releasedKnowledgeSelection?.snapshotId ?? null
   if (state.knowledgeSnapshotId !== knowledgeSnapshotId) {
-    SessionState.update(input.sessionId, { knowledgeSynthesis: null, knowledgeSnapshotId })
+    if (!observation) SessionState.update(input.sessionId, { knowledgeSynthesis: null, knowledgeSnapshotId })
+    if (observation) {
+      state.knowledgeSynthesis = null
+      state.knowledgeSnapshotId = knowledgeSnapshotId
+    }
   }
   const roundState = state.roundState
   const budgetCheck = Budget.check(roundState, state.budget)
@@ -114,7 +121,8 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
       ...(state.workspacePath ? { workspacePath: state.workspacePath } : {}),
       ...(input.releasedKnowledgeSelection ? { releasedSelection: input.releasedKnowledgeSelection } : {}),
     })
-    if (knowledge) SessionState.update(input.sessionId, { knowledgeSynthesis: knowledge, knowledgeSnapshotId })
+    if (knowledge && !observation)
+      SessionState.update(input.sessionId, { knowledgeSynthesis: knowledge, knowledgeSnapshotId })
   }
 
   const previousResults: PreviousResults | null =
@@ -135,17 +143,19 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
   // timing must not open a window where the stable section appears mid-session and busts the
   // cached prefix). No task tool ⇒ the session classifies as "no orchestration" (0) and stays so;
   // a later round with the tool present reads the SAME frozen value for the stable section.
-  const fanoutDecision = state.userRequest && input.tools.availableTools.some((tool) => tool.name === "task")
-    ? decideFanout({
-        mode: state.mode,
-        signals: estimateSignalsFromText({ userRequest: state.userRequest }),
-        caps: input.orchestrationCaps,
-      })
-    : undefined
+  const fanoutDecision =
+    state.userRequest && input.tools.availableTools.some((tool) => tool.name === "task")
+      ? decideFanout({
+          mode: state.mode,
+          signals: estimateSignalsFromText({ userRequest: state.userRequest }),
+          caps: input.orchestrationCaps,
+        })
+      : undefined
   if (state.frozenComplexity === null && state.userRequest !== null) {
-    SessionState.update(input.sessionId, {
-      frozenComplexity: fanoutDecision !== undefined ? fanoutDecision.complexity : 0,
-    })
+    if (!observation)
+      SessionState.update(input.sessionId, {
+        frozenComplexity: fanoutDecision !== undefined ? fanoutDecision.complexity : 0,
+      })
     state.frozenComplexity = fanoutDecision !== undefined ? fanoutDecision.complexity : 0
   }
   const stableComplexity = state.frozenComplexity ?? fanoutDecision?.complexity
@@ -159,16 +169,18 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
   // is unaffected.
   let bridge: string | undefined
   try {
-    if (
-      state.workspacePath &&
-      ProjectBridge.shouldLoadBridge(state.mode) &&
-      KnowledgeSource.isConfigured()
-    ) {
-      const store = KnowledgeSource.projectStoreFor(state.workspacePath).documentStore
-      const projectId = projectIdForWorkspace(state.workspacePath)
-      const loaded = ProjectBridge.loadBridge(store, projectId)
-      const rendered = ProjectBridge.renderHandoff(loaded)
-      if (rendered.trim().length > 0) bridge = rendered
+    if (state.workspacePath && ProjectBridge.shouldLoadBridge(state.mode) && KnowledgeSource.isConfigured()) {
+      const store = (
+        observation
+          ? KnowledgeSource.observedProjectStore(state.workspacePath)
+          : KnowledgeSource.projectStoreFor(state.workspacePath)
+      )?.documentStore
+      if (store) {
+        const projectId = projectIdForWorkspace(state.workspacePath)
+        const loaded = ProjectBridge.loadBridge(store, projectId)
+        const rendered = ProjectBridge.renderHandoff(loaded)
+        if (rendered.trim().length > 0) bridge = rendered
+      }
     }
   } catch {
     bridge = undefined

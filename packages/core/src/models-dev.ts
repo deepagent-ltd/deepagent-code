@@ -11,6 +11,7 @@ import { EventV2 } from "./event"
 import { makeGlobalNode } from "./effect/app-node"
 import { httpClient } from "./effect/app-node-platform"
 import { OFFICIAL_PROVIDER_CATALOG_ALIASES } from "./provider-official"
+import { PROVIDER_BOOTSTRAP_CATALOG } from "./provider-presets"
 
 export const CatalogModelStatus = Schema.Literals(["alpha", "beta", "deprecated"])
 export type CatalogModelStatus = typeof CatalogModelStatus.Type
@@ -51,7 +52,7 @@ export const Model = Schema.Struct({
   release_date: Schema.String,
   attachment: Schema.Boolean,
   reasoning: Schema.Boolean,
-  temperature: Schema.Boolean,
+  temperature: Schema.optional(Schema.Boolean),
   tool_call: Schema.Boolean,
   interleaved: Schema.optional(
     Schema.Union([
@@ -108,6 +109,8 @@ export const Provider = Schema.Struct({
 })
 
 export type Provider = Schema.Schema.Type<typeof Provider>
+
+const bootstrap = Schema.decodeUnknownSync(Schema.Record(Schema.String, Provider))(PROVIDER_BOOTSTRAP_CATALOG)
 
 export const Event = {
   Refreshed: EventV2.define({
@@ -294,7 +297,7 @@ export const DEEPAGENT_MODEL_PROTOCOL: Record<string, "openai-compatible.respons
 }
 
 export const mergeVendored = (loaded: Record<string, Provider>) => {
-  const merged = { ...OFFICIAL_VENDORED_CATALOG, ...loaded }
+  const merged = { ...loaded }
   // D2 — official-id catalog bridge, applied at the single choke point every consumer reads
   // (the V1 provider loader's database, the V2 Catalog via ModelsDevPlugin, and the refresh
   // handler all call ModelsDev.get()). Upstream models.dev renamed entries out from under
@@ -308,7 +311,7 @@ export const mergeVendored = (loaded: Record<string, Provider>) => {
     if (!entry) continue
     merged[officialID] = { ...entry, id: officialID }
   }
-  return merged
+  return { ...bootstrap, ...OFFICIAL_VENDORED_CATALOG, ...merged }
 }
 
 // Chain entries may be base URLs ("https://models.dev") or full file URLs (".../api.json",
@@ -318,23 +321,23 @@ const normalizeSource = (entry: string) => {
   return trimmed.endsWith("/api.json") ? trimmed.slice(0, -"/api.json".length) : trimmed
 }
 
-// A source only succeeds when the body parses to a non-empty provider map — a proxy/WAF HTML
-// error page served with a 200 must fall through to the next source, not poison the disk cache.
+const Catalog = Schema.Record(Schema.String, Provider).check(Schema.makeFilter((data) => Object.keys(data).length > 0))
+
+// Validate cache and network bodies alike. A successful HTTP response may still be a
+// gateway error object; preserve unknown metadata so newer catalog fields survive decoding.
 const parseCatalog = (text: string) =>
-  Effect.try({
-    try: () => {
-      const data = JSON.parse(text) as Record<string, Provider>
-      if (typeof data !== "object" || data === null || Array.isArray(data) || Object.keys(data).length === 0)
-        throw new Error("not a non-empty provider map")
-      return { text, data }
-    },
-    catch: () => new Error("models.dev catalog body is not valid JSON"),
-  })
+  Schema.decodeUnknownEffect(Schema.fromJsonString(Catalog), { onExcessProperty: "preserve" })(text).pipe(
+    Effect.map((data) => ({ text, data })),
+  )
 
 export interface Interface {
   readonly get: () => Effect.Effect<Record<string, Provider>>
-  readonly refresh: (force?: boolean) => Effect.Effect<void>
+  readonly refresh: (force?: boolean) => Effect.Effect<void, RefreshError>
 }
+
+export class RefreshError extends Schema.TaggedErrorClass<RefreshError>()("ModelsDevRefreshError", {
+  message: Schema.String,
+}) {}
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/ModelsDev") {}
 
@@ -357,7 +360,7 @@ export const layer = Layer.effect(
 
     // Ordered fetch chain: the self-hosted aly mirror (hourly-synced from models.dev, reachable
     // from CN networks) first, models.dev itself as the authoritative fallback. No build-time
-    // snapshot: offline first runs serve the vendored deepagent catalog until refresh heals.
+    // snapshot: offline first runs retain connection identities; refresh supplies model specs.
     const rawSource = Flag.DEEPAGENT_CODE_MODELS_URL
     const sources = (rawSource ?? "https://ai.deepagent.ltd,https://models.dev")
       .split(",")
@@ -394,18 +397,15 @@ export const layer = Layer.effect(
       )
     })
 
-    const loadFromDisk = fs.readJson(Flag.DEEPAGENT_CODE_MODELS_PATH ?? filepath).pipe(
+    const loadFromDisk = fs.readFileString(Flag.DEEPAGENT_CODE_MODELS_PATH ?? filepath).pipe(
+      Effect.flatMap(parseCatalog),
+      Effect.map((loaded) => loaded.data),
       Effect.catch((error) => {
-        if (
-          Flag.DEEPAGENT_CODE_MODELS_PATH === undefined &&
-          error._tag === "FileSystemError" &&
-          error.method === "readJson"
-        ) {
+        if (Flag.DEEPAGENT_CODE_MODELS_PATH === undefined && error._tag === "SchemaError") {
           return fs.remove(filepath, { force: true }).pipe(Effect.ignore, Effect.as(undefined))
         }
         return Effect.succeed(undefined)
       }),
-      Effect.map((v) => v as Record<string, Provider> | undefined),
     )
 
     const fetchAndWrite = Effect.fn("ModelsDev.fetchAndWrite")(function* () {
@@ -426,11 +426,11 @@ export const layer = Layer.effect(
     const populate = Effect.gen(function* () {
       const fromDisk = yield* loadFromDisk
       if (fromDisk) return mergeVendored(fromDisk)
-      if (Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH) return OFFICIAL_VENDORED_CATALOG
+      if (Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH) return mergeVendored({})
       // The root-scoped flock is cross-process: concurrent CLIs sharing this Global root serialize
       // the cache file, while independent embedded roots cannot accidentally share a module path.
       // A failed chain must not kill provider init (there is no bundled snapshot anymore): serve
-      // the vendored deepagent catalog and let the hourly refresh heal the disk cache.
+      // supported connection identities and let the hourly refresh heal the disk cache.
       const data = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* flock.acquire(lockKey)
@@ -443,7 +443,7 @@ export const layer = Layer.effect(
           ),
         ),
       )
-      if (!data) return OFFICIAL_VENDORED_CATALOG
+      if (!data) return mergeVendored({})
       return mergeVendored(data)
     }).pipe(Effect.withSpan("ModelsDev.populate"), Effect.orDie)
 
@@ -467,7 +467,9 @@ export const layer = Layer.effect(
         Effect.tapCause((cause) =>
           Effect.logError("Failed to fetch models.dev").pipe(Effect.annotateLogs("cause", cause)),
         ),
-        Effect.ignore,
+        Effect.catchCause(() =>
+          force ? Effect.fail(new RefreshError({ message: "Could not refresh the model catalog" })) : Effect.void,
+        ),
       )
     })
 

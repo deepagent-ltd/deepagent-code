@@ -16,6 +16,7 @@ export interface PopoverProps<T extends ValidComponent = "div">
   class?: ComponentProps<"div">["class"]
   classList?: ComponentProps<"div">["classList"]
   style?: ComponentProps<"div">["style"]
+  bodyClass?: ComponentProps<"div">["class"]
   portal?: boolean
 }
 
@@ -30,6 +31,7 @@ export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>
     "class",
     "classList",
     "style",
+    "bodyClass",
     "children",
     "portal",
     "open",
@@ -131,7 +133,9 @@ export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>
       <Show when={local.description}>
         <Kobalte.Description data-slot="popover-description">{local.description}</Kobalte.Description>
       </Show>
-      <div data-slot="popover-body">{local.children}</div>
+      <div data-slot="popover-body" class={local.bodyClass}>
+        {local.children}
+      </div>
     </Kobalte.Content>
   )
 

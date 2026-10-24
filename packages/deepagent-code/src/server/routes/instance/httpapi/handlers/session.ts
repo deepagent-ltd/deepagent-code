@@ -21,10 +21,13 @@ import { AgentV2 } from "@deepagent-code/core/agent"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { WorkAuthoritySchema } from "@deepagent-code/core/session/work-authority.schema"
 import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
+import { PromptPrepare } from "@deepagent-code/core/session/prompt-prepare"
 import { SessionMutationEpoch } from "@/session/mutation-epoch"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionSummary } from "@/session/summary"
+import { TaskSummary } from "@deepagent-code/core/session/task-summary"
+import { SessionContextUsageSchema } from "@deepagent-code/core/session/context-usage.schema"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { SessionProviderResolution } from "@/session/provider-resolution"
 import { DevCampaignMint } from "@/effect/dev-campaign-mint"
@@ -78,7 +81,7 @@ import {
 } from "../errors"
 import * as SessionError from "./session-errors"
 import { randomUUID } from "node:crypto"
-import { getWorkspaceContext } from "../utils/workspace-context"
+import { getWorkspaceContext, resolveRoutedDirectory } from "../utils/workspace-context"
 import { SessionDiffArtifact } from "@/session/diff-artifact"
 import { exportSessionSnapshot, importSessionSnapshot, type SessionSnapshot } from "@/session/snapshot"
 import { exportSessionBundle, parseSessionBundle, BUNDLE_MAX_BYTES } from "@/session/bundle"
@@ -130,6 +133,29 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const providerResolutionFacade = yield* SessionProviderResolution.Service
     const flags = yield* RuntimeFlags.Service
     const scope = yield* Scope.Scope
+    const { LocationServiceMap, existingContext } = yield* Effect.promise(
+      () => import("@deepagent-code/core/location-layer"),
+    )
+    const contextUsageLocations = Option.getOrUndefined(yield* Effect.serviceOption(LocationServiceMap))
+    const contextUsageServices = Effect.gen(function* () {
+      const { SessionRunnerModel } = yield* Effect.promise(() => import("@deepagent-code/core/session/runner/model"))
+      const { ToolRegistry } = yield* Effect.promise(() => import("@deepagent-code/core/tool/registry"))
+      const { SystemContextRegistry } = yield* Effect.promise(
+        () => import("@deepagent-code/core/system-context/registry"),
+      )
+      const { SkillGuidance } = yield* Effect.promise(() => import("@deepagent-code/core/skill/guidance"))
+      const { Git } = yield* Effect.promise(() => import("@deepagent-code/core/git"))
+      const models = Option.getOrUndefined(yield* Effect.serviceOption(SessionRunnerModel.Service))
+      const agents = Option.getOrUndefined(yield* Effect.serviceOption(AgentV2.Service))
+      const tools = Option.getOrUndefined(yield* Effect.serviceOption(ToolRegistry.Service))
+      const systemContext = Option.getOrUndefined(yield* Effect.serviceOption(SystemContextRegistry.Service))
+      const skillGuidance = Option.getOrUndefined(yield* Effect.serviceOption(SkillGuidance.Service))
+      const gateway = Option.getOrUndefined(yield* Effect.serviceOption(AgentGateway.Runtime))
+      const git = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
+      return models && agents && tools && systemContext && skillGuidance && gateway
+        ? { models, agents, tools, systemContext, skillGuidance, gateway, git }
+        : undefined
+    })
     // 1.4.8.rN dev campaign mint (env-gated): consume the seam so the merged layer is a real
     // graph requirement and builds with the Database (production: no-op, empty service).
     yield* DevCampaignMint
@@ -210,8 +236,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
                   resource: error.code,
                 })
               : notFound(`Session not found: ${sessionID}`),
-          ),
-        )
+        ),
+      )
 
     const refuseLegacyMessageMutation = Effect.fn("SessionHttpApi.refuseLegacyMessageMutation")(function* (
       sessionID: SessionID,
@@ -262,6 +288,98 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const children = Effect.fn("SessionHttpApi.children")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireSession(ctx.params.sessionID)
       return yield* session.children(ctx.params.sessionID)
+    })
+
+    const taskSummary = Effect.fn("SessionHttpApi.taskSummary")(function* (ctx: {
+      params: { sessionID: SessionID }
+      query: { cursor?: string; directory?: string; workspace?: string }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const instance = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      // Session routing follows the stored placement. Also reject an explicit stale client
+      // placement instead of silently turning a scoped read into another project's task list.
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const directory = ctx.query.directory || request.headers["x-deepagent-code-directory"]
+      if (
+        (directory && resolveRoutedDirectory(directory) !== instance.directory) ||
+        (ctx.query.workspace && ctx.query.workspace !== workspaceID)
+      )
+        return yield* notFound(`Session not found: ${ctx.params.sessionID}`)
+      return yield* database.db
+        .transaction((tx) =>
+          TaskSummary.read(tx, {
+            parentSessionID: ctx.params.sessionID,
+            projectID: instance.project.id,
+            directory: instance.directory,
+            workspaceID,
+            cursor: ctx.query.cursor,
+          }),
+        )
+        .pipe(
+          Effect.mapError(() => notFound(`Session not found: ${ctx.params.sessionID}`)),
+          Effect.catchDefect(() =>
+            Effect.fail(
+              new ServiceUnavailableError({
+                service: "session.task-summary",
+                message: "Task summary could not be read",
+              }),
+            ),
+          ),
+        )
+    })
+
+    const contextUsage = Effect.fn("SessionHttpApi.contextUsage")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof SessionContextUsageSchema.Query.Type
+      query: { directory?: string; workspace?: string }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const instance = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const directory = ctx.query.directory || request.headers["x-deepagent-code-directory"]
+      if (
+        (directory && resolveRoutedDirectory(directory) !== instance.directory) ||
+        (ctx.query.workspace && ctx.query.workspace !== workspaceID)
+      )
+        return yield* notFound(`Session not found: ${ctx.params.sessionID}`)
+      if (!!ctx.payload.providerID !== !!ctx.payload.modelID) return yield* new HttpApiError.BadRequest({})
+      const { SessionContextUsage } = yield* Effect.promise(() => import("@deepagent-code/core/session/context-usage"))
+      // The existing cached Location tree owns these services, just as for the V2 agent roster.
+      const cached = contextUsageLocations
+        ? yield* existingContext(contextUsageLocations, {
+            directory: AbsolutePath.make(instance.directory),
+            ...(workspaceID ? { workspaceID } : {}),
+          })
+        : undefined
+      const services = cached ? yield* contextUsageServices.pipe(Effect.provide(cached.context)) : undefined
+      return yield* SessionContextUsage.read(
+        database.db,
+        {
+          ...ctx.payload,
+          sessionID: ctx.params.sessionID,
+          projectID: instance.project.id,
+          directory: instance.directory,
+          workspaceID,
+        },
+        services,
+      ).pipe(
+        Effect.map((summary) =>
+          cached && !cached.current()
+            ? { ...summary, estimate: { ...summary.estimate, status: "stale" as const } }
+            : summary,
+        ),
+        Effect.mapError(() => notFound(`Session not found: ${ctx.params.sessionID}`)),
+        Effect.catchDefect(() =>
+          Effect.fail(
+            new ServiceUnavailableError({
+              service: "session.context-usage",
+              message: "Context usage could not be read",
+            }),
+          ),
+        ),
+      )
     })
 
     const todo = Effect.fn("SessionHttpApi.todo")(function* (ctx: { params: { sessionID: SessionID } }) {
@@ -414,7 +532,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           .pipe(
             // RI-04 admission validation surfaces as a typed 400 like the public V2 endpoint.
             Effect.catchTags({
-              "GoalChild.Error": (error) => Effect.fail(new ConflictError({ message: error.message, resource: error.code })),
+              "GoalChild.Error": (error) =>
+                Effect.fail(new ConflictError({ message: error.message, resource: error.code })),
               "WorkAuthority.Error": (error) =>
                 Effect.fail(new InvalidRequestError({ message: error.message, kind: error.code })),
               "AgentV2.NotFoundError": (error) => Effect.fail(new HttpApiError.BadRequest({})),
@@ -688,7 +807,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       })
     })
 
-    const preparePromptDraft = Effect.fn("SessionHttpApi.preparePromptDraft")(function* (input: {
+    const preparePromptDraftBody = Effect.fn("SessionHttpApi.preparePromptDraft")(function* (input: {
       ctx: { params: { sessionID: SessionID }; payload: typeof PromptPreparePayload.Type }
       onProgress?: (preview: string) => void
     }) {
@@ -768,11 +887,25 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       }
     })
 
+    const preparePromptDraft = (input: Parameters<typeof preparePromptDraftBody>[0]) =>
+      preparePromptDraftBody(input).pipe(
+        Effect.timeoutOrElse({
+          duration: PromptPrepare.TIMEOUT_MS,
+          orElse: () => Effect.fail(new PromptPrepare.Timeout()),
+        }),
+      )
+
     const promptPrepare = Effect.fn("SessionHttpApi.promptPrepare")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof PromptPreparePayload.Type
     }) {
-      return yield* preparePromptDraft({ ctx })
+      return yield* preparePromptDraft({ ctx }).pipe(
+        Effect.mapError((error) =>
+          error instanceof PromptPrepare.Timeout
+            ? new ServiceUnavailableError({ service: "intelligence_prepare", message: error.message })
+            : error,
+        ),
+      )
     })
 
     const promptPrepareStream = Effect.fn("SessionHttpApi.promptPrepareStream")(function* (ctx: {
@@ -791,13 +924,23 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         },
       }).pipe(
         Effect.tap((result) => Effect.sync(() => Queue.offerUnsafe(queue, { type: "result", result }))),
+        Effect.catch((error) =>
+          Effect.sync(() =>
+            Queue.offerUnsafe(queue, {
+              type: "error",
+              message: error instanceof PromptPrepare.Timeout ? error.message : "Prompt preparation failed",
+              ...(error instanceof PromptPrepare.Timeout ? { code: error.code } : {}),
+            }),
+          ),
+        ),
         Effect.catchCause((cause) =>
           Effect.sync(() => Queue.offerUnsafe(queue, { type: "error", message: Cause.pretty(cause) })),
         ),
         Effect.forkScoped({ startImmediately: true }),
       )
       return HttpServerResponse.stream(
-        Stream.fromQueue(queue).pipe(
+        Stream.make({ type: "started" }).pipe(
+          Stream.concat(Stream.fromQueue(queue)),
           Stream.takeUntil(isPromptPrepareTerminal),
           Stream.map(promptPrepareEvent),
           Stream.pipeThroughChannel(Sse.encode()),
@@ -1238,8 +1381,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const importBundle = Effect.fn("SessionHttpApi.importBundle")(function* (ctx: {
       payload: typeof ImportBundlePayload.Type
     }) {
-      if (ctx.payload.bundle.length > BUNDLE_MAX_BYTES * 1.4)
-        return yield* new HttpApiError.BadRequest({})
+      if (ctx.payload.bundle.length > BUNDLE_MAX_BYTES * 1.4) return yield* new HttpApiError.BadRequest({})
       const parsed = yield* Effect.tryPromise(() => parseSessionBundle(Buffer.from(ctx.payload.bundle, "base64"))).pipe(
         Effect.mapError(() => new HttpApiError.BadRequest({})),
       )
@@ -1325,6 +1467,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("status", status)
       .handle("get", get)
       .handle("children", children)
+      .handle("taskSummary", taskSummary)
+      .handle("contextUsage", contextUsage)
       .handle("todo", todo)
       .handle("plan", plan)
       .handle("diff", diff)

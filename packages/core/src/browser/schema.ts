@@ -35,6 +35,7 @@ export const MAX_RESERVED_BYTES = 67_108_864
 export const MAX_ACTIVE_CONTROLS = 4
 export const MAX_TABS = 4
 export const MAX_FRAMES = 64
+export const MAX_SNAPSHOT_TARGETS = 500
 export const MAX_WAITING = 16
 export const DEFAULT_TIMEOUT_MS = 10_000
 export const MAX_TIMEOUT_MS = 30_000
@@ -45,12 +46,12 @@ export const MAX_PIXELS = 16_000_000
 export const ID = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(512),
-  Schema.makeFilter((value: string) => Buffer.byteLength(value, "utf8") <= 512),
+  Schema.makeFilter((value: string) => new TextEncoder().encode(value).byteLength <= 512),
 )
 export const Address = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(2048),
-  Schema.makeFilter((value: string) => Buffer.byteLength(value, "utf8") <= 2048),
+  Schema.makeFilter((value: string) => new TextEncoder().encode(value).byteLength <= 2048),
 )
 export const Count = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
@@ -112,7 +113,7 @@ export const Origin = Address.check(
 )
 export const PublicOrigin = Address.check(
   Schema.makeFilter((value: string) => {
-    if (!URL.canParse(value) || Buffer.byteLength(value, "utf8") > 512) return false
+    if (!URL.canParse(value) || new TextEncoder().encode(value).byteLength > 512) return false
     const url = new URL(value)
     return url.protocol === "https:" && !url.username && !url.password && value === url.origin &&
       !url.hostname.endsWith(".") && url.hostname.includes(".") &&
@@ -307,7 +308,7 @@ export const Command = Schema.Union([
     generation: Count,
     frameID: Schema.optional(ID),
     depth: Schema.optional(Count.check(Schema.isLessThanOrEqualTo(16))),
-    limit: Schema.optional(Revision.check(Schema.isLessThanOrEqualTo(500))),
+    limit: Schema.optional(Revision.check(Schema.isLessThanOrEqualTo(MAX_SNAPSHOT_TARGETS))),
   }),
   Schema.Struct({ type: Schema.Literal("screenshot"), tabID: ID, generation: Count }),
   Schema.Struct({
@@ -436,6 +437,15 @@ export const Result = Schema.Struct({
   scriptResultJSON: Schema.optional(Schema.String.check(Schema.makeFilter((value: string) =>
     Buffer.byteLength(value, "utf8") <= MAX_SCRIPT_RESULT_BYTES &&
     Option.isSome(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(value))))),
+  scriptContextEvidence: Schema.optional(Schema.Struct({
+    version: Schema.Literal(1),
+    context: Schema.Literal("snapshot-json-v1"),
+    sha256: Digest,
+    bytes: Count.check(Schema.isLessThanOrEqualTo(1_048_576)),
+    frameID: ID,
+    observationRevision: Revision,
+    generation: Count,
+  })),
   frameID: Schema.optional(ID),
   observationRevision: Schema.optional(Revision),
   refs: Schema.optional(

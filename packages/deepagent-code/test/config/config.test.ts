@@ -1,12 +1,13 @@
 import { test, expect, describe, afterEach, beforeEach, spyOn } from "bun:test"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
-import { Cause, Deferred, Effect, Exit, Layer, Option } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Layer, Option } from "effect"
 import { InvalidError } from "@deepagent-code/core/v1/config/error"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { Config, normalizeLoadedConfig } from "@/config/config"
 import { ConfigManaged } from "@/config/managed"
 import { ConfigParse } from "../../src/config/parse"
+import { ConfigFileWrite } from "@/config/file-write"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 
 import { InstanceRef } from "../../src/effect/instance-ref"
@@ -319,6 +320,83 @@ it.effect("creates global jsonc config with schema when no global configs exist"
       const content = yield* FSUtil.use.readFileString(path.join(dir, "config.jsonc"))
       expect(content).toContain('"$schema": "https://ai.deepagent.ltd/config.schema.json"')
     }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+  ),
+)
+
+configIt({ account: Account.defaultLayer.pipe(Layer.orDie) }).effect("global MCP scope observation keeps the canonical Add file as its exact source", () =>
+  withGlobalConfig({}, ({ dir }) =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped()
+      yield* withInstanceDir(directory, Effect.gen(function* () {
+        const config = yield* Config.Service
+        yield* config.get()
+        yield* config.updateGlobal({
+          mcp: { scopedGlobal: { type: "remote", url: "http://127.0.0.1:9/mcp", enabled: false } },
+        })
+        const snapshot = yield* config.mcpSnapshot!()
+        const readonly = yield* config.readonlySnapshot!({ directory, worktree: directory })
+        const loaded = yield* config.get()
+        for (const observed of [snapshot, readonly, { config: loaded }]) {
+          const source = observed.config.mcp_origins?.scopedGlobal
+          expect(source).toBe(path.join(dir, "config.jsonc"))
+          const file = yield* ConfigFileWrite.read(source!)
+          expect(file.text).toBeDefined()
+          expect(ConfigParse.jsonc(file.text!, source!)).toMatchObject({
+            mcp: { scopedGlobal: { type: "remote", url: "http://127.0.0.1:9/mcp", enabled: false } },
+          })
+        }
+      }))
+    }),
+  ),
+)
+
+configIt({ account: Account.defaultLayer.pipe(Layer.orDie) }).effect("global MCP scope origins retain each contributing file and canonical precedence", () =>
+  withGlobalConfig({}, ({ dir }) =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped()
+      const names = ["config.json", "deepagent-code.json", "deepagent-code.jsonc", "config.jsonc"]
+      yield* Effect.forEach(names, (name, index) => writeConfigEffect(dir, {
+        mcp: {
+          [`global${index}`]: { type: "remote", url: `http://127.0.0.1:9/${index}`, enabled: false },
+          shared: { type: "remote", url: `http://127.0.0.1:9/${index}`, enabled: false },
+        },
+      }, name))
+      yield* withInstanceDir(directory, Effect.gen(function* () {
+        const config = yield* Config.Service
+        // Readonly observation retains the real pre-consolidation contributions.
+        const snapshot = yield* config.mcpSnapshot!()
+        const readonly = yield* config.readonlySnapshot!({ directory, worktree: directory })
+        for (const observed of [snapshot, readonly]) {
+          names.forEach((name, index) => expect(observed.config.mcp_origins?.[`global${index}`]).toBe(path.join(dir, name)))
+          expect(observed.config.mcp_origins?.shared).toBe(path.join(dir, "config.jsonc"))
+          expect(observed.config.mcp?.shared).toMatchObject({ url: "http://127.0.0.1:9/3" })
+        }
+        const loaded = yield* config.get()
+        names.forEach((_, index) => expect(loaded.mcp_origins?.[`global${index}`]).toBe(path.join(dir, "config.jsonc")))
+        expect(loaded.mcp?.shared).toMatchObject({ url: "http://127.0.0.1:9/3" })
+      }))
+    }),
+  ),
+)
+
+configIt({ account: Account.defaultLayer.pipe(Layer.orDie) }).effect("global MCP scope TOML migration records its written file without serializing origins", () =>
+  withGlobalConfig({}, ({ dir }) =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped()
+      yield* FSUtil.use.writeWithDirs(path.join(dir, "config"), '[mcp.legacyScope]\ntype = "remote"\nurl = "http://127.0.0.1:9/mcp"\nenabled = false\n')
+      yield* withInstanceDir(directory, Effect.gen(function* () {
+        const config = yield* Config.Service
+        const loaded = yield* config.get()
+        const snapshot = yield* config.mcpSnapshot!()
+        expect(loaded.mcp_origins?.legacyScope).toBe(path.join(dir, "config.json"))
+        expect(snapshot.config.mcp_origins?.legacyScope).toBe(path.join(dir, "config.json"))
+        const file = yield* ConfigFileWrite.read(path.join(dir, "config.json"))
+        expect(file.text).not.toContain("mcp_origins")
+        expect(ConfigParse.jsonc(file.text!, file.path)).toMatchObject({
+          mcp: { legacyScope: { type: "remote", url: "http://127.0.0.1:9/mcp", enabled: false } },
+        })
+      }))
+    }),
   ),
 )
 
@@ -1047,6 +1125,34 @@ it.instance("updates config and writes to the project config file", () =>
     const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "deepagent-code.json"))
     expect(writtenConfig).toMatchObject({ model: "updated/model" })
   }),
+)
+
+it.instance(
+  "config watch preserves its registering Root context in the real filesystem callback",
+  () =>
+    Effect.gen(function* () {
+      const root = Context.Reference<string | undefined>("test/ConfigWatchRoot", { defaultValue: () => undefined })
+      const directory = (yield* TestInstance).directory
+      const config = yield* Config.Service
+      const changed = Deferred.makeUnsafe<{ root: string | undefined; directory: string | undefined }>()
+      const stop = yield* config.watch!(() =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(changed, { root: yield* root, directory: (yield* InstanceRef)?.directory })
+        }),
+        { mcpOnly: true },
+      ).pipe(Effect.provideService(root, "registered-root"))
+      yield* Effect.addFinalizer(() => Effect.sync(stop))
+
+      yield* FSUtil.use.writeFileString(
+        path.join(directory, "deepagent-code.json"),
+        JSON.stringify(schemaConfig({ model: "after/model" })),
+      )
+      expect(yield* Deferred.await(changed).pipe(Effect.timeout("5 seconds"))).toEqual({
+        root: "registered-root",
+        directory,
+      })
+    }),
+  { config: { model: "before/model" } },
 )
 
 it.instance(

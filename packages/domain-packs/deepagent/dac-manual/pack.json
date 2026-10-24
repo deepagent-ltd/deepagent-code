@@ -2,8 +2,8 @@
   "schema_version": "domain_pack.v1",
   "id": "deepagent.dac-manual",
   "name": "DeepAgent Code System Manual",
-  "description": "DeepAgent Code 自用系统手册:subagent 编排与 worktree 合并回路、代码理解、上下文工程、权限语义、会话可靠性",
-  "version": "1.0.0",
+  "description": "DeepAgent Code 系统手册：浏览器共享接管、IM代理、Goal与事件边界、subagent协作、代码理解、上下文和权限语义",
+  "version": "1.0.1",
   "scope": "system",
   "risk": "low",
   "domains": [

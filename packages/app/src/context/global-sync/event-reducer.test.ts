@@ -1229,10 +1229,10 @@ describe("goal.updated reducer (session_goal)", () => {
 
       dispatch(setSessionGoal, goalEvent("ses_1", "running", 10))
       expect(goalStore.g.ses_1.phase).toBe("unknown")
-      expect(goalStore.g.ses_1.ledger.tokens).toBe(10)
+      expect(goalStore.g.ses_1.ledger?.tokens).toBe(10)
 
       dispatch(setSessionGoal, goalEvent("ses_1", "running", 120))
-      expect(goalStore.g.ses_1.ledger.tokens).toBe(120)
+      expect(goalStore.g.ses_1.ledger?.tokens).toBe(120)
 
       dispatch(setSessionGoal, goalEvent("ses_1", "needs_human", 200))
       expect(goalStore.g.ses_1.phase).toBe("unknown")

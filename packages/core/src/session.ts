@@ -40,6 +40,7 @@ import { WorkSessionGuard } from "./session/work-session-guard"
 import { WorkAuthoritySchema } from "./session/work-authority.schema"
 import { GoalChild } from "./deepagent/goal-child"
 import { GoalChildSchema } from "./deepagent/goal-child.schema"
+import { SharedBrowserUserInput } from "./browser/shared-user-input"
 
 // get project -> project.locations
 //
@@ -170,11 +171,19 @@ export class AgentNotSelectableError extends Schema.TaggedErrorClass<AgentNotSel
   { id: AgentV2.ID },
 ) {}
 
+// Scope a pre-projection guard to this command's event without creating a second
+// transaction or exposing uncommitted notifications from a nested EventV2 publish.
+const CurrentAgentSwitch = Context.Reference<{ id: EventV2.ID; currentAgent?: AgentV2.ID } | undefined>(
+  "@deepagent-code/v2/SessionCurrentAgentSwitch",
+  { defaultValue: () => undefined },
+)
+
 export type Error =
   | NotFoundError
   | MessageDecodeError
   | OperationUnavailableError
   | PromptConflictError
+  | SessionInput.ModeChangeRefused
   | AgentNotSelectableError
   | AgentV2.NotFoundError
 
@@ -423,6 +432,7 @@ export interface Interface {
     | LegacySessionRequiresAdoption
     | AgentV2.NotFoundError
     | AgentNotSelectableError
+    | SessionInput.ModeChangeRefused
     | WorkAuthoritySchema.Error | GoalChildSchema.Error
   >
   readonly switchModel: (input: {
@@ -450,6 +460,7 @@ export interface Interface {
     | LegacySessionRequiresAdoption
     | PromptConflictError
     | SessionInput.StaleRevertEpoch
+    | SessionInput.ModeChangeRefused
     | AgentV2.NotFoundError
     | AgentNotSelectableError
     | WorkAuthoritySchema.Error | GoalChildSchema.Error
@@ -512,6 +523,18 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const events = yield* EventV2.Service
+    yield* events.beforeCommit((event) =>
+      Effect.gen(function* () {
+        const guarded = yield* CurrentAgentSwitch
+        if (!guarded || event.id !== guarded.id || event.replay || !Schema.is(SessionEvent.AgentSwitched)(event)) return
+        yield* SessionInput.requireModeChange(db, {
+          sessionID: event.data.sessionID,
+          currentAgent: guarded.currentAgent,
+          requestedAgent: event.data.agent,
+          delivery: "steer",
+        }).pipe(Effect.orDie)
+      }),
+    )
     const projects = yield* ProjectV2.Service
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
@@ -544,20 +567,21 @@ export const layer = Layer.effect(
     // still fails at admission.
     const requireAdmissionAgent = Effect.fn("V2Session.requireAdmissionAgent")(function* (
       location: Location.Ref,
-      agent: AgentV2.ID,
+      agent: AgentV2.ID | undefined,
       selectable: boolean,
     ) {
-      if (Option.isNone(locations)) return
+      if (Option.isNone(locations)) return agent
       const services = yield* Effect.all({
         boot: Effect.serviceOption(PluginBoot.Service),
         agents: Effect.serviceOption(AgentV2.Service),
       }).pipe(Effect.provide(locations.value.get(location)))
-      if (Option.isNone(services.agents)) return
+      if (Option.isNone(services.agents)) return agent
       if (Option.isSome(services.boot)) yield* services.boot.value.wait()
       const resolved = yield* services.agents.value.resolve(agent)
-      if (resolved === undefined) return yield* new AgentV2.NotFoundError({ id: agent })
+      if (resolved === undefined) return yield* new AgentV2.NotFoundError({ id: agent ?? AgentV2.defaultID })
       if (selectable && (resolved.mode === "subagent" || resolved.hidden))
-        return yield* new AgentNotSelectableError({ id: agent })
+        return yield* new AgentNotSelectableError({ id: resolved.id })
+      return resolved.id
     })
 
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -906,8 +930,15 @@ export const layer = Layer.effect(
               sessionID: input.sessionID,
               prompt: input.prompt,
               delivery,
+              currentAgent: input.prompt.agent === undefined
+                ? undefined
+                : writable.agent ?? (yield* requireAdmissionAgent(writable.location, undefined, false)),
               revertEpoch: input.revertEpoch,
-              ...(managed ? { commit: (seq: number) => GoalChild.recordInput(db, input, seq) } : {}),
+              commit: (seq: number) => Effect.gen(function* () {
+                if (managed) yield* GoalChild.recordInput(db, input, seq)
+                yield* SharedBrowserUserInput.recordAdmission(db, { id: messageID, sessionID: input.sessionID,
+                  prompt: input.prompt, delivery, admittedSeq: seq }).pipe(Effect.orDie)
+              }),
             }).pipe(
               Effect.catchDefect((defect) =>
                 defect instanceof SessionInput.LifecycleConflict
@@ -970,12 +1001,21 @@ export const layer = Layer.effect(
       switchAgent: Effect.fn("V2Session.switchAgent")(function* (input) {
         const session = yield* result.requireWritable(input.sessionID)
         yield* requireAdmissionAgent(session.location, AgentV2.ID.make(input.agent), true)
+        const id = EventV2.ID.create()
         yield* events.publish(SessionEvent.AgentSwitched, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),
           timestamp: yield* DateTime.now,
           agent: input.agent,
-        })
+        }, { id }).pipe(
+          Effect.provideService(CurrentAgentSwitch, {
+            id,
+            currentAgent: session.agent ?? (yield* requireAdmissionAgent(session.location, undefined, false)),
+          }),
+          Effect.catchDefect((error) => error instanceof SessionInput.ModeChangeRefused
+            ? Effect.fail(error)
+            : Effect.die(error)),
+        )
       }),
       switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
         yield* result.requireWritable(input.sessionID)

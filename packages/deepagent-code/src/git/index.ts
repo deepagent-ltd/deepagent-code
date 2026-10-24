@@ -52,6 +52,7 @@ export type Patch = {
 }
 
 export interface PatchOptions {
+  readonly relative?: boolean
   readonly context?: number
   readonly maxOutputBytes?: number
 }
@@ -137,9 +138,9 @@ export interface Interface {
   readonly hasHead: (cwd: string) => Effect.Effect<boolean>
   readonly mergeBase: (cwd: string, base: string, head?: string) => Effect.Effect<string | undefined>
   readonly show: (cwd: string, ref: string, file: string, prefix?: string) => Effect.Effect<string>
-  readonly status: (cwd: string) => Effect.Effect<Item[]>
-  readonly diff: (cwd: string, ref: string) => Effect.Effect<Item[]>
-  readonly stats: (cwd: string, ref: string) => Effect.Effect<Stat[]>
+  readonly status: (cwd: string, options?: { readonly relative?: boolean }) => Effect.Effect<Item[]>
+  readonly diff: (cwd: string, ref: string, options?: { readonly relative?: boolean }) => Effect.Effect<Item[]>
+  readonly stats: (cwd: string, ref: string, options?: { readonly relative?: boolean }) => Effect.Effect<Stat[]>
   readonly patch: (cwd: string, ref: string, file: string, options?: PatchOptions) => Effect.Effect<Patch>
   readonly patchAll: (cwd: string, ref: string, options?: PatchOptions) => Effect.Effect<Patch>
   readonly patchUntracked: (cwd: string, file: string, options?: PatchOptions) => Effect.Effect<Patch>
@@ -165,7 +166,8 @@ const kind = (code: string): Kind => {
   return "modified"
 }
 
-const diagnostic = (result: Result) => result.stderr.toString("utf8").trim() || out(result) || `git exited ${result.exitCode}`
+const diagnostic = (result: Result) =>
+  result.stderr.toString("utf8").trim() || out(result) || `git exited ${result.exitCode}`
 
 const validPath = (value: string) => {
   const normalized = value.replace(/\\/g, "/")
@@ -292,22 +294,52 @@ export const layer = Layer.effect(
       return result.text()
     })
 
-    const status = Effect.fn("Git.status")(function* (cwd: string) {
+    const status = Effect.fn("Git.status")(function* (cwd: string, options?: { readonly relative?: boolean }) {
+      const directoryPrefix = options?.relative
+        ? (yield* run(["rev-parse", "--show-prefix"], { cwd })).text().replace(/\r?\n$/, "")
+        : ""
       return nuls(
-        yield* text(["status", "--porcelain=v1", "--untracked-files=all", "--no-renames", "-z", "--", "."], {
-          cwd,
-        }),
+        yield* text(
+          [
+            ...(options?.relative ? ["-c", "status.relativePaths=true"] : []),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--no-renames",
+            "-z",
+            "--",
+            ".",
+          ],
+          {
+            cwd,
+          },
+        ),
       ).flatMap((item) => {
-        const file = item.slice(3)
+        const rootPath = item.slice(3)
+        const file =
+          directoryPrefix && rootPath.startsWith(directoryPrefix) ? rootPath.slice(directoryPrefix.length) : rootPath
         if (!file) return []
         const code = item.slice(0, 2)
         return [{ file, code, status: kind(code) } satisfies Item]
       })
     })
 
-    const diff = Effect.fn("Git.diff")(function* (cwd: string, ref: string) {
+    const diff = Effect.fn("Git.diff")(function* (cwd: string, ref: string, options?: { readonly relative?: boolean }) {
       const list = nuls(
-        yield* text(["diff", "--no-ext-diff", "--no-renames", "--name-status", "-z", ref, "--", "."], { cwd }),
+        yield* text(
+          [
+            "diff",
+            ...(options?.relative ? ["--relative", "--no-textconv"] : []),
+            "--no-ext-diff",
+            "--no-renames",
+            "--name-status",
+            "-z",
+            ref,
+            "--",
+            ".",
+          ],
+          { cwd },
+        ),
       )
       return list.flatMap((code, idx) => {
         if (idx % 2 !== 0) return []
@@ -317,9 +349,26 @@ export const layer = Layer.effect(
       })
     })
 
-    const stats = Effect.fn("Git.stats")(function* (cwd: string, ref: string) {
+    const stats = Effect.fn("Git.stats")(function* (
+      cwd: string,
+      ref: string,
+      options?: { readonly relative?: boolean },
+    ) {
       return nuls(
-        yield* text(["diff", "--no-ext-diff", "--no-renames", "--numstat", "-z", ref, "--", "."], { cwd }),
+        yield* text(
+          [
+            "diff",
+            ...(options?.relative ? ["--relative", "--no-textconv"] : []),
+            "--no-ext-diff",
+            "--no-renames",
+            "--numstat",
+            "-z",
+            ref,
+            "--",
+            ".",
+          ],
+          { cwd },
+        ),
       ).flatMap((item) => {
         const a = item.indexOf("\t")
         const b = item.indexOf("\t", a + 1)
@@ -342,7 +391,17 @@ export const layer = Layer.effect(
 
     const patch = Effect.fn("Git.patch")(function* (cwd: string, ref: string, file: string, options?: PatchOptions) {
       const result = yield* run(
-        ["diff", "--patch", "--no-ext-diff", "--no-renames", `--unified=${options?.context ?? 3}`, ref, "--", file],
+        [
+          "diff",
+          ...(options?.relative ? ["--relative", "--no-textconv"] : []),
+          "--patch",
+          "--no-ext-diff",
+          "--no-renames",
+          `--unified=${options?.context ?? 3}`,
+          ref,
+          "--",
+          file,
+        ],
         { cwd, maxOutputBytes: options?.maxOutputBytes },
       )
       return { text: result.truncated ? "" : result.text(), truncated: result.truncated } satisfies Patch
@@ -350,7 +409,17 @@ export const layer = Layer.effect(
 
     const patchAll = Effect.fn("Git.patchAll")(function* (cwd: string, ref: string, options?: PatchOptions) {
       const result = yield* run(
-        ["diff", "--patch", "--no-ext-diff", "--no-renames", `--unified=${options?.context ?? 3}`, ref, "--", "."],
+        [
+          "diff",
+          ...(options?.relative ? ["--relative", "--no-textconv"] : []),
+          "--patch",
+          "--no-ext-diff",
+          "--no-renames",
+          `--unified=${options?.context ?? 3}`,
+          ref,
+          "--",
+          ".",
+        ],
         { cwd, maxOutputBytes: options?.maxOutputBytes },
       )
       return { text: result.text(), truncated: result.truncated } satisfies Patch
@@ -418,9 +487,12 @@ export const layer = Layer.effect(
     })
 
     const porcelainStatus = Effect.fn("Git.porcelainStatus")(function* (cwd: string) {
-      const result = yield* run(["status", "--porcelain=v1", "--untracked-files=all", "--no-renames", "-z", "--", "."], {
-        cwd,
-      })
+      const result = yield* run(
+        ["status", "--porcelain=v1", "--untracked-files=all", "--no-renames", "-z", "--", "."],
+        {
+          cwd,
+        },
+      )
       if (result.exitCode !== 0) return
       const entries = nuls(result.text()).flatMap((item) => {
         const file = item.slice(3)
@@ -428,7 +500,11 @@ export const layer = Layer.effect(
         const code = item.slice(0, 2)
         return [{ file, code, status: kind(code) } satisfies Item]
       })
-      return { entries, paths: entries.map((entry) => entry.file), clean: entries.length === 0 } satisfies PorcelainStatus
+      return {
+        entries,
+        paths: entries.map((entry) => entry.file),
+        clean: entries.length === 0,
+      } satisfies PorcelainStatus
     })
 
     const resolveRef = Effect.fn("Git.resolveRef")(function* (cwd: string, ref = "HEAD") {

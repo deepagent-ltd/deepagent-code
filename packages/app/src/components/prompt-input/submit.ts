@@ -13,6 +13,9 @@ import { useLocal } from "@/context/local"
 import { usePermission } from "@/context/permission"
 import { type ContextItem, type ImageAttachmentPart, type Prompt, usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
+import { usePlatform } from "@/context/platform"
+import type { SharedBrowserSchema } from "@deepagent-code/core/browser/shared-schema"
+import { PromptPrepare } from "@deepagent-code/core/session/prompt-prepare"
 import { useSync } from "@/context/sync"
 import { Identifier } from "@/utils/id"
 import { Worktree as WorktreeState } from "@/utils/worktree"
@@ -22,6 +25,8 @@ import { formatServerError } from "@/utils/server-errors"
 import { ScopedKey } from "@/utils/server-scope"
 import { deepAgentPromptModeFromConfig } from "@/utils/deepagent-settings"
 import { resolveScenarioOverride, resetScenarioOnStop } from "./scenario-override"
+import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
+import { createGoalStop } from "@/utils/goal-stop"
 
 type PendingPrompt = {
   abort: AbortController
@@ -29,10 +34,11 @@ type PendingPrompt = {
 }
 
 const pending = new Map<string, PendingPrompt>()
+const pauseGoalFromComposer = createGoalStop()
 
-// D1: idle deadline for the prepare SSE stream (see prepareDeepAgentPromptDraft). Exported
-// mutable so tests can shrink it instead of waiting the real 90s.
-export let prepareStreamIdleTimeoutMs = 90_000
+// Legacy test hook name retained; this is now one absolute deadline including fetch
+// response headers. Progress never renews the preparation budget.
+export let prepareStreamIdleTimeoutMs = PromptPrepare.TIMEOUT_MS
 export const setPrepareStreamIdleTimeoutMs = (ms: number) => {
   prepareStreamIdleTimeoutMs = ms
 }
@@ -43,6 +49,7 @@ export type FollowupDraft = {
   prompt: Prompt
   context: (ContextItem & { key: string })[]
   agent: string
+  delivery?: "steer" | "queue"
   model: { providerID: string; modelID: string }
   variant?: string
   metadata?: {
@@ -84,6 +91,8 @@ type SessionPromptAsyncInput = Parameters<ReturnType<typeof useSDK>["client"]["s
 type AdmissionRetry = {
   promptInput: SessionPromptAsyncInput & { messageID: string; intentID: string }
   optimisticParts: Part[]
+  delivery?: "steer" | "queue"
+  ownerInput?: SharedBrowserSchema.InputStamp
 }
 
 type SubmissionIdentity = {
@@ -108,9 +117,10 @@ type RawSdkClient = {
 }
 
 type DeepAgentPromptPrepareStreamEvent =
+  | { type: "started" }
   | { type: "progress"; preview: string }
   | { type: "result"; result: DeepAgentPromptPrepareResult }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; code?: string }
 
 type FollowupSendInput = {
   client: ReturnType<typeof useSDK>["client"]
@@ -119,6 +129,16 @@ type FollowupSendInput = {
   draft: FollowupDraft
   messageID?: string
   intentID?: string
+  stampOwnerInput?: (input: {
+    sessionID: string
+    inputID: string
+    originalSubmissionID: string
+    rawInput: string
+  }) => Promise<SharedBrowserSchema.InputStamp | undefined>
+  sealOwnerInput?: (input: {
+    stamp: SharedBrowserSchema.InputStamp
+    prompt: unknown
+  }) => Promise<SharedBrowserSchema.InputStamp>
   retry?: AdmissionRetry
   intentSource?: "composer" | "intelligence" | "followup" | "rewrite"
   optimisticBusy?: boolean
@@ -156,6 +176,7 @@ const submissionFingerprint = (draft: FollowupDraft) =>
       }))
       .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
     agent: draft.agent,
+    delivery: draft.delivery,
     model: draft.model,
     variant: draft.variant,
     metadata: draft.metadata,
@@ -178,65 +199,68 @@ async function prepareDeepAgentPromptDraft(input: {
   onProgress?: (preview: string) => void
 }) {
   const raw = input.client as unknown as RawSdkClient
-  const response = await raw.client.request<ReadableStream<Uint8Array>>({
-    method: "POST",
-    url: "/session/{sessionID}/prompt_prepare_stream",
-    path: { sessionID: input.sessionID },
-    body: {
-      mode: input.mode,
-      output_language: input.outputLanguage,
-      intent_id: input.intentID,
-      intent_source: input.intentSource,
-      parts: input.parts,
-    },
-    headers: {
-      "Content-Type": "application/json",
-    },
-    parseAs: "stream",
-    signal: input.signal,
+  const abort = new AbortController()
+  const state: { expired: boolean; reader?: ReadableStreamDefaultReader<Uint8Array> } = { expired: false }
+  const interrupted = () => abort.abort(input.signal?.reason)
+  input.signal?.addEventListener("abort", interrupted, { once: true })
+  if (input.signal?.aborted) interrupted()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      state.expired = true
+      const error = new PromptPrepare.Timeout()
+      reject(error)
+      abort.abort(error)
+    }, prepareStreamIdleTimeoutMs)
   })
-  if (!response.data) throw new Error("Prompt draft prepare returned no stream")
-
-  const decoder = new TextDecoder()
-  const reader = response.data.getReader()
-  let buffer = ""
-  let prepared: DeepAgentPromptPrepareResult | undefined
-  const readEvent = (block: string) => {
-    const data = block
-      .split("\n")
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
-      .join("\n")
-    if (!data) return
-    const event = JSON.parse(data) as DeepAgentPromptPrepareStreamEvent
-    if (event.type === "progress") {
-      input.onProgress?.(event.preview)
-      return
-    }
-    if (event.type === "error") throw new Error(event.message)
-    prepared = event.result
-  }
-
-  // D1 guard: the terminal SSE event must arrive for the stream to end. A server that never
-  // emits one (hung refinement, a dropped connection that keeps the body open) would leave the
-  // composer in its locked preparing state forever. Race each read against an idle deadline so
-  // the failure surfaces to the W1-3 degrade path instead. The timer is cleared per iteration
-  // (no leak across chunks) and the reader is cancelled on ANY early exit so the underlying
-  // connection does not stay pinned.
-  const readChunk = async () => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error("Prompt draft prepare stream timed out")), prepareStreamIdleTimeoutMs)
-    })
-    try {
-      return await Promise.race([reader.read(), deadline])
-    } finally {
-      clearTimeout(timer)
-    }
-  }
   try {
+    // Install the absolute deadline before fetch, not after response headers arrive.
+    const response = await Promise.race([
+      raw.client.request<ReadableStream<Uint8Array>>({
+        method: "POST",
+        url: "/session/{sessionID}/prompt_prepare_stream",
+        path: { sessionID: input.sessionID },
+        body: {
+          mode: input.mode,
+          output_language: input.outputLanguage,
+          intent_id: input.intentID,
+          intent_source: input.intentSource,
+          parts: input.parts,
+        },
+        headers: { "Content-Type": "application/json" },
+        parseAs: "stream",
+        signal: abort.signal,
+      }),
+      deadline,
+    ])
+    if (!response.data) throw new Error("Prompt draft prepare returned no stream")
+    const reader = response.data.getReader()
+    state.reader = reader
+    const decoder = new TextDecoder()
+    let buffer = ""
+    let prepared: DeepAgentPromptPrepareResult | undefined
+    const readEvent = (block: string) => {
+      const data = block
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n")
+      if (!data) return
+      const event = JSON.parse(data) as DeepAgentPromptPrepareStreamEvent
+      if (event.type === "started") return
+      if (event.type === "progress") {
+        input.onProgress?.(event.preview)
+        return
+      }
+      if (event.type === "error") {
+        if (event.code === "PROMPT_PREPARE_TIMEOUT") throw new PromptPrepare.Timeout()
+        throw new Error(event.message)
+      }
+      prepared = event.result
+    }
     while (true) {
-      const part = await readChunk()
+      const part = await Promise.race([reader.read(), deadline])
+      if (state.expired) throw new PromptPrepare.Timeout()
       if (part.done) break
       buffer += decoder.decode(part.value, { stream: true })
       const blocks = buffer.split("\n\n")
@@ -245,15 +269,19 @@ async function prepareDeepAgentPromptDraft(input: {
     }
     buffer += decoder.decode()
     if (buffer.trim()) readEvent(buffer)
-  } catch (err) {
-    await reader.cancel().catch(() => undefined)
-    throw err
+    if (!prepared) throw new Error("Prompt draft prepare returned no result")
+    return prepared
+  } catch (error) {
+    abort.abort(error)
+    // Abort the actual fetch immediately. A faulty stream cancel callback must not
+    // hold the UI's Stop/deadline recovery hostage.
+    void state.reader?.cancel().catch(() => undefined)
+    if (state.expired) throw new PromptPrepare.Timeout()
+    throw error
+  } finally {
+    clearTimeout(timer)
+    input.signal?.removeEventListener("abort", interrupted)
   }
-  if (!prepared) {
-    await reader.cancel().catch(() => undefined)
-    throw new Error("Prompt draft prepare returned no result")
-  }
-  return prepared
 }
 
 export type DeepAgentPromptSuggestion = {
@@ -336,6 +364,16 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
 
   const messageID = input.retry?.promptInput.messageID ?? input.messageID ?? Identifier.ascending("message")
   const intentID = input.retry?.promptInput.intentID ?? input.intentID ?? Identifier.ascending("message")
+  // Stamp the original human submission before prompt preparation, worktree waits or
+  // slow attachment loading. A retry carries its old stamp and never earns a new order.
+  const ownerInput = input.retry
+    ? input.retry.ownerInput
+    : await input.stampOwnerInput?.({
+        sessionID: input.draft.sessionID,
+        inputID: messageID,
+        originalSubmissionID: intentID,
+        rawInput: text,
+      })
   const buildParts = (promptText: string) =>
     buildRequestParts({
       prompt: input.draft.prompt,
@@ -383,6 +421,10 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       setIdle()
       input.onPromptPrepareEnd?.()
       if (input.promptPrepareSignal?.aborted) return false
+      if (err instanceof PromptPrepare.Timeout) {
+        showToast({ variant: "error", title: "Prompt preparation timed out", description: err.message })
+        return false
+      }
       // W1-3 — degrade to the direct path instead of blocking the send: refinement is an
       // enhancement, not a gate. V2-only servers already degrade server-side (W0-3a); this
       // covers older servers and transient prepare failures so the raw input still goes out.
@@ -497,12 +539,29 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       variant: input.draft.variant,
       metadata,
     }
-    input.onPromptInput?.({ promptInput, optimisticParts: submittedParts.optimisticParts })
-    const admission = await input.client.v2.session.prompt({
-      sessionID: promptInput.sessionID,
-      id: promptInput.messageID,
-      prompt: toV2Prompt(promptInput),
+    const prompt = toV2Prompt(promptInput)
+    const sealedOwnerInput = ownerInput?.promptHash
+      ? ownerInput
+      : ownerInput && input.sealOwnerInput
+        ? await input.sealOwnerInput({ stamp: ownerInput, prompt })
+        : undefined
+    input.onPromptInput?.({
+      promptInput,
+      optimisticParts: submittedParts.optimisticParts,
+      delivery: input.retry ? input.retry.delivery : input.draft.delivery,
+      ...(sealedOwnerInput ? { ownerInput: sealedOwnerInput } : {}),
     })
+    const admission = await input.client.v2.session.prompt(
+      {
+        sessionID: promptInput.sessionID,
+        id: promptInput.messageID,
+        delivery: input.retry ? input.retry.delivery : input.draft.delivery,
+        prompt,
+      },
+      sealedOwnerInput
+        ? { headers: { "x-dac-user-input": base64Encode(JSON.stringify(sealedOwnerInput)) } }
+        : undefined,
+    )
     if (!admission.data?.data.id) throw new Error("Prompt admission returned no durable receipt")
     // A chat steer is only projected into canonical history at the next provider boundary. Keep the
     // client-keyed placeholder visible until that correlated message.updated event replaces it.
@@ -567,6 +626,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const prompt = usePrompt()
   const layout = useLayout()
   const language = useLanguage()
+  const platform = usePlatform()
   const params = useParams()
   const recoveryRequired = (sessionID = params.id) =>
     !!sessionID && sync.data.session_status?.[sessionID]?.type === "recovery_required"
@@ -619,6 +679,40 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     resetScenarioOnStop(pendingKey(sessionID), ScopedKey.from(sdk.scope, sdk.directory))
 
     input.onAbort?.()
+    const captured = { client: sdk.client, directory: sdk.directory, scope: sdk.scope, sessionID }
+    const observed = serverSync.data.session_goal[sessionID]
+    if (observed && (!observed.control || !GoalClient.confirmedTerminal(observed.control))) {
+      try {
+        const result = await pauseGoalFromComposer({
+          client: captured.client as unknown as GoalClient.Client,
+          scope: { server: JSON.stringify([captured.scope, sdk.url]), directory: captured.directory, sessionID },
+          goalID: observed.goalId,
+          current: () =>
+            sdk.client === captured.client &&
+            sdk.scope === captured.scope &&
+            sdk.directory === captured.directory &&
+            params.id === sessionID,
+        })
+        if (
+          sdk.client !== captured.client ||
+          sdk.scope !== captured.scope ||
+          sdk.directory !== captured.directory ||
+          params.id !== sessionID
+        )
+          return
+        await serverSync.goal.sync(captured.directory, sessionID)
+        showToast({
+          title: language.t(
+            result.inFlight || result.recoveryRequired || result.preparation !== "ready"
+              ? "goal.control.pausePending"
+              : "composer.goal.phase.paused",
+          ),
+        })
+      } catch (error) {
+        showToast({ title: language.t("goal.control.failed"), description: errorMessage(error), variant: "error" })
+      }
+      return
+    }
 
     const submission = await cancelPending({ preserveDraft: true })
     if (recoveryRequired(sessionID)) return
@@ -700,6 +794,23 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     const currentModel = local.model.current()
     const currentAgent = local.agent.current()
+    const effectiveAgent = local.agent.effective?.()?.name
+    const goal = params.id ? serverSync.data.session_goal[params.id] : undefined
+    if (
+      goal &&
+      currentAgent?.name !== effectiveAgent &&
+      (!goal.control ||
+        (!GoalClient.confirmedTerminal(goal.control) &&
+          !(
+            goal.control.requestedPhase === "paused" &&
+            !goal.control.inFlight &&
+            !goal.control.recoveryRequired &&
+            goal.control.preparation === "ready"
+          )))
+    ) {
+      showToast({ title: language.t("goal.control.pauseBeforeMode") })
+      return
+    }
     const variant = local.model.variant.current()
     if (!currentModel || !currentAgent) {
       showToast({
@@ -800,6 +911,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       prompt: currentPrompt,
       context,
       agent,
+      delivery: !isNewSession && input.working() && currentAgent?.name !== effectiveAgent ? "queue" : undefined,
       model,
       variant,
     }
@@ -1010,6 +1122,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       draft,
       messageID,
       intentID,
+      stampOwnerInput: platform.sharedBrowser?.stampInput,
+      sealOwnerInput: platform.sharedBrowser?.sealInput,
       retry: identity.request,
       intentSource: preparesPromptDraft ? "intelligence" : "composer",
       optimisticBusy: sessionDirectory === projectDirectory,

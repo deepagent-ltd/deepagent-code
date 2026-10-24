@@ -364,9 +364,9 @@ export const OversightDashboard: Component<OversightDashboardProps> = (props) =>
           </Show>
         </section>
 
-        {/* ── Human Takeover (§D2) ── */}
-        <section>
-          <h3 class="mb-1 text-13-medium text-text-strong">{language.t("oversight.takeover.title")}</h3>
+        {/* Historical takeover is an audit record, not execution control. Keep it in diagnostics. */}
+        <details data-audit-only="human-intervention">
+          <summary class="mb-1 cursor-pointer text-13-medium text-text-strong">{language.t("oversight.takeover.title")}</summary>
           <p class="mb-2 text-11-regular text-text-weak">{language.t("oversight.takeover.description")}</p>
           <textarea
             class="w-full rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-12-regular text-text-strong outline-none resize-none focus:ring-2 focus:ring-accent-base"
@@ -377,9 +377,9 @@ export const OversightDashboard: Component<OversightDashboardProps> = (props) =>
           />
           <div class="mt-2 flex items-center gap-2">
             <Button
-              variant="primary"
+              variant="secondary"
               size="small"
-              icon="shield"
+              icon="history"
               onClick={submitTakeover}
               disabled={takeoverBusy() || !takeoverReason().trim()}
             >
@@ -392,7 +392,7 @@ export const OversightDashboard: Component<OversightDashboardProps> = (props) =>
               <span class="text-11-regular text-text-weak">{takeoverNote()}</span>
             </Show>
           </div>
-        </section>
+        </details>
 
         {/* ── Rollback (§D2) ── */}
         <section>

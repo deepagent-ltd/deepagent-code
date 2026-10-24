@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
 
-for (const mode of ["idle", "reads", "denied", "warm", "pending", "oversized", "proxy", "proxyread", "account"])
+for (const mode of ["idle", "reads", "denied", "warm", "pending", "oversized", "proxy", "proxyread", "account", "damaged"])
   test(`actual MCP ${mode} bypasses instance bootstrap and preserves the complete cold source`, async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-mcp-readonly-")))
     await Promise.all(["home", "tmp", "project"].map((name) => fs.mkdir(path.join(root, name), { mode: 0o700 })))

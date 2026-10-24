@@ -1,5 +1,6 @@
 import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { readonlySet } from "@deepagent-code/core/util/readonly-collections"
+import { ProviderVariants } from "@deepagent-code/core/provider-variants"
 
 export type BundledSDK = {
   languageModel(modelId: string): LanguageModelV3
@@ -19,11 +20,9 @@ type CompatibilityModel = {
 
 export const SUPPORTED_DEEPAGENT_PROVIDER_IDS = readonlySet(new Set(["openai", "deepseek", "anthropic"]))
 
-export const SUPPORTED_DEEPAGENT_PROVIDER_PACKAGES = readonlySet(new Set([
-  "@ai-sdk/openai",
-  "@ai-sdk/openai-compatible",
-  "@ai-sdk/anthropic",
-]))
+export const SUPPORTED_DEEPAGENT_PROVIDER_PACKAGES = readonlySet(
+  new Set(["@ai-sdk/openai", "@ai-sdk/openai-compatible", "@ai-sdk/anthropic"]),
+)
 
 export function deepagentUpstreamProviderID(model: CompatibilityModel) {
   const configured = model.options?.upstreamProviderID
@@ -65,10 +64,7 @@ export function applyCompatibilityProviderOptions(model: CompatibilityModel, opt
     delete options.fetch
   }
 
-  if (
-    model.api.npm === "@ai-sdk/openai-compatible" &&
-    `${model.id ?? ""} ${model.api.id ?? ""}`.toLowerCase().includes("deepseek-v4")
-  ) {
+  if (model.api.npm === "@ai-sdk/openai-compatible" && ProviderVariants.deepseek(model.api.id ?? model.id ?? "")) {
     const transformRequestBody = options.transformRequestBody
     options.transformRequestBody = (input: Record<string, unknown>) => {
       const body = typeof transformRequestBody === "function" ? transformRequestBody(input) : input
@@ -80,7 +76,7 @@ export function applyCompatibilityProviderOptions(model: CompatibilityModel, opt
       ) {
         return body
       }
-      return { ...body, thinking: { type: "disabled" } }
+      return { ...body, thinking: { type: "disabled" }, reasoning_effort: "none" }
     }
   }
 }

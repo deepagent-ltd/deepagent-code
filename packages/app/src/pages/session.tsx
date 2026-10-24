@@ -35,7 +35,7 @@ import { useComments } from "@/context/comments"
 import { getSessionPrefetch, SESSION_PREFETCH_TTL } from "@/context/global-sync/session-prefetch"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
-import { RIGHT_PANEL_RAIL_PX, useLayout } from "@/context/layout"
+import { useLayout } from "@/context/layout"
 import { usePrompt } from "@/context/prompt"
 import { deepAgentModeFromConfig } from "@/utils/deepagent-settings"
 import { useSDK } from "@/context/sdk"
@@ -64,6 +64,7 @@ import {
   shouldFocusTerminalOnKeyDown,
 } from "@/pages/session/helpers"
 import { MessageTimeline } from "@/pages/session/message-timeline"
+import type { TaskProgressGit } from "@/pages/session/task-progress"
 import { SessionHistoryLoadState } from "@/pages/session/history-load-state"
 import { type DiffStyle, SessionReviewTab, type SessionReviewTabProps } from "@/pages/session/review-tab"
 import { useSessionLayout } from "@/pages/session/session-layout"
@@ -229,6 +230,9 @@ export default function Page() {
 
   const [ui, setUi] = createStore({
     pendingMessage: undefined as string | undefined,
+    taskOverviewOpened: false,
+    gitRefsRequested: false,
+    pageVisible: document.visibilityState !== "hidden",
     reviewSnap: false,
     scrollGesture: 0,
     scroll: {
@@ -239,6 +243,7 @@ export default function Page() {
   })
 
   const [fileNavigator, setFileNavigator] = createSignal<(filePath: string, line: number) => void>()
+  const [taskProgressAvailable, setTaskProgressAvailable] = createSignal(false)
 
   const composer = createSessionComposerState()
 
@@ -313,19 +318,14 @@ export default function Page() {
   const desktopReviewOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "review")
   const desktopFileTreeOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "files")
   const desktopRightPanelOpen = createMemo(() => isDesktop() && view().rightPanel.opened())
+  const desktopRightPanelExpanded = createMemo(() => desktopRightPanelOpen() && view().workPanel.expanded())
   const mobileMessagesOpen = createMemo(() => !isDesktop() && view().rightPanel.mode() === "im")
-  // T3.2: the icon rail is ALWAYS present on desktop, so the session content always yields the rail
-  // width; the content-panel width (wide bucket for review/files, else narrow) is subtracted on top only
-  // when a panel is open.
   const sessionPanelWidth = createMemo(() => {
-    if (!isDesktop()) return "100%"
+    if (!isDesktop() || !desktopRightPanelOpen()) return "100%"
     const mode = view().rightPanel.mode()
-    const bucket = mode === "review" || mode === "files" ? "wide" : "narrow"
-    const content = desktopRightPanelOpen() ? layout.rightPanel.width(bucket) : 0
-    return `calc(100% - ${RIGHT_PANEL_RAIL_PX + content}px - var(--workbench-gap)${desktopRightPanelOpen() ? " - var(--workbench-gap)" : ""})`
+    const bucket = mode === "home" || mode === "browser" || mode === "review" || mode === "files" ? "wide" : "narrow"
+    return `calc(100% - ${layout.rightPanel.width(bucket)}px - var(--workbench-gap))`
   })
-  // The composer is only truly centered when the panel content is closed AND the rail (a thin 44px
-  // strip) is the only thing on the right — visually still effectively centered.
   const centered = createMemo(() => isDesktop() && !desktopRightPanelOpen())
 
   function normalizeTab(tab: string) {
@@ -382,11 +382,14 @@ export default function Page() {
     return sync.session.history.loading(id)
   })
   const userMessages = createMemo(
-    () => displayMessages(messages().filter((m): m is UserMessage => {
-      if (m.role !== "user") return false
-      const parts = sync.data.part[m.id] ?? []
-      return parts.length === 0 || parts.some((part) => part.type !== "text" || !part.synthetic)
-    })),
+    () =>
+      displayMessages(
+        messages().filter((m): m is UserMessage => {
+          if (m.role !== "user") return false
+          const parts = sync.data.part[m.id] ?? []
+          return parts.length === 0 || parts.some((part) => part.type !== "text" || !part.synthetic)
+        }),
+      ),
     emptyUserMessages,
     { equals: same },
   )
@@ -444,6 +447,17 @@ export default function Page() {
     deferRender: false,
   })
 
+  const [comparison, setComparison] = persisted(
+    Persist.global("session-git-comparison"),
+    createStore<{ bases: Record<string, string | undefined> }>({ bases: {} }),
+  )
+  const comparisonScope = createMemo(() => JSON.stringify([serverSDK.scope, sdk.directory, params.id]))
+  const comparisonBase = createMemo(() => (params.id ? comparison.bases[comparisonScope()] : undefined))
+  makeEventListener(document, "visibilitychange", () => setUi("pageVisible", document.visibilityState !== "hidden"))
+  createEffect(
+    on(comparisonScope, () => setUi({ taskOverviewOpened: false, gitRefsRequested: false }), { defer: true }),
+  )
+
   const [followup, setFollowup] = persisted(
     Persist.serverWorkspace(serverSDK.scope, sdk.directory, "followup", ["followup.v1"]),
     createStore<{
@@ -494,14 +508,7 @@ export default function Page() {
   const changesOptions = createMemo<ChangeMode[]>(() => {
     const list: ChangeMode[] = []
     if (sync.project?.vcs === "git") list.push("git")
-    if (
-      sync.project?.vcs === "git" &&
-      sync.data.vcs?.branch &&
-      sync.data.vcs?.default_branch &&
-      sync.data.vcs.branch !== sync.data.vcs.default_branch
-    ) {
-      list.push("branch")
-    }
+    if (sync.project?.vcs === "git") list.push("branch")
     list.push("turn")
     return list
   })
@@ -509,32 +516,150 @@ export default function Page() {
   const wantsReview = createMemo(() =>
     isDesktop() ? desktopFileTreeOpen() || desktopReviewOpen() : store.mobileTab === "changes",
   )
+  const overviewKey = createMemo(
+    () => ["session-git-summary", serverSDK.scope, sdk.directory, params.id, comparisonBase()] as const,
+  )
+  const overviewEnabled = createMemo(
+    () =>
+      !!params.id &&
+      !!sync.project &&
+      ui.pageVisible &&
+      (ui.taskOverviewOpened || (wantsReview() && store.changes === "branch")),
+  )
+  const overview = createQuery(() => ({
+    queryKey: overviewKey(),
+    enabled: overviewEnabled(),
+    queryFn: async ({ signal }) => {
+      const response = await sdk.client.vcs.summary({ baseRef: comparisonBase() }, { signal })
+      if (!response.data) throw new Error("Git overview unavailable")
+      if (response.data.directory !== sdk.directory) throw new Error("Git overview scope changed")
+      return response.data
+    },
+    retry: false,
+    refetchInterval: overviewEnabled() ? 15_000 : false,
+    refetchOnWindowFocus: false,
+  }))
+  const refsKey = createMemo(() => ["session-git-refs", serverSDK.scope, sdk.directory, params.id] as const)
+  const refsEnabled = createMemo(
+    () => overviewEnabled() && ui.taskOverviewOpened && ui.gitRefsRequested && sync.project?.vcs === "git",
+  )
+  const refs = createQuery(() => ({
+    queryKey: refsKey(),
+    enabled: refsEnabled(),
+    queryFn: async ({ signal }) => {
+      const response = await sdk.client.vcs.refs({}, { signal })
+      if (!response.data || response.data.directory !== sdk.directory) throw new Error("Git refs scope changed")
+      return response.data
+    },
+    retry: false,
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
+  }))
+  // Enabling a consumer must not cancel the request just started for that same key.
+  const bindQueryLifetime = (key: () => readonly unknown[], enabled: () => boolean) => {
+    createEffect(
+      on(
+        () => ({ key: key(), enabled: enabled() }),
+        (next, previous) => {
+          if (
+            previous &&
+            (previous.key.length !== next.key.length || previous.key.some((item, index) => item !== next.key[index]))
+          )
+            void queryClient.cancelQueries({ queryKey: previous.key, exact: true })
+          if (!next.enabled) void queryClient.cancelQueries({ queryKey: next.key, exact: true })
+        },
+      ),
+    )
+    onCleanup(() => void queryClient.cancelQueries({ queryKey: key(), exact: true }))
+  }
+  bindQueryLifetime(overviewKey, overviewEnabled)
+  bindQueryLifetime(refsKey, refsEnabled)
+  const taskProgressGit = createMemo<TaskProgressGit>(() => ({
+    summary: overview.data,
+    loading: overview.isFetching,
+    failed: overview.isError,
+    baseRef: comparisonBase() ?? overview.data?.baseRef ?? undefined,
+    refs: refs.data?.items ?? [],
+    refsLoading: refs.isFetching,
+    refsFailed: refs.isError,
+    refsTruncated: refs.data?.truncated,
+    onOpenRefs: () => setUi("gitRefsRequested", true),
+    onBaseRefChange: (ref) => {
+      if (!params.id || !refs.data?.items.some((item) => item.ref === ref)) return
+      setComparison("bases", comparisonScope(), ref)
+    },
+    onOpenReview: () => {
+      const base = comparisonBase() ?? overview.data?.baseRef ?? sync.data.vcs?.default_branch
+      if (params.id && base) setComparison("bases", comparisonScope(), base)
+      setStore("changes", "branch")
+      if (!isDesktop()) setStore("mobileTab", "changes")
+      openReviewPanel()
+    },
+    onRefresh: () => {
+      void overview.refetch({ cancelRefetch: false })
+    },
+  }))
   const vcsMode = createMemo<VcsMode | undefined>(() => {
     if (store.changes === "git" || store.changes === "branch") return store.changes
   })
   const vcsKey = createMemo(
-    () => ["session-vcs", sdk.directory, sync.data.vcs?.branch ?? "", sync.data.vcs?.default_branch ?? ""] as const,
+    () =>
+      [
+        "session-vcs",
+        serverSDK.scope,
+        sdk.directory,
+        params.id,
+        comparisonBase(),
+        overview.data?.baseOID,
+        overview.data?.headOID,
+        sync.data.vcs?.branch ?? "",
+        sync.data.vcs?.default_branch ?? "",
+      ] as const,
   )
+  const patchEnabled = createMemo(() => {
+    const mode = vcsMode()
+    const summary = overview.data
+    return (
+      wantsReview() &&
+      ui.pageVisible &&
+      sync.project?.vcs === "git" &&
+      (mode !== "branch" || (summary?.state === "ready" && !summary.stale))
+    )
+  })
   const vcsQuery = createQuery(() => {
     const mode = vcsMode()
-    const enabled = wantsReview() && sync.project?.vcs === "git"
-
     return {
       queryKey: [...vcsKey(), mode] as const,
-      enabled,
+      enabled: patchEnabled(),
       queryFn: mode
-        ? () =>
+        ? ({ signal }) =>
             sdk.client.vcs
-              .diff({ mode })
-              .then((result) => list(result.data))
-              .catch((error) => {
-                console.debug("[session-review] failed to load vcs diff", { mode, error })
-                return []
+              .diff(
+                {
+                  mode,
+                  ...(mode === "branch"
+                    ? {
+                        baseRef: comparisonBase() ?? overview.data?.baseRef ?? sync.data.vcs?.default_branch,
+                        baseOID: overview.data?.baseOID ?? undefined,
+                        headOID: overview.data?.headOID ?? undefined,
+                      }
+                    : {}),
+                },
+                { signal },
+              )
+              .then((result) => {
+                if (!result.data) throw new Error("Git comparison unavailable")
+                return list(result.data)
               })
         : skipToken,
     }
   })
-  const refreshVcs = debounce(() => void queryClient.invalidateQueries({ queryKey: vcsKey() }), 100)
+  bindQueryLifetime(() => [...vcsKey(), vcsMode()], patchEnabled)
+  const refreshVcs = debounce(() => {
+    void queryClient.invalidateQueries({ queryKey: vcsKey() })
+    void queryClient.invalidateQueries({ queryKey: overviewKey(), exact: true })
+    void queryClient.invalidateQueries({ queryKey: refsKey(), exact: true })
+  }, 100)
   const reviewDiffs = () => {
     if (store.changes === "git" || store.changes === "branch")
       // avoids suspense
@@ -758,13 +883,17 @@ export default function Page() {
   )
 
   const stopVcs = sdk.event.listen((evt) => {
+    if (evt.details.type === "vcs.branch.updated") {
+      refreshVcs()
+      return
+    }
     if (evt.details.type !== "file.watcher.updated") return
     const props =
       typeof evt.details.properties === "object" && evt.details.properties
         ? (evt.details.properties as Record<string, unknown>)
         : undefined
     const file = typeof props?.file === "string" ? props.file : undefined
-    if (!file || file.startsWith(".git/")) return
+    if (!file) return
     refreshVcs()
   })
   onCleanup(stopVcs)
@@ -875,8 +1004,13 @@ export default function Page() {
 
     // Prefer the open terminal over the composer when it can take focus.
     // Phase 3: check both bottom and side hosts.
-    const bottomVisible = view().panel.bottom.opened() && view().panel.bottom.activeView() === "terminal"
-    const sideVisible = view().rightPanel.mode() === "terminal"
+    const bottomVisible =
+      !desktopRightPanelExpanded() &&
+      !mobileMessagesOpen() &&
+      view().panel.bottom.opened() &&
+      view().panel.bottom.activeView() === "terminal"
+    const sideVisible =
+      view().panel.sideAvailable() && view().rightPanel.opened() && view().rightPanel.mode() === "terminal"
     if (bottomVisible || sideVisible) {
       const id = bottomVisible ? terminalHosts.bottom.active() : terminalHosts.side.active()
       if (id && shouldFocusTerminalOnKeyDown(event) && focusTerminalById(id)) return
@@ -1009,23 +1143,41 @@ export default function Page() {
     }
 
     return (
-      <div class="flex min-w-0 items-center gap-2">
-        <Select
-          options={changesOptions()}
-          current={store.changes}
-          label={label}
-          onSelect={(option) => option && setStore("changes", option)}
-          variant="ghost"
-          size="small"
-          valueClass="text-14-medium"
-        />
-        <Show when={store.changes === "turn" && diffManifest()?.completeness === "truncated"}>
-          <span
-            class="shrink-0 text-11-medium text-text-warning"
-            title={diffManifest()?.truncationReasons.join(", ")}
-          >
-            {language.t("session.context.summary.partial")}
-          </span>
+      <div class="min-w-0 space-y-2">
+        <div class="flex min-w-0 items-center gap-2">
+          <Select
+            options={changesOptions()}
+            current={store.changes}
+            label={label}
+            onSelect={(option) => option && setStore("changes", option)}
+            variant="ghost"
+            size="small"
+            valueClass="text-14-medium"
+          />
+          <Show when={store.changes === "turn" && diffManifest()?.completeness === "truncated"}>
+            <span
+              class="shrink-0 text-11-medium text-text-warning"
+              title={diffManifest()?.truncationReasons.join(", ")}
+            >
+              {language.t("session.context.summary.partial")}
+            </span>
+          </Show>
+        </div>
+        <Show when={store.changes === "branch" && overview.data}>
+          {(value) => (
+            <details class="text-11-regular text-text-weak" data-slot="review-comparison-scope">
+              <summary class="cursor-pointer break-words">
+                {value().branch ?? value().headOID?.slice(0, 8) ?? "—"} →{" "}
+                {value().baseRef?.replace(/^refs\/(heads|remotes)\//, "") ?? "—"}
+                {value().stale || overview.isError ? ` · ${language.t("workPanel.snapshotStale")}` : ""}
+              </summary>
+              <p class="mt-2 break-all">{value().directory}</p>
+              <p class="break-all">base {value().baseOID ?? "—"}</p>
+              <p class="break-all">HEAD {value().headOID ?? "—"}</p>
+              <p class="break-all">merge-base {value().mergeBaseOID ?? "—"}</p>
+              <p>{language.t("workPanel.compareMeaning")}</p>
+            </details>
+          )}
         </Show>
       </div>
     )
@@ -1061,6 +1213,11 @@ export default function Page() {
 
   const reviewEmpty = (input: { loadingClass: string; emptyClass: string }) => {
     if (store.changes === "git" || store.changes === "branch") {
+      if (vcsQuery.isError || (store.changes === "branch" && overview.isError))
+        return empty(language.t("common.requestFailed"))
+      if (store.changes === "branch" && overview.data?.state && overview.data.state !== "ready")
+        return empty(language.t(`workPanel.gitState.${overview.data.state}` as Parameters<typeof language.t>[0]))
+      if (store.changes === "branch" && overview.data?.stale) return empty(language.t("workPanel.snapshotStale"))
       if (!reviewReady()) return <div class={input.loadingClass}>{language.t("session.review.loadingChanges")}</div>
       return empty(reviewEmptyText())
     }
@@ -1673,8 +1830,10 @@ export default function Page() {
   const rolled = createMemo(() => {
     const id = revertMessageID()
     if (!id) return []
-    return (messageBoundary(userMessages(), id)?.rolled ?? emptyUserMessages)
-      .map((item) => ({ id: item.id, text: line(item.id) }))
+    return (messageBoundary(userMessages(), id)?.rolled ?? emptyUserMessages).map((item) => ({
+      id: item.id,
+      text: line(item.id),
+    }))
   })
 
   const fork = createForkAction({
@@ -1785,6 +1944,7 @@ export default function Page() {
       }}
       onResponseSubmit={resumeScroll}
       inputDisabled={reverting()}
+      taskProgressAvailable={taskProgressAvailable()}
       inputControlRef={(control) => {
         promptInputControl = control
       }}
@@ -1832,112 +1992,124 @@ export default function Page() {
       <div class="workbench-session relative size-full overflow-hidden flex flex-col" data-session-id={params.id}>
         <SessionHeader />
         <Show when={params.id}>{(sessionID) => <SessionMcpAppInvocations sessionID={sessionID()} />}</Show>
-      <div class="workbench-split flex-1 min-h-0 flex flex-col md:flex-row">
-        <Show when={!isDesktop()}>
-          <SessionMobileTabs
-            tab={store.mobileTab}
-            onChange={(tab) => setStore("mobileTab", tab)}
-            hasSession={!!params.id}
-            reviewCount={hasReview() ? reviewCount() : 0}
-          />
-        </Show>
+        <div class="workbench-split flex-1 min-h-0 flex flex-col md:flex-row">
+          <Show when={!isDesktop()}>
+            <SessionMobileTabs
+              tab={store.mobileTab}
+              onChange={(tab) => setStore("mobileTab", tab)}
+              hasSession={!!params.id}
+              reviewCount={hasReview() ? reviewCount() : 0}
+            />
+          </Show>
 
-        <div
-          aria-hidden={mobileMessagesOpen()}
-          inert={mobileMessagesOpen()}
-          classList={{
-            "workbench-panel @container relative shrink-0 flex flex-col min-h-0 h-full flex-1 md:flex-none": true,
-            "duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
-              !size.active() && !ui.reviewSnap,
-            "transition-[width]": true,
-          }}
-          style={{
-            width: sessionPanelWidth(),
-            display: mobileMessagesOpen() ? "none" : undefined,
-          }}
-        >
-          <div class="flex-1 min-h-0 overflow-hidden">
-            <Switch>
-              <Match when={params.id && mobileChanges()}>
-                <div class="relative h-full overflow-hidden">
-                  {reviewContent({
-                    diffStyle: "unified",
-                    classes: {
-                      root: "pb-8",
-                      header: "px-4",
-                      container: "px-4",
-                    },
-                    loadingClass: "px-4 py-4 text-text-weak",
-                    emptyClass: "h-full pb-64 -mt-4 flex flex-col items-center justify-center text-center gap-6",
-                  })}
-                </div>
-              </Match>
-              <Match when={params.id}>
-                <Show when={messagesReady()} fallback={
-                  <SessionHistoryLoadState error={sessionSync.error} loading={sessionSync.loading}
-                    retry={() => void sessionSyncActions.refetch()} />
-                }>
-                  <MessageTimeline
-                    actions={actions}
-                    scroll={ui.scroll}
-                    onResumeScroll={resumeScroll}
-                    setScrollRef={setScrollRef}
-                    onScheduleScrollState={scheduleScrollState}
-                    onAutoScrollHandleScroll={autoScroll.handleScroll}
-                    onMarkScrollGesture={markScrollGesture}
-                    hasScrollGesture={hasScrollGesture}
-                    onUserScroll={markUserScroll}
-                    onHistoryScroll={historyLoader.onScrollerScroll}
-                    onAutoScrollInteraction={autoScroll.handleInteraction}
-                    shouldAnchorBottom={() =>
-                      !location.hash && !store.messageId && !ui.pendingMessage && !autoScroll.userScrolled()
+          <div
+            aria-hidden={mobileMessagesOpen() || desktopRightPanelExpanded()}
+            inert={mobileMessagesOpen() || desktopRightPanelExpanded()}
+            classList={{
+              "workbench-panel @container relative shrink-0 flex flex-col min-h-0 h-full flex-1 md:flex-none": true,
+              "duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
+                !size.active() && !ui.reviewSnap,
+              "transition-[width]": true,
+            }}
+            style={{
+              width: sessionPanelWidth(),
+              display: mobileMessagesOpen() || desktopRightPanelExpanded() ? "none" : undefined,
+            }}
+          >
+            <div class="flex-1 min-h-0 overflow-hidden">
+              <Switch>
+                <Match when={params.id && mobileChanges()}>
+                  <div class="relative h-full overflow-hidden">
+                    {reviewContent({
+                      diffStyle: "unified",
+                      classes: {
+                        root: "pb-8",
+                        header: "px-4",
+                        container: "px-4",
+                      },
+                      loadingClass: "px-4 py-4 text-text-weak",
+                      emptyClass: "h-full pb-64 -mt-4 flex flex-col items-center justify-center text-center gap-6",
+                    })}
+                  </div>
+                </Match>
+                <Match when={params.id}>
+                  <Show
+                    when={messagesReady()}
+                    fallback={
+                      <SessionHistoryLoadState
+                        error={sessionSync.error}
+                        loading={sessionSync.loading}
+                        retry={() => void sessionSyncActions.refetch()}
+                      />
                     }
-                    centered={centered()}
-                    setContentRef={(el) => {
-                      content = el
-                      autoScroll.contentRef(el)
+                  >
+                    <MessageTimeline
+                      onTaskProgressAvailableChange={setTaskProgressAvailable}
+                      taskProgressGit={taskProgressGit()}
+                      onTaskProgressOpenChange={(opened) => setUi("taskOverviewOpened", opened)}
+                      actions={actions}
+                      scroll={ui.scroll}
+                      onResumeScroll={resumeScroll}
+                      setScrollRef={setScrollRef}
+                      onScheduleScrollState={scheduleScrollState}
+                      onAutoScrollHandleScroll={autoScroll.handleScroll}
+                      onMarkScrollGesture={markScrollGesture}
+                      hasScrollGesture={hasScrollGesture}
+                      onUserScroll={markUserScroll}
+                      onHistoryScroll={historyLoader.onScrollerScroll}
+                      onAutoScrollInteraction={autoScroll.handleInteraction}
+                      shouldAnchorBottom={() =>
+                        !location.hash && !store.messageId && !ui.pendingMessage && !autoScroll.userScrolled()
+                      }
+                      centered={centered()}
+                      setContentRef={(el) => {
+                        content = el
+                        autoScroll.contentRef(el)
 
-                      const root = scroller
-                      if (root) scheduleScrollState(root)
-                    }}
-                    historyShift={historyLoader.shift()}
-                    userMessages={historyLoader.userMessages()}
-                    anchor={anchor}
-                    activeMessageID={activeTurnId}
-                    scrollToMessage={scrollToMessage}
-                    setActiveMessage={setActiveMessage}
-                    setRevealMessage={(fn) => {
-                      revealMessage = fn
-                    }}
-                  />
-                </Show>
-              </Match>
-              <Match when={true}>
-                <NewSessionView worktree={newSessionWorktree()} />
-              </Match>
-            </Switch>
+                        const root = scroller
+                        if (root) scheduleScrollState(root)
+                      }}
+                      historyShift={historyLoader.shift()}
+                      userMessages={historyLoader.userMessages()}
+                      anchor={anchor}
+                      activeMessageID={activeTurnId}
+                      scrollToMessage={scrollToMessage}
+                      setActiveMessage={setActiveMessage}
+                      setRevealMessage={(fn) => {
+                        revealMessage = fn
+                      }}
+                    />
+                  </Show>
+                </Match>
+                <Match when={true}>
+                  <NewSessionView worktree={newSessionWorktree()} />
+                </Match>
+              </Switch>
+            </div>
+
+            {composerRegion("dock")}
           </div>
 
-          {composerRegion("dock")}
+          <SessionSidePanel
+            onFileNavigate={(navigate) => setFileNavigator(() => navigate)}
+            canReview={canReview}
+            diffs={reviewDiffs}
+            diffsReady={reviewReady}
+            empty={reviewEmptyText}
+            hasReview={hasReview}
+            reviewCount={reviewCount}
+            reviewPanel={reviewPanel}
+            activeDiff={tree.activeDiff}
+            focusReviewDiff={focusReviewDiff}
+            reviewSnap={ui.reviewSnap}
+            size={size}
+          />
         </div>
 
-        <SessionSidePanel
-          onFileNavigate={(navigate) => setFileNavigator(() => navigate)}
-          canReview={canReview}
-          diffs={reviewDiffs}
-          diffsReady={reviewReady}
-          empty={reviewEmptyText}
-          hasReview={hasReview}
-          reviewCount={reviewCount}
-          reviewPanel={reviewPanel}
-          activeDiff={tree.activeDiff}
-          focusReviewDiff={focusReviewDiff}
-          reviewSnap={ui.reviewSnap}
-          size={size}
+        <TerminalPanel
+          occluded={desktopRightPanelExpanded() || mobileMessagesOpen()}
+          onOpenFile={(path, line) => fileNavigator()?.(path, line)}
         />
-      </div>
-
-      <TerminalPanel onOpenFile={(path, line) => fileNavigator()?.(path, line)} />
       </div>
     </SessionLifecycle>
   )

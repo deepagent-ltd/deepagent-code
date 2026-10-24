@@ -1,4 +1,4 @@
-import { createEffect, createMemo, Show, untrack } from "solid-js"
+import { createEffect, createMemo, Show, untrack, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { IconButton } from "@deepagent-code/ui/icon-button"
@@ -45,7 +45,7 @@ export type TitlebarUpdate = {
   install: () => void
 }
 
-export function Titlebar(props: { update?: TitlebarUpdate }) {
+export function Titlebar(props: { update?: TitlebarUpdate; messages?: JSX.Element }) {
   const layout = useLayout()
   const platform = usePlatform()
   const command = useCommand()
@@ -343,7 +343,11 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
           data-tauri-drag-region
           onMouseDown={drag}
         >
-          <div id="deepagent-code-titlebar-right" class="flex items-center gap-1 shrink-0 justify-end" />
+          <div id="deepagent-code-titlebar-right" class="flex items-center gap-1 shrink-0 justify-end">
+            <div id="deepagent-code-titlebar-actions" class="flex items-center gap-1" />
+            {props.messages}
+            <div id="deepagent-code-titlebar-panel" class="flex items-center" />
+          </div>
           <Show when={windows()}>
             {!tauriApi() && <div class="shrink-0" style={{ width: windowsControlsWidth() }} />}
             <div data-tauri-decorum-tb class="flex flex-row" />

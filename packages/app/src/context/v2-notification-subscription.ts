@@ -81,7 +81,7 @@ export const subscribeSessionNotifications = (
     const schedule = (delay: number) => {
       clearTimeout(timers.get(sessionID))
       timers.delete(sessionID)
-      if (disposed || !visible()) return
+      if (disposed) return
       timers.set(
         sessionID,
         setTimeout(() => void tick(), delay),
@@ -96,7 +96,7 @@ export const subscribeSessionNotifications = (
     kicks.set(sessionID, kick)
     const tick = async () => {
       if (disposed) return
-      if (!visible() || owner.active) {
+      if (owner.active) {
         owner.pending = true
         return
       }
@@ -109,7 +109,7 @@ export const subscribeSessionNotifications = (
       try {
         if (lastSeq === undefined) {
           const cursor = await client.context.eventsCursor({ session_id: sessionID }, { signal: abort.signal })
-          if (disposed || !visible()) return
+          if (disposed) return
           if (cursor.error) {
             handlers.onErrorEvent?.(cursor.error)
             return
@@ -150,14 +150,14 @@ export const subscribeSessionNotifications = (
           else if (mapped.error) handlers.onError(mapped.sessionID, mapped.error)
         }
       } catch (error) {
-        if (!disposed && visible() && !abort.signal.aborted) handlers.onErrorEvent?.(error)
+        if (!disposed && !abort.signal.aborted) handlers.onErrorEvent?.(error)
       } finally {
         owner.active = false
         if (requests.get(sessionID) === abort) requests.delete(sessionID)
         if (!disposed) {
           owner.delay =
             result.fresh || owner.running || resolver?.active?.(sessionID) ? pollMs : Math.min(30_000, owner.delay * 2)
-          if (!result.successful && visible() && !abort.signal.aborted) owner.pending = false
+          if (!result.successful && !abort.signal.aborted) owner.pending = false
           schedule(owner.pending ? Math.max(0, owner.nextAt - performance.now()) : owner.delay)
         }
       }
@@ -167,13 +167,10 @@ export const subscribeSessionNotifications = (
 
   for (const sessionID of sessionIDs) startLoop(sessionID, resolver?.after?.(sessionID))
   const visibility = () => {
-    if (visible()) {
-      for (const kick of kicks.values()) kick()
-      return
-    }
-    for (const timer of timers.values()) clearTimeout(timer)
-    timers.clear()
-    for (const abort of requests.values()) abort.abort()
+    // The notification journal must keep its single consumer alive in the background.
+    // Returning to the window only requests an earlier drain; it does not replay rows.
+    if (!visible()) return
+    for (const kick of kicks.values()) kick()
   }
   const unsubscribe = resolver?.subscribeHint?.((sessionID) => {
     if (sessionID !== undefined) {

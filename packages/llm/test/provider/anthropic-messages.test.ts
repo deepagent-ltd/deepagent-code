@@ -42,6 +42,67 @@ const expectToolResult = (body: AnthropicMessages.AnthropicMessagesBody): Anthro
 }
 
 describe("Anthropic Messages route", () => {
+  it.effect("preserves adaptive thinking display and lowers effort into output_config", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(
+        LLM.request({
+          model: opus48,
+          prompt: "Hello",
+          providerOptions: { anthropic: { thinking: { type: "adaptive", display: "summarized" }, effort: "xhigh" } },
+        }),
+      )
+      expect(prepared.body).toMatchObject({
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "xhigh" },
+      })
+      expect(prepared.body).not.toHaveProperty("effort")
+    }),
+  )
+
+  it.effect("keeps extended thinking budgets and explicit disabled thinking", () =>
+    Effect.gen(function* () {
+      const enabled = yield* LLMClient.prepare(
+        LLM.request({
+          model,
+          prompt: "Hello",
+          providerOptions: { anthropic: { thinking: { type: "enabled", budgetTokens: 2048 } } },
+        }),
+      )
+      expect(enabled.body).toMatchObject({ thinking: { type: "enabled", budget_tokens: 2048 } })
+      const disabled = yield* LLMClient.prepare(
+        LLM.request({ model, prompt: "Hello", providerOptions: { anthropic: { thinking: { type: "disabled" } } } }),
+      )
+      expect(disabled.body).toMatchObject({ thinking: { type: "disabled" } })
+    }),
+  )
+
+  it.effect("rejects invalid effort and thinking mode before transport", () =>
+    Effect.gen(function* () {
+      const effort = yield* LLMClient.prepare(
+        LLM.request({ model: opus48, prompt: "Hello", providerOptions: { anthropic: { effort: "adaptive" } } }),
+      ).pipe(Effect.flip)
+      expect(effort).toBeInstanceOf(LLMError)
+      const thinking = yield* LLMClient.prepare(
+        LLM.request({ model: opus48, prompt: "Hello", providerOptions: { anthropic: { thinking: { type: "typo" } } } }),
+      ).pipe(Effect.flip)
+      expect(thinking.message).toContain("unsupported type")
+    }),
+  )
+
+  it.effect("rejects a manual thinking budget that cannot fit the configured output cap", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.request({
+          model,
+          prompt: "Hello",
+          generation: { maxTokens: 4096 },
+          providerOptions: { anthropic: { thinking: { type: "enabled", budgetTokens: 16000 } } },
+        }),
+      ).pipe(Effect.flip)
+      expect(error.message).toContain("budgetTokens must be less than maxTokens")
+    }),
+  )
+
   it.effect("prepares Anthropic Messages target", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(request)

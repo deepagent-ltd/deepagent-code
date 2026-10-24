@@ -25,6 +25,7 @@ import { WebSearchTool } from "./websearch"
 import { ManagedCommandTool } from "./work-command"
 import { WriteTool } from "./write"
 import { PlanWriteTool } from "./plan"
+import { PlanExitTool } from "./plan-exit"
 import { CapabilityRuntimeSearch } from "../system-context/capability-runtime-search"
 import { CapabilityLoadTool } from "../system-context/capability-load-tool"
 import { DomainPackLoadTool } from "../system-context/domain-pack-load-tool"
@@ -49,6 +50,7 @@ export const builtinToolNames = readonlySet(new Set([
   GrepTool.name,
   GitReadTool.name,
   PlanWriteTool.name,
+  PlanExitTool.name,
   QuestionTool.name,
   ReadTool.name,
   SkillTool.name,
@@ -82,7 +84,7 @@ export const builtinToolNames = readonlySet(new Set([
  *
  * TODO: Port the remaining launch-follow-up leaves deliberately: edit fuzzy
  * parity, LSP,
- * repo_clone, repo_overview, plan_exit, and Rune/code mode. Keep MCP and plugin
+ * repo_clone, repo_overview, and Rune/code mode. Keep MCP and plugin
  * transforms separate from this static built-in list (the `task` delegation leaf
  * shipped with the RI-26 convergence wave).
  *
@@ -118,6 +120,7 @@ export const locationLayer = Layer.mergeAll(
   WriteTool.layer,
   ManagedCommandTool.layer,
   PlanWriteTool.layer,
+  PlanExitTool.layer,
   CapabilityRuntimeSearch.layer,
   CapabilityLoadTool.layer,
   DomainPackLoadTool.layer,
