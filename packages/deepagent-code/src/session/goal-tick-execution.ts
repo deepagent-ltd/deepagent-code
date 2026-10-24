@@ -7,6 +7,8 @@ import { GoalChildPolicy } from "@deepagent-code/core/deepagent/goal-child-polic
 import { GoalChildSchema } from "@deepagent-code/core/deepagent/goal-child.schema"
 import { GoalTickCheckpointV2 } from "@deepagent-code/core/deepagent/goal-tick-checkpoint-v2"
 import { GoalTickCheckpoint } from "@deepagent-code/core/deepagent/goal-tick-checkpoint"
+import { GoalPauseBoundary } from "@deepagent-code/core/deepagent/goal-pause-boundary"
+import type { GoalChildExecution } from "@deepagent-code/core/deepagent/goal-child-execution"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import type { SessionRunCoordinator } from "@deepagent-code/core/session/run-coordinator"
 import type { SessionSchema } from "@deepagent-code/core/session/schema"
@@ -18,7 +20,10 @@ type Entry = {
   permit: GoalControl.Permit
   policy: GoalChildPolicy.Frame
   receipts: Set<Receipt>
+  targets: Map<Receipt, GoalChildExecution.Target>
   revoked: boolean
+  joined: boolean
+  pauseClaimed: boolean
   signal?: () => void
   completed: Deferred.Deferred<void>
 }
@@ -29,9 +34,9 @@ export interface Interface {
   ) => Effect.Effect<A, E | GoalChildSchema.Error, R>
   readonly policy: (frame: Frame) => GoalChildPolicy.Frame | undefined
   readonly current: (frame: Frame) => Effect.Effect<void, GoalChildSchema.Error>
-  readonly registered: (frame: Frame, receipt: Receipt) => void
+  readonly registered: (frame: Frame, receipt: Receipt, target: GoalChildExecution.Target) => void
   /** Call only after the control transaction committed. This never looks up a fiber by Session ID. */
-  readonly control: (goalID: string, committedRevision: number) => Effect.Effect<void>
+  readonly control: (goalID: string, committedRevision: number, pause?: { commandID: string; directory: string }) => Effect.Effect<void>
 }
 export class Service extends Context.Service<Service, Interface>()("deepagent-code/GoalTickExecution") {}
 const failure = () =>
@@ -44,6 +49,8 @@ export const layer = Layer.effect(
     const db = (yield* Database.Service).db
     const execution = yield* SessionExecution.Service
     const entries = new Map<Frame, Entry>()
+    const quiescent = new WeakMap<object, GoalPauseBoundary.Quiescence>()
+    const settlePause = GoalPauseBoundary.authority<object>((witness) => quiescent.get(witness))
     const stop = (frame: Frame, entry: Entry, awaitBody = true) =>
       Effect.gen(function* () {
         entry.revoked = true
@@ -64,6 +71,13 @@ export const layer = Layer.effect(
             : []),
         ]
         yield* Effect.all(joins, { concurrency: Math.max(1, joins.length), discard: true })
+        // The body's finalizer may have registered an owner after the first snapshot. Once the
+        // completed join resolves no further registration is possible; join that complete set.
+        if (awaitBody && owned) {
+          const settled = yield* Effect.forEach([...entry.receipts], (receipt) => owned.await(receipt))
+          entry.joined = settled.every((item) => item.status === "settled") &&
+            entry.targets.size === entry.receipts.size
+        }
       })
     yield* Effect.addFinalizer(() =>
       Effect.forEach(
@@ -98,19 +112,41 @@ export const layer = Layer.effect(
         return entry && !entry.revoked ? entry.policy : undefined
       },
       current,
-      registered: (frame, receipt) => {
+      registered: (frame, receipt, target) => {
         const entry = entries.get(frame)
         if (!entry) throw failure()
+        const prior = entry.targets.get(receipt)
+        if (prior && GoalControl.fingerprint(prior) !== GoalControl.fingerprint(target)) throw failure()
         entry.receipts.add(receipt)
+        entry.targets.set(receipt, Object.freeze({ ...target }))
         // Coordinator registration defects settle this same Entry before Started; they cannot leak an owner.
         if (entry.revoked) throw failure()
       },
-      control: (goalID, committedRevision) =>
+      control: (goalID, committedRevision, pause) =>
         Effect.forEach(
           [...entries].filter(
             ([, entry]) => entry.permit.goal_id === goalID && entry.permit.control_revision < committedRevision,
           ),
-          ([frame, entry]) => stop(frame, entry),
+          ([frame, entry]) => Effect.gen(function* () {
+            yield* stop(frame, entry)
+            if (!pause || !entry.joined || entry.pauseClaimed || committedRevision !== entry.permit.control_revision + 1) return
+            entry.pauseClaimed = true
+            const witness = Object.freeze({})
+            yield* Effect.acquireUseRelease(
+              Effect.sync(() => {
+                quiescent.set(witness, { permit: entry.permit, commandID: pause.commandID,
+                  controlRevision: committedRevision, targets: [...entry.targets.values()] })
+                return witness
+              }),
+              (witness) => settlePause(db, { witness, directory: pause.directory }).pipe(
+                // The pause already committed and revoked. Incomplete evidence keeps its original
+                // unknown obligation; it cannot roll back control or silently authorize a new tick.
+                Effect.catchTag("GoalControl.Error", () => Effect.void),
+                Effect.asVoid,
+              ),
+              (witness) => Effect.sync(() => quiescent.delete(witness)),
+            )
+          }),
           { discard: true },
         ),
       withFrame: (permit, body) =>
@@ -135,7 +171,10 @@ export const layer = Layer.effect(
               permit: current.permit,
               policy,
               receipts: new Set(),
+              targets: new Map(),
               revoked: false,
+              joined: false,
+              pauseClaimed: false,
               completed: yield* Deferred.make<void>(),
             })
             return frame
@@ -150,7 +189,12 @@ export const layer = Layer.effect(
             const entry = entries.get(frame)!
             return Effect.gen(function* () {
               yield* stop(frame, entry, false)
-              if (Exit.isFailure(exit)) yield* GoalTickCheckpointV2.markUnknown(db, permit.permit_id).pipe(Effect.orDie)
+              if (Exit.isFailure(exit)) {
+                yield* GoalTickCheckpointV2.markUnknown(db, permit.permit_id).pipe(Effect.orDie)
+                // Publish the original unresolved obligation before completed wakes control callers.
+                // GoalTickPort's outer failure finalizer remains an idempotent issued-only backstop.
+                yield* GoalControl.unknown(db, permit).pipe(Effect.orDie)
+              }
               yield* GoalChildPolicy.releaseFrame(db, entry.policy).pipe(Effect.orDie)
               entries.delete(frame)
             }).pipe(Effect.ensuring(Deferred.succeed(entry.completed, undefined)))

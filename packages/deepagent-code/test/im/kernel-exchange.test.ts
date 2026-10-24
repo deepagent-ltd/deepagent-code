@@ -32,7 +32,7 @@ const run = <A>(
 ) => effect.pipe(Effect.provideService(HttpClient.HttpClient, http))
 
 describe("IMKernelExchange", () => {
-  it.live("exchange posts to /api/im/exchange with the Bearer key and unwraps the success envelope", () =>
+  it.live("exchange posts to /api/im/login with the Bearer key and unwraps the success envelope", () =>
     Effect.gen(function* () {
       const seen: Array<{ method: string; url: string; authorization: string | undefined }> = []
       const http = HttpClient.make((req) =>
@@ -47,7 +47,7 @@ describe("IMKernelExchange", () => {
       )
 
       expect(seen).toEqual([
-        { method: "POST", url: "http://facade.local:3100/api/im/exchange", authorization: "Bearer sk-alice" },
+        { method: "POST", url: "http://facade.local:3100/api/im/login", authorization: "Bearer sk-alice" },
       ])
       expect(result).toEqual(payload)
     }),

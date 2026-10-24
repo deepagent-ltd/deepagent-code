@@ -2,7 +2,7 @@
 
 The shared SolidJS interface for DeepAgent Code's web app and Electron desktop renderer. It presents projects, sessions, streaming agent output, tools, settings, and IM through the [agent server](../deepagent-code/README.md).
 
-The current source release line and package version are **2.0.4**. This package builds the GUI; the [desktop package](../desktop/README.md) owns Electron integration and installers. See the [repository README](../../README.md) for the full product introduction.
+The current source release line and package version are **2.0.5**. This package builds the GUI; the [desktop package](../desktop/README.md) owns Electron integration and installers. See the [repository README](../../README.md) for the full product introduction.
 
 ## Stack
 

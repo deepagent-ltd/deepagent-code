@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto"
 import path from "node:path"
 import fs from "node:fs/promises"
 import { Cause, Context, Effect, Layer, Option, Schema } from "effect"
+import { Log } from "@deepagent-code/core/util/log"
 import { Global } from "@deepagent-code/core/global"
 import { projectIdForWorkspace } from "@deepagent-code/core/deepagent/durable-knowledge-store"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -17,6 +18,8 @@ import { registerInstanceStateDisposer } from "@/effect/instance-registry"
 import { InstanceRef } from "@/effect/instance-ref"
 import { LocalAuthority } from "@/installation/local-authority"
 import { McpAuth } from "./auth"
+import { McpAuthStore } from "./auth-store"
+import { McpWindowsStorage } from "./windows-storage"
 import { McpAuthJournal } from "./auth-journal"
 import { McpAuthJournalSchema } from "./auth-journal-schema"
 import { McpOAuthState } from "./oauth-state"
@@ -26,13 +29,15 @@ import { SecretRefScope } from "./secret-ref-scope"
 import { McpOAuthCallback } from "./oauth-callback"
 import { McpLocalOperator } from "./local-operator"
 
+const log = Log.create({ service: "mcp.auth.scope" })
+
 export type Flow = {
   readonly state: string
   readonly redirectUri: string
   readonly callback?: McpOAuthCallback.Lease
   readonly auth: McpAuth.Interface
   readonly current: () => Promise<boolean>
-  readonly fetch: (url: string | URL, init?: RequestInit) => Promise<Response>
+  readonly fetch: (url: string | URL, init?: RequestInit, beforeSend?: () => undefined) => Promise<Response>
   readonly connected: () => Promise<void>
   readonly handoffLocal: () => Promise<void>
   readonly revoke: (credentials?: boolean) => Promise<void>
@@ -81,6 +86,7 @@ export const layer = Layer.effect(
     const secrets = yield* SecretStore.Service
     const migration = yield* Effect.serviceOption(McpSecretMigration.Service)
     const legacy = yield* McpAuth.Service
+    const windows = yield* McpWindowsStorage.Current
     const runtime = new WeakMap<object, Map<string, { configuration: string; incarnation: string }>>()
     const configure = Effect.fn("McpAuthScope.configure")(function* (name: string, config: ConfigMCPV1.Info) {
       const instance = yield* InstanceState.context
@@ -119,7 +125,7 @@ export const layer = Layer.effect(
       runtime.get(yield* InstanceState.context)?.delete(name)
     })
 
-    const capture = Effect.fnUntraced(function* (
+    const captureRead = Effect.fnUntraced(function* (
       name: string,
       config: ConfigMCPV1.Info,
       initialize: boolean,
@@ -177,7 +183,8 @@ export const layer = Layer.effect(
             Effect.catchCause((cause) => {
               const reason = cause.reasons.length === 1 ? cause.reasons[0] : undefined
               return reason && Cause.isDieReason(reason) && (reason.defect instanceof SecretStore.FileError || reason.defect instanceof SecretRefScope.Error || reason.defect instanceof McpSecretMigration.Error)
-                ? Effect.fail(new McpAuthJournalSchema.Error("unavailable"))
+                ? Effect.fail(new McpAuthJournalSchema.Error(reason.defect instanceof SecretStore.FileError &&
+                    reason.defect.reason === "legacy_unverified" ? "legacy_unverified" : "unavailable"))
                 : Effect.failCause(cause)
             }),
           )
@@ -227,14 +234,46 @@ export const layer = Layer.effect(
       }
     })
 
+    const capture = (...input: Parameters<typeof captureRead>) => {
+      const read = captureRead(...input)
+      if (process.platform !== "win32" || input[2] || input[1].type !== "remote" || input[1].oauth === false)
+        return read
+      const fields =
+        Object.values(input[1].headers ?? {}).filter(SecretStore.isScoped).length +
+        (typeof input[1].oauth === "object" && SecretStore.isScoped(input[1].oauth.clientSecret ?? "") ? 1 : 0)
+      // Three pin-preparation operations, one installation read, two per scoped
+      // field and one final current use at most 21 of the original 32 operations.
+      // Wider configurations retain their original independent read leases.
+      return fields >= 1 && fields <= 8 ? LocalAuthority.withWindowsInstallation(read) : read
+    }
+
+    const metadataReads = { sequence: 0 }
     const metadataRead = Effect.fn("McpAuthScope.metadataRead")(function* (
       name: string,
       config: ConfigMCPV1.Info,
       observed?: ReadInput,
     ) {
-      const old = !!(yield* legacy.get(name))
+      const sequence = ++metadataReads.sequence
+      const measured = <A, E, R>(
+        stage: "legacy_read" | "installation_read" | "scope_capture" | "journal_open" | "journal_read",
+        pending: Effect.Effect<A, E, R>,
+      ) => Effect.suspend(() => {
+        const started = performance.now()
+        return pending.pipe(Effect.onExit((exit) => Effect.sync(() => {
+          const elapsedMs = Math.round(performance.now() - started)
+          if (exit._tag !== "Success" || elapsedMs >= 1000)
+            log.warn("MCP metadata timing", { sequence, stage, elapsedMs, success: exit._tag === "Success" })
+        })))
+      })
+      // The legacy Promise boundary reports its bounded store errors as defects.
+      // Convert only those known failures; unrelated defects must remain defects.
+      const old = !!(yield* measured("legacy_read", legacy.get(name).pipe(Effect.catchDefect((error) =>
+        error instanceof McpAuthStore.Error
+          ? Effect.fail(new McpAuthJournalSchema.Error(error.reason === "io" ? "unavailable" : error.reason))
+          : Effect.die(error),
+      ))))
       const empty = { tokens: false, expired: false, unknown: false, legacy: old }
-      const installed = yield* safePromise(() =>
+      const installed = yield* measured("installation_read", safePromise(() =>
         fs.lstat(LocalAuthority.installationPath()).then(
           () => true,
           (error: unknown) => {
@@ -242,18 +281,28 @@ export const layer = Layer.effect(
             throw new McpAuthJournalSchema.Error("unavailable")
           },
         ),
-      )
-      if (!installed || (observed && !observed.projectID)) return empty
-      const captured = yield* capture(name, config, false, false, observed).pipe(
+      ))
+      if (!installed || (observed && !observed.projectID)) {
+        log.debug("MCP metadata read", { stage: !installed ? "installation_missing" : "project_missing" })
+        return empty
+      }
+      const captured = yield* measured("scope_capture", capture(name, config, false, false, observed).pipe(
         Effect.catchTag("LocationIdentity.NotFoundError", () => Effect.succeed(undefined)),
         Effect.mapError(safeError),
-      )
-      if (!captured) return empty
-      const store = yield* safePromise(() => McpAuthJournal.open(captured.file, captured.installationTag, "read"))
-      if (!store) return { tokens: false, expired: false, unknown: false, legacy: old }
-      return yield* Effect.try({
+      ))
+      if (!captured) {
+        log.debug("MCP metadata read", { stage: "location_missing" })
+        return empty
+      }
+      const store = yield* measured("journal_open", safePromise(() => McpAuthJournal.open(captured.file, captured.installationTag, "read", windows)))
+      if (!store) {
+        log.debug("MCP metadata read", { stage: "journal_missing" })
+        return { tokens: false, expired: false, unknown: false, legacy: old }
+      }
+      return yield* measured("journal_read", Effect.try({
         try: () => {
           const value = store.read(captured.slot)
+          log.debug("MCP metadata read", { stage: "journal_read", tokens: !!value?.credentials.tokens })
           return {
             tokens: !!value?.credentials.tokens,
             expired:
@@ -264,11 +313,12 @@ export const layer = Layer.effect(
           }
         },
         catch: safeError,
-      }).pipe(Effect.ensuring(Effect.sync(store.close)))
+      }).pipe(Effect.ensuring(Effect.sync(store.close))))
     })
 
     const metadata = (name: string, config: ConfigMCPV1.Info) => metadataRead(name, config)
-    const metadataAt = (name: string, config: ConfigMCPV1.Info, input: ReadInput) => metadataRead(name, config, input)
+    const metadataAt = (name: string, config: ConfigMCPV1.Info, input: ReadInput) =>
+      metadataRead(name, config, input).pipe(Effect.provideService(SecretRefScope.RequestDirectory, input.directory))
 
     const begin = Effect.fn("McpAuthScope.begin")(function* (
       name: string,
@@ -285,7 +335,7 @@ export const layer = Layer.effect(
       const bridge = yield* EffectBridge.make()
       const instance = yield* InstanceState.context
       yield* localCurrent()
-      const store = yield* safePromise(() => McpAuthJournal.open(captured.file, captured.installationTag, "write"))
+      const store = yield* safePromise(() => McpAuthJournal.open(captured.file, captured.installationTag, "write", windows))
       if (!store || config.type !== "remote") return yield* Effect.fail(new McpAuthJournalSchema.Error("unavailable"))
       const oauth = typeof config.oauth === "object" ? config.oauth : undefined
       const before = yield* Effect.try({ try: () => store.read(captured.slot), catch: safeError }).pipe(
@@ -378,8 +428,9 @@ export const layer = Layer.effect(
       const operation: { current?: McpAuthJournal.Receipt; kind?: McpAuthJournalSchema.Kind; closed: boolean } = {
         closed: false,
       }
-      const check = (verify = false) =>
-        localCurrent().pipe(
+      const checks = { sequence: 0 }
+      const check = (verify = false) => {
+        const pending = localCurrent().pipe(
           Effect.andThen(capture(name, config, false, verify)),
           Effect.flatMap((current) =>
             localCurrent().pipe(
@@ -400,8 +451,34 @@ export const layer = Layer.effect(
             ),
           ),
           Effect.mapError(safeError),
-          Effect.provideService(InstanceRef, instance),
         )
+        return Effect.suspend(() => {
+          const started = performance.now()
+          const sequence = ++checks.sequence
+          log.debug("MCP scope phase", { stage: "check.begin", sequence, verify })
+          return pending.pipe(
+            Effect.onExit((exit) =>
+              Effect.sync(() => {
+                const fields = {
+                  stage: "check.end",
+                  sequence,
+                  verify,
+                  elapsedMs: Math.round(performance.now() - started),
+                  success: exit._tag === "Success",
+                }
+                if (!fields.success || fields.elapsedMs >= 1000) {
+                  log.warn("MCP scope phase", fields)
+                  return
+                }
+                log.debug("MCP scope phase", fields)
+              }),
+            ),
+          )
+        }).pipe(
+          Effect.provideService(InstanceRef, instance),
+          bridge.run,
+        )
+      }
       const read = () =>
         check().pipe(
           Effect.map(
@@ -517,7 +594,7 @@ export const layer = Layer.effect(
           ),
       }
 
-      const fetch: Flow["fetch"] = async (url, init) => {
+      const fetch: Flow["fetch"] = async (url, init, beforeSend) => {
         const snapshot = await bridge.promise(check())
         const endpoint = new URL(url).href
         const discovery = snapshot.flow?.discovery
@@ -530,9 +607,11 @@ export const layer = Layer.effect(
         const mutation =
           (init?.method ?? "GET").toUpperCase() === "POST" && (endpoint === token || endpoint === registration)
         if (!mutation) {
-          // The transport also uses this fetch for ordinary MCP requests. The same
-          // real scope is rechecked, but JSON-RPC POST is not an OAuth token operation.
-          await bridge.promise(check())
+          // The full scope was checked above. No asynchronous work intervenes;
+          // retain the final local-owner and durable-journal fences at dispatch.
+          beforeSend?.()
+          if (operation.closed) throw new McpAuthJournalSchema.Error("changed")
+          store.current(handle, operation.current)
           return globalThis.fetch(url, init)
         }
         const kind =
@@ -559,6 +638,8 @@ export const layer = Layer.effect(
               Effect.flatMap(() =>
                 Effect.try({
                   try: () => {
+                    beforeSend?.()
+                    if (operation.closed) throw new McpAuthJournalSchema.Error("changed")
                     operation.current = store.dispatch(handle, {
                       kind,
                       requestTag: captured.tag("request", { endpoint, body, headers }),
@@ -670,7 +751,8 @@ function configurationDigest(config: unknown) {
 }
 
 function safeError(error: unknown) {
-  return error instanceof McpAuthJournalSchema.Error ? error : new McpAuthJournalSchema.Error("unavailable")
+  return error instanceof McpAuthJournalSchema.Error ? error : new McpAuthJournalSchema.Error(
+    error instanceof SecretStore.FileError && error.reason === "legacy_unverified" ? "legacy_unverified" : "unavailable")
 }
 function safePromise<A>(body: () => Promise<A>) {
   return Effect.tryPromise({ try: body, catch: safeError })

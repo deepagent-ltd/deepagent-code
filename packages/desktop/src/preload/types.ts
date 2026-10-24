@@ -1,5 +1,6 @@
 import type { DesktopMenuAction } from "@deepagent-code/app/desktop-menu"
 import type { UpdaterState } from "@deepagent-code/app/updater"
+import type { SharedBrowserRootBridge } from "@deepagent-code/core/browser/shared-platform"
 
 export type ServerReadyData = {
   url: string
@@ -60,6 +61,7 @@ export type ElectronAPI = {
   installCli: () => Promise<string>
   awaitInitialization: () => Promise<ServerReadyData>
   browser: BrowserAPI
+  sharedBrowser: SharedBrowserRootBridge
   updater: UpdaterAPI
   consumeInitialDeepLinks: () => Promise<string[]>
   getDefaultServerUrl: () => Promise<string | null>

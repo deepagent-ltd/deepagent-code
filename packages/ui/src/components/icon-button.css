@@ -169,6 +169,12 @@
   border-radius: 7px;
 }
 
+[data-component="icon-button"].workbench-rail-action {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+}
+
 [data-component="icon-button"].titlebar-icon[data-variant="ghost"][aria-expanded="true"] {
   background-color: var(--surface-raised-base-active);
 }

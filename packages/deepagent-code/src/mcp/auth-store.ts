@@ -2,21 +2,35 @@ import fs from "node:fs/promises"
 import { constants, type Stats } from "node:fs"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
+import { Global } from "@deepagent-code/core/global"
+import { WindowsPrivateStorage } from "@/installation/windows-private-storage"
+import type { McpWindowsStorage } from "./windows-storage"
 
 export const MAX_BYTES = 1_048_576
 
 export class Error extends globalThis.Error {
   readonly _tag = "McpAuthStoreError"
-  constructor(readonly reason: "unavailable" | "invalid" | "capacity" | "changed" | "io") {
+  constructor(readonly reason: "unavailable" | "invalid" | "capacity" | "changed" | "io" | "unknown") {
     super(`MCP credential store ${reason}`)
   }
 }
 
-type Stamp = { readonly device: number; readonly inode: number; readonly bytes: number; readonly mtime: number; readonly ctime: number; readonly hash: string }
+type Stamp = { readonly kind: "posix"; readonly device: number; readonly inode: number; readonly bytes: number; readonly mtime: number; readonly ctime: number; readonly hash: string }
+  | { readonly kind: "windows"; readonly witness: WindowsPrivateStorage.Snapshot }
 
 // Native FD flags and fsync are required here; readJson/writeJson cannot provide this boundary.
 // Only ENOENT is an empty store. Errors deliberately omit paths, payloads and OS error text.
-export async function read(file: string): Promise<{ readonly text: string; readonly stamp: Stamp } | undefined> {
+export async function read(file: string, native?: McpWindowsStorage.Port): Promise<{ readonly text: string; readonly stamp: Stamp } | undefined> {
+  if (process.platform === "win32") {
+    if (file !== path.join(Global.Path.config, "mcp-auth.json")) throw new Error("invalid")
+    if (!native) throw new Error("unavailable")
+    try {
+      const value = await native.read("mcp_legacy_auth")
+      return value && { text: value.text, stamp: { kind: "windows", witness: value.witness } }
+    } catch (error) {
+      throw error instanceof WindowsPrivateStorage.Error ? new Error(error.reason) : new Error("io")
+    }
+  }
   try {
     await directory(file)
     const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW).catch((error: unknown) => {
@@ -41,7 +55,7 @@ export async function read(file: string): Promise<{ readonly text: string; reado
       requirePrivate(actual, "file")
       if (length !== before.size || !sameFile(before, after) || !sameFile(after, actual)) throw new Error("changed")
       const text = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, length))
-      return { text, stamp: { device: before.dev, inode: before.ino, bytes: before.size, mtime: before.mtimeMs, ctime: before.ctimeMs, hash: createHash("sha256").update(buffer.subarray(0, length)).digest("hex") } }
+      return { text, stamp: { kind: "posix", device: before.dev, inode: before.ino, bytes: before.size, mtime: before.mtimeMs, ctime: before.ctimeMs, hash: createHash("sha256").update(buffer.subarray(0, length)).digest("hex") } }
     } finally {
       await handle.close()
     }
@@ -52,8 +66,20 @@ export async function read(file: string): Promise<{ readonly text: string; reado
 
 /** Caller owns the fixed EffectFlock. Rename gives atomic visibility; directory fsync confirms
  * durability. A failure after rename does not undo publication and must not admit network work. */
-export async function write(file: string, text: string, expected?: Stamp) {
+export async function write(file: string, text: string, expected?: Stamp, native?: McpWindowsStorage.Port) {
   if (Buffer.byteLength(text, "utf8") > MAX_BYTES) throw new Error("capacity")
+  if (process.platform === "win32") {
+    if (file !== path.join(Global.Path.config, "mcp-auth.json")) throw new Error("invalid")
+    if (!native) throw new Error("unavailable")
+    if (expected && expected.kind !== "windows") throw new Error("changed")
+    try {
+      await native.publish("mcp_legacy_auth", text, expected?.witness ?? null)
+      return
+    } catch (error) {
+      throw error instanceof WindowsPrivateStorage.Error ? new Error(error.reason) : new Error("io")
+    }
+  }
+  if (expected?.kind === "windows") throw new Error("changed")
   const temporary = path.join(path.dirname(file), `.mcp-auth-${randomUUID()}.tmp`)
   try {
     await directory(file)

@@ -3,6 +3,7 @@ import { formatPatch, structuredPatch } from "diff"
 import { InstanceState } from "@/effect/instance-state"
 import { Watcher } from "@deepagent-code/core/filesystem/watcher"
 import { Git } from "@/git"
+import { VcsOverview } from "./vcs-overview"
 import * as Log from "@deepagent-code/core/util/log"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
@@ -18,7 +19,11 @@ export const RawDiffLimits = {
   patchBytes: 10 * 1024 * 1024,
 } as const
 type DiffOptions = {
+  readonly relative?: boolean
   readonly context?: number
+  readonly baseRef?: string
+  readonly baseOID?: string
+  readonly headOID?: string
 }
 
 const emptyPatch = (file: string) => formatPatch(structuredPatch(file, file, "", "", "", "", { context: 0 }))
@@ -112,6 +117,7 @@ const batchPatches = Effect.fnUntraced(function* (
   const result = yield* git.patchAll(cwd, ref, {
     context: options?.context ?? PATCH_CONTEXT_LINES,
     maxOutputBytes: MAX_TOTAL_PATCH_BYTES,
+    relative: options?.relative,
   })
   if (result.truncated) log.warn("batched patch exceeded byte limit", { max: MAX_TOTAL_PATCH_BYTES })
 
@@ -138,10 +144,12 @@ const nativePatch = Effect.fnUntraced(function* (
       ? yield* git.patchUntracked(cwd, item.file, {
           context: options?.context ?? PATCH_CONTEXT_LINES,
           maxOutputBytes: MAX_PATCH_BYTES,
+          relative: options?.relative,
         })
       : yield* git.patch(cwd, ref, item.file, {
           context: options?.context ?? PATCH_CONTEXT_LINES,
           maxOutputBytes: MAX_PATCH_BYTES,
+          relative: options?.relative,
         })
   if (!result.truncated && result.text) return result.text
 
@@ -214,9 +222,12 @@ const diffAgainstRef = Effect.fnUntraced(function* (
   ref: string,
   options?: DiffOptions,
 ) {
-  const [list, stats, extra] = yield* Effect.all([git.diff(cwd, ref), git.stats(cwd, ref), git.status(cwd)], {
-    concurrency: 3,
-  })
+  const [list, stats, extra] = yield* Effect.all(
+    [git.diff(cwd, ref, options), git.stats(cwd, ref, options), git.status(cwd, options)],
+    {
+      concurrency: 3,
+    },
+  )
   return yield* files(
     git,
     cwd,
@@ -315,12 +326,18 @@ export class RawDiffError extends Schema.TaggedErrorClass<RawDiffError>()("VcsRa
   file: Schema.optional(Schema.String),
 }) {}
 
+export const Refs = VcsOverview.Refs
+export const WorkSummary = VcsOverview.WorkSummary
+export const ReadError = VcsOverview.ReadError
+
 export interface Interface {
   readonly init: () => Effect.Effect<void>
   readonly branch: () => Effect.Effect<string | undefined>
   readonly defaultBranch: () => Effect.Effect<string | undefined>
   readonly status: () => Effect.Effect<FileStatus[]>
-  readonly diff: (mode: Mode, options?: DiffOptions) => Effect.Effect<FileDiff[]>
+  readonly diff: (mode: Mode, options?: DiffOptions) => Effect.Effect<FileDiff[], VcsOverview.ReadError>
+  readonly refs: () => Effect.Effect<typeof Refs.Type, VcsOverview.ReadError>
+  readonly summary: (baseRef?: string) => Effect.Effect<VcsOverview.WorkSummary>
   readonly diffRaw: () => Effect.Effect<string, RawDiffError>
   readonly apply: (input: ApplyInput) => Effect.Effect<ApplyResult, PatchApplyError>
 }
@@ -409,6 +426,20 @@ export const layer: Layer.Layer<Service, never, Git.Service | EventV2Bridge.Serv
             }),
         )
       }),
+      refs: Effect.fn("Vcs.refs")(function* () {
+        const ctx = yield* InstanceState.context
+        return yield* VcsOverview.refs(git, ctx.directory)
+      }),
+      summary: Effect.fn("Vcs.summary")(function* (baseRef?: string) {
+        const ctx = yield* InstanceState.context
+        const value = yield* InstanceState.get(state)
+        return yield* VcsOverview.summary(git, {
+          directory: ctx.directory,
+          git: ctx.project.vcs === "git",
+          baseRef,
+          defaultRef: value.root?.ref,
+        })
+      }),
       diff: Effect.fn("Vcs.diff")(function* (mode: Mode, options?: DiffOptions) {
         const value = yield* InstanceState.get(state)
         const ctx = yield* InstanceState.context
@@ -417,6 +448,26 @@ export const layer: Layer.Layer<Service, never, Git.Service | EventV2Bridge.Serv
           return yield* track(git, ctx.directory, (yield* git.hasHead(ctx.directory)) ? "HEAD" : undefined, options)
         }
 
+        if (options?.baseRef) {
+          const base = yield* VcsOverview.base(git, ctx.directory, options.baseRef)
+          const head = yield* git.resolveRef(ctx.directory)
+          if (
+            !head ||
+            (options.headOID && options.headOID !== head) ||
+            (options.baseOID && options.baseOID !== base.oid)
+          )
+            return yield* new VcsOverview.ReadError({ reason: "scope_changed" })
+          const ref = yield* git.mergeBase(ctx.directory, base.oid, head)
+          if (!ref) return yield* new VcsOverview.ReadError({ reason: "no_common_ancestor" })
+          const result = yield* diffAgainstRef(git, ctx.directory, ref, { ...options, relative: true })
+          const [nextHead, nextBase] = yield* Effect.all([
+            git.resolveRef(ctx.directory),
+            git.resolveRef(ctx.directory, base.ref),
+          ])
+          if (nextHead !== head || nextBase !== base.oid)
+            return yield* new VcsOverview.ReadError({ reason: "scope_changed" })
+          return result
+        }
         if (!value.root) return []
         if (value.current && value.current === value.root.name) return []
         const ref = yield* git.mergeBase(ctx.directory, value.root.ref)
@@ -542,7 +593,10 @@ export const layer: Layer.Layer<Service, never, Git.Service | EventV2Bridge.Serv
             },
           )
           if (Date.now() >= deadline)
-            return yield* new RawDiffError({ message: "Untracked raw diff exceeded its deadline", reason: "time-limit" })
+            return yield* new RawDiffError({
+              message: "Untracked raw diff exceeded its deadline",
+              reason: "time-limit",
+            })
           if (patch.truncated || patch.stdout.byteLength > patchRemaining)
             return yield* new RawDiffError({
               message: `Untracked raw patch exceeded the remaining output budget: ${item.file}`,

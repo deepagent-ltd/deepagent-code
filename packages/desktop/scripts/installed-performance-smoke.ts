@@ -8,12 +8,20 @@ import { Database } from "bun:sqlite"
 import { _electron } from "@playwright/test"
 import { createPerformanceViewport } from "./performance-terminal"
 
+const expectedVersion: unknown =
+  process.env.DEEPAGENT_CODE_SMOKE_EXPECTED_VERSION ??
+  (await Bun.file(new URL("../package.json", import.meta.url)).json()).version
+if (typeof expectedVersion !== "string" || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(expectedVersion))
+  throw new Error(
+    "Installed smoke requires a release version from DEEPAGENT_CODE_SMOKE_EXPECTED_VERSION or the Desktop manifest",
+  )
+
 const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-installed-performance-"))
 await fs.chmod(root, 0o700)
 const samples = 24
 const idleSamples = 20
 const result: Record<string, unknown> = {
-  version: "2.0.4", root, samples, idleSamples,
+  version: expectedVersion, root, samples, idleSamples,
   workload: { guiSessions: 12, messages: 0, concurrentWorks: 0, imConnections: 0, providerExecuted: false },
   hardware: { platform: process.platform, architecture: process.arch, kernel: os.release(), memoryBytes: os.totalmem(), cpus: os.cpus().length, cpuModel: os.cpus()[0]?.model, machineLoad: os.loadavg() },
   slo: { inputEchoP95Ms: 50, loadedSessionSwitchP95Ms: 300, localListPageP95Ms: 300, coldInteractiveP95Ms: 5000 },
@@ -80,7 +88,7 @@ async function gui() {
   result.gui = measurements
   try {
     const actual = await app.evaluate(({ app }) => ({ version: app.getVersion(), packaged: app.isPackaged, executable: process.execPath, application: app.getAppPath(), userData: app.getPath("userData") }))
-    assert.equal(actual.version, "2.0.4"); assert.equal(actual.packaged, true); assert.ok(actual.userData.startsWith(root + path.sep))
+    assert.equal(actual.version, expectedVersion); assert.equal(actual.packaged, true); assert.ok(actual.userData.startsWith(root + path.sep))
     measurements.actual = actual
     const page = await app.firstWindow({ timeout: 45_000 })
     const errors: string[] = []

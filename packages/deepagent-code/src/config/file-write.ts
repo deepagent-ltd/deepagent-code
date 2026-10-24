@@ -9,6 +9,7 @@ import { Effect, Schema } from "effect"
 import { parse, type ParseError } from "jsonc-parser"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+import { Global } from "@deepagent-code/core/global"
 import { SettingsPrivateFile } from "../settings/private-file"
 import type { WindowsPrivateStorage } from "../installation/windows-private-storage"
 
@@ -47,17 +48,28 @@ export type Transaction = {
 }
 const MAX_BYTES = 16_777_216
 const nativeFiles = new WeakMap<File, WindowsPrivateStorage.Snapshot | null>()
+const mcpLedger = (file: string) => process.platform === "win32" &&
+  path.resolve(file).toLowerCase() === path.join(Global.Path.config, "mcp-secret-migration.json").toLowerCase()
+const privateFile = (file: string) => process.platform === "win32" && (!!SettingsPrivateFile.name(file) || mcpLedger(file))
 
 /** Raw source observation: no expansion, logging, normalization or writes. */
 export const read = (file: string) => Effect.suspend(() => {
   const name = process.platform === "win32" ? SettingsPrivateFile.name(file) : undefined
-  if (!name) return Effect.tryPromise({ try: () => observe(file), catch: safeError })
+  if (!name && !mcpLedger(file)) return Effect.tryPromise({ try: () => observe(file), catch: safeError })
   return Effect.gen(function* () {
-    const { WindowsSettingsStorage } = yield* Effect.promise(() => import("../installation/windows-settings-storage"))
     const { WindowsPrivateStorage } = yield* Effect.promise(() => import("../installation/windows-private-storage"))
-    const storage = yield* WindowsSettingsStorage.Current
-    if (!storage) return yield* new Error({ reason: "unavailable" })
-    const current = yield* storage.read(name).pipe(Effect.mapError(safeError))
+    const current = yield* Effect.gen(function* () {
+      if (mcpLedger(file)) {
+        const { McpWindowsStorage } = yield* Effect.promise(() => import("../mcp/windows-storage"))
+        const storage = yield* McpWindowsStorage.Current
+        if (!storage) return yield* new Error({ reason: "unavailable" })
+        return yield* Effect.tryPromise({ try: () => storage.read("mcp_secret_migration"), catch: safeError })
+      }
+      const { WindowsSettingsStorage } = yield* Effect.promise(() => import("../installation/windows-settings-storage"))
+      const storage = yield* WindowsSettingsStorage.Current
+      if (!storage || !name) return yield* new Error({ reason: "unavailable" })
+      return yield* storage.read(name).pipe(Effect.mapError(safeError))
+    })
     const observation = current && WindowsPrivateStorage.describe(current.witness)
     if (current && !observation) return yield* new Error({ reason: "changed" })
     const result: File = Object.freeze({ path: path.resolve(file), ...(current && observation ? { text: current.text,
@@ -102,7 +114,7 @@ export const transaction = <A, E, R>(files: readonly string[], body: (tx: Transa
         write: (file, text) =>
           Effect.suspend(() =>
             active.value && observed.includes(file)
-              ? (process.platform === "win32" && SettingsPrivateFile.name(file.path)
+              ? (privateFile(file.path)
                 ? publishPrivate(file, text)
                 : Effect.tryPromise({ try: () => publish(file, text), catch: safeError })).pipe(Effect.uninterruptible)
               : Effect.fail(new Error({ reason: "changed" })),
@@ -110,7 +122,7 @@ export const transaction = <A, E, R>(files: readonly string[], body: (tx: Transa
         remove: (file) =>
           Effect.suspend(() =>
             active.value && observed.includes(file)
-              ? process.platform === "win32" && SettingsPrivateFile.name(file.path)
+              ? privateFile(file.path)
                 ? Effect.fail(new Error({ reason: "unavailable" }))
                 : Effect.tryPromise({ try: () => remove(file), catch: safeError }).pipe(Effect.uninterruptible)
               : Effect.fail(new Error({ reason: "changed" })),
@@ -158,7 +170,7 @@ export function digest(file: Observation) { return file.nativeStamp?.digest ?? f
 
 async function canonicalFile(file: string) {
   const absolute = path.resolve(file)
-  if (process.platform === "win32" && SettingsPrivateFile.name(absolute)) return absolute
+  if (privateFile(absolute)) return absolute
   const parent = await fs.realpath(path.dirname(absolute)).catch((error: unknown) => {
     if (errno(error) === "ENOENT") return path.dirname(absolute)
     throw error
@@ -176,12 +188,21 @@ async function canonicalFile(file: string) {
 }
 
 const publishPrivate = Effect.fn("ConfigFileWrite.publishPrivate")(function* (before: File, text: string) {
-  const { WindowsSettingsStorage } = yield* Effect.promise(() => import("../installation/windows-settings-storage"))
   const { WindowsPrivateStorage } = yield* Effect.promise(() => import("../installation/windows-private-storage"))
-  const storage = yield* WindowsSettingsStorage.Current
-  const name = SettingsPrivateFile.name(before.path)
-  if (!storage || !name || !nativeFiles.has(before)) return yield* new Error({ reason: "changed" })
-  const witness = yield* storage.publish(name, text, nativeFiles.get(before)!).pipe(Effect.mapError(safeError))
+  if (!nativeFiles.has(before)) return yield* new Error({ reason: "changed" })
+  const witness = yield* Effect.gen(function* () {
+    if (mcpLedger(before.path)) {
+      const { McpWindowsStorage } = yield* Effect.promise(() => import("../mcp/windows-storage"))
+      const storage = yield* McpWindowsStorage.Current
+      if (!storage) return yield* new Error({ reason: "unavailable" })
+      return yield* Effect.tryPromise({ try: () => storage.publish("mcp_secret_migration", text, nativeFiles.get(before)!), catch: safeError })
+    }
+    const { WindowsSettingsStorage } = yield* Effect.promise(() => import("../installation/windows-settings-storage"))
+    const storage = yield* WindowsSettingsStorage.Current
+    const name = SettingsPrivateFile.name(before.path)
+    if (!storage || !name) return yield* new Error({ reason: "changed" })
+    return yield* storage.publish(name, text, nativeFiles.get(before)!).pipe(Effect.mapError(safeError))
+  })
   return yield* Effect.gen(function* () {
     const expected = WindowsPrivateStorage.describe(witness)
     const after = yield* read(before.path)

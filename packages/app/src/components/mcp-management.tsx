@@ -1,6 +1,7 @@
-import { Button } from "@deepagent-code/ui/button"
+import { ButtonV2 } from "@deepagent-code/ui/v2/button-v2"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
-import { Switch } from "@deepagent-code/ui/switch"
+import { Icon } from "@deepagent-code/ui/icon"
+import { Switch } from "@deepagent-code/ui/v2/switch-v2"
 import { createEffect, createMemo, createSignal, For, Show, type JSX } from "solid-js"
 import { DialogAddMcp } from "@/components/dialog-add-mcp"
 import { DialogConfigureMcp } from "@/components/dialog-configure-mcp"
@@ -11,6 +12,7 @@ import { useMcpRemove, useMcpToggle, useMcpRefresh } from "@/context/mcp"
 import { useSync } from "@/context/sync"
 import { mcpConnectionBlocked, mcpConnectionMessage } from "@/context/global-sync/mcp"
 import { SDKProvider, useSDK } from "@/context/sdk"
+import "./mcp-management.css"
 
 export function McpManagement(props: { current?: () => boolean } = {}) {
   const dialog = useDialog()
@@ -18,13 +20,20 @@ export function McpManagement(props: { current?: () => boolean } = {}) {
   const sync = useSync()
   const sdk = useSDK()
   const captured = { directory: sdk.directory, scope: sdk.scope, client: sdk.client }
-  const current = () => props.current?.() !== false && sdk.directory === captured.directory &&
-    sdk.scope === captured.scope && sdk.client === captured.client
+  const current = () =>
+    props.current?.() !== false &&
+    sdk.directory === captured.directory &&
+    sdk.scope === captured.scope &&
+    sdk.client === captured.client
   // Replacing a global Settings dialog retains that dialog's owner. Carry the original
   // project provider explicitly into each child, rather than selecting a new placement.
   const open = (element: () => JSX.Element) => {
     if (!current()) return
-    dialog.show(() => <Show when={current()}><SDKProvider directory={captured.directory}>{element()}</SDKProvider></Show>)
+    dialog.show(() => (
+      <Show when={current()}>
+        <SDKProvider directory={captured.directory}>{element()}</SDKProvider>
+      </Show>
+    ))
   }
   const toggleMcp = useMcpToggle()
   const refreshMcp = useMcpRefresh()
@@ -50,47 +59,51 @@ export function McpManagement(props: { current?: () => boolean } = {}) {
   }
 
   return (
-    <div class="flex min-w-0 flex-col">
-      <div class="flex flex-wrap items-center gap-2 px-1 pb-2">
-        <Button variant="secondary" disabled={!selectedMcp() || mcpStatus(selectedMcp()!)?.status !== "connected"} onClick={() => {
-          const name = selectedMcp()
-          if (name) open(() => <DialogMcpApps name={name} />)
-        }}>{language.t("mcp.apps.title")}</Button>
-        <Button variant="secondary" icon="plus" onClick={() => open(() => <DialogAddMcp />)}>
+    <div class="mcp-management">
+      <div class="mcp-management-toolbar">
+        <ButtonV2 variant="neutral" icon="plus" onClick={() => open(() => <DialogAddMcp />)}>
           {language.t("dialog.mcp.add")}
-        </Button>
-        <Button
-          variant="secondary"
-          icon="settings-gear"
-          disabled={!selectedMcp()}
-          onClick={() => {
-            const name = selectedMcp()
-            if (!name) return
-            open(() => <DialogConfigureMcp name={name} />)
-          }}
-        >
-          {language.t("dialog.mcp.configure")}
-        </Button>
-        <Button
-          variant="secondary"
-          icon="trash"
-          disabled={!selectedMcp() || removeMcp.isPending}
-          onClick={deleteSelectedMcp}
-        >
-          {language.t("dialog.mcp.delete")}
-        </Button>
-        <Button
-          variant="secondary"
-          disabled={!selectedMcp()}
-          onClick={() => {
-            const name = selectedMcp()
-            if (name) open(() => <DialogMcpSecrets name={name} />)
-          }}
-        >
-          {language.t("mcp.secrets.open")}
-        </Button>
+        </ButtonV2>
+        <Show when={selectedMcp() && mcpStatus(selectedMcp()!)}>
+          <ButtonV2
+            variant="neutral"
+            disabled={!selectedMcp() || mcpStatus(selectedMcp()!)?.status !== "connected"}
+            onClick={() => {
+              const name = selectedMcp()
+              if (name) open(() => <DialogMcpApps name={name} />)
+            }}
+          >
+            {language.t("mcp.apps.title")}
+          </ButtonV2>
+          <ButtonV2
+            variant="neutral"
+            icon="settings-gear"
+            disabled={!selectedMcp()}
+            onClick={() => {
+              const name = selectedMcp()
+              if (!name) return
+              open(() => <DialogConfigureMcp name={name} />)
+            }}
+          >
+            {language.t("dialog.mcp.configure")}
+          </ButtonV2>
+          <ButtonV2 variant="neutral" disabled={!selectedMcp() || removeMcp.isPending} onClick={deleteSelectedMcp}>
+            <Icon name="trash" />
+            {language.t("dialog.mcp.delete")}
+          </ButtonV2>
+          <ButtonV2
+            variant="neutral"
+            disabled={!selectedMcp()}
+            onClick={() => {
+              const name = selectedMcp()
+              if (name) open(() => <DialogMcpSecrets name={name} />)
+            }}
+          >
+            {language.t("mcp.secrets.open")}
+          </ButtonV2>
+        </Show>
       </div>
-      <div class="flex min-h-14 flex-col rounded-sm bg-background-base p-3">
+      <div class="mcp-management-list">
         <Show
           when={mcpNames().length > 0}
           fallback={
@@ -101,16 +114,13 @@ export function McpManagement(props: { current?: () => boolean } = {}) {
             {(name) => {
               const status = () => mcpStatus(name)?.status
               const enabled = () => status() === "connected"
+              const error = () => {
+                const value = mcpStatus(name)
+                if (value?.status === "failed" || value?.status === "needs_client_registration") return value.error
+              }
               return (
-                <div
-                  class="flex min-h-8 w-full items-center gap-2 rounded-md py-1 pl-3 pr-2 transition-colors hover:bg-surface-raised-base-hover"
-                  classList={{ "bg-surface-raised-base": selectedMcp() === name }}
-                >
-                  <button
-                    type="button"
-                    class="flex min-w-0 flex-1 items-center gap-2 text-left"
-                    onClick={() => setSelectedMcp(name)}
-                  >
+                <div class="mcp-management-row" data-selected={selectedMcp() === name ? "" : undefined}>
+                  <button type="button" class="mcp-management-server" onClick={() => setSelectedMcp(name)}>
                     <div
                       classList={{
                         "size-1.5 shrink-0 rounded-full": true,
@@ -127,6 +137,7 @@ export function McpManagement(props: { current?: () => boolean } = {}) {
                     />
                     <span class="flex min-w-0 flex-1 flex-col">
                       <span class="truncate text-14-regular text-text-base">{name}</span>
+                      <Show when={error()}>{(message) => <span class="mcp-management-error">{message()}</span>}</Show>
                       <Show when={status() === "disconnected"}>
                         <span class="text-11-regular text-text-weaker">{language.t("mcp.status.disconnected")}</span>
                       </Show>
@@ -140,20 +151,22 @@ export function McpManagement(props: { current?: () => boolean } = {}) {
                       </Show>
                     </span>
                   </button>
-                  <div class="flex shrink-0 items-center gap-2">
+                  <div class="mcp-management-actions">
                     <Show when={mcpConnectionBlocked(mcpStatus(name))}>
-                      <Button variant="secondary" disabled={refreshMcp.isPending} onClick={() => {
-                        if (current()) refreshMcp.mutate()
-                      }}>
+                      <ButtonV2
+                        variant="neutral"
+                        disabled={refreshMcp.isPending}
+                        onClick={() => {
+                          if (current()) refreshMcp.mutate()
+                        }}
+                      >
                         {language.t("mcp.action.refresh")}
-                      </Button>
+                      </ButtonV2>
                     </Show>
                     <Switch
                       checked={enabled()}
                       hideLabel
-                      disabled={
-                        mcpConnectionBlocked(mcpStatus(name)) || (toggleMcp.isPending && toggleMcp.variables === name)
-                      }
+                      disabled={mcpConnectionBlocked(mcpStatus(name)) || toggleMcp.isPending}
                       onChange={() => {
                         if (!current() || toggleMcp.isPending) return
                         toggleMcp.mutate(name)

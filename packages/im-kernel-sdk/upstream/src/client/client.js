@@ -1,3 +1,4 @@
+import { deviceConfig } from "../delivery/device-auth";
 import IO from "../socket/io";
 import DeliveryClient from "../delivery/client";
 import { deliveryError } from "../delivery/contract";
@@ -23,6 +24,11 @@ let init = (config) => {
   if ((!mode && "protectedDeliveryReader" in config) || (mode && (!("value" in mode) || ![true, false, undefined].includes(mode.value))))
     throw deliveryError("init", "invalid_request");
   const protectedReader = mode?.value === true;
+  const deviceMode = Object.getOwnPropertyDescriptor(config, "protectedDeviceAuth");
+  if ((!deviceMode && "protectedDeviceAuth" in config) || deviceMode && !("value" in deviceMode)) throw deliveryError("init", "invalid_request");
+  const protectedDeviceAuth = deviceConfig(deviceMode?.value);
+  if (protectedDeviceAuth && !protectedReader) throw deliveryError("init", "invalid_request");
+  if (protectedDeviceAuth) config = { ...config, protectedDeviceAuth };
   const mediaMode = Object.getOwnPropertyDescriptor(config, "protectedMedia");
   if ((!mediaMode && "protectedMedia" in config) || (mediaMode && (!("value" in mediaMode) || ![true, false, undefined].includes(mediaMode.value))) ||
       mediaMode?.value === true && !protectedReader) throw deliveryError("init", "invalid_request");

@@ -51,6 +51,7 @@ import {
   acceptsSessionPlanUpdate,
   hasSessionPlanIdentityConflict,
   sessionPlanCursor,
+  sessionGoalFromStatus,
   type SessionPlan,
   type SessionPlanStep,
   type SessionGoal,
@@ -58,6 +59,12 @@ import {
 } from "./global-sync/types"
 
 export type { SessionPlan, SessionPlanStep, SessionGoal }
+
+export function scheduleServerEventStart(start: () => unknown) {
+  // Hidden desktop windows can pause animation frames while their Sessions keep running.
+  const timer = setTimeout(() => void start(), 0)
+  return () => clearTimeout(timer)
+}
 
 export async function syncRetainedSessionPlanSnapshots(input: {
   stores: Readonly<Record<string, { readonly session: readonly { readonly id: string }[] }>>
@@ -101,7 +108,7 @@ type GlobalStore = {
 
 export const loadMcpQuery = (scope: ServerScope, directory: string, sdk: DeepAgentCodeClient) =>
   queryOptions({
-    queryKey: [scope, directory, "mcp"] as const,
+    queryKey: [scope, directoryKey(directory), "mcp"] as const,
     queryFn: () => sdk.mcp.status().then((r) => r.data ?? {}),
   })
 
@@ -234,14 +241,6 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
 
   let bootedAt = 0
   let bootingRoot = false
-  let eventFrame: number | undefined
-  let eventTimer: ReturnType<typeof setTimeout> | undefined
-
-  onCleanup(() => {
-    if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)
-    if (eventTimer !== undefined) clearTimeout(eventTimer)
-  })
-
   const setProjects = (next: Project[] | ((draft: Project[]) => Project[])) => {
     setGlobalStore("project", next)
   }
@@ -340,7 +339,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
           ...(current?.goalId === goal.goalId
             ? { ledger: goal.ledger, stallCount: goal.stallCount, gaps: goal.gaps }
             : {}),
-          eventHint: (current?.eventHint ?? 0) + 1,
+          eventHint: !current || current.goalId === goal.goalId ? (current?.eventHint ?? 0) + 1 : current.eventHint,
         }),
       )
       return
@@ -356,7 +355,11 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       goalReloads.add(key)
       return pending
     }
-    const previous = { goalId: globalStore.session_goal[sessionID]?.goalId, write: goalWrites.get(sessionID) ?? 0 }
+    const previous = {
+      goalId: globalStore.session_goal[sessionID]?.goalId,
+      write: goalWrites.get(sessionID) ?? 0,
+      eventHint: globalStore.session_goal[sessionID]?.eventHint ?? 0,
+    }
     const promise = GoalClient.status(sdkFor(directory) as unknown as GoalClient.Client, sessionID)
       .then((snapshot) => {
         if (goalDisposed) return
@@ -367,21 +370,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
           return
         }
         if (!GoalClient.accepts(current?.control, snapshot)) return
-        setSessionGoal(
-          sessionID,
-          {
-            goalId: snapshot.goalId,
-            planDocId: snapshot.planDocId,
-            phase: snapshot.phase,
-            control: snapshot,
-            ledger:
-              current?.goalId === snapshot.goalId ? current.ledger : { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0 },
-            stallCount: current?.goalId === snapshot.goalId ? current.stallCount : 0,
-            gaps: current?.goalId === snapshot.goalId ? current.gaps : [],
-            eventHint: current?.eventHint,
-          },
-          { source: "status" },
-        )
+        setSessionGoal(sessionID, sessionGoalFromStatus(current, snapshot, previous.eventHint), { source: "status" })
       })
       .finally(() => {
         goalLoads.delete(key)
@@ -704,20 +693,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   })
 
   onMount(() => {
-    if (typeof requestAnimationFrame === "function") {
-      eventFrame = requestAnimationFrame(() => {
-        eventFrame = undefined
-        eventTimer = setTimeout(() => {
-          eventTimer = undefined
-          void serverSDK.event.start()
-        }, 0)
-      })
-    } else {
-      eventTimer = setTimeout(() => {
-        eventTimer = undefined
-        void serverSDK.event.start()
-      }, 0)
-    }
+    onCleanup(scheduleServerEventStart(() => serverSDK.event.start()))
   })
 
   const projectApi = {
@@ -730,34 +706,55 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     },
   }
 
-  // Refresh the cached provider lists (global + every directory scope) and re-run bootstrap.
-  // Shared by config updates and by disconnect flows that change provider state on the backend
-  // (e.g. auth.remove + global.dispose) but don't go through updateConfig — without this the
-  // connected-provider list would not re-render after disconnecting a built-in provider.
-  const refreshProviders = () => {
-    bootstrap.refetch()
-    queryClient.invalidateQueries({ queryKey: [serverSDK.scope, null, "providers"] })
-    queryClient.invalidateQueries({
-      predicate: (query) => query.queryKey[0] === serverSDK.scope && query.queryKey[2] === "providers",
-    })
+  // Explicit connection flows await the same global and project snapshots the model picker reads.
+  // Background refreshes retain the last good state without creating an unhandled rejection.
+  const refreshProviders = async (options: { throwOnError?: boolean } = {}) => {
+    const results = await Promise.allSettled([
+      queryClient.refetchQueries(queryOptionsApi.globalConfig(), { throwOnError: true }),
+      queryClient.invalidateQueries(
+        {
+          predicate: (query) => query.queryKey[0] === serverSDK.scope && query.queryKey[2] === "providers",
+        },
+        { throwOnError: true },
+      ),
+      ...Object.entries(children.children).map(async ([key, child]) => {
+        const response = await sdkFor(key).config.get()
+        if (children.children[key] === child && response.data)
+          child[1]("config", reconcile(response.data, { merge: false }))
+      }),
+    ])
+    const failed = results.find((result) => result.status === "rejected")
+    if (options.throwOnError && failed?.status === "rejected") throw failed.reason
   }
 
-  const providerRefreshTimer = setInterval(refreshProviders, PROVIDER_MODEL_REFRESH_INTERVAL_MS)
+  const providerRefreshTimer = setInterval(() => void refreshProviders(), PROVIDER_MODEL_REFRESH_INTERVAL_MS)
   onCleanup(() => clearInterval(providerRefreshTimer))
 
   const updateConfigMutation = useMutation(() => ({
-    mutationFn: (config: Config) => serverSDK.client.global.config.update({ config }),
-    onError: (error) => showToast({
-      variant: "error",
-      title: language.t("common.requestFailed"),
-      description: formatServerError(error, language.t),
-    }),
-    onSuccess: () => {
+    mutationFn: (config: Config) => serverSDK.client.global.config.update({ config }, { throwOnError: true }),
+    onError: (error) =>
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: formatServerError(error, language.t),
+      }),
+    onSuccess: (result) => {
+      if (result.data) queryClient.setQueryData(queryOptionsApi.globalConfig().queryKey, result.data)
       // Invalidate all provider queries so newly configured custom providers
       // appear immediately in the available provider list across all directories.
       refreshProviders()
     },
   }))
+
+  const refreshMcpConfiguration = async (key: string) => {
+    const child = children.children[key]
+    const response = await Promise.all([
+      queryClient.refetchQueries(queryOptionsApi.globalConfig(), { throwOnError: true }),
+      sdkFor(key).config.get(),
+    ])
+    if (child && children.children[key] === child && response[1].data)
+      child[1]("config", reconcile(response[1].data, { merge: false }))
+  }
 
   const updateMcpConfig = async (
     directory: string,
@@ -772,10 +769,14 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
         [input.name]: input.config,
       },
     })
-    await queryClient.refetchQueries(queryOptionsApi.globalConfig())
-    if (input.config.enabled === false) await sdk.mcp.disconnect({ name: input.name })
-    else await sdk.mcp.connect({ name: input.name })
-    await queryClient.refetchQueries(queryOptionsApi.mcp(key))
+    await refreshMcpConfiguration(key)
+    await (
+      input.config.enabled === false ? sdk.mcp.disconnect({ name: input.name }) : sdk.mcp.connect({ name: input.name })
+    ).catch(async (error: unknown) => {
+      await queryClient.refetchQueries(queryOptionsApi.mcp(key)).catch(() => {})
+      throw error
+    })
+    await queryClient.refetchQueries(queryOptionsApi.mcp(key), { throwOnError: true })
   }
 
   const removeMcpConfig = async (directory: string, name: string) => {
@@ -783,7 +784,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     const sdk = sdkFor(key)
     const result = await sdk.mcp.removeConfig({ name })
     if (result.data?.removed !== true) throw new Error("MCP configuration removal was not confirmed")
-    await queryClient.refetchQueries(queryOptionsApi.globalConfig())
+    await refreshMcpConfiguration(key)
     await queryClient.refetchQueries(queryOptionsApi.mcp(key))
   }
 
@@ -802,7 +803,10 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   ) => {
     const key = directoryKey(directory)
     const sdk = sdkFor(key)
-    const res = await sdk.mcp.catalogEnable(input)
+    const res = await sdk.mcp.catalogEnable(input).catch(async (error: unknown) => {
+      await queryClient.refetchQueries(queryOptionsApi.mcp(key)).catch(() => {})
+      throw error
+    })
     const enabled = res.data
     if (enabled?.name && enabled.config) {
       // Persist the instantiated config to the global config so it is durable across restarts.
@@ -814,7 +818,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
         },
       })
     }
-    await queryClient.refetchQueries(queryOptionsApi.globalConfig())
+    await refreshMcpConfiguration(key)
     await queryClient.refetchQueries(queryOptionsApi.mcp(key))
   }
 
@@ -850,7 +854,11 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       sessionReloaders.delete(directoryKey(directory))
     },
     mcp: {
-      refresh: (directory: string) => queryClient.refetchQueries(queryOptionsApi.mcp(directoryKey(directory))),
+      refresh: async (directory: string) => {
+        const key = directoryKey(directory)
+        await refreshMcpConfiguration(key)
+        await queryClient.refetchQueries(queryOptionsApi.mcp(key))
+      },
       toggle: async (directory: string, name: string) => {
         const key = directoryKey(directory)
         const sdk = sdkFor(key)

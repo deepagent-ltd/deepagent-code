@@ -4,6 +4,8 @@ import type { Accessor } from "solid-js"
 import type { DesktopMenuAction } from "../desktop-menu"
 import { ServerConnection } from "./server"
 import type { UpdaterPlatform } from "../updater"
+import type { SharedBrowserPlatform } from "@deepagent-code/core/browser/shared-platform"
+export type { SharedBrowserPlatform, SharedBrowserView } from "@deepagent-code/core/browser/shared-platform"
 
 type PickerPaths = string | string[] | null
 type OpenDirectoryPickerOptions = { title?: string; multiple?: boolean }
@@ -99,6 +101,7 @@ type PlatformBase = {
   /** U7: isolated in-app browser (Electron desktop only). Navigation-only — never exposes page
    * content to the app/agent. The WebContentsView is drawn by the main process over the rect. */
   browser?: BrowserPlatform
+  sharedBrowser?: SharedBrowserPlatform
 
   /** Get the preferred display backend (desktop only) */
   getDisplayBackend?(): Promise<DisplayBackend | null> | DisplayBackend | null

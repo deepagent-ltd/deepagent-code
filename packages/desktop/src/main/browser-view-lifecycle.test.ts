@@ -31,6 +31,9 @@ test("real Electron browser views have independent window ownership and close th
   console.log("BROWSER_LIFECYCLE_EVIDENCE", root, result)
   expect(exitCode).toBe(0)
   expect(result.initial.separateContents).toBe(true)
+  expect(result.firstNavigation).toMatchObject({ initiallyHidden: true, loadingAtFirstShow: true,
+    firstRequests: 1, sameContentsAfterHideShow: true })
+  expect(result.firstNavigation.firstURL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/first-open$/)
   expect(result.afterFirstDestroy.firstDestroyed).toBe(true)
   expect(result.afterFirstDestroy.secondAlive).toBe(true)
   expect(result.afterHostClose.replacementDestroyed).toBe(true)

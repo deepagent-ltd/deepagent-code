@@ -46,6 +46,8 @@ export namespace Flock {
     baseDelayMs?: number
     maxDelayMs?: number
     onWait?: Wait
+    /** Native custody/IM ownership may only reclaim a proven dead local PID. */
+    reclaimDeadProcess?: boolean
   }
 
   type Opts = {
@@ -53,6 +55,7 @@ export namespace Flock {
     timeoutMs: number
     baseDelayMs: number
     maxDelayMs: number
+    reclaimDeadProcess: boolean
   }
 
   type Owned = {
@@ -125,7 +128,20 @@ export namespace Flock {
     }
   }
 
-  async function stale(lockDir: string, heartbeatPath: string, metaPath: string, staleMs: number) {
+  async function deadLocalProcess(metaPath: string) {
+    const metadata = await readFile(metaPath, "utf8").then((raw): unknown => JSON.parse(raw)).catch(() => undefined)
+    if (!metadata || typeof metadata !== "object" || !("hostname" in metadata) || metadata.hostname !== os.hostname() ||
+      !("pid" in metadata) || typeof metadata.pid !== "number" || !Number.isSafeInteger(metadata.pid) || metadata.pid < 1) return false
+    try {
+      process.kill(metadata.pid, 0)
+      return false
+    } catch (error) {
+      return code(error) === "ESRCH"
+    }
+  }
+
+  async function stale(lockDir: string, heartbeatPath: string, metaPath: string, staleMs: number, reclaimDeadProcess = false) {
+    if (reclaimDeadProcess) return deadLocalProcess(metaPath)
     // Stale detection allows automatic recovery after crashed owners.
     const now = wall()
     const heartbeat = await stats(heartbeatPath)
@@ -158,7 +174,7 @@ export namespace Flock {
         throw err
       }
 
-      if (!(await stale(lockDir, heartbeatPath, metaPath, opts.staleMs))) {
+      if (!(await stale(lockDir, heartbeatPath, metaPath, opts.staleMs, opts.reclaimDeadProcess))) {
         return { acquired: false }
       }
 
@@ -169,7 +185,9 @@ export namespace Flock {
         const errCode = code(claimErr)
         if (errCode === "EEXIST") {
           const breaker = await stats(breakerPath)
-          if (breaker && wall() - breaker.mtimeMs > opts.staleMs) {
+          if (breaker && (opts.reclaimDeadProcess
+            ? await deadLocalProcess(path.join(breakerPath, "meta.json"))
+            : wall() - breaker.mtimeMs > opts.staleMs)) {
             await rm(breakerPath, { recursive: true, force: true }).catch(() => undefined)
           }
           return { acquired: false }
@@ -183,8 +201,10 @@ export namespace Flock {
       }
 
       try {
+        if (opts.reclaimDeadProcess) await writeFile(path.join(breakerPath, "meta.json"),
+          JSON.stringify({ token, pid: process.pid, hostname: os.hostname() }), { flag: "wx", mode: 0o600 })
         // Breaker ownership ensures only one contender performs stale cleanup.
-        if (!(await stale(lockDir, heartbeatPath, metaPath, opts.staleMs))) {
+        if (!(await stale(lockDir, heartbeatPath, metaPath, opts.staleMs, opts.reclaimDeadProcess))) {
           return { acquired: false }
         }
 
@@ -315,6 +335,7 @@ export namespace Flock {
       timeoutMs: input.timeoutMs ?? defaultOpts.timeoutMs,
       baseDelayMs: input.baseDelayMs ?? defaultOpts.baseDelayMs,
       maxDelayMs: input.maxDelayMs ?? defaultOpts.maxDelayMs,
+      reclaimDeadProcess: input.reclaimDeadProcess === true,
     }
     const dir = input.dir ?? root()
 

@@ -24,9 +24,10 @@ export const LIMITS = Object.freeze({
 export class Error extends globalThis.Error {
   readonly _tag = "McpAuthJournalError"
   constructor(
-    readonly reason: "unavailable" | "invalid" | "capacity" | "changed" | "conflict" | "unknown" | "expired",
+    readonly reason: "unavailable" | "invalid" | "capacity" | "changed" | "conflict" | "unknown" | "expired" | "legacy_unverified",
   ) {
-    super(`MCP authentication journal ${reason}`)
+    super(reason === "legacy_unverified" ? "Legacy MCP credentials require explicit re-entry before use"
+      : `MCP authentication journal ${reason}`)
   }
 }
 

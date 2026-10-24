@@ -41,6 +41,8 @@ const state = {
   release: undefined as (() => void) | undefined,
   invalidate: undefined as (() => void) | undefined,
   unsubscribed: 0,
+  empty: false,
+  close: vi.fn(),
 }
 const client = createDeepAgentCodeClient({
   baseUrl: "http://owned.example",
@@ -59,7 +61,9 @@ const client = createDeepAgentCodeClient({
         signal: request.signal,
       })
       if (url.pathname === "/mcp/apps")
-        return Response.json([descriptor, { ...descriptor, server: "foreign", resourceUri: "ui://foreign/secret" }])
+        return Response.json(
+          state.empty ? [] : [descriptor, { ...descriptor, server: "foreign", resourceUri: "ui://foreign/secret" }],
+        )
       if (url.pathname === "/mcp/apps/open") {
         if (state.delayed)
           await new Promise<void>((resolve) => {
@@ -104,7 +108,7 @@ const mount = (
                 state.unsubscribed++
               }
             }}
-            close={() => {}}
+            close={state.close}
           />
         </Dialog>
       </LanguageProvider>
@@ -124,6 +128,8 @@ beforeEach(() => {
   state.release = undefined
   state.invalidate = undefined
   state.unsubscribed = 0
+  state.empty = false
+  state.close.mockReset()
 })
 afterEach(() => {
   state.release?.()
@@ -214,4 +220,23 @@ it("unmount aborts pending open and retires a completed late response without mo
   await waitFor(() => expect(closed()).toHaveLength(1))
   expect(document.querySelector("iframe")).toBeNull()
   expect(calls.every((call) => call.directory === directory && call.origin === "http://owned.example")).toBe(true)
+})
+
+it("an MCP with no App resources keeps open disabled and allows explicit refresh and close", async () => {
+  state.empty = true
+  mount()
+  const refresh = screen.getByRole("button", { name: dict["oversight.common.refresh"] })
+  await waitFor(() => expect(refresh.hasAttribute("disabled")).toBe(false))
+  expect(screen.getByText(dict["mcp.apps.empty"])).toBeTruthy()
+  expect(screen.queryByRole("combobox")).toBeNull()
+  expect(button().hasAttribute("disabled")).toBe(true)
+  fireEvent.click(button())
+  expect(opened()).toHaveLength(0)
+  expect(calls.map((call) => call.path)).toEqual(["/mcp/apps"])
+  fireEvent.click(refresh)
+  await waitFor(() => expect(calls.map((call) => call.path)).toEqual(["/mcp/apps", "/mcp/apps"]))
+  fireEvent.click(screen.getAllByRole("button", { name: dict["common.close"] }).at(-1)!)
+  expect(state.close).toHaveBeenCalledOnce()
+  expect(opened()).toHaveLength(0)
+  expect(closed()).toHaveLength(0)
 })

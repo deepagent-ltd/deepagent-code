@@ -33,7 +33,8 @@ import {
 } from "@deepagent-code/core/context-federation/production-adapters"
 import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
 import { ContextToolRuntime } from "@deepagent-code/core/context-federation/tool-runtime"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
+import { CodeQuery } from "@deepagent-code/core/code-intelligence/query"
 import { currentIdentity } from "@/context-federation/production-sources"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceLayer } from "@/project/instance-layer"
@@ -57,58 +58,70 @@ import { EventInvestigationHost } from "@/deepagent/event-investigation"
 import { WorkExecutionProfile } from "@deepagent-code/core/session/work-execution-profile"
 import { LLMClient } from "@deepagent-code/llm"
 
-// W3.10 — the V2 runner frame host hook (closes B-review P0 / O-W3-10).
-//
-// The problem: `ProductionV2Sources` (the W3.7 value seam) is built at the APP level where no
-// `InstanceRef` exists, so the seam value carries NO identity (W3.8.1 claimed a real runner frame;
-// W3.9 proved the identity was never attached — the layer-build `LocationIndexRuntime` attach died
-// on "InstanceRef not provided" and the seam lost the field). The C6 readiness probe resolves the
-// identity ON DEMAND per request (it runs in an instance-context request fiber), so probe and
-// runner disagreed: probe = real frame, runner = `v2:local` → code graph `source_error`.
-//
-// The fix: a host hook INSIDE the runner's per-location subtree. The V2 runner subtree is composed
-// by the core `LocationServiceMap.lookup` per location ref (60-min TTL, `Layer.fresh` per drain
-// provide — see `packages/core/src/location-layer.ts` and `session/execution/local.ts` drain
-// `Effect.provide(locations.get(session.location))`). deepagent-code replaces the `LocationServiceMap`
-// service (LAST-WINS provide at the app/route graph, the same context-flow mechanism as the W3.7
-// seam) with an AUGMENTED map whose per-ref layer:
-//
-//   1. loads the instance context for the ref's directory (`InstanceStore.load` — the same
-//      derivation the httpapi instance-context middleware uses) and provides `InstanceRef` into the
-//      ref tree, so `LocationIndexRuntime.current()` is VALID inside the subtree;
-//   2. overrides `ProductionV2Sources` with `{ ...outerSeamValue, identity }` where identity is
-//      `currentIdentity(runtime)` — the SAME derivation the probe uses (`identityFromHandle` of the
-//      CURRENT instance handle), so runner frame and probe frame can never diverge again.
-//
-// Honesty contract: a missing/erroneous instance (store load failure, no handle, index flag off)
-// yields `identity: undefined` — the documented `v2:local` degradation frame, never a fake. The
-// outer seam value (code/documents/knowledge/memory) is passed through unchanged.
-//
-// Composition-point verdict: the runner layer is NOT a per-turn rebuild and NOT deepagent-code
-// composed — it is the core per-location-ref tree (memoized 60 min). Hooking the per-ref build is
-// therefore INSTANCE-LEVEL: the identity binds the same instance the index handle binds (the
-// `LocationIndexRuntime` instance `ScopedCache` is keyed by instance directory), and a per-turn
-// re-resolution adds nothing — the handle is already per-instance. This is the verdict the review
-// accepted ("instance-level real frame, per-turn unnecessary, report the ruling").
-
-/**
- * W3.10 — host hook layer factory for one location ref. Returns a `ProductionV2Sources` override:
- * the outer seam value (forwarded by the core `productionV2SourcesLayer`) plus the REAL identity of
- * the CURRENT instance handle for the ref's directory. `undefined` identity (no handle / store
- * failure) keeps the seam as-is (honest `v2:local` degradation).
- */
+/** Bind automatic graph reads to the actual Location, not the application build fiber. */
 export function runnerFrameSeamFor(ref: Location.Ref, base: ProductionV2AdapterInput = {}) {
   return Layer.unwrap(
     Effect.gen(function* () {
       const store = yield* InstanceStore.Service
       const ctx = yield* store.load({ directory: ref.directory })
-      // The instance context is local to this probe: provide it around the identity resolution so
-      // `LocationIndexRuntime.current()` observes the SAME instance the ref tree is built for
-      // (and never depends on an ambient InstanceRef the drain fiber cannot carry).
-      const identity = yield* currentIdentity(yield* LocationIndexRuntime.Service).pipe(
-        Effect.provideService(InstanceRef, ctx),
+      const current = Effect.gen(function* () {
+        if ((yield* store.peek(ref.directory)) !== ctx) {
+          return yield* Effect.fail(
+            new CodeQuery.InvalidQueryError({ reason: "location instance is no longer current" }),
+          )
+        }
+      })
+      const scoped = <A, E>(operation: Effect.Effect<A, E>) =>
+        Effect.gen(function* () {
+          yield* current
+          const result = yield* operation
+          // Disposal can happen while a live source query awaits its index or database.
+          yield* current
+          return result
+        }).pipe(Effect.provideService(InstanceRef, ctx))
+      const identity = yield* scoped(currentIdentity(yield* LocationIndexRuntime.Service)).pipe(
+        Effect.catch(() => Effect.succeed(undefined)),
       )
-      return Layer.succeed(ProductionV2Sources, identity === undefined ? base : { ...base, identity })
+      const gateway = yield* Effect.serviceOption(AgentGateway.Runtime)
+      // The immutable Gateway owns these stores. The application-level seam may have been built
+      // before it, or while a different legacy/default knowledge runtime was configured.
+      const stores = Option.isSome(gateway)
+        ? gateway.value.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(ref.directory))
+        : undefined
+      return Layer.succeed(ProductionV2Sources, {
+        ...(identity === undefined ? {} : { identity }),
+        code:
+          base.code === undefined
+            ? undefined
+            : {
+                query: (input) => scoped(Effect.suspend(() => base.code!.query(input))),
+              },
+        documents:
+          base.documents === undefined
+            ? undefined
+            : {
+                search: (input) => scoped(Effect.suspend(() => base.documents!.search(input))),
+                ...(base.documents.mutationEpoch === undefined
+                  ? {}
+                  : {
+                      mutationEpoch: () => scoped(Effect.suspend(() => base.documents!.mutationEpoch!())),
+                    }),
+              },
+        knowledge:
+          stores === undefined
+            ? undefined
+            : {
+                stores,
+                ...(base.knowledge?.released === undefined
+                  ? {}
+                  : {
+                      released: {
+                        ...base.knowledge.released,
+                        current: (scope) => scoped(Effect.suspend(() => base.knowledge!.released!.current(scope))),
+                      },
+                    }),
+              },
+      })
     }),
   )
 }
@@ -149,6 +162,7 @@ const runnerFrameHost = Layer.effect(
     // Capture the installed implementation before admitting its configuration in cached Locations.
     yield* LSP.Service
     const sources = yield* ProductionV2Sources
+    const gateway = yield* AgentGateway.Runtime
     const store = yield* InstanceStore.Service
     const runtime = yield* LocationIndexRuntime.Service
     const codeIntel = yield* CodeIntelFacade.Service
@@ -174,6 +188,7 @@ const runnerFrameHost = Layer.effect(
     // RuntimeIntegrityIdentity.captureRootContextLayer); the resolver stays context-independent.
     const identitySlot = yield* RuntimeIntegrityIdentity.RootIdentitySlot
     const dependencies = Layer.mergeAll(
+      Layer.succeed(AgentGateway.Runtime, gateway),
       Layer.succeed(InstanceStore.Service, store),
       Layer.succeed(LocationIndexRuntime.Service, runtime),
       Layer.succeed(CodeIntelFacade.Service, codeIntel),
@@ -184,7 +199,7 @@ const runnerFrameHost = Layer.effect(
     return LocationRuntimeHost.of({
       client: yield* LLMClient.Service,
       work: yield* ProductionWorkExecution.Service,
-      browser: BrowserNativeHost.current(),
+      browser: yield* BrowserHost.Current,
       layer: (ref) =>
         Layer.mergeAll(
           runnerFrameSeamFor(ref, sources),
@@ -287,10 +302,13 @@ export const gatewayRuntimeLayer = Layer.unwrap(
 
 const nativeClientLayer = NativeRuntime.clientLayer.pipe(Layer.provide(gatewayRuntimeLayer))
 const nativeRuntimeLayer = NativeRuntime.layer.pipe(Layer.provide(nativeClientLayer))
+// HTTP user-input admission and Location tools must observe this same bootstrapped
+// host. Providing it only inside BrowserFiles hides the authority from request fibers.
+export const nativeBrowserHostLayer = Layer.effect(BrowserHost.Current, Effect.sync(BrowserNativeHost.current))
 // This exact layer object is shared with the API. Construction observes only the
 // bootstrap host and database; installed file assets and consent remain lazy.
 export const browserFilesLayer = BrowserFiles.layer.pipe(
-  Layer.provide(Layer.effect(BrowserHost.Current, Effect.sync(BrowserNativeHost.current))),
+  Layer.provide(nativeBrowserHostLayer),
   Layer.provide(Database.defaultLayer),
 )
 const workRuntimeLayer = ProductionWorkExecution.layer.pipe(
@@ -302,6 +320,7 @@ const workRuntimeLayer = ProductionWorkExecution.layer.pipe(
 const workServicesLayer = Layer.unwrap(Effect.map(ProductionWorkExecution.Service, WorkExecutionProfile.servicesLayer)).pipe(Layer.provide(workRuntimeLayer))
 
 export const runnerFrameHostLayer = runnerFrameHost.pipe(
+  Layer.provide(nativeBrowserHostLayer),
   Layer.provide(workRuntimeLayer),
   Layer.provide(LSP.defaultLayer),
   Layer.provide(nativeClientLayer),
@@ -373,8 +392,16 @@ const eventInvestigationHostLayer = EventInvestigationHost.layer.pipe(
   Layer.provide(Global.defaultLayer),
 )
 
+// Goal/checkpoint reads run at the root after a Location drain has settled. They must resolve
+// the same captured root identity as the drain, never trust a receipt's self-reported identity.
+export const runtimeIntegrityIdentityLayer = Layer.effect(
+  V2ProviderTurn.CurrentRuntimeIntegrityIdentity,
+  Effect.map(RuntimeIntegrityIdentity.RootIdentitySlot, RuntimeIntegrityIdentity.slotResolver),
+).pipe(Layer.provide(RuntimeIntegrityIdentity.rootIdentitySlotLayer))
+
 /** One application V2 runtime: one DB, event bridge, execution owner, restart owner, and Location map. */
 export const sessionRuntimeLayer = Layer.mergeAll(
+  nativeBrowserHostLayer,
   nativeRuntimeLayer,
   workRuntimeLayer,
   workServicesLayer,
@@ -383,6 +410,7 @@ export const sessionRuntimeLayer = Layer.mergeAll(
   eventInvestigationHostLayer,
   Layer.succeed(CompositionDigest.FrameIdentity, frameIdentity),
   RuntimeIntegrityIdentity.rootIdentitySlotLayer,
+  runtimeIntegrityIdentityLayer,
   // Same memoized slot instance the execution layer carries; same memoized SessionV2 build as
   // coreSessionRuntime — the capture wires holder to service once per root.
   TaskTool.captureDelegationServiceLayer.pipe(

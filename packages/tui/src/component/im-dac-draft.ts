@@ -36,6 +36,7 @@ export function createIMDacDraft(input: {
     busy: false,
     uncertain: !!pending.intent,
     replyUncertain: false,
+    reconciliation: undefined as IMDacSessionSchema.ReplyReconcileResponse | undefined,
     command: undefined as IMDacCommand | undefined,
     failure: undefined as unknown,
   })
@@ -44,11 +45,17 @@ export function createIMDacDraft(input: {
   const requireCurrent = () => {
     if (!current()) throw new IMRequestError("dac_scope_changed", "DAC draft scope changed", 409)
   }
-  const unresolved = () => state.uncertain || state.replyUncertain || state.command?.replyStatus === "unknown"
+  const unresolved = () => state.uncertain || state.replyUncertain
   const accept = (command: IMDacCommand) => {
     requireCurrent()
     const admittedDraft = pending.intent?.commandID === command.commandID
-    setState({ command, commandID: command.commandID, uncertain: command.state === "pending", replyUncertain: false })
+    setState({
+      command,
+      commandID: command.commandID,
+      uncertain: command.state === "pending",
+      replyUncertain: false,
+      ...(state.commandID !== command.commandID ? { reconciliation: undefined } : {}),
+    })
     if (command.state === "pending") return command
     pending.intent = undefined
     if (command.state === "admitted" && admittedDraft)
@@ -97,7 +104,7 @@ export function createIMDacDraft(input: {
       requireCurrent()
       if (state.busy) return
       if (pending.intent) return observe(pending.intent.commandID)
-      if (unresolved()) return observe()
+      if (unresolved() || (!state.text.trim() && state.command?.replyStatus === "unknown")) return observe()
       if (!pending.intent) {
         if (!state.text.trim()) throw new IMRequestError("invalid_request", "DAC command is empty")
         pending.intent = Schema.decodeUnknownSync(IMDacSessionSchema.Submit)(
@@ -139,6 +146,49 @@ export function createIMDacDraft(input: {
       requireCurrent()
       if (state.busy || state.uncertain || state.replyUncertain) return
       return observe(commandID)
+    },
+    async reconcileReply() {
+      requireCurrent()
+      const command = state.command
+      if (state.busy || state.uncertain || !command || command.state !== "admitted" || !command.finalMessageID) return
+      setState({ busy: true, failure: undefined })
+      try {
+        const value = await input.client.dacReplyReconcile(
+          input.groupID,
+          command.commandID,
+          state.reconciliation?.nextCursor ?? undefined,
+          AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]),
+        )
+        requireCurrent()
+        if (
+          state.command?.commandID !== command.commandID ||
+          !(
+            [
+              "commandID",
+              "groupID",
+              "bindingID",
+              "sessionID",
+              "inputID",
+              "projectID",
+              "directory",
+              "workspaceID",
+              "activityID",
+              "finalMessageID",
+              "state",
+              "delivery",
+            ] as const
+          ).every((key) => value.command[key] === command[key])
+        )
+          throw new IMRequestError("dac_scope_changed", "Original reply command changed", 409)
+        accept(value.command)
+        setState("reconciliation", value)
+        return value
+      } catch (error) {
+        if (current()) setState("failure", () => error)
+        throw error
+      } finally {
+        if (current()) setState("busy", false)
+      }
     },
     async retryReply() {
       requireCurrent()

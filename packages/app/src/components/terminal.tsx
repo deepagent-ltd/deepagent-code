@@ -15,6 +15,7 @@ import { disposeIfDisposable, getHoveredLinkText, setOptionIfSupported } from "@
 import { terminalInputWriter } from "@/utils/terminal-input-writer"
 import { terminalWriter } from "@/utils/terminal-writer"
 import { terminalWebSocketURL } from "@/utils/terminal-websocket-url"
+import { openTerminalWithoutAutoFocus, terminalAutoFocusRequest } from "@/utils/terminal-autofocus"
 
 const TOGGLE_TERMINAL_ID = "terminal.toggle"
 const DEFAULT_TOGGLE_TERMINAL_KEYBIND = "ctrl+`"
@@ -331,12 +332,16 @@ export const Terminal = (props: TerminalProps) => {
     scheduleFit()
   })
 
-  const focusTerminal = () => {
+  const focusTerminal = (allowed?: () => boolean) => {
     const t = term
     if (!t) return
-    t.focus()
+    if (allowed && !allowed()) return
+    if (!allowed) t.focus()
     t.textarea?.focus()
-    setTimeout(() => t.textarea?.focus(), 0)
+    setTimeout(() => {
+      if (allowed && !allowed()) return
+      t.textarea?.focus()
+    }, 0)
   }
   const handlePointerDown = () => {
     const activeElement = document.activeElement
@@ -363,6 +368,7 @@ export const Terminal = (props: TerminalProps) => {
   }
 
   onMount(() => {
+    const allowed = terminalAutoFocusRequest(() => container)
     const run = async () => {
       setStatus("connecting")
       const loaded = await loadGhostty()
@@ -421,7 +427,7 @@ export const Terminal = (props: TerminalProps) => {
       t.loadAddon(fit)
       fitAddon = fit
 
-      t.open(container)
+      openTerminalWithoutAutoFocus(t, container)
       useTerminalUiBindings({
         container,
         term: t,
@@ -430,7 +436,7 @@ export const Terminal = (props: TerminalProps) => {
         handleLinkClick,
       })
 
-      if (local.autoFocus !== false) focusTerminal()
+      if (local.autoFocus !== false && allowed()) focusTerminal(allowed)
 
       if (typeof document !== "undefined" && document.fonts) {
         void document.fonts.ready.then(scheduleFit)

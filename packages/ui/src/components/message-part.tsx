@@ -59,30 +59,8 @@ import { useLocation } from "@solidjs/router"
 import { attached, inline, kind } from "./message-file"
 import { readPartText } from "./message-part-text"
 import { chunkCacheKey, partChunks } from "./message-part-chunk"
-
-async function writeClipboard(text: string): Promise<boolean> {
-  const body = typeof document === "undefined" ? undefined : document.body
-  if (body) {
-    const textarea = document.createElement("textarea")
-    textarea.value = text
-    textarea.setAttribute("readonly", "")
-    textarea.style.position = "fixed"
-    textarea.style.opacity = "0"
-    textarea.style.pointerEvents = "none"
-    body.appendChild(textarea)
-    textarea.select()
-    const copied = document.execCommand("copy")
-    body.removeChild(textarea)
-    if (copied) return true
-  }
-
-  const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard
-  if (!clipboard?.writeText) return false
-  return clipboard.writeText(text).then(
-    () => true,
-    () => false,
-  )
-}
+import { writeClipboard } from "../utils/clipboard"
+import { PlanApproval } from "./plan-approval"
 
 function ShellSubmessage(props: { text: string; animate?: boolean }) {
   let widthRef: HTMLSpanElement | undefined
@@ -1205,7 +1183,13 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
         <>
           <div data-slot="user-message-body">
             <div data-slot="user-message-text">
-              <HighlightedText text={text()} references={inlineFiles()} agents={agents()} />
+              <PlanApproval
+                text={text()}
+                sessionID={props.message.sessionID}
+                kind="approved"
+                approval={props.message.metadata?.dac_plan_approval}
+                fallback={<HighlightedText text={text()} references={inlineFiles()} agents={agents()} />}
+              />
             </div>
           </div>
           <div data-slot="user-message-copy-wrapper">

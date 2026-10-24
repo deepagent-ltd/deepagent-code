@@ -1,5 +1,6 @@
 import { $ } from "bun"
 import path from "node:path"
+import { normalizeProduct } from "./normalize-product"
 
 const root = path.resolve(import.meta.dirname, "..")
 const source = path.join(root, "upstream")
@@ -19,7 +20,7 @@ const products = await Promise.all(
     { output: "lib/index.js", source: "dist/juggleim-es-min-1.9.17.js" },
     { output: "lib/index.d.ts", source: "src/index.d.ts" },
   ].map(async (entry) => {
-    const bytes = await Bun.file(path.join(source, entry.source)).arrayBuffer()
+    const bytes = normalizeProduct(await Bun.file(path.join(source, entry.source)).arrayBuffer(), entry.output)
     const expected = manifest.files.find((file: { path: string; sha256: string }) => file.path === entry.output)
     if (!expected || Bun.CryptoHasher.hash("sha256", bytes, "hex") !== expected.sha256) {
       throw new Error(`Reviewed SDK build differs: ${entry.output}`)

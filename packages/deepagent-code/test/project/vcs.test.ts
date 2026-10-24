@@ -440,3 +440,167 @@ describe("Vcs diff", () => {
     20_000,
   )
 })
+
+describe("Vcs work overview", () => {
+  afterEach(async () => {
+    await disposeAllInstances()
+  })
+
+  it.instance(
+    "work overview counts committed, staged, unstaged and untracked changes once without mutating Git",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* write(path.join(test.directory, "same.txt"), "one\n")
+        yield* git(test.directory, ["add", "."])
+        yield* git(test.directory, ["commit", "--no-gpg-sign", "-m", "overview base"])
+        yield* git(test.directory, ["branch", "overview-base"])
+        yield* git(test.directory, ["update-ref", "refs/remotes/origin/overview-base", "HEAD"])
+        yield* write(path.join(test.directory, "same.txt"), "one\ntwo\n")
+        yield* git(test.directory, ["add", "."])
+        yield* git(test.directory, ["commit", "--no-gpg-sign", "-m", "overview commit"])
+        yield* write(path.join(test.directory, "same.txt"), "one\nstaged\n")
+        yield* git(test.directory, ["add", "."])
+        yield* write(path.join(test.directory, "same.txt"), "one\nworking\nthree\n")
+        yield* write(path.join(test.directory, "new.txt"), "new\n")
+        yield* write(path.join(test.directory, "empty.txt"), "")
+        yield* Effect.promise(() => Bun.write(path.join(test.directory, "image.bin"), new Uint8Array([0, 1, 0, 2])))
+        const service = yield* Git.Service
+        const before = yield* service.run(["status", "--porcelain=v1", "-z"], { cwd: test.directory })
+        const index = yield* service.run(["write-tree"], { cwd: test.directory })
+        const head = yield* service.resolveRef(test.directory)
+        const vcs = yield* init()
+        const refs = yield* vcs.refs()
+        expect(refs.items).toContainEqual(
+          expect.objectContaining({ name: "overview-base", ref: "refs/heads/overview-base", kind: "local" }),
+        )
+        expect(refs.items).toContainEqual(
+          expect.objectContaining({
+            name: "origin/overview-base",
+            ref: "refs/remotes/origin/overview-base",
+            kind: "remote",
+          }),
+        )
+        const summary = yield* vcs.summary("refs/heads/overview-base")
+        expect(summary).toMatchObject({
+          state: "ready",
+          coverage: "complete",
+          stale: false,
+          files: 4,
+          additions: 3,
+          deletions: 0,
+          uncommitted: 4,
+          binary: 1,
+          lineStatsComplete: false,
+          conflicts: 0,
+          headOID: head,
+        })
+        expect(
+          (yield* Effect.flip(vcs.diff("branch", { baseRef: "refs/heads/overview-base", baseOID: "0".repeat(40) })))
+            .reason,
+        ).toBe("scope_changed")
+        const diff = yield* vcs.diff("branch", {
+          baseRef: "refs/heads/overview-base",
+          baseOID: summary.baseOID ?? undefined,
+          headOID: summary.headOID ?? undefined,
+          context: 3,
+        })
+        expect(diff.map((item) => item.file).sort()).toEqual(["empty.txt", "image.bin", "new.txt", "same.txt"])
+        expect((yield* service.run(["status", "--porcelain=v1", "-z"], { cwd: test.directory })).text()).toBe(
+          before.text(),
+        )
+        expect((yield* service.run(["write-tree"], { cwd: test.directory })).text()).toBe(index.text())
+        expect(yield* service.resolveRef(test.directory)).toBe(head)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "work overview explicitly compares the current branch instead of the old default-branch empty shortcut",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* git(test.directory, ["branch", "-M", "main"])
+        yield* write(path.join(test.directory, "local.txt"), "local\n")
+        const vcs = yield* init()
+        expect(yield* vcs.diff("branch")).toEqual([])
+        expect(yield* vcs.summary("main")).toMatchObject({ state: "ready", files: 1, additions: 1, deletions: 0 })
+        expect(yield* vcs.diff("branch", { baseRef: "main" })).toContainEqual(
+          expect.objectContaining({ file: "local.txt" }),
+        )
+        for (const name of ["missing-ref", "HEAD~1", "--output=/tmp/invalid", "main; echo invalid"]) {
+          expect(yield* vcs.summary(name)).toMatchObject({ state: "base_unavailable", files: null, additions: null })
+          expect((yield* Effect.flip(vcs.diff("branch", { baseRef: name }))).reason).toBe("ref_invalid")
+        }
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "work overview reports detached identity and no-common-ancestor without claiming zero changes",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* git(test.directory, ["branch", "overview-base"])
+        yield* git(test.directory, ["checkout", "--detach", "HEAD"])
+        const vcs = yield* init()
+        expect(yield* vcs.summary("overview-base")).toMatchObject({ state: "ready", branch: null, files: 0 })
+        yield* git(test.directory, ["checkout", "--orphan", "unrelated"])
+        yield* git(test.directory, ["read-tree", "--empty"])
+        yield* git(test.directory, ["commit", "--no-gpg-sign", "--allow-empty", "-m", "unrelated root"])
+        expect(yield* vcs.summary("overview-base")).toMatchObject({
+          state: "no_common_ancestor",
+          files: null,
+          additions: null,
+        })
+        expect((yield* Effect.flip(vcs.diff("branch", { baseRef: "overview-base" }))).reason).toBe("no_common_ancestor")
+      }),
+    { git: true },
+  )
+
+  it.instance("work overview distinguishes a non-Git directory from a clean repository", () =>
+    Effect.gen(function* () {
+      expect(yield* (yield* init()).summary()).toMatchObject({
+        state: "non_git",
+        files: null,
+        additions: null,
+        lineStatsComplete: false,
+      })
+    }),
+  )
+})
+
+worktreeIt.live("work overview keeps a nested directory's status, numstat and review paths in the same scope", () =>
+  Effect.gen(function* () {
+    const root = yield* tmpdirScoped({ git: true })
+    const dir = path.join(root, " nested ")
+    yield* write(path.join(dir, "same.txt"), "before\n")
+    yield* write(path.join(root, "outside.txt"), "outside\n")
+    yield* git(root, ["add", "."])
+    yield* git(root, ["commit", "--no-gpg-sign", "-m", "nested base"])
+    yield* git(root, ["branch", "overview-base"])
+    yield* git(root, ["config", "status.relativePaths", "false"])
+    yield* write(path.join(dir, "same.txt"), "after\n")
+    yield* write(path.join(dir, "new.txt"), "new\n")
+    yield* write(path.join(root, "outside.txt"), "outside changed\n")
+    const result = yield* Effect.gen(function* () {
+      const vcs = yield* init()
+      return {
+        summary: yield* vcs.summary("overview-base"),
+        diff: yield* vcs.diff("branch", { baseRef: "overview-base" }),
+      }
+    }).pipe(provideInstance(dir))
+    expect(result.summary).toMatchObject({
+      state: "ready",
+      directory: dir,
+      repositoryRoot: root,
+      files: 2,
+      additions: 2,
+      deletions: 1,
+      uncommitted: 2,
+    })
+    expect(result.diff.map((item) => item.file).sort()).toEqual(["new.txt", "same.txt"])
+    expect(result.diff.find((item) => item.file === "same.txt")?.patch).toContain("--- a/same.txt")
+    expect(result.diff.some((item) => item.patch?.includes("outside changed"))).toBe(false)
+  }),
+)

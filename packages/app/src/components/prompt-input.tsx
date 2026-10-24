@@ -71,7 +71,7 @@ import {
 } from "./prompt-input/history"
 import { createPromptSubmit, type DeepAgentPromptPrepareResult, type FollowupDraft } from "./prompt-input/submit"
 import { ScenarioToggle } from "./prompt-input/scenario-toggle"
-import { PromptPopover, type AtOption, type SlashCommand } from "./prompt-input/slash-popover"
+import { closePromptPopoverOnBlur, PromptPopover, type AtOption, type SlashCommand } from "./prompt-input/slash-popover"
 import { PromptContextItems } from "./prompt-input/context-items"
 import { PromptImageAttachments } from "./prompt-input/image-attachments"
 import { PromptDragOverlay } from "./prompt-input/drag-overlay"
@@ -753,8 +753,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const [composing, setComposing] = createSignal(false)
   const isImeComposing = (event: KeyboardEvent) => event.isComposing || composing() || event.keyCode === 229
 
-  const handleBlur = () => {
-    closePopover()
+  const handleBlur = (event: FocusEvent) => {
+    closePromptPopoverOnBlur(event, slashPopoverRef, closePopover)
     setComposing(false)
   }
 
@@ -1822,6 +1822,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       {(promptReady(), null)}
       <PromptPopover
         popover={store.popover}
+        onClose={closePopover}
         setSlashPopoverRef={(el) => (slashPopoverRef = el)}
         atFlat={atFlat()}
         atActive={atActive() ?? undefined}
@@ -2047,6 +2048,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 blank={blank()}
                 stopping={stopping()}
                 recovery={recoveryRequired()}
+                queue={working() && local.agent.current()?.name !== local.agent.effective?.()?.name}
                 selectionRequired={!local.model.current() || !local.agent.current()}
                 mode={store.mode}
                 tip={tip()}

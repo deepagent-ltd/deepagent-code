@@ -24,6 +24,8 @@ const SettingsListV2 = lazy(() =>
   import("./settings-v2/parts/list").then((module) => ({ default: module.SettingsListV2 })),
 )
 
+const SettingsPage = lazy(() => import("./settings-v2/parts/page").then((module) => ({ default: module.SettingsPage })))
+
 const IS_MAC = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(navigator.platform)
 const PALETTE_ID = "command.palette"
 const DEFAULT_PALETTE_KEYBIND = "mod+shift+p"
@@ -513,14 +515,14 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
         </div>
       }
     >
-      <>
-        <div class="settings-v2-tab-header settings-v2-tab-header--stacked">
-          <div class="settings-v2-tab-header-row">
-            <h2 class="settings-v2-tab-title">{language.t("settings.shortcuts.title")}</h2>
-            <ButtonV2 variant="ghost" onClick={resetAll} disabled={!hasOverrides()}>
-              {language.t("settings.shortcuts.reset.button")}
-            </ButtonV2>
-          </div>
+      <SettingsPage
+        title={language.t("settings.shortcuts.title")}
+        action={
+          <ButtonV2 variant="ghost" onClick={resetAll} disabled={!hasOverrides()}>
+            {language.t("settings.shortcuts.reset.button")}
+          </ButtonV2>
+        }
+        search={
           <div class="settings-v2-tab-search">
             <TextInputV2
               type="search"
@@ -540,14 +542,16 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
                 variant="ghost-muted"
                 size="small"
                 class="settings-v2-tab-search-clear"
+                aria-label={language.t("settings.search.clear")}
                 icon={<IconV2 name="close" size="large" class="text-v2-icon-icon-muted" />}
                 onClick={() => setStore("filter", "")}
               />
             </Show>
           </div>
-        </div>
-        <div class="settings-v2-tab-body">{groups}</div>
-      </>
+        }
+      >
+        {groups}
+      </SettingsPage>
     </Show>
   )
 }

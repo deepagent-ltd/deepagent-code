@@ -12,6 +12,9 @@ import { readJson, writeJsonAtomic } from "../util/persistence"
 import { useTheme } from "./theme"
 import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
+import { useKV } from "./kv"
+import { useProject } from "./project"
+import { configuredCollaborationMode } from "@deepagent-code/core/session/collaboration-mode"
 import { useTuiI18n } from "./i18n"
 import { mcpConnectionBlocked } from "../util/mcp-status"
 import type { Agent } from "@deepagent-code/sdk"
@@ -55,13 +58,16 @@ export function createAgentSelection(input: {
   agents: () => Agent[] | undefined
   loading: () => boolean
   preferred?: () => string | undefined
+  scope?: () => string
+  selected?: () => string | undefined
+  save?: (name: string) => void
   warn: (message: string) => void
 }) {
   const agents = createMemo(
     () => input.agents()?.filter((agent) => agent.mode !== "subagent" && !agent.hidden) ?? [],
     [],
   )
-  const [store, setStore] = createStore({ current: undefined as string | undefined })
+  const [store, setStore] = createStore<{ current: Record<string, string | undefined> }>({ current: {} })
   const status = () =>
     input.loading()
       ? ("loading" as const)
@@ -74,12 +80,19 @@ export function createAgentSelection(input: {
   const current = () => {
     const preferred = input.preferred?.()
     const name = preferred === "build" && !list().some((agent) => agent.name === "build") ? "auto" : preferred
-    return list().find((agent) => agent.name === store.current) ?? list().find((agent) => agent.name === name) ?? list().at(0)
+    return (
+      list().find((agent) => agent.name === (input.selected?.() ?? store.current[input.scope?.() ?? "default"])) ??
+      list().find((agent) => agent.name === name) ??
+      list().at(0)
+    )
   }
   return {
     status,
     list,
     current,
+    reset(scope: string) {
+      setStore("current", scope, undefined)
+    },
     set(name: string) {
       if (status() !== "ready") {
         input.warn(
@@ -91,7 +104,8 @@ export function createAgentSelection(input: {
         input.warn(`Agent not found: ${name}`)
         return false
       }
-      setStore("current", name)
+      setStore("current", input.scope?.() ?? "default", name)
+      input.save?.(name)
       return true
     },
     move(direction: 1 | -1) {
@@ -101,7 +115,8 @@ export function createAgentSelection(input: {
       const index = values.findIndex((agent) => agent.name === selected.name)
       const next = values[(index + direction + values.length) % values.length]
       if (!next) return false
-      setStore("current", next.name)
+      setStore("current", input.scope?.() ?? "default", next.name)
+      input.save?.(next.name)
       return true
     },
   }
@@ -115,6 +130,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const toast = useToast()
     const theme = useTheme().theme
     const route = useRoute()
+    const kv = useKV()
+    const project = useProject()
     const paths = useTuiPaths()
     const i18n = useTuiI18n()
 
@@ -132,10 +149,32 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     }
 
     function createAgent() {
+      const sessionID = () => (route.data.type === "session" ? route.data.sessionID : undefined)
+      const effective = () => {
+        const id = sessionID()
+        if (!id) return
+        const session = sync.session.get(id)
+        return sync.data.message[id]?.findLast((message) => message.role === "user")?.agent ?? session?.agent
+      }
+      const selectionKey = () =>
+        JSON.stringify([
+          sdk.url,
+          project.instance.path().directory,
+          sessionID() ? (sync.session.get(sessionID()!)?.workspaceID ?? null) : null,
+          sessionID() ?? "new-session",
+        ])
       const selection = createAgentSelection({
         agents: () => sync.data.agent,
-        loading: () => sync.status === "loading",
-        preferred: () => sync.data.config.default_agent,
+        loading: () => sync.status === "loading" || !kv.ready,
+        scope: selectionKey,
+        selected: () => (kv.get("agent_selection.v2", {}) as Record<string, string>)[selectionKey()],
+        preferred: () =>
+          sessionID() ? (effective() ?? "auto") : configuredCollaborationMode(sync.data.config.default_agent),
+        save: (name) =>
+          kv.set("agent_selection.v2", {
+            ...(kv.get("agent_selection.v2", {}) as Record<string, string>),
+            [selectionKey()]: name,
+          }),
         warn: (message) => toast.show({ variant: "warning", message, duration: 3000 }),
       })
       const visibleAgents = createMemo(() => sync.data.agent?.filter((x) => !x.hidden) ?? [], [])
@@ -150,6 +189,22 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       ])
       return {
         ...selection,
+        effective() {
+          return sync.data.agent?.find((agent) => agent.name === effective())
+        },
+        promote(session: { id: string; workspaceID?: string }) {
+          if (sessionID()) return
+          const previous = selectionKey()
+          const selected = selection.current()?.name
+          const saved = { ...(kv.get("agent_selection.v2", {}) as Record<string, string>) }
+          delete saved[previous]
+          if (selected)
+            saved[
+              JSON.stringify([sdk.url, project.instance.path().directory, session.workspaceID ?? null, session.id])
+            ] = selected
+          selection.reset(previous)
+          kv.set("agent_selection.v2", saved)
+        },
         color(name: string) {
           const visible = visibleAgents() ?? []
           const index = visible.findIndex((x) => x.name === name)
@@ -558,7 +613,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         if (sdk.mcpOperator) {
           const prepared = await sdk.mcpOperator.prepare(name)
           try {
-            await sdk.mcpOperator.send({ ticket: prepared.ticket, action: status.status === "connected" ? "disconnect" : status.status === "needs_auth" ? "authenticate" : "connect" })
+            await sdk.mcpOperator.send({
+              ticket: prepared.ticket,
+              action:
+                status.status === "connected"
+                  ? "disconnect"
+                  : status.status === "needs_auth"
+                    ? "authenticate"
+                    : "connect",
+            })
           } finally {
             await sdk.mcpOperator.release(prepared.ticket)
           }

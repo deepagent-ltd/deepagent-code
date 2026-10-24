@@ -2,6 +2,8 @@ import { Show, createEffect, createMemo, createResource, onCleanup } from "solid
 import { createStore } from "solid-js/store"
 import { Button } from "@deepagent-code/ui/button"
 import { Icon } from "@deepagent-code/ui/icon"
+import { Dialog, DialogFooter } from "@deepagent-code/ui/v2/dialog-v2"
+import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { useServerSync } from "@/context/server-sync"
 import { useSDK } from "@/context/sdk"
 import { useLocal } from "@/context/local"
@@ -13,7 +15,7 @@ import { fetchCapabilities, fetchGoalStartable, GoalClient, type PanelGoalClient
 // powered by the Goal Loop engine and are designed to have the human START the loop after the plan is
 // authored (loop: agent writes goal+plan.md; design: user writes it). auto is autonomous end-to-end in
 // the current turn — a supervised background goal would be a confusing, redundant second door there, so
-// the button must NOT appear in auto. plan is hidden and never the client-visible current mode.
+// the button must NOT appear in auto. plan executes only after approving its displayed snapshot.
 const GOAL_MODES = new Set(["loop", "design"])
 // Unknown descriptors occupy their slot until the original command has a known outcome.
 const pendingStarts = new Map<string, { request: GoalClient.Descriptor; unknown: boolean }>()
@@ -36,11 +38,20 @@ export function GoalStartButton(props: { sessionID: string }) {
   const serverSync = useServerSync()
   const local = useLocal()
   const language = useLanguage()
+  const dialog = useDialog()
   let disposed = false
   onCleanup(() => {
     disposed = true
   })
   const [state, setState] = createStore<{ busy?: string; retry?: GoalClient.Descriptor; error?: string }>({})
+  const [form, setForm] = createStore({
+    source: "session",
+    preset: "default",
+    commands: "",
+    codeRefs: "",
+    diagnostics: "none",
+    reviewer: "none",
+  })
   const target = createMemo(() => ({
     client: sdk.client as unknown as PanelGoalClient,
     server: JSON.stringify([sdk.scope, sdk.url]),
@@ -48,9 +59,12 @@ export function GoalStartButton(props: { sessionID: string }) {
     sessionID: props.sessionID,
   }))
   const busy = () => !!state.busy
-  createEffect(() =>
-    setState({ busy: undefined, retry: pendingStarts.get(GoalClient.scopeKey(target()))?.request, error: undefined }),
-  )
+  createEffect(() => {
+    setState({ busy: undefined, retry: pendingStarts.get(GoalClient.scopeKey(target()))?.request, error: undefined })
+    // Acceptance references belong to this placement; another conversation starts with a fresh draft.
+    // Unknown writes still use their captured descriptor, independent of these editable fields.
+    setForm({ source: "session", preset: "default", commands: "", codeRefs: "", diagnostics: "none", reviewer: "none" })
+  })
 
   const [capabilities] = createResource(
     () => (props.sessionID ? target() : undefined),
@@ -58,7 +72,7 @@ export function GoalStartButton(props: { sessionID: string }) {
   )
   const goalAvailable = createMemo(() => capabilities()?.goalLoop === true)
 
-  // The current collaboration mode (auto/loop/design) — the button only applies to loop/design. Sourced
+  // The next activity collaboration mode (auto/plan/loop/design) — the button only applies to loop/design. Sourced
   // from local.agent.current() (session-scoped mode selection), the same source the mode selector uses.
   const currentMode = createMemo(() => local.agent.current()?.name)
   const modeAllows = createMemo(() => GOAL_MODES.has(currentMode() ?? ""))
@@ -93,12 +107,27 @@ export function GoalStartButton(props: { sessionID: string }) {
       return
     }
     const retained = pendingStarts.get(key)
-    const request =
-      retained?.request ??
-      GoalClient.capture(captured.client, captured, "start", {
+    const request = (() => {
+      if (retained) return retained.request
+      const criteria: NonNullable<GoalClient.StartInput["criteria"]>[number][] = [{ kind: "plan_complete" }]
+      const commands = form.commands
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+      if (commands.length) criteria.push({ kind: "tests_pass", commands })
+      if (form.diagnostics !== "none") criteria.push({ kind: "no_diagnostics", severityAtMost: form.diagnostics })
+      if (form.reviewer !== "none") criteria.push({ kind: "reviewer_clean", maxSeverity: form.reviewer })
+      return GoalClient.capture(captured.client, captured, "start", {
         sessionID: captured.sessionID,
         requestID: crypto.randomUUID(),
+        ...(form.preset === "custom" ? { criteria } : {}),
+        ...(form.source === "workspace-file" ? { planSource: "workspace-file" as const } : {}),
+        codeRefs: form.codeRefs
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean),
       })
+    })()
     pendingStarts.set(key, retained ?? { request, unknown: false })
     setState({ busy: request.body.requestID, error: undefined })
     try {
@@ -136,6 +165,117 @@ export function GoalStartButton(props: { sessionID: string }) {
     }
   }
 
+  const openStart = () => {
+    if (state.retry) {
+      void onStart()
+      return
+    }
+    const captured = target()
+    dialog.show(() => (
+      <Dialog size="large" title={language.t("goal.start.form.title")}>
+        <div class="flex flex-col gap-4 p-2" data-component="goal-start-form">
+          <label class="flex flex-col gap-1">
+            {language.t("goal.start.form.source")}
+            <select
+              aria-label={language.t("goal.start.form.source")}
+              value={form.source}
+              onChange={(event) => setForm("source", event.currentTarget.value)}
+            >
+              <option value="session">{language.t("goal.start.form.sessionPlan")}</option>
+              <option value="workspace-file">{language.t("goal.start.form.workspacePlan")}</option>
+            </select>
+          </label>
+          <label class="flex flex-col gap-1">
+            {language.t("goal.start.form.criteria")}
+            <select
+              aria-label={language.t("goal.start.form.criteria")}
+              value={form.preset}
+              onChange={(event) => setForm("preset", event.currentTarget.value)}
+            >
+              <option value="default">{language.t("goal.start.form.default")}</option>
+              <option value="custom">{language.t("goal.start.form.custom")}</option>
+            </select>
+          </label>
+          <Show when={form.preset === "custom"}>
+            <label class="flex flex-col gap-1">
+              {language.t("goal.start.form.commands")}
+              <textarea
+                rows={3}
+                aria-label={language.t("goal.start.form.commands")}
+                value={form.commands}
+                onInput={(event) => setForm("commands", event.currentTarget.value)}
+              />
+            </label>
+            <label class="flex flex-col gap-1">
+              {language.t("goal.start.form.diagnostics")}
+              <select
+                aria-label={language.t("goal.start.form.diagnostics")}
+                value={form.diagnostics}
+                onChange={(event) => setForm("diagnostics", event.currentTarget.value)}
+              >
+                <option value="none">{language.t("goal.start.form.omit")}</option>
+                <option value="error">error</option>
+                <option value="warning">warning</option>
+                <option value="info">info</option>
+                <option value="hint">hint</option>
+              </select>
+            </label>
+            <label class="flex flex-col gap-1">
+              {language.t("goal.start.form.reviewer")}
+              <select
+                aria-label={language.t("goal.start.form.reviewer")}
+                value={form.reviewer}
+                onChange={(event) => setForm("reviewer", event.currentTarget.value)}
+              >
+                <option value="none">{language.t("goal.start.form.omit")}</option>
+                <option value="high">high</option>
+                <option value="medium">medium</option>
+                <option value="low">low</option>
+              </select>
+            </label>
+          </Show>
+          <label class="flex flex-col gap-1">
+            {language.t("goal.start.form.codeRefs")}
+            <textarea
+              rows={3}
+              aria-label={language.t("goal.start.form.codeRefs")}
+              value={form.codeRefs}
+              onInput={(event) => setForm("codeRefs", event.currentTarget.value)}
+            />
+          </label>
+          <p class="text-12-regular text-text-weak">{language.t("goal.start.form.hint")}</p>
+          <Show when={state.error}>
+            <p role="alert">{state.error}</p>
+          </Show>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => dialog.close()}>
+            {language.t("common.cancel")}
+          </Button>
+          <Button
+            variant="primary"
+            disabled={busy()}
+            onClick={() => {
+              if (disposed || target() !== captured) {
+                dialog.close()
+                return
+              }
+              void onStart()
+                .then(() => {
+                  if (!disposed && target() === captured && !state.error) dialog.close()
+                })
+                .catch((error: unknown) => {
+                  if (!disposed && target() === captured) setState("error", errorMessage(error))
+                })
+            }}
+          >
+            {language.t("goal.start.button")}
+          </Button>
+        </DialogFooter>
+      </Dialog>
+    ))
+  }
+
   return (
     <Show when={show()}>
       <div
@@ -149,7 +289,7 @@ export function GoalStartButton(props: { sessionID: string }) {
           size="small"
           class="h-7 px-2 ml-auto shrink-0"
           disabled={busy()}
-          onClick={onStart}
+          onClick={openStart}
           aria-label={language.t(state.retry ? "goal.control.retry" : "goal.start.button")}
         >
           {language.t(state.retry ? "goal.control.retry" : "goal.start.button")}

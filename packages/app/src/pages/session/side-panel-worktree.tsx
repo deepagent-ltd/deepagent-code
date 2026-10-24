@@ -1,9 +1,10 @@
-import { Component, createResource, createSignal, For, Show } from "solid-js"
+import { Component, createEffect, createResource, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { useSDK } from "@/context/sdk"
 import { useLanguage } from "@/context/language"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Button } from "@deepagent-code/ui/button"
 import { showToast } from "@/utils/toast"
+import { useWorkspaceRemoval } from "@/pages/layout/workspace-removal"
 
 const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
@@ -15,9 +16,16 @@ const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(er
 export const SidePanelWorktree: Component<{ onClose: () => void }> = (props) => {
   const sdk = useSDK()
   const language = useLanguage()
+  const workspaceRemoval = useWorkspaceRemoval()
   const directory = () => sdk.directory
 
   const [busy, setBusy] = createSignal(false)
+  const preflight = { disposed: false, pending: undefined as AbortController | undefined }
+  onCleanup(() => {
+    preflight.disposed = true
+    preflight.pending?.abort()
+  })
+  createEffect(on(directory, () => preflight.pending?.abort(), { defer: true }))
 
   const [data, { refetch }] = createResource(directory, async (dir) => {
     const [changes, diff, summary] = await Promise.all([
@@ -62,19 +70,36 @@ export const SidePanelWorktree: Component<{ onClose: () => void }> = (props) => 
     if (busy()) return
     const prompt = force ? language.t("worktree.remove.confirmForce") : language.t("worktree.remove.confirm")
     if (!window.confirm(prompt)) return
+    const removedDirectory = directory()
     setBusy(true)
+    const operation = workspaceRemoval.capture(removedDirectory)
+    const abort = new AbortController()
+    preflight.pending = abort
+    const active = () =>
+      !preflight.disposed && !abort.signal.aborted && operation.current() && directory() === removedDirectory
     try {
-      await sdk.client.worktree.safeRemove({
-        directory: directory(),
-        worktreeSafeRemoveInput: { directory: directory(), force },
+      const removal = await operation.resolve(abort.signal)
+      if (!active()) return
+      if (!removal) throw new Error(language.t("common.requestFailed"))
+      const result = await sdk.client.worktree.safeRemove({
+        directory: removal.root,
+        worktreeSafeRemoveInput: { directory: removedDirectory, force },
       })
+      if (result.data !== true) throw new Error(language.t("common.requestFailed"))
+      if (
+        !removal.complete(() => {
+          if (!preflight.disposed) props.onClose()
+        })
+      )
+        return
       showToast({ variant: "success", title: language.t("worktree.remove.done"), description: "" })
-      props.onClose()
     } catch (err) {
       // fail-closed: the service refuses when there is unmerged work — offer force in the message.
+      if (!active()) return
       showToast({ variant: "error", title: language.t("worktree.remove.refused"), description: errMsg(err) })
     } finally {
-      setBusy(false)
+      if (preflight.pending === abort) preflight.pending = undefined
+      if (!preflight.disposed) setBusy(false)
     }
   }
 

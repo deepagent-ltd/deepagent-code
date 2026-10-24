@@ -1,4 +1,5 @@
 import { McpReadModel } from "@/mcp/read-model"
+import { FSUtil } from "@deepagent-code/core/fs-util"
 import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
@@ -38,6 +39,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const sessions = yield* Session.Service
     const background = yield* BackgroundJob.Service
     const flags = yield* RuntimeFlags.Service
+    const fs = yield* FSUtil.Service
 
     const getConsole = Effect.fn("ExperimentalHttpApi.console")(function* () {
       const [state, groups] = yield* Effect.all(
@@ -170,6 +172,23 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       const ctx = yield* InstanceState.context
       yield* mapWorktreeError(worktreeSvc.safeRemove(input.payload))
       yield* project.removeSandbox(ctx.project.id, input.payload.directory)
+      // Deletion is complete. Refresh a surviving request checkout through the
+      // normal project observation so a linked-first root cannot be resurrected.
+      yield* Effect.gen(function* () {
+        if (yield* fs.exists(ctx.project.worktree)) return
+        if (!(yield* fs.exists(ctx.directory))) return
+        const observed = yield* project.fromDirectory(ctx.directory)
+        if (
+          observed.project.id === ctx.project.id &&
+          observed.project.worktree === observed.sandbox &&
+          observed.project.sandboxes.includes(observed.project.worktree)
+        )
+          yield* project.removeSandbox(observed.project.id, observed.project.worktree)
+      }).pipe(
+        Effect.catchCause(() =>
+          Effect.logWarning("Worktree removed; retained project observation could not be refreshed"),
+        ),
+      )
       return true
     })
 

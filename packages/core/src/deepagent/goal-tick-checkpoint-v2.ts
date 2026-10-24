@@ -221,7 +221,7 @@ export const begin = (db: Db, input: { permitID: string; permitToken: string; pr
           .get<{
             records: number
             bytes: number
-          }>(sql`SELECT count(*) AS records,coalesce(sum(reserved_bytes),0) AS bytes FROM goal_tick_checkpoint`)
+          }>(sql`SELECT count(*) AS records,coalesce(sum(reserved_bytes),0) AS bytes FROM (SELECT reserved_bytes FROM goal_tick_checkpoint UNION ALL SELECT reserved_bytes FROM goal_pause_boundary)`)
           .pipe(Effect.orDie)
         if (
           !capacity ||
@@ -304,7 +304,7 @@ export const activate = (db: Db, input: { permitID: string; revision: number; ro
         )
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
 
 export function dependencies(journal: GoalTickProgram.Journal, roleIndex: number) {
   const indices = journal.program.roles[roleIndex].recipe.dependencies
@@ -440,7 +440,7 @@ export const recordResult = (db: Db, proof: GoalChildResult.Proof) =>
         )
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
 
 /** Unknown state is a retained tombstone; this never clears an input, result or storage reservation. */
 export const markUnknown = (db: Db, permitID: string) =>
@@ -502,7 +502,7 @@ export function controllerAuthority<Witness>(
           return yield* write(tx, row, { ...row.journal, dispositions, cursor: { role, stage } }, "running")
         }),
       { behavior: "immediate" },
-    )
+    ).pipe(GoalChildResult.withRuntimeIdentity(db))
 }
 
 type NativeLocalSnapshot = Pick<
@@ -809,7 +809,7 @@ export const prepareProjection = (
         )
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
 
 /** File CAS is intentionally inside the short control transaction. SQL rollback cannot undo the
  * exclusive file write; the next call confirms only these same immutable bytes. */
@@ -863,7 +863,7 @@ export const projectDocument = (db: Db, input: { permitID: string; documentID: s
         )
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
 
 export const settle = (db: Db, input: { permitID: string; revision: number }) =>
   db.transaction(
@@ -924,4 +924,4 @@ export const settle = (db: Db, input: { permitID: string; revision: number }) =>
         return committed
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))

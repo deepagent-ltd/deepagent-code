@@ -6,11 +6,13 @@ import { HttpTransport } from "../route/transport"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
+  LLMRequest,
+  HttpOptions,
+  mergeJsonRecords,
   ToolDefinition,
   Usage,
   type FunctionToolDefinition,
   type FinishReason,
-  type LLMRequest,
   type MediaPart,
   type ReasoningPart,
   type TextPart,
@@ -96,6 +98,7 @@ export const bodyFields = {
   stream_options: Schema.optional(Schema.Struct({ include_usage: Schema.Boolean })),
   store: Schema.optional(Schema.Boolean),
   reasoning_effort: Schema.optional(OpenAIOptions.OpenAIReasoningEffort),
+  thinking: Schema.optional(JsonObject),
   max_tokens: Schema.optional(Schema.Number),
   temperature: Schema.optional(Schema.Number),
   top_p: Schema.optional(Schema.Number),
@@ -272,8 +275,8 @@ const lowerAssistantMessage = Effect.fn("OpenAIChat.lowerAssistantMessage")(func
           // when the caller had no reasoning to carry — and opting out entirely is what the
           // `tool_calls === undefined` branch already does.
           toolCalls.length > 0
-            ? (carried ?? "")
-            : carried,
+          ? (carried ?? "")
+          : carried,
   }
 })
 
@@ -344,16 +347,37 @@ const lowerMessages = Effect.fn("OpenAIChat.lowerMessages")(function* (request: 
   return messages
 })
 
-const lowerOptions = Effect.fn("OpenAIChat.lowerOptions")(function* (request: LLMRequest) {
+const lowerOptions = Effect.fn("OpenAIChat.lowerOptions")(function* (
+  request: LLMRequest,
+  toolChoice: OpenAIChatBody["tool_choice"],
+) {
   const store = OpenAIOptions.store(request)
   const reasoningEffort = OpenAIOptions.reasoningEffort(request)
+  const thinking = request.providerOptions?.openai?.thinking
+  if (thinking !== undefined && !isRecord(thinking)) return yield* invalid("OpenAI Chat thinking must be an object")
   if (reasoningEffort && !OpenAIOptions.isReasoningEffort(reasoningEffort))
     return yield* invalid(`OpenAI Chat does not support reasoning effort ${reasoningEffort}`)
+  const body = mergeJsonRecords(
+    { model: request.model.id, tool_choice: toolChoice },
+    isRecord(request.http?.body) ? request.http.body : undefined,
+  )
   return {
     ...(store !== undefined ? { store } : {}),
     ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+    ...(thinking === undefined ? {} : { thinking }),
+    ...(forcedDeepSeekTool(body?.model, body?.tool_choice)
+      ? { reasoning_effort: "none" as const, thinking: { type: "disabled" } }
+      : {}),
   }
 })
+
+function forcedDeepSeekTool(model: unknown, choice: unknown) {
+  return (
+    typeof model === "string" &&
+    /(?:^|\/)deepseek-(?:flash$|v4(?:[.-]|$))/.test(model.toLowerCase()) &&
+    (choice === "required" || (isRecord(choice) && choice.type === "function"))
+  )
+}
 
 const fromRequest = Effect.fn("OpenAIChat.fromRequest")(function* (request: LLMRequest) {
   if (!request.tools.every(ToolDefinition.isFunction))
@@ -361,11 +385,12 @@ const fromRequest = Effect.fn("OpenAIChat.fromRequest")(function* (request: LLMR
   // `fromRequest` returns the provider body only. Endpoint, auth, framing,
   // validation, and HTTP execution are composed by `Route.make`.
   const generation = request.generation
+  const toolChoice = request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined
   return {
     model: request.model.id,
     messages: yield* lowerMessages(request),
     tools: request.tools.length === 0 ? undefined : request.tools.map(lowerTool),
-    tool_choice: request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined,
+    tool_choice: toolChoice,
     stream: true as const,
     stream_options: { include_usage: true },
     max_tokens: generation?.maxTokens,
@@ -375,7 +400,7 @@ const fromRequest = Effect.fn("OpenAIChat.fromRequest")(function* (request: LLMR
     presence_penalty: generation?.presencePenalty,
     seed: generation?.seed,
     stop: generation?.stop,
-    ...(yield* lowerOptions(request)),
+    ...(yield* lowerOptions(request, toolChoice)),
   }
 })
 
@@ -499,7 +524,35 @@ export const protocol = Protocol.make({
   },
 })
 
-export const httpTransport = HttpTransport.sseJson.with<OpenAIChatBody>()
+function forcedToolTransport(
+  transport: HttpTransport.HttpJsonTransport<OpenAIChatBody, string>,
+): HttpTransport.HttpJsonTransport<OpenAIChatBody, string> {
+  return {
+    ...transport,
+    with: (patch) => forcedToolTransport(transport.with(patch)),
+    prepare: (input) => {
+      // HTTP overlays are applied after protocol lowering. Inspect their effective
+      // tool choice too, then normalize before the one final encoding and auth pass.
+      const body = mergeJsonRecords(
+        input.body,
+        isRecord(input.request.http?.body) ? input.request.http.body : undefined,
+      )
+      if (!forcedDeepSeekTool(body?.model, body?.tool_choice)) return transport.prepare(input)
+      return transport.prepare({
+        ...input,
+        request: new LLMRequest({
+          ...input.request,
+          http: new HttpOptions({
+            ...input.request.http,
+            body: { ...input.request.http?.body, reasoning_effort: "none", thinking: { type: "disabled" } },
+          }),
+        }),
+      })
+    },
+  }
+}
+
+export const httpTransport = forcedToolTransport(HttpTransport.sseJson.with<OpenAIChatBody>())
 
 export const route = Route.make({
   id: ADAPTER,

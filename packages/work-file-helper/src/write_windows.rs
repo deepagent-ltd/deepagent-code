@@ -295,12 +295,12 @@ pub(crate) fn overlaps(left: &Path, right: &Path) -> bool {
     left == right || left.starts_with(&format!("{right}\\")) || right.starts_with(&format!("{left}\\"))
 }
 fn digest(value: &str) -> bool { value.len() == 64 && value.bytes().all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v)) }
-fn components(relative: &str) -> io::Result<Vec<&str>> {
+pub(crate) fn components(relative: &str) -> io::Result<Vec<&str>> {
     let parts = no_follow::relative(relative)?;
     for part in &parts { component(part)?; }
     Ok(parts)
 }
-fn parent(root: &Root, parts: &[&str]) -> io::Result<LockedPath> {
+pub(crate) fn parent(root: &Root, parts: &[&str]) -> io::Result<LockedPath> {
     root.current()?;
     let (_, ancestors) = parts.split_last().ok_or(io::ErrorKind::InvalidInput)?;
     let mut path = root.path.clone();
@@ -355,7 +355,7 @@ fn fact(held: &Held, relative: &str, retained_unlinked: bool, deadline: Instant)
     }
     Ok(WriteStageFile { relative: relative.to_owned(), identity: held.identity.clone(), sha256, bytes, retained_unlinked })
 }
-fn read_delete_handle(file: &File) -> io::Result<File> {
+pub(crate) fn read_delete_handle(file: &File) -> io::Result<File> {
     use windows_sys::Win32::Foundation::DuplicateHandle;
     let process = unsafe { GetCurrentProcess() }; let mut handle = 0;
     if unsafe { DuplicateHandle(process, file.as_raw_handle() as HANDLE, process, &mut handle,
@@ -401,7 +401,7 @@ pub(crate) fn open(parent: &File, name: &str, directory: bool, access: u32, disp
     if !directory && (!crate::regular_file::is_disk_file(&file) || !file.metadata()?.is_file()) { return Err(io::ErrorKind::PermissionDenied.into()); }
     Ok(file)
 }
-fn rename(file: &File, parent: &File, name: &str, replace: bool) -> io::Result<()> {
+pub(crate) fn rename(file: &File, parent: &File, name: &str, replace: bool) -> io::Result<()> {
     component(name)?; private_directory::require_private(file)?;
     let name = OsStr::new(name).encode_wide().collect::<Vec<_>>(); let bytes = offset_of!(FILE_RENAME_INFO, FileName) + name.len() * 2;
     let mut storage = vec![0usize; bytes.div_ceil(size_of::<usize>())]; let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();

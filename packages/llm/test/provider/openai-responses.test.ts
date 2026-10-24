@@ -1,11 +1,12 @@
 import { describe, expect } from "bun:test"
-import { ConfigProvider, Effect, Layer, Stream } from "effect"
+import { ConfigProvider, Effect, Layer, Schema, Stream } from "effect"
 import { Headers, HttpClientRequest } from "effect/unstable/http"
 import { LLM, LLMError, Message, Model, ToolCallPart, ToolDefinition, Usage } from "../../src"
 import { Auth, LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
 import * as Azure from "../../src/providers/azure"
 import * as OpenAI from "../../src/providers/openai"
 import * as OpenAIResponses from "../../src/protocols/openai-responses"
+import { OpenAIChat } from "../../src/protocols/openai-chat"
 import * as ProviderShared from "../../src/protocols/shared"
 import { continuationRequest, nativeOpenAIResponsesContinuation } from "../continuation-scenarios"
 import { it } from "../lib/effect"
@@ -120,13 +121,114 @@ describe("OpenAI Responses route", () => {
             properties: {
               path: { type: "string" },
               reference: { type: "string" },
-              limit: { type: "integer", maximum: 2000 },
+              limit: {
+                anyOf: [
+                  { type: "integer", maximum: 2000 },
+                  { type: "integer", maximum: 51200 },
+                ],
+              },
               resource: { type: "string" },
             },
             additionalProperties: false,
           },
         },
       ])
+    }),
+  )
+
+  it.effect("preserves every nested browser object variant in both OpenAI function formats", () =>
+    Effect.gen(function* () {
+      const input = Schema.Union([
+        Schema.Struct({ controlID: Schema.String, command: Schema.Struct({ type: Schema.Literal("snapshot") }) }),
+        Schema.Union([
+          Schema.Struct({ operation: Schema.Literal("status"), resourceID: Schema.String }),
+          Schema.Struct({
+            operation: Schema.Literal("acquire"),
+            resourceID: Schema.String,
+            requestID: Schema.String,
+            expectedManualEpoch: Schema.Int,
+          }),
+          Schema.Struct({
+            operation: Schema.Literal("execute"),
+            resourceID: Schema.String,
+            command: Schema.Struct({ type: Schema.Literal("snapshot") }),
+          }),
+        ]),
+      ])
+      const schema = Schema.toJsonSchemaDocument(input).schema
+      const tools = [{ name: "browser", description: "Use the original or shared browser.", inputSchema: schema }]
+      const responses = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.updateRequest(request, { tools }),
+      )
+      const chat = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.updateRequest(request, {
+          model: OpenAIChat.route
+            .with({ endpoint: { baseURL: "https://api.openai.test/v1/" }, auth: Auth.bearer("test") })
+            .model({ id: "test" }),
+          tools,
+        }),
+      )
+      const expected = {
+        type: "object",
+        properties: {
+          controlID: { type: "string" },
+          command: {
+            type: "object",
+            properties: { type: { type: "string", enum: ["snapshot"] } },
+            required: ["type"],
+            additionalProperties: false,
+          },
+          operation: { type: "string", enum: ["status", "acquire", "execute"] },
+          resourceID: { type: "string" },
+          requestID: { type: "string" },
+          expectedManualEpoch: { type: "integer" },
+        },
+        additionalProperties: false,
+      }
+      expect(responses.body.tools?.[0]).toMatchObject({ type: "function", parameters: expected })
+      expect(chat.body.tools?.[0]).toMatchObject({ type: "function", function: { parameters: expected } })
+      expect(
+        Schema.is(input)({ operation: "acquire", resourceID: "r", requestID: "q", expectedManualEpoch: 1 }),
+      ).toBeTrue()
+      expect(Schema.is(input)({ operation: "acquire", resourceID: "r" })).toBeFalse()
+      expect(Schema.is(input)({ operation: "invented", resourceID: "r" })).toBeFalse()
+    }),
+  )
+
+  it.effect("preserves common required fields and mixed literal alternatives in nested function schemas", () =>
+    Effect.sync(() => {
+      expect(
+        ProviderShared.openAiToolInputSchema({
+          type: "object",
+          properties: { sessionID: { type: "string" } },
+          required: ["sessionID"],
+          anyOf: [
+            { type: "object", properties: { operation: { type: "string", const: "status" } }, required: ["operation"] },
+            {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { operation: { type: "string", enum: ["acquire", "execute"] } },
+                  required: ["operation"],
+                },
+                {
+                  type: "object",
+                  properties: { operation: { type: "string", const: "status" } },
+                  required: ["operation"],
+                },
+              ],
+            },
+          ],
+        }),
+      ).toEqual({
+        type: "object",
+        properties: {
+          sessionID: { type: "string" },
+          operation: { type: "string", enum: ["status", "acquire", "execute"] },
+        },
+        required: ["sessionID", "operation"],
+        additionalProperties: false,
+      })
     }),
   )
 

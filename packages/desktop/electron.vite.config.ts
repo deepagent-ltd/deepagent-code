@@ -4,6 +4,7 @@ import appPlugin from "@deepagent-code/app/vite"
 import { copyFile, cp, lstat, mkdir, readdir, rm } from "node:fs/promises"
 import path from "node:path"
 import { prepareManagedBrowserInputAsset } from "./scripts/managed-browser-input-assets"
+import { prepareSharedBrowserComputationAsset, copySharedBrowserComputationAsset } from "./scripts/shared-browser-compute-assets"
 
 const DEEPAGENT_CODE_SERVER_DIST = "../deepagent-code/dist/node"
 const DOMAIN_PACKS_DIST = "../domain-packs"
@@ -33,6 +34,8 @@ const sentry =
     : false
 
 export default defineConfig(async () => {
+  const computationDirectory = path.resolve("node_modules/.cache/dac-shared-browser-compute")
+  const computation = await prepareSharedBrowserComputationAsset(computationDirectory)
   const inputDirectory = path.resolve("node_modules/.cache/dac-managed-browser-input", `${process.platform}-${process.arch}`)
   await mkdir(inputDirectory, { recursive: true })
   const browserInput = await prepareManagedBrowserInputAsset({ directory: inputDirectory })
@@ -52,6 +55,7 @@ export default defineConfig(async () => {
   main: {
     define: {
       "import.meta.env.DEEPAGENT_CODE_CHANNEL": JSON.stringify(channel),
+      __DAC_SHARED_BROWSER_COMPUTE_ASSET__: JSON.stringify(computation),
       __DAC_MANAGED_BROWSER_INPUT_ASSET__: browserInput ? JSON.stringify(browserInput) : "undefined",
     },
     build: {
@@ -75,6 +79,7 @@ export default defineConfig(async () => {
       {
         name: "deepagent-code:copy-server-assets",
         async writeBundle() {
+          await copySharedBrowserComputationAsset(computationDirectory, "./out/main/shared-browser-compute", computation)
           await rm("./out/main/managed-browser-input", { recursive: true, force: true })
           if (browserInput) {
             await mkdir("./out/main/managed-browser-input", { recursive: true })

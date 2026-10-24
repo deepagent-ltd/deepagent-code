@@ -41,13 +41,14 @@ export default function MediaClient(io, enabled) {
   };
   const request = async (operation, path, options = {}) => {
     const source = current(operation);
+    let dispatched = false;
     check(source, operation, options.expiry);
     if (options.signal?.aborted) throw deliveryError(operation, "cancelled");
     const controller = new AbortController();
     const abort = () => controller.abort();
     const release = io.onDeliveryInvalidation?.(abort);
     const aborted = () => {
-      if ((options.method || "GET") !== "GET") return deliveryError(operation, "unknown");
+      if (dispatched && (options.method || "GET") !== "GET") return deliveryError(operation, "unknown");
       if (options.signal?.aborted) return deliveryError(operation, "cancelled");
       const value = io.deliveryMediaContext();
       if (!io.isConnected() || !value || source.generation !== value.generation) return deliveryError(operation, "disconnected");
@@ -58,9 +59,15 @@ export default function MediaClient(io, enabled) {
     const interrupted = new Promise((_, reject) => controller.signal.addEventListener("abort", () => reject(aborted()), { once: true }));
     let reader;
     try {
-      const response = await Promise.race([fetch(`${source.navigator}/navigator/protected-media/v1${path}`, {
+      const url = `${source.navigator}/navigator/protected-media/v1${path}`;
+      const headers = await Promise.race([io.deviceHttpHeaders({ method: options.method || "GET", url, credential: source.token, currentSourceEpoch: source.generation })
+        .catch(() => { throw deliveryError(operation, "unavailable"); }), interrupted]);
+      check(source, operation, options.expiry);
+      if (controller.signal.aborted) throw aborted();
+      dispatched = true;
+      const response = await Promise.race([fetch(url, {
         method: options.method || "GET", redirect: "error", cache: "no-store", credentials: "omit",
-        headers: { authorization: `Bearer ${source.token}`, ...(options.headers || {}) },
+        headers: { ...(options.headers || {}), ...headers },
         ...(options.body === undefined ? {} : { body: options.body }), signal: controller.signal,
       }), interrupted]);
       check(source, operation, options.expiry);

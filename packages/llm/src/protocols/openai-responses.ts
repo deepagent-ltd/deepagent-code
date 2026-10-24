@@ -7,6 +7,8 @@ import { HttpTransport, WebSocketTransport } from "../route/transport"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
+  mergeHttpOptions,
+  mergeProviderOptions,
   ToolDefinition,
   Usage,
   type FinishReason,
@@ -99,6 +101,13 @@ const OpenAIResponsesFunctionCallOutput = Schema.Union([
   Schema.Array(OpenAIResponsesFunctionCallOutputContent),
 ])
 
+// Keep provider-returned compact windows byte-faithful, including retained message/tool fields.
+export const CompactedInputItem = Schema.StructWithRest(Schema.Struct({ type: Schema.String }), [
+  Schema.Record(Schema.String, Schema.Unknown),
+])
+export const CompactedWindow = Schema.Array(CompactedInputItem)
+export type CompactedWindow = typeof CompactedWindow.Type
+
 const OpenAIResponsesInputItem = Schema.Union([
   Schema.Struct({ role: Schema.tag("system"), content: Schema.String }),
   OpenAIResponsesCompactionItem,
@@ -178,7 +187,7 @@ const OpenAIResponsesToolChoice = Schema.Union([
 // transports in sync without a destructure-and-strip dance.
 const OpenAIResponsesCoreFields = {
   model: Schema.String,
-  input: Schema.Array(OpenAIResponsesInputItem),
+  input: Schema.Array(Schema.Union([CompactedInputItem, OpenAIResponsesInputItem])),
   instructions: Schema.optional(Schema.String),
   tools: optionalArray(OpenAIResponsesTool),
   tool_choice: Schema.optional(OpenAIResponsesToolChoice),
@@ -452,11 +461,23 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
     request.system.length === 0 ? [] : [{ role: "system", content: ProviderShared.joinText(request.system) }]
   const input: OpenAIResponsesInputItem[] = [...system]
   const compactionEncryptedContent = OpenAIOptions.compactionEncryptedContent(request)
-  if (compactionEncryptedContent)
-    input.unshift({ type: "compaction", encrypted_content: compactionEncryptedContent })
+  if (compactionEncryptedContent) input.unshift({ type: "compaction", encrypted_content: compactionEncryptedContent })
   const store = OpenAIOptions.store(request)
+  const windows = new Map<number, CompactedWindow>()
 
   for (const message of request.messages) {
+    const window = message.metadata?.responsesCompactedWindow
+    if (window !== undefined) {
+      const decoded = yield* ProviderShared.validateWith(Schema.decodeUnknownEffect(CompactedWindow))(window)
+      if (windows.has(input.length)) return yield* invalid("Multiple compacted windows at one history boundary")
+      windows.set(input.length, decoded)
+      for (const item of decoded) {
+        if (typeof item.call_id !== "string") continue
+        if (item.type === "custom_tool_call") customToolCallIDs.add(item.call_id)
+        if (item.type === "function_call") functionToolCallIDs.add(item.call_id)
+      }
+      continue
+    }
     if (message.role === "system") {
       const part = yield* ProviderShared.wrappedSystemUpdate("OpenAI Responses", message)
       const previous = input.at(-1)
@@ -563,11 +584,18 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
   // With store:false, OpenAI only accepts previous reasoning items when the
   // complete item has encrypted state. Summary blocks for one item may carry
   // that state only on the last block, so filter after they have been joined.
-  return store === false
-    ? input.filter(
-        (item) => !("type" in item) || item.type !== "reasoning" || typeof item.encrypted_content === "string",
-      )
-    : input
+  const filtered =
+    store === false
+      ? input.filter(
+          (item) => !("type" in item) || item.type !== "reasoning" || typeof item.encrypted_content === "string",
+        )
+      : input
+  // Opaque windows are never filtered, re-summarized, or reduced to encrypted_content alone.
+  // Insertions use original indices, before any store:false reasoning filtering.
+  if (windows.size === 0) return filtered
+  return input
+    .flatMap((item, index) => [...(windows.get(index) ?? []), ...(filtered.includes(item) ? [item] : [])])
+    .concat(windows.get(input.length) ?? [])
 })
 
 // UPD-002: lower the canonical `responseFormat` json variant onto OpenAI
@@ -597,8 +625,7 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
   const instructions = OpenAIOptions.instructions(request)
   const serviceTier = OpenAIOptions.serviceTier(request)
   const format = lowerTextFormat(request)
-  const text =
-    verbosity || format ? { ...(verbosity ? { verbosity } : {}), ...(format ? { format } : {}) } : undefined
+  const text = verbosity || format ? { ...(verbosity ? { verbosity } : {}), ...(format ? { format } : {}) } : undefined
   return {
     ...(instructions ? { instructions } : {}),
     ...(store !== undefined ? { store } : {}),
@@ -1125,8 +1152,7 @@ const step = (state: ParserState, event: OpenAIResponsesEvent) => {
   if (event.type === "response.function_call_arguments.delta") return onFunctionCallArgumentsDelta(state, event)
   if (event.type === "response.custom_tool_call_input.delta") return onCustomToolCallInputDelta(state, event)
   if (event.type === "response.output_item.done") return onOutputItemDone(state, event)
-  if (event.type === "response.completed" || event.type === "response.incomplete")
-    return onResponseFinish(state, event)
+  if (event.type === "response.completed" || event.type === "response.incomplete") return onResponseFinish(state, event)
   if (event.type === "response.failed") return Effect.succeed(onResponseFailed(state, event))
   if (event.type === "error") return Effect.succeed(onError(state, event))
   return Effect.succeed<StepResult>([state, NO_EVENTS])
@@ -1218,29 +1244,18 @@ export const webSocketRoute = Route.make({
 // models SSE streams (body → frames → event state machine) and adding a unary
 // axis would ripple protocol.ts / client.ts / transport (>2 files). A local
 // function reusing the existing lowering helpers confines the change here.
-const OpenAIResponsesCompactOutputItem = Schema.Struct({
-  type: Schema.String,
-  id: Schema.optional(Schema.String),
-  encrypted_content: optionalNull(Schema.String),
-})
-
 const OpenAIResponsesCompactResponse = Schema.Struct({
-  output: Schema.Array(OpenAIResponsesCompactOutputItem),
+  output: CompactedWindow,
+  usage: optionalNull(OpenAIResponsesUsage),
 })
-
 const decodeCompactResponse = ProviderShared.validateWith(
   Schema.decodeUnknownEffect(Schema.fromJsonString(OpenAIResponsesCompactResponse)),
 )
 
 export interface CompactResult {
-  /** Opaque server-encrypted compacted context from the `compaction` item. */
   readonly encryptedContent: string
-  /** Full compacted output item list (loose shapes) for round-tripping. */
-  readonly output: ReadonlyArray<{
-    readonly type: string
-    readonly id?: string
-    readonly encrypted_content?: string | null
-  }>
+  readonly output: CompactedWindow
+  readonly usage?: Usage
 }
 
 /**
@@ -1248,65 +1263,75 @@ export interface CompactResult {
  * `RequestExecutor.Service` in the environment. On success returns the
  * compaction item's `encrypted_content`; on any failure (transport, HTTP ≥
  * 400, malformed payload, missing compaction item) fails with `LLMError` so
- * callers can fail over to local summarization. Fails with InvalidRequest
+ * callers can classify definitive refusal separately from unknown results. Fails with InvalidRequest
  * when the request is not bound to this route.
  */
-export const compactConversation = (
-  input: {
-    readonly request: LLMRequest
-    /** Prior compaction's encrypted context; prepended as a compaction item. */
-    readonly previousEncryptedContent?: string | undefined
-  },
-): Effect.Effect<CompactResult, LLMError, RequestExecutor.Service> =>
+export const compactConversation = (input: {
+  readonly request: LLMRequest
+  /** Prior compaction's encrypted context; prepended as a compaction item. */
+  readonly previousEncryptedContent?: string | undefined
+}): Effect.Effect<CompactResult, LLMError, RequestExecutor.Service> =>
   Effect.gen(function* () {
-  const request = input.request
-  // The compatible-responses route reuses this protocol end-to-end (DeepSeek serves
-  // /responses/compact, verified per UPD-005); capability gating stays in the caller's
-  // per-profile supportsResponsesCompact probe, so both Responses routes are admissible here.
-  if (request.model.route.id !== ADAPTER && request.model.route.id !== "openai-compatible-responses")
-    return yield* invalid(`Remote compaction requires the ${ADAPTER} route (got ${request.model.route.id})`)
+    const request = {
+      ...input.request,
+      providerOptions: mergeProviderOptions(
+        input.request.model.route.defaults.providerOptions,
+        input.request.providerOptions,
+      ),
+      http: mergeHttpOptions(input.request.model.route.defaults.http, input.request.http),
+    }
+    // The compatible-responses route reuses this protocol end-to-end (DeepSeek serves
+    // /responses/compact, verified per UPD-005); capability gating stays in the caller's
+    // per-profile supportsResponsesCompact probe, so both Responses routes are admissible here.
+    if (request.model.route.id !== ADAPTER && request.model.route.id !== "openai-compatible-responses")
+      return yield* invalid(`Remote compaction requires the ${ADAPTER} route (got ${request.model.route.id})`)
 
-  const base = yield* fromRequest(request)
-  // `/responses/compact` is unary: strip `stream`; the compact endpoint takes
-  // no tool choice, and a json_schema text format is meaningless for a
-  // compaction — both are dropped rather than forwarded.
-  const { stream: _stream, tool_choice: _toolChoice, text: _text, ...core } = base
-  const lowered = yield* lowerMessages(request)
-  const compactItem: OpenAIResponsesCompactionItem | undefined = input.previousEncryptedContent
-    ? { type: "compaction", encrypted_content: input.previousEncryptedContent }
-    : undefined
-  const body = {
-    ...core,
-    input: compactItem ? [compactItem, ...lowered] : lowered,
-  }
+    // The unary endpoint has its own request contract. Do not send generation, tools,
+    // stream, storage, or text-format fields from an ordinary Responses request.
+    const body = {
+      model: request.model.id,
+      input: [
+        ...(input.previousEncryptedContent
+          ? [{ type: "compaction", encrypted_content: input.previousEncryptedContent }]
+          : []),
+        ...(yield* lowerMessages({ ...request, system: [] })),
+      ],
+      ...(request.system.length > 0 ? { instructions: ProviderShared.joinText(request.system) } : {}),
+    }
 
-  const compactEndpoint = Endpoint.merge(request.model.route.endpoint, { path: COMPACT_PATH })
-  const parts = yield* HttpTransport.jsonRequestParts({
-    request,
-    body,
-    endpoint: compactEndpoint,
-    auth: request.model.route.auth,
-    encodeBody: ProviderShared.encodeJson,
-  })
-  const httpRequest = ProviderShared.jsonPost({ url: parts.url, body: parts.bodyText, headers: parts.headers })
-  const response = yield* (yield* RequestExecutor.Service).execute(httpRequest)
-  const rawText = yield* response.text.pipe(
-    Effect.mapError(() =>
-      ProviderShared.eventError(ADAPTER, "Failed to read OpenAI Responses compact response body"),
-    ),
-  )
-  const decoded = yield* decodeCompactResponse(rawText).pipe(
-    Effect.mapError(() =>
-      ProviderShared.eventError(ADAPTER, "OpenAI Responses compact response is not a valid compact payload", rawText),
-    ),
-  )
-  const compaction = decoded.output.find(
-    (item): item is typeof item & { readonly encrypted_content: string } =>
-      item.type === "compaction" && typeof item.encrypted_content === "string" && item.encrypted_content.length > 0,
-  )
-  if (!compaction)
-    return yield* ProviderShared.invalidRequest("OpenAI Responses compact response is missing a compaction item")
-  return { encryptedContent: compaction.encrypted_content, output: decoded.output } satisfies CompactResult
+    const compactEndpoint = Endpoint.merge(request.model.route.endpoint, { path: COMPACT_PATH })
+    const parts = yield* HttpTransport.jsonRequestParts({
+      // The unary contract owns its JSON body. Keep headers/query/auth, but never
+      // inherit ordinary stream/tools/generation body overlays.
+      request: { ...request, http: request.http ? { ...request.http, body: undefined } : undefined },
+      body,
+      endpoint: compactEndpoint,
+      auth: request.model.route.auth,
+      encodeBody: ProviderShared.encodeJson,
+    })
+    const httpRequest = ProviderShared.jsonPost({ url: parts.url, body: parts.bodyText, headers: parts.headers })
+    const response = yield* (yield* RequestExecutor.Service).execute(httpRequest)
+    const rawText = yield* response.text.pipe(
+      Effect.mapError(() =>
+        ProviderShared.eventError(ADAPTER, "Failed to read OpenAI Responses compact response body"),
+      ),
+    )
+    const decoded = yield* decodeCompactResponse(rawText).pipe(
+      Effect.mapError(() =>
+        ProviderShared.eventError(ADAPTER, "OpenAI Responses compact response is not a valid compact payload", rawText),
+      ),
+    )
+    const compaction = decoded.output.find(
+      (item): item is typeof item & { readonly encrypted_content: string } =>
+        item.type === "compaction" && typeof item.encrypted_content === "string" && item.encrypted_content.length > 0,
+    )
+    if (!compaction)
+      return yield* ProviderShared.invalidRequest("OpenAI Responses compact response is missing a compaction item")
+    return {
+      encryptedContent: compaction.encrypted_content,
+      output: decoded.output,
+      usage: mapUsage(decoded.usage),
+    } satisfies CompactResult
   })
 
 export * as OpenAIResponses from "./openai-responses"

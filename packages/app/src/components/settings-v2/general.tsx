@@ -1,3 +1,4 @@
+import { SettingsCompaction } from "./compaction"
 import { Component, For, Show, createMemo, createResource, onMount } from "solid-js"
 import { ButtonV2 } from "@deepagent-code/ui/v2/button-v2"
 import { Icon } from "@deepagent-code/ui/icon"
@@ -11,6 +12,7 @@ import { usePlatform, type DisplayBackend } from "@/context/platform"
 import { ZOOM_LEVELS } from "@/zoom-levels"
 import { useServerSync } from "@/context/server-sync"
 import { useServerSDK } from "@/context/server-sdk"
+import { PanelButton } from "../deepagent/panel-button"
 import { useUpdaterAction } from "../updater-action"
 import {
   monoDefault,
@@ -28,6 +30,7 @@ import { playSoundById, SOUND_OPTIONS } from "@/utils/sound"
 import { Link } from "../link"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
+import { SettingsPage } from "./parts/page"
 import { ImportSection } from "./import-history"
 import "./settings-v2.css"
 import {
@@ -97,9 +100,11 @@ const playDemoSound = (id: string | undefined) => {
 }
 
 export type SettingsSession = {
+  id?: () => string | undefined
   current: () => boolean
   editable: () => boolean
   mode: () => string | undefined
+  effective?: () => string | undefined
   select: (name: string) => void
 }
 
@@ -111,41 +116,62 @@ export function SettingsCollaborationMode(props: {
   const language = useLanguage()
   const serverSync = useServerSync()
   const modeLabel = useModeLabel()
-  const currentSession = () => props.session?.current() === true && props.session.editable()
-  const currentMode = () =>
-    (currentSession() ? props.session?.mode() : undefined) ??
-    configuredCollaborationMode(serverSync.data.config.default_agent)
+  const currentSession = () => props.session?.current() === true
   return (
-    <SettingsRowV2
-      title={language.t(
-        currentSession()
-          ? "settings.general.row.collaborationMode.currentTitle"
-          : "settings.general.row.collaborationMode.title",
-      )}
-      description={language.t(
-        currentSession()
-          ? "settings.general.row.collaborationMode.currentDescription"
-          : "settings.general.row.collaborationMode.description",
-      )}
-    >
-      <SelectV2
-        appearance="inline"
-        data-action="settings-collaboration-mode"
-        options={props.modes()}
-        placement="bottom-end"
-        gutter={6}
-        current={props.modes().find((mode) => mode.name === currentMode())}
-        value={(mode) => mode.name}
-        label={(mode) => modeLabel(mode.name)}
-        disabled={props.loading || props.modes().length === 0}
-        onSelect={(mode) => {
-          if (!mode) return
-          if (currentSession()) props.session?.select(mode.name)
-          if (mode.name !== configuredCollaborationMode(serverSync.data.config.default_agent))
-            void serverSync.updateConfig({ default_agent: mode.name })
-        }}
-      />
-    </SettingsRowV2>
+    <>
+      <SettingsRowV2
+        title={language.t("settings.general.row.collaborationMode.title")}
+        description={language.t("settings.general.row.collaborationMode.description")}
+      >
+        <SelectV2
+          appearance="inline"
+          data-action="settings-collaboration-default"
+          options={props.modes()}
+          placement="bottom-end"
+          gutter={6}
+          current={props
+            .modes()
+            .find((mode) => mode.name === configuredCollaborationMode(serverSync.data.config.default_agent))}
+          value={(mode) => mode.name}
+          label={(mode) => modeLabel(mode.name)}
+          disabled={props.loading || props.modes().length === 0}
+          onSelect={(mode) => {
+            if (mode && mode.name !== configuredCollaborationMode(serverSync.data.config.default_agent))
+              void serverSync.updateConfig({ default_agent: mode.name })
+          }}
+        />
+      </SettingsRowV2>
+      <Show when={currentSession()}>
+        <SettingsRowV2
+          title={language.t("settings.general.row.collaborationMode.currentTitle")}
+          description={language.t("settings.general.row.collaborationMode.currentDescription")}
+        >
+          <div class="flex flex-col items-end gap-1">
+            <SelectV2
+              appearance="inline"
+              data-action="settings-collaboration-mode"
+              options={props.modes()}
+              placement="bottom-end"
+              gutter={6}
+              current={props.modes().find((mode) => mode.name === props.session?.mode())}
+              value={(mode) => mode.name}
+              label={(mode) => modeLabel(mode.name)}
+              disabled={props.loading || props.modes().length === 0 || !props.session?.editable()}
+              onSelect={(mode) => {
+                if (mode && currentSession() && props.session?.editable()) props.session.select(mode.name)
+              }}
+            />
+            <Show when={props.session?.effective?.()}>
+              <span class="text-11-regular text-text-weak">
+                {language.t("settings.general.row.collaborationMode.effective", {
+                  mode: modeLabel(props.session?.effective?.()),
+                })}
+              </span>
+            </Show>
+          </div>
+        </SettingsRowV2>
+      </Show>
+    </>
   )
 }
 
@@ -168,9 +194,12 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
   const [collaborationModes] = createResource(
     () => serverSdk.client,
     // Agent options are provider configuration, while SelectV2 uses `options` for groups.
-    (client) => client.app.agents().then((result) =>
-      result.data?.filter(isSelectableCollaborationMode).map((mode) => ({ name: mode.name })) ?? [],
-    ),
+    (client) =>
+      client.app
+        .agents()
+        .then(
+          (result) => result.data?.filter(isSelectableCollaborationMode).map((mode) => ({ name: mode.name })) ?? [],
+        ),
     { initialValue: [] },
   )
 
@@ -406,70 +435,84 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
       <h3 class="settings-v2-section-title">{language.t("settings.general.section.deepagent")}</h3>
 
       <SettingsListV2>
+        <SettingsCompaction />
         <SettingsCollaborationMode
           modes={collaborationModes}
           loading={collaborationModes.loading}
           session={props.session}
         />
-        <SettingsRowV2
-          title={language.t("settings.general.deepagent.mode.title")}
-          description={
-            <>
-              {language.t("settings.general.deepagent.mode.description")}
-              <Show when={ultraDisabled()}>
-                {" "}
-                <span class="text-text-weak">
-                  {language.t("settings.general.deepagent.mode.ultraRequiresIntelligence")}
-                </span>
-              </Show>
-            </>
-          }
-        >
-          <SelectV2
-            appearance="inline"
-            data-action="settings-deepagent-mode"
-            options={deepAgentModeOptions()}
-            placement="bottom-end"
-            gutter={6}
-            current={deepAgentModeOptions().find((o) => o.value === deepAgentMode())}
-            value={(o) => o.value}
-            label={(o) => o.label}
-            onSelect={(option) => {
-              if (!option) return
-              if (option.value === deepAgentMode()) return
-              if (option.value === "ultra" && ultraDisabled()) return
-              void updateDeepAgentOptions(serverSync, { agentMode: option.value })
-            }}
-          />
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.deepagent.subagentMode.title")}
-          description={language.t("settings.general.deepagent.subagentMode.description")}
-        >
-          <SelectV2
-            appearance="inline"
-            data-action="settings-deepagent-subagent-intensity"
-            options={subagentIntensityOptions()}
-            placement="bottom-end"
-            gutter={6}
-            current={subagentIntensityOptions().find((o) => o.value === deepAgentSubagentIntensity())}
-            value={(o) => o.value}
-            label={(o) => o.label}
-            onSelect={(option) => {
-              if (!option) return
-              if (option.value === deepAgentSubagentIntensity()) return
-              void updateDeepAgentOptions(serverSync, { subagentIntensity: option.value })
-            }}
-          />
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.deepagent.prompt.title")}
-          description={language.t("settings.general.deepagent.prompt.description")}
-        >
-          <div data-action="settings-deepagent-prompt-mode" class="settings-v2-choice-control">
+        <Show when={props.session?.current() && props.session.id?.()}>
+          {(id) => <PanelButton sessionID={id() as string} />}
+        </Show>
+      </SettingsListV2>
+      <details class="settings-v2-details" data-component="settings-agent-advanced">
+        <summary>{language.t("settings.general.agentAdvanced")}</summary>
+        <p class="text-12-regular text-text-weak">{language.t("settings.general.agentScope")}</p>
+        <SettingsListV2>
+          <SettingsRowV2
+            title={language.t("settings.general.deepagent.mode.title")}
+            description={
+              <>
+                {language.t("settings.general.deepagent.mode.description")}
+                <Show when={ultraDisabled()}>
+                  {" "}
+                  <span class="text-text-weak">
+                    {language.t("settings.general.deepagent.mode.ultraRequiresIntelligence")}
+                  </span>
+                </Show>
+              </>
+            }
+          >
             <SelectV2
+              appearance="inline"
+              data-action="settings-deepagent-mode"
+              options={deepAgentModeOptions()}
+              placement="bottom-end"
+              gutter={6}
+              current={deepAgentModeOptions().find((o) => o.value === deepAgentMode())}
+              value={(o) => o.value}
+              label={(o) => o.label}
+              onSelect={(option) => {
+                if (!option) return
+                if (option.value === deepAgentMode()) return
+                if (option.value === "ultra" && ultraDisabled()) return
+                void updateDeepAgentOptions(serverSync, { agentMode: option.value })
+              }}
+            />
+          </SettingsRowV2>
+
+          <SettingsRowV2
+            title={language.t("settings.general.deepagent.subagentMode.title")}
+            description={language.t("settings.general.deepagent.subagentMode.description")}
+          >
+            <SelectV2
+              appearance="inline"
+              data-action="settings-deepagent-subagent-intensity"
+              options={subagentIntensityOptions()}
+              placement="bottom-end"
+              gutter={6}
+              current={subagentIntensityOptions().find((o) => o.value === deepAgentSubagentIntensity())}
+              value={(o) => o.value}
+              label={(o) => o.label}
+              onSelect={(option) => {
+                if (!option) return
+                if (option.value === deepAgentSubagentIntensity()) return
+                void updateDeepAgentOptions(serverSync, { subagentIntensity: option.value })
+              }}
+            />
+          </SettingsRowV2>
+
+          <SettingsRowV2
+            title={language.t("settings.general.deepagent.prompt.title")}
+            description={
+              <>
+                {language.t("settings.general.deepagent.prompt.description")}
+                <span class="settings-v2-choice-description">{scenarioModeDescription()}</span>
+              </>
+            }
+          >
+            <SelectV2
+              data-action="settings-deepagent-prompt-mode"
               appearance="inline"
               options={scenarioModeCards()}
               placement="bottom-end"
@@ -483,51 +526,68 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
                 void updateDeepAgentOptions(serverSync, { promptMode: option.value })
               }}
             />
-            <div class="settings-v2-choice-description">{scenarioModeDescription()}</div>
-          </div>
-        </SettingsRowV2>
+          </SettingsRowV2>
 
-        <SettingsRowV2
-          title={language.t("settings.general.deepagent.intelligenceModel.title")}
-          description={language.t("settings.general.deepagent.intelligenceModel.description")}
-        >
-          <SelectV2
-            appearance="inline"
-            data-action="settings-deepagent-intelligence-model"
-            options={intelligenceModelOptions()}
-            placement="bottom-end"
-            gutter={6}
-            current={
-              intelligenceModelOptions().find((option) => option.value === deepAgentIntelligenceModel()) ??
-              intelligenceModelOptions()[0]
-            }
-            value={(o) => o.value}
-            label={(o) => o.label}
-            onSelect={(option) => {
-              if (!option) return
-              if (option.value === deepAgentIntelligenceModel()) return
-              void updateDeepAgentOptions(serverSync, { intelligenceModel: option.value })
-            }}
-          >
-            {(o) => (
-              <span class="flex items-center gap-2">
-                <span>{o.label}</span>
-                <Show when={o.description}>
-                  <span class="rounded-sm bg-background-strong px-1.5 py-0.5 text-11-regular text-text-weak">
-                    {o.description}
-                  </span>
+          <SettingsRowV2
+            title={language.t("settings.general.deepagent.intelligenceModel.title")}
+            description={
+              <>
+                {language.t("settings.general.deepagent.intelligenceModel.description")}
+                <Show
+                  when={
+                    deepAgentIntelligenceModel() &&
+                    !intelligenceModelOptions().some((option) => option.value === deepAgentIntelligenceModel())
+                  }
+                >
+                  <code class="settings-v2-metadata">{deepAgentIntelligenceModel()}</code>
                 </Show>
-              </span>
-            )}
-          </SelectV2>
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.deepagent.selfLearning.title")}
-          description={language.t("settings.general.deepagent.selfLearning.description")}
-        >
-          <div data-action="settings-deepagent-self-learning" class="settings-v2-choice-control">
+              </>
+            }
+          >
             <SelectV2
+              appearance="inline"
+              data-action="settings-deepagent-intelligence-model"
+              options={intelligenceModelOptions()}
+              placement="bottom-end"
+              gutter={6}
+              current={intelligenceModelOptions().find((option) => option.value === deepAgentIntelligenceModel())}
+              placeholder={language.t(
+                deepAgentIntelligenceModel()
+                  ? "settings.general.deepagent.intelligenceModel.unavailable"
+                  : "settings.general.deepagent.intelligenceModel.unset",
+              )}
+              value={(o) => o.value}
+              label={(o) => o.label}
+              onSelect={(option) => {
+                if (!option) return
+                if (option.value === deepAgentIntelligenceModel()) return
+                void updateDeepAgentOptions(serverSync, { intelligenceModel: option.value })
+              }}
+            >
+              {(o) => (
+                <span class="flex items-center gap-2">
+                  <span>{o.label}</span>
+                  <Show when={o.description}>
+                    <span class="rounded-sm bg-background-strong px-1.5 py-0.5 text-11-regular text-text-weak">
+                      {o.description}
+                    </span>
+                  </Show>
+                </span>
+              )}
+            </SelectV2>
+          </SettingsRowV2>
+
+          <SettingsRowV2
+            title={language.t("settings.general.deepagent.selfLearning.title")}
+            description={
+              <>
+                {language.t("settings.general.deepagent.selfLearning.description")}
+                <span class="settings-v2-choice-description">{selfLearningDescription()}</span>
+              </>
+            }
+          >
+            <SelectV2
+              data-action="settings-deepagent-self-learning"
               appearance="inline"
               options={selfLearningCards()}
               placement="bottom-end"
@@ -541,32 +601,30 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
                 void updateDeepAgentOptions(serverSync, { selfLearning: option.value })
               }}
             />
-            <div class="settings-v2-choice-description">{selfLearningDescription()}</div>
-          </div>
-        </SettingsRowV2>
+          </SettingsRowV2>
 
-        <SettingsRowV2
-          title={language.t("settings.general.row.shell.title")}
-          description={language.t("settings.general.row.shell.description")}
-        >
-          <SelectV2
-            appearance="inline"
-            data-action="settings-shell"
-            options={shellOptions()}
-            current={shellOptions().find((o) => o.value === currentShell()) ?? autoOption}
-            placement="bottom-end"
-            gutter={6}
-            value={(o) => o.id}
-            label={(o) => o.label}
-            onSelect={(option) => {
-              if (!option) return
-              if (option.value === currentShell()) return
-              serverSync.updateConfig({ shell: option.value })
-            }}
-          />
-        </SettingsRowV2>
-
-      </SettingsListV2>
+          <SettingsRowV2
+            title={language.t("settings.general.row.shell.title")}
+            description={language.t("settings.general.row.shell.description")}
+          >
+            <SelectV2
+              appearance="inline"
+              data-action="settings-shell"
+              options={shellOptions()}
+              current={shellOptions().find((o) => o.value === currentShell()) ?? autoOption}
+              placement="bottom-end"
+              gutter={6}
+              value={(o) => o.id}
+              label={(o) => o.label}
+              onSelect={(option) => {
+                if (!option) return
+                if (option.value === currentShell()) return
+                serverSync.updateConfig({ shell: option.value })
+              }}
+            />
+          </SettingsRowV2>
+        </SettingsListV2>
+      </details>
     </div>
   )
 
@@ -622,7 +680,6 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
             />
           </div>
         </SettingsRowV2>
-
       </SettingsListV2>
     </div>
   )
@@ -1005,33 +1062,26 @@ export const SettingsGeneralV2: Component<{ session?: SettingsSession }> = (prop
   )
 
   return (
-    <>
-      <div class="settings-v2-tab-header">
-        <h2 class="settings-v2-tab-title">{language.t("settings.tab.general")}</h2>
-      </div>
+    <SettingsPage title={language.t("settings.tab.general")}>
+      <GeneralSection />
 
-      <div class="settings-v2-tab-body">
-        <GeneralSection />
+      <DeepAgentSection />
 
-        <DeepAgentSection />
+      <FeedSection />
 
-        <FeedSection />
+      <AppearanceSection />
 
-        <AppearanceSection />
+      <NotificationsSection />
 
-        <NotificationsSection />
+      <SoundsSection />
 
-        <SoundsSection />
+      <UpdatesSection />
 
+      <DisplaySection />
 
-        <UpdatesSection />
+      <PowerSection />
 
-        <DisplaySection />
-
-        <PowerSection />
-
-        <ImportSection />
-      </div>
-    </>
+      <ImportSection />
+    </SettingsPage>
   )
 }

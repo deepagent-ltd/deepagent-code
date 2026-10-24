@@ -876,13 +876,32 @@ export const browserAsset = Effect.fn("WorkFileHelper.browserAsset")(function* (
     message: "The current installed browser file helper is unavailable" })
   const changed = () => new BrowserFileSchema.Error({ code: "BROWSER_FILE_CHANGED",
     message: "The installed browser file helper or instance identity changed" })
-  if (process.platform === "win32") return yield* unavailable()
   const installation = yield* NativeInstallation.current().pipe(Effect.mapError(unavailable))
+  if (process.platform === "win32") {
+    const { WindowsWorkFileHelper } = yield* Effect.promise(() => import("./windows-work-file-helper"))
+    const asset = yield* WindowsWorkFileHelper.asset(installation).pipe(Effect.mapError(unavailable))
+    const instance = yield* LocalAuthority.readInstallation.pipe(Effect.mapError(unavailable))
+    const context = yield* Effect.context<never>()
+    return { instanceID: instance.instanceID, filename: asset.filename, helperHash: asset.hash,
+      launch: async (scope: Scope.Scope) => {
+        const owned = await Effect.runPromise(Scope.fork(scope))
+        const release = () => Effect.runPromise(Scope.close(owned, Exit.void))
+        const child = await Effect.runPromiseWith(context)(WindowsWorkFileHelper.launch(asset).pipe(Effect.provideService(Scope.Scope, owned)))
+          .catch(async (error) => { await release(); throw error })
+        return { child, release }
+      },
+      current: Effect.gen(function* () {
+        const actual = yield* WindowsWorkFileHelper.asset(installation).pipe(Effect.mapError(changed))
+        const currentInstance = yield* LocalAuthority.readInstallation.pipe(Effect.mapError(changed))
+        if (actual.hash !== asset.hash || actual.identity !== asset.identity || currentInstance.instanceID !== instance.instanceID ||
+          currentInstance.secret !== instance.secret) return yield* changed()
+      }).pipe(Effect.provide(context)) }
+  }
   const asset = yield* Effect.tryPromise({ try: () => verifiedAsset(installation), catch: unavailable })
   const instance = yield* LocalAuthority.readInstallation.pipe(Effect.mapError(unavailable))
   return { instanceID: instance.instanceID, filename: asset.filename, helperHash: asset.hash,
     current: Effect.gen(function* () {
-      yield* NativeInstallation.requireCurrent(installation).pipe(Effect.mapError(changed))
+      // verifiedAsset revalidates this same installation through inventory before opening the helper FD.
       const actual = yield* Effect.tryPromise({ try: () => verifiedAsset(installation), catch: changed })
       const currentInstance = yield* LocalAuthority.readInstallation.pipe(Effect.mapError(changed))
       if (actual.hash !== asset.hash || actual.identity !== asset.identity ||

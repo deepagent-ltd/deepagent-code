@@ -7,6 +7,13 @@ import { useSync } from "../context/sync"
 import { useTuiI18n } from "../context/i18n"
 import { useToast } from "../ui/toast"
 import { errorMessage } from "../util/error"
+import { useLocal } from "../context/local"
+import { useRoute } from "../context/route"
+import {
+  configuredCollaborationMode,
+  isSelectableCollaborationMode,
+} from "@deepagent-code/core/session/collaboration-mode"
+import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
 
 // DeepAgent settings face — the agentMode / self-learning / subagent-intensity / prompt-mode
 // selectors the GUI settings-v2 General tab owns. Writes send only the changed options through
@@ -31,6 +38,8 @@ export function DialogDeepAgentSettings() {
   const sync = useSync()
   const i18n = useTuiI18n()
   const toast = useToast()
+  const local = useLocal()
+  const route = useRoute()
   const [busy, setBusy] = createSignal(false)
 
   const [config, { refetch }] = createResource(async () => {
@@ -60,7 +69,9 @@ export function DialogDeepAgentSettings() {
     return isPromptMode(raw) ? raw : "intelligence"
   })
 
-  const patch = async (update: Partial<Record<"agentMode" | "selfLearning" | "subagentIntensity" | "promptMode", string>>) => {
+  const patch = async (
+    update: Partial<Record<"agentMode" | "selfLearning" | "subagentIntensity" | "promptMode", string>>,
+  ) => {
     if (busy()) return
     setBusy(true)
     try {
@@ -96,7 +107,134 @@ export function DialogDeepAgentSettings() {
     promptMode: (): string => (promptMode() === "direct" ? "intelligence" : "direct"),
   }
 
+  const sessionID = () => (route.data.type === "session" ? route.data.sessionID : undefined)
+  const editable = () => {
+    const id = sessionID()
+    if (!id) return false
+    const session = sync.session.get(id)
+    if (session && "ordinaryEligible" in session && session.ordinaryEligible === false) return false
+    const goal = sync.data.session_goal[id]
+    const control = goal?.control
+    return (
+      !goal ||
+      (!!control &&
+        (GoalClient.confirmedTerminal(control) ||
+          (control.requestedPhase === "paused" &&
+            !control.inFlight &&
+            !control.recoveryRequired &&
+            control.preparation === "ready")))
+    )
+  }
+  const [historicalPanel, panelActions] = createResource(
+    () => (sessionID() ? ([sdk.client, sdk.url, sdk.directory, sessionID()!] as const) : undefined),
+    async ([client, _url, _directory, id]) => {
+      return (client as unknown as GoalClient.Client).client
+        .request<{ armed: boolean; explicit: boolean }>({
+          method: "GET",
+          url: `/deepagent/panel/status?sessionID=${encodeURIComponent(id)}`,
+          throwOnError: false,
+        })
+        .then((result) => (result.error ? undefined : result.data))
+        .catch(() => undefined)
+    },
+  )
+  const stopHistoricalPanel = async () => {
+    const id = sessionID()
+    if (busy() || !id || !historicalPanel()?.armed) return
+    const captured = { client: sdk.client, url: sdk.url, directory: sdk.directory, sessionID: id }
+    setBusy(true)
+    try {
+      const result = await (captured.client as unknown as GoalClient.Client).client.request<{
+        sessionID: string
+        armed: boolean
+      }>({
+        method: "POST",
+        url: "/deepagent/panel/arm",
+        body: { sessionID: id, armed: false },
+        throwOnError: false,
+      })
+      if (
+        sdk.client !== captured.client ||
+        sdk.url !== captured.url ||
+        sdk.directory !== captured.directory ||
+        sessionID() !== id
+      )
+        return
+      if (result.error || result.data?.sessionID !== id || result.data.armed !== false)
+        throw new Error("Historical panel stop was not confirmed")
+      toast.show({ variant: "success", message: i18n.t("tui.panel.stopped"), duration: 4000 })
+      await panelActions.refetch()
+    } catch (error) {
+      toast.show({ variant: "error", message: errorMessage(error), duration: 6000 })
+    } finally {
+      setBusy(false)
+    }
+  }
+  const chooseMode = (defaultOnly: boolean) => {
+    const captured = { client: sdk.client, url: sdk.url, sessionID: sessionID(), directory: sdk.directory }
+    dialog.replace(() => (
+      <DialogSelect
+        title={i18n.t(defaultOnly ? "tui.mode.default" : "tui.mode.next")}
+        current={defaultOnly ? configuredCollaborationMode(current().default_agent) : local.agent.current()?.name}
+        options={local.agent
+          .list()
+          .filter(isSelectableCollaborationMode)
+          .map((mode) => ({
+            value: mode.name,
+            title: i18n.t(`tui.mode.${mode.name as "auto" | "plan" | "loop" | "design"}`),
+            description: mode.description,
+          }))}
+        onSelect={(mode) => {
+          if (captured.client !== sdk.client || captured.url !== sdk.url || captured.directory !== sdk.directory) return
+          if (!defaultOnly) {
+            if (captured.sessionID !== sessionID() || !editable()) return
+            local.agent.set(mode.value)
+            dialog.clear()
+            return
+          }
+          void sdk.client.global.config
+            .update({ config: { default_agent: mode.value } })
+            .then((result) => {
+              if (result.error) throw result.error
+              if (captured.client !== sdk.client || captured.url !== sdk.url) return
+              toast.show({ variant: "success", message: i18n.t("tui.deepagent.updated"), duration: 4000 })
+              dialog.replace(() => <DialogDeepAgentSettings />)
+            })
+            .catch((error: unknown) => toast.show({ variant: "error", message: errorMessage(error), duration: 6000 }))
+        }}
+      />
+    ))
+  }
+
   const entries = () => [
+    ...(historicalPanel()?.armed
+      ? [
+          {
+            title: i18n.t("tui.panel.stopHistory"),
+            value: "panelHistory",
+            category: "Session",
+            description: i18n.t("tui.panel.history"),
+            disabled: busy(),
+          },
+        ]
+      : []),
+    {
+      title: i18n.t("tui.mode.default"),
+      value: "defaultAgent",
+      category: "Session",
+      footer: configuredCollaborationMode(current().default_agent),
+    },
+    ...(sessionID()
+      ? [
+          {
+            title: i18n.t("tui.mode.next"),
+            value: "nextAgent",
+            category: "Session",
+            footer: `${local.agent.current()?.name ?? "—"} · ${i18n.t("tui.mode.effective")}: ${local.agent.effective()?.name ?? "—"}`,
+            disabled: !editable(),
+          },
+        ]
+      : []),
     {
       title: i18n.t("tui.deepagent.agentMode"),
       value: "agentMode",
@@ -132,7 +270,17 @@ export function DialogDeepAgentSettings() {
       title={i18n.t("tui.deepagent.title")}
       options={entries()}
       current={undefined}
-      onSelect={(option) => void patch({ [String(option.value)]: cycle[option.value as keyof typeof cycle]() })}
+      onSelect={(option) => {
+        if (option.value === "panelHistory") {
+          void stopHistoricalPanel()
+          return
+        }
+        if (option.value === "defaultAgent" || option.value === "nextAgent") {
+          chooseMode(option.value === "defaultAgent")
+          return
+        }
+        void patch({ [String(option.value)]: cycle[option.value as keyof typeof cycle]() })
+      }}
     />
   )
 }

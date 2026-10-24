@@ -35,6 +35,7 @@ function fixture(directory: string) {
     commands: new Map<string, IMDacSessionSchema.CommandResponse>(),
     recent: false,
     replyRetries: [] as string[],
+    reconciles: [] as (string | undefined)[],
     loseReplyResponse: false,
     afterBinding: undefined as (() => void) | undefined,
     calls: [] as {
@@ -100,6 +101,27 @@ function fixture(directory: string) {
         return Response.json(state.commands.get(body.commandID))
       }
       if (url.pathname.startsWith(`/api/v1/im/groups/${group.id}/dac/commands/`)) {
+        if (request.method === "POST" && url.pathname.endsWith("/reply/reconcile")) {
+          const commandID = url.pathname.split("/").at(-3)!
+          const body = (await request.json()) as { cursor?: string }
+          state.reconciles.push(body.cursor)
+          const command = state.commands.get(commandID)!
+          const done = body.cursor === "original-page-two"
+          const next = { ...command, replyStatus: done ? ("delivered" as const) : ("unknown" as const) }
+          state.commands.set(commandID, next)
+          return Response.json({
+            version: 1,
+            command: next,
+            state: done ? "confirmed_acceptance" : "partial",
+            totalParts: 3,
+            confirmedParts: done ? 3 : 1,
+            unconfirmedParts: done ? 0 : 2,
+            activeParts: 0,
+            parts: [],
+            hasMore: !done,
+            nextCursor: done ? null : "original-page-two",
+          })
+        }
         if (request.method === "POST" && url.pathname.endsWith("/reply/retry")) {
           const commandID = url.pathname.split("/").at(-3)!
           state.replyRetries.push(commandID)
@@ -584,7 +606,7 @@ test("ambiguous final delivery disables repeated POST and Enter observes only it
   }
 })
 
-test("known unknown final delivery stays GET-only until its original receipt is settled", async () => {
+test("known admitted unknown final permits one explicit same-session followup without retrying the old reply", async () => {
   await using tmp = await tmpdir()
   using peer = fixture(tmp.path)
   const draft = createIMDacDraft({ client: peer.client, groupID: group.id, current: () => true })
@@ -592,7 +614,7 @@ test("known unknown final delivery stays GET-only until its original receipt is 
   try {
     draft.update({ text: "one original private task" })
     const command = (await draft.submit())!
-    const unknown = { ...command, finalMessageID: "original-final", replyStatus: "unknown" as const }
+    const unknown = { ...command, activityID: "original-activity", finalMessageID: "original-final", replyStatus: "unknown" as const }
     peer.state.commands.set(command.commandID, unknown)
     await draft.refresh()
     using ui = await mountIM(tmp.path, peer.server.url.origin, () => (
@@ -602,37 +624,31 @@ test("known unknown final delivery stays GET-only until its original receipt is 
     const frame = (await ui.frame("needs checking")).replace(/\s+/g, " ")
     expect(frame).toContain("Final delivery: Delivery outcome needs checking")
     expect(frame).not.toContain("Resend the failed final answer")
-    expect(frame).not.toContain("Submit to my DAC (Enter)")
-    expect(frame).toContain("Keep the original command and check its state")
-    expect(draft.editable()).toBe(false)
-    expect(draft.update({ text: "must not replace the original command" })).toBe(false)
+    expect(draft.editable()).toBe(true)
     ui.app.mockInput.pressKey("y", { ctrl: true })
     await ui.app.renderOnce()
     expect(peer.state.replyRetries).toEqual([])
     const before = peer.state.calls.length
     ui.app.mockInput.pressEnter()
-    await until(() => peer.state.calls.length > before && !draft.state.busy, "unknown final Enter GET")
+    await until(() => peer.state.calls.length > before && !draft.state.busy, "empty Enter reads the original command")
     expect(peer.state.calls.at(-1)?.method).toBe("GET")
     expect(peer.state.calls.at(-1)?.path).toBe(`/api/v1/im/groups/${group.id}/dac/commands/${command.commandID}`)
-    expect(draft.state.command?.replyStatus).toBe("unknown")
     expect(opened).toEqual([])
-    await ui.frame("needs checking")
-    expect(draft.state.busy).toBe(false)
-    expect(draft.state.uncertain).toBe(false)
-    expect(draft.state.replyUncertain).toBe(false)
-    peer.state.commands.set(command.commandID, { ...unknown, replyStatus: "delivered" })
-    ui.app.mockInput.pressKey("r", { ctrl: true })
-    await until(() => draft.state.command?.replyStatus === "delivered" && !draft.state.busy, "original receipt settles")
-    await ui.frame("Final delivery: delivered")
-    expect(peer.state.calls.at(-1)?.method).toBe("GET")
-    expect(peer.state.calls.at(-1)?.path).toBe(`/api/v1/im/groups/${group.id}/dac/commands/${command.commandID}`)
-    expect(draft.editable()).toBe(true)
     expect(peer.state.posts).toHaveLength(1)
+    await ui.type("explicit new followup")
+    await ui.frame("Submit to my DAC (Enter)")
+    expect(peer.state.posts).toHaveLength(1)
+    ui.app.mockInput.pressEnter()
+    await until(() => peer.state.posts.length === 2 && opened.length === 1 && !draft.state.busy, "explicit new command admits to original Session")
+    expect(peer.state.posts[1]).toMatchObject({text: "explicit new followup", delivery: "queue"})
+    expect(peer.state.posts[1].commandID).not.toBe(command.commandID)
+    expect(peer.state.posts[1].newSession).toBeUndefined()
+    expect(draft.state.command?.sessionID).toBe(command.sessionID)
+    expect(opened).toEqual([command.sessionID])
+    expect(peer.state.commands.get(command.commandID)).toEqual(unknown)
     expect(peer.state.replyRetries).toEqual([])
     expect(peer.state.messages).toEqual([])
-  } finally {
-    draft.dispose()
-  }
+  } finally { draft.dispose() }
 })
 
 test("hidden destroyed editor ignores reactive updates and preserves the draft when shown again", async () => {
@@ -759,4 +775,60 @@ test("remote attach retains ordinary chat transport while private DAC refuses be
   expect(calls).toHaveLength(1)
   expect(createIMClient({ ...sdk, url: "http://deepagent-code.internal" }).dacAvailable()).toBe(true)
   expect(createIMClient({ ...sdk, url: "http://deepagent-code.internal", fetch: undefined }).dacAvailable()).toBe(false)
+})
+
+test("explicit TUI receipt action uses original POST pages while empty Enter remains GET and never resends", async () => {
+  await using tmp = await tmpdir()
+  using peer = fixture(tmp.path)
+  const command: IMDacSessionSchema.CommandResponse = {
+    version: 1,
+    groupID: group.id,
+    projectID: "original-project",
+    directory: tmp.path,
+    workspaceID: null,
+    commandID: "original-receipt-command",
+    bindingID: "original-binding",
+    sessionID: "original-session",
+    inputID: "original-input",
+    delivery: "queue",
+    state: "admitted",
+    activityID: "original-activity",
+    finalMessageID: "original-final",
+    replyStatus: "unknown",
+  }
+  peer.state.commands.set(command.commandID, command)
+  const draft = createIMDacDraft({ client: peer.client, groupID: group.id, current: () => true })
+  await draft.refresh(command.commandID)
+  const ui = await mountIM(tmp.path, peer.server.url.origin, () => (
+    <DialogIMDac
+      draft={draft}
+      openSession={async () => {
+        throw new Error("receipt must not open a Session")
+      }}
+      back={() => {}}
+    />
+  ))
+  try {
+    await ui.frame("Check reply receipt")
+    expect(peer.state.reconciles).toEqual([])
+    ui.app.mockInput.pressEnter()
+    await until(
+      () => peer.state.calls.filter((x) => x.method === "GET" && x.path.endsWith(command.commandID)).length === 2,
+    )
+    expect(peer.state.reconciles).toEqual([])
+    ui.app.mockInput.pressKey("k", { ctrl: true })
+    await ui.frame("Original parts confirmed by server: 1 / 3")
+    expect(draft.state.command?.replyStatus).toBe("unknown")
+    expect(peer.state.reconciles).toEqual([undefined])
+    ui.app.mockInput.pressKey("k", { ctrl: true })
+    await ui.frame("Original parts confirmed by server: 3 / 3")
+    expect(draft.state.command?.replyStatus).toBe("delivered")
+    expect(peer.state.reconciles).toEqual([undefined, "original-page-two"])
+    expect(peer.state.posts).toEqual([])
+    expect(peer.state.replyRetries).toEqual([])
+    expect(peer.state.messages).toEqual([])
+  } finally {
+    draft.dispose()
+    ui[Symbol.dispose]()
+  }
 })

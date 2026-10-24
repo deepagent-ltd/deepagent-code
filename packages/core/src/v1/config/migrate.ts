@@ -46,6 +46,7 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
     tool_output: info.tool_output,
     compaction: info.compaction && {
       auto: info.compaction.auto,
+      mode: info.compaction.mode,
       prune: info.compaction.prune,
       keep: {
         tokens: info.compaction.preserve_recent_tokens,
@@ -194,7 +195,8 @@ function migrateModel(info: typeof ConfigProviderV1.Model.Type, packageName?: st
       info.variants &&
       Object.entries(info.variants).map(([id, options]) => ({
         id,
-        body: ingest(options),
+        ...(options.disabled === undefined ? {} : { disabled: options.disabled }),
+        body: ingest(Object.fromEntries(Object.entries(options).filter(([key]) => key !== "disabled"))),
       })),
     cost: costs,
     disabled: info.status === "deprecated" ? true : undefined,

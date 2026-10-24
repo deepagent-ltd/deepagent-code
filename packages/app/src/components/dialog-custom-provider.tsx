@@ -274,7 +274,7 @@ export function DialogCustomProvider(props: Props) {
           return
         }
         const res = discovery.data
-        if (res?.kind) setDetectedProtocol(res.kind)
+        if (res?.kind === "openai-compatible" || res?.kind === "anthropic") setDetectedProtocol(res.kind)
         const discovered = res?.models ?? []
         if (discovered.length > 0 && !hasManualModels) {
           // Backend owns the model list at runtime, so we leave the form's manual-model rows empty
@@ -338,6 +338,8 @@ export function DialogCustomProvider(props: Props) {
               error={form.err.baseURL}
             />
             <TextField
+              type="password"
+              autocomplete="off"
               label={language.t("provider.custom.field.apiKey.label")}
               placeholder={language.t("provider.custom.field.apiKey.placeholder")}
               description={language.t("provider.custom.field.apiKey.description")}

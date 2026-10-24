@@ -1,6 +1,6 @@
 import { Component, Show } from "solid-js"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
-import { popularProviders, useProviders } from "@/hooks/use-providers"
+import { useProviders } from "@/hooks/use-providers"
 import { Dialog } from "@deepagent-code/ui/dialog"
 import { List } from "@deepagent-code/ui/list"
 import { Tag } from "@deepagent-code/ui/tag"
@@ -8,6 +8,8 @@ import { ProviderIcon } from "@deepagent-code/ui/provider-icon"
 import { DialogConnectProvider } from "./dialog-connect-provider"
 import { useLanguage } from "@/context/language"
 import { DialogCustomProvider } from "./dialog-custom-provider"
+import { PROVIDER_SUPPLIERS, providerSupplier } from "@deepagent-code/core/provider-presets"
+import { DialogConnectSupplier } from "./dialog-connect-supplier"
 
 const CUSTOM_ID = "_custom"
 
@@ -33,18 +35,46 @@ export const DialogSelectProvider: Component = () => {
         search={{ placeholder: language.t("dialog.provider.search.placeholder"), autofocus: true }}
         emptyMessage={language.t("dialog.provider.empty")}
         activeIcon="plus-small"
-        key={(x) => x?.id}
+        key={(x) => x ? `${x.supplier ? "supplier" : "provider"}:${x.id}` : CUSTOM_ID}
         items={() => {
           language.locale()
-          return [{ id: CUSTOM_ID, name: customLabel() }, ...Array.from(providers.all().values())]
+          return [
+            { id: CUSTOM_ID, name: customLabel(), supplier: false, icon: "synthetic", keywords: "" },
+            ...PROVIDER_SUPPLIERS.filter((supplier) => supplier.providers.some((id) => providers.all().has(id))).map(
+              (supplier) => ({
+                id: supplier.id,
+                name:
+                  supplier.id === "alibaba-cn"
+                    ? language.t("settings.providers.supplier.alibabaChina")
+                    : supplier.id === "alibaba"
+                      ? language.t("settings.providers.supplier.alibabaInternational")
+                      : supplier.name,
+                supplier: true,
+                icon: supplier.providers[0],
+                keywords: supplier.providers.join(" "),
+              }),
+            ),
+            ...Array.from(providers.all().values())
+              .filter((provider) => !providerSupplier(provider.id))
+              .map((provider) => ({
+                id: provider.id,
+                name: provider.name,
+                supplier: false,
+                icon: provider.id,
+                keywords: "",
+              })),
+          ]
         }}
-        filterKeys={["id", "name"]}
-        groupBy={(x) => (popularProviders.includes(x.id) ? popularGroup() : otherGroup())}
+        filterKeys={["id", "name", "keywords"]}
+        groupBy={(x) => (x.supplier ? popularGroup() : otherGroup())}
         sortBy={(a, b) => {
           if (a.id === CUSTOM_ID) return -1
           if (b.id === CUSTOM_ID) return 1
-          if (popularProviders.includes(a.id) && popularProviders.includes(b.id))
-            return popularProviders.indexOf(a.id) - popularProviders.indexOf(b.id)
+          if (a.supplier && b.supplier)
+            return (
+              PROVIDER_SUPPLIERS.findIndex((item) => item.id === a.id) -
+              PROVIDER_SUPPLIERS.findIndex((item) => item.id === b.id)
+            )
           return a.name.localeCompare(b.name)
         }}
         sortGroupsBy={(a, b) => {
@@ -59,12 +89,16 @@ export const DialogSelectProvider: Component = () => {
             dialog.show(() => <DialogCustomProvider back="providers" />)
             return
           }
+          if (x.supplier) {
+            dialog.show(() => <DialogConnectSupplier supplier={x.id} />)
+            return
+          }
           dialog.show(() => <DialogConnectProvider provider={x.id} />)
         }}
       >
         {(i) => (
           <div class="px-1.25 w-full flex items-center gap-x-3">
-            <ProviderIcon data-slot="list-item-extra-icon" id={i.id} />
+            <ProviderIcon data-slot="list-item-extra-icon" id={i.icon} />
             <span>{i.name}</span>
             <Show when={i.id === CUSTOM_ID}>
               <Tag>{language.t("settings.providers.tag.custom")}</Tag>

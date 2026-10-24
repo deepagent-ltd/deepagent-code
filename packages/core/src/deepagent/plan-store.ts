@@ -17,6 +17,7 @@ export * as DeepAgentPlanStore from "./plan-store"
 // hot cache: getPlanDoc is an in-memory Map lookup + a JSON.parse, not a disk read.
 import path from "node:path"
 import { AsyncLocalStorage } from "node:async_hooks"
+import { Hash } from "../util/hash"
 import { DocumentConflictError, DocumentStore, type Provenance } from "./document-store"
 import {
   PlanConflictError,
@@ -163,12 +164,41 @@ export const getPlanDoc = (sessionId: string): PlanDoc | null => {
   return decodePlanDoc(doc.body)
 }
 
+/** Prompt observations do not create a Session graph directory when no plan exists. */
+export const observe = (sessionId: string) => {
+  if (!hasRoot()) return undefined
+  const view = DocumentStore.observe(planStoreRoot(sessionId))
+  const ref = view.list({ type: "plan", scope: planScope(sessionId) })[0]
+  if (!ref) return undefined
+  const doc = view.get(ref.id)
+  const plan = doc ? decodePlanDoc(doc.body) : null
+  return plan ? { plan, ref: { id: ref.id, version: ref.version } } : undefined
+}
+
 // The doc id + current version for a session's plan (for the SessionRunState latch pointer), or null.
 export const planDocRef = (sessionId: string): { id: string; version: number } | null => {
   const ref = resolveRef(sessionId)
   if (!ref) return null
   const doc = store(sessionId).get(ref.id)
   return doc ? { id: doc.id, version: doc.version } : null
+}
+
+/** One committed immutable version is displayed and approved. Later drafts cannot
+ * substitute their content while a question or durable input admission is awaiting. */
+export const approvalSnapshot = (sessionId: string) => {
+  const ref = resolveRef(sessionId)
+  if (!ref) return null
+  const doc = store(sessionId).get(ref.id)
+  if (!doc || Buffer.byteLength(doc.body) > 131072) return null
+  const plan = decodePlanDoc(doc.body)
+  if (!plan || plan.session_id !== sessionId) return null
+  return Object.freeze({
+    documentID: doc.id,
+    planID: plan.plan_id,
+    version: doc.version,
+    body: doc.body,
+    hash: Hash.sha256(doc.body),
+  })
 }
 
 export type PlanCompareAndCommitInput = {

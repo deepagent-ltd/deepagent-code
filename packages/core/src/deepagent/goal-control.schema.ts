@@ -24,6 +24,18 @@ export const ControlInput = Schema.Struct({
   requestID: Text,
 })
 export type ControlInput = typeof ControlInput.Type
+/** Read-only statistics from the exact durable Goal baseline; never control authority. */
+export const Progress = Schema.Struct({
+  ledger: Schema.Struct({
+    ticks: Count,
+    tokens: Count,
+    cost: Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0)),
+    wallclockMs: Count,
+  }),
+  stallCount: Count,
+  gaps: Schema.Array(Schema.String.check(Schema.isMaxLength(4096))).check(Schema.isMaxLength(64)),
+})
+export type Progress = typeof Progress.Type
 export const Snapshot = Schema.Struct({
   goalId: Schema.String,
   planDocId: Schema.String,
@@ -37,6 +49,7 @@ export const Snapshot = Schema.Struct({
   wakeState: WakeState,
   receiptID: Schema.optional(Schema.String),
   replayed: Schema.Boolean,
+  progress: Schema.optional(Progress),
 })
 export type Snapshot = typeof Snapshot.Type
 

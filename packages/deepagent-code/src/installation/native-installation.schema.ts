@@ -73,6 +73,39 @@ export class NodeManifest extends Schema.Class<NodeManifest>("NativeNodeInstalla
   signature: Schema.String.check(Schema.isPattern(/^[a-f0-9]{128}$/)),
 }) {}
 
+export const WINDOWS_OBSERVATION_LIMIT = 131_328
+const WindowsFile = Schema.Struct({
+  identity: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048)),
+  hash: Digest,
+  bytes: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(268_435_456)),
+  text: Schema.NullOr(Schema.String),
+})
+export const WindowsObservation = Schema.Struct({
+  version: Schema.Literal(1),
+  artifact: WindowsFile,
+  manifest: WindowsFile,
+  runtime: WindowsFile,
+  bootstrap_sha256: Digest,
+})
+type WindowsFile = typeof WindowsFile.Type
+type WindowsFiles = Readonly<{ version: number; artifact: WindowsFile; manifest: WindowsFile; runtime: WindowsFile; bootstrap_sha256: string }>
+
+/** Exact public-data equality only; this never grants current or installation authority. */
+export function sameWindowsFiles(left: WindowsFiles, right: WindowsFiles, expectedBootstrapHash?: string) {
+  return (
+    left.version === right.version &&
+    left.bootstrap_sha256 === right.bootstrap_sha256 &&
+    (expectedBootstrapHash === undefined || right.bootstrap_sha256 === expectedBootstrapHash) &&
+    (["artifact", "manifest", "runtime"] as const).every(
+      (name) =>
+        left[name].identity === right[name].identity &&
+        left[name].hash === right[name].hash &&
+        left[name].bytes === right[name].bytes &&
+        left[name].text === right[name].text,
+    )
+  )
+}
+
 export const ErrorCode = Schema.Literals([
   "NATIVE_INSTALLATION_UNAVAILABLE",
   "NATIVE_MANIFEST_INVALID",

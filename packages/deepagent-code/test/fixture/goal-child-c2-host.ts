@@ -9,6 +9,7 @@ import { Cause, Effect, Exit, Fiber, Schema } from "effect"
 import { sql } from "drizzle-orm"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Database } from "@deepagent-code/core/database/database"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { GoalChild } from "@deepagent-code/core/deepagent/goal-child"
 import { GoalChildPolicy } from "@deepagent-code/core/deepagent/goal-child-policy"
 import { GoalChildResult } from "@deepagent-code/core/deepagent/goal-child-result"
@@ -389,7 +390,162 @@ try {
             : []),
         ],
       })
+      if (scenario.startsWith("initial-selection-")) {
+        const docroot = GoalManager.goalStoreRoot(parent.id)
+        const file = path.join(directory, ".deepagent-code/plans/goal+plan.md")
+        const markdown = `## Goal\nVerify the authored steps\n## Criteria\n- plan complete\n## Plan\n${
+          scenario === "initial-selection-active"
+            ? "- [>] Verify first\n- [ ] Verify second\n"
+            : scenario === "initial-selection-done"
+              ? "- [x] Verify first\n- [x] Verify second\n"
+              : "- [ ] Verify first\n- [ ] Verify second\n"
+        }`
+        yield* Effect.promise(() => fs.mkdir(path.dirname(file), { recursive: true }))
+        yield* Effect.promise(() => Bun.write(file, markdown))
+        const selected = GoalManager.readGoalPlanFile(directory, parent.id)!
+        assert(selected)
+        const original = JSON.stringify(selected.plan)
+        const prior =
+          scenario === "initial-selection-markdown"
+            ? undefined
+            : new DocumentStore(docroot).create({
+                type: "plan",
+                scope: `run:${parent.id}`,
+                idSlug: `plan-${parent.id}`,
+                description: "Authored initial plan",
+                body: original,
+                provenance: { source: "human", run_ref: `run:${parent.id}` },
+              })
+        const start = { sessionID: parent.id, requestID: scenario, planSource: "workspace-file" as const }
+        const options = {
+          directory: docroot,
+          sessionID: parent.id,
+          requestID: start.requestID,
+          plan: selected.plan,
+          spec: {
+            criteria: selected.criteria,
+            limits: { maxTicks: 3, maxTokens: 1000, maxWallclockMs: 60000 },
+            stallThreshold: 3,
+          },
+          model: { providerID: "fixture", modelID: "test-model" },
+          netTokenBudget: false,
+          panel: { question: "Review", codeRefs: [], lenses: ["correctness"], maxRounds: 1 },
+        }
+        if (scenario === "initial-selection-source-conflict") {
+          const refused = yield* GoalTickProjection.prepare(db, {
+            ...options,
+            plan: { ...selected.plan, goal: "A different selected source" },
+          }).pipe(Effect.exit)
+          assert(Exit.isFailure(refused))
+          assert(Cause.pretty(refused.cause).includes("The selected initial plan changed before preparation"))
+          assert.equal(DocumentStore.openExact(docroot, [prior!.id]).get(prior!.id)!.hash, prior!.hash)
+        } else {
+          const initialization = yield* GoalTickProjection.prepare(db, options)
+          const document = initialization.ownedPreparation!.documents[0]!
+          const payload = Schema.decodeUnknownSync(Schema.fromJsonString(GoalTickProgram.DocumentPayload))(document.payload)
+          const desired = DeepAgentPlanStore.decodePlanDoc(payload.body)!
+          assert(desired)
+          assert.equal(JSON.stringify(selected.plan), original, "Preparing must not mutate its authored input")
+          assert.equal(yield* Effect.promise(() => Bun.file(file).text()), markdown)
+          assert.equal(document.expectedVersion, prior?.version ?? null)
+          assert.equal(document.expectedHash, prior?.hash.slice(7) ?? null)
+          if (scenario === "initial-selection-active" || scenario === "initial-selection-done") {
+            assert.equal(payload.body, original)
+            assert.equal(payload.version, prior!.version)
+          } else {
+            assert.deepEqual(
+              desired.steps.map((step) => step.status),
+              ["active", "pending"],
+            )
+            assert.equal(desired.active_step_id, "step_1")
+            assert.equal(payload.version, prior ? prior.version + 1 : 1)
+            assert.deepEqual(
+              { ...desired, steps: selected.plan.steps, active_step_id: selected.plan.active_step_id },
+              selected.plan,
+            )
+          }
+          if (prior) assert.deepEqual({ ...payload, body: prior.body, version: prior.version, hash: prior.hash }, prior)
+          assert.equal(initialization.planVersion, payload.version)
+          const request = {
+            ...start,
+            requestHash: GoalControl.fingerprint(start),
+            planDocId: initialization.spec.planDocId,
+            initialization,
+            driverMode: "event" as const,
+          }
+          const reserved = yield* GoalControl.reserveStart(db, request)
+          const input = {
+            row: reserved.row,
+            requestID: start.requestID,
+            requestHash: request.requestHash,
+            directory: docroot,
+          }
+          if (scenario === "initial-selection-cas-conflict") {
+            const store = DocumentStore.openExact(docroot, [prior!.id])
+            const competing = store.update(prior!.id, `${prior!.body} `)
+            const refused = yield* GoalTickProjection.initialize(db, input).pipe(Effect.exit)
+            assert(Exit.isFailure(refused))
+            assert(Cause.pretty(refused.cause).includes("Exact initial Goal document bytes could not be confirmed"))
+            assert.equal(DocumentStore.openExact(docroot, [prior!.id]).get(prior!.id)!.hash, competing.hash)
+            assert.equal((yield* GoalControl.get(db, reserved.row.goal_id))!.preparation, "preparing")
+            assert.deepEqual(yield* db.all("SELECT * FROM goal_tick_permit"), [])
+          } else {
+            if (scenario === "initial-selection-stored") {
+              yield* db.run(
+                sql`CREATE TRIGGER initial_selection_gap BEFORE UPDATE ON goal_control WHEN NEW.preparation='ready' BEGIN SELECT RAISE(ABORT,'fixture initialization gap'); END`,
+              )
+              assert(Exit.isFailure(yield* GoalTickProjection.initialize(db, input).pipe(Effect.exit)))
+              assert.equal((yield* GoalControl.get(db, reserved.row.goal_id))!.preparation, "preparing")
+              assert.equal(DocumentStore.openExact(docroot, [payload.id]).get(payload.id)!.version, payload.version)
+              yield* db.run(sql`DROP TRIGGER initial_selection_gap`)
+            }
+            const receipt = yield* GoalTickProjection.initialize(db, input)
+            const projected = DocumentStore.openExact(docroot, [payload.id]).get(payload.id)!
+            assert.equal(projected.version, payload.version)
+            assert.equal(projected.body, payload.body)
+            const replay = yield* (yield* GoalManager.Service).start(start)
+            assert.equal(replay.replayed, true)
+            assert.equal(replay.goalId, receipt.goalId)
+            assert.equal(replay.revision, receipt.revision)
+            assert.equal(DocumentStore.openExact(docroot, [payload.id]).get(payload.id)!.hash, projected.hash)
+            assert.deepEqual(yield* db.all("SELECT * FROM goal_tick_permit"), [])
+            const tick = yield* GoalControl.beginTick(db, {
+              sessionID: parent.id,
+              goalId: receipt.goalId,
+              planDocId: payload.id,
+              revision: 1,
+              seq: 0,
+              expectedPlanVersion: initialization.planVersion,
+              mode: "event",
+            })
+            const frozen = yield* GoalOwnedLoop.prepare({ permitID: tick.permit.permit_id, directory: docroot })
+            assert.deepEqual(frozen.plan, desired)
+            assert.equal(tick.permit.plan_version, payload.version)
+          }
+        }
+        return {
+          inputs: yield* db.all("SELECT * FROM session_input"),
+          units: yield* db.all("SELECT * FROM goal_child_unit"),
+          active: Array.from(yield* (yield* SessionExecution.Service).active),
+        }
+      }
       if (scenario.startsWith("manager")) {
+        const statusEvents: Array<{ type: string; data: Record<string, unknown> }> = []
+        const events = yield* EventV2Bridge.Service
+        yield* events.listen((event) =>
+          Effect.gen(function* () {
+            if (event.type !== "goal.updated" && event.type !== "plan.updated") return
+            statusEvents.push({ type: event.type, data: event.data as Record<string, unknown> })
+            const ledger = (event.data as { ledger?: { ticks: number } }).ledger
+            if (
+              scenario === "manager-status-publish-failure" &&
+              event.type === "goal.updated" &&
+              ledger &&
+              ledger.ticks > 0
+            )
+              return yield* Effect.die("Intentional status listener fault after committed checkpoint")
+          }),
+        )
         const manager = yield* GoalManager.Service
         const input = {
           sessionID: parent.id,
@@ -435,7 +591,37 @@ try {
         const checkpoint = yield* GoalTickCheckpointV2.read(db, row.permit_id)
         assert.equal(checkpoint?.state, "committed")
         assert.equal((yield* manager.status(parent.id))!.phase, scenario === "manager-tests" ? "done" : "needs_human")
+        if (scenario.startsWith("manager")) {
+          for (
+            let n = 0;
+            n < 100 &&
+            !statusEvents.some(
+              (event) => event.type === "goal.updated" && (event.data.ledger as { ticks: number }).ticks > 0,
+            );
+            n++
+          )
+            yield* Effect.sleep("10 millis")
+          const state = JSON.parse(checkpoint!.journal.nextState!)
+          const observed = statusEvents.filter((event) => event.type === "goal.updated").at(-1)!
+          assert.equal(observed.data.phase, state.phase, "Owned committed phase must reach existing status publisher")
+          assert.deepEqual(observed.data.ledger, {
+            ticks: state.ledger.ticks,
+            tokens: state.ledger.tokens,
+            cost: state.ledger.cost,
+            wallclockMs: state.ledger.wallclockMs,
+          })
+          assert.deepEqual(observed.data.gaps, state.gaps)
+          assert(state.ledger.ticks > 0 && state.ledger.tokens > 0)
+          const plan = DocumentStore.shared(GoalManager.goalStoreRoot(parent.id)).get(receipt.planDocId)!
+          const mirrored = statusEvents.filter((event) => event.type === "plan.updated").at(-1)!
+          assert(mirrored, "Owned checkpoint must mirror the existing exact plan version")
+          assert.equal(mirrored.data.plan_version, plan.version)
+          assert.deepEqual(mirrored.data.steps, JSON.parse(plan.body).steps)
+          assert.equal((yield* GoalTickCheckpointV2.read(db, row.permit_id))!.revision, checkpoint!.revision)
+          assert.equal(requests.length, scenario === "manager-tests" ? 3 : 1)
+        }
         return {
+          statusEvents,
           checkpoint,
           inputs: yield* db.all("SELECT * FROM session_input"),
           units: yield* db.all("SELECT * FROM goal_child_unit"),

@@ -147,10 +147,17 @@ const AnthropicToolChoice = Schema.Union([
   Schema.Struct({ type: Schema.tag("tool"), name: Schema.String }),
 ])
 
-const AnthropicThinking = Schema.Struct({
-  type: Schema.tag("enabled"),
-  budget_tokens: Schema.Number,
-})
+const ThinkingDisplay = Schema.Literals(["summarized", "omitted"])
+const AnthropicEffort = Schema.Literals(["low", "medium", "high", "xhigh", "max"])
+const AnthropicThinking = Schema.Union([
+  Schema.Struct({
+    type: Schema.tag("enabled"),
+    budget_tokens: Schema.Number,
+    display: Schema.optional(ThinkingDisplay),
+  }),
+  Schema.Struct({ type: Schema.tag("adaptive"), display: Schema.optional(ThinkingDisplay) }),
+  Schema.Struct({ type: Schema.tag("disabled") }),
+])
 
 const AnthropicBodyFields = {
   model: Schema.String,
@@ -165,6 +172,7 @@ const AnthropicBodyFields = {
   top_k: Schema.optional(Schema.Number),
   stop_sequences: optionalArray(Schema.String),
   thinking: Schema.optional(AnthropicThinking),
+  output_config: Schema.optional(Schema.Struct({ effort: AnthropicEffort })),
 }
 const AnthropicMessagesBody = Schema.Struct(AnthropicBodyFields)
 export type AnthropicMessagesBody = Schema.Schema.Type<typeof AnthropicMessagesBody>
@@ -492,7 +500,14 @@ const anthropicOptions = (request: LLMRequest) => request.providerOptions?.anthr
 
 const lowerThinking = Effect.fn("AnthropicMessages.lowerThinking")(function* (request: LLMRequest) {
   const thinking = anthropicOptions(request)?.thinking
-  if (!ProviderShared.isRecord(thinking) || thinking.type !== "enabled") return undefined
+  if (!ProviderShared.isRecord(thinking)) return undefined
+  if (thinking.type === "disabled") return { type: "disabled" as const }
+  const display =
+    thinking.display === undefined
+      ? undefined
+      : yield* ProviderShared.validateWith(Schema.decodeUnknownEffect(ThinkingDisplay))(thinking.display)
+  if (thinking.type === "adaptive") return { type: "adaptive" as const, display }
+  if (thinking.type !== "enabled") return yield* invalid("Anthropic thinking provider option has an unsupported type")
   const budget =
     typeof thinking.budgetTokens === "number"
       ? thinking.budgetTokens
@@ -500,7 +515,11 @@ const lowerThinking = Effect.fn("AnthropicMessages.lowerThinking")(function* (re
         ? thinking.budget_tokens
         : undefined
   if (budget === undefined) return yield* invalid("Anthropic thinking provider option requires budgetTokens")
-  return { type: "enabled" as const, budget_tokens: budget }
+  if (budget >= (request.generation?.maxTokens ?? request.model.route.defaults.limits?.output ?? 4096))
+    return yield* invalid(
+      "Anthropic thinking budgetTokens must be less than maxTokens; lower the budget or raise the output cap",
+    )
+  return { type: "enabled" as const, budget_tokens: budget, display }
 })
 
 const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (request: LLMRequest) {
@@ -543,6 +562,14 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
     top_k: generation?.topK,
     stop_sequences: generation?.stop,
     thinking: yield* lowerThinking(request),
+    output_config:
+      anthropicOptions(request)?.effort === undefined
+        ? undefined
+        : {
+            effort: yield* ProviderShared.validateWith(Schema.decodeUnknownEffect(AnthropicEffort))(
+              anthropicOptions(request)?.effort,
+            ),
+          },
   }
 })
 

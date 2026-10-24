@@ -19,7 +19,8 @@ import { ContextStagedAdaptersV2 } from "@deepagent-code/core/context-federation
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { LocationIndexRuntime } from "@/location-index/runtime"
-import { currentIdentity } from "@/context-federation/production-sources"
+import { V2RunnerFrame } from "@/session/v2-runner-frame"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 import { InstanceState } from "@/effect/instance-state"
 import { InstanceHttpApi } from "../api"
 import { ContextApi } from "../groups/context"
@@ -154,22 +155,16 @@ export const contextHandlers = HttpApiBuilder.group(InstanceHttpApi, "context", 
       query: { session_id: string }
     }) {
       const info = yield* getLocalSession(ctx.query.session_id)
-      // W3.8.1 + W3.9 + W3.10: the probe frame mirrors the runner. W3.9 made the seam identity
-      // lazy — resolved HERE on demand (`runtime.current()` at probe time, per-request `InstanceRef`
-      // from the instance-context middleware) because the production-sources layer built at app
-      // start has neither `InstanceRef` nor an eager index attach (zero layer-build side effects).
-      // W3.10 closes the runner side with a host hook at the per-location runner tree (the augmented
-      // `LocationServiceMap` in `session/v2-runner-frame.ts`): the runner resolves the same
-      // `currentIdentity` derivation at tree build with the instance context of the ref directory,
-      // so probe and runner frames are the SAME derivation — a real frame when an instance index is
-      // attached, the v2:local degradation otherwise (never a fake).
-      const sources = yield* ProductionV2Sources
-      const identity = yield* currentIdentity(yield* LocationIndexRuntime.Service)
-      const envelope = buildReadinessEnvelope(info, identity)
-      // W3.7 L5: readiness reflects what the V2 runner actually does — same flag-gated adapter
-      // selection (production sources default, staged `source_disabled` only under `=false`).
-      const adapters = readinessAdapters(sources)
-      const resolved = yield* SessionContextResolverV2.resolveGraphs(envelope, adapters, 5_000)
+      const base = yield* ProductionV2Sources
+      // Use the same exact Gateway/Location sources as the ordinary runner, after the Session
+      // directory boundary above. The APP source may predate its scoped knowledge runtime.
+      const resolved = yield* Effect.gen(function* () {
+        const sources = yield* ProductionV2Sources
+        const envelope = buildReadinessEnvelope(info, sources.identity)
+        return yield* SessionContextResolverV2.resolveGraphs(envelope, readinessAdapters(sources), 5_000)
+      }).pipe(
+        Effect.provide(V2RunnerFrame.runnerFrameSeamFor({ directory: AbsolutePath.make(info.directory) }, base)),
+      )
       const graphs = resolved.results.map((entry) => entry.status)
       const ready = Object.values(resolved.graphStatuses).every((status) => status.status === "ready")
       const statuses = Object.fromEntries(

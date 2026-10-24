@@ -6,7 +6,7 @@ import type { CapabilityCatalog, CapabilityLoadReceipts, SystemContextSnapshot }
 // endpoint data (repo convention: no component-render unit tests).
 
 export const AVAILABILITY_KEYS = {
-  stable: "settings.capabilities.availability.stable",
+  stable: "settings.capabilities.integrated",
   maintenance_only: "settings.capabilities.availability.maintenance_only",
   disabled: "settings.capabilities.availability.disabled",
   unavailable: "settings.capabilities.availability.unavailable",

@@ -546,6 +546,23 @@ export function createIMClient(sdk: IMSDK, fixed?: IMClientScope) {
       signal.throwIfAborted()
       return value
     },
+    dacReplyReconcile: async (groupID: string, commandID: string, cursor: string | undefined, signal: AbortSignal) => {
+      requireLocalDac()
+      const captured = scope()
+      const value = Schema.decodeUnknownSync(IMDacSessionSchema.ReplyReconcileResponse)(
+        sdkResponse(
+          await captured.client.im.dacReplyReconcile(
+            { groupId: groupID, commandID, cursor, ...location(captured) },
+            scopedOptions(captured, signal),
+          ),
+          captured,
+        ),
+        { onExcessProperty: "error" },
+      )
+      dacCommandResponse(value.command, captured, groupID, commandID)
+      signal.throwIfAborted()
+      return value
+    },
     dacReplyRetry: async (groupID: string, commandID: string, signal: AbortSignal) => {
       requireLocalDac()
       const captured = scope()

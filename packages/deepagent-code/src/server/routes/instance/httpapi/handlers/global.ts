@@ -1,4 +1,8 @@
 import { Config } from "@/config/config"
+import { ConfigIM } from "@deepagent-code/core/config/im"
+import { ServerCapabilities } from "@deepagent-code/core/server-capabilities"
+import { IMActivation } from "@/im/activation"
+import { IMFacade } from "@/im/facade"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
@@ -13,10 +17,10 @@ import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { IM_PROTOCOL_VERSION } from "@deepagent-code/core/im/protocol"
 import * as Log from "@deepagent-code/core/util/log"
-import { Cause, Effect, Layer, Queue, Schema } from "effect"
+import { Cause, Effect, Layer, Option, Queue, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import {
@@ -25,6 +29,7 @@ import {
   ImportRequestError,
   ImportBusyError,
   ImportNotFoundError,
+  IMServiceBusyError,
 } from "../groups/global"
 import { ImportJobs } from "@/import/job"
 import { ImportJobSchema } from "@deepagent-code/core/import-job/schema"
@@ -55,55 +60,61 @@ function parseBody(body: string) {
   }
 }
 
-function eventResponse(source: EventV2.Interface, execution: SessionExecution.Interface, runtime: SessionRuntimeStatus.Interface) {
+function eventResponse(
+  source: EventV2.Interface,
+  execution: SessionExecution.Interface,
+  runtime: SessionRuntimeStatus.Interface,
+) {
   return Effect.gen(function* () {
-  log.info("global event connected")
-  const events = Stream.callback<GlobalBusEvent, Error>(
-    (queue) => {
-      const handler = (event: GlobalBusEvent) => {
-        if (Queue.offerUnsafe(queue, event)) return
-        Queue.failCauseUnsafe(queue, Cause.fail(new Error("Global event consumer exceeded its 1024-event buffer")))
-      }
-      return Effect.acquireRelease(
-        Effect.sync(() => GlobalBus.on("event", handler)),
-        () => Effect.sync(() => GlobalBus.off("event", handler)),
-      )
-    },
-    { bufferSize: 1024, strategy: "dropping" },
-  )
-  const heartbeat = Stream.tick("10 seconds").pipe(
-    Stream.drop(1),
-    Stream.map(() => ({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })),
-  )
-  const statuses = (yield* SessionRuntimeStatusEvents.stream(source, execution, runtime)).pipe(
-    Stream.filter((event) => event.location !== undefined),
-    Stream.map((event) => ({
-      directory: event.location!.directory,
-      workspace: event.location!.workspaceID,
-      payload: { id: EventV2.ID.create(), type: "session.status", properties: event.properties },
-    })),
-  )
-
-  return HttpServerResponse.stream(
-    Stream.make({ payload: { id: EventV2.ID.create(), type: "server.connected", properties: {} } }).pipe(
-      Stream.concat(events.pipe(
-        Stream.merge(statuses, { haltStrategy: "left" }),
-        Stream.merge(heartbeat, { haltStrategy: "left" }),
-      )),
-      Stream.map(eventData),
-      Stream.pipeThroughChannel(Sse.encode()),
-      Stream.encodeText,
-      Stream.ensuring(Effect.sync(() => log.info("global event disconnected"))),
-    ),
-    {
-      contentType: "text/event-stream",
-      headers: {
-        "Cache-Control": "no-cache, no-transform",
-        "X-Accel-Buffering": "no",
-        "X-Content-Type-Options": "nosniff",
+    log.info("global event connected")
+    const events = Stream.callback<GlobalBusEvent, Error>(
+      (queue) => {
+        const handler = (event: GlobalBusEvent) => {
+          if (Queue.offerUnsafe(queue, event)) return
+          Queue.failCauseUnsafe(queue, Cause.fail(new Error("Global event consumer exceeded its 1024-event buffer")))
+        }
+        return Effect.acquireRelease(
+          Effect.sync(() => GlobalBus.on("event", handler)),
+          () => Effect.sync(() => GlobalBus.off("event", handler)),
+        )
       },
-    },
-  )
+      { bufferSize: 1024, strategy: "dropping" },
+    )
+    const heartbeat = Stream.tick("10 seconds").pipe(
+      Stream.drop(1),
+      Stream.map(() => ({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })),
+    )
+    const statuses = (yield* SessionRuntimeStatusEvents.stream(source, execution, runtime)).pipe(
+      Stream.filter((event) => event.location !== undefined),
+      Stream.map((event) => ({
+        directory: event.location!.directory,
+        workspace: event.location!.workspaceID,
+        payload: { id: EventV2.ID.create(), type: "session.status", properties: event.properties },
+      })),
+    )
+
+    return HttpServerResponse.stream(
+      Stream.make({ payload: { id: EventV2.ID.create(), type: "server.connected", properties: {} } }).pipe(
+        Stream.concat(
+          events.pipe(
+            Stream.merge(statuses, { haltStrategy: "left" }),
+            Stream.merge(heartbeat, { haltStrategy: "left" }),
+          ),
+        ),
+        Stream.map(eventData),
+        Stream.pipeThroughChannel(Sse.encode()),
+        Stream.encodeText,
+        Stream.ensuring(Effect.sync(() => log.info("global event disconnected"))),
+      ),
+      {
+        contentType: "text/event-stream",
+        headers: {
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
+          "X-Content-Type-Options": "nosniff",
+        },
+      },
+    )
   })
 }
 
@@ -119,6 +130,8 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const events = yield* EventV2Bridge.Service
     const execution = yield* SessionExecution.Service
     const runtime = yield* SessionRuntimeStatus.Service
+    const activation = Option.getOrUndefined(yield* Effect.serviceOption(IMActivation.Service))
+    const facade = Option.getOrUndefined(yield* Effect.serviceOption(IMFacade.Service))
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
       return { healthy: true as const, version: InstallationVersion, runtimeId }
@@ -162,7 +175,46 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     const configUpdate = Effect.fn("GlobalHttpApi.configUpdate")(function* (ctx) {
-      const result = yield* config.updateGlobal(ctx.payload)
+      if (
+        ["provider", "providers", "enabled_providers", "disabled_providers"].some((key) =>
+          Object.hasOwn(ctx.payload, key),
+        ) &&
+        !ServerCapabilities.isAllowed(ServerCapabilities.Actions.providerConfigWrite)
+      )
+        return yield* new HttpApiError.BadRequest({})
+      const changesService = ctx.payload.im && Object.hasOwn(ctx.payload.im, "url")
+      const result = yield* Effect.gen(function* () {
+        if (!changesService) return yield* config.updateGlobal(ctx.payload)
+        const url = ctx.payload.im?.url === null ? null : ConfigIM.normalizeServiceURL(ctx.payload.im?.url ?? "")
+        if (url === undefined) return yield* new HttpApiError.BadRequest({})
+        if (!activation || !facade)
+          return yield* new IMServiceBusyError({
+            name: "IM_SERVICE_BUSY",
+            data: {
+              code: "im_service_busy",
+              message: "The IM service lifecycle is unavailable; configuration was not changed",
+            },
+          })
+        return yield* activation
+          .withServiceConfiguration(
+            facade.withServiceConfiguration(
+              url,
+              config.updateGlobal({ ...ctx.payload, im: { ...ctx.payload.im, url } }),
+            ),
+          )
+          .pipe(
+            Effect.mapError(
+              () =>
+                new IMServiceBusyError({
+                  name: "IM_SERVICE_BUSY",
+                  data: {
+                    code: "im_service_busy",
+                    message: "An IM activation or identity operation is in progress; configuration was not changed",
+                  },
+                }),
+            ),
+          )
+      })
       if (result.changed) bridge.fork(disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true }))
       return result.info
     })

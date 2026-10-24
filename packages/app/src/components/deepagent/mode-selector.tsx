@@ -25,12 +25,14 @@ type ModeName = CollaborationModeName
 
 const MODE_LABEL_KEY = {
   auto: "composer.mode.auto",
+  plan: "composer.mode.plan",
   loop: "composer.mode.loop",
   design: "composer.mode.design",
 } as const
 
 const MODE_DESC_KEY = {
   auto: "composer.mode.auto.desc",
+  plan: "composer.mode.plan.desc",
   loop: "composer.mode.loop.desc",
   design: "composer.mode.design.desc",
 } as const
@@ -149,7 +151,9 @@ export function ModeSelector(props: {
               <div class="flex flex-1 min-w-0 flex-col gap-0.5 pr-7 text-left">
                 <span class="text-13-medium text-text-base capitalize">{title(agent)}</span>
                 <Show when={description(agent)}>
-                  <span class="text-11-regular text-text-weaker whitespace-normal leading-snug">{description(agent)}</span>
+                  <span class="text-11-regular text-text-weaker whitespace-normal leading-snug">
+                    {description(agent)}
+                  </span>
                 </Show>
               </div>
             )}

@@ -1,5 +1,7 @@
 import { For, Show } from "solid-js"
 import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
+import { Button } from "@deepagent-code/ui/button"
+import { showToast } from "@/utils/toast"
 import { useLanguage } from "@/context/language"
 import type { PanelVerdict } from "./panel-goal.api"
 
@@ -21,6 +23,28 @@ export function PanelVerdictDialog(props: { verdict: PanelVerdict }) {
   return (
     <Dialog size="large" variant="settings" title={language.t("composer.panel.verdict.title")}>
       <div class="flex flex-col gap-4 p-1" data-component="panel-verdict">
+        <p class="text-12-regular text-text-weak">{language.t("composer.panel.history")}</p>
+        <Button
+          variant="ghost"
+          size="small"
+          onClick={() => {
+            if (!navigator.clipboard?.writeText) {
+              showToast({ title: language.t("composer.panel.copyUnavailable"), variant: "error" })
+              return
+            }
+            void navigator.clipboard
+              .writeText(JSON.stringify(v(), null, 2))
+              .catch((error: unknown) =>
+                showToast({
+                  title: language.t("common.requestFailed"),
+                  description: error instanceof Error ? error.message : "",
+                  variant: "error",
+                }),
+              )
+          }}
+        >
+          {language.t("composer.panel.copyHistory")}
+        </Button>
         <div class="flex items-center gap-2">
           <span class="text-15-medium text-text-base">{language.t(DECISION_LABEL_KEY[v().decision] as never)}</span>
           <span class="text-13-regular text-text-weak">
@@ -35,9 +59,7 @@ export function PanelVerdictDialog(props: { verdict: PanelVerdict }) {
           <div class="flex flex-col gap-1">
             <span class="text-13-medium text-text-base">{language.t("composer.panel.verdict.evidence")}</span>
             <ul class="flex flex-col gap-1">
-              <For each={v().evidence}>
-                {(e) => <li class="text-13-regular text-text-weak">{e}</li>}
-              </For>
+              <For each={v().evidence}>{(e) => <li class="text-13-regular text-text-weak">{e}</li>}</For>
             </ul>
           </div>
         </Show>
@@ -55,7 +77,11 @@ export function PanelVerdictDialog(props: { verdict: PanelVerdict }) {
                     {(f) => (
                       <div class="text-12-regular text-text-weak">
                         <span class="text-text-base">{f.summary}</span>
-                        <Show when={f.file}> — {f.file}{f.line != null ? `:${f.line}` : ""}</Show>
+                        <Show when={f.file}>
+                          {" "}
+                          — {f.file}
+                          {f.line != null ? `:${f.line}` : ""}
+                        </Show>
                         <div class="italic">{f.failureScenario}</div>
                       </div>
                     )}

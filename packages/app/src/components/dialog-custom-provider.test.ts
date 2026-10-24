@@ -393,6 +393,43 @@ describe("formStateFromProvider", () => {
 })
 
 describe("deriveProviderIdentity", () => {
+  test("keeps complete IP and localhost endpoint identities distinct by port without copying URL credentials", () => {
+    const derive = (baseURL: string) => deriveProviderIdentity({ baseURL, existingProviderIDs: new Set() })
+    expect(derive("http://127.0.0.1:61403/v1")).toEqual({ providerID: "127-0-0-1-61403", name: "127.0.0.1:61403" })
+    expect(derive("http://127.0.0.1:61404/v1").providerID).toBe("127-0-0-1-61404")
+    expect(derive("http://localhost:11434/v1")).toEqual({ providerID: "localhost-11434", name: "localhost:11434" })
+    expect(derive("http://api.localhost:8080/v1")).toEqual({
+      providerID: "api-localhost-8080",
+      name: "api.localhost:8080",
+    })
+    expect(derive("http://[::1]:61403/v1")).toEqual({ providerID: "ipv6-__1-61403", name: "[::1]:61403" })
+    expect(derive("http://[1::]:61403/v1").providerID).toBe("ipv6-1__-61403")
+    expect(derive("http://user:test-secret@127.0.0.1:61403/v1?api_key=hidden")).toEqual(
+      derive("http://127.0.0.1:61403/v1"),
+    )
+    expect(derive("http://localhost/v1")).toEqual({ providerID: "localhost-80", name: "localhost:80" })
+    expect(derive("https://localhost/v1")).toEqual({ providerID: "localhost-443", name: "localhost:443" })
+  })
+
+  test("preserves normal domain names and the existing collision policy for local endpoints", () => {
+    expect(
+      deriveProviderIdentity({ baseURL: "https://api.moonshot.cn:8443/v1", existingProviderIDs: new Set() }),
+    ).toEqual({ providerID: "moonshot", name: "Moonshot" })
+    expect(
+      deriveProviderIdentity({
+        baseURL: "http://127.0.0.1:61403/v1",
+        existingProviderIDs: new Set(["127-0-0-1-61403"]),
+      }),
+    ).toEqual({ providerID: "127-0-0-1-61403-2", name: "127.0.0.1:61403" })
+    expect(
+      deriveProviderIdentity({
+        baseURL: "http://localhost:11434/v1",
+        existingProviderIDs: new Set(["localhost-11434"]),
+        disabledProviders: ["localhost-11434"],
+      }),
+    ).toEqual({ providerID: "localhost-11434", name: "localhost:11434" })
+  })
+
   test("strips generic service labels and uses the brand label", () => {
     expect(deriveProviderIdentity({ baseURL: "https://api.moonshot.cn/v1", existingProviderIDs: new Set() })).toEqual({
       providerID: "moonshot",

@@ -112,6 +112,11 @@ export const make = Effect.fn("NativeWindowsWorkFactory.make")(function* () {
           (event.value.kind !== "exit" && event.value.exit_code !== null)) throw unavailable()
         return { kind: event.value.kind, bytes: value.bytes, exitCode: event.value.exit_code }
       },
+      retainBrowserCustody() {
+        requireLive()
+        if (!port.retainBrowserCustody) throw unavailable()
+        port.retainBrowserCustody(original, child.lease)
+      },
       stop() { if (state.active) port.stop(original,child.lease) },
       close() {
         if (!state.active) return true

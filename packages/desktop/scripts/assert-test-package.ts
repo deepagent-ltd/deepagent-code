@@ -48,6 +48,10 @@ export async function inspectTestInstallers(input: { directory: string; target: 
 if (import.meta.main) {
   const target = process.env.DAC_TEST_PACKAGE_TARGET
   if (!target) throw new Error("DAC_TEST_PACKAGE_TARGET is required")
+  const version = (await Bun.file(new URL("../package.json", import.meta.url)).json()).version
+  const runtimeVersion = process.env.DEEPAGENT_CODE_VERSION
+  if (typeof version !== "string" || runtimeVersion?.match(/^0\.0\.0-dev\.([0-9]+\.[0-9]+\.[0-9]+)\.[0-9]+\.[0-9]+$/)?.[1] !== version)
+    throw new Error("Test runtime version must identify the source package")
   const files = await inspectTestInstallers({ directory: path.resolve("dist"), target })
-  await Bun.write("dist/test-package-checksums.json", JSON.stringify({ version: "2.0.4", runtimeVersion: process.env.DEEPAGENT_CODE_VERSION ?? null, target, files }, null, 2) + "\n")
+  await Bun.write("dist/test-package-checksums.json", JSON.stringify({ version, runtimeVersion, target, files }, null, 2) + "\n")
 }

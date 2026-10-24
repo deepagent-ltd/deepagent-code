@@ -38,6 +38,11 @@ export async function toggleMcp(input: {
     disabled: input.connect,
     failed: input.connect,
     needs_client_registration: input.connect,
-  }[input.status.status]()
+  }
+    [input.status.status]()
+    .catch(async (error: unknown) => {
+      await input.refresh().catch(() => {})
+      throw error
+    })
   await input.refresh()
 }

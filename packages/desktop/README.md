@@ -2,7 +2,7 @@
 
 The Electron desktop application for DeepAgent Code. It combines the shared [GUI renderer](../app/README.md) with a local [agent server](../deepagent-code/README.md), project tools, terminals, and an integrated browser.
 
-The current source release line and package version are **2.0.4**. The build pipeline pins the actual package version and channel. See the [repository README](../../README.md) for product features and downloads.
+The current source release line and package version are **2.0.5**. The build pipeline pins the actual package version and channel. See the [repository README](../../README.md) for product features and downloads.
 
 ## Package responsibilities
 
@@ -42,6 +42,8 @@ bun run package:mac
 Installer output goes to `dist/`. These commands require the appropriate native build tools and packaging configuration. macOS packaging requires signing configuration by default; `DEEPAGENT_CODE_ALLOW_UNSIGNED=1` explicitly selects an unsigned test candidate. It does not bypass Native asset validation.
 
 For a complete macOS Native package, `bun run package:complete:mac` carries one configured Native publisher through preparation, compilation, and packaging on the target architecture's native host. It requires a matching Native publisher key and public pin, a release identity, and the selected asset signing identity.
+
+Release builds also require the same version's release-owner authorization and public verification key throughout the CLI and Desktop build and packaging steps. A standalone release-mode `desktop-build` reuses this pair from the corresponding successful `publish` run through `owner_issuance_run_id`.
 
 The `publish` and `desktop-build` GitHub Actions workflows share the [desktop packaging action](../../.github/actions/package-desktop/action.yml). It sets the build identity, prepares the Native publisher, builds and packages, verifies the packaged Native assets, and cleans up the temporary publisher. Use this workflow for release packages rather than treating a successful JavaScript bundle as a completed installer.
 

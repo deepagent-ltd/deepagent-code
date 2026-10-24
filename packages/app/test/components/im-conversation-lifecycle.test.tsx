@@ -231,3 +231,16 @@ it("keeps a returning conversation pending and lets its late acknowledgment sett
   expect(document.activeElement).toBe(input)
   expect(screen.queryByText("a's acknowledgment")).toBeNull()
 })
+
+it("uses an explicit parent refresh increment without firing on mount or duplicating the owned header action", async () => {
+  const [request, setRequest] = createSignal(7)
+  render(() => <GroupChatPanel groupID="a" headerOwned refreshRequest={request()} />)
+  await screen.findByRole("textbox")
+  expect(client.listMessages).toHaveBeenCalledTimes(1)
+  expect(screen.queryByRole("button", { name: dict["im.transport.refresh"] })).toBeNull()
+  setRequest(8)
+  await waitFor(() => expect(client.listMessages).toHaveBeenCalledTimes(2))
+  setRequest(8)
+  await Promise.resolve()
+  expect(client.listMessages).toHaveBeenCalledTimes(2)
+})

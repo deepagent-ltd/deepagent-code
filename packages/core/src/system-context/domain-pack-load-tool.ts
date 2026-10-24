@@ -1,6 +1,6 @@
 export * as DomainPackLoadTool from "./domain-pack-load-tool"
 
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { ToolFailure } from "@deepagent-code/llm"
 import { and, count, eq, sql } from "drizzle-orm"
 import { Database } from "../database/database"
@@ -8,6 +8,7 @@ import { EventV2 } from "../event"
 import { EventTable } from "../event/sql"
 import { SessionToolQuota } from "../session/tool-quota.schema"
 import { SessionTable } from "../session/sql"
+import { AgentGateway } from "../agent-gateway"
 import { Tool } from "../tool/tool"
 import { Tools } from "../tool/tools"
 import { Token } from "../util/token"
@@ -259,6 +260,13 @@ function cardLine(output: DomainPackLoadOutput): string {
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
-    yield* tools.register({ [name]: makeDomainPackLoadTool() }).pipe(Effect.orDie)
+    const gateway = yield* Effect.serviceOption(AgentGateway.Runtime)
+    yield* tools
+      .register({
+        [name]: makeDomainPackLoadTool({
+          store: () => (Option.isSome(gateway) ? gateway.value.withStorage(productionStoreResolver) : null),
+        }),
+      })
+      .pipe(Effect.orDie)
   }),
 )

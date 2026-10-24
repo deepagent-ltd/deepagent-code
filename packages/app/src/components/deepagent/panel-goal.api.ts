@@ -109,7 +109,14 @@ export const armPanel = async (
     body: { sessionID, armed, ...(rounds ? { rounds } : {}) },
     headers: JSON_HEADERS,
   })
-  return { armed: response.data?.armed ?? armed, rounds: response.data?.rounds ?? rounds ?? "single" }
+  if (
+    response.error ||
+    response.data?.sessionID !== sessionID ||
+    response.data.armed !== armed ||
+    !["single", "multi"].includes(response.data.rounds)
+  )
+    throw new Error("Panel control was not confirmed")
+  return { armed: response.data.armed, rounds: response.data.rounds }
 }
 
 /**

@@ -1,6 +1,6 @@
 //! Child Externals are tied to the exact original capture and Work factory.
 //! Retired roots may only observe, stop or close their already-owned children.
-use super::{napi, work_bridge::{self,Api},work_process::{Child,Observation}};
+use super::{napi, work_bridge::{self,Api},work_process::{Child,Observation,PipeBytes}};
 use std::{collections::HashMap,ffi::c_void,io,ptr,sync::{Mutex,OnceLock}};
 type Env=*mut c_void;
 type Value=*mut c_void;
@@ -15,7 +15,7 @@ pub(super) fn register(env:Env,exports:Value)->io::Result<()>{
     all.insert(env as usize,State{entries:HashMap::new(),blocked:std::collections::HashSet::new(),pending:0});drop(all);
     if unsafe{(api.cleanup)(env,cleanup,env)}!=0{return Err(io::ErrorKind::Unsupported.into());}
     for(name,callback)in[(c"launchWorkHelper",launch as Callback),(c"writeWorkChild",write as Callback),(c"endWorkChild",end as Callback),
-        (c"readWorkChild",read as Callback),(c"stopWorkChild",stop as Callback),(c"closeWorkChild",close as Callback)]{
+        (c"retainBrowserWorkChild",retain_browser as Callback),(c"readWorkChild",read as Callback),(c"stopWorkChild",stop as Callback),(c"closeWorkChild",close as Callback)]{
         let mut value=ptr::null_mut();
         if unsafe{(api.create_function)(env,name.as_ptr(),name.to_bytes().len(),callback,ptr::null_mut(),&mut value)}!=0||
             unsafe{(api.set_property)(env,exports,name.as_ptr(),value)}!=0{return Err(io::ErrorKind::Unsupported.into());}
@@ -64,9 +64,12 @@ unsafe extern "C" fn write(env:Env,info:*mut c_void)->Value{
     let result=(||->io::Result<Value>{
         let args=args(&api,env,info,4)?;let mut data=ptr::null_mut();let mut size=0;
         if unsafe{(api.buffer_info)(env,args[3],&mut data,&mut size)}!=0||size>1_048_580||(size!=0&&data.is_null()){return Err(io::ErrorKind::InvalidData.into());}
-        let bytes=if size==0{Vec::new()}else{unsafe{std::slice::from_raw_parts(data.cast::<u8>(),size)}.to_vec()};
-        with_child(&api,env,&args,true,|child|child.write(bytes))?;undefined(&api,env)
+        let mut bytes=PipeBytes(if size==0{Vec::new()}else{unsafe{std::slice::from_raw_parts(data.cast::<u8>(),size)}.to_vec()});
+        with_child(&api,env,&args,true,|child|child.write(std::mem::take(&mut bytes.0)))?;undefined(&api,env)
     })();result.unwrap_or_else(|error|failure(&api,env,"write-child",error))
+}
+unsafe extern "C" fn retain_browser(env:Env,info:*mut c_void)->Value {
+    action(env,info,true,"retain-browser-custody",Child::retain_browser_custody)
 }
 unsafe extern "C" fn end(env:Env,info:*mut c_void)->Value{action(env,info,true,"end-child",Child::end)}
 unsafe extern "C" fn stop(env:Env,info:*mut c_void)->Value{action(env,info,false,"stop-child",Child::stop)}
@@ -79,10 +82,19 @@ unsafe extern "C" fn read(env:Env,info:*mut c_void)->Value{
     let Ok(api)=Api::load()else{return ptr::null_mut();};
     let result=(||->io::Result<Value>{
         let args=args(&api,env,info,3)?;let Observation{kind,bytes,exit_code}=with_child(&api,env,&args,false,Child::read)?;
-        let text=serde_json::to_string(&serde_json::json!({"version":1,"kind":kind,"exit_code":exit_code,"payload_bytes":bytes.len()}))?;
+        let bytes=PipeBytes(bytes);
+        let text=serde_json::to_string(&serde_json::json!({"version":1,"kind":kind,"exit_code":exit_code,"payload_bytes":bytes.0.len()}))?;
         let metadata=api.text(env,&text)?;let mut payload=ptr::null_mut();let mut object=ptr::null_mut();
-        if unsafe{(api.create_object)(env,&mut object)}!=0||unsafe{(api.buffer_copy)(env,bytes.len(),bytes.as_ptr().cast(),ptr::null_mut(),&mut payload)}!=0||
+        if unsafe{(api.create_object)(env,&mut object)}!=0||unsafe{(api.buffer_copy)(env,bytes.0.len(),bytes.0.as_ptr().cast(),ptr::null_mut(),&mut payload)}!=0||
             unsafe{(api.set_property)(env,object,c"metadata".as_ptr(),metadata)}!=0||unsafe{(api.set_property)(env,object,c"bytes".as_ptr(),payload)}!=0{
+            // A failed property assignment may already have created the JS copy.
+            if !payload.is_null() {
+                let mut data=ptr::null_mut();let mut size=0;
+                if unsafe{(api.buffer_info)(env,payload,&mut data,&mut size)}==0&&!data.is_null()&&size<=65_536{
+                    for offset in 0..size{unsafe{ptr::write_volatile(data.cast::<u8>().add(offset),0);}}
+                    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+                }
+            }
             return Err(io::ErrorKind::Unsupported.into());
         }Ok(object)
     })();result.unwrap_or_else(|error|failure(&api,env,"read-child",error))
@@ -102,7 +114,12 @@ pub(super) fn factory_can_close(env:Env,factory:usize)->io::Result<bool>{
     let mut all=states().lock().map_err(|_|io::ErrorKind::Other)?;
     let Some(state)=all.get_mut(&(env as usize))else{return Ok(true);};
     if state.blocked.contains(&factory){return Ok(false);}
-    for entry in state.entries.values_mut().filter(|entry|entry.factory==factory){entry.child.stop()?;if !entry.child.close()?{return Ok(false);}}
+    for entry in state.entries.values_mut().filter(|entry|entry.factory==factory){
+        // Browser custody may only leave through the original helper's known
+        // cleanup and normal exit. Root retirement is not a release permit.
+        if entry.child.browser_custody() { if !entry.child.close()? { return Ok(false); } continue; }
+        entry.child.stop()?;if !entry.child.close()?{return Ok(false);}
+    }
     Ok(true)
 }
 fn undefined(api:&Api,env:Env)->io::Result<Value>{let mut value=ptr::null_mut();if unsafe{(api.undefined)(env,&mut value)}!=0{return Err(io::ErrorKind::Unsupported.into());}Ok(value)}

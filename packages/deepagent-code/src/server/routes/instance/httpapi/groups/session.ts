@@ -10,6 +10,8 @@ import { SessionCommandV2 } from "@/session/command-v2"
 import { SessionRevert } from "@/session/revert"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
+import { TaskSummarySchema } from "@deepagent-code/core/session/task-summary.schema"
+import { SessionContextUsageSchema } from "@deepagent-code/core/session/context-usage.schema"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Snapshot } from "@/snapshot"
@@ -441,7 +443,9 @@ export const ExportBundlePayload = Schema.Struct({
   redact: Schema.optional(Schema.Boolean),
 })
 export const ImportBundlePayload = Schema.Struct({ bundle: Schema.String })
-export const ShareBundlePayload = Schema.Struct({ tier: Schema.Literals(["conversation", "conversation_metadata", "session_logs"]) })
+export const ShareBundlePayload = Schema.Struct({
+  tier: Schema.Literals(["conversation", "conversation_metadata", "session_logs"]),
+})
 export const ImportBundleSharePayload = Schema.Struct({ url: Schema.String })
 export const RevokeBundleSharePayload = Schema.Struct({ url: Schema.String, revokeToken: Schema.String })
 export const ImportSnapshotResult = Schema.Struct({
@@ -455,6 +459,8 @@ export const SessionPaths = {
   status: `${root}/status`,
   get: `${root}/:sessionID`,
   children: `${root}/:sessionID/children`,
+  taskSummary: `${root}/:sessionID/task-summary`,
+  contextUsage: `${root}/:sessionID/context-usage`,
   todo: `${root}/:sessionID/todo`,
   plan: `${root}/:sessionID/plan`,
   diff: `${root}/:sessionID/diff`,
@@ -547,6 +553,36 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.children",
             summary: "Get session children",
             description: "Retrieve all child sessions that were forked from the specified parent session.",
+          }),
+        ),
+        HttpApiEndpoint.get("taskSummary", SessionPaths.taskSummary, {
+          params: { sessionID: SessionID },
+          query: Schema.Struct({
+            ...WorkspaceRoutingQueryFields,
+            cursor: Schema.optional(Schema.String.check(Schema.isMaxLength(128))),
+          }),
+          success: described(TaskSummarySchema.Summary, "Direct child task summary"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.taskSummary",
+            summary: "Get direct child task facts",
+            description:
+              "Read latest task generations, visible progress, results and notification facts within the routed parent Session. This endpoint never executes or controls a task.",
+          }),
+        ),
+        HttpApiEndpoint.post("contextUsage", SessionPaths.contextUsage, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: SessionContextUsageSchema.Query,
+          success: described(SessionContextUsageSchema.Summary, "Read-only context preview and durable usage"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.contextUsage",
+            summary: "Observe context and recorded usage",
+            description:
+              "Read the current Session's context estimate and durable usage. POST keeps draft text out of URLs; no input admission, execution, provider or MCP request occurs.",
           }),
         ),
         HttpApiEndpoint.get("todo", SessionPaths.todo, {
@@ -920,7 +956,8 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "session.deleteMessage",
             summary: "Delete message",
-            description: "Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.",
+            description:
+              "Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.",
             deprecated: true,
           }),
         ),
@@ -932,7 +969,8 @@ export const SessionApi = HttpApi.make("session")
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "part.delete",
-            description: "Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.",
+            description:
+              "Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.",
             deprecated: true,
           }),
         ),
@@ -945,7 +983,8 @@ export const SessionApi = HttpApi.make("session")
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "part.update",
-            description: "Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.",
+            description:
+              "Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.",
             deprecated: true,
           }),
         ),
@@ -1092,7 +1131,10 @@ export const SessionApi = HttpApi.make("session")
           success: Schema.Struct({ bundle: Schema.String, archive: Schema.Literal("zip") }),
           error: [HttpApiError.BadRequest, ApiNotFoundError],
         }).annotateMerge(
-          OpenApi.annotations({ identifier: "session.exportBundle", summary: "Export a verified read-only session ZIP" }),
+          OpenApi.annotations({
+            identifier: "session.exportBundle",
+            summary: "Export a verified read-only session ZIP",
+          }),
         ),
         HttpApiEndpoint.post("exportBundleStream", SessionPaths.exportBundleStream, {
           params: { sessionID: SessionID },
@@ -1100,29 +1142,46 @@ export const SessionApi = HttpApi.make("session")
           success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
           error: [HttpApiError.BadRequest, ApiNotFoundError],
         }).annotateMerge(
-          OpenApi.annotations({ identifier: "session.exportBundleStream", summary: "Stream ZIP export progress and result" }),
+          OpenApi.annotations({
+            identifier: "session.exportBundleStream",
+            summary: "Stream ZIP export progress and result",
+          }),
         ),
         HttpApiEndpoint.post("importBundle", SessionPaths.importBundle, {
           payload: ImportBundlePayload,
           success: ImportSnapshotResult,
           error: [HttpApiError.BadRequest],
         }).annotateMerge(
-          OpenApi.annotations({ identifier: "session.importBundle", summary: "Import a verified read-only session ZIP" }),
+          OpenApi.annotations({
+            identifier: "session.importBundle",
+            summary: "Import a verified read-only session ZIP",
+          }),
         ),
         HttpApiEndpoint.post("shareBundle", SessionPaths.shareBundle, {
           params: { sessionID: SessionID },
           payload: ShareBundlePayload,
-          success: Schema.Struct({ id: Schema.String, url: Schema.String, revokeToken: Schema.String, expiresAt: Schema.Number }),
+          success: Schema.Struct({
+            id: Schema.String,
+            url: Schema.String,
+            revokeToken: Schema.String,
+            expiresAt: Schema.Number,
+          }),
           error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
-          OpenApi.annotations({ identifier: "session.shareBundle", summary: "Upload a redacted session ZIP to the configured share host" }),
+          OpenApi.annotations({
+            identifier: "session.shareBundle",
+            summary: "Upload a redacted session ZIP to the configured share host",
+          }),
         ),
         HttpApiEndpoint.post("importBundleShare", SessionPaths.importBundleShare, {
           payload: ImportBundleSharePayload,
           success: ImportSnapshotResult,
           error: [HttpApiError.BadRequest, ServiceUnavailableError],
         }).annotateMerge(
-          OpenApi.annotations({ identifier: "session.importBundleShare", summary: "Import a verified ZIP from a share link" }),
+          OpenApi.annotations({
+            identifier: "session.importBundleShare",
+            summary: "Import a verified ZIP from a share link",
+          }),
         ),
         HttpApiEndpoint.post("revokeBundleShare", SessionPaths.revokeBundleShare, {
           payload: RevokeBundleSharePayload,

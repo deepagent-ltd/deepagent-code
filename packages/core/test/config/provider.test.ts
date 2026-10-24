@@ -18,6 +18,89 @@ function request(headers: Record<string, string>, variant?: string) {
 const decode = Schema.decodeUnknownSync(Config.Info)
 
 describe("ConfigProviderPlugin.Plugin", () => {
+  it.effect("applies model selections without changing credential provenance and resolves fresh remote IDs", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const sources = [
+        { id: "selected-env", enabled: { via: "env", name: "FIXTURE_KEY" } },
+        { id: "selected-account", enabled: { via: "account", service: "fixture-account" } },
+        { id: "selected-custom", enabled: { via: "custom", data: { fixture: "retained" } } },
+      ] as const
+      const transform = yield* catalog.transform()
+      yield* transform((editor) => {
+        for (const item of sources) {
+          const id = ProviderV2.ID.make(item.id)
+          editor.provider.update(id, (provider) => {
+            provider.name = item.id
+            provider.env = ["FIXTURE_KEY"]
+            provider.enabled = item.enabled
+            provider.api = { type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://fixture.invalid/v1" }
+            provider.request.headers = { "x-fixture": "retained" }
+          })
+          editor.model.update(id, ModelV2.ID.make("existing"), () => {})
+        }
+      })
+      for (const disabled of [true, false]) {
+        yield* ConfigProviderPlugin.Plugin.effect.pipe(
+          Effect.provideService(
+            Config.Service,
+            Config.Service.of({
+              entries: () =>
+                Effect.succeed([
+                  new Config.Document({
+                    type: "document",
+                    info: decode({
+                      providers: {
+                        ...Object.fromEntries(
+                          sources.map((item) => [
+                            item.id,
+                            {
+                              models: {
+                                existing: { disabled },
+                                "remote-only": { disabled: false },
+                                "manual-plan-id": { disabled: false },
+                              },
+                            },
+                          ]),
+                        ),
+                        "selected-unknown": { models: { "remote-only": { disabled: false } } },
+                      },
+                    }),
+                  }),
+                ]),
+            }),
+          ),
+        )
+        for (const item of sources) {
+          const id = ProviderV2.ID.make(item.id)
+          const provider = yield* catalog.provider.get(id)
+          expect(provider.enabled).toEqual(item.enabled)
+          expect(provider.origin).toBeUndefined()
+          expect(provider.env).toEqual(["FIXTURE_KEY"])
+          expect(provider.request.headers).toEqual({ "x-fixture": "retained" })
+          expect((yield* catalog.model.get(id, ModelV2.ID.make("existing"))).enabled).toBe(!disabled)
+          for (const freshID of ["remote-only", "manual-plan-id"]) {
+            const fresh = yield* catalog.model.get(id, ModelV2.ID.make(freshID))
+            expect(fresh.enabled).toBe(true)
+            expect(fresh.api).toEqual({
+              id: ModelV2.ID.make(freshID),
+              type: "aisdk",
+              package: "@ai-sdk/openai-compatible",
+              url: "https://fixture.invalid/v1",
+            })
+            expect(fresh.request.headers).toEqual({ "x-fixture": "retained" })
+            expect(fresh.limit).toEqual({})
+            expect(fresh.cost).toEqual([])
+          }
+        }
+        const unknown = yield* catalog.provider.get(ProviderV2.ID.make("selected-unknown"))
+        expect(unknown.enabled).toBe(false)
+        expect(unknown.origin).toBeUndefined()
+        expect((yield* catalog.model.available()).some((model) => model.providerID === unknown.id)).toBe(false)
+      }
+    }),
+  )
+
   it.effect("partitions existing model variant bodies without changing config shape", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service

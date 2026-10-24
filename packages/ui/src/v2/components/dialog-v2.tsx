@@ -1,6 +1,7 @@
 import { Dialog as Kobalte } from "@kobalte/core/dialog"
 import { type ComponentProps, type JSXElement, type ParentProps, Show, children, splitProps } from "solid-js"
 import "./dialog-v2.css"
+import { useDialogFocusReturn } from "../../context/dialog"
 
 export interface DialogProps extends ParentProps {
   title?: JSXElement
@@ -18,6 +19,7 @@ export function DialogFooter(props: ParentProps) {
 }
 
 export function Dialog(props: DialogProps) {
+  const returnFocus = useDialogFocusReturn()
   const [local] = splitProps(props, [
     "title",
     "description",
@@ -46,6 +48,7 @@ export function Dialog(props: DialogProps) {
     >
       <div data-slot="dialog-container">
         <Kobalte.Content
+          onCloseAutoFocus={returnFocus}
           data-slot="dialog-content"
           data-no-header={!hasHeader() ? "" : undefined}
           classList={{

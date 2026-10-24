@@ -184,12 +184,26 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         return session
     }
 
+    const effectiveAgent = () => {
+      const sessionID = id()
+      if (!sessionID) return
+      const session = sync.session.get(sessionID)
+      if (session?.directory !== sdk.directory) return
+      const messages = sync.data.message?.[sessionID]
+      return messages?.findLast((message) => message.role === "user")?.agent ?? session.agent
+    }
     const agent = {
       list,
+      effective() {
+        return sync.data.agent.find((agent) => agent.name === effectiveAgent())
+      },
       current() {
         const session = controlledSession()
-        if (session) return session.agent ? pickAgent(session.agent) : undefined
-        return pickAgent(scope()?.agent ?? store.current ?? configuredCollaborationMode(sync.data.config.default_agent))
+        if (session) return sync.data.agent.find((agent) => agent.name === session.agent)
+        return pickAgent(
+          scope()?.agent ??
+            (id() ? (effectiveAgent() ?? "auto") : configuredCollaborationMode(sync.data.config.default_agent)),
+        )
       },
       set(name: string | undefined) {
         const item = pickAgent(name)
@@ -238,7 +252,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
     const current = () => {
       const session = controlledSession()
-      if (session) return session.model ? models.find({ providerID: session.model.providerID, modelID: session.model.id }) : undefined
+      if (session)
+        return session.model
+          ? models.find({ providerID: session.model.providerID, modelID: session.model.id })
+          : undefined
       const item = firstModel(
         () => scope()?.model,
         () => {
@@ -263,7 +280,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       })
     }
 
-    const selected = () => controlledSession() ? undefined : scope()?.variant
+    const selected = () => (controlledSession() ? undefined : scope()?.variant)
 
     const snapshot = () => {
       const model = current()

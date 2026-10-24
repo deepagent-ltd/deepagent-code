@@ -246,7 +246,7 @@ export const begin = (
           .get<{
             records: number
             bytes: number
-          }>(sql`SELECT count(*) AS records,coalesce(sum(reserved_bytes),0) AS bytes FROM goal_tick_checkpoint`)
+          }>(sql`SELECT count(*) AS records,coalesce(sum(reserved_bytes),0) AS bytes FROM (SELECT reserved_bytes FROM goal_tick_checkpoint UNION ALL SELECT reserved_bytes FROM goal_pause_boundary)`)
           .pipe(Effect.orDie)
         if (
           !capacity ||
@@ -314,6 +314,12 @@ export const requireParentFacts = (db: Reader, row: ParentFactsRow) =>
   Effect.gen(function* () {
     if (!["prepared", "running", "mirror_pending"].includes(row.state))
       return yield* fail("CHECKPOINT_RECOVERY_REQUIRED", "Checkpoint no longer permits execution")
+    return yield* requireParentSourceFacts(db, row)
+  })
+
+/** Historical source inspection only. It grants no permit, live policy, or execution authority. */
+export const requireParentSourceFacts = (db: Reader, row: ParentFactsRow) =>
+  Effect.gen(function* () {
     const parent = yield* GoalControl.session(db, row.journal.parent.sessionID)
     if (GoalControl.fingerprint(authority(parent)) !== row.journal.parent.authorityHash)
       return yield* fail("PARENT_AUTHORITY_CHANGED", "Parent authority differs from the frozen tick")
@@ -689,7 +695,7 @@ export const recordResult = (db: Db, proof: GoalChildResult.Proof) =>
         )
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
 
 /** Prepares exact projection bytes only after all real role results have been recorded. */
 export const prepareMirrors = (
@@ -748,7 +754,7 @@ export const prepareMirrors = (
         )
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
 
 /** Existing run-document body projection. The host supplies its trusted DocumentStore root.
  * SQL is deliberately not claimed to roll back an exclusive file write. A retry checks the exact
@@ -823,7 +829,7 @@ export const projectMirror = (db: Db, input: { permitID: string; documentID: str
         )
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
 
 /** Caller-supplied cursor values must exactly match the already prepared next-state object. */
 export const settle = (db: Db, input: { permitID: string; revision: number }) =>
@@ -886,4 +892,4 @@ export const settle = (db: Db, input: { permitID: string; revision: number }) =>
         return yield* write(tx, row, row.journal, "committed")
       }),
     { behavior: "immediate" },
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))

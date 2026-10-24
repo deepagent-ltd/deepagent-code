@@ -22,6 +22,7 @@ import {
   MIN_TERMINAL_PANE_WIDTH,
 } from "@/context/terminal"
 import { focusTerminalById } from "@/pages/session/helpers"
+import { terminalAutoFocusRequest } from "@/utils/terminal-autofocus"
 
 // ─── Debug console (shared: bottom dock + side panel) ───────────────────────────
 
@@ -432,16 +433,20 @@ export function useTerminalLifecycle(opts: {
   })
 
   const focus = (id: string) => {
+    const allowed = terminalAutoFocusRequest(opts.rootEl)
+    if (!allowed()) return () => {}
     focusTerminalById(id)
     const frame = requestAnimationFrame(() => {
       if (!opts.active()) return
       if (terminal.active() !== id) return
+      if (!allowed()) return
       focusTerminalById(id)
     })
     const timers = [120, 240].map((ms) =>
       window.setTimeout(() => {
         if (!opts.active()) return
         if (terminal.active() !== id) return
+        if (!allowed()) return
         focusTerminalById(id)
       }, ms),
     )

@@ -92,28 +92,20 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
 
     const latestSet = createMemo(() => new Set(latest().map((x) => modelKey(x))))
 
-    // PARITY-004 / GUI 批 — 模型启停服务端真相源:可见性(启/停)的权威来源是服务端 config
-    // `provider[pID].models[mID].disabled`(plugin/provider.ts 已映射 model.enabled=!disabled)。
-    // localStorage(store.user)仅作迁移来源与乐观缓存,不再是真相。
+    // Native V2 config is shared by the settings facade and the runtime plugin.
+    // Legacy `provider.models.disabled` was discarded by the compatibility loader.
     const serverDisabled = (model: ModelKey): boolean | undefined => {
-      const provider = serverSync.data.config.provider?.[model.providerID]
+      const provider = serverSync.data.config.providers?.[model.providerID]
       const disabled = provider?.models?.[model.modelID]?.disabled
       return typeof disabled === "boolean" ? disabled : undefined
     }
 
     const setServerDisabled = async (model: ModelKey, disabled: boolean) => {
-      const config = serverSync.data.config
-      const provider = config.provider?.[model.providerID]
-      const current = provider?.models?.[model.modelID]
       await serverSync.updateConfig({
-        ...config,
-        provider: {
-          ...config.provider,
+        providers: {
           [model.providerID]: {
-            ...provider,
             models: {
-              ...provider?.models,
-              [model.modelID]: { ...current, disabled },
+              [model.modelID]: { disabled },
             },
           },
         },
@@ -178,9 +170,10 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
       void (async () => {
         for (const item of pending) {
           if (serverDisabled({ providerID: item.providerID, modelID: item.modelID }) !== undefined) continue
-          await setServerDisabled({ providerID: item.providerID, modelID: item.modelID }, item.visibility === "hide").catch(
-            () => undefined,
-          )
+          await setServerDisabled(
+            { providerID: item.providerID, modelID: item.modelID },
+            item.visibility === "hide",
+          ).catch(() => undefined)
         }
         setStore("user", [])
       })()

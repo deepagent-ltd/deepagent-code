@@ -15,6 +15,7 @@ import { V2ToolEffectAdmissionTable, V2ToolEffectTable } from "./v2-tool-effect.
 import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 import type { V2ProviderTurn } from "./v2-provider-turn"
 import type { V2ToolEffect } from "./v2-tool-effect"
+import { SharedBrowserUserInput } from "../../browser/shared-user-input"
 
 type Db = Pick<Database.Interface["db"], "select">
 type Entry = {
@@ -137,6 +138,17 @@ export const requireCurrent = Effect.fn("CurrentToolExecution.requireCurrent")(f
     scope.sessionID !== context.sessionID || scope.projectID !== location.project.id || scope.directory !== location.directory))
     return yield* denied()
   return entry.admission
+})
+
+/** Derives only from the actual request/selection captured by this canonical tool call. A
+ * caller cannot upgrade an old provider response by supplying a newer message or epoch. */
+export const sharedWitness = Effect.fn("CurrentToolExecution.sharedWitness")(function* (
+  db: Db, context: Tool.Context, location: Location.Interface, input: unknown,
+) {
+  const admission = yield* requireCurrent(db, context, location, input)
+  const witness = yield* SharedBrowserUserInput.witness(db, admission.receiptId)
+  if (!witness || witness.rootSessionID !== context.sessionID) return yield* denied()
+  return witness
 })
 
 /** A file frame can only be captured inside the original canonical settlement scope.

@@ -15,7 +15,7 @@ import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import type { SessionV2 } from "@deepagent-code/core/session"
 import type { Snapshot } from "../snapshot"
 import * as Log from "@deepagent-code/core/util/log"
-import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
+import { EventRouteRef, InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import type { InstanceStore } from "@/project/instance-store"
 import type { Database } from "@deepagent-code/core/database/database"
 import type { EventV2 } from "@deepagent-code/core/event"
@@ -151,6 +151,30 @@ export const makeGoalTickPort =
             completed.journal.nextState,
           )
           const settledControl = yield* GoalControl.requireTarget(deps.db, request.goalId, sessionID)
+          if (completed.state === "committed")
+            yield* makeGoalStatusPublisher({
+              controlDB: deps.db,
+              events: deps.events,
+              sessions: deps.sessions,
+              eventBus: deps.eventBus,
+              approvalQueue: deps.approvalQueue,
+              v4MultiAgentRuntime: deps.flags.v4MultiAgentRuntime,
+              v4GoalTickEventDriven: deps.flags.v4GoalTickEventDriven,
+              goalStoreRoot: deps.goalStoreRoot,
+            })
+              .publishStatus(sessionID, state)
+              .pipe(
+                Effect.provideService(InstanceRef, ctx),
+                Effect.provideService(
+                  WorkspaceRef,
+                  target.workspace_id ? WorkspaceV2.ID.make(target.workspace_id) : undefined,
+                ),
+                Effect.provideService(EventRouteRef, {
+                  ...ctx,
+                  ...(target.workspace_id ? { workspaceID: WorkspaceV2.ID.make(target.workspace_id) } : {}),
+                }),
+                Effect.catchCause(() => Effect.void),
+              )
           return {
             progress: state.phase === "running" && settledControl.requested_phase === "running" && !settledControl.pending_rebase_id ? ("continue" as const) : ("terminal" as const),
             nextSeq: state.ledger.ticks,

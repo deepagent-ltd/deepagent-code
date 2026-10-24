@@ -1,10 +1,17 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test"
-import { writeFile, mkdtemp, rm } from "fs/promises"
+import { writeFile, readFile, mkdtemp, rm, stat } from "fs/promises"
 import { join } from "path"
 import { tmpdir } from "os"
 import { PAP } from "@/profile/pap"
 import { Vocabulary } from "@/profile/vocabulary"
-import { PerfAdapter, perfMapping, parsePerfReport, parsePerfStat, parsePerfMultiSection, installedPerfProbe } from "@/profile/adapters/perf"
+import {
+  PerfAdapter,
+  perfMapping,
+  parsePerfReport,
+  parsePerfStat,
+  parsePerfMultiSection,
+  installedPerfProbe,
+} from "@/profile/adapters/perf"
 
 // Representative perf multi-section fixture.
 // Section perf_report: `perf report --stdio -n` format.
@@ -31,6 +38,108 @@ const PERF_FIXTURE = `=== SECTION: perf_report ===
 
 let tmpDir: string
 let fixturePath: string
+
+describe("real perf report contract", () => {
+  it("probes recording in an isolated directory and runs the target only once after unavailable hardware", async () => {
+    const executable = join(tmpDir, "owned-perf-probe")
+    const calls = join(tmpDir, "owned-perf-calls.jsonl")
+    await writeFile(
+      executable,
+      `#!${process.execPath}
+import { appendFile, writeFile } from "node:fs/promises"
+const args = process.argv.slice(2)
+await appendFile(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n")
+if (args[0] === "stat") {
+  console.error("<not supported> instructions")
+  process.exit(0)
+}
+const output = args[args.indexOf("-o") + 1]
+await writeFile(output, "owned test native report")
+if (args[args.indexOf("-e") + 1] !== "cpu-clock:u") {
+  console.error("The instructions event is not supported.")
+  process.exit(255)
+}
+`,
+      { mode: 0o755 },
+    )
+    const report = await new PerfAdapter({ locate: () => executable }).collect({
+      command: join(tmpDir, "owned-target"),
+    })
+    const recorded = (await readFile(calls, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[])
+    expect(recorded).toHaveLength(2)
+    expect(recorded.every((args) => args[0] === "record")).toBe(true)
+    expect(recorded[0]!.at(-1)).toBe("/usr/bin/true")
+    expect(recorded[1]!.at(-1)).toBe(join(tmpDir, "owned-target"))
+    expect(recorded[1]![recorded[1]!.indexOf("-e") + 1]).toBe("cpu-clock:u")
+    const probe = recorded[0]![recorded[0]!.indexOf("-o") + 1]!
+    expect(probe).not.toBe(report.path)
+    await expect(stat(probe)).rejects.toThrow("ENOENT")
+    await expect(stat(join(probe, ".."))).rejects.toThrow("ENOENT")
+    await rm(report.path)
+  })
+
+  it("keeps self overhead and symbols when perf prints Children and Samples columns", () => {
+    const rows = parsePerfReport(`
+# Children      Self       Samples  Command  Shared Object  Symbol
+    99.98%    23.09%          1392  python3  python3.12     [.] _PyEval_EvalFrameDefault
+    16.71%    16.71%          1007  python3  [vdso]         [.] __vdso_clock_gettime
+`)
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ symbol: "_PyEval_EvalFrameDefault", overheadPct: 23.09 })
+  })
+
+  it("reads only the first event and real srcline without inventing hardware metrics", async () => {
+    const adapter = new PerfAdapter(installedPerfProbe(["perf"]))
+    const filename = join(tmpDir, "software-sample.txt")
+    await writeFile(
+      filename,
+      `=== SECTION: perf_report ===
+# Samples: 6K of event 'cpu-clock:u'
+92.50%\thotloop\thotloop\t[.] busy_kernel\t/owned/hotloop.c:13\t- -
+7.50%\thotloop\t[vdso]\t[.] clock_gettime\tclock_gettime+85\t- -
+# Samples: 2K of event 'instructions:u'
+100.00%\thotloop\thotloop\t[.] other_event\t/owned/hotloop.c:21\t- -
+=== SECTION: perf_stat ===
+# PID TID
+`,
+      "utf8",
+    )
+    const raw = await adapter.parse({ path: filename, format: "text" })
+    const normalized = adapter.normalize(raw)
+    expect(normalized.hotspots).toHaveLength(2)
+    expect(normalized.hotspots[0]).toMatchObject({
+      symbol: "busy_kernel",
+      self_pct: 92.5,
+      file_line: { file: "/owned/hotloop.c", line: 13 },
+    })
+    expect(normalized.hotspots[1].file_line).toBeUndefined()
+    for (const name of [
+      "cpi",
+      "ipc",
+      "clockticks",
+      "instructions_retired",
+      "cache_miss_rate",
+      "branch_misprediction_pct",
+    ]) {
+      expect(normalized.summary[name]).toMatchObject({ value: null, reason: "not_collected" })
+    }
+    expect(normalized.summary.cpi).toMatchObject({ detail: expect.stringContaining("CPU-clock software samples") })
+  })
+
+  it("reads record -s thread counters and refuses an empty sampled report", async () => {
+    const counts = parsePerfStat(`# PID TID cycles:u instructions:u
+100 100 2000 1000
+100 101 4000 2000
+`)
+    expect(counts.get("cycles")).toBe(6000)
+    expect(counts.get("instructions")).toBe(3000)
+    const filename = join(tmpDir, "empty-sample.txt")
+    await writeFile(filename, "=== SECTION: perf_report ===\n# Samples: 0 of event 'cpu-clock:u'\n", "utf8")
+    await expect(
+      new PerfAdapter(installedPerfProbe(["perf"])).parse({ path: filename, format: "text" }),
+    ).rejects.toThrow("no sampled hotspots")
+  })
+})
 
 beforeAll(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), "deepagent-test-perf-"))

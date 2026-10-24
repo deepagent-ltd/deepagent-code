@@ -800,3 +800,22 @@ test("slow authenticated pending inspection starts its local consumption window 
   expect((yield* nameState(s.db)).messages).toHaveLength(0)
   expect(yield* nameState(s.db)).toEqual(before)
 }))))
+
+test("anchorID preserves protected reader output and refuses a stale read cut even for a missing target", () => isolated((filename) => run(filename, Effect.gen(function* () {
+  const s = yield* fixture
+  yield* KernelReader.ensureScope(s.runtime)
+  yield* KernelReader.applyChanges(s.runtime, s.changes)
+  yield* KernelReader.applyMessages(s.runtime, s.messages)
+  yield* KernelReader.checkpoint(s.runtime, [projectionKey], true)
+  const projection = (yield* KernelReader.projections(s.runtime))[0]!
+  const groupID = projection.local_group_id!
+  const row = yield* s.db.get<{ id: string }>(sql`SELECT id FROM im_messages WHERE group_id=${groupID}`)
+  const anchored = yield* s.output(groupID, s.repo.listMessages({ groupID, anchorID: row!.id, limit: 50 }))
+  expect(anchored.messages.map((message) => message.id)).toEqual([row!.id])
+  expect(anchored.reader).toMatchObject({ state: "partial", projectionRevision: s.permission.revision })
+  const absent = yield* s.output(groupID, s.repo.listMessages({ groupID, anchorID: "missing-target", limit: 50 }))
+  expect(absent.messages).toEqual([])
+  expect(absent.reader).toMatchObject({ state: "partial", projectionRevision: s.permission.revision })
+  s.permission.allowed = false
+  expect(yield* s.output(groupID, s.repo.listMessages({ groupID, anchorID: "missing-target", limit: 50 })).pipe(Effect.flip)).toMatchObject({ code: "reader_stale" })
+}))))

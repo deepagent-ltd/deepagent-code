@@ -5,11 +5,11 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{fs::File, io::{self, Read, Seek, SeekFrom}};
 
-pub struct Installed { manifest: LockedPath, description: Description }
+pub struct Installed { manifest: LockedPath, description: Description, encoded: String }
 #[derive(Serialize)]
 struct Observation { identity: String, hash: String, bytes: u64, text: Option<String> }
 #[derive(Serialize)]
-struct Description { version: u8, artifact: Observation, manifest: Observation, runtime: Observation }
+struct Description { version: u8, artifact: Observation, manifest: Observation, runtime: Observation, bootstrap_sha256: String }
 impl Installed {
     pub fn open(original: &FirstLoad, proof: &Evidence) -> io::Result<Self> {
         original.current()?; proof.current()?;
@@ -18,19 +18,22 @@ impl Installed {
         let manifest = LockedPath::open(&directory.join(format!("{}.native-installation.json",proof.artifact_name()?)), false, false)?;
         super::loader::require_trusted(&manifest.file)?;
         let description = Description { version: 1, artifact: observe(proof.node_file()?, 268_435_456, false)?,
-            manifest: observe(&manifest.file, 65_536, true)?, runtime: observe(original.original_host_file()?, 268_435_456, false)? };
-        let installed = Self { manifest, description };
+            manifest: observe(&manifest.file, 65_536, true)?, runtime: observe(original.original_host_file()?, 268_435_456, false)?,
+            bootstrap_sha256: format!("{:x}", Sha256::digest(super::napi::encode_description(original, Some(proof))?.as_bytes())) };
+        let encoded = serde_json::to_string(&description).map_err(io::Error::other)?;
+        // The compact description digest adds less than 256 bytes to the
+        // original <=131072-byte public installation observation.
+        if encoded.len() > 131_328 { return Err(io::ErrorKind::InvalidData.into()); }
+        let installed = Self { manifest, description, encoded };
         installed.current(original, proof)?;
         Ok(installed)
     }
-    pub fn read(&self, original: &FirstLoad, proof: &Evidence) -> io::Result<String> {
+    pub fn read(&self, original: &FirstLoad, proof: &Evidence) -> io::Result<&str> {
+        // Only the immutable description is reused inside this held capture.
+        // No external read or await occurs before N-API copies these bytes;
+        // recheck the complete live graph and all three stamps before returning.
         self.current(original, proof)?;
-        // These bytes were observed while the original capture's handles denied
-        // WRITE/DELETE sharing. Reuse only inside that same live native capture;
-        // every read still verifies its held image graph and all three stamps.
-        let description = serde_json::to_string(&self.description).map_err(io::Error::other)?;
-        self.current(original, proof)?;
-        Ok(description)
+        Ok(&self.encoded)
     }
     fn current(&self, original: &FirstLoad, proof: &Evidence) -> io::Result<()> {
         original.current()?; proof.current()?; self.manifest.current()?;

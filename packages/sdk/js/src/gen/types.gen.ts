@@ -64,11 +64,11 @@ export type Event =
   | EventModelsDevRefreshed
   | EventPluginAdded
   | EventCatalogModelUpdated
+  | EventPermissionV2Asked
+  | EventPermissionV2Replied
   | EventAccountAdded
   | EventAccountRemoved
   | EventAccountSwitched
-  | EventPermissionV2Asked
-  | EventPermissionV2Replied
   | EventFileEdited
   | EventFileWatcherUpdated
   | EventFileWatcherOverflow
@@ -1493,6 +1493,16 @@ export type GlobalEvent = {
           recent: string
           checkpointID?: string
           checkpointHash?: string
+          remote?: {
+            providerID: string
+            modelID: string
+            routeID: string
+            protocol: string
+            endpointHash: string
+            output: Array<{
+              [key: string]: unknown
+            }>
+          }
         }
       }
     | {
@@ -1648,29 +1658,6 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "account.added"
-        properties: {
-          account: AuthInfo
-        }
-      }
-    | {
-        id: string
-        type: "account.removed"
-        properties: {
-          account: AuthInfo
-        }
-      }
-    | {
-        id: string
-        type: "account.switched"
-        properties: {
-          serviceID: string
-          from?: string
-          to?: string
-        }
-      }
-    | {
-        id: string
         type: "permission.v2.asked"
         properties: {
           id: string
@@ -1691,6 +1678,29 @@ export type GlobalEvent = {
           sessionID: string
           requestID: string
           reply: PermissionV2Reply
+        }
+      }
+    | {
+        id: string
+        type: "account.added"
+        properties: {
+          account: AuthInfo
+        }
+      }
+    | {
+        id: string
+        type: "account.removed"
+        properties: {
+          account: AuthInfo
+        }
+      }
+    | {
+        id: string
+        type: "account.switched"
+        properties: {
+          serviceID: string
+          from?: string
+          to?: string
         }
       }
     | {
@@ -2473,7 +2483,6 @@ export type ProviderConfig = {
           [key: string]: unknown
         }
       }
-      disabled?: boolean
     }
   }
   groups?: {
@@ -2559,6 +2568,9 @@ export type AttachmentConfig = {
 }
 
 export type Config = {
+  providers?: {
+    [key: string]: ConfigV2Provider
+  }
   $schema?: string
   shell?: string
   logLevel?: LogLevel
@@ -2683,6 +2695,7 @@ export type Config = {
     max_bytes?: number
   }
   compaction?: {
+    mode?: "adaptive" | "long" | "extreme"
     auto?: boolean
     prune?: boolean
     tail_turns?: number
@@ -2701,6 +2714,15 @@ export type Config = {
       max_fanout?: number
       max_concurrency?: number
     }
+  }
+}
+
+export type ImServiceBusyError = {
+  _tag: "IMServiceBusyError"
+  name: "IM_SERVICE_BUSY"
+  data: {
+    code: "im_service_busy"
+    message: string
   }
 }
 
@@ -4122,6 +4144,7 @@ export type WorktreeDiffResult = {
 
 export type WorktreeBranchSummary = {
   base: string
+  defaultCheckout?: string
   additions: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   deletions: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   files: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -4527,6 +4550,12 @@ export type ImUnsupportedMediaTypeError = {
   }
 }
 
+export type ImServiceStatus = {
+  url: string | null
+  source: "config" | "environment" | "default" | "none"
+  reconnectRequired: boolean
+}
+
 export type ImFacadeForbiddenError = {
   name: "IM_FACADE_FORBIDDEN"
   data: {
@@ -4787,6 +4816,50 @@ export type VcsFileStatus = {
   additions: number
   deletions: number
   status: "added" | "deleted" | "modified"
+}
+
+export type VcsRef = {
+  name: string
+  ref: string
+  oid: string
+  kind: "local" | "remote"
+}
+
+export type VcsRefs = {
+  directory: string
+  repositoryRoot: string
+  observedAt: number
+  items: Array<VcsRef>
+  truncated: boolean
+}
+
+export type VcsReadError = {
+  name: "VcsReadError"
+  data: {
+    reason: "read_failed" | "ref_invalid" | "no_common_ancestor" | "scope_changed"
+  }
+}
+
+export type VcsWorkSummary = {
+  directory: string
+  repositoryRoot: string
+  branch: string
+  headOID: string
+  baseRef: string
+  baseOID: string
+  mergeBaseOID: string
+  startedAt: number
+  observedAt: number
+  state: "ready" | "non_git" | "unborn" | "base_unavailable" | "no_common_ancestor" | "unavailable"
+  coverage: "complete" | "partial"
+  stale: boolean
+  files: number
+  additions: number
+  deletions: number
+  uncommitted: number
+  binary: number
+  conflicts: number
+  lineStatsComplete: boolean
 }
 
 export type VcsFileDiff = {
@@ -5531,6 +5604,70 @@ export type NotFoundError = {
   data: {
     message: string
   }
+}
+
+export type TaskSummaryItem = {
+  childSessionID: string
+  title: string
+  agent: string
+  state:
+    | "admitted"
+    | "provisioning"
+    | "researching"
+    | "finalizing"
+    | "completed"
+    | "error"
+    | "cancelled"
+    | "interrupted"
+    | "queued"
+    | "running"
+    | "failed"
+    | "closed"
+    | "recovery_required"
+    | "unknown"
+  runID: string
+  generation: number
+  controlState: "open" | "close_requested" | "closed"
+  createdAt: number
+  updatedAt: number
+  settledAt: number
+  progress: {
+    messageID: string
+    text: string
+    tool: {
+      name: string
+      status: "pending" | "running" | "completed" | "error"
+    }
+  }
+  result: {
+    state: "available" | "not_available" | "unknown"
+    text: string
+    messageID: string
+    truncated: boolean
+  }
+  notification: {
+    state:
+      | "not_established"
+      | "pending"
+      | "delivering"
+      | "delivered"
+      | "dead"
+      | "admitting"
+      | "admitted"
+      | "processing"
+      | "response_recovery_required"
+      | "unknown"
+    updatedAt: number
+    deliveredAt: number
+  }
+}
+
+export type TaskSummary = {
+  parentSessionID: string
+  observedAt: number
+  items: Array<TaskSummaryItem>
+  hasMore: boolean
+  nextCursor: string
 }
 
 export type Session2 = {
@@ -6803,6 +6940,23 @@ export type ModelV2Info = {
   }
 }
 
+export type PermissionV2Source =
+  | {
+      type: "tool"
+      messageID: string
+      callID: string
+    }
+  | {
+      type: "mcp_app"
+      invocationID: string
+      viewID: string
+      server: string
+      tool: string
+      generation: string
+    }
+
+export type PermissionV2Reply = "once" | "always" | "reject"
+
 export type AuthOAuthCredential = {
   type: "oauth"
   refresh: string
@@ -6826,23 +6980,6 @@ export type AuthInfo = {
   description: string
   credential: AuthCredential
 }
-
-export type PermissionV2Source =
-  | {
-      type: "tool"
-      messageID: string
-      callID: string
-    }
-  | {
-      type: "mcp_app"
-      invocationID: string
-      viewID: string
-      server: string
-      tool: string
-      generation: string
-    }
-
-export type PermissionV2Reply = "once" | "always" | "reject"
 
 export type QuestionV2Option = {
   /**
@@ -7837,6 +7974,16 @@ export type SyncEventSessionNextCompactionEnded2 = {
       recent: string
       checkpointID?: string
       checkpointHash?: string
+      remote?: {
+        providerID: string
+        modelID: string
+        routeID: string
+        protocol: string
+        endpointHash: string
+        output: Array<{
+          [key: string]: unknown
+        }>
+      }
     }
   }
 }
@@ -8098,7 +8245,148 @@ export type SyncEventSessionCompacted1 = {
   }
 }
 
+export type ConfigV2ProviderRequest = {
+  headers?: {
+    [key: string]: string
+  }
+  body?: {
+    [key: string]: unknown
+  }
+}
+
+export type ConfigV2ModelCostCache = {
+  read?: number
+  write?: number
+}
+
+export type ConfigV2ModelCost = {
+  tier?: {
+    type: "context"
+    size: number
+  }
+  input: number
+  output: number
+  cache?: ConfigV2ModelCostCache
+}
+
+export type ConfigV2ModelLimit = {
+  context?: number
+  input?: number
+  output?: number
+}
+
+export type ConfigV2Model = {
+  family?: string
+  name?: string
+  api?:
+    | {
+        id?: string
+        type: "aisdk"
+        package: string
+        url?: string
+        settings?: {
+          [key: string]: unknown
+        }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+        protocolCapabilities?: {
+          structuredOutput: boolean
+          reasoningItems: boolean
+          providerToolExecution: boolean
+          previousResponseId: boolean
+          remoteCompaction: boolean
+          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
+          protocolRevision: number
+        }
+      }
+    | {
+        id?: string
+        type: "native"
+        url?: string
+        settings: {
+          [key: string]: unknown
+        }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+        protocolCapabilities?: {
+          structuredOutput: boolean
+          reasoningItems: boolean
+          providerToolExecution: boolean
+          previousResponseId: boolean
+          remoteCompaction: boolean
+          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
+          protocolRevision: number
+        }
+      }
+    | {
+        id: string
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+        protocolCapabilities?: {
+          structuredOutput: boolean
+          reasoningItems: boolean
+          providerToolExecution: boolean
+          previousResponseId: boolean
+          remoteCompaction: boolean
+          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
+          protocolRevision: number
+        }
+      }
+  capabilities?: {
+    tools: boolean
+    input: Array<string>
+    output: Array<string>
+  }
+  request?: {
+    headers?: {
+      [key: string]: string
+    }
+    body?: {
+      [key: string]: unknown
+    }
+    variant?: string
+  }
+  variants?: Array<{
+    id: string
+    disabled?: boolean
+    headers?: {
+      [key: string]: string
+    }
+    body?: {
+      [key: string]: unknown
+    }
+  }>
+  cost?: ConfigV2ModelCost | Array<ConfigV2ModelCost>
+  disabled?: boolean
+  limit?: ConfigV2ModelLimit
+}
+
+export type ConfigV2Provider = {
+  name?: string
+  env?: Array<string>
+  api?:
+    | {
+        type: "aisdk"
+        package: string
+        url?: string
+        settings?: {
+          [key: string]: unknown
+        }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+      }
+    | {
+        type: "native"
+        url?: string
+        settings: {
+          [key: string]: unknown
+        }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+      }
+  request?: ConfigV2ProviderRequest
+  models?: {
+    [key: string]: ConfigV2Model
+  }
+}
+
 export type ConfigIm = {
+  url?: string | null
   model?: string
 }
 
@@ -8747,6 +9035,16 @@ export type SessionMessageCompaction = {
   recent: string
   checkpointID?: string
   checkpointHash?: string
+  remote?: {
+    providerID: string
+    modelID: string
+    routeID: string
+    protocol: string
+    endpointHash: string
+    output: Array<{
+      [key: string]: unknown
+    }>
+  }
   id: string
   metadata?: {
     [key: string]: unknown
@@ -9479,6 +9777,16 @@ export type EventSessionNextCompactionEnded = {
     recent: string
     checkpointID?: string
     checkpointHash?: string
+    remote?: {
+      providerID: string
+      modelID: string
+      routeID: string
+      protocol: string
+      endpointHash: string
+      output: Array<{
+        [key: string]: unknown
+      }>
+    }
   }
 }
 
@@ -9762,32 +10070,6 @@ export type EventCatalogModelUpdated = {
   }
 }
 
-export type EventAccountAdded = {
-  id: string
-  type: "account.added"
-  properties: {
-    account: AuthInfo
-  }
-}
-
-export type EventAccountRemoved = {
-  id: string
-  type: "account.removed"
-  properties: {
-    account: AuthInfo
-  }
-}
-
-export type EventAccountSwitched = {
-  id: string
-  type: "account.switched"
-  properties: {
-    serviceID: string
-    from?: string
-    to?: string
-  }
-}
-
 export type EventPermissionV2Asked = {
   id: string
   type: "permission.v2.asked"
@@ -9811,6 +10093,32 @@ export type EventPermissionV2Replied = {
     sessionID: string
     requestID: string
     reply: PermissionV2Reply
+  }
+}
+
+export type EventAccountAdded = {
+  id: string
+  type: "account.added"
+  properties: {
+    account: AuthInfo
+  }
+}
+
+export type EventAccountRemoved = {
+  id: string
+  type: "account.removed"
+  properties: {
+    account: AuthInfo
+  }
+}
+
+export type EventAccountSwitched = {
+  id: string
+  type: "account.switched"
+  properties: {
+    serviceID: string
+    from?: string
+    to?: string
   }
 }
 
@@ -10745,6 +11053,10 @@ export type GlobalConfigUpdateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * IMServiceBusyError
+   */
+  409: ImServiceBusyError
 }
 
 export type GlobalConfigUpdateError = GlobalConfigUpdateErrors[keyof GlobalConfigUpdateErrors]
@@ -11020,6 +11332,1448 @@ export type GlobalProjectDeleteResponses = {
 }
 
 export type GlobalProjectDeleteResponse = GlobalProjectDeleteResponses[keyof GlobalProjectDeleteResponses]
+
+export type BrowserTuiPairData = {
+  body: {
+    requestID: string
+    challengeHash: string
+    rootSessionID: string
+    directory: string
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/browser/shared/tui/pair"
+}
+
+export type BrowserTuiPairErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserTuiPairError = BrowserTuiPairErrors[keyof BrowserTuiPairErrors]
+
+export type BrowserTuiPairResponses = {
+  /**
+   * Success
+   */
+  200: {
+    requestID: string
+    challengeHash: string
+    rootSessionID: string
+    directory: string
+    attachID: string
+    generation: string
+    pendingUntil: number
+    state: "pending" | "active" | "retired"
+    streamLive: boolean
+    barrierOrder: number
+  }
+}
+
+export type BrowserTuiPairResponse = BrowserTuiPairResponses[keyof BrowserTuiPairResponses]
+
+export type BrowserTuiOwnerData = {
+  body: {
+    attachID: string
+    generation: string
+    secret: string
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/browser/shared/tui/owner"
+}
+
+export type BrowserTuiOwnerErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserTuiOwnerError = BrowserTuiOwnerErrors[keyof BrowserTuiOwnerErrors]
+
+export type BrowserTuiOwnerResponses = {
+  /**
+   * Success
+   */
+  200: string
+}
+
+export type BrowserTuiOwnerResponse = BrowserTuiOwnerResponses[keyof BrowserTuiOwnerResponses]
+
+export type BrowserTuiReserveData = {
+  body: {
+    attachID: string
+    generation: string
+    secret: string
+    expectedBarrierOrder: number
+    inputID: string
+    originalSubmissionID: string
+    rawInput: string
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/browser/shared/tui/reserve"
+}
+
+export type BrowserTuiReserveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserTuiReserveError = BrowserTuiReserveErrors[keyof BrowserTuiReserveErrors]
+
+export type BrowserTuiReserveResponses = {
+  /**
+   * Success
+   */
+  200: {
+    stamp?: {
+      originalSubmissionID: string
+      inputID: string
+      rootSessionID: string
+      rawInputHash: string
+      promptHash?: string
+      sourceKind: "gui_composer" | "tui_owner" | "im_owner_dac"
+      sourceBindingHash: string
+      mainIncarnation: string
+      submissionOrder: number
+    }
+  }
+}
+
+export type BrowserTuiReserveResponse = BrowserTuiReserveResponses[keyof BrowserTuiReserveResponses]
+
+export type BrowserTuiSealData = {
+  body: {
+    attachID: string
+    generation: string
+    secret: string
+    stamp: {
+      originalSubmissionID: string
+      inputID: string
+      rootSessionID: string
+      rawInputHash: string
+      promptHash?: string
+      sourceKind: "gui_composer" | "tui_owner" | "im_owner_dac"
+      sourceBindingHash: string
+      mainIncarnation: string
+      submissionOrder: number
+    }
+    prompt: unknown
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/browser/shared/tui/seal"
+}
+
+export type BrowserTuiSealErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserTuiSealError = BrowserTuiSealErrors[keyof BrowserTuiSealErrors]
+
+export type BrowserTuiSealResponses = {
+  /**
+   * Success
+   */
+  200: {
+    stamp: {
+      originalSubmissionID: string
+      inputID: string
+      rootSessionID: string
+      rawInputHash: string
+      promptHash?: string
+      sourceKind: "gui_composer" | "tui_owner" | "im_owner_dac"
+      sourceBindingHash: string
+      mainIncarnation: string
+      submissionOrder: number
+    }
+  }
+}
+
+export type BrowserTuiSealResponse = BrowserTuiSealResponses[keyof BrowserTuiSealResponses]
+
+export type BrowserTuiDetachData = {
+  body: {
+    attachID: string
+    generation: string
+    secret: string
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/browser/shared/tui/detach"
+}
+
+export type BrowserTuiDetachErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserTuiDetachError = BrowserTuiDetachErrors[keyof BrowserTuiDetachErrors]
+
+export type BrowserTuiDetachResponses = {
+  /**
+   * Success
+   */
+  200: {
+    requestID: string
+    challengeHash: string
+    rootSessionID: string
+    directory: string
+    attachID: string
+    generation: string
+    pendingUntil: number
+    state: "pending" | "active" | "retired"
+    streamLive: boolean
+    barrierOrder: number
+  }
+}
+
+export type BrowserTuiDetachResponse = BrowserTuiDetachResponses[keyof BrowserTuiDetachResponses]
+
+export type BrowserSharedListData = {
+  body?: never
+  path?: never
+  query: {
+    sessionID: string
+  }
+  url: "/api/v1/browser/shared/resources"
+}
+
+export type BrowserSharedListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserSharedListError = BrowserSharedListErrors[keyof BrowserSharedListErrors]
+
+export type BrowserSharedListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    resources: Array<{
+      version: 2
+      profile: "managed-shared-browser-v1"
+      inputAssurance: "shared-document-v1"
+      resourceID: string
+      requestID: string
+      requestDigest: string
+      rootSessionID: string
+      scope: {
+        principal: string
+        securityNamespaceID: string
+        locationKey: string
+        projectScopeKey: string
+        namespaceBindingHash: string
+        sessionID: string
+        projectID: string
+        directory: string
+        workspaceID: null
+      }
+      mainIncarnation: string
+      policy: {
+        origin: string
+        approvedOrigins: Array<string>
+        manualApprovedOrigins: Array<string>
+        resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        postGrants: Array<{
+          method: "POST"
+          url: string
+          contentType: "application/json" | "application/x-www-form-urlencoded" | "text/plain"
+          bodySha256: string
+          bytes: number
+        }>
+        scriptContext?: "snapshot-json-v1"
+        scriptGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          readOnly: true
+        }>
+        programGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+          maxSteps: number
+        }>
+        filePolicy?: {
+          upload: boolean
+          download: boolean
+        }
+      }
+      policyHash: string
+      policyRevision?: number
+      policyApprovals?: Array<{
+        requestID: string
+        requestHash: string
+        manualEpoch: number
+        baseRevision: number
+        revision: number
+        policyRevision: number
+        policyHash: string
+      }>
+      state:
+        | "creating"
+        | "agent_owned"
+        | "takeover_pending"
+        | "human_owned"
+        | "acquire_pending"
+        | "fenced_blocked"
+        | "recovery_required"
+        | "resource_lost"
+        | "closing"
+        | "closed"
+      revision: number
+      manualEpoch: number
+      barrierOrder: number
+      coreCutoff: number
+      liveLeaseID: string | null
+      agentAccessFenced: boolean
+      resourceAlive: boolean
+      manualEnabled: boolean
+      createdAt: number
+      updatedAt: number
+      expiresAt: number
+    }>
+  }
+}
+
+export type BrowserSharedListResponse = BrowserSharedListResponses[keyof BrowserSharedListResponses]
+
+export type BrowserSharedCreateData = {
+  body: {
+    version: 2
+    profile: "managed-shared-browser-v1"
+    inputAssurance: "shared-document-v1"
+    requestID: string
+    sessionID: string
+    policy: {
+      origin: string
+      approvedOrigins: Array<string>
+      manualApprovedOrigins: Array<string>
+      resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+      postGrants: Array<{
+        method: "POST"
+        url: string
+        contentType: "application/json" | "application/x-www-form-urlencoded" | "text/plain"
+        bodySha256: string
+        bytes: number
+      }>
+      scriptContext?: "snapshot-json-v1"
+      scriptGrants?: Array<{
+        scriptHash: string
+        argsHash: string
+        readOnly: true
+      }>
+      programGrants?: Array<{
+        scriptHash: string
+        argsHash: string
+        operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+        maxSteps: number
+      }>
+      filePolicy?: {
+        upload: boolean
+        download: boolean
+      }
+    }
+    expiresAt: number
+  }
+  path?: never
+  query?: never
+  url: "/api/v1/browser/shared/resources"
+}
+
+export type BrowserSharedCreateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserSharedCreateError = BrowserSharedCreateErrors[keyof BrowserSharedCreateErrors]
+
+export type BrowserSharedCreateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    resource: {
+      version: 2
+      profile: "managed-shared-browser-v1"
+      inputAssurance: "shared-document-v1"
+      resourceID: string
+      requestID: string
+      requestDigest: string
+      rootSessionID: string
+      scope: {
+        principal: string
+        securityNamespaceID: string
+        locationKey: string
+        projectScopeKey: string
+        namespaceBindingHash: string
+        sessionID: string
+        projectID: string
+        directory: string
+        workspaceID: null
+      }
+      mainIncarnation: string
+      policy: {
+        origin: string
+        approvedOrigins: Array<string>
+        manualApprovedOrigins: Array<string>
+        resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        postGrants: Array<{
+          method: "POST"
+          url: string
+          contentType: "application/json" | "application/x-www-form-urlencoded" | "text/plain"
+          bodySha256: string
+          bytes: number
+        }>
+        scriptContext?: "snapshot-json-v1"
+        scriptGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          readOnly: true
+        }>
+        programGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+          maxSteps: number
+        }>
+        filePolicy?: {
+          upload: boolean
+          download: boolean
+        }
+      }
+      policyHash: string
+      policyRevision?: number
+      policyApprovals?: Array<{
+        requestID: string
+        requestHash: string
+        manualEpoch: number
+        baseRevision: number
+        revision: number
+        policyRevision: number
+        policyHash: string
+      }>
+      state:
+        | "creating"
+        | "agent_owned"
+        | "takeover_pending"
+        | "human_owned"
+        | "acquire_pending"
+        | "fenced_blocked"
+        | "recovery_required"
+        | "resource_lost"
+        | "closing"
+        | "closed"
+      revision: number
+      manualEpoch: number
+      barrierOrder: number
+      coreCutoff: number
+      liveLeaseID: string | null
+      agentAccessFenced: boolean
+      resourceAlive: boolean
+      manualEnabled: boolean
+      createdAt: number
+      updatedAt: number
+      expiresAt: number
+    }
+  }
+}
+
+export type BrowserSharedCreateResponse = BrowserSharedCreateResponses[keyof BrowserSharedCreateResponses]
+
+export type BrowserSharedGetData = {
+  body?: never
+  path: {
+    resourceID: string
+  }
+  query?: never
+  url: "/api/v1/browser/shared/resources/{resourceID}"
+}
+
+export type BrowserSharedGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserSharedGetError = BrowserSharedGetErrors[keyof BrowserSharedGetErrors]
+
+export type BrowserSharedGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    resource: {
+      version: 2
+      profile: "managed-shared-browser-v1"
+      inputAssurance: "shared-document-v1"
+      resourceID: string
+      requestID: string
+      requestDigest: string
+      rootSessionID: string
+      scope: {
+        principal: string
+        securityNamespaceID: string
+        locationKey: string
+        projectScopeKey: string
+        namespaceBindingHash: string
+        sessionID: string
+        projectID: string
+        directory: string
+        workspaceID: null
+      }
+      mainIncarnation: string
+      policy: {
+        origin: string
+        approvedOrigins: Array<string>
+        manualApprovedOrigins: Array<string>
+        resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        postGrants: Array<{
+          method: "POST"
+          url: string
+          contentType: "application/json" | "application/x-www-form-urlencoded" | "text/plain"
+          bodySha256: string
+          bytes: number
+        }>
+        scriptContext?: "snapshot-json-v1"
+        scriptGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          readOnly: true
+        }>
+        programGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+          maxSteps: number
+        }>
+        filePolicy?: {
+          upload: boolean
+          download: boolean
+        }
+      }
+      policyHash: string
+      policyRevision?: number
+      policyApprovals?: Array<{
+        requestID: string
+        requestHash: string
+        manualEpoch: number
+        baseRevision: number
+        revision: number
+        policyRevision: number
+        policyHash: string
+      }>
+      state:
+        | "creating"
+        | "agent_owned"
+        | "takeover_pending"
+        | "human_owned"
+        | "acquire_pending"
+        | "fenced_blocked"
+        | "recovery_required"
+        | "resource_lost"
+        | "closing"
+        | "closed"
+      revision: number
+      manualEpoch: number
+      barrierOrder: number
+      coreCutoff: number
+      liveLeaseID: string | null
+      agentAccessFenced: boolean
+      resourceAlive: boolean
+      manualEnabled: boolean
+      createdAt: number
+      updatedAt: number
+      expiresAt: number
+    }
+  }
+}
+
+export type BrowserSharedGetResponse = BrowserSharedGetResponses[keyof BrowserSharedGetResponses]
+
+export type BrowserSharedTakeoverData = {
+  body: {
+    resourceID: string
+    requestID: string
+    expectedRevision: number
+  }
+  path: {
+    resourceID: string
+  }
+  query?: never
+  url: "/api/v1/browser/shared/resources/{resourceID}/takeover"
+}
+
+export type BrowserSharedTakeoverErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserSharedTakeoverError = BrowserSharedTakeoverErrors[keyof BrowserSharedTakeoverErrors]
+
+export type BrowserSharedTakeoverResponses = {
+  /**
+   * Success
+   */
+  200: {
+    resource: {
+      version: 2
+      profile: "managed-shared-browser-v1"
+      inputAssurance: "shared-document-v1"
+      resourceID: string
+      requestID: string
+      requestDigest: string
+      rootSessionID: string
+      scope: {
+        principal: string
+        securityNamespaceID: string
+        locationKey: string
+        projectScopeKey: string
+        namespaceBindingHash: string
+        sessionID: string
+        projectID: string
+        directory: string
+        workspaceID: null
+      }
+      mainIncarnation: string
+      policy: {
+        origin: string
+        approvedOrigins: Array<string>
+        manualApprovedOrigins: Array<string>
+        resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        postGrants: Array<{
+          method: "POST"
+          url: string
+          contentType: "application/json" | "application/x-www-form-urlencoded" | "text/plain"
+          bodySha256: string
+          bytes: number
+        }>
+        scriptContext?: "snapshot-json-v1"
+        scriptGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          readOnly: true
+        }>
+        programGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+          maxSteps: number
+        }>
+        filePolicy?: {
+          upload: boolean
+          download: boolean
+        }
+      }
+      policyHash: string
+      policyRevision?: number
+      policyApprovals?: Array<{
+        requestID: string
+        requestHash: string
+        manualEpoch: number
+        baseRevision: number
+        revision: number
+        policyRevision: number
+        policyHash: string
+      }>
+      state:
+        | "creating"
+        | "agent_owned"
+        | "takeover_pending"
+        | "human_owned"
+        | "acquire_pending"
+        | "fenced_blocked"
+        | "recovery_required"
+        | "resource_lost"
+        | "closing"
+        | "closed"
+      revision: number
+      manualEpoch: number
+      barrierOrder: number
+      coreCutoff: number
+      liveLeaseID: string | null
+      agentAccessFenced: boolean
+      resourceAlive: boolean
+      manualEnabled: boolean
+      createdAt: number
+      updatedAt: number
+      expiresAt: number
+    }
+  }
+}
+
+export type BrowserSharedTakeoverResponse = BrowserSharedTakeoverResponses[keyof BrowserSharedTakeoverResponses]
+
+export type BrowserSharedApproveOriginData = {
+  body: {
+    resourceID: string
+    requestID: string
+    expectedRevision: number
+    expectedManualEpoch: number
+    expectedPolicyHash: string
+    origin: string
+  }
+  path: {
+    resourceID: string
+  }
+  query?: never
+  url: "/api/v1/browser/shared/resources/{resourceID}/origins"
+}
+
+export type BrowserSharedApproveOriginErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserSharedApproveOriginError = BrowserSharedApproveOriginErrors[keyof BrowserSharedApproveOriginErrors]
+
+export type BrowserSharedApproveOriginResponses = {
+  /**
+   * Success
+   */
+  200: {
+    resource: {
+      version: 2
+      profile: "managed-shared-browser-v1"
+      inputAssurance: "shared-document-v1"
+      resourceID: string
+      requestID: string
+      requestDigest: string
+      rootSessionID: string
+      scope: {
+        principal: string
+        securityNamespaceID: string
+        locationKey: string
+        projectScopeKey: string
+        namespaceBindingHash: string
+        sessionID: string
+        projectID: string
+        directory: string
+        workspaceID: null
+      }
+      mainIncarnation: string
+      policy: {
+        origin: string
+        approvedOrigins: Array<string>
+        manualApprovedOrigins: Array<string>
+        resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        postGrants: Array<{
+          method: "POST"
+          url: string
+          contentType: "application/json" | "application/x-www-form-urlencoded" | "text/plain"
+          bodySha256: string
+          bytes: number
+        }>
+        scriptContext?: "snapshot-json-v1"
+        scriptGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          readOnly: true
+        }>
+        programGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+          maxSteps: number
+        }>
+        filePolicy?: {
+          upload: boolean
+          download: boolean
+        }
+      }
+      policyHash: string
+      policyRevision?: number
+      policyApprovals?: Array<{
+        requestID: string
+        requestHash: string
+        manualEpoch: number
+        baseRevision: number
+        revision: number
+        policyRevision: number
+        policyHash: string
+      }>
+      state:
+        | "creating"
+        | "agent_owned"
+        | "takeover_pending"
+        | "human_owned"
+        | "acquire_pending"
+        | "fenced_blocked"
+        | "recovery_required"
+        | "resource_lost"
+        | "closing"
+        | "closed"
+      revision: number
+      manualEpoch: number
+      barrierOrder: number
+      coreCutoff: number
+      liveLeaseID: string | null
+      agentAccessFenced: boolean
+      resourceAlive: boolean
+      manualEnabled: boolean
+      createdAt: number
+      updatedAt: number
+      expiresAt: number
+    }
+  }
+}
+
+export type BrowserSharedApproveOriginResponse =
+  BrowserSharedApproveOriginResponses[keyof BrowserSharedApproveOriginResponses]
+
+export type BrowserSharedCloseData = {
+  body: {
+    resourceID: string
+    requestID: string
+    expectedRevision: number
+  }
+  path: {
+    resourceID: string
+  }
+  query?: never
+  url: "/api/v1/browser/shared/resources/{resourceID}/close"
+}
+
+export type BrowserSharedCloseErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserSharedCloseError = BrowserSharedCloseErrors[keyof BrowserSharedCloseErrors]
+
+export type BrowserSharedCloseResponses = {
+  /**
+   * Success
+   */
+  200: {
+    resource: {
+      version: 2
+      profile: "managed-shared-browser-v1"
+      inputAssurance: "shared-document-v1"
+      resourceID: string
+      requestID: string
+      requestDigest: string
+      rootSessionID: string
+      scope: {
+        principal: string
+        securityNamespaceID: string
+        locationKey: string
+        projectScopeKey: string
+        namespaceBindingHash: string
+        sessionID: string
+        projectID: string
+        directory: string
+        workspaceID: null
+      }
+      mainIncarnation: string
+      policy: {
+        origin: string
+        approvedOrigins: Array<string>
+        manualApprovedOrigins: Array<string>
+        resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        postGrants: Array<{
+          method: "POST"
+          url: string
+          contentType: "application/json" | "application/x-www-form-urlencoded" | "text/plain"
+          bodySha256: string
+          bytes: number
+        }>
+        scriptContext?: "snapshot-json-v1"
+        scriptGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          readOnly: true
+        }>
+        programGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+          maxSteps: number
+        }>
+        filePolicy?: {
+          upload: boolean
+          download: boolean
+        }
+      }
+      policyHash: string
+      policyRevision?: number
+      policyApprovals?: Array<{
+        requestID: string
+        requestHash: string
+        manualEpoch: number
+        baseRevision: number
+        revision: number
+        policyRevision: number
+        policyHash: string
+      }>
+      state:
+        | "creating"
+        | "agent_owned"
+        | "takeover_pending"
+        | "human_owned"
+        | "acquire_pending"
+        | "fenced_blocked"
+        | "recovery_required"
+        | "resource_lost"
+        | "closing"
+        | "closed"
+      revision: number
+      manualEpoch: number
+      barrierOrder: number
+      coreCutoff: number
+      liveLeaseID: string | null
+      agentAccessFenced: boolean
+      resourceAlive: boolean
+      manualEnabled: boolean
+      createdAt: number
+      updatedAt: number
+      expiresAt: number
+    }
+  }
+}
+
+export type BrowserSharedCloseResponse = BrowserSharedCloseResponses[keyof BrowserSharedCloseResponses]
+
+export type BrowserSharedFilesPreviewData = {
+  body:
+    | {
+        direction: "upload"
+        relative: string
+        targetURL: string
+      }
+    | {
+        direction: "download"
+        relative: string
+        targetURL: string
+        maxBytes: number
+      }
+  path: {
+    resourceID: string
+  }
+  query?: never
+  url: "/api/v1/browser/shared/resources/{resourceID}/files/preview"
+}
+
+export type BrowserSharedFilesPreviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserSharedFilesPreviewError = BrowserSharedFilesPreviewErrors[keyof BrowserSharedFilesPreviewErrors]
+
+export type BrowserSharedFilesPreviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    resourceID: string
+    previewID: string
+    resourceRevision: number
+    leaseID: string
+    leaseEpoch: number
+    manualEpoch: number
+    preview:
+      | {
+          direction: "upload"
+          name: string
+          relative: string
+          bytes: number
+          sha256: string
+          targetURL: string
+          observedAt: number
+        }
+      | {
+          direction: "download"
+          name: string
+          relative: string
+          maxBytes: number
+          targetURL: string
+          observedAt: number
+        }
+  }
+}
+
+export type BrowserSharedFilesPreviewResponse =
+  BrowserSharedFilesPreviewResponses[keyof BrowserSharedFilesPreviewResponses]
+
+export type BrowserSharedFilesApproveData = {
+  body: {
+    requestID: string
+    previewID: string
+    expectedResourceRevision: number
+    expectedLeaseID: string
+    expectedLeaseEpoch: number
+    expectedManualEpoch: number
+    expiresAt: number
+  }
+  path: {
+    resourceID: string
+  }
+  query?: never
+  url: "/api/v1/browser/shared/resources/{resourceID}/files/approve"
+}
+
+export type BrowserSharedFilesApproveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserSharedFilesApproveError = BrowserSharedFilesApproveErrors[keyof BrowserSharedFilesApproveErrors]
+
+export type BrowserSharedFilesApproveResponses = {
+  /**
+   * Success
+   */
+  200:
+    | {
+        resourceID: string
+        grant: {
+          grantID: string
+          direction: "upload" | "download"
+          name: string
+          bytes?: number
+          maxBytes?: number
+          expiresAt: number
+          state: "approved" | "used" | "expired" | "unavailable"
+        }
+        replayed: boolean
+      }
+    | {
+        resourceID: string
+        requestID: string
+        state: "cancelled"
+        grant: null
+        replayed: boolean
+      }
+}
+
+export type BrowserSharedFilesApproveResponse =
+  BrowserSharedFilesApproveResponses[keyof BrowserSharedFilesApproveResponses]
+
+export type BrowserSharedFilesStatusData = {
+  body?: never
+  path: {
+    resourceID: string
+    requestID: string
+  }
+  query?: never
+  url: "/api/v1/browser/shared/resources/{resourceID}/files/requests/{requestID}"
+}
+
+export type BrowserSharedFilesStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserSharedFilesStatusError = BrowserSharedFilesStatusErrors[keyof BrowserSharedFilesStatusErrors]
+
+export type BrowserSharedFilesStatusResponses = {
+  /**
+   * Success
+   */
+  200:
+    | {
+        requestID: string
+        state: "approved" | "used" | "expired" | "unavailable" | "missing"
+        grant: {
+          grantID: string
+          direction: "upload" | "download"
+          name: string
+          bytes?: number
+          maxBytes?: number
+          expiresAt: number
+          state: "approved" | "used" | "expired" | "unavailable"
+        } | null
+      }
+    | {
+        requestID: string
+        state: "cancelled"
+        grant: null
+      }
+}
+
+export type BrowserSharedFilesStatusResponse =
+  BrowserSharedFilesStatusResponses[keyof BrowserSharedFilesStatusResponses]
+
+export type BrowserSharedFilesListData = {
+  body?: never
+  path: {
+    resourceID: string
+  }
+  query?: {
+    cursor?: string
+    limit?: string
+  }
+  url: "/api/v1/browser/shared/resources/{resourceID}/files"
+}
+
+export type BrowserSharedFilesListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * BrowserForbidden
+   */
+  403: BrowserForbidden
+  /**
+   * BrowserMissing
+   */
+  404: BrowserMissing
+  /**
+   * BrowserConflict
+   */
+  409: BrowserConflict
+  /**
+   * BrowserUnavailable
+   */
+  503: BrowserUnavailable
+}
+
+export type BrowserSharedFilesListError = BrowserSharedFilesListErrors[keyof BrowserSharedFilesListErrors]
+
+export type BrowserSharedFilesListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    files: Array<{
+      artifactID: string
+      grantID: string
+      direction: "upload" | "download"
+      name: string
+      bytes: number
+      sha256: string
+      state: "selected" | "published"
+      nativeVerified: true
+    }>
+    grants: Array<{
+      grantID: string
+      direction: "upload" | "download"
+      name: string
+      bytes?: number
+      maxBytes?: number
+      expiresAt: number
+      state: "approved" | "used" | "expired" | "unavailable"
+    }>
+    nextCursor: string | null
+  }
+}
+
+export type BrowserSharedFilesListResponse = BrowserSharedFilesListResponses[keyof BrowserSharedFilesListResponses]
 
 export type BrowserCreateData = {
   body:
@@ -12359,6 +14113,15 @@ export type BrowserActionResponses = {
         text?: string
         truncated?: boolean
         scriptResultJSON?: string
+        scriptContextEvidence?: {
+          version: 1
+          context: "snapshot-json-v1"
+          sha256: string
+          bytes: number
+          frameID: string
+          observationRevision: number
+          generation: number
+        }
         frameID?: string
         observationRevision?: number
         refs?: Array<{
@@ -16273,10 +18036,12 @@ export type DebugEventsError = DebugEventsErrors[keyof DebugEventsErrors]
 
 export type DebugEventsResponses = {
   /**
-   * SSE event stream
+   * Success
    */
-  200: unknown
+  200: string
 }
+
+export type DebugEventsResponse = DebugEventsResponses[keyof DebugEventsResponses]
 
 export type ProfileRunData = {
   body?: ProfileRunBody
@@ -17345,6 +19110,8 @@ export type DeepagentGoalStartData = {
     sessionID: string
     requestID: string
     objective?: string
+    codeRefs?: Array<string>
+    planSource?: "workspace-file"
     criteria?: Array<{
       kind: "tests_pass" | "no_diagnostics" | "reviewer_clean" | "panel_approves" | "plan_complete"
       commands?: Array<string>
@@ -17405,6 +19172,16 @@ export type DeepagentGoalStartResponses = {
     wakeState: "none" | "pending" | "published" | "superseded"
     receiptID?: string
     replayed: boolean
+    progress?: {
+      ledger: {
+        ticks: number
+        tokens: number
+        cost: number
+        wallclockMs: number
+      }
+      stallCount: number
+      gaps: Array<string>
+    }
   }
 }
 
@@ -17463,6 +19240,16 @@ export type DeepagentGoalPauseResponses = {
     wakeState: "none" | "pending" | "published" | "superseded"
     receiptID?: string
     replayed: boolean
+    progress?: {
+      ledger: {
+        ticks: number
+        tokens: number
+        cost: number
+        wallclockMs: number
+      }
+      stallCount: number
+      gaps: Array<string>
+    }
   }
 }
 
@@ -17521,6 +19308,16 @@ export type DeepagentGoalResumeResponses = {
     wakeState: "none" | "pending" | "published" | "superseded"
     receiptID?: string
     replayed: boolean
+    progress?: {
+      ledger: {
+        ticks: number
+        tokens: number
+        cost: number
+        wallclockMs: number
+      }
+      stallCount: number
+      gaps: Array<string>
+    }
   }
 }
 
@@ -17579,6 +19376,16 @@ export type DeepagentGoalStopResponses = {
     wakeState: "none" | "pending" | "published" | "superseded"
     receiptID?: string
     replayed: boolean
+    progress?: {
+      ledger: {
+        ticks: number
+        tokens: number
+        cost: number
+        wallclockMs: number
+      }
+      stallCount: number
+      gaps: Array<string>
+    }
   }
 }
 
@@ -18464,6 +20271,16 @@ export type DeepagentGoalStatusResponses = {
       wakeState: "none" | "pending" | "published" | "superseded"
       receiptID?: string
       replayed: boolean
+      progress?: {
+        ledger: {
+          ticks: number
+          tokens: number
+          cost: number
+          wallclockMs: number
+        }
+        stallCount: number
+        gaps: Array<string>
+      }
     }
   }
 }
@@ -20302,6 +22119,368 @@ export type FileLockStatusResponses = {
 
 export type FileLockStatusResponse = FileLockStatusResponses[keyof FileLockStatusResponses]
 
+export type ImPlansData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/plans"
+}
+
+export type ImPlansErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type ImPlansError = ImPlansErrors[keyof ImPlansErrors]
+
+export type ImPlansResponses = {
+  /**
+   * Success
+   */
+  200:
+    | {
+        state: "unknown"
+        reason:
+          | "service_unconfigured"
+          | "not_bound"
+          | "custody_unavailable"
+          | "unsupported"
+          | "service_unavailable"
+          | "invalid_response"
+          | "scope_changed"
+      }
+    | {
+        state: "known"
+        catalog: {
+          version: "dac-im-plans-v1"
+          planVersion: string
+          salesAvailable: boolean
+          serverObservedAt: number
+          purchaseURL: string
+          plans: [
+            {
+              planID: "im-year" | "im-three-years" | "im-lifetime"
+              priceCredits: "1" | "2" | "9.9"
+              term:
+                | {
+                    kind: "calendarYears"
+                    years: 1 | 3
+                  }
+                | {
+                    kind: "lifetime"
+                  }
+              maxBoundDevices: 1
+              autoRenew: false
+            },
+            {
+              planID: "im-year" | "im-three-years" | "im-lifetime"
+              priceCredits: "1" | "2" | "9.9"
+              term:
+                | {
+                    kind: "calendarYears"
+                    years: 1 | 3
+                  }
+                | {
+                    kind: "lifetime"
+                  }
+              maxBoundDevices: 1
+              autoRenew: false
+            },
+            {
+              planID: "im-year" | "im-three-years" | "im-lifetime"
+              priceCredits: "1" | "2" | "9.9"
+              term:
+                | {
+                    kind: "calendarYears"
+                    years: 1 | 3
+                  }
+                | {
+                    kind: "lifetime"
+                  }
+              maxBoundDevices: 1
+              autoRenew: false
+            },
+          ]
+        }
+      }
+}
+
+export type ImPlansResponse = ImPlansResponses[keyof ImPlansResponses]
+
+export type ImEntitlementData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/entitlement"
+}
+
+export type ImEntitlementErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type ImEntitlementError = ImEntitlementErrors[keyof ImEntitlementErrors]
+
+export type ImEntitlementResponses = {
+  /**
+   * Success
+   */
+  200:
+    | {
+        state: "unknown"
+        reason:
+          | "service_unconfigured"
+          | "not_bound"
+          | "custody_unavailable"
+          | "unsupported"
+          | "service_unavailable"
+          | "invalid_response"
+          | "scope_changed"
+      }
+    | {
+        state: "known"
+        entitlement: {
+          version: "dac-im-entitlement-v1"
+          profile: "dac-im-device-v1"
+          realm: string
+          entitlementID: string
+          deviceJkt: string
+          bindingVersion: number
+          uuid: string
+          planID: string
+          planVersion: string
+          state: "active" | "expired" | "revoked" | "pending"
+          validityKnown: boolean
+          lifetime: boolean
+          validFrom: number
+          expiresAt: number
+          serverObservedAt: number
+        }
+      }
+}
+
+export type ImEntitlementResponse = ImEntitlementResponses[keyof ImEntitlementResponses]
+
+export type ImDeviceInfoData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/device/info"
+}
+
+export type ImDeviceInfoErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImDeviceInfoError = ImDeviceInfoErrors[keyof ImDeviceInfoErrors]
+
+export type ImDeviceInfoResponses = {
+  /**
+   * Success
+   */
+  200: {
+    profile: "dac-im-device-v1"
+    storeAvailable: true
+    deviceJkt: string
+    publicJwk: {
+      kty: "EC"
+      crv: "P-256"
+      x: string
+      y: string
+    }
+  }
+}
+
+export type ImDeviceInfoResponse = ImDeviceInfoResponses[keyof ImDeviceInfoResponses]
+
+export type ImMigrationPendingData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/device/migrations"
+}
+
+export type ImMigrationPendingErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImMigrationPendingError = ImMigrationPendingErrors[keyof ImMigrationPendingErrors]
+
+export type ImMigrationPendingResponses = {
+  /**
+   * Success
+   */
+  200: {
+    migration: {
+      migrationID: string
+      state: "pending" | "unknown" | "succeeded" | "rejected"
+      chargedCredits: 0
+      credentialStored: boolean
+      code?: string
+      entitlementID?: string
+      uuid?: string
+    }
+  }
+}
+
+export type ImMigrationPendingResponse = ImMigrationPendingResponses[keyof ImMigrationPendingResponses]
+
+export type ImMigrationStatusData = {
+  body?: never
+  path: {
+    migrationID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/device/migrations/{migrationID}"
+}
+
+export type ImMigrationStatusErrors = {
+  /**
+   * IMFacadeBadRequestError | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImMigrationStatusError = ImMigrationStatusErrors[keyof ImMigrationStatusErrors]
+
+export type ImMigrationStatusResponses = {
+  /**
+   * Success
+   */
+  200: {
+    migrationID: string
+    state: "pending" | "unknown" | "succeeded" | "rejected"
+    chargedCredits: 0
+    credentialStored: boolean
+    code?: string
+    entitlementID?: string
+    uuid?: string
+  }
+}
+
+export type ImMigrationStatusResponse = ImMigrationStatusResponses[keyof ImMigrationStatusResponses]
+
+export type ImMigrateData = {
+  body: {
+    migrationID: string
+    voucher: string
+    retryOriginal?: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/device/migrate"
+}
+
+export type ImMigrateErrors = {
+  /**
+   * IMFacadeBadRequestError | BadRequest | InvalidRequestError
+   */
+  400: ImFacadeBadRequestError | EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMFacadeConflictError
+   */
+  409: ImFacadeConflictError
+  /**
+   * IMFacadeUnavailableError
+   */
+  502: ImFacadeUnavailableError
+}
+
+export type ImMigrateError = ImMigrateErrors[keyof ImMigrateErrors]
+
+export type ImMigrateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    migrationID: string
+    state: "pending" | "unknown" | "succeeded" | "rejected"
+    chargedCredits: 0
+    credentialStored: boolean
+    code?: string
+    entitlementID?: string
+    uuid?: string
+  }
+}
+
+export type ImMigrateResponse = ImMigrateResponses[keyof ImMigrateResponses]
+
 export type ImActivationQuoteData = {
   body?: never
   path?: never
@@ -20406,6 +22585,7 @@ export type ImActivateData = {
     method: "api_key" | "activation_code"
     credential: string
     quoteID: string
+    retryOriginal?: boolean
   }
   path?: never
   query?: {
@@ -20715,6 +22895,101 @@ export type ImDacCommandResponses = {
 }
 
 export type ImDacCommandResponse = ImDacCommandResponses[keyof ImDacCommandResponses]
+
+export type ImDacReplyReconcileData = {
+  body: {
+    cursor?: string
+  }
+  path: {
+    groupId: string
+    commandID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups/{groupId}/dac/commands/{commandID}/reply/reconcile"
+}
+
+export type ImDacReplyReconcileErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMGroupNotFoundError
+   */
+  404: ImGroupNotFoundError
+  /**
+   * IMDacCommandError
+   */
+  409: ImDacCommandError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+  /**
+   * IMReaderUnavailableError
+   */
+  503: ImReaderUnavailableError
+}
+
+export type ImDacReplyReconcileError = ImDacReplyReconcileErrors[keyof ImDacReplyReconcileErrors]
+
+export type ImDacReplyReconcileResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: 1
+    command: {
+      version: 1
+      groupID: string
+      projectID: string
+      directory: string
+      workspaceID: string
+      commandID: string
+      bindingID: string
+      sessionID: string
+      inputID: string
+      delivery: "queue" | "steer"
+      state: "pending" | "admitted" | "rejected"
+      activityID: string
+      finalMessageID: string
+      replyStatus: "pending" | "delivering" | "delivered" | "dead" | "unknown"
+    }
+    state: "confirmed_acceptance" | "partial" | "unconfirmed"
+    totalParts: number
+    confirmedParts: number
+    unconfirmedParts: number
+    activeParts: number
+    parts: Array<{
+      index: number
+      outboxID: string
+      replyMessageID: string
+      deliveryMessageID: string
+      outcome:
+        | "already_confirmed"
+        | "confirmed_acceptance"
+        | "unconfirmed"
+        | "active_delivery"
+        | "not_dispatched"
+        | "expired"
+        | "retired"
+        | "unavailable"
+      remoteState: "confirmed_acceptance" | "unknown" | "not_found" | "conflict" | "expired" | "unavailable"
+      kernelMessageID: string
+    }>
+    hasMore: boolean
+    nextCursor: string
+  }
+}
+
+export type ImDacReplyReconcileResponse = ImDacReplyReconcileResponses[keyof ImDacReplyReconcileResponses]
 
 export type ImDacReplyRetryData = {
   body?: never
@@ -21219,6 +23494,7 @@ export type ImMessagesListData = {
     directory?: string
     workspace?: string
     cursor?: string
+    anchorID?: string
     limit?: string
   }
   url: "/api/v1/im/groups/{groupId}/messages"
@@ -21226,9 +23502,9 @@ export type ImMessagesListData = {
 
 export type ImMessagesListErrors = {
   /**
-   * InvalidRequestError
+   * IMValidationFailedError | InvalidRequestError
    */
-  400: InvalidRequestError
+  400: ImValidationFailedError | InvalidRequestError
   /**
    * Unauthorized
    */
@@ -22211,6 +24487,7 @@ export type ImFacadeStatusResponses = {
    * IM facade status
    */
   200: {
+    service?: ImServiceStatus
     media?: {
       version: 2
       enabled: boolean
@@ -23197,6 +25474,67 @@ export type VcsStatusResponses = {
 
 export type VcsStatusResponse = VcsStatusResponses[keyof VcsStatusResponses]
 
+export type VcsRefsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/vcs/refs"
+}
+
+export type VcsRefsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * VcsReadError
+   */
+  503: VcsReadError
+}
+
+export type VcsRefsError = VcsRefsErrors[keyof VcsRefsErrors]
+
+export type VcsRefsResponses = {
+  /**
+   * VcsRefs
+   */
+  200: VcsRefs
+}
+
+export type VcsRefsResponse = VcsRefsResponses[keyof VcsRefsResponses]
+
+export type VcsSummaryData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    baseRef?: string
+  }
+  url: "/vcs/summary"
+}
+
+export type VcsSummaryErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type VcsSummaryError = VcsSummaryErrors[keyof VcsSummaryErrors]
+
+export type VcsSummaryResponses = {
+  /**
+   * VcsWorkSummary
+   */
+  200: VcsWorkSummary
+}
+
+export type VcsSummaryResponse = VcsSummaryResponses[keyof VcsSummaryResponses]
+
 export type VcsDiffData = {
   body?: never
   path?: never
@@ -23204,6 +25542,9 @@ export type VcsDiffData = {
     directory?: string
     workspace?: string
     mode: "git" | "branch"
+    baseRef?: string
+    baseOID?: string
+    headOID?: string
     context?: number
   }
   url: "/vcs/diff"
@@ -23214,6 +25555,10 @@ export type VcsDiffErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * VcsReadError
+   */
+  503: VcsReadError
 }
 
 export type VcsDiffError = VcsDiffErrors[keyof VcsDiffErrors]
@@ -25762,7 +28107,7 @@ export type ProviderModelsDiscoverData = {
     apiKey?: string
     authProviderID?: string
     modelID?: string
-    kind?: "openai-compatible" | "anthropic"
+    kind?: "openai-compatible" | "anthropic" | "google"
     headers?: {
       [key: string]: string
     }
@@ -25791,7 +28136,7 @@ export type ProviderModelsDiscoverResponses = {
   200: {
     providerID: string
     baseURL: string
-    kind: "openai-compatible" | "anthropic"
+    kind: "openai-compatible" | "anthropic" | "google"
     models: Array<{
       id: string
       name: string
@@ -26223,6 +28568,138 @@ export type SessionChildrenResponses = {
 }
 
 export type SessionChildrenResponse = SessionChildrenResponses[keyof SessionChildrenResponses]
+
+export type SessionTaskSummaryData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    cursor?: string
+  }
+  url: "/session/{sessionID}/task-summary"
+}
+
+export type SessionTaskSummaryErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SessionTaskSummaryError = SessionTaskSummaryErrors[keyof SessionTaskSummaryErrors]
+
+export type SessionTaskSummaryResponses = {
+  /**
+   * Direct child task summary
+   */
+  200: TaskSummary
+}
+
+export type SessionTaskSummaryResponse = SessionTaskSummaryResponses[keyof SessionTaskSummaryResponses]
+
+export type SessionContextUsageData = {
+  body?: {
+    providerID?: string
+    modelID?: string
+    variant?: string
+    agent?: string
+    draft?: string
+    draftRevision: string
+    hasAttachments?: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/context-usage"
+}
+
+export type SessionContextUsageErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SessionContextUsageError = SessionContextUsageErrors[keyof SessionContextUsageErrors]
+
+export type SessionContextUsageResponses = {
+  /**
+   * Read-only context preview and durable usage
+   */
+  200: {
+    sessionID: string
+    observedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    revision: string
+    estimate: {
+      status: "complete" | "partial" | "unavailable" | "stale"
+      inputTokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      contextLimit: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      inputLimit: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      physicalInputBudget: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      reservedOutput: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      modelID: string
+      providerID: string
+      draftRevision: string
+      missing: Array<string>
+    }
+    activity: {
+      id: string
+      state: string
+      current: boolean
+      calls: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      reportedCalls: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      unknownCalls: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      reasoningReported: boolean
+      cacheReadReported: boolean
+      cacheWriteReported: boolean
+      tokens: {
+        nonCachedInput: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cacheRead: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cacheWrite: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        output: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        reasoning: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }
+    totals: {
+      nonCachedInput: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cacheRead: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cacheWrite: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      output: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      reasoning: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    totalsReasoningReported: boolean
+    totalsCacheReadReported: boolean
+    totalsCacheWriteReported: boolean
+    totalCalls: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    unknownCalls: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    coverage: "recorded" | "partial"
+  }
+}
+
+export type SessionContextUsageResponse = SessionContextUsageResponses[keyof SessionContextUsageResponses]
 
 export type SessionTodoData = {
   body?: never

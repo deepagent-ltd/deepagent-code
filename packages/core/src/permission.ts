@@ -45,6 +45,7 @@ import { PermissionSavedEpochTable } from "./permission/sql"
 import { CanonicalJson } from "./util/canonical-json"
 import { McpAppInvocationSchema } from "./session/mcp-app-invocation.schema"
 import { Hash } from "./util/hash"
+import { PlanningPermissions } from "./session/planning-permissions"
 
 export { Effect, Rule, Ruleset } from "./permission/schema"
 type Effect = PermissionSchema.Effect
@@ -356,9 +357,14 @@ export const layer = Layer.effect(
           policy.parentAgentPermissions,
           policy.parentSessionPermissions,
           role,
+          PlanningPermissions.forAgent(agent.id),
         ] as const
       }
-      return [agent?.permissions ?? missingAgentPermissions, session.permissions] as const
+      return [
+        agent?.permissions ?? missingAgentPermissions,
+        session.permissions,
+        PlanningPermissions.forAgent(agent?.id),
+      ] as const
     })
 
     function configuredEffect(action: string, resource: string, rulesets: readonly Ruleset[]): Effect {

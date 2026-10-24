@@ -163,6 +163,7 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
       "AttentionItem",
       "TaskHumanControlInput",
       "TaskHumanControlReceipt",
+      "IMServiceStatus",
     ].includes(name)
       ? stripNativeOptionalNull(structuredClone(schema))
       : stripOptionalNull(structuredClone(schema))
@@ -212,7 +213,11 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
             "/api/v1/im/groups/{groupId}/messages/{messageId}/attachments/{attachmentId}/content",
           ].includes(path)) ||
         (method === "post" &&
-          ["/api/v1/im/work/{workID}/recover-known", "/api/v1/im/work/{workID}/resume-recovered", "/api/v1/im/work/cleanup-known"].includes(path)) ||
+          [
+            "/api/v1/im/work/{workID}/recover-known",
+            "/api/v1/im/work/{workID}/resume-recovered",
+            "/api/v1/im/work/cleanup-known",
+          ].includes(path)) ||
         path.startsWith("/deepagent/goal/plan-rebase/") ||
         path.startsWith("/api/v1/browser/") ||
         path.startsWith("/api/v1/event-validation/")
@@ -402,16 +407,15 @@ function applyLegacySchemaOverrides(spec: OpenApiSpec) {
   const attention = schemas.AttentionItem?.properties
   if (attention?.occurredAt) attention.occurredAt = nullable(attention.occurredAt)
   if (attention?.seenAt) attention.seenAt = nullable(attention.seenAt)
+  // An explicit null disables IM. Legacy optional-field cleanup must not turn
+  // that persisted choice into an absent URL that falls back to the environment.
+  const im = schemas.ConfigIM?.properties
+  if (im?.url) im.url = nullable(im.url)
   const providerOptions = schemas.ProviderConfig?.properties?.options
   if (providerOptions) providerOptions.additionalProperties = {}
   const model = schemas.ProviderConfig?.properties?.models?.additionalProperties
   const variants = typeof model === "object" ? model.properties?.variants?.additionalProperties : undefined
   if (variants && typeof variants === "object") variants.additionalProperties = {}
-  // PARITY-004 模型启停服务端真相源:服务端 ConfigV2.Model 已支持 per-model `disabled`
-  // (plugin/provider.ts 映射 model.enabled=!disabled),但 OpenAPI 生成源未暴露该字段;
-  // 在此补齐,使 SDK Config 类型可读写 per-model disabled(与运行时行为一致)。
-  if (model && typeof model === "object" && model.properties && !model.properties.disabled)
-    model.properties.disabled = { type: "boolean" }
   // The legacy-shape (version 1) sync component keeps the nullable-field override legacy
   // clients were built against; the version 2 component carries the native V2 Info shape and
   // stays strict.

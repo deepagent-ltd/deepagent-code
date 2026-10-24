@@ -77,7 +77,7 @@ export const make = (config: KernelConfig.Info, options?: IMKernelSync.LayerOpti
   const hint = (entry: Entry) => Effect.gen(function* () {
     if (!entry.lifetime.active) return
     entry.lifetime.hint = true
-    if (entry.lifetime.queued || entry.lifetime.running || entry.lifetime.native) return
+    if (entry.lifetime.queued || entry.lifetime.running) return
     // Advisory polling coalesces until the existing scheduler revisits this
     // hint. Foreground sync and original live observations remain immediate;
     // no completed reader response or authority witness is reused here.

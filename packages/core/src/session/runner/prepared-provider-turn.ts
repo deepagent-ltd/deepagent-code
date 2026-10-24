@@ -240,7 +240,9 @@ export function prepare(input: Input): PreparedProviderTurn {
     ...(input.protocolAttemptIdentityHash === undefined
       ? {}
       : { protocol_attempt_identity_hash: input.protocolAttemptIdentityHash }),
-    ...(input.protocolAttemptIdentity === undefined ? {} : { protocol_attempt_identity: input.protocolAttemptIdentity }),
+    ...(input.protocolAttemptIdentity === undefined
+      ? {}
+      : { protocol_attempt_identity: input.protocolAttemptIdentity }),
     ...(input.capabilitySnapshot === undefined
       ? {}
       : {
@@ -264,17 +266,21 @@ const positiveEnv = (name: string, fallback: number) => {
  * do not reduce the model's occupied context window. Keep this estimator shared by the hard gate
  * and the durable prepared-turn budget receipt. */
 export function estimateFullRequestTokens(request: LLMRequest): number {
-  return Token.estimate(JSON.stringify({
-    model: request.model.id,
-    system: request.system,
-    messages: request.messages,
-    tools: request.tools,
-    toolChoice: request.toolChoice,
-    generation: request.generation,
-    providerOptions: request.providerOptions,
-    responseFormat: request.responseFormat,
-    metadata: request.metadata,
-  })) + 256
+  return (
+    Token.estimate(
+      JSON.stringify({
+        model: request.model.id,
+        system: request.system,
+        messages: request.messages,
+        tools: request.tools,
+        toolChoice: request.toolChoice,
+        generation: request.generation,
+        providerOptions: request.providerOptions,
+        responseFormat: request.responseFormat,
+        metadata: request.metadata,
+      }),
+    ) + 256
+  )
 }
 
 // Shared by the session runner and the compaction summary turn so every durable receipt budgets the
@@ -283,9 +289,25 @@ export function estimateFullRequestTokens(request: LLMRequest): number {
 // An absent/zero context limit means UNKNOWN (legacy `requestBudget` parity): the host guard
 // (DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD, default 32k) is the only budget line, so the estimate
 // decides. The runner consumes `decision` as a pre-dispatch guard; the receipt records the outcome.
-export function budget(model: Model, estimatedFullRequestTokens = 0): Budget {
-  const context = model.route.defaults.limits?.input ?? model.route.defaults.limits?.context
-  const output = model.route.defaults.limits?.output ?? 0
+export function budget(model: Model, estimatedFullRequestTokens = 0, maxOutputTokens?: number): Budget {
+  const limits = model.route.defaults.limits
+  const context = limits?.input ?? limits?.context
+  const output = maxOutputTokens ?? model.route.defaults.generation?.maxTokens ?? limits?.output ?? 0
+  if (
+    (context !== undefined && (!Number.isFinite(context) || context < 0)) ||
+    !Number.isFinite(output) ||
+    output < 0 ||
+    (limits?.context !== undefined && (!Number.isFinite(limits.context) || limits.context < 0))
+  )
+    return {
+      decision: "unavailable",
+      reason: "context_limit_invalid",
+      estimatedFullRequestTokens,
+      physicalInputBudget: 0,
+      reservedOutputTokens: output,
+      safetyMargin: 0,
+      provenance: "host_guard",
+    }
   if (context === undefined || context === 0) {
     const hostGuard = positiveEnv("DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD", 32_768)
     return {
@@ -298,18 +320,13 @@ export function budget(model: Model, estimatedFullRequestTokens = 0): Budget {
       provenance: "host_guard",
     }
   }
-  if (!Number.isFinite(context) || context < 0)
-    return {
-      decision: "unavailable",
-      reason: "context_limit_invalid",
-      estimatedFullRequestTokens,
-      physicalInputBudget: 0,
-      reservedOutputTokens: output,
-      safetyMargin: 0,
-      provenance: "host_guard",
-    }
   const safetyMargin = positiveEnv("DEEPAGENT_CODE_CONTEXT_SAFETY_MARGIN", 1_024)
-  const physicalInputBudget = context - safetyMargin
+  // Gemini 2.5/3 declare independent input and output windows. Other declared context windows
+  // bound input plus this request's output; an independent input ceiling still applies as well.
+  const independent =
+    ["google", "google-vertex"].includes(model.provider) && /^gemini-(?:2\.5|3(?:\.|-))/.test(model.id)
+  const physicalInputBudget =
+    Math.min(context, limits?.context === undefined || independent ? context : limits.context - output) - safetyMargin
   if (physicalInputBudget <= 0)
     return {
       decision: "unavailable",

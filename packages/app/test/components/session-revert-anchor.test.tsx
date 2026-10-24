@@ -24,6 +24,7 @@ const wiring = vi.hoisted(
 vi.mock("@/context/command", () => ({
   useCommand: () => ({ register: (_key: string, commands: () => CommandOption[]) => (wiring.commands = commands) }),
 }))
+vi.mock("@/context/platform", () => ({ usePlatform: () => ({ platform: "web" }) }))
 vi.mock("@/context/sdk", () => ({ useSDK: () => ({ client: wiring.client, directory: "/anchor-project" }) }))
 vi.mock("@/context/server-sync", () => ({ useServerSync: () => ({ data: { session_goal: {} } }) }))
 vi.mock("@/context/sync", () => ({

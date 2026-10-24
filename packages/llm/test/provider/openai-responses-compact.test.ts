@@ -5,7 +5,10 @@ import { LLM, LLMError } from "../../src"
 import { Auth, LLMClient, RequestExecutor } from "../../src/route"
 import * as OpenAIChat from "../../src/protocols/openai-chat"
 import * as OpenAIResponses from "../../src/protocols/openai-responses"
-import { byProvider as OpenAICompatibleProfiles, type OpenAICompatibleProfile } from "../../src/providers/openai-compatible-profile"
+import {
+  byProvider as OpenAICompatibleProfiles,
+  type OpenAICompatibleProfile,
+} from "../../src/providers/openai-compatible-profile"
 import { it } from "../lib/effect"
 import { dynamicResponse, fixedResponse } from "../lib/http"
 
@@ -68,10 +71,41 @@ describe("OpenAI Responses unary compaction (/responses/compact)", () => {
             expect(body.model).toBe("gpt-4.1-mini")
             expect(body.stream).toBeUndefined()
             expect(body.tool_choice).toBeUndefined()
+            expect(body.max_output_tokens).toBeUndefined()
+            expect(body.temperature).toBeUndefined()
+            expect(body.tools).toBeUndefined()
+            expect(body.instructions).toBe("You are concise.")
             expect(body.input).toEqual([
-              { role: "system", content: "You are concise." },
               { role: "user", content: [{ type: "input_text", text: "Summarize this session." }] },
             ])
+            return input.respond(compactBody(), { headers: JSON_HEADERS })
+          }),
+        ),
+      ),
+      Effect.provideService(RequestExecutor.CurrentRetryLimit, 0),
+    ),
+  )
+
+  it.effect("keeps transport headers/query but does not forward ordinary JSON body overlays", () =>
+    OpenAIResponses.compactConversation({
+      request: LLM.updateRequest(request, {
+        http: {
+          headers: { "x-client": "dac-test" },
+          query: { region: "test" },
+          body: { input: "wrong window", stream: true, max_output_tokens: 20 },
+        },
+      }),
+    }).pipe(
+      Effect.provide(
+        dynamicResponse((input) =>
+          Effect.gen(function* () {
+            const web = yield* HttpClientRequest.toWeb(input.request).pipe(Effect.orDie)
+            expect(web.headers.get("x-client")).toBe("dac-test")
+            expect(new URL(web.url).searchParams.get("region")).toBe("test")
+            const body = (yield* Effect.promise(() => web.json())) as Record<string, unknown>
+            expect(body.input).not.toBe("wrong window")
+            expect(body.stream).toBeUndefined()
+            expect(body.max_output_tokens).toBeUndefined()
             return input.respond(compactBody(), { headers: JSON_HEADERS })
           }),
         ),
@@ -88,7 +122,8 @@ describe("OpenAI Responses unary compaction (/responses/compact)", () => {
             const body = (yield* readBody(input.request)) as Record<string, unknown>
             const inputItems = body.input as ReadonlyArray<Record<string, unknown>>
             expect(inputItems[0]).toEqual({ type: "compaction", encrypted_content: "prior-enc" })
-            expect(inputItems[1]).toEqual({ role: "system", content: "You are concise." })
+            expect(body.instructions).toBe("You are concise.")
+            expect(inputItems[1]).toMatchObject({ role: "user" })
             return input.respond(compactBody("enc-blob-2"), { headers: JSON_HEADERS })
           }),
         ),
@@ -136,6 +171,39 @@ describe("OpenAI Responses unary compaction (/responses/compact)", () => {
         Effect.provideService(RequestExecutor.CurrentRetryLimit, 0),
       )
       expect(second.encryptedContent).toBe("enc-round-2")
+    }),
+  )
+
+  it.effect("keeps the complete canonical compact window, including retained messages and tool results", () =>
+    Effect.gen(function* () {
+      const output = [
+        {
+          type: "message",
+          id: "msg-kept",
+          role: "user",
+          content: [{ type: "input_text", text: "keep this exact request" }],
+        },
+        { type: "compaction", id: "cmp-full", encrypted_content: "opaque", extra: { version: 2 } },
+        { type: "function_call_output", call_id: "call-kept", output: [{ type: "input_text", text: "42" }] },
+      ]
+      const result = yield* OpenAIResponses.compactConversation({ request }).pipe(
+        Effect.provide(fixedResponse(JSON.stringify({ output }), { headers: JSON_HEADERS })),
+        Effect.provideService(RequestExecutor.CurrentRetryLimit, 0),
+      )
+      expect(result.output).toEqual(output)
+      const next = yield* LLMClient.prepare(
+        LLM.updateRequest(request, {
+          messages: [
+            { role: "user", content: [], metadata: { responsesCompactedWindow: result.output } },
+            { role: "user", content: [{ type: "text", text: "continue" }] },
+          ],
+        }),
+      )
+      expect((next.body as { input: unknown[] }).input).toEqual([
+        { role: "system", content: "You are concise." },
+        ...output,
+        { role: "user", content: [{ type: "input_text", text: "continue" }] },
+      ])
     }),
   )
 

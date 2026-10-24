@@ -22,6 +22,7 @@ import { ProcessLifecycle } from "@/effect/process-lifecycle"
 import { ServerAuth } from "./auth"
 import { ListenerTransport } from "./listener-transport"
 import { ListenerStop } from "./listener-stop"
+import type { IMDeviceStore } from "@/im/device-store"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -78,7 +79,10 @@ type ListenOptions = CorsOptions & {
   restorePrepare?: () => Promise<void>
   /** Failure injection after the old listener closes; production never sets this. */
   restoreRebind?: () => Promise<void>
+  /** Executable constructor dependency only; never selected by JSON, environment or HTTP. */
+  readonly imDeviceStore?: Layer.Layer<IMDeviceStore.Service>
 }
+type RuntimeListenOptions = ListenOptions & { readonly imRuntime?: ReturnType<typeof HttpApiApp.createIMRuntimeLayer> }
 type ListenerState = {
   scope: Scope.Scope
   server: Context.Service.Shape<typeof HttpServer.HttpServer>
@@ -148,9 +152,14 @@ export async function listen(opts: ListenOptions): Promise<Listener> {
   }
 }
 
-const listenEffect: (opts: ListenOptions) => Effect.Effect<Listener, unknown> = Effect.fn("Server.listen")(function* (
-  opts: ListenOptions,
+const listenEffect: (input: ListenOptions) => Effect.Effect<Listener, unknown> = Effect.fn("Server.listen")(function* (
+  input: ListenOptions,
 ) {
+  // Keep only the IM layer identity stable across restore warming and rebinding.
+  // The origin-aware HTTP graph still binds afresh for each listener/port.
+  const opts: RuntimeListenOptions = input.imDeviceStore
+    ? { ...input, imRuntime: HttpApiApp.createIMRuntimeLayer(undefined, input.imDeviceStore) }
+    : { ...input }
   const cold = !serverHasListened
   const layerBuildT0 = yield* Effect.sync(() => Date.now())
   const control = makeRestoreControl(opts)
@@ -177,8 +186,8 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<Listener, unknown> = 
   }
 })
 
-function listenerLayer(opts: ListenOptions, port: number) {
-  return HttpRouter.serve(HttpApiApp.createRoutes(opts), {
+function listenerLayer(opts: RuntimeListenOptions, port: number) {
+  return HttpRouter.serve(HttpApiApp.createRoutes(opts, undefined, { imRuntime: opts.imRuntime }), {
     middleware: disposeMiddleware,
     disableLogger: true,
     disableListenLog: true,
@@ -209,7 +218,7 @@ function maintenanceListenerLayer(opts: ListenOptions, port: number, filename: s
   )
 }
 
-function startWithPortFallback(opts: ListenOptions, onRestored: () => void) {
+function startWithPortFallback(opts: RuntimeListenOptions, onRestored: () => void) {
   if (opts.port !== 0) return startListener(opts, opts.port, onRestored)
   // Match the legacy listener port-resolution behavior: explicit `0` prefers
   // 4096 first, then any free port.
@@ -221,7 +230,7 @@ function startWithPortFallback(opts: ListenOptions, onRestored: () => void) {
 }
 
 function startListener(
-  opts: ListenOptions,
+  opts: RuntimeListenOptions,
   port: number,
   onRestored?: () => void,
   prepared?: Layer.MemoMap,
@@ -292,7 +301,7 @@ function startListener(
 /** Keep the incident listener serving while a fresh business graph opens the restored DB.
  * Only a fully built graph may replace it; a failed warm build leaves maintenance admission
  * intact and retries without ever exposing a partially initialized business runtime. */
-function makeRestoreControl(opts: ListenOptions) {
+function makeRestoreControl(opts: RuntimeListenOptions) {
   let active: { state: ListenerState; stop: Listener["stop"] } | undefined
   let maintenanceState: BootstrapState | undefined
   let port = 0
@@ -326,7 +335,7 @@ function makeRestoreControl(opts: ListenOptions) {
     try {
       await Effect.runPromise(
         Layer.buildWithMemoMap(
-          Layer.provideMerge(HttpApiApp.createRoutes(opts), HttpRouter.layer),
+          Layer.provideMerge(HttpApiApp.createRoutes(opts, undefined, { imRuntime: opts.imRuntime }), HttpRouter.layer),
           memoMap,
           scope,
         ).pipe(Effect.provide(HttpApiApp.context)),

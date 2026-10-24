@@ -20,7 +20,6 @@ import { mergeMessage } from "./global-sync/event-reducer"
 import { snapshotRows } from "@/context/v2-session-projector"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
-type ActivityProgress = NonNullable<Extract<Message, { role: "assistant" }>["activityProgress"]>
 
 // provider lifecycle root cause B: ID order is not chronological order across the 6-byte ID time wrap;
 // parts sort by (time.start, id), messages by (time.created, id). See utils/message-order.ts.
@@ -64,25 +63,40 @@ function mergePageMessages(
   base: readonly Message[],
   incoming: readonly Message[],
   previous: readonly Message[],
-  baseline: ReadonlyMap<string, ActivityProgress | undefined>,
+  parts: Readonly<Record<string, readonly Part[] | undefined>>,
+  baseline: ReadonlyMap<string, { info: string; parts: string }>,
   authoritative: boolean,
 ) {
   const messages = new Map(base.map((item) => [item.id, item] as const))
   const previousByID = new Map(previous.map((item) => [item.id, item] as const))
-  if (authoritative) {
-    for (const item of previous) {
-      if (!baseline.has(item.id) || !sameActivityProgress(item, baseline.get(item.id))) messages.set(item.id, item)
-    }
+  const concurrent = new Set<string>()
+  const preserveParts = new Set<string>()
+  // A page is a snapshot from before any messages delivered while its request was in flight.
+  for (const item of previous) {
+    const original = baseline.get(item.id)
+    const changedParts = JSON.stringify(parts[item.id] ?? []) !== (original?.parts ?? "[]")
+    if (JSON.stringify(item) === original?.info && !changedParts) continue
+    messages.set(item.id, item)
+    concurrent.add(item.id)
+    if (changedParts || parts[item.id]?.length) preserveParts.add(item.id)
   }
   let conflict = false
   for (const item of incoming) {
-    if (authoritative && baseline.has(item.id) && !previousByID.has(item.id)) continue
+    if (baseline.has(item.id) && !previousByID.has(item.id)) {
+      messages.delete(item.id)
+      preserveParts.add(item.id)
+      continue
+    }
     const current = previousByID.get(item.id) ?? messages.get(item.id)
     if (!current) {
       messages.set(item.id, item)
       continue
     }
-    if (authoritative && sameActivityProgress(current, baseline.get(item.id))) {
+    if (concurrent.has(item.id)) {
+      messages.set(item.id, current)
+      continue
+    }
+    if (authoritative && baseline.has(item.id)) {
       messages.set(item.id, item)
       continue
     }
@@ -93,22 +107,8 @@ function mergePageMessages(
   return {
     messages: [...messages.values()].sort((a, b) => compareMessages(a, b)),
     conflict,
+    preserveParts,
   }
-}
-
-function activityProgress(message: Message): ActivityProgress | undefined {
-  if (message.role !== "assistant" || !message.activityProgress) return
-  return { ...message.activityProgress }
-}
-
-function sameActivityProgress(message: Message, baseline: ActivityProgress | undefined) {
-  const marker = activityProgress(message)
-  return (
-    marker?.activityID === baseline?.activityID &&
-    marker?.revision === baseline?.revision &&
-    marker?.state === baseline?.state &&
-    marker?.terminalReason === baseline?.terminalReason
-  )
 }
 
 type OptimisticStore = {
@@ -457,10 +457,11 @@ export const createDirSyncContext = (
   }) => {
     const key = keyFor(input.directory, input.sessionID)
     return runInflight(inflightMessages, trailingMessages, key, input.force === true, async () => {
+      const initial = serverSync.child(input.directory, { bootstrap: false })[0]
       const baseline = new Map(
-        (serverSync.child(input.directory, { bootstrap: false })[0].message[input.sessionID] ?? []).map((message) => [
+        (initial.message[input.sessionID] ?? []).map((message) => [
           message.id,
-          activityProgress(message),
+          { info: JSON.stringify(message), parts: JSON.stringify(initial.part[message.id] ?? []) },
         ]),
       )
       let conflict = false
@@ -493,7 +494,14 @@ export const createDirSyncContext = (
           const [store] = serverSync.child(input.directory, { bootstrap: false })
           const previous = store.message[input.sessionID] ?? []
           const cached = input.mode === "prepend" ? previous : optimistic.canonical
-          const merged = mergePageMessages(cached, next.session, previous, baseline, input.authoritative === true)
+          const merged = mergePageMessages(
+            cached,
+            next.session,
+            previous,
+            store.part,
+            baseline,
+            input.authoritative === true,
+          )
           conflict = merged.conflict
           if (conflict)
             console.error("Conflicting activity progress page", {
@@ -505,6 +513,7 @@ export const createDirSyncContext = (
           batch(() => {
             input.setStore("message", input.sessionID, reconcile(message, { key: "id" }))
             for (const p of next.part) {
+              if (merged.preserveParts.has(p.id)) continue
               const filtered = p.part.filter((x) => !SKIP_PARTS.has(x.type))
               if (filtered.length) input.setStore("part", p.id, filtered)
             }

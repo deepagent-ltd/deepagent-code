@@ -331,6 +331,7 @@ export interface GetGroupInput {
 export interface ListMessagesInput {
   groupID: string
   cursor?: string
+  anchorID?: string
   limit: number
 }
 
@@ -789,7 +790,20 @@ export const IMRepositoryLive = Layer.effect(
       listMessages: (input) =>
         Effect.gen(function* () {
           yield* readerGuard(KernelReader.gateGroup(db, input.groupID))
+          if (input.anchorID !== undefined && input.cursor !== undefined)
+            return yield* new IMRepositoryError({ message: "anchorID and cursor are mutually exclusive" })
           const limit = input.limit + 1
+          const anchor = input.anchorID === undefined ? undefined : yield* db
+            .select({ id: MessageTable.id, createdAt: MessageTable.created_at })
+            .from(MessageTable)
+            .where(and(
+              eq(MessageTable.id, input.anchorID as IMID.MessageID),
+              eq(MessageTable.group_id, input.groupID as IMID.GroupID),
+              isNull(MessageTable.deleted_at),
+              yield* readerGuard(KernelReader.messagePredicate(db)),
+            ))
+            .get()
+            .pipe(Effect.mapError(dbError("Database operation failed")))
 
           const cursor = parseCompositeCursor(input.cursor)
           const cursorTimestamp = input.cursor && !cursor ? Number(input.cursor) : undefined
@@ -803,8 +817,10 @@ export const IMRepositoryLive = Layer.effect(
             eq(MessageTable.group_id, input.groupID as IMID.GroupID),
             isNull(MessageTable.deleted_at),
             yield* readerGuard(KernelReader.messagePredicate(db)),
-            cursor ? or(lt(MessageTable.created_at, cursor.createdAt), and(eq(MessageTable.created_at, cursor.createdAt), lt(MessageTable.id, cursor.id as IMID.MessageID)))
-              : cursorTimestamp !== undefined && Number.isFinite(cursorTimestamp) ? lt(MessageTable.created_at, cursorTimestamp) : undefined,
+            input.anchorID !== undefined
+              ? anchor ? sql`(${MessageTable.created_at}, ${MessageTable.id}) <= (${anchor.createdAt}, ${anchor.id})` : sql`0`
+              : cursor ? or(lt(MessageTable.created_at, cursor.createdAt), and(eq(MessageTable.created_at, cursor.createdAt), lt(MessageTable.id, cursor.id as IMID.MessageID)))
+                : cursorTimestamp !== undefined && Number.isFinite(cursorTimestamp) ? lt(MessageTable.created_at, cursorTimestamp) : undefined,
           )
 
           const messages = yield* db
@@ -816,11 +832,21 @@ export const IMRepositoryLive = Layer.effect(
             .all()
             .pipe(Effect.mapError(dbError("Database operation failed")))
 
-          yield* Effect.forEach(messages, (message) => readerGuard(KernelReader.verifyMessage(db, message)))
+          // Read only the nearest bounded context on the other side of a visible anchor.
+          const newer = anchor ? yield* db.select().from(MessageTable).where(and(
+            eq(MessageTable.group_id, input.groupID as IMID.GroupID),
+            isNull(MessageTable.deleted_at),
+            yield* readerGuard(KernelReader.messagePredicate(db)),
+            sql`(${MessageTable.created_at}, ${MessageTable.id}) > (${anchor.createdAt}, ${anchor.id})`,
+          )).orderBy(asc(MessageTable.created_at), asc(MessageTable.id)).limit(Math.max(0, input.limit - 1)).all()
+            .pipe(Effect.mapError(dbError("Database operation failed"))) : []
+          const newerCount = Math.min(newer.length, Math.max(Math.floor(input.limit / 2), input.limit - Math.min(messages.length, input.limit)))
+          const resultMessages = input.anchorID !== undefined && messages[0]?.id !== input.anchorID ? []
+            : [...newer.slice(0, newerCount).reverse(), ...messages.slice(0, input.limit - newerCount)]
+          const hasMore = resultMessages.length > 0 && messages.length > input.limit - newerCount
+          yield* Effect.forEach([...messages, ...newer], (message) => readerGuard(KernelReader.verifyMessage(db, message)))
           yield* readerGuard(KernelReader.assertOutput(db))
           const reader = yield* readerGuard(KernelReader.pageState(db, input.groupID))
-          const hasMore = messages.length > input.limit
-          const resultMessages = hasMore ? messages.slice(0, input.limit) : messages
 
           return {
             messages: yield* Effect.forEach(resultMessages, (message) => readerGuard(KernelReader.displayMessage(db, message)).pipe(Effect.map((display) => ({ ...mapMessageRow(message), ...display })))),

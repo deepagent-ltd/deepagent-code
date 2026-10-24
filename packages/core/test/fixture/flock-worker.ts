@@ -9,6 +9,7 @@ type Msg = {
   baseDelayMs?: number
   maxDelayMs?: number
   holdMs?: number
+  reclaimDeadProcess?: boolean
   clockSkewMs?: number
   ready?: string
   active?: string
@@ -65,6 +66,7 @@ async function main() {
     timeoutMs: msg.timeoutMs,
     baseDelayMs: msg.baseDelayMs,
     maxDelayMs: msg.maxDelayMs,
+    reclaimDeadProcess: msg.reclaimDeadProcess,
   })
 }
 

@@ -2,6 +2,7 @@ import { Dialog as Kobalte } from "@kobalte/core/dialog"
 import { ComponentProps, JSXElement, Match, ParentProps, Show, Switch } from "solid-js"
 import { useI18n } from "../context/i18n"
 import { IconButton } from "./icon-button"
+import { useDialogFocusReturn } from "../context/dialog"
 
 export interface DialogProps extends ParentProps {
   title?: JSXElement
@@ -16,6 +17,7 @@ export interface DialogProps extends ParentProps {
 
 export function Dialog(props: DialogProps) {
   const i18n = useI18n()
+  const returnFocus = useDialogFocusReturn()
   return (
     <div
       data-component="dialog"
@@ -25,6 +27,7 @@ export function Dialog(props: DialogProps) {
     >
       <div data-slot="dialog-container">
         <Kobalte.Content
+          onCloseAutoFocus={returnFocus}
           data-slot="dialog-content"
           data-no-header={!props.title && !props.action ? "" : undefined}
           classList={{

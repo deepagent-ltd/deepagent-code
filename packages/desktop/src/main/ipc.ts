@@ -11,10 +11,11 @@ import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attach
 import { archivePath, copyPath, extractPath, guardFileOpCall, movePath, removePath, renamePath, type FileOpResult } from "./file-ops"
 import { fileLog, isTracked } from "./git"
 import { getStore } from "./store"
-import { getPinchZoomEnabled, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
+import { getPinchZoomEnabled, isMainWindow, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
 import { getPreventSleepEnabled, setPreventSleepEnabled, syncPowerSaveBlocker } from "./power"
 import { PREVENT_SLEEP_KEY, SETTINGS_STORE } from "./store-keys"
 import { registerBrowserViewIpc } from "./browser-view"
+import { registerSharedBrowserIpc } from "./shared-browser-ipc"
 import type { UpdaterController } from "./updater-controller"
 import { createUpdaterSubscriptions } from "./updater-subscriptions"
 
@@ -187,11 +188,16 @@ export function registerIpcHandlers(deps: Deps) {
     },
   )
 
-  ipcMain.handle("save-file-dialog", async (_event: IpcMainInvokeEvent, input: { defaultPath: string; bytes: ArrayBuffer }) => {
+  ipcMain.handle("save-file-dialog", async (event: IpcMainInvokeEvent, input: { defaultPath: string; bytes: ArrayBuffer }) => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    if (!owner || !isMainWindow(owner) || event.senderFrame !== event.sender.mainFrame)
+      throw new Error("Session bundle save requires its main window")
     if (!(input.bytes instanceof ArrayBuffer) || input.bytes.byteLength > 64 * 1024 * 1024)
       throw new Error("Invalid session bundle")
-    const result = await dialog.showSaveDialog({ title: "Save session bundle", defaultPath: basename(input.defaultPath) })
+    const result = await dialog.showSaveDialog(owner, { title: "Save session bundle", defaultPath: basename(input.defaultPath) })
     if (result.canceled || !result.filePath) return false
+    if (owner.isDestroyed() || event.sender.isDestroyed() || BrowserWindow.fromWebContents(event.sender) !== owner)
+      throw new Error("Session bundle save window was closed")
     await writeFile(result.filePath, new Uint8Array(input.bytes))
     return true
   })
@@ -234,6 +240,7 @@ export function registerIpcHandlers(deps: Deps) {
   })
 
   registerBrowserViewIpc()
+  app.once("will-quit", registerSharedBrowserIpc(deps.awaitInitialization, isMainWindow))
 
   ipcMain.handle("show-window", (event: IpcMainInvokeEvent) => {
     const win = BrowserWindow.fromWebContents(event.sender)

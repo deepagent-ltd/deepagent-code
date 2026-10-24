@@ -164,7 +164,7 @@ export const make = (db: Db) => {
     prepare: (target: Target) => prepare(db, target),
     prepareForJoin: (target: Target) => prepareForJoin(db, target),
     transaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      db.transaction(() => effect, { behavior: "immediate" }).pipe(Effect.orDie),
+      db.transaction(() => effect, { behavior: "immediate" }).pipe(GoalChildResult.withRuntimeIdentity(db), Effect.orDie),
     register: (receipt: Receipt, prepared: Prepared) => {
       const token = Object.freeze({})
       entries.set(receipt, token)

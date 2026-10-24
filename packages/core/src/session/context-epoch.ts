@@ -56,6 +56,44 @@ interface Prepared {
   readonly selection?: SessionInput.SelectionSnapshot
 }
 
+/** Observe reconciliation using the runner's algebra, without fencing or publishing a new epoch. */
+export const observe = Effect.fn("SessionContextEpoch.observe")(function* (
+  db: DatabaseService,
+  context: Effect.Effect<SystemContext.SystemContext>,
+  sessionID: SessionSchema.ID,
+  agent: AgentV2.ID,
+) {
+  const [value, stored] = yield* Effect.all([context, find(db, sessionID)], { concurrency: 2 })
+  if (!stored) {
+    const generation = yield* SystemContext.initialize(value)
+    return {
+      baseline: generation.baseline,
+      baselineSeq: yield* SessionInput.latestSeq(db, sessionID),
+      revision: 0,
+      updates: [] as string[],
+    }
+  }
+  const snapshot = yield* Schema.decodeUnknownEffect(SystemContext.Snapshot)(stored.snapshot)
+  const result =
+    stored.replacement_seq === null && stored.agent === agent
+      ? yield* SystemContext.reconcile(value, snapshot)
+      : yield* SystemContext.replace(value, snapshot)
+  if (result._tag === "ReplacementReady")
+    return {
+      baseline: result.generation.baseline,
+      baselineSeq: stored.replacement_seq ?? (yield* SessionInput.latestSeq(db, sessionID)),
+      revision: stored.revision + 1,
+      updates: [] as string[],
+    }
+  return {
+    baseline: stored.baseline,
+    baselineSeq: stored.baseline_seq,
+    revision: stored.revision,
+    updates: result._tag === "Updated" ? [result.text] : [],
+    blocked: result._tag === "ReplacementBlocked",
+  }
+})
+
 export function initialize(
   db: DatabaseService,
   context: Effect.Effect<SystemContext.SystemContext>,

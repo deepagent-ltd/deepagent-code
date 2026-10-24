@@ -21,7 +21,7 @@
 
 **DeepAgent Code (DAC)** combines a desktop coding workspace and a terminal agent with a shared execution core. It helps you work through changes that span files, model turns, tools, and people: keep project context, maintain an editable plan, delegate independent tasks, inspect execution, and bring the final answer back to the conversation that started the work.
 
-This source line targets **2.0.4**. See [GitHub Releases](https://github.com/deepagent-ltd/deepagent-code/releases) for available installation packages.
+This source line targets **2.0.5**. See [GitHub Releases](https://github.com/deepagent-ltd/deepagent-code/releases) for available installation packages.
 
 ## Why DeepAgent Code
 
@@ -34,17 +34,19 @@ This source line targets **2.0.4**. See [GitHub Releases](https://github.com/dee
 | **Turn a discussion into real work**  | Public IM supports `/dac` commands to your own local DAC, continuous follow-up in the same Session, and final answers returned to the original conversation. |
 | **Choose your tools and models**      | GUI and TUI share the core; configurable providers, Skills, domain packs, and MCP extend it for your project.                                                |
 
-## What's new in 2.0.4
+## 2.0.5 highlights
 
-**Personal agent in IM.** Use `/dac` to ask your own DAC to work on a discussion. It uses the normal local Session, model, tools, and permissions. Commands and execution are private to you; the final answer returns to IM. Follow-up requests in the same conversation reuse the Session. IM files and images have a **10 MiB per-attachment limit**.
+**More consistent model setup.** Model lists refresh after provider connection changes, and reasoning controls follow the selected model's supported options.
 
-**Desktop-managed browser.** Inspect pages, navigate tabs, and perform supported page interactions from the coding workspace. Uploads, downloads, clipboard access, and other sensitive operations have explicit authorization and target checks. Available actions depend on the host platform and its browser capabilities.
+**Clearer MCP management.** Add and configure servers, connect or disconnect services, and inspect their current connection status and errors.
 
-**Traceable event workflows.** Configured events can drive task graphs with dependencies, execution records, and results. The value is practical: track what triggered the work, which step owns it, what completed, and which outcomes need attention.
+**More control during long tasks.** Edit Goal plans, choose context-compaction modes, and take over the managed browser when a step needs your input. Browser actions remain subject to the current host's capabilities and permissions.
 
-**A more consistent workspace.** Model and reasoning controls sit near the composer actions, collaboration settings live in Settings, and IM has its own model selection. Desktop builds share the Native asset preparation and package-validation path across build workflows.
+**Device-bound IM access.** Inspect the current device's IM entitlement, plan, and validity in Settings. IM activation remains separate from connecting a model provider.
 
-See the [changelog](CHANGELOG.md) for the user-facing release details.
+**Windows installer fixes.** Improve user installation-path handling and PATH restoration during upgrades and uninstall.
+
+See the [changelog](CHANGELOG.md) for published release details.
 
 ## Built for sustained work
 
@@ -83,9 +85,9 @@ For example, while discussing a bug with a teammate:
 
 DAC opens or reuses the local Session associated with that conversation. View the streaming execution in the normal DAC workspace, then receive the final answer in the IM thread. Continue with another `/dac` request to build on the same Session; you can explicitly start a new Session when you want separate context.
 
-IM activation is a separate, explicit purchase: **1 credit, valid indefinitely, with no automatic renewal**. Connecting a model provider does not automatically activate or charge for IM. Obtain credentials through your administrator or an authorized distribution channel, activate IM in Settings, and choose the model for your personal agent.
+IM requires a separate entitlement bound to one device. DAC supports one-year, three-year, and lifetime plans without automatic renewal. Obtain activation credentials through your administrator or an authorized distribution channel. In Settings, check this device, review its access information, and redeem an activation code or bind existing access. Purchase availability, current access, and expiry are determined by the configured IM service; an unknown expiry does not mean lifetime access. Connecting a model provider does not purchase or activate IM. IM files and images have a **maximum of 10 MiB per attachment**.
 
-Public IM transports messages; your agent executes on your own machine. DAC 2.0.4 does not provide a public remote-execution relay, shared agents callable by other users, or whole-desktop Computer Use.
+Public IM transports messages; your agent executes on your own machine. DAC 2.0.5 does not provide a public remote-execution relay, shared agents callable by other users, or whole-desktop Computer Use.
 
 ## Get started
 
@@ -98,7 +100,7 @@ Download the package for your platform from [GitHub Releases](https://github.com
 Use the Bun version pinned in the root `package.json`: **Bun 1.4.2** for this source line.
 
 ```bash
-git clone --branch 2.0.4 https://github.com/deepagent-ltd/deepagent-code.git
+git clone --branch 2.0.5 --single-branch https://github.com/deepagent-ltd/deepagent-code.git
 cd deepagent-code
 bun install
 ```

@@ -161,6 +161,7 @@ export type TuiInput = {
   goalPlan?: GoalPlanClient.Transport
   mcpOperator?: McpOperatorClient.Transport
   taskControl?: TaskHumanClient.Transport
+  browserOwner?: import("./prompt/browser-owner").BrowserOwnerTransport
   pluginHost: TuiPluginHost
 }
 
@@ -283,59 +284,60 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                             <KVProvider>
                               <TuiI18nProvider>
                                 <ToastProvider>
-                                <RouteProvider
-                                  initialRoute={
-                                    input.args.continue
-                                      ? {
-                                          type: "session",
-                                          sessionID: "dummy",
-                                        }
-                                      : undefined
-                                  }
-                                >
-                                  <TuiConfigProvider config={input.config}>
-                                    <PluginRuntimeProvider value={pluginRuntime}>
-                                      <SDKProvider
-                                        url={input.url}
-                                        directory={input.directory}
-                                        fetch={input.fetch}
-                                        headers={input.headers}
-                                        events={input.events}
-                                        goalPlan={input.goalPlan}
-                                        mcpOperator={input.mcpOperator}
-                                        taskControl={input.taskControl}
-                                      >
-                                        <ProjectProvider>
-                                          <SyncProvider>
-                                            <SyncProviderV2>
-                                              <ThemeProvider mode={mode}>
-                                                <LocalProvider>
-                                                  <PromptStashProvider>
-                                                    <DialogProvider>
-                                                      <FrecencyProvider>
-                                                        <PromptHistoryProvider>
-                                                          <PromptRefProvider>
-                                                            <EditorContextProvider>
-                                                              <App
-                                                                onSnapshot={input.onSnapshot}
-                                                                pluginHost={input.pluginHost}
-                                                              />
-                                                            </EditorContextProvider>
-                                                          </PromptRefProvider>
-                                                        </PromptHistoryProvider>
-                                                      </FrecencyProvider>
-                                                    </DialogProvider>
-                                                  </PromptStashProvider>
-                                                </LocalProvider>
-                                              </ThemeProvider>
-                                            </SyncProviderV2>
-                                          </SyncProvider>
-                                        </ProjectProvider>
-                                      </SDKProvider>
-                                    </PluginRuntimeProvider>
-                                  </TuiConfigProvider>
-                                </RouteProvider>
-                              </ToastProvider>
+                                  <RouteProvider
+                                    initialRoute={
+                                      input.args.continue
+                                        ? {
+                                            type: "session",
+                                            sessionID: "dummy",
+                                          }
+                                        : undefined
+                                    }
+                                  >
+                                    <TuiConfigProvider config={input.config}>
+                                      <PluginRuntimeProvider value={pluginRuntime}>
+                                        <SDKProvider
+                                          url={input.url}
+                                          directory={input.directory}
+                                          fetch={input.fetch}
+                                          headers={input.headers}
+                                          events={input.events}
+                                          goalPlan={input.goalPlan}
+                                          mcpOperator={input.mcpOperator}
+                                          taskControl={input.taskControl}
+                                          browserOwner={input.browserOwner}
+                                        >
+                                          <ProjectProvider>
+                                            <SyncProvider>
+                                              <SyncProviderV2>
+                                                <ThemeProvider mode={mode}>
+                                                  <LocalProvider>
+                                                    <PromptStashProvider>
+                                                      <DialogProvider>
+                                                        <FrecencyProvider>
+                                                          <PromptHistoryProvider>
+                                                            <PromptRefProvider>
+                                                              <EditorContextProvider>
+                                                                <App
+                                                                  onSnapshot={input.onSnapshot}
+                                                                  pluginHost={input.pluginHost}
+                                                                />
+                                                              </EditorContextProvider>
+                                                            </PromptRefProvider>
+                                                          </PromptHistoryProvider>
+                                                        </FrecencyProvider>
+                                                      </DialogProvider>
+                                                    </PromptStashProvider>
+                                                  </LocalProvider>
+                                                </ThemeProvider>
+                                              </SyncProviderV2>
+                                            </SyncProvider>
+                                          </ProjectProvider>
+                                        </SDKProvider>
+                                      </PluginRuntimeProvider>
+                                    </TuiConfigProvider>
+                                  </RouteProvider>
+                                </ToastProvider>
                               </TuiI18nProvider>
                             </KVProvider>
                           </ArgsProvider>
@@ -457,7 +459,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         return
       }
 
-      toast.show({ title: i18n.t("tui.common.forkFailed"), message: errorMessage(result.error), variant: "error", duration: 8000 })
+      toast.show({
+        title: i18n.t("tui.common.forkFailed"),
+        message: errorMessage(result.error),
+        variant: "error",
+        duration: 8000,
+      })
       const retry = await DialogConfirm.show(
         dialog,
         "Retry fork?",

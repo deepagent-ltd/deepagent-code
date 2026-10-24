@@ -38,6 +38,37 @@ import type {
   BrowserFilesStatusResponses,
   BrowserGetErrors,
   BrowserGetResponses,
+  BrowserSharedApproveOriginErrors,
+  BrowserSharedApproveOriginResponses,
+  BrowserSharedCloseErrors,
+  BrowserSharedCloseResponses,
+  BrowserSharedCreateErrors,
+  BrowserSharedCreateResponses,
+  BrowserSharedFilesApproveErrors,
+  BrowserSharedFilesApproveResponses,
+  BrowserSharedFilesListErrors,
+  BrowserSharedFilesListResponses,
+  BrowserSharedFilesPreviewErrors,
+  BrowserSharedFilesPreviewResponses,
+  BrowserSharedFilesStatusErrors,
+  BrowserSharedFilesStatusResponses,
+  BrowserSharedGetErrors,
+  BrowserSharedGetResponses,
+  BrowserSharedListErrors,
+  BrowserSharedListResponses,
+  BrowserSharedTakeoverErrors,
+  BrowserSharedTakeoverResponses,
+  BrowserTuiDetachErrors,
+  BrowserTuiDetachResponses,
+  BrowserTuiOwnerErrors,
+  BrowserTuiOwnerResponse,
+  BrowserTuiOwnerResponses,
+  BrowserTuiPairErrors,
+  BrowserTuiPairResponses,
+  BrowserTuiReserveErrors,
+  BrowserTuiReserveResponses,
+  BrowserTuiSealErrors,
+  BrowserTuiSealResponses,
   CapabilityCatalogErrors,
   CapabilityCatalogResponses,
   CapabilityLoadReceiptsErrors,
@@ -70,6 +101,7 @@ import type {
   DebugEvaluateErrors,
   DebugEvaluateResponses,
   DebugEventsErrors,
+  DebugEventsResponse,
   DebugEventsResponses,
   DebugScopesErrors,
   DebugScopesResponses,
@@ -338,10 +370,16 @@ import type {
   ImDacBindingResponses,
   ImDacCommandErrors,
   ImDacCommandResponses,
+  ImDacReplyReconcileErrors,
+  ImDacReplyReconcileResponses,
   ImDacReplyRetryErrors,
   ImDacReplyRetryResponses,
   ImDacSubmitErrors,
   ImDacSubmitResponses,
+  ImDeviceInfoErrors,
+  ImDeviceInfoResponses,
+  ImEntitlementErrors,
+  ImEntitlementResponses,
   ImFacadeClaimErrors,
   ImFacadeClaimResponses,
   ImFacadeDirectErrors,
@@ -382,6 +420,14 @@ import type {
   ImMessagesSearchResponses,
   ImMessagesThreadErrors,
   ImMessagesThreadResponses,
+  ImMigrateErrors,
+  ImMigrateResponses,
+  ImMigrationPendingErrors,
+  ImMigrationPendingResponses,
+  ImMigrationStatusErrors,
+  ImMigrationStatusResponses,
+  ImPlansErrors,
+  ImPlansResponses,
   ImportJobRequest,
   ImportRequest,
   ImWebsocketConnectResponses,
@@ -616,6 +662,8 @@ import type {
   SessionContextCohortResponses,
   SessionContextDiagnosticsErrors,
   SessionContextDiagnosticsResponses,
+  SessionContextUsageErrors,
+  SessionContextUsageResponses,
   SessionContinuationResolutionListErrors,
   SessionContinuationResolutionListResponses,
   SessionContinuationResolutionResolveErrors,
@@ -690,6 +738,8 @@ import type {
   SessionStatusResponses,
   SessionSummarizeErrors,
   SessionSummarizeResponses,
+  SessionTaskSummaryErrors,
+  SessionTaskSummaryResponses,
   SessionTodoErrors,
   SessionTodoResponses,
   SessionUnrevertErrors,
@@ -822,8 +872,12 @@ import type {
   VcsDiffResponses,
   VcsGetErrors,
   VcsGetResponses,
+  VcsRefsErrors,
+  VcsRefsResponses,
   VcsStatusErrors,
   VcsStatusResponses,
+  VcsSummaryErrors,
+  VcsSummaryResponses,
   WebhookCiErrors,
   WebhookCiResponses,
   WebhookGitErrors,
@@ -2163,6 +2217,579 @@ export class Global extends HeyApiClient {
 }
 
 export class Browser extends HeyApiClient {
+  public tuiPair<ThrowOnError extends boolean = false>(
+    parameters: {
+      requestID: string
+      challengeHash: string
+      rootSessionID: string
+      directory: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "requestID" },
+            { in: "body", key: "challengeHash" },
+            { in: "body", key: "rootSessionID" },
+            { in: "body", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserTuiPairResponses, BrowserTuiPairErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/tui/pair",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public tuiOwner<ThrowOnError extends boolean = false>(
+    parameters: {
+      attachID: string
+      generation: string
+      secret: string
+    },
+    options?: Options<never, ThrowOnError, BrowserTuiOwnerResponse>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "attachID" },
+            { in: "body", key: "generation" },
+            { in: "body", key: "secret" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).sse.post<BrowserTuiOwnerResponses, BrowserTuiOwnerErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/tui/owner",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public tuiReserve<ThrowOnError extends boolean = false>(
+    parameters: {
+      attachID: string
+      generation: string
+      secret: string
+      expectedBarrierOrder: number
+      inputID: string
+      originalSubmissionID: string
+      rawInput: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "attachID" },
+            { in: "body", key: "generation" },
+            { in: "body", key: "secret" },
+            { in: "body", key: "expectedBarrierOrder" },
+            { in: "body", key: "inputID" },
+            { in: "body", key: "originalSubmissionID" },
+            { in: "body", key: "rawInput" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserTuiReserveResponses, BrowserTuiReserveErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/tui/reserve",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public tuiSeal<ThrowOnError extends boolean = false>(
+    parameters: {
+      attachID: string
+      generation: string
+      secret: string
+      stamp: {
+        originalSubmissionID: string
+        inputID: string
+        rootSessionID: string
+        rawInputHash: string
+        promptHash?: string
+        sourceKind: "gui_composer" | "tui_owner" | "im_owner_dac"
+        sourceBindingHash: string
+        mainIncarnation: string
+        submissionOrder: number
+      }
+      prompt: unknown
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "attachID" },
+            { in: "body", key: "generation" },
+            { in: "body", key: "secret" },
+            { in: "body", key: "stamp" },
+            { in: "body", key: "prompt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserTuiSealResponses, BrowserTuiSealErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/tui/seal",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public tuiDetach<ThrowOnError extends boolean = false>(
+    parameters: {
+      attachID: string
+      generation: string
+      secret: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "attachID" },
+            { in: "body", key: "generation" },
+            { in: "body", key: "secret" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserTuiDetachResponses, BrowserTuiDetachErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/tui/detach",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public sharedList<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<BrowserSharedListResponses, BrowserSharedListErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/resources",
+      ...options,
+      ...params,
+    })
+  }
+
+  public sharedCreate<ThrowOnError extends boolean = false>(
+    parameters: {
+      version: 2
+      profile: "managed-shared-browser-v1"
+      inputAssurance: "shared-document-v1"
+      requestID: string
+      sessionID: string
+      policy: {
+        origin: string
+        approvedOrigins: Array<string>
+        manualApprovedOrigins: Array<string>
+        resolverPolicy: "system" | "cloudflare_doh_v1" | "alidns_doh_v1"
+        postGrants: Array<{
+          method: "POST"
+          url: string
+          contentType: "application/json" | "application/x-www-form-urlencoded" | "text/plain"
+          bodySha256: string
+          bytes: number
+        }>
+        scriptContext?: "snapshot-json-v1"
+        scriptGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          readOnly: true
+        }>
+        programGrants?: Array<{
+          scriptHash: string
+          argsHash: string
+          operations: Array<"fill" | "select" | "click" | "press" | "scroll" | "drag">
+          maxSteps: number
+        }>
+        filePolicy?: {
+          upload: boolean
+          download: boolean
+        }
+      }
+      expiresAt: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "version" },
+            { in: "body", key: "profile" },
+            { in: "body", key: "inputAssurance" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "policy" },
+            { in: "body", key: "expiresAt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserSharedCreateResponses, BrowserSharedCreateErrors, ThrowOnError>(
+      {
+        url: "/api/v1/browser/shared/resources",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  public sharedGet<ThrowOnError extends boolean = false>(
+    parameters: {
+      resourceID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "resourceID" }] }])
+    return (options?.client ?? this.client).get<BrowserSharedGetResponses, BrowserSharedGetErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/resources/{resourceID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  public sharedTakeover<ThrowOnError extends boolean = false>(
+    parameters: {
+      path_resourceID: string
+      body_resourceID: string
+      requestID: string
+      expectedRevision: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            {
+              in: "path",
+              key: "path_resourceID",
+              map: "resourceID",
+            },
+            {
+              in: "body",
+              key: "body_resourceID",
+              map: "resourceID",
+            },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedRevision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      BrowserSharedTakeoverResponses,
+      BrowserSharedTakeoverErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/browser/shared/resources/{resourceID}/takeover",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public sharedApproveOrigin<ThrowOnError extends boolean = false>(
+    parameters: {
+      path_resourceID: string
+      body_resourceID: string
+      requestID: string
+      expectedRevision: number
+      expectedManualEpoch: number
+      expectedPolicyHash: string
+      origin: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            {
+              in: "path",
+              key: "path_resourceID",
+              map: "resourceID",
+            },
+            {
+              in: "body",
+              key: "body_resourceID",
+              map: "resourceID",
+            },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedRevision" },
+            { in: "body", key: "expectedManualEpoch" },
+            { in: "body", key: "expectedPolicyHash" },
+            { in: "body", key: "origin" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      BrowserSharedApproveOriginResponses,
+      BrowserSharedApproveOriginErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/browser/shared/resources/{resourceID}/origins",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public sharedClose<ThrowOnError extends boolean = false>(
+    parameters: {
+      path_resourceID: string
+      body_resourceID: string
+      requestID: string
+      expectedRevision: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            {
+              in: "path",
+              key: "path_resourceID",
+              map: "resourceID",
+            },
+            {
+              in: "body",
+              key: "body_resourceID",
+              map: "resourceID",
+            },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "expectedRevision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<BrowserSharedCloseResponses, BrowserSharedCloseErrors, ThrowOnError>({
+      url: "/api/v1/browser/shared/resources/{resourceID}/close",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public sharedFilesPreview<ThrowOnError extends boolean = false>(
+    parameters: {
+      resourceID: string
+      body:
+        | {
+            direction: "upload"
+            relative: string
+            targetURL: string
+          }
+        | {
+            direction: "download"
+            relative: string
+            targetURL: string
+            maxBytes: number
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "resourceID" },
+            { key: "body", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      BrowserSharedFilesPreviewResponses,
+      BrowserSharedFilesPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/browser/shared/resources/{resourceID}/files/preview",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public sharedFilesApprove<ThrowOnError extends boolean = false>(
+    parameters: {
+      resourceID: string
+      requestID: string
+      previewID: string
+      expectedResourceRevision: number
+      expectedLeaseID: string
+      expectedLeaseEpoch: number
+      expectedManualEpoch: number
+      expiresAt: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "resourceID" },
+            { in: "body", key: "requestID" },
+            { in: "body", key: "previewID" },
+            { in: "body", key: "expectedResourceRevision" },
+            { in: "body", key: "expectedLeaseID" },
+            { in: "body", key: "expectedLeaseEpoch" },
+            { in: "body", key: "expectedManualEpoch" },
+            { in: "body", key: "expiresAt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      BrowserSharedFilesApproveResponses,
+      BrowserSharedFilesApproveErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/browser/shared/resources/{resourceID}/files/approve",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public sharedFilesStatus<ThrowOnError extends boolean = false>(
+    parameters: {
+      resourceID: string
+      requestID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "resourceID" },
+            { in: "path", key: "requestID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      BrowserSharedFilesStatusResponses,
+      BrowserSharedFilesStatusErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/browser/shared/resources/{resourceID}/files/requests/{requestID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  public sharedFilesList<ThrowOnError extends boolean = false>(
+    parameters: {
+      resourceID: string
+      cursor?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "resourceID" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      BrowserSharedFilesListResponses,
+      BrowserSharedFilesListErrors,
+      ThrowOnError
+    >({
+      url: "/api/v1/browser/shared/resources/{resourceID}/files",
+      ...options,
+      ...params,
+    })
+  }
+
   public create<ThrowOnError extends boolean = false>(
     parameters: {
       body:
@@ -4220,7 +4847,7 @@ export class Debug extends HeyApiClient {
       workspace?: string
       sessionId?: string
     },
-    options?: Options<never, ThrowOnError>,
+    options?: Options<never, ThrowOnError, DebugEventsResponse>,
   ) {
     const params = buildClientParams(
       [parameters],
@@ -4234,7 +4861,7 @@ export class Debug extends HeyApiClient {
         },
       ],
     )
-    return (options?.client ?? this.client).get<DebugEventsResponses, DebugEventsErrors, ThrowOnError>({
+    return (options?.client ?? this.client).sse.get<DebugEventsResponses, DebugEventsErrors, ThrowOnError>({
       url: "/debug/events",
       ...options,
       ...params,
@@ -5061,6 +5688,8 @@ export class Goal extends HeyApiClient {
       sessionID: string
       requestID: string
       objective?: string
+      codeRefs?: Array<string>
+      planSource?: "workspace-file"
       criteria?: Array<{
         kind: "tests_pass" | "no_diagnostics" | "reviewer_clean" | "panel_approves" | "plan_complete"
         commands?: Array<string>
@@ -5087,6 +5716,8 @@ export class Goal extends HeyApiClient {
             { in: "body", key: "sessionID" },
             { in: "body", key: "requestID" },
             { in: "body", key: "objective" },
+            { in: "body", key: "codeRefs" },
+            { in: "body", key: "planSource" },
             { in: "body", key: "criteria" },
             { in: "body", key: "limits" },
             { in: "body", key: "stallThreshold" },
@@ -7665,6 +8296,7 @@ export class Messages extends HeyApiClient {
       directory?: string
       workspace?: string
       cursor?: string
+      anchorID?: string
       limit?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -7678,6 +8310,7 @@ export class Messages extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "query", key: "cursor" },
+            { in: "query", key: "anchorID" },
             { in: "query", key: "limit" },
           ],
         },
@@ -8586,6 +9219,187 @@ export class Websocket extends HeyApiClient {
 
 export class Im extends HeyApiClient {
   /**
+   * Read the selected IM service's authoritative plan catalog without purchasing
+   */
+  public plans<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImPlansResponses, ImPlansErrors, ThrowOnError>({
+      url: "/api/v1/im/plans",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read this existing device binding's authoritative IM entitlement without logging in
+   */
+  public entitlement<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImEntitlementResponses, ImEntitlementErrors, ThrowOnError>({
+      url: "/api/v1/im/entitlement",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read public IM device identity and verify native custody
+   */
+  public deviceInfo<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImDeviceInfoResponses, ImDeviceInfoErrors, ThrowOnError>({
+      url: "/api/v1/im/device/info",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read the original unfinished device binding
+   */
+  public migrationPending<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImMigrationPendingResponses, ImMigrationPendingErrors, ThrowOnError>({
+      url: "/api/v1/im/device/migrations",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Recover the original zero-credit legacy binding
+   */
+  public migrationStatus<ThrowOnError extends boolean = false>(
+    parameters: {
+      migrationID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "migrationID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImMigrationStatusResponses, ImMigrationStatusErrors, ThrowOnError>({
+      url: "/api/v1/im/device/migrations/{migrationID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Explicitly bind an existing paid entitlement without charging
+   */
+  public migrate<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      migrationID: string
+      voucher: string
+      retryOriginal?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "migrationID" },
+            { in: "body", key: "voucher" },
+            { in: "body", key: "retryOriginal" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImMigrateResponses, ImMigrateErrors, ThrowOnError>({
+      url: "/api/v1/im/device/migrate",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Get explicit IM activation terms without spending credit
    */
   public activationQuote<ThrowOnError extends boolean = false>(
@@ -8653,6 +9467,7 @@ export class Im extends HeyApiClient {
       method: "api_key" | "activation_code"
       credential: string
       quoteID: string
+      retryOriginal?: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -8668,6 +9483,7 @@ export class Im extends HeyApiClient {
             { in: "body", key: "method" },
             { in: "body", key: "credential" },
             { in: "body", key: "quoteID" },
+            { in: "body", key: "retryOriginal" },
           ],
         },
       ],
@@ -8819,6 +9635,48 @@ export class Im extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  /**
+   * Explicitly check original final reply receipts without sending or executing again
+   */
+  public dacReplyReconcile<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      commandID: string
+      directory?: string
+      workspace?: string
+      cursor?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "path", key: "commandID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "cursor" },
+          ],
+        },
+      ],
+    )
+    params.body ??= {}
+    return (options?.client ?? this.client).post<ImDacReplyReconcileResponses, ImDacReplyReconcileErrors, ThrowOnError>(
+      {
+        url: "/api/v1/im/groups/{groupId}/dac/commands/{commandID}/reply/reconcile",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
   }
 
   /**
@@ -9282,6 +10140,64 @@ export class Vcs extends HeyApiClient {
   }
 
   /**
+   * List local and cached remote branches
+   */
+  public refs<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<VcsRefsResponses, VcsRefsErrors, ThrowOnError>({
+      url: "/vcs/refs",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read bounded working tree comparison statistics without patches
+   */
+  public summary<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      baseRef?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "baseRef" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<VcsSummaryResponses, VcsSummaryErrors, ThrowOnError>({
+      url: "/vcs/summary",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Get VCS diff
    *
    * Retrieve the current git diff for the working tree or against the default branch.
@@ -9291,6 +10207,9 @@ export class Vcs extends HeyApiClient {
       directory?: string
       workspace?: string
       mode: "git" | "branch"
+      baseRef?: string
+      baseOID?: string
+      headOID?: string
       context?: number
     },
     options?: Options<never, ThrowOnError>,
@@ -9303,6 +10222,9 @@ export class Vcs extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "query", key: "mode" },
+            { in: "query", key: "baseRef" },
+            { in: "query", key: "baseOID" },
+            { in: "query", key: "headOID" },
             { in: "query", key: "context" },
           ],
         },
@@ -11360,7 +12282,7 @@ export class Models extends HeyApiClient {
       apiKey?: string
       authProviderID?: string
       modelID?: string
-      kind?: "openai-compatible" | "anthropic"
+      kind?: "openai-compatible" | "anthropic" | "google"
       headers?: {
         [key: string]: string
       }
@@ -11907,6 +12829,93 @@ export class Session2 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  /**
+   * Get direct child task facts
+   *
+   * Read latest task generations, visible progress, results and notification facts within the routed parent Session. This endpoint never executes or controls a task.
+   */
+  public taskSummary<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      cursor?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "cursor" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<SessionTaskSummaryResponses, SessionTaskSummaryErrors, ThrowOnError>({
+      url: "/session/{sessionID}/task-summary",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Observe context and recorded usage
+   *
+   * Read the current Session's context estimate and durable usage. POST keeps draft text out of URLs; no input admission, execution, provider or MCP request occurs.
+   */
+  public contextUsage<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      providerID?: string
+      modelID?: string
+      variant?: string
+      agent?: string
+      draft?: string
+      draftRevision: string
+      hasAttachments?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "providerID" },
+            { in: "body", key: "modelID" },
+            { in: "body", key: "variant" },
+            { in: "body", key: "agent" },
+            { in: "body", key: "draft" },
+            { in: "body", key: "draftRevision" },
+            { in: "body", key: "hasAttachments" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionContextUsageResponses, SessionContextUsageErrors, ThrowOnError>(
+      {
+        url: "/session/{sessionID}/context-usage",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
   }
 
   /**

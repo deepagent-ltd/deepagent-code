@@ -640,7 +640,12 @@ export const ImportSection: Component = () => {
               "Import selected chat history, memory and skills into an isolated copy. Live merge supports chat history only.",
             )}
           >
-            <div class="settings-v2-scope-row" data-action="settings-import-scope" role="group" aria-label={t("settings.import.scope", "What to import")}>
+            <div
+              class="settings-v2-scope-row"
+              data-action="settings-import-scope"
+              role="group"
+              aria-label={t("settings.import.scope", "What to import")}
+            >
               <For each={scopeOptions}>
                 {(opt) => (
                   <CheckboxV2
@@ -749,29 +754,6 @@ export const ImportSection: Component = () => {
           </SettingsRowV2>
         </Show>
 
-        <div class="settings-v2-import-actions" data-action="settings-import-run">
-          <ButtonV2
-            size="normal"
-            variant="neutral"
-            class="settings-v2-import-run"
-            disabled={
-              locked() ||
-              (format() === "deepagent"
-                ? !state.snapshotFile
-                : state.capability !== true ||
-                  state.scopes.length === 0 ||
-                  (fileScopes() && (!state.copyLiveDb || (!state.dryRun && state.fileCapability !== true))) ||
-                  (state.mode === "custom" && !sourcePath()) ||
-                  (!state.dryRun && !state.copyLiveDb && !state.confirmLiveMerge))
-            }
-            onClick={() => void run()}
-          >
-            {state.submitting
-              ? t("settings.import.job.submitting", "Submitting…")
-              : t("settings.import.run.btn", "Import")}
-          </ButtonV2>
-        </div>
-
         <Show when={state.unresolved}>
           {(requestID) => (
             <SettingsRowV2
@@ -829,284 +811,323 @@ export const ImportSection: Component = () => {
             </SettingsRowV2>
           )}
         </Show>
-
-        <Show when={state.capability && !state.switched}>
-          <SettingsRowV2
-            title={t("settings.import.job.history", "Import jobs")}
-            description={t(
-              "settings.import.job.historyHint",
-              "Select an existing job to continue observing it. Opening or refreshing a job does not restart the import.",
-            )}
-          >
-            <div class="flex flex-col gap-2 w-full min-w-0">
-              <Show
-                when={state.jobs.length > 0}
-                fallback={
-                  <p role="status" class="text-12-regular text-text-weak">
-                    {state.loading
-                      ? t("settings.import.job.loading", "Loading jobs…")
-                      : t("settings.import.job.empty", "No import jobs yet.")}
-                  </p>
-                }
+      </SettingsListV2>
+      <div class="settings-v2-import-actions" data-action="settings-import-run">
+        <ButtonV2
+          data-action="settings-import-submit"
+          size="normal"
+          variant="neutral"
+          class="settings-v2-import-run"
+          disabled={
+            locked() ||
+            (format() === "deepagent"
+              ? !state.snapshotFile
+              : state.capability !== true ||
+                state.scopes.length === 0 ||
+                (fileScopes() && (!state.copyLiveDb || (!state.dryRun && state.fileCapability !== true))) ||
+                (state.mode === "custom" && !sourcePath()) ||
+                (!state.dryRun && !state.copyLiveDb && !state.confirmLiveMerge))
+          }
+          onClick={() => void run()}
+        >
+          {state.submitting
+            ? t("settings.import.job.submitting", "Submitting…")
+            : t("settings.import.run.btn", "Import")}
+        </ButtonV2>
+      </div>
+      <section class="settings-v2-section" data-component="settings-import-history">
+        <div class="settings-v2-section-heading">
+          <h4 class="settings-v2-section-title">{t("settings.import.job.history", "Import jobs")}</h4>
+          <Show when={state.capability && !state.switched}>
+            <div class="settings-v2-actions">
+              <ButtonV2
+                data-action="settings-import-refresh"
+                variant="neutral"
+                disabled={state.loading}
+                onClick={() => void refresh()}
               >
-                <SelectV2
-                  appearance="inline"
-                  data-action="settings-import-job"
-                  options={state.jobs}
-                  current={state.jobs.find((job) => job.id === state.job?.id)}
-                  placement="bottom-end"
-                  value={(job) => job.id}
-                  label={(job) => `${job.source} · ${label(job)} · ${date(job.createdAt)} · ${job.id.slice(-8)}`}
-                  onSelect={(job) => {
-                    if (!job || job.id === state.job?.id) return
-                    detailRequest++
-                    setState({ loadingJob: false, notice: "" })
-                    receive(job, true)
-                    void detail(job.id)
-                  }}
-                />
-              </Show>
-              <div class="flex flex-wrap gap-2">
-                <ButtonV2 variant="ghost" disabled={state.loading} onClick={() => void refresh()}>
-                  {t("settings.import.job.refresh", "Refresh jobs")}
+                {t("settings.import.job.refresh", "Refresh jobs")}
+              </ButtonV2>
+              <Show when={state.cursor}>
+                <ButtonV2 variant="ghost" disabled={state.loading} onClick={() => void refresh(true)}>
+                  {t("settings.import.job.more", "Load older jobs")}
                 </ButtonV2>
-                <Show when={state.cursor}>
-                  <ButtonV2 variant="ghost" disabled={state.loading} onClick={() => void refresh(true)}>
-                    {t("settings.import.job.more", "Load older jobs")}
-                  </ButtonV2>
-                </Show>
-              </div>
+              </Show>
             </div>
-          </SettingsRowV2>
-        </Show>
-
-        <Show when={state.job}>
-          {(job) => (
-            <SettingsRowV2 title={t("settings.import.job.current", "Selected job")} description={label(job())}>
-              <div class="flex flex-col gap-2 min-w-0 w-full">
-                <dl class="settings-v2-import-summary">
-                  <Show when={!job().scopes || job().scopes!.includes("session")}>
-                    <div>
-                      <dt>
-                        {job().dryRun
-                          ? t("settings.import.job.identified", "Sessions found")
-                          : t("settings.import.job.imported", "Sessions imported")}
-                      </dt>
-                      <dd>
-                        {job().dryRun
-                          ? job().totalSessions
-                          : `${job().committedSessions ?? (job().scopes?.some((scope) => scope !== "session") ? "—" : job().committedBatches)} / ${job().totalSessions}`}
-                      </dd>
-                    </div>
-                  </Show>
-                  <Show when={job().fileResults !== undefined}>
-                    <div>
-                      <dt>{language.t("settings.import.job.fileSets")}</dt>
-                      <dd>{job().fileResults!.length}</dd>
-                    </div>
-                    <div>
-                      <dt>{language.t("settings.import.job.files")}</dt>
-                      <dd>{job().fileResults!.reduce((total, result) => total + result.fileCount, 0)}</dd>
-                    </div>
-                    <div>
-                      <dt>{language.t("settings.import.job.bytes")}</dt>
-                      <dd>{job().fileResults!.reduce((total, result) => total + result.bytes, 0)}</dd>
-                    </div>
-                  </Show>
-                  <Show when={job().failedBatches > 0}>
-                    <div>
-                      <dt>{t("settings.import.job.failed", "Failed batches")}</dt>
-                      <dd>{job().failedBatches}</dd>
-                    </div>
-                  </Show>
-                  <div>
-                    <dt>{t("settings.import.target", "Actual target")}</dt>
-                    <dd>
-                      {job().target
-                        ? job().target!.mode === "copy_to_new_db"
-                          ? t("settings.import.job.targetCopy", "Independent copy")
-                          : t("settings.import.job.targetLive", "Current database")
-                        : t("settings.import.job.targetPending", "Not confirmed yet")}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>{t("settings.import.job.backup", "Backup")}</dt>
-                    <dd>
-                      {job().dryRun
-                        ? t("settings.import.job.backupPreview", "Not needed for a preview")
-                        : job().target?.backup
-                          ? t("settings.import.job.backupVerified", "Verified by the server before writing")
-                          : t("settings.import.job.backupPending", "No verified backup receipt yet")}
-                    </dd>
-                  </div>
-                </dl>
-                <Show when={job().dryRun}>
-                  <p class="text-12-regular text-text-weak">
-                    {t(
-                      "settings.import.target.dryRun",
-                      "Preview target only; no target database or backup was created.",
-                    )}
-                  </p>
-                </Show>
-                <Show when={job().state === "completed" && !job().dryRun && job().target?.mode === "copy_to_new_db"}>
-                  <p class="settings-v2-import-copy-notice" role="status">
-                    {t(
-                      "settings.import.job.copyComplete",
-                      "History was saved to an independent copy. This server still uses its original database, so the imported conversations have not been added to the current conversation list.",
-                    )}
-                  </p>
-                </Show>
-                <Show when={job().error}>
-                  <p role="alert" class="text-12-regular text-text-weak">
-                    {job().error!.message}
-                  </p>
-                </Show>
-                <Show when={state.detailError}>
-                  <p role="alert" class="text-12-regular text-text-weak">
-                    {t(
-                      "settings.import.job.loadFailed",
-                      "Import jobs could not be refreshed. Previously loaded evidence may be stale.",
-                    )}
-                  </p>
-                </Show>
-                <Show when={job().cancelRequestedAt && !job().stopConfirmedAt}>
-                  <p role="status" class="text-12-regular text-text-weak">
-                    {t(
-                      "settings.import.job.cancelPending",
-                      "Cancellation requested. Waiting for the server to confirm a safe stopping boundary; writes may still be in progress.",
-                    )}
-                  </p>
-                </Show>
-                <Show when={job().stopConfirmedAt && ["cancelled", "cancelled_partial"].includes(job().state)}>
-                  <p role="status" class="text-12-regular text-text-weak">
-                    {t("settings.import.job.stopped", "Server confirmed the import stopped.")}{" "}
-                    {date(job().stopConfirmedAt!)}
-                  </p>
-                </Show>
-                <Show when={job().state === "recovery_required"}>
-                  <p role="status" class="text-12-regular text-text-weak">
-                    {t(
-                      "settings.import.job.recovery",
-                      "The outcome needs review. Keep this job's target and backup evidence; refreshing will not retry unknown writes.",
-                    )}
-                  </p>
-                </Show>
-                <Show when={job().committedBatches > 0 && job().state !== "completed"}>
-                  <p class="text-12-regular text-text-weak">
-                    {t(
-                      "settings.import.job.partial",
-                      "Committed batches remain in the recorded target. Cancellation or failure does not roll them back.",
-                    )}
-                  </p>
-                </Show>
-                <div class="flex flex-wrap gap-2">
-                  <ButtonV2
-                    variant="ghost"
-                    disabled={state.loadingJob || state.switched}
-                    onClick={() => void detail(job().id)}
-                  >
-                    {t("settings.import.job.refreshOne", "Refresh selected job")}
-                  </ButtonV2>
-                  <Show when={active(job()) && job().state !== "cancel_requested"}>
-                    <ButtonV2 disabled={state.cancelling || state.switched} onClick={() => void cancel()}>
-                      {state.cancelling
-                        ? t("settings.import.job.cancelSubmitting", "Requesting cancellation…")
-                        : t("settings.import.job.cancel", "Request cancellation")}
-                    </ButtonV2>
-                  </Show>
-                </div>
-                <div
-                  class="settings-v2-import-details"
-                  data-dialog-escape-boundary={state.detailsOpen ? "" : undefined}
-                  ref={detailsElement}
+          </Show>
+        </div>
+        <SettingsListV2>
+          <Show when={state.capability && !state.switched}>
+            <SettingsRowV2
+              title={t("settings.import.job.select", "Existing job")}
+              description={t(
+                "settings.import.job.historyHint",
+                "Select an existing job to continue observing it. Opening or refreshing a job does not restart the import.",
+              )}
+            >
+              <div class="flex flex-col gap-2 w-full min-w-0">
+                <Show
+                  when={state.jobs.length > 0}
+                  fallback={
+                    <p role="status" class="text-12-regular text-text-weak">
+                      {state.loading
+                        ? t("settings.import.job.loading", "Loading jobs…")
+                        : t("settings.import.job.empty", "No import jobs yet.")}
+                    </p>
+                  }
                 >
-                  <ButtonV2
-                    ref={detailsButton}
-                    variant="ghost"
-                    aria-expanded={state.detailsOpen}
-                    aria-controls={detailsID}
-                    onClick={() => {
-                      copyRequest++
-                      setState({ detailsOpen: !state.detailsOpen, copyStatus: "idle" })
+                  <SelectV2
+                    appearance="inline"
+                    data-action="settings-import-job"
+                    options={state.jobs}
+                    current={state.jobs.find((job) => job.id === state.job?.id)}
+                    placement="bottom-end"
+                    value={(job) => job.id}
+                    label={(job) => `${job.source} · ${label(job)} · ${date(job.createdAt)} · ${job.id.slice(-8)}`}
+                    onSelect={(job) => {
+                      if (!job || job.id === state.job?.id) return
+                      detailRequest++
+                      setState({ loadingJob: false, notice: "" })
+                      receive(job, true)
+                      void detail(job.id)
                     }}
-                  >
-                    <Icon name={state.detailsOpen ? "chevron-down" : "chevron-right"} size="small" />
-                    {t("settings.import.job.details", "Technical details")}
-                  </ButtonV2>
-                  <Show when={state.detailsOpen}>
-                    <div id={detailsID} class="settings-v2-import-details-body">
-                      <p class="text-12-regular text-text-weak">
-                        {t(
-                          "settings.import.job.detailsHint",
-                          "Task identifiers, target paths and verification receipts for troubleshooting.",
-                        )}
-                      </p>
-                      <ButtonV2 disabled={state.copyStatus === "copying"} onClick={() => void copyDetails()}>
-                        {t("settings.import.job.copyDetails", "Copy diagnostic details")}
-                      </ButtonV2>
-                      <Show when={state.copyStatus === "copied"}>
-                        <p role="status" class="text-12-regular text-text-weak">
-                          {t("settings.import.job.copied", "Diagnostic details copied.")}
-                        </p>
-                      </Show>
-                      <Show when={state.copyStatus === "failed"}>
-                        <p role="alert" class="text-12-regular text-text-weak">
-                          {t("settings.import.job.copyFailed", "Copy unavailable. Select and copy the details below.")}
-                        </p>
-                      </Show>
-                      <TextareaV2
-                        readOnly
-                        rows={8}
-                        aria-label={t("settings.import.job.diagnosticText", "Diagnostic details")}
-                        value={diagnostics()}
-                      />
-                      <Show when={state.logs.length > 0}>
-                        <p class="text-12-regular text-text-weak">
-                          {t(
-                            "settings.import.job.localLog",
-                            "Local observations only; up to 2,000 lines / 2 MiB. This is not a full server audit log.",
-                          )}
-                        </p>
-                        <ButtonV2 variant="ghost" onClick={exportLog}>
-                          {t("settings.import.job.exportLog", "Export observations")}
-                        </ButtonV2>
-                        <pre class="settings-v2-import-log">
-                          <For each={state.logs}>{(line) => line + "\n"}</For>
-                        </pre>
-                      </Show>
-                    </div>
-                  </Show>
-                </div>
+                  />
+                </Show>
               </div>
             </SettingsRowV2>
-          )}
-        </Show>
+          </Show>
 
-        <Show when={state.summary}>
-          <SettingsRowV2 title={t("settings.import.result", "Result")} description="">
-            <pre class="settings-v2-import-log">{state.summary}</pre>
-          </SettingsRowV2>
-        </Show>
+          <Show when={state.job}>
+            {(job) => (
+              <SettingsRowV2 title={t("settings.import.job.current", "Selected job")} description={label(job())}>
+                <div class="flex flex-col gap-2 min-w-0 w-full">
+                  <dl class="settings-v2-import-summary">
+                    <Show when={!job().scopes || job().scopes!.includes("session")}>
+                      <div>
+                        <dt>
+                          {job().dryRun
+                            ? t("settings.import.job.identified", "Sessions found")
+                            : t("settings.import.job.imported", "Sessions imported")}
+                        </dt>
+                        <dd>
+                          {job().dryRun
+                            ? job().totalSessions
+                            : `${job().committedSessions ?? (job().scopes?.some((scope) => scope !== "session") ? "—" : job().committedBatches)} / ${job().totalSessions}`}
+                        </dd>
+                      </div>
+                    </Show>
+                    <Show when={job().fileResults !== undefined}>
+                      <div>
+                        <dt>{language.t("settings.import.job.fileSets")}</dt>
+                        <dd>{job().fileResults!.length}</dd>
+                      </div>
+                      <div>
+                        <dt>{language.t("settings.import.job.files")}</dt>
+                        <dd>{job().fileResults!.reduce((total, result) => total + result.fileCount, 0)}</dd>
+                      </div>
+                      <div>
+                        <dt>{language.t("settings.import.job.bytes")}</dt>
+                        <dd>{job().fileResults!.reduce((total, result) => total + result.bytes, 0)}</dd>
+                      </div>
+                    </Show>
+                    <Show when={job().failedBatches > 0}>
+                      <div>
+                        <dt>{t("settings.import.job.failed", "Failed batches")}</dt>
+                        <dd>{job().failedBatches}</dd>
+                      </div>
+                    </Show>
+                    <div>
+                      <dt>{t("settings.import.target", "Actual target")}</dt>
+                      <dd>
+                        {job().target
+                          ? job().target!.mode === "copy_to_new_db"
+                            ? t("settings.import.job.targetCopy", "Independent copy")
+                            : t("settings.import.job.targetLive", "Current database")
+                          : t("settings.import.job.targetPending", "Not confirmed yet")}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>{t("settings.import.job.backup", "Backup")}</dt>
+                      <dd>
+                        {job().dryRun
+                          ? t("settings.import.job.backupPreview", "Not needed for a preview")
+                          : job().target?.backup
+                            ? t("settings.import.job.backupVerified", "Verified by the server before writing")
+                            : t("settings.import.job.backupPending", "No verified backup receipt yet")}
+                      </dd>
+                    </div>
+                  </dl>
+                  <Show when={job().dryRun}>
+                    <p class="text-12-regular text-text-weak">
+                      {t(
+                        "settings.import.target.dryRun",
+                        "Preview target only; no target database or backup was created.",
+                      )}
+                    </p>
+                  </Show>
+                  <Show when={job().state === "completed" && !job().dryRun && job().target?.mode === "copy_to_new_db"}>
+                    <p class="settings-v2-import-copy-notice" role="status">
+                      {t(
+                        "settings.import.job.copyComplete",
+                        "History was saved to an independent copy. This server still uses its original database, so the imported conversations have not been added to the current conversation list.",
+                      )}
+                    </p>
+                  </Show>
+                  <Show when={job().error}>
+                    <p role="alert" class="text-12-regular text-text-weak">
+                      {job().error!.message}
+                    </p>
+                  </Show>
+                  <Show when={state.detailError}>
+                    <p role="alert" class="text-12-regular text-text-weak">
+                      {t(
+                        "settings.import.job.loadFailed",
+                        "Import jobs could not be refreshed. Previously loaded evidence may be stale.",
+                      )}
+                    </p>
+                  </Show>
+                  <Show when={job().cancelRequestedAt && !job().stopConfirmedAt}>
+                    <p role="status" class="text-12-regular text-text-weak">
+                      {t(
+                        "settings.import.job.cancelPending",
+                        "Cancellation requested. Waiting for the server to confirm a safe stopping boundary; writes may still be in progress.",
+                      )}
+                    </p>
+                  </Show>
+                  <Show when={job().stopConfirmedAt && ["cancelled", "cancelled_partial"].includes(job().state)}>
+                    <p role="status" class="text-12-regular text-text-weak">
+                      {t("settings.import.job.stopped", "Server confirmed the import stopped.")}{" "}
+                      {date(job().stopConfirmedAt!)}
+                    </p>
+                  </Show>
+                  <Show when={job().state === "recovery_required"}>
+                    <p role="status" class="text-12-regular text-text-weak">
+                      {t(
+                        "settings.import.job.recovery",
+                        "The outcome needs review. Keep this job's target and backup evidence; refreshing will not retry unknown writes.",
+                      )}
+                    </p>
+                  </Show>
+                  <Show when={job().committedBatches > 0 && job().state !== "completed"}>
+                    <p class="text-12-regular text-text-weak">
+                      {t(
+                        "settings.import.job.partial",
+                        "Committed batches remain in the recorded target. Cancellation or failure does not roll them back.",
+                      )}
+                    </p>
+                  </Show>
+                  <div class="flex flex-wrap gap-2">
+                    <ButtonV2
+                      variant="ghost"
+                      disabled={state.loadingJob || state.switched}
+                      onClick={() => void detail(job().id)}
+                    >
+                      {t("settings.import.job.refreshOne", "Refresh selected job")}
+                    </ButtonV2>
+                    <Show when={active(job()) && job().state !== "cancel_requested"}>
+                      <ButtonV2 disabled={state.cancelling || state.switched} onClick={() => void cancel()}>
+                        {state.cancelling
+                          ? t("settings.import.job.cancelSubmitting", "Requesting cancellation…")
+                          : t("settings.import.job.cancel", "Request cancellation")}
+                      </ButtonV2>
+                    </Show>
+                  </div>
+                  <div
+                    class="settings-v2-import-details"
+                    data-dialog-escape-boundary={state.detailsOpen ? "" : undefined}
+                    ref={detailsElement}
+                  >
+                    <ButtonV2
+                      ref={detailsButton}
+                      variant="ghost"
+                      aria-expanded={state.detailsOpen}
+                      aria-controls={detailsID}
+                      onClick={() => {
+                        copyRequest++
+                        setState({ detailsOpen: !state.detailsOpen, copyStatus: "idle" })
+                      }}
+                    >
+                      <Icon name={state.detailsOpen ? "chevron-down" : "chevron-right"} size="small" />
+                      {t("settings.import.job.details", "Technical details")}
+                    </ButtonV2>
+                    <Show when={state.detailsOpen}>
+                      <div id={detailsID} class="settings-v2-import-details-body">
+                        <p class="text-12-regular text-text-weak">
+                          {t(
+                            "settings.import.job.detailsHint",
+                            "Task identifiers, target paths and verification receipts for troubleshooting.",
+                          )}
+                        </p>
+                        <ButtonV2 disabled={state.copyStatus === "copying"} onClick={() => void copyDetails()}>
+                          {t("settings.import.job.copyDetails", "Copy diagnostic details")}
+                        </ButtonV2>
+                        <Show when={state.copyStatus === "copied"}>
+                          <p role="status" class="text-12-regular text-text-weak">
+                            {t("settings.import.job.copied", "Diagnostic details copied.")}
+                          </p>
+                        </Show>
+                        <Show when={state.copyStatus === "failed"}>
+                          <p role="alert" class="text-12-regular text-text-weak">
+                            {t(
+                              "settings.import.job.copyFailed",
+                              "Copy unavailable. Select and copy the details below.",
+                            )}
+                          </p>
+                        </Show>
+                        <TextareaV2
+                          readOnly
+                          rows={8}
+                          aria-label={t("settings.import.job.diagnosticText", "Diagnostic details")}
+                          value={diagnostics()}
+                        />
+                        <Show when={state.logs.length > 0}>
+                          <p class="text-12-regular text-text-weak">
+                            {t(
+                              "settings.import.job.localLog",
+                              "Local observations only; up to 2,000 lines / 2 MiB. This is not a full server audit log.",
+                            )}
+                          </p>
+                          <ButtonV2 variant="ghost" onClick={exportLog}>
+                            {t("settings.import.job.exportLog", "Export observations")}
+                          </ButtonV2>
+                          <pre class="settings-v2-import-log">
+                            <For each={state.logs}>{(line) => line + "\n"}</For>
+                          </pre>
+                        </Show>
+                      </div>
+                    </Show>
+                  </div>
+                </div>
+              </SettingsRowV2>
+            )}
+          </Show>
 
-        <Show when={state.logs.length > 0 && !state.job}>
-          <SettingsRowV2 title={t("settings.import.log", "Progress")} description="">
-            <div class="flex flex-col gap-2 w-full sm:w-[320px] min-w-0">
-              <p class="text-12-regular text-text-weak">
-                {t(
-                  "settings.import.job.localLog",
-                  "Local observations only; up to 2,000 lines / 2 MiB. This is not a full server audit log.",
-                )}
-              </p>
-              <ButtonV2 variant="ghost" onClick={exportLog}>
-                {t("settings.import.job.exportLog", "Export observations")}
-              </ButtonV2>
-              <pre class="settings-v2-import-log">
-                <For each={state.logs}>{(line) => line + "\n"}</For>
-              </pre>
-            </div>
-          </SettingsRowV2>
-        </Show>
-      </SettingsListV2>
+          <Show when={state.summary}>
+            <SettingsRowV2 title={t("settings.import.result", "Result")} description="">
+              <pre class="settings-v2-import-log">{state.summary}</pre>
+            </SettingsRowV2>
+          </Show>
+
+          <Show when={state.logs.length > 0 && !state.job}>
+            <SettingsRowV2 title={t("settings.import.log", "Progress")} description="">
+              <div class="flex flex-col gap-2 w-full sm:w-[320px] min-w-0">
+                <p class="text-12-regular text-text-weak">
+                  {t(
+                    "settings.import.job.localLog",
+                    "Local observations only; up to 2,000 lines / 2 MiB. This is not a full server audit log.",
+                  )}
+                </p>
+                <ButtonV2 variant="ghost" onClick={exportLog}>
+                  {t("settings.import.job.exportLog", "Export observations")}
+                </ButtonV2>
+                <pre class="settings-v2-import-log">
+                  <For each={state.logs}>{(line) => line + "\n"}</For>
+                </pre>
+              </div>
+            </SettingsRowV2>
+          </Show>
+        </SettingsListV2>
+      </section>
     </div>
   )
 }

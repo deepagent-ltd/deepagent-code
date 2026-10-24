@@ -1,8 +1,9 @@
 export * as PackSearchTool from "./pack-search-tool"
 
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { ToolFailure } from "@deepagent-code/llm"
 import type { Doc } from "../deepagent/document-store"
+import { AgentGateway } from "../agent-gateway"
 import { Tool } from "../tool/tool"
 import { Tools } from "../tool/tools"
 import {
@@ -136,6 +137,13 @@ export function renderPackSearchCards(output: PackSearchOutput): string {
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
-    yield* tools.register({ [name]: makePackSearchTool() }).pipe(Effect.orDie)
+    const gateway = yield* Effect.serviceOption(AgentGateway.Runtime)
+    yield* tools
+      .register({
+        [name]: makePackSearchTool({
+          store: () => (Option.isSome(gateway) ? gateway.value.withStorage(productionStoreResolver) : null),
+        }),
+      })
+      .pipe(Effect.orDie)
   }),
 )

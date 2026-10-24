@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
+import { createServer, request } from "node:http"
+import { Readable } from "node:stream"
 import type { ContextItem, Prompt } from "@/context/prompt"
 import { toV2Prompt, type SessionStatus } from "@deepagent-code/sdk/client"
+import type { SharedBrowserPlatform } from "@deepagent-code/core/browser/shared-platform"
+import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
+import { Hash } from "@deepagent-code/core/util/hash"
 
 // Bun module mocks survive mock.restore(); later SDK integration files need the original export table.
 const sdkClient = { ...(await import("@deepagent-code/sdk/client")) }
@@ -9,6 +14,12 @@ afterAll(() => mock.module("@deepagent-code/sdk/client", () => sdkClient))
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 
 const statuses: Record<string, SessionStatus> = {}
+const goals: Record<
+  string,
+  { goalId: string; control?: import("@deepagent-code/core/deepagent/goal-client").GoalClient.Snapshot }
+> = {}
+let selectedAgent = "agent"
+let effectiveAgent = "agent"
 const abortedSessions: string[] = []
 const createdClients: string[] = []
 const createdSessions: string[] = []
@@ -38,6 +49,7 @@ const preparedDrafts: Array<{
 const preparedIntents: Array<{ intentID?: string; source?: string }> = []
 const sentPromptAsync: Array<{
   directory: string
+  delivery?: "queue" | "steer"
   metadata?: unknown
   text?: string
   parts?: unknown[]
@@ -58,7 +70,10 @@ let variant: string | undefined
 let promptMode: "direct" | "intelligence" | "wish" = "direct"
 let appLocale = "en"
 let releaseDelayedPrompt: (() => void) | undefined
+let prepareTransportURL: string | undefined
 const rejectedAdmissionReceipts = new Set<string>()
+let ownerBridge: Pick<SharedBrowserPlatform, "stampInput" | "sealInput"> | undefined
+const sentOwnerHeaders: Array<Record<string, string> | undefined> = []
 
 const promptValue: Prompt = [{ type: "text", content: "ls", start: 0, end: 2 }]
 const promptContextItems: Array<ContextItem & { key: string }> = []
@@ -82,41 +97,64 @@ const clientFor = (directory: string) => {
         return { data: undefined }
       },
       prompt: async () => ({ data: undefined }),
-      promptAsync: async () => { throw new Error("legacy prompt path") },
-      command: async () => ({ data: undefined }),
-      abort: async (input: { sessionID: string }) => { abortedSessions.push(input.sessionID); return { data: undefined } },
-    },
-    v2: { session: {
-      prompt: async (payload: {
-        id?: string
-        prompt: { text: string; metadata?: unknown; files?: unknown[]; agents?: unknown[]; intent?: { id?: string; source?: string; variant?: string } }
-      }) => {
-        const sent = {
-          directory,
-          metadata: payload.prompt.metadata,
-          text: payload.prompt.text,
-          parts: [{ type: "text", text: payload.prompt.text }, ...(payload.prompt.files ?? []), ...(payload.prompt.agents ?? [])],
-          messageID: payload.id,
-          intentID: payload.prompt.intent?.id,
-          intentSource: payload.prompt.intent?.source,
-          intentVariant: payload.prompt.intent?.variant,
-        }
-        sentPromptAsync.push(sent)
-        if (
-          (sent.text?.includes("receipt lost") || sent.text?.includes("Edited retry goal")) &&
-          !rejectedAdmissionReceipts.has(sent.text ?? "")
-        ) {
-          rejectedAdmissionReceipts.add(sent.text ?? "")
-          throw new Error("connection closed after durable admission")
-        }
-        if (sent.text === "prompt waits after admission") {
-          await new Promise<void>((resolve) => {
-            releaseDelayedPrompt = resolve
-          })
-        }
-        return { data: { data: { id: "msg_server_admitted", delivery: "steer" } } }
+      promptAsync: async () => {
+        throw new Error("legacy prompt path")
       },
-    } },
+      command: async () => ({ data: undefined }),
+      abort: async (input: { sessionID: string }) => {
+        abortedSessions.push(input.sessionID)
+        return { data: undefined }
+      },
+    },
+    v2: {
+      session: {
+        prompt: async (
+          payload: {
+            id?: string
+            delivery?: "queue" | "steer"
+            prompt: {
+              text: string
+              metadata?: unknown
+              files?: unknown[]
+              agents?: unknown[]
+              intent?: { id?: string; source?: string; variant?: string }
+            }
+          },
+          options?: { headers?: Record<string, string> },
+        ) => {
+          sentOwnerHeaders.push(options?.headers)
+          const sent = {
+            directory,
+            delivery: payload.delivery,
+            metadata: payload.prompt.metadata,
+            text: payload.prompt.text,
+            parts: [
+              { type: "text", text: payload.prompt.text },
+              ...(payload.prompt.files ?? []),
+              ...(payload.prompt.agents ?? []),
+            ],
+            messageID: payload.id,
+            intentID: payload.prompt.intent?.id,
+            intentSource: payload.prompt.intent?.source,
+            intentVariant: payload.prompt.intent?.variant,
+          }
+          sentPromptAsync.push(sent)
+          if (
+            (sent.text?.includes("receipt lost") || sent.text?.includes("Edited retry goal")) &&
+            !rejectedAdmissionReceipts.has(sent.text ?? "")
+          ) {
+            rejectedAdmissionReceipts.add(sent.text ?? "")
+            throw new Error("connection closed after durable admission")
+          }
+          if (sent.text === "prompt waits after admission") {
+            await new Promise<void>((resolve) => {
+              releaseDelayedPrompt = resolve
+            })
+          }
+          return { data: { data: { id: "msg_server_admitted", delivery: payload.delivery ?? "steer" } } }
+        },
+      },
+    },
     client: {
       request: async (payload: {
         url?: string
@@ -139,6 +177,22 @@ const clientFor = (directory: string) => {
           text,
         })
         preparedIntents.push({ intentID: payload.body?.intent_id, source: payload.body?.intent_source })
+        if (prepareTransportURL) {
+          // Happy DOM owns this file's EventTarget globals; use actual Node HTTP rather
+          // than mixing its signal with Bun's branded native fetch implementation.
+          return new Promise<{ data: ReadableStream<Uint8Array> }>((resolve, reject) => {
+            const call = request(prepareTransportURL!, { method: "POST" }, (response) => {
+              // Node and DOM declarations spell the standard reader overloads differently.
+              resolve({ data: Readable.toWeb(response) as unknown as ReadableStream<Uint8Array> })
+            })
+            const abort = () => call.destroy(new Error("Own prepare transport aborted"))
+            payload.signal?.addEventListener("abort", abort, { once: true })
+            call.once("close", () => payload.signal?.removeEventListener("abort", abort))
+            call.on("error", reject)
+            if (payload.signal?.aborted) abort()
+            else call.end(JSON.stringify(payload.body))
+          })
+        }
         if (text === "prepare fails") {
           throw new Error("POST /session/ses_1/prompt_prepare returned 400", {
             cause: {
@@ -176,7 +230,9 @@ const clientFor = (directory: string) => {
               start(controller) {
                 // Emit one progress delta, then never the terminal event and never close:
                 // the exact hung-stream shape the D1 timeout must recover from.
-                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: "progress", preview: "Partial" })}\n\n`))
+                controller.enqueue(
+                  new TextEncoder().encode(`data: ${JSON.stringify({ type: "progress", preview: "Partial" })}\n\n`),
+                )
                 payload.signal?.addEventListener("abort", () => controller.close(), { once: true })
               },
             }),
@@ -264,7 +320,8 @@ beforeAll(async () => {
         variant: { current: () => variant },
       },
       agent: {
-        current: () => ({ name: "agent" }),
+        current: () => ({ name: selectedAgent }),
+        effective: () => ({ name: effectiveAgent }),
       },
       session: {
         promote(directory: string, sessionID: string) {
@@ -345,13 +402,16 @@ beforeAll(async () => {
           },
         },
       },
-      set: (key: string, sessionID: string, value: SessionStatus) => { if (key === "session_status") statuses[sessionID] = value },
+      set: (key: string, sessionID: string, value: SessionStatus) => {
+        if (key === "session_status") statuses[sessionID] = value
+      },
     }),
   }))
 
   mock.module("@/context/server-sync", () => ({
     useServerSync: () => ({
       data: {
+        session_goal: goals,
         config: {
           provider: {
             deepagent: {
@@ -368,7 +428,10 @@ beforeAll(async () => {
         return [
           { session: storedSessions[directory], session_status: statuses },
           (...args: unknown[]) => {
-            if (args[0] === "session_status") { statuses[args[1] as string] = args[2] as SessionStatus; return }
+            if (args[0] === "session_status") {
+              statuses[args[1] as string] = args[2] as SessionStatus
+              return
+            }
             if (args[0] !== "session") return
             const next = args[1]
             if (typeof next === "function") {
@@ -387,6 +450,7 @@ beforeAll(async () => {
   mock.module("@/context/platform", () => ({
     usePlatform: () => ({
       fetch: fetch,
+      sharedBrowser: ownerBridge,
     }),
   }))
 
@@ -403,6 +467,10 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  prepareTransportURL = undefined
+  selectedAgent = "agent"
+  effectiveAgent = "agent"
+  for (const key of Object.keys(goals)) delete goals[key]
   for (const key of Object.keys(statuses)) delete statuses[key]
   abortedSessions.length = 0
   createdClients.length = 0
@@ -430,16 +498,49 @@ beforeEach(() => {
   releaseDelayedPrompt?.()
   releaseDelayedPrompt = undefined
   rejectedAdmissionReceipts.clear()
+  ownerBridge = undefined
+  sentOwnerHeaders.length = 0
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
 })
 
 describe("prompt submit worktree selection", () => {
-  const guardedSubmit = (options: Partial<Parameters<typeof createPromptSubmit>[0]> = {}) => createPromptSubmit({
-    info: () => ({ id: "session-1" }), imageAttachments: () => [], commentCount: () => 0,
-    autoAccept: () => false, mode: () => "normal", working: () => false,
-    editor: () => undefined, queueScroll: () => undefined, promptLength: () => 2,
-    addToHistory: () => undefined, resetHistoryNavigation: () => undefined,
-    setMode: () => undefined, setPopover: () => undefined, ...options,
+  const guardedSubmit = (options: Partial<Parameters<typeof createPromptSubmit>[0]> = {}) =>
+    createPromptSubmit({
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: () => 2,
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      ...options,
+    })
+
+  test("a changed mode while busy queues the next activity and leaves the active mode unchanged", async () => {
+    params = { id: "session-1" }
+    selectedAgent = "plan"
+    statuses["session-1"] = { type: "busy" }
+    await guardedSubmit({ working: () => true }).handleSubmit(new Event("submit", { cancelable: true }))
+    await flushAsyncSubmit()
+    expect(sentPromptAsync).toHaveLength(1)
+    expect(sentPromptAsync[0].delivery).toBe("queue")
+    expect(optimistic[0].message.agent).toBe("plan")
+    expect(effectiveAgent).toBe("agent")
+  })
+
+  test("same-mode follow-up keeps the existing steer contract", async () => {
+    params = { id: "session-1" }
+    statuses["session-1"] = { type: "busy" }
+    await guardedSubmit({ working: () => true }).handleSubmit(new Event("submit", { cancelable: true }))
+    await flushAsyncSubmit()
+    expect(sentPromptAsync).toHaveLength(1)
+    expect(sentPromptAsync[0].delivery).toBeUndefined()
   })
 
   test("typed recovery blocks direct submit and abort callbacks without changing the draft or status", async () => {
@@ -465,10 +566,12 @@ describe("prompt submit worktree selection", () => {
     params = { id: "session-1" }
     promptMode = "intelligence"
     const status: SessionStatus = { type: "recovery_required", message: "opaque", blockedReason: "recovery_required" }
-    const submit = guardedSubmit({ confirmPromptDraft: async () => {
-      statuses["session-1"] = status
-      return { editedGoal: "Reviewed goal" }
-    } })
+    const submit = guardedSubmit({
+      confirmPromptDraft: async () => {
+        statuses["session-1"] = status
+        return { editedGoal: "Reviewed goal" }
+      },
+    })
     await submit.handleSubmit(new Event("submit", { cancelable: true }))
     await flushAsyncSubmit()
     expect(preparedDrafts).toHaveLength(1)
@@ -890,7 +993,7 @@ describe("prompt submit worktree selection", () => {
 
   // D1: a prepare stream that never emits its terminal event (hung refinement / dropped body)
   // must time out and degrade to direct instead of locking the composer forever.
-  test("times out a stalled prepare stream and degrades to direct", async () => {
+  test("times out a stalled prepare stream and preserves the draft without automatic dispatch", async () => {
     params = { id: "session-1" }
     promptMode = "intelligence"
     promptValue[0] = { type: "text", content: "prepare stalls", start: 0, end: 14 }
@@ -917,15 +1020,70 @@ describe("prompt submit worktree selection", () => {
     await new Promise((resolve) => setTimeout(resolve, 300))
     await flushAsyncSubmit()
 
-    expect(sentPromptAsync[0]?.text).toBe("prepare stalls")
-    expect(sentPromptAsync[0]?.metadata).toEqual({
-      deepagent: {
-        agent_mode_override: "general",
-        prompt_pipeline: {
-          mode: "direct_override",
-        },
-      },
-    })
+    expect(sentPromptAsync).toHaveLength(0)
+    expect(promptValue[0]?.type === "text" && promptValue[0].content).toBe("prepare stalls")
+    expect(toastCalls[0]?.title).toBe("Prompt preparation timed out")
+  })
+
+  test("absolute prepare deadline closes real HTTP before headers and despite continuous progress", async () => {
+    for (const mode of ["headers", "progress"] as const) {
+      params = { id: "session-1" }
+      promptMode = "intelligence"
+      promptValue[0] = { type: "text", content: `real ${mode}`, start: 0, end: 20 }
+      const facts = { requests: 0, closed: 0, progress: 0 }
+      const server = createServer((request, response) => {
+        facts.requests++
+        request.resume()
+        const timer =
+          mode === "progress"
+            ? setInterval(() => {
+                facts.progress++
+                response.write(`data: ${JSON.stringify({ type: "progress", preview: "Waiting" })}\n\n`)
+              }, 20)
+            : undefined
+        response.on("close", () => {
+          clearInterval(timer)
+          facts.closed++
+        })
+        if (mode === "progress") {
+          response.writeHead(200, { "content-type": "text/event-stream" })
+          response.write('data: {"type":"started"}\n\n')
+        }
+      })
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+      const address = server.address()
+      if (!address || typeof address === "string") throw new Error("Own HTTP fixture has no loopback port")
+      prepareTransportURL = `http://127.0.0.1:${address.port}/prepare`
+      try {
+        const submit = createPromptSubmit({
+          info: () => ({ id: "session-1" }),
+          imageAttachments: () => [],
+          commentCount: () => 0,
+          autoAccept: () => false,
+          mode: () => "normal",
+          working: () => false,
+          editor: () => undefined,
+          queueScroll: () => undefined,
+          promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+          addToHistory: () => undefined,
+          resetHistoryNavigation: () => undefined,
+          setMode: () => undefined,
+          setPopover: () => undefined,
+          onSubmit: () => undefined,
+        })
+        await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+        await new Promise((resolve) => setTimeout(resolve, 350))
+        expect(facts.requests).toBe(1)
+        expect(facts.closed).toBe(1)
+        expect(sentPromptAsync).toHaveLength(0)
+        expect(promptValue[0]?.type === "text" && promptValue[0].content).toBe(`real ${mode}`)
+        if (mode === "progress") expect(facts.progress).toBeGreaterThan(1)
+      } finally {
+        prepareTransportURL = undefined
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
+    }
   })
 
   test("stops intelligence prompt preparation without submitting", async () => {
@@ -1045,6 +1203,26 @@ describe("prompt submit worktree selection", () => {
   })
 
   test("reuses submission identity when the durable admission receipt is lost", async () => {
+    const origins: string[] = []
+    ownerBridge = {
+      stampInput: async (input) => {
+        origins.push("stamp")
+        return {
+          inputID: input.inputID,
+          originalSubmissionID: input.originalSubmissionID,
+          rootSessionID: input.sessionID,
+          mainIncarnation: "fixture-main",
+          rawInputHash: Hash.sha256(input.rawInput),
+          sourceKind: "gui_composer",
+          sourceBindingHash: "a".repeat(64),
+          submissionOrder: origins.length,
+        }
+      },
+      sealInput: async (input) => {
+        origins.push("seal")
+        return { ...input.stamp, promptHash: Hash.sha256(CanonicalJson.stringify(input.prompt)) }
+      },
+    }
     params = { id: "session-1" }
     promptValue[0] = { type: "text", content: "receipt lost", start: 0, end: 12 }
     const context = {
@@ -1092,6 +1270,9 @@ describe("prompt submit worktree selection", () => {
     expect(sentPromptAsync[0]?.intentID).toBeDefined()
     expect(sentPromptAsync[1]?.intentID).toBe(sentPromptAsync[0]?.intentID)
     expect(sentPromptAsync[1]?.parts).toEqual(sentPromptAsync[0]?.parts)
+    expect(origins).toEqual(["stamp", "seal"])
+    expect(sentOwnerHeaders[0]?.["x-dac-user-input"]).toBeTruthy()
+    expect(sentOwnerHeaders[1]).toEqual(sentOwnerHeaders[0])
 
     promptContextItems.push({ ...context, key: "new-ui-key-after-success" })
     await submit.handleSubmit(event)

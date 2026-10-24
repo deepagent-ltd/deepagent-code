@@ -48,7 +48,8 @@ export async function compileWindowsInputNative(input: {
       `/DDAC_MANAGED_BROWSER_INPUT_NODE_VERSION=${JSON.stringify(managedBrowserInputRuntime.nodeVersion)}`,
       `/I${include}`,
       `/Fo${path.join(stage, "managed-browser-input-windows.obj")}`, entry, "/link", `/OUT:${filename}`,
-      input.electronImportLibrary.path, "user32.lib", "msctf.lib", "ole32.lib", "uuid.lib"], cwd: stage })
+      "/DELAYLOAD:node.exe", input.electronImportLibrary.path, "delayimp.lib",
+      "user32.lib", "msctf.lib", "ole32.lib", "uuid.lib"], cwd: stage })
     if (result.exitCode !== 0) throw new Error(`WINDOWS_INPUT_BUILD_FAILED:${result.stderr}`)
     const body = await readFile(filename)
     requireWindowsInputPE(body)

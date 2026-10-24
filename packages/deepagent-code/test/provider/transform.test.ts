@@ -1715,9 +1715,7 @@ describe("ProviderTransform.message - anthropic empty content filtering", () => 
       },
       {
         role: "tool",
-        content: [
-          { type: "tool-result", toolCallId: "123", toolName: "bash", output: { type: "text", value: "ok" } },
-        ],
+        content: [{ type: "tool-result", toolCallId: "123", toolName: "bash", output: { type: "text", value: "ok" } }],
       },
     ] as any[]
 
@@ -3493,6 +3491,32 @@ describe("ProviderTransform.variants", () => {
   })
 
   describe("@ai-sdk/anthropic", () => {
+    for (const apiId of [
+      "claude-sonnet-5",
+      "claude-sonnet-5-5",
+      "claude-sonnet-5.5",
+      "claude-sonnet-5-20260801",
+      "claude-haiku-5-5",
+      "claude-haiku-5.5",
+      "claude-mythos-preview",
+      "claude-mythos-5",
+      "claude-mythos-5-1",
+      "claude-mythos-5.1",
+    ]) {
+      test(`current adaptive Claude ${apiId} never uses a manual thinking budget`, () => {
+        const result = ProviderTransform.variants(
+          createMockModel({
+            id: `anthropic/${apiId}`,
+            providerID: "anthropic",
+            api: { id: apiId, url: "https://api.anthropic.com", npm: "@ai-sdk/anthropic" },
+          }),
+        )
+        expect(Object.keys(result)).toEqual(["low", "medium", "high", "xhigh", "max"])
+        expect(result.high).toEqual({ thinking: { type: "adaptive", display: "summarized" }, effort: "high" })
+        expect(result.max).toEqual({ thinking: { type: "adaptive", display: "summarized" }, effort: "max" })
+      })
+    }
+
     for (const testCase of [
       {
         name: "opus 4.5",

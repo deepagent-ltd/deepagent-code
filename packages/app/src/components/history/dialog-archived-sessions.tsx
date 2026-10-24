@@ -1,5 +1,5 @@
 import type { GlobalSession } from "@deepagent-code/sdk/client"
-import { Component, createMemo, createResource, createSignal, For, Show } from "solid-js"
+import { Component, createMemo, createResource, createSignal, For, Show, type ComponentProps } from "solid-js"
 import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
 import { Icon } from "@deepagent-code/ui/icon"
 import { IconButton } from "@deepagent-code/ui/icon-button"
@@ -28,11 +28,7 @@ type ArchivedClient = {
     }
   }
   session: {
-    update(input: {
-      directory: string
-      sessionID: string
-      time: { archived: number | null }
-    }): Promise<unknown>
+    update(input: { directory: string; sessionID: string; time: { archived: number | null } }): Promise<unknown>
     delete(input: { directory: string; sessionID: string }): Promise<unknown>
   }
 }
@@ -54,7 +50,7 @@ export const listArchivedSessions = async (client: ArchivedClient): Promise<Arch
   }
 }
 
-export const DialogArchivedSessions: Component<{ client: ArchivedClient }> = (props) => {
+export const ArchivedSessionsPanel: Component<{ client: ArchivedClient }> = (props) => {
   const language = useLanguage()
   const [query, setQuery] = createSignal("")
   // Locally removed ids (restored or deleted) — so the row disappears without a refetch.
@@ -145,106 +141,111 @@ export const DialogArchivedSessions: Component<{ client: ArchivedClient }> = (pr
   }
 
   return (
-    <Dialog size="x-large" variant="settings" title={language.t("session.archived.title")}>
-      <div class="settings-v2-panel" data-component="archived-sessions-dialog">
-        <div class="settings-v2-tab-body deepagent-dialog-body">
-          <div class="flex items-center gap-2 rounded-lg border border-v2-border-border-muted px-3 py-2">
-            <Icon name="magnifying-glass" size="small" class="text-icon-weak" />
-            <input
-              type="text"
-              autofocus
-              value={query()}
-              onInput={(e) => setQuery(e.currentTarget.value)}
-              placeholder={language.t("session.archived.search")}
-              class="min-w-0 flex-1 bg-transparent text-13-regular text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
-              aria-label={language.t("session.archived.search")}
-            />
-          </div>
+    <div class="settings-v2-panel" data-component="archived-sessions-dialog">
+      <div class="settings-v2-tab-body deepagent-dialog-body">
+        <div class="flex items-center gap-2 rounded-lg border border-v2-border-border-muted px-3 py-2">
+          <Icon name="magnifying-glass" size="small" class="text-icon-weak" />
+          <input
+            type="text"
+            autofocus
+            value={query()}
+            onInput={(e) => setQuery(e.currentTarget.value)}
+            placeholder={language.t("session.archived.search")}
+            class="min-w-0 flex-1 bg-transparent text-13-regular text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
+            aria-label={language.t("session.archived.search")}
+          />
+        </div>
 
-          <div class="deepagent-dialog-scroll rounded-lg border border-v2-border-border-muted">
+        <div class="deepagent-dialog-scroll rounded-lg border border-v2-border-border-muted">
+          <Show
+            when={!items.loading}
+            fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.loading")}</div>}
+          >
             <Show
-              when={!items.loading}
-              fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.loading")}</div>}
+              when={!items.error}
+              fallback={
+                <div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("session.archived.error")}</div>
+              }
             >
               <Show
-                when={!items.error}
+                when={filtered().length > 0}
                 fallback={
                   <div class="p-4 text-13-regular text-v2-text-text-faint">
-                    {language.t("session.archived.error")}
+                    {query().trim() ? language.t("review.empty") : language.t("session.archived.empty")}
                   </div>
                 }
               >
-                <Show
-                  when={filtered().length > 0}
-                  fallback={
-                    <div class="p-4 text-13-regular text-v2-text-text-faint">
-                      {query().trim() ? language.t("review.empty") : language.t("session.archived.empty")}
-                    </div>
-                  }
-                >
-                  <For each={filtered()}>
-                    {(session) => (
-                      <div class="flex items-center gap-3 border-b border-v2-border-border-muted px-3 py-2.5 last:border-b-0 hover:bg-v2-background-bg-layer-01">
-                        <Icon name="archive" size="small" class="shrink-0 text-icon-weak" />
-                        <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-                          <span class="truncate text-13-medium text-v2-text-text-base">{rowTitle(session)}</span>
-                          <span class="truncate text-11-regular text-v2-text-text-faint">{secondaryLine(session)}</span>
-                          <span class="truncate text-11-regular text-v2-text-text-faint">{projectLabel(session)}</span>
-                        </div>
-                        <Show
-                          when={confirmId() === session.id}
-                          fallback={
-                            <div class="flex shrink-0 items-center gap-1">
-                              <IconButton
-                                icon="arrow-undo-down"
-                                variant="ghost"
-                                size="small"
-                                onClick={() => void handleRestore(session)}
-                                aria-label={language.t("session.archived.restore")}
-                                title={language.t("session.archived.restore")}
-                              />
-                              <IconButton
-                                icon="trash"
-                                variant="ghost"
-                                size="small"
-                                onClick={() => setConfirmId(session.id)}
-                                aria-label={language.t("common.delete")}
-                                title={language.t("common.delete")}
-                              />
-                            </div>
-                          }
-                        >
-                          <div class="flex shrink-0 flex-col items-end gap-1">
-                            <span class="text-11-regular text-v2-text-text-base">
-                              {language.t("session.delete.confirm", { name: rowTitle(session) })}
-                            </span>
-                            <div class="flex items-center gap-2">
-                              <button
-                                type="button"
-                                class="text-11-medium text-v2-text-text-faint hover:text-v2-text-text-base"
-                                onClick={() => setConfirmId(undefined)}
-                              >
-                                {language.t("common.cancel")}
-                              </button>
-                              <button
-                                type="button"
-                                class="text-11-medium text-v2-text-text-danger hover:opacity-80"
-                                onClick={() => void handleDelete(session)}
-                              >
-                                {language.t("session.delete.button")}
-                              </button>
-                            </div>
-                          </div>
-                        </Show>
+                <For each={filtered()}>
+                  {(session) => (
+                    <div class="flex items-center gap-3 border-b border-v2-border-border-muted px-3 py-2.5 last:border-b-0 hover:bg-v2-background-bg-layer-01">
+                      <Icon name="archive" size="small" class="shrink-0 text-icon-weak" />
+                      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                        <span class="truncate text-13-medium text-v2-text-text-base">{rowTitle(session)}</span>
+                        <span class="truncate text-11-regular text-v2-text-text-faint">{secondaryLine(session)}</span>
+                        <span class="truncate text-11-regular text-v2-text-text-faint">{projectLabel(session)}</span>
                       </div>
-                    )}
-                  </For>
-                </Show>
+                      <Show
+                        when={confirmId() === session.id}
+                        fallback={
+                          <div class="flex shrink-0 items-center gap-1">
+                            <IconButton
+                              icon="arrow-undo-down"
+                              variant="ghost"
+                              size="small"
+                              onClick={() => void handleRestore(session)}
+                              aria-label={language.t("session.archived.restore")}
+                              title={language.t("session.archived.restore")}
+                            />
+                            <IconButton
+                              icon="trash"
+                              variant="ghost"
+                              size="small"
+                              onClick={() => setConfirmId(session.id)}
+                              aria-label={language.t("common.delete")}
+                              title={language.t("common.delete")}
+                            />
+                          </div>
+                        }
+                      >
+                        <div class="flex shrink-0 flex-col items-end gap-1">
+                          <span class="text-11-regular text-v2-text-text-base">
+                            {language.t("session.delete.confirm", { name: rowTitle(session) })}
+                          </span>
+                          <div class="flex items-center gap-2">
+                            <button
+                              type="button"
+                              class="text-11-medium text-v2-text-text-faint hover:text-v2-text-text-base"
+                              onClick={() => setConfirmId(undefined)}
+                            >
+                              {language.t("common.cancel")}
+                            </button>
+                            <button
+                              type="button"
+                              class="text-11-medium text-v2-text-text-danger hover:opacity-80"
+                              onClick={() => void handleDelete(session)}
+                            >
+                              {language.t("session.delete.button")}
+                            </button>
+                          </div>
+                        </div>
+                      </Show>
+                    </div>
+                  )}
+                </For>
               </Show>
             </Show>
-          </div>
+          </Show>
         </div>
       </div>
+    </div>
+  )
+}
+
+export const DialogArchivedSessions: Component<ComponentProps<typeof ArchivedSessionsPanel>> = (props) => {
+  const language = useLanguage()
+  return (
+    <Dialog size="x-large" variant="settings" title={language.t("session.archived.title")}>
+      <ArchivedSessionsPanel {...props} />
     </Dialog>
   )
 }

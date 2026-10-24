@@ -35,7 +35,10 @@ export interface Interface {
   readonly register: (tools: Readonly<Record<string, AnyTool>>) => Effect.Effect<void, RegistrationError, Scope.Scope>
 }
 
-export type PermissionPolicy = { readonly rulesets: readonly PermissionV2.Ruleset[] }
+export type PermissionPolicy = {
+  readonly rulesets: readonly PermissionV2.Ruleset[]
+  readonly allowedToolIDs?: ReadonlyArray<string>
+}
 
 export interface Materialization {
   readonly registeredIDs: ReadonlyArray<string>
@@ -186,7 +189,10 @@ const registryLayer = Layer.effect(
           )
         const registeredIDs = [...registrations.keys()]
         for (const [name, registration] of registrations)
-          if (whollyDisabled(permission(registration.tool, name), permissions)) registrations.delete(name)
+          if (
+            ("rulesets" in permissions && permissions.allowedToolIDs && !permissions.allowedToolIDs.includes(name)) ||
+            whollyDisabled(permission(registration.tool, name), permissions)
+          ) registrations.delete(name)
         const materialization: Materialization = {
           registeredIDs,
           permissionFilteredIDs: [...registrations.keys()],

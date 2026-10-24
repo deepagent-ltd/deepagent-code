@@ -70,6 +70,12 @@ export const Result = Schema.Struct({
     inferredInputCategories: Schema.Array(Schema.Literals(["nonCachedInput", "cacheRead", "cacheWrite"])).check(
       Schema.isMaxLength(3),
     ),
+    refusals: Schema.optional(Schema.Struct({
+      version: Schema.Literal(1),
+      count: Count.check(Schema.isGreaterThanOrEqualTo(1)),
+      ledgerHash: Hash,
+      billing: Schema.Literal("unknown"),
+    })),
   }),
 })
 export type Result = typeof Result.Type

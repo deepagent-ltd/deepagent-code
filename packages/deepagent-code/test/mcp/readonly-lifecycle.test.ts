@@ -1,14 +1,23 @@
-import { expect } from "bun:test"
+import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { Global } from "@deepagent-code/core/global"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { testEffect, pollWithTimeout } from "../lib/effect"
 import { TestInstance } from "../fixture/fixture"
 import { oauthHttp } from "../fixture/mcp-oauth-http"
 import { Config } from "../../src/config/config"
 import { MCP } from "../../src/mcp/index"
+import { McpAuthScope } from "../../src/mcp/auth-scope"
+import { McpAuthJournalSchema } from "../../src/mcp/auth-journal-schema"
+import { McpReadModel } from "../../src/mcp/read-model"
+import { SecretStore } from "../../src/mcp/secret-store"
+import { AppRuntime } from "../../src/effect/app-runtime"
+import { InstanceStore } from "../../src/project/instance-store"
+import { InstanceRef } from "../../src/effect/instance-ref"
+import { tmpdir } from "../fixture/fixture"
 
 const it = testEffect(Layer.mergeAll(MCP.defaultLayer, Config.defaultLayer, CrossSpawnSpawner.defaultLayer))
 
@@ -192,3 +201,134 @@ it.instance(
     }),
   { config: { mcp: {} } },
 )
+
+test("readonly deduplication keeps observed freshness and cold/command/unsafe boundaries", async () => {
+  await using directory = await tmpdir({ config: { mcp: {} } })
+  await AppRuntime.runPromise(
+    Effect.gen(function* () {
+      const instances = yield* InstanceStore.Service
+      yield* instances.load({ directory: directory.path })
+      const configuration = yield* Config.Service
+      const calls = { snapshot: 0 }
+      const controlled = {
+        ...configuration,
+        readonlySnapshot: () =>
+          Effect.gen(function* () {
+            calls.snapshot++
+            return yield* Effect.die(new Error("full command observation must only run when consumed"))
+          }),
+      }
+      const services = yield* Layer.build(Layer.fresh(McpReadModel.layer)).pipe(
+        Effect.provideService(Config.Service, controlled),
+      )
+      const read = Context.get(services, McpReadModel.Service)
+      expect(yield* read.status({ directory: directory.path })).toEqual({})
+      expect(yield* read.resources({ directory: directory.path })).toEqual({})
+      expect(calls.snapshot).toBe(0)
+      expect((yield* read.commands({ directory: directory.path }).pipe(Effect.exit))._tag).toBe("Failure")
+      expect(calls.snapshot).toBe(1)
+      const coldServices = yield* Layer.build(Layer.fresh(McpReadModel.layer)).pipe(
+        Effect.provideService(Config.Service, controlled),
+        Effect.provideService(InstanceStore.Service, { ...instances, peek: () => Effect.succeed(undefined) }),
+      )
+      const cold = Context.get(coldServices, McpReadModel.Service)
+      expect((yield* cold.status({ directory: directory.path }).pipe(Effect.exit))._tag).toBe("Failure")
+      expect(calls.snapshot).toBe(2)
+      expect(yield* cold.resources({ directory: directory.path })).toEqual({})
+      expect(calls.snapshot).toBe(2)
+      expect((yield* read.status({ directory: path.parse(directory.path).root }).pipe(Effect.exit))._tag).toBe(
+        "Failure",
+      )
+      expect(
+        (yield* read
+          .status({ directory: directory.path, workspaceID: WorkspaceV2.ID.make("wrk_readonly_fixture") })
+          .pipe(Effect.exit))._tag,
+      ).toBe("Failure")
+      expect(calls.snapshot).toBe(2)
+      yield* instances.disposeDirectory(directory.path)
+    }).pipe(Effect.scoped),
+  )
+}, 15000)
+
+test("readonly deduplication reuses only successful scope-change metadata and preserves failure retry and unknown", async () => {
+  await using directory = await tmpdir({ config: { mcp: {} } })
+  await AppRuntime.runPromise(
+    Effect.gen(function* () {
+      const instances = yield* InstanceStore.Service
+      const instance = yield* instances.load({ directory: directory.path })
+      const configuration = yield* Config.Service
+      const view: { snapshot: Config.McpSnapshot } = { snapshot: { config: { mcp: {} }, source: "before" } }
+      const reads = { count: 0, mode: "success" }
+      const metadata = () =>
+        Effect.suspend(() => {
+          reads.count++
+          return reads.mode === "failed" || (reads.mode === "recover" && reads.count === 1)
+            ? Effect.fail(new McpAuthJournalSchema.Error("unavailable"))
+            : Effect.succeed({ tokens: false, expired: false, unknown: reads.mode === "unknown", legacy: false })
+        })
+      const services = yield* Layer.build(
+        Layer.fresh(MCP.layer).pipe(
+          Layer.provide(SecretStore.defaultLayer),
+          Layer.provide(CrossSpawnSpawner.defaultLayer),
+          Layer.provide(
+            Layer.succeed(
+              McpAuthScope.Service,
+              McpAuthScope.Service.of({
+                configure: () => Effect.void,
+                retire: () => Effect.void,
+                begin: () => Effect.die("readonly fixture must not begin OAuth"),
+                metadata,
+                metadataAt: metadata,
+                remove: () => Effect.die("readonly fixture must not remove credentials"),
+              }),
+            ),
+          ),
+        ),
+      ).pipe(
+        Effect.provideService(Config.Service, {
+          ...configuration,
+          mcpSnapshot: () => Effect.succeed(view.snapshot),
+        }),
+      )
+      const mcp = Context.get(services, MCP.Service)
+      const run = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.provideService(InstanceRef, instance))
+      yield* run(mcp.reconcileConfig!())
+      view.snapshot = {
+        config: { mcp: { fixture: { type: "remote", url: "http://127.0.0.1:9/mcp" } } },
+        source: "after",
+      }
+      yield* run(mcp.reconcileConfig!())
+      reads.count = 0
+      expect((yield* run(mcp.status())).fixture).toEqual({
+        status: "disconnected",
+        authStatus: "not_authenticated",
+        reason: "scope_changed",
+      })
+      expect(reads.count).toBe(1)
+      reads.count = 0
+      reads.mode = "unknown"
+      expect((yield* run(mcp.status())).fixture).toEqual({
+        status: "disconnected",
+        authStatus: "unknown",
+        reason: "unknown_outcome",
+      })
+      expect(reads.count).toBe(1)
+      reads.count = 0
+      reads.mode = "recover"
+      expect((yield* run(mcp.status())).fixture).toEqual({
+        status: "disconnected",
+        authStatus: "not_authenticated",
+        reason: "scope_changed",
+      })
+      expect(reads.count).toBe(2)
+      reads.count = 0
+      reads.mode = "failed"
+      expect((yield* run(mcp.status())).fixture).toEqual({
+        status: "failed",
+        error: "MCP authentication storage or scope is unavailable",
+      })
+      expect(reads.count).toBe(2)
+      yield* instances.disposeDirectory(directory.path)
+    }).pipe(Effect.scoped),
+  )
+}, 15000)

@@ -94,12 +94,38 @@ export type SessionGoal = {
   planDocId: string
   // running | paused | done | needs_human | rolled_back | stopped
   phase: string
-  ledger: { ticks: number; tokens: number; cost: number; wallclockMs: number }
+  ledger?: { ticks: number; tokens: number; cost: number; wallclockMs: number }
   stallCount: number
   gaps: string[]
   /** Only GET status / acknowledged controls carry lifecycle authority; old SSE is a hint. */
   control?: import("@deepagent-code/core/deepagent/goal-client").GoalClient.Snapshot
   eventHint?: number
+}
+
+// Control/placement admission stays with the caller. These are observation-only statistics.
+export function sessionGoalFromStatus(
+  current: SessionGoal | undefined,
+  snapshot: NonNullable<SessionGoal["control"]>,
+  capturedEventHint: number,
+): SessionGoal {
+  const same = current?.goalId === snapshot.goalId ? current : undefined
+  const progress = snapshot.progress
+  const retained =
+    same?.ledger &&
+    (!progress ||
+      same.ledger.ticks > progress.ledger.ticks ||
+      (same.ledger.ticks === progress.ledger.ticks && (same.eventHint ?? 0) !== capturedEventHint))
+  const observed = retained ? same : progress
+  return {
+    goalId: snapshot.goalId,
+    planDocId: snapshot.planDocId,
+    phase: snapshot.phase,
+    control: snapshot,
+    ledger: observed?.ledger,
+    stallCount: observed?.stallCount ?? 0,
+    gaps: [...(observed?.gaps ?? [])],
+    eventHint: same?.eventHint,
+  }
 }
 
 export type State = {

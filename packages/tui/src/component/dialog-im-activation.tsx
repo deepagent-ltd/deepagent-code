@@ -16,24 +16,50 @@ export function DialogIMActivation(props: { flow: IMActivation; queryOnly?: bool
   const [queryID, setQueryID] = createSignal("")
   const [failure, setFailure] = createSignal<unknown>()
   let disposed = false
-  onCleanup(() => { disposed = true })
+  onCleanup(() => {
+    disposed = true
+  })
   const run = (action: () => Promise<unknown>) => {
     setFailure(undefined)
-    void action().catch((error: unknown) => { if (!disposed) setFailure(() => error) })
+    void action().catch((error: unknown) => {
+      if (!disposed) setFailure(() => error)
+    })
   }
   const refresh = () => run(() => props.flow.refresh(props.flow.state.transactionID ?? queryID()))
   const submit = () => run(() => props.flow.submit())
-  useBindings(() => ({ priority: 2, bindings: [
-    { key: "return", cmd: () => { if (props.queryOnly || props.flow.state.uncertain) refresh(); else submit() } },
-    { key: "tab", cmd: () => setField((current) => current === 0 ? 1 : 0) },
-    { key: "shift+tab", cmd: () => setField((current) => current === 0 ? 1 : 0) },
-    { key: "alt+c", cmd: () => props.flow.update({ confirmed: !props.flow.state.confirmed }) },
-    { key: "alt+m", cmd: () => props.flow.update({ method: props.flow.state.method === "api_key"
-      ? "activation_code" : "api_key", credential: "" }) },
-    { key: "ctrl+r", cmd: refresh },
-    { key: "ctrl+l", cmd: () => run(() => props.flow.load()) },
-    { key: "escape", cmd: props.back },
-  ] }))
+  const retryOriginal = () => run(() => props.flow.retryOriginal())
+  useBindings(() => ({
+    priority: 2,
+    bindings: [
+      {
+        key: "return",
+        cmd: () => {
+          if (props.queryOnly || props.flow.state.uncertain) refresh()
+          else submit()
+        },
+      },
+      { key: "tab", cmd: () => setField((current) => (current === 0 ? 1 : 0)) },
+      { key: "shift+tab", cmd: () => setField((current) => (current === 0 ? 1 : 0)) },
+      { key: "alt+c", cmd: () => props.flow.update({ confirmed: !props.flow.state.confirmed }) },
+      {
+        key: "alt+m",
+        cmd: () =>
+          props.flow.update({
+            method: props.flow.state.method === "api_key" ? "activation_code" : "api_key",
+            credential: "",
+          }),
+      },
+      { key: "ctrl+r", cmd: refresh },
+      {
+        key: "alt+s",
+        cmd: () => {
+          if (props.flow.canRetryOriginal()) retryOriginal()
+        },
+      },
+      { key: "ctrl+l", cmd: () => run(() => props.flow.load()) },
+      { key: "escape", cmd: props.back },
+    ],
+  }))
   onMount(() => run(() => props.flow.load(!props.queryOnly)))
   createEffect(() => {
     const editor = nameInput()
@@ -50,70 +76,158 @@ export function DialogIMActivation(props: { flow: IMActivation; queryOnly?: bool
     if (props.queryOnly && !props.flow.state.busy && !props.flow.state.transactionID) editor.focus()
     else editor.blur()
   })
-  return <box paddingLeft={2} paddingRight={2} paddingBottom={1} gap={1}>
-    <text fg={theme.text} attributes={TextAttributes.BOLD}>
-      {i18n.t(props.queryOnly ? "tui.im.activation.resume" : "tui.im.activation.title")}
-    </text>
-    <text fg={theme.textMuted} wrapMode="word">{i18n.t("tui.im.activation.notice")}</text>
-    <Show when={!props.queryOnly && !props.flow.state.uncertain && props.flow.state.transaction?.state !== "succeeded"}>
-      <Show when={props.flow.state.quote}>
-        {(quote) => <text fg={theme.textMuted} wrapMode="word">{i18n.t("tui.im.activation.quote", {
-          credits: quote().priceCredits, expiry: new Date(quote().expiresAt).toLocaleString(),
-        })}</text>}
+  return (
+    <box paddingLeft={2} paddingRight={2} paddingBottom={1} gap={1}>
+      <text fg={theme.text} attributes={TextAttributes.BOLD}>
+        {i18n.t(props.queryOnly ? "tui.im.activation.resume" : "tui.im.activation.title")}
+      </text>
+      <text fg={theme.textMuted} wrapMode="word">
+        {i18n.t("tui.im.activation.notice")}
+      </text>
+      <Show
+        when={!props.queryOnly && !props.flow.state.uncertain && props.flow.state.transaction?.state !== "succeeded"}
+      >
+        <Show when={props.flow.state.quote}>
+          {(quote) => (
+            <text fg={theme.textMuted} wrapMode="word">
+              {i18n.t("tui.im.activation.quote", {
+                credits: quote().priceCredits,
+                expiry: new Date(quote().expiresAt).toLocaleString(),
+              })}
+            </text>
+          )}
+        </Show>
+        <text
+          fg={theme.primary}
+          onMouseUp={() =>
+            props.flow.update({
+              method: props.flow.state.method === "api_key" ? "activation_code" : "api_key",
+              credential: "",
+            })
+          }
+        >
+          {i18n.t(props.flow.state.method === "api_key" ? "tui.im.activation.apiKey" : "tui.im.activation.code")}
+        </text>
+        <box>
+          <text fg={theme.text}>{i18n.t("tui.im.activation.name")}</text>
+          <textarea
+            id="im-activation-name"
+            height={1}
+            ref={setNameInput}
+            textColor={theme.text}
+            onContentChange={() => props.flow.update({ name: nameInput()?.plainText ?? "" })}
+          />
+        </box>
+        <IMSecretInput
+          value={props.flow.state.credential}
+          setValue={(credential) => props.flow.update({ credential })}
+          active={field() === 1}
+          locked={!props.flow.editable()}
+          label={i18n.t("tui.im.activation.credential")}
+        />
+        <Show when={props.flow.state.method === "api_key"}>
+          <text fg={theme.primary} onMouseUp={() => props.flow.update({ confirmed: !props.flow.state.confirmed })}>
+            {props.flow.state.confirmed ? "[x] " : "[ ] "}
+            {i18n.t("tui.im.activation.confirm")}
+          </text>
+        </Show>
+        <text fg={theme.textMuted} wrapMode="word">
+          {i18n.t(
+            props.flow.state.method === "api_key" ? "tui.im.activation.confirmHint" : "tui.im.activation.codeHint",
+          )}
+        </text>
+        <text fg={theme.primary} onMouseUp={() => run(() => props.flow.load())}>
+          {i18n.t("tui.im.activation.quoteRefresh")}
+        </text>
       </Show>
-      <text fg={theme.primary} onMouseUp={() => props.flow.update({ method: props.flow.state.method === "api_key"
-        ? "activation_code" : "api_key", credential: "" })}>
-        {i18n.t(props.flow.state.method === "api_key" ? "tui.im.activation.apiKey" : "tui.im.activation.code")}
-      </text>
-      <box>
-        <text fg={theme.text}>{i18n.t("tui.im.activation.name")}</text>
-        <textarea id="im-activation-name" height={1} ref={setNameInput} textColor={theme.text}
-          onContentChange={() => props.flow.update({ name: nameInput()?.plainText ?? "" })} />
-      </box>
-      <IMSecretInput value={props.flow.state.credential} setValue={(credential) => props.flow.update({ credential })}
-        active={field() === 1} locked={!props.flow.editable()} label={i18n.t("tui.im.activation.credential")} />
-      <Show when={props.flow.state.method === "api_key"}>
-      <text fg={theme.primary} onMouseUp={() => props.flow.update({ confirmed: !props.flow.state.confirmed })}>
-        {props.flow.state.confirmed ? "[x] " : "[ ] "}
-        {i18n.t("tui.im.activation.confirm")}
-      </text>
+      <Show when={props.queryOnly && !props.flow.state.transactionID}>
+        <text fg={theme.text}>{i18n.t("tui.im.activation.statusID")}</text>
+        <textarea
+          id="im-activation-status-id"
+          height={1}
+          ref={setQueryInput}
+          onContentChange={() => setQueryID(queryInput()?.plainText ?? "")}
+          textColor={theme.text}
+        />
       </Show>
-      <text fg={theme.textMuted} wrapMode="word">{i18n.t(props.flow.state.method === "api_key"
-        ? "tui.im.activation.confirmHint" : "tui.im.activation.codeHint")}</text>
-      <text fg={theme.primary} onMouseUp={() => run(() => props.flow.load())}>
-        {i18n.t("tui.im.activation.quoteRefresh")}
+      <Show when={props.flow.state.transactionID}>
+        {(id) => (
+          <text fg={theme.textMuted} wrapMode="word">
+            {i18n.t("tui.im.activation.transaction", { id: id() })}
+          </text>
+        )}
+      </Show>
+      <Show when={props.flow.state.transaction}>
+        {(transaction) => (
+          <text fg={theme.textMuted} wrapMode="word">
+            {i18n.t("tui.im.activation.state", {
+              state: transaction().state,
+              credits: transaction().chargedCredits ?? "—",
+            })}
+          </text>
+        )}
+      </Show>
+      <Show when={props.flow.state.uncertain}>
+        <text fg={theme.warning} wrapMode="word">
+          {i18n.t("tui.im.activation.unknown")}
+        </text>
+      </Show>
+      <Show when={props.flow.canRetryOriginal()}>
+        <text fg={theme.textMuted} wrapMode="word">
+          {i18n.t("tui.im.activation.retryHint")}
+        </text>
+        <IMSecretInput
+          value={props.flow.state.credential}
+          setValue={(credential) => props.flow.update({ credential })}
+          active={!props.flow.state.busy}
+          locked={props.flow.state.busy}
+          label={i18n.t("tui.im.activation.credential")}
+        />
+        <text fg={theme.primary} onMouseUp={() => props.flow.update({ confirmed: !props.flow.state.confirmed })}>
+          {props.flow.state.confirmed ? "[x] " : "[ ] "}
+          {i18n.t("tui.im.activation.retryConsent")}
+        </text>
+        <text
+          fg={
+            props.flow.state.confirmed && props.flow.state.credential && !props.flow.state.busy
+              ? theme.primary
+              : theme.textMuted
+          }
+          onMouseUp={retryOriginal}
+        >
+          {i18n.t("tui.im.activation.retryOriginal")}
+        </text>
+      </Show>
+      <Show when={props.flow.state.transaction?.state === "succeeded" && props.flow.state.transaction.credentialStored}>
+        <text fg={theme.success} wrapMode="word">
+          {i18n.t("tui.im.activation.complete")}
+        </text>
+      </Show>
+      <Show when={props.flow.state.transaction?.state === "rejected"}>
+        <text fg={theme.warning}>{i18n.t("tui.im.activation.failed")}</text>
+      </Show>
+      <Show when={failure() ?? props.flow.state.failure}>
+        {(failure) => (
+          <text fg={theme.error} wrapMode="word">
+            {imErrorText(failure(), i18n)}
+          </text>
+        )}
+      </Show>
+      <Show
+        when={!props.queryOnly && !props.flow.state.uncertain && props.flow.state.transaction?.state !== "succeeded"}
+      >
+        <text fg={theme.primary} onMouseUp={submit}>
+          {props.flow.state.busy
+            ? i18n.t("tui.im.working")
+            : i18n.t(props.flow.state.method === "api_key" ? "tui.im.activation.submit" : "tui.im.activation.redeem")}
+        </text>
+      </Show>
+      <text fg={theme.primary} onMouseUp={refresh}>
+        {i18n.t("tui.im.activation.refresh")}
       </text>
-    </Show>
-    <Show when={props.queryOnly && !props.flow.state.transactionID}>
-      <text fg={theme.text}>{i18n.t("tui.im.activation.statusID")}</text>
-      <textarea id="im-activation-status-id" height={1} ref={setQueryInput}
-        onContentChange={() => setQueryID(queryInput()?.plainText ?? "")} textColor={theme.text} />
-    </Show>
-    <Show when={props.flow.state.transactionID}>
-      {(id) => <text fg={theme.textMuted} wrapMode="word">{i18n.t("tui.im.activation.transaction", { id: id() })}</text>}
-    </Show>
-    <Show when={props.flow.state.transaction}>
-      {(transaction) => <text fg={theme.textMuted} wrapMode="word">{i18n.t("tui.im.activation.state", {
-        state: transaction().state, credits: transaction().chargedCredits ?? "—",
-      })}</text>}
-    </Show>
-    <Show when={props.flow.state.uncertain}>
-      <text fg={theme.warning} wrapMode="word">{i18n.t("tui.im.activation.unknown")}</text>
-    </Show>
-    <Show when={props.flow.state.transaction?.state === "succeeded" && props.flow.state.transaction.credentialStored}>
-      <text fg={theme.success} wrapMode="word">{i18n.t("tui.im.activation.complete")}</text>
-    </Show>
-    <Show when={props.flow.state.transaction?.state === "rejected"}>
-      <text fg={theme.warning}>{i18n.t("tui.im.activation.failed")}</text>
-    </Show>
-    <Show when={failure() ?? props.flow.state.failure}>
-      {(failure) => <text fg={theme.error} wrapMode="word">{imErrorText(failure(), i18n)}</text>}
-    </Show>
-    <Show when={!props.queryOnly && !props.flow.state.uncertain && props.flow.state.transaction?.state !== "succeeded"}>
-      <text fg={theme.primary} onMouseUp={submit}>{props.flow.state.busy ? i18n.t("tui.im.working")
-        : i18n.t(props.flow.state.method === "api_key" ? "tui.im.activation.submit" : "tui.im.activation.redeem")}</text>
-    </Show>
-    <text fg={theme.primary} onMouseUp={refresh}>{i18n.t("tui.im.activation.refresh")}</text>
-    <text fg={theme.textMuted} onMouseUp={props.back}>{i18n.t("tui.im.activation.back")}</text>
-  </box>
+      <text fg={theme.textMuted} onMouseUp={props.back}>
+        {i18n.t("tui.im.activation.back")}
+      </text>
+    </box>
+  )
 }

@@ -3,6 +3,7 @@ import { createStore } from "solid-js/store"
 import { useMutation } from "@tanstack/solid-query"
 import { Button } from "@deepagent-code/ui/button"
 import { DockPrompt } from "@deepagent-code/ui/dock-prompt"
+import { PlanApproval } from "@deepagent-code/ui/plan-approval"
 import { Icon } from "@deepagent-code/ui/icon"
 import { showToast } from "@/utils/toast"
 import type { QuestionAnswer, QuestionRequest } from "@deepagent-code/sdk"
@@ -506,7 +507,14 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
       }
     >
       <div data-slot="question-text" class="overflow-auto">
-        {question()?.question}
+        <Show when={question()?.custom === false} fallback={question()?.question}>
+          <PlanApproval
+            text={question()?.question ?? ""}
+            sessionID={props.request.sessionID}
+            kind="question"
+            fallback={question()?.question}
+          />
+        </Show>
       </div>
       <Show when={multi()} fallback={<div data-slot="question-hint">{language.t("ui.question.singleHint")}</div>}>
         <div data-slot="question-hint">{language.t("ui.question.multiHint")}</div>

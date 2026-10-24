@@ -1,4 +1,4 @@
-import { Component, Show } from "solid-js"
+import { Component, Show, type ComponentProps } from "solid-js"
 import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
 import { Tabs } from "@deepagent-code/ui/tabs"
 import { useLanguage } from "@/context/language"
@@ -13,7 +13,7 @@ export type KnowledgeTab = "review" | "wiki" | "packs"
 // Repo & Wiki, Domain Packs — merged into ONE "Knowledge" dialog with tabs 审核 | Wiki | 领域包.
 // The Wiki tab only shows when the server has the wiki capability (same gating the old rail
 // entry used). Default tab is the governance review queue.
-export const DialogKnowledge: Component<{
+export const KnowledgePanel: Component<{
   client: ReviewClient & WikiClient & PackClient
   tab?: KnowledgeTab
   wikiAvailable?: boolean
@@ -26,27 +26,34 @@ export const DialogKnowledge: Component<{
   }
 
   return (
-    <Dialog size="x-large" variant="settings" title={language.t("knowledge.title")}>
-      <Tabs variant="pill" defaultValue={initial()} class="h-full" data-scope="knowledge">
-        <Tabs.List>
-          <Tabs.Trigger value="review">{language.t("knowledge.tab.review")}</Tabs.Trigger>
-          <Show when={wiki()}>
-            <Tabs.Trigger value="wiki">{language.t("knowledge.tab.wiki")}</Tabs.Trigger>
-          </Show>
-          <Tabs.Trigger value="packs">{language.t("packs.title")}</Tabs.Trigger>
-        </Tabs.List>
-        <Tabs.Content value="review" class="min-h-0">
-          <ReviewPanel client={props.client} />
-        </Tabs.Content>
+    <Tabs variant="pill" defaultValue={initial()} class="h-full" data-scope="knowledge">
+      <Tabs.List>
+        <Tabs.Trigger value="review">{language.t("knowledge.tab.review")}</Tabs.Trigger>
         <Show when={wiki()}>
-          <Tabs.Content value="wiki" class="min-h-0">
-            <WikiPanel client={props.client} />
-          </Tabs.Content>
+          <Tabs.Trigger value="wiki">{language.t("knowledge.tab.wiki")}</Tabs.Trigger>
         </Show>
-        <Tabs.Content value="packs" class="min-h-0">
-          <PacksPanel client={props.client} />
+        <Tabs.Trigger value="packs">{language.t("packs.title")}</Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content value="review" class="min-h-0">
+        <ReviewPanel client={props.client} />
+      </Tabs.Content>
+      <Show when={wiki()}>
+        <Tabs.Content value="wiki" class="min-h-0">
+          <WikiPanel client={props.client} />
         </Tabs.Content>
-      </Tabs>
+      </Show>
+      <Tabs.Content value="packs" class="min-h-0">
+        <PacksPanel client={props.client} />
+      </Tabs.Content>
+    </Tabs>
+  )
+}
+
+export const DialogKnowledge: Component<ComponentProps<typeof KnowledgePanel>> = (props) => {
+  const language = useLanguage()
+  return (
+    <Dialog size="x-large" variant="settings" title={language.t("knowledge.title")}>
+      <KnowledgePanel {...props} />
     </Dialog>
   )
 }

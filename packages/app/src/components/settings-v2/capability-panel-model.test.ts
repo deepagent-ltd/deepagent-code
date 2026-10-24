@@ -50,7 +50,9 @@ const snapshot = (): SystemContextSnapshot => ({
 
 describe("catalogRows (L0)", () => {
   test("derives id/version/summary/availability/entry tools rows", () => {
-    const rows = catalogRows(catalog([catalogCapability, { ...catalogCapability, id: "legacy.sync", availability: "maintenance_only" }]))
+    const rows = catalogRows(
+      catalog([catalogCapability, { ...catalogCapability, id: "legacy.sync", availability: "maintenance_only" }]),
+    )
     expect(rows).toHaveLength(2)
 
     expect(rows[0]).toEqual({
@@ -58,14 +60,14 @@ describe("catalogRows (L0)", () => {
       version: "1.2.0",
       summary: "Query code context with intent",
       availability: "stable",
-      availabilityKey: "settings.capabilities.availability.stable",
+      availabilityKey: "settings.capabilities.integrated",
       entryTools: ["context_query"],
     })
     expect(rows[1]?.availabilityKey).toBe("settings.capabilities.availability.maintenance_only")
   })
 
   test("maps every availability value to a stable label key", () => {
-    expect(availabilityKey("stable")).toBe("settings.capabilities.availability.stable")
+    expect(availabilityKey("stable")).toBe("settings.capabilities.integrated")
     expect(availabilityKey("maintenance_only")).toBe("settings.capabilities.availability.maintenance_only")
     expect(availabilityKey("disabled")).toBe("settings.capabilities.availability.disabled")
     expect(availabilityKey("unavailable")).toBe("settings.capabilities.availability.unavailable")

@@ -96,10 +96,11 @@ pub fn with_preloaded_image<A>(env: Env, capture: Value, run: impl FnOnce(&First
     let state = all.get(&(env as usize)).ok_or(io::ErrorKind::PermissionDenied)?;
     let mut pointer = ptr::null_mut();
     if unsafe { (state.api.get_external)(env,capture,&mut pointer) } != 0 || pointer.is_null() ||
-        pointer as usize != state.token || !valid(state) { return Err(io::ErrorKind::PermissionDenied.into()); }
+        pointer as usize != state.token { return Err(io::ErrorKind::PermissionDenied.into()); }
     let image = state.image.as_ref().ok_or(io::ErrorKind::PermissionDenied)?;
     let proof = state.preload.as_ref().ok_or(io::ErrorKind::PermissionDenied)?;
-    proof.current()?;
+    // Every caller synchronously validates these original image/proof objects
+    // before external I/O or authority use; keep the state lock held through run.
     run(image,proof)
 }
 
@@ -157,13 +158,20 @@ unsafe extern "C" fn describe(env: Env, info: *mut c_void) -> Value {
     if !argument(&state.api, env, info, state.token) { return state.api.error(env); }
     let Some(image) = &state.image else { return state.api.error(env); };
     if !valid(state) { return state.api.error(env); }
-    let Ok(mut description) = serde_json::to_value(image.description()) else { return state.api.error(env); };
-    description["preloaded"] = serde_json::Value::Bool(state.preload.is_some());
-    description["preload_hash"] = state.preload.as_ref().map(|proof| serde_json::Value::String(proof.hash.clone())).unwrap_or(serde_json::Value::Null);
-    let Ok(text) = serde_json::to_string(&description) else { return state.api.error(env); };
+    let Ok(text) = encode_description(image, state.preload.as_ref()) else { return state.api.error(env); };
     let mut value = ptr::null_mut();
     if unsafe { (state.api.create_string)(env, text.as_ptr().cast(), text.len(), &mut value) } != 0 { return state.api.error(env); }
     value
+}
+/// Public immutable facts only. Callers must validate the same held image/proof
+/// before returning this description; it never proves current authority itself.
+pub(super) fn encode_description(image: &FirstLoad, proof: Option<&preload::Evidence>) -> io::Result<String> {
+    let mut description = serde_json::to_value(image.description()).map_err(io::Error::other)?;
+    description["preloaded"] = serde_json::Value::Bool(proof.is_some());
+    description["preload_hash"] = proof.map(|proof| serde_json::Value::String(proof.hash.clone())).unwrap_or(serde_json::Value::Null);
+    let text = serde_json::to_string(&description).map_err(io::Error::other)?;
+    if text.len() > 65_536 { return Err(io::ErrorKind::InvalidData.into()); }
+    Ok(text)
 }
 unsafe extern "C" fn current(env: Env, info: *mut c_void) -> Value {
     let Ok(all) = states().lock() else { return ptr::null_mut(); };
@@ -364,8 +372,10 @@ unsafe extern "C" fn finalize_sidecar(env: Env, token: *mut c_void, _: *mut c_vo
 unsafe extern "C" fn read_installation(env: Env, info: *mut c_void) -> Value {
     let Ok(mut all) = states().lock() else { return ptr::null_mut(); };
     let Some(state) = all.get_mut(&(env as usize)) else { return ptr::null_mut(); };
-    if !argument(&state.api, env, info, state.token) || !valid(state) { return state.api.error(env); }
+    if !argument(&state.api, env, info, state.token) { return state.api.error(env); }
     let (Some(image), Some(proof)) = (&state.image, &state.preload) else { return state.api.error(env); };
+    // open/read check this same held image and preload before using them. Keep
+    // their full checks instead of repeating the graph here in this sync call.
     if state.installation.is_none() {
         let installed = match super::installation::Installed::open(image, proof) { Ok(value) => value, Err(error) => {
             eprintln!("dac-native-preload:installation-open:{:?}:{:?}", error.kind(), error.raw_os_error()); return state.api.error(env);

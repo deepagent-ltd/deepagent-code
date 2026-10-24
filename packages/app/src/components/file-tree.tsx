@@ -1,4 +1,5 @@
 import { useFile } from "@/context/file"
+import { useServer } from "@/context/server"
 import { encodeFilePath } from "@/context/file/path"
 import { Collapsible } from "@deepagent-code/ui/collapsible"
 import { ContextMenu } from "@deepagent-code/ui/context-menu"
@@ -18,6 +19,7 @@ import {
   For,
   Match,
   on,
+  onCleanup,
   Show,
   splitProps,
   Switch,
@@ -150,6 +152,9 @@ const FileTreeNode = (
   ])
   const language = useLanguage()
   const file = useFile()
+  const server = useServer()
+  const renameOwner = { active: true, busy: false }
+  onCleanup(() => (renameOwner.active = false))
   const kind = () => visibleKind(local.node, local.kinds, local.marks)
   const active = () => !!kind() && !local.node.ignored
   const color = () => {
@@ -165,18 +170,42 @@ const FileTreeNode = (
   })
 
   const commitRename = async (next: string) => {
+    if (!renameOwner.active || renameOwner.busy || !editing()) return
     const name = next.trim()
-    local.setRenaming?.(null)
-    if (!name || name === local.node.name) return
-    const res = await desktopApi()?.fileOps?.rename(file.directory(), local.node.absolute, name)
-    if (!res) return
-    if (res.ok) {
-      showToast({ variant: "success", title: language.t("fileTree.renamed") })
-      const idx = local.node.path.lastIndexOf("/")
-      void file.tree.refresh(idx === -1 ? "" : local.node.path.slice(0, idx))
-      return
+    const request = {
+      directory: file.directory(),
+      scope: server.scope(),
+      path: local.node.path,
+      absolute: local.node.absolute,
+      api: desktopApi(),
     }
-    showToast({ variant: "error", title: language.t("fileTree.renameFailed"), description: res.error })
+    // Closing the editor can emit blur synchronously after Enter.
+    renameOwner.busy = true
+    local.setRenaming?.(null)
+    try {
+      if (!name || name === local.node.name) return
+      if (!isLocalFilesystemOp({ desktop: Boolean(request.api), localSidecar: file.isLocalSidecar() })) return
+      const res = await request.api?.fileOps?.rename(request.directory, request.absolute, name)
+      if (!res) return
+      if (
+        !renameOwner.active ||
+        server.scope() !== request.scope ||
+        file.directory() !== request.directory ||
+        local.node.path !== request.path ||
+        local.node.absolute !== request.absolute ||
+        desktopApi() !== request.api
+      )
+        return
+      if (res.ok) {
+        showToast({ variant: "success", title: language.t("fileTree.renamed") })
+        const idx = request.path.lastIndexOf("/")
+        void file.tree.refresh(idx === -1 ? "" : request.path.slice(0, idx))
+        return
+      }
+      showToast({ variant: "error", title: language.t("fileTree.renameFailed"), description: res.error })
+    } finally {
+      renameOwner.busy = false
+    }
   }
 
   // Defer rename until the context menu has finished closing so its focus-return doesn't yank focus
@@ -311,16 +340,14 @@ export default function FileTree(props: {
   const setRenaming = props._setRenaming ?? ownSetRenaming
 
   const onOpenTimeline = (node: FileNode) => {
-    void dialog.show(
-      () => (
-        <GitTimelineDialog
-          workDir={file.directory()}
-          relPath={node.path}
-          name={node.name}
-          local={isLocalFilesystemOp({ desktop: Boolean(desktopApi()), localSidecar: file.isLocalSidecar() })}
-        />
-      ),
-    )
+    void dialog.show(() => (
+      <GitTimelineDialog
+        workDir={file.directory()}
+        relPath={node.path}
+        name={node.name}
+        local={isLocalFilesystemOp({ desktop: Boolean(desktopApi()), localSidecar: file.isLocalSidecar() })}
+      />
+    ))
   }
 
   const key = (p: string) =>

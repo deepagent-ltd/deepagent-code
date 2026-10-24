@@ -32,3 +32,14 @@ export const layer = Layer.effectContext(Effect.gen(function* () {
     parent: invoke((storage) => storage.current),
   })
 }))
+
+/** Config for serve/web is read before the listener opens its database root.
+ * Prepare only the original Native settings port; no Work/MCP/DB services boot. */
+export const standaloneLayer = Layer.effectContext(Effect.gen(function* () {
+  if (process.platform !== "win32" || !(yield* NativeWindowsBootstrap.Registered)) return Context.empty()
+  const { NativeInstallation } = yield* Effect.promise(() => import("./native-installation"))
+  const bootstrap = yield* NativeWindowsBootstrap.make(yield* NativeInstallation.current())
+  const native = Context.make(NativeWindowsBootstrap.Service, bootstrap)
+  const settings = yield* Layer.build(layer.pipe(Layer.provide(Layer.succeedContext(native))))
+  return Context.merge(native, settings)
+}))

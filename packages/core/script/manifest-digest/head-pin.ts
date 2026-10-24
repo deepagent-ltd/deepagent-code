@@ -12,12 +12,12 @@
  * `bun run script/manifest-digest/generate-manifest.ts` and update both digests
  * here.
  *
- * This v2.0.4 pin records the reviewed working-tree candidate. Final source closure must still
+ * This v2.0.5 pin records the reviewed working-tree candidate. Final source closure must still
  * freeze these exact inputs and compile the materialized tree; this pin is not release approval.
  */
 export const HeadPin = {
   /** Source commit used to prepare the pinned tree. Informational; the digests are the gate. */
-  commit: "6edd81197fe34dbb3048608055c6e2b1f645a84e",
-  setTreeDigest: "38c901835a0565158ca64fcc5a334b6fd2808be06c20b0deb466d330c4aefbd0",
-  overallDigest: "fea5ef8f840ae00fffa67533073c0fbf018a8d3053b32109ca14812854f19ffd",
+  commit: "abfacfa706bd64876e6554bfcb810f0c55315222",
+  setTreeDigest: "8955602ba44ebfe4816abd08c1aff32325f63d089159cd9aae6cfb91ef5b0ca2",
+  overallDigest: "5bb71c4f041357eb66ddc685fdbebe4dbc73cfcb3a1c6203c28b5a519db3ed66",
 } as const

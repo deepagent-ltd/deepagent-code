@@ -135,6 +135,9 @@ export function setDockIcon() {
   if (!icon.isEmpty()) app.dock?.setIcon(icon)
 }
 
+const mainWindows = new WeakSet<BrowserWindow>()
+export const isMainWindow = (window: BrowserWindow) => mainWindows.has(window) && !window.isDestroyed()
+
 export function createMainWindow() {
   const state = windowState({
     defaultWidth: 1280,
@@ -173,6 +176,7 @@ export function createMainWindow() {
     },
   })
 
+  mainWindows.add(win)
   allowRendererPermissions(win)
   wireWindowRecovery(win, "main")
 

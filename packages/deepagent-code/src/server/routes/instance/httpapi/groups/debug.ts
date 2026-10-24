@@ -8,7 +8,7 @@
  * Delivers: debug.stopped / debug.output / debug.terminated / debug.updated
  */
 import { Schema } from "effect"
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { WorkspaceRoutingMiddleware, WorkspaceRoutingQueryFields } from "../middleware/workspace-routing"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
@@ -269,7 +269,7 @@ export const DebugApi = HttpApi.make("debug").add(
       // Effect HttpApi streams via HttpServerResponse.stream; we handle it in the handler.
       HttpApiEndpoint.get("events", DebugPaths.events, {
         query: DebugEventsQuery,
-        success: described(Schema.Unknown, "SSE event stream"),
+        success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "debug.events",

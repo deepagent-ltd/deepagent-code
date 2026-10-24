@@ -1,4 +1,4 @@
-import { batch, createEffect, onCleanup, onMount, Show } from "solid-js"
+import { batch, createEffect, on, onCleanup, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Button } from "@deepagent-code/ui/button"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
@@ -10,13 +10,23 @@ import { useLocation, useNavigate } from "@solidjs/router"
 import { SessionRouteKey, SessionStateKey } from "@/utils/server-scope"
 import { base64Encode } from "@deepagent-code/core/util/encode"
 import { PersonalCommandEditor, type PersonalCommandClient } from "./personal-command-editor"
+import type { IMDacSessionSchema } from "@deepagent-code/core/im/dac-session.schema"
 import type { DacDraft, DacBinding, DacCommand } from "./personal-command"
 
 export function PersonalCommandFlow(props: {
-  client: PersonalCommandClient & { dacReplyRetry: PersonalCommandClient["dacCommand"] }
+  client: PersonalCommandClient & {
+    dacReplyRetry: PersonalCommandClient["dacCommand"]
+    dacReplyReconcile?: (
+      groupID: string,
+      commandID: string,
+      cursor: string | undefined,
+      signal: AbortSignal,
+    ) => Promise<IMDacSessionSchema.ReplyReconcileResponse>
+  }
   groupID: string
   draft: DacDraft
   autoSubmit: boolean
+  showReturn?: boolean
   bookmark: (targetPath: string) => void
   active: () => boolean
   onClose: () => void
@@ -39,6 +49,7 @@ export function PersonalCommandFlow(props: {
     invalid: false,
     replyBusy: false,
     replyUnknown: false,
+    reconciliation: undefined as IMDacSessionSchema.ReplyReconcileResponse | undefined,
   })
   const current = () =>
     state.alive &&
@@ -111,6 +122,61 @@ export function PersonalCommandFlow(props: {
       batch(() => {
         props.draft.setState("command", value)
         setState("replyUnknown", false)
+      })
+    } catch {
+      if (current()) setState("replyUnknown", true)
+    } finally {
+      if (current()) setState("replyBusy", false)
+    }
+  }
+  createEffect(
+    on(
+      () => props.draft.state.command?.commandID,
+      () => setState("reconciliation", undefined),
+    ),
+  )
+  const reconcileReply = async () => {
+    const original = props.draft.state.command
+    if (
+      !current() ||
+      state.replyBusy ||
+      !original ||
+      original.state !== "admitted" ||
+      !original.finalMessageID ||
+      !props.client.dacReplyReconcile
+    )
+      return
+    setState("replyBusy", true)
+    try {
+      const value = await props.client.dacReplyReconcile(
+        props.groupID,
+        original.commandID,
+        state.reconciliation?.nextCursor ?? undefined,
+        AbortSignal.any([requests.signal, AbortSignal.timeout(30_000)]),
+      )
+      if (!current() || props.draft.state.command?.commandID !== original.commandID) return
+      if (
+        !(
+          [
+            "commandID",
+            "groupID",
+            "bindingID",
+            "sessionID",
+            "inputID",
+            "projectID",
+            "directory",
+            "workspaceID",
+            "activityID",
+            "finalMessageID",
+            "state",
+            "delivery",
+          ] as const
+        ).every((key) => value.command[key] === original[key])
+      )
+        throw new Error("changed")
+      batch(() => {
+        props.draft.setState("command", value.command)
+        setState({ reconciliation: value, replyUnknown: false })
       })
     } catch {
       if (current()) setState("replyUnknown", true)
@@ -251,21 +317,51 @@ export function PersonalCommandFlow(props: {
             {language.t("im.dac.check")}
           </Button>
         </Show>
+        <Show
+          when={
+            props.draft.state.command?.state === "admitted" &&
+            props.draft.state.command?.finalMessageID &&
+            props.draft.state.command?.replyStatus !== "delivered" &&
+            props.client.dacReplyReconcile
+          }
+        >
+          <Button
+            size="small"
+            variant="secondary"
+            disabled={!current() || state.replyBusy}
+            onClick={() => void reconcileReply()}
+          >
+            {language.t(state.reconciliation?.hasMore ? "im.dac.reply.reconcileMore" : "im.dac.reply.reconcile")}
+          </Button>
+          <p>{language.t("im.dac.reply.reconcileHelp")}</p>
+        </Show>
+        <Show when={state.reconciliation}>
+          {(value) => (
+            <p role="status">
+              {language.t("im.dac.reply.reconcileCount", {
+                confirmed: value().confirmedParts,
+                total: value().totalParts,
+              })}
+            </p>
+          )}
+        </Show>
         <Show when={state.invalid}>
           <p role="alert">{language.t("im.dac.scopeChanged")}</p>
         </Show>
-        <Button
-          size="small"
-          variant="secondary"
-          disabled={state.invalid || !current() || location.pathname !== state.targetPath}
-          onClick={() => {
-            if (!current()) return
-            navigate(returnPath)
-            props.onClose()
-          }}
-        >
-          {language.t("im.dac.returnToChat")}
-        </Button>
+        <Show when={props.showReturn !== false}>
+          <Button
+            size="small"
+            variant="secondary"
+            disabled={state.invalid || !current() || location.pathname !== state.targetPath}
+            onClick={() => {
+              if (!current()) return
+              navigate(returnPath)
+              props.onClose()
+            }}
+          >
+            {language.t("im.dac.returnToChat")}
+          </Button>
+        </Show>
       </div>
     </Show>
   )

@@ -8,18 +8,20 @@ const productName =
   channel === "prod" ? "DeepAgent Code" : `DeepAgent Code ${channel.charAt(0).toUpperCase() + channel.slice(1)}`
 const summary = `Open source AI coding agent${channel !== "prod" ? ` (${channel})` : ""}`
 
+const product = await Bun.file(new URL("../package.json", import.meta.url)).json()
+
 const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
   <id>${appId}</id>
 
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT</project_license>
+  <project_license>${product.license}</project_license>
 
   <name>${productName}</name>
   <summary>${summary}</summary>
 
-  <developer id="ly.anoma">
-    <name>Anomaly Innovations Inc.</name>
+  <developer id="ltd.deepagent">
+    <name>${product.author.name}</name>
   </developer>
 
   <description>

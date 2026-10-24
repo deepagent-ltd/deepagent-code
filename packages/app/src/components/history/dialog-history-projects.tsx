@@ -1,4 +1,4 @@
-import { Component, createMemo, createResource, createSignal, For, Show } from "solid-js"
+import { Component, createMemo, createResource, createSignal, For, Show, type ComponentProps } from "solid-js"
 import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
 import { Dialog as ConfirmDialog } from "@deepagent-code/ui/dialog"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
@@ -77,9 +77,7 @@ const ConfirmDeleteDialog: Component<{
     <ConfirmDialog title={language.t("project.delete.title")} fit>
       <div class="flex flex-col gap-4 pl-6 pr-2.5 pb-3">
         <div class="flex flex-col gap-1">
-          <span class="text-14-regular text-text-strong">
-            {language.t("project.delete.confirm", { name: name() })}
-          </span>
+          <span class="text-14-regular text-text-strong">{language.t("project.delete.confirm", { name: name() })}</span>
           <span class="text-12-regular text-text-weak">{language.t("project.delete.warning")}</span>
         </div>
         <div class="flex justify-end gap-2">
@@ -95,7 +93,7 @@ const ConfirmDeleteDialog: Component<{
   )
 }
 
-export const DialogHistoryProjects: Component<{
+export const HistoryProjectsPanel: Component<{
   client: RawSdkClient
   activeWorktrees: ReadonlySet<string>
   onOpen: (directory: string) => void
@@ -138,74 +136,79 @@ export const DialogHistoryProjects: Component<{
   }
 
   return (
-    <Dialog size="x-large" variant="settings" title={language.t("sidebar.history")}>
-      <div class="settings-v2-panel" data-component="history-projects-dialog">
-        <div class="settings-v2-tab-body deepagent-dialog-body">
-          <p class="text-12-regular text-v2-text-text-faint">
-            {language.t("sidebar.history.description")}
-          </p>
+    <div class="settings-v2-panel" data-component="history-projects-dialog">
+      <div class="settings-v2-tab-body deepagent-dialog-body">
+        <p class="text-12-regular text-v2-text-text-faint">{language.t("sidebar.history.description")}</p>
 
-          <div class="deepagent-dialog-scroll rounded-lg border border-v2-border-border-muted">
+        <div class="deepagent-dialog-scroll rounded-lg border border-v2-border-border-muted">
+          <Show
+            when={!items.loading}
+            fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.loading")}</div>}
+          >
             <Show
-              when={!items.loading}
-              fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.loading")}</div>}
+              when={historical().length > 0}
+              fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.empty")}</div>}
             >
-              <Show
-                when={historical().length > 0}
-                fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.empty")}</div>}
-              >
-                <For each={historical()}>
-                  {(project) => (
-                    <div class="group/history-row flex w-full items-center gap-1 border-b border-v2-border-border-muted px-3 py-2.5 last:border-b-0 hover:bg-v2-background-bg-layer-01">
-                      <button
-                        type="button"
-                        data-action="history-project"
-                        class="flex min-w-0 flex-1 items-center gap-3 text-left"
-                        onClick={() => props.onOpen(project.worktree)}
-                      >
-                        <Icon name="folder" size="small" class="text-icon-weak" />
-                        <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-                          <span class="break-words text-13-medium text-v2-text-text-base">
-                            {project.name ?? getFilename(project.worktree)}
-                          </span>
-                          <span class="break-words text-11-regular text-v2-text-text-faint">{project.worktree}</span>
-                        </div>
-                      </button>
-                      <DropdownMenu>
-                        <DropdownMenu.Trigger
-                          as={IconButton}
-                          icon="dot-grid"
-                          variant="ghost"
-                          data-action="history-project-menu"
-                          aria-label={language.t("common.moreOptions")}
-                          class="shrink-0 size-6 rounded-md"
-                        />
-                        <DropdownMenu.Portal>
-                          <DropdownMenu.Content>
-                            <DropdownMenu.Item
-                              data-action="history-project-open"
-                              onSelect={() => props.onOpen(project.worktree)}
-                            >
-                              <DropdownMenu.ItemLabel>{language.t("common.open")}</DropdownMenu.ItemLabel>
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Separator />
-                            <DropdownMenu.Item
-                              data-action="history-project-delete"
-                              onSelect={() => confirmDelete(project)}
-                            >
-                              <DropdownMenu.ItemLabel>{language.t("common.delete")}</DropdownMenu.ItemLabel>
-                            </DropdownMenu.Item>
-                          </DropdownMenu.Content>
-                        </DropdownMenu.Portal>
-                      </DropdownMenu>
-                    </div>
-                  )}
-                </For>
-              </Show>
+              <For each={historical()}>
+                {(project) => (
+                  <div class="group/history-row flex w-full items-center gap-1 border-b border-v2-border-border-muted px-3 py-2.5 last:border-b-0 hover:bg-v2-background-bg-layer-01">
+                    <button
+                      type="button"
+                      data-action="history-project"
+                      class="flex min-w-0 flex-1 items-center gap-3 text-left"
+                      onClick={() => props.onOpen(project.worktree)}
+                    >
+                      <Icon name="folder" size="small" class="text-icon-weak" />
+                      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                        <span class="break-words text-13-medium text-v2-text-text-base">
+                          {project.name ?? getFilename(project.worktree)}
+                        </span>
+                        <span class="break-words text-11-regular text-v2-text-text-faint">{project.worktree}</span>
+                      </div>
+                    </button>
+                    <DropdownMenu>
+                      <DropdownMenu.Trigger
+                        as={IconButton}
+                        icon="dot-grid"
+                        variant="ghost"
+                        data-action="history-project-menu"
+                        aria-label={language.t("common.moreOptions")}
+                        class="shrink-0 size-6 rounded-md"
+                      />
+                      <DropdownMenu.Portal>
+                        <DropdownMenu.Content>
+                          <DropdownMenu.Item
+                            data-action="history-project-open"
+                            onSelect={() => props.onOpen(project.worktree)}
+                          >
+                            <DropdownMenu.ItemLabel>{language.t("common.open")}</DropdownMenu.ItemLabel>
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Separator />
+                          <DropdownMenu.Item
+                            data-action="history-project-delete"
+                            onSelect={() => confirmDelete(project)}
+                          >
+                            <DropdownMenu.ItemLabel>{language.t("common.delete")}</DropdownMenu.ItemLabel>
+                          </DropdownMenu.Item>
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu>
+                  </div>
+                )}
+              </For>
             </Show>
-          </div>
+          </Show>
         </div>
       </div>
+    </div>
+  )
+}
+
+export const DialogHistoryProjects: Component<ComponentProps<typeof HistoryProjectsPanel>> = (props) => {
+  const language = useLanguage()
+  return (
+    <Dialog size="x-large" variant="settings" title={language.t("sidebar.history")}>
+      <HistoryProjectsPanel {...props} />
     </Dialog>
   )
 }

@@ -266,7 +266,7 @@ export const admit = (db: Db, sessions: Pick<SessionV2.Interface, "create" | "pr
         return yield* failure("GOAL_CHILD_RECOVERY_REQUIRED", "Session admission did not commit matching Goal receipts")
       return { unit, admitted }
     }),
-  )
+  ).pipe(GoalChildResult.withRuntimeIdentity(db))
 
 export const admitV2 = (
   db: Db,

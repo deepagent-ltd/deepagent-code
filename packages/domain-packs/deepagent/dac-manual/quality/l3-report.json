@@ -3,9 +3,9 @@
   "pack_id": "deepagent.dac-manual",
   "maturity": "L3",
   "counts": {
-    "strategy": 4,
+    "strategy": 5,
     "methodology": 4,
-    "knowledge": 11,
+    "knowledge": 13,
     "skill": 1,
     "memory": 0,
     "failure_dossier": 2

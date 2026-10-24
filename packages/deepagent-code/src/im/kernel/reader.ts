@@ -66,6 +66,7 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
   const broadcaster = yield* IMBroadcasterService
   const requests = yield* Semaphore.make(2)
   const syncLock = yield* Semaphore.make(1)
+  const recoverySchedule = { reserveNext: false }
   const running = yield* Ref.make<{ completed: Deferred.Deferred<void>; handles: object[]; active: boolean } | undefined>(undefined)
   const scope = yield* Effect.scope
   const source = KernelConfig.deliverySource(config)
@@ -105,6 +106,28 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
     return yield* restore(Fiber.join(fiber))
   }))
   const query = <A>(effect: Effect.Effect<A, KernelSdk.KernelError>, lane: "foreground" | "background" = "foreground") => withRequest(effect.pipe(Effect.mapError(readerError)), lane)
+  const cuts = new Map<string, { started: number; pending: Deferred.Deferred<KernelReaderSchema.Cut, KernelReaderSchema.Error> }>()
+  const readCut = (request: Parameters<KernelClient.Interface["getDeliveryReadCut"]>[0], observeStarted?: (started: number) => void) => Effect.gen(function* () {
+    yield* KernelReader.current(runtime)
+    const key = JSON.stringify([request.version, request.scopeKey, request.projectionKey, request.projectionRevision])
+    // A cancelled consumer cannot cancel the SDK operation or release its native
+    // slot. A later consumer may join only that identical, still-pending cut.
+    const flight = yield* Effect.uninterruptible(Effect.suspend(() => {
+      const previous = cuts.get(key)
+      if (previous) return Effect.succeed(previous)
+      const pending = Deferred.makeUnsafe<KernelReaderSchema.Cut, KernelReaderSchema.Error>()
+      const flight = { started: performance.now(), pending }
+      cuts.set(key, flight)
+      return Deferred.complete(pending, query(client.getDeliveryReadCut(request)).pipe(
+        // Delete before publishing settlement, so completed proofs are never reused.
+        Effect.ensuring(Effect.sync(() => { if (cuts.get(key) === flight) cuts.delete(key) })),
+      )).pipe(Effect.forkIn(scope), Effect.as(flight))
+    }))
+    observeStarted?.(flight.started)
+    const result = yield* Deferred.await(flight.pending)
+    yield* KernelReader.current(runtime)
+    return result
+  })
   const inspect = (request: { conversationType: 1 | 2; conversationID: string }) => Effect.gen(function* () {
     yield* KernelReader.current(runtime)
     if (!config.identity || !input.inspectConversation) return yield* KernelReaderSchema.failure("reader_unavailable", "inspect")
@@ -116,7 +139,7 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
   const runtime = KernelReader.attach({ db: database.db, workspaceID: input.workspaceID, userID: input.userID ?? SERVER_USER_ID, source, current: () => Effect.gen(function* () {
     if (input.ownerCurrent && !input.ownerCurrent() || input.instanceCurrent && !(yield* input.instanceCurrent)) return false
     return (yield* SubscriptionRef.get(client.state)) === "connected" && KernelReader.hash(KernelConfig.deliverySource(config)) === KernelReader.hash(source)
-  }), readCut: (request) => query(client.getDeliveryReadCut(request)), outputProof: (request) => Effect.suspend(() =>
+  }), readCut, outputProof: (request) => Effect.suspend(() =>
     request.version !== 2 || !client.getDeliveryOutputProof || outputProofCapability.scopeKey !== request.scopeKey
       ? Effect.fail(KernelReaderSchema.failure("reader_upgrade_required", "output-proof"))
       : query(client.getDeliveryOutputProof(request))), inspect, retirementObservation: (handle) => {
@@ -251,20 +274,26 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
     // The mandatory current header and receiver baseline must not consume the
     // entire advisory dispatch window on a normal public connection. The
     // original query count and whole-pass hard timeout still bound each slice.
+    const recoveryPending = (yield* observe("sender_recovery", KernelReader.senderRecovery(runtime, reader.serverNow))).length > 0
+    // This serialized reader-local turn only schedules work; it grants no authority.
+    // A full normal turn must retain enough slots for a fresh receiver baseline, cut and page.
+    const reserveRecovery = recoveryPending && recoverySchedule.reserveNext
+    if (recoveryPending) recoverySchedule.reserveNext = !recoverySchedule.reserveNext
+    const normalLimit = limit - (reserveRecovery ? 1 : 0)
     const start = performance.now()
     let rawBytes = 0
-    while (queries < limit && rawBytes < 16_777_216 && performance.now() - start < budget) {
+    while (queries < normalLimit && rawBytes < 16_777_216 && performance.now() - start < budget) {
       const stored = yield* observe("local_metadata", KernelReader.scope(runtime))
       if (!stored) return yield* KernelReaderSchema.failure("reader_unavailable", "sync")
       const continuation = KernelReaderSchema.decode(KernelReaderSchema.Continuation, stored.continuation, 8192)
       if (continuation.projections.length) {
         const completed: string[] = []
         for (const work of continuation.projections) {
-          if (queries >= limit) break
+          if (queries >= normalLimit) break
           const projection = yield* observe("local_metadata", KernelReader.projection(runtime, work.projectionKey))
           if (!projection || projection.visibility !== "visible" || projection.server_revision !== work.serverRevision) return yield* KernelReaderSchema.failure("reader_stale", "projection")
           let finished = false
-          for (let round = 0; round < 4 && queries < limit && performance.now() - start < budget; round++) {
+          for (let round = 0; round < 4 && queries < normalLimit && performance.now() - start < budget; round++) {
             const currentProjection = yield* observe("local_metadata", KernelReader.projection(runtime, work.projectionKey))
             if (!currentProjection) return yield* KernelReaderSchema.failure("reader_stale", "projection")
             if (work.direction === "older" && currentProjection.history_complete) { finished = true; break }
@@ -273,7 +302,7 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
             const storedCut = liveCuts.get(work.projectionKey)
             const currentCut = storedCut && client.readLiveCut?.(storedCut) ? storedCut : undefined
             if (privateLive && !currentCut) {
-              if (queries + 2 > limit) break
+              if (queries + 2 > normalLimit) break
               const captured = yield* querySync("getDeliveryLiveCut", "live_cut", client.getDeliveryLiveCut!({ version: 2, subscriberID: liveSubscriberID, scopeKey: reader.scopeKey,
                 projectionKey: work.projectionKey, projectionRevision: work.serverRevision },
                 receiverLive ? receiverBaseline.handle : undefined))
@@ -297,7 +326,7 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
             yield* notify(yield* observe("cleanup", commit(KernelReader.cleanup(runtime, page.serverNow))))
             if (!page.finished) continue
             if (work.direction === "newer" && !currentProjection.history_complete) {
-              if (queries >= limit || performance.now() - start >= budget) break
+              if (queries >= normalLimit || performance.now() - start >= budget) break
               const olderObserved = performance.now()
               const older = yield* querySync("getDeliveryMessages", "older", client.getDeliveryMessages({ version: KernelReader.readerVersion(runtime), scopeKey: reader.scopeKey, projectionKey: work.projectionKey, projectionRevision: work.serverRevision, direction: "older", ...(currentProjection.older_before ? { anchorDeliveryCursor: currentProjection.older_before } : {}), limit: 32 }))
               queries++
@@ -324,14 +353,27 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
       if (!pending) yield* observe("checkpoint", commit(KernelReader.checkpoint(runtime, [], page.windowComplete)))
       if (page.caughtUp && !pending) break
     }
-    for (const item of yield* observe("sender_recovery", KernelReader.senderRecovery(runtime, reader.serverNow))) {
-      if (queries >= limit || rawBytes >= 16_777_216 || performance.now() - start >= budget) break
-      const projection = yield* observe("local_metadata", KernelReader.projection(runtime, item.projectionKey))
-      if (!projection?.server_revision) continue
-      const page = yield* querySync("getDeliveryMessages", "sender_recovery_messages", client.getDeliveryMessages({ version: KernelReader.readerVersion(runtime), scopeKey: reader.scopeKey, projectionKey: item.projectionKey, projectionRevision: projection.server_revision, direction: "newer", anchorDeliveryCursor: (BigInt(item.deliveryCursor) - 1n).toString(), limit: 1 }))
-      queries++
-      rawBytes += KernelReaderSchema.bytes(JSON.stringify(page))
-      if (page.items.some((message) => message.effectKey === item.effectKey)) yield* notify(yield* observe("apply_messages", commit(KernelReader.applyMessages(runtime, page, item.effectKey))))
+    // Alternate a full normal turn with one reserved recovery slot while work is pending.
+    // A slow normal page may exhaust its advisory slice without starving recovery.
+    // The original query/byte bounds and whole-pass hard timeout still apply.
+    if (queries < limit && rawBytes < 16_777_216) {
+      const pending = yield* observe("sender_recovery", KernelReader.senderRecovery(runtime, reader.serverNow))
+      const first = pending[0]
+      if (first) {
+        const batch = pending.filter((item) => item.projectionKey === first.projectionKey)
+        const projection = yield* observe("local_metadata", KernelReader.projection(runtime, first.projectionKey))
+        if (projection?.server_revision) {
+          const anchor = batch.reduce((cursor, item) => BigInt(item.deliveryCursor) < cursor ? BigInt(item.deliveryCursor) : cursor, BigInt(first.deliveryCursor))
+          const page = yield* querySync("getDeliveryMessages", "sender_recovery_messages", client.getDeliveryMessages({ version: KernelReader.readerVersion(runtime), scopeKey: reader.scopeKey, projectionKey: first.projectionKey, projectionRevision: projection.server_revision, direction: "newer", anchorDeliveryCursor: (anchor - 1n).toString(), limit: 32 }))
+          queries++
+          rawBytes += KernelReaderSchema.bytes(JSON.stringify(page))
+          const keys = new Set(batch.map((item) => item.effectKey))
+          for (const message of page.items) {
+            if (!keys.has(message.effectKey)) continue
+            yield* notify(yield* observe("apply_messages", commit(KernelReader.applyMessages(runtime, { ...page, items: [message] }, message.effectKey))))
+          }
+        }
+      }
     }
     const stored = yield* observe("local_metadata", KernelReader.scope(runtime))
     yield* SubscriptionRef.set(state, { state: stored?.phase === "idle" ? "ready" : "partial", displayEpoch: runtime.displayEpoch, legacyMirrorUnavailable: true })
@@ -447,8 +489,13 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
     if (!options?.refreshBeforeEffect) return syncLock.withPermits(1)(KernelReader.withOutput(runtime, request, effect))
     return Effect.gen(function* () {
       const first = yield* syncLock.withPermits(1)(KernelReader.prepareOutput(runtime, request, effect).pipe(Effect.matchEffect({
-        onFailure: (error) => error instanceof KernelReaderSchema.Error && error.code === "reader_stale" && error.operation === "getDeliveryReadCut" && error.wireCode === 12203
-          ? Effect.succeed({ _tag: "Refresh" as const }) : Effect.fail(error),
+        onFailure: (error) => {
+          const groupID = error instanceof KernelReaderSchema.Error && error.code === "reader_scope_mismatch" && error.operation === "pending-output" && request.groupIDs?.length === 1
+            ? request.groupIDs[0] : undefined
+          if (groupID !== undefined || error instanceof KernelReaderSchema.Error && error.code === "reader_stale" && error.operation === "getDeliveryReadCut" && error.wireCode === 12203)
+            return Effect.succeed({ _tag: "Refresh" as const, groupID })
+          return Effect.fail(error)
+        },
         // This branch runs only after prepare succeeded. Failures in the business
         // effect or its postframe current check never enter onFailure above.
         onSuccess: (prepared) => prepared.pipe(Effect.map((value) => ({ _tag: "Done" as const, value }))),
@@ -457,7 +504,11 @@ export const make = (config: KernelConfig.Info, input: { workspaceID: string; us
       // Sync commits take this same semaphore, so the failed preparation's
       // permit must be released first. The original query and time bounds hold.
       yield* KernelReader.current(runtime)
-      yield* runSync(4, "foreground")
+      // A text mutation may revalidate only its original empty mapping, using
+      // current authenticated inspection and membership/CAS before any effect.
+      yield* first.groupID !== undefined
+        ? commit(KernelReader.refreshGroup(runtime, first.groupID))
+        : runSync(4, "foreground")
       yield* KernelReader.current(runtime)
       return yield* syncLock.withPermits(1)(KernelReader.withOutput(runtime, request, effect))
     })

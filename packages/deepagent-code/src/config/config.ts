@@ -18,6 +18,7 @@ import type { ConsoleState } from "@deepagent-code/core/v1/config/console-state"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { InstanceRef } from "@/effect/instance-ref"
+import { EffectBridge } from "@/effect/bridge"
 import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema, ScopedCache, Semaphore } from "effect"
 import { JsonError, InvalidError } from "@deepagent-code/core/v1/config/error"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
@@ -42,6 +43,10 @@ import { OFFICIAL_PROVIDER_ID_SET } from "@deepagent-code/core/provider-official
 import { withTransientReadRetry } from "@/util/effect-http-client"
 
 const log = Log.create({ service: "config" })
+
+// Root and Location layers can cache the same global files independently. Keep only
+// invalidation identity process-wide; configuration values remain layer-owned.
+const globalConfigGenerations = new Map<string, { value: number }>()
 
 // Custom merge function that concatenates array fields instead of replacing them
 // Keep remeda's deep conditional merge type out of hot config-loading paths; TS profiling showed it dominates here.
@@ -74,7 +79,8 @@ export function normalizeLoadedConfig(data: unknown, source: string) {
     Object.fromEntries(Object.entries(copy).filter(([key]) => Object.hasOwn(MixedNativeFields.fields, key))),
     source,
   )
-  delete copy.providers
+  // Native provider selections also belong to the settings HTTP projection;
+  // dropping them here made a successful PATCH disappear before readback.
   delete copy.permissions
   return copy
 }
@@ -173,6 +179,7 @@ export type ConfigError = {
 }
 
 type State = {
+  generation: number
   config: Info
   mcpAccountSource?: Account.Source
   readonlyRemote?: { sources: { source: string; config: Pick<Info, "command" | "skills"> }[]; unavailable: boolean }
@@ -221,7 +228,7 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 
 export const use = serviceUse(Service)
 
-function globalConfigFile() {
+export function globalConfigFile() {
   const candidates = ["config.jsonc", "config.json", "deepagent-code.jsonc", "deepagent-code.json"].map((file) =>
     path.join(Global.Path.config, file),
   )
@@ -488,6 +495,15 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
+    const actual = yield* Effect.promise(() =>
+      fsNode.realpath(Global.Path.config).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error
+        return path.resolve(Global.Path.config)
+      }),
+    )
+    const domain = process.platform === "win32" ? actual.toLowerCase() : actual
+    const generation = globalConfigGenerations.get(domain) ?? { value: 0 }
+    globalConfigGenerations.set(domain, generation)
     const flock = yield* EffectFlock.Service
     const fileWrite = <A, E>(effect: Effect.Effect<A, E, FSUtil.Service | EffectFlock.Service>) =>
       effect.pipe(Effect.provideService(FSUtil.Service, fs), Effect.provideService(EffectFlock.Service, flock))
@@ -576,6 +592,8 @@ export const layer = Layer.effect(
 
     const loadGlobal = Effect.fnUntraced(function* (env?: Record<string, string>) {
       let result: Info = {}
+      // Keep provenance outside result: the legacy TOML migration serializes result.
+      const origins: Record<string, string> = {}
       const errors: ConfigError[] = []
       // A single broken global config file (bad JSON or invalid field) must not wipe the whole global config
       // and must tell the user *why*. loadFileSafe captures the parse/validation error into `errors` and
@@ -624,10 +642,12 @@ export const layer = Layer.effect(
       // Merge in precedence order: legacy names first, then the canonical config.jsonc last so it
       // wins. All names are still loaded for backward compatibility until migration removes the old
       // files; migrateGlobalConfigFiles() consolidates them into config.jsonc on startup.
-      result = mergeConfig(result, yield* loadFileSafe(path.join(Global.Path.config, "config.json")))
-      result = mergeConfig(result, yield* loadFileSafe(path.join(Global.Path.config, "deepagent-code.json")))
-      result = mergeConfig(result, yield* loadFileSafe(path.join(Global.Path.config, "deepagent-code.jsonc")))
-      result = mergeConfig(result, yield* loadFileSafe(path.join(Global.Path.config, "config.jsonc")))
+      for (const name of ["config.json", "deepagent-code.json", "deepagent-code.jsonc", "config.jsonc"]) {
+        const file = path.join(Global.Path.config, name)
+        const next = yield* loadFileSafe(file)
+        result = mergeConfig(result, next)
+        Object.keys(next.mcp ?? {}).forEach((key) => { origins[key] = file })
+      }
 
       const legacy = path.join(Global.Path.config, "config")
       if (existsSync(legacy)) {
@@ -647,6 +667,7 @@ export const layer = Layer.effect(
             yield* tx.write(tx.file(destination), JSON.stringify(next, null, 2))
             yield* tx.remove(original)
             result = next
+            Object.keys(next.mcp ?? {}).forEach((key) => { origins[key] = destination })
           }),
         ).pipe(
           fileWrite,
@@ -654,21 +675,35 @@ export const layer = Layer.effect(
         )
       }
 
-      return { config: result, errors }
+      return { config: { ...result, ...(Object.keys(origins).length ? { mcp_origins: origins } : {}) }, errors }
     })
 
     const [cachedGlobal, invalidateGlobal] = yield* Effect.cachedInvalidateWithTTL(
-      loadGlobal().pipe(
-        Effect.tapError((error) =>
-          Effect.sync(() => log.error("failed to load global config, using defaults", { error: String(error) })),
-        ),
-        Effect.orElseSucceed((): { config: Info; errors: ConfigError[] } => ({ config: {}, errors: [] })),
-      ),
+      Effect.gen(function* () {
+        // Capture before loading: an invalidation during I/O must never label old
+        // bytes as belonging to the newly published generation.
+        const observed = generation.value
+        const result = yield* loadGlobal().pipe(
+          Effect.tapError((error) =>
+            Effect.sync(() => log.error("failed to load global config, using defaults", { error: String(error) })),
+          ),
+          Effect.orElseSucceed((): { config: Info; errors: ConfigError[] } => ({ config: {}, errors: [] })),
+        )
+        return { ...result, generation: observed }
+      }),
       Duration.infinity,
     )
 
+    const readGlobal = Effect.fn("Config.readGlobal")(function* () {
+      while (true) {
+        const observed = yield* cachedGlobal
+        if (observed.generation === generation.value) return observed
+        yield* invalidateGlobal
+      }
+    })
+
     const getGlobal = Effect.fn("Config.getGlobal")(function* () {
-      const base = (yield* cachedGlobal).config
+      const base = (yield* readGlobal()).config
       // Frontend view: overlay first-party settings so the app renders current values. Official
       // transport is included here (getGlobal is only read by the app / global routes, never by the
       // provider loader), so the connect dialog can show/edit timeouts.
@@ -696,6 +731,7 @@ export const layer = Layer.effect(
 
     const loadInstanceState = Effect.fn("Config.loadInstanceState")(
       function* (ctx: InstanceContext) {
+        const observedGeneration = generation.value
         const auth = yield* authSvc.all().pipe(Effect.orDie)
 
         let result: Info = {}
@@ -758,7 +794,7 @@ export const layer = Layer.effect(
           if (next.mcp) {
             result.mcp_origins = {
               ...result.mcp_origins,
-              ...Object.fromEntries(Object.keys(next.mcp).map((name) => [name, source])),
+              ...Object.fromEntries(Object.keys(next.mcp).map((name) => [name, next.mcp_origins?.[name] ?? source])),
             }
           }
           return mergePluginOrigins(source, next.plugin, kind)
@@ -811,7 +847,7 @@ export const layer = Layer.effect(
           configErrors.push(...loaded.errors)
           yield* merge(Global.Path.config, loaded.config, "global")
         } else {
-          const cached = yield* cachedGlobal
+          const cached = yield* readGlobal()
           configErrors.push(...cached.errors)
           yield* merge(Global.Path.config, cached.config, "global")
         }
@@ -1019,6 +1055,7 @@ export const layer = Layer.effect(
         }
 
         return {
+          generation: observedGeneration,
           config: result,
           mcpAccountSource: observed.account,
           readonlyRemote,
@@ -1041,8 +1078,17 @@ export const layer = Layer.effect(
       }),
     )
 
+    const currentState = Effect.fn("Config.currentState")(function* () {
+      while (true) {
+        const observed = yield* InstanceState.get(state)
+        if (observed.generation === generation.value) return observed
+        yield* InstanceState.invalidate(state)
+      }
+    })
+
     const observeConfig = Effect.fn("Config.observeConfig")(
-      function* (ctx: { directory: string; worktree: string }, cachedState?: State, full = false) {
+      function* (ctx: { directory: string; worktree: string }, observedState?: State, full = false) {
+        const cachedState = observedState?.generation === generation.value ? observedState : undefined
         const result: Info = {}
         const sources: [string, string][] = []
         const merge = (source: string, next: Info) => {
@@ -1076,7 +1122,7 @@ export const layer = Layer.effect(
         )
         for (const [key, value] of remote) merge(cached!.mcp_origins![key], { mcp: { [key]: value } })
         for (const file of ["config.json", "deepagent-code.json", "deepagent-code.jsonc", "config.jsonc"])
-          yield* read(path.join(Global.Path.config, file), Global.Path.config)
+          yield* read(path.join(Global.Path.config, file))
         if (Flag.DEEPAGENT_CODE_CONFIG) yield* read(Flag.DEEPAGENT_CODE_CONFIG)
         if (!Flag.DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG)
           for (const file of yield* ConfigPaths.files("deepagent-code", ctx.directory, ctx.worktree).pipe(Effect.orDie))
@@ -1148,7 +1194,7 @@ export const layer = Layer.effect(
     })
 
     const get = Effect.fn("Config.get")(function* () {
-      const base = yield* InstanceState.use(state, (s) => s.config)
+      const base = (yield* currentState()).config
       // Backend view: overlay ONLY the deepagent runtime settings (gatewayConfig/intelligenceModel read them
       // from provider.deepagent.options). Official-provider transport is deliberately NOT overlaid
       // here — the provider loader reads transport straight from SettingsStore, and injecting an
@@ -1158,21 +1204,19 @@ export const layer = Layer.effect(
     })
 
     const directories = Effect.fn("Config.directories")(function* () {
-      return yield* InstanceState.use(state, (s) => s.directories)
+      return (yield* currentState()).directories
     })
 
     const getConsoleState = Effect.fn("Config.getConsoleState")(function* () {
-      return yield* InstanceState.use(state, (s) => s.consoleState)
+      return (yield* currentState()).consoleState
     })
 
     const getErrors = Effect.fn("Config.getErrors")(function* () {
-      return yield* InstanceState.use(state, (s) => s.errors)
+      return (yield* currentState()).errors
     })
 
     const waitForDependencies = Effect.fn("Config.waitForDependencies")(function* () {
-      yield* InstanceState.useEffect(state, (s) =>
-        Effect.forEach(s.deps, Fiber.join, { concurrency: 16 }).pipe(Effect.asVoid),
-      )
+      yield* Effect.forEach((yield* currentState()).deps, Fiber.join, { concurrency: 16 }).pipe(Effect.asVoid)
     })
 
     // Project-scoped writes must land in a file the loader actually merges: ConfigPaths.files
@@ -1194,6 +1238,7 @@ export const layer = Layer.effect(
     })
 
     const invalidate = Effect.fn("Config.invalidate")(function* () {
+      generation.value += 1
       yield* invalidateGlobal
       const instance = yield* InstanceRef
       if (instance) yield* InstanceState.invalidate(state)
@@ -1232,11 +1277,12 @@ export const layer = Layer.effect(
         ...pluginFiles.map(path.dirname),
         ...pluginDirectories,
       ])
+      const bridge = yield* EffectBridge.make()
       const semaphore = yield* Semaphore.make(1)
       let closed = false
       const watchers = new Map<string, ReturnType<typeof watch>>()
       const refresh = () => {
-        void Effect.runPromise(
+        void bridge.promise(
           semaphore
             .withPermit(
               Effect.gen(function* () {
@@ -1364,7 +1410,7 @@ export const layer = Layer.effect(
     const removeGlobalMcp = Effect.fn("Config.removeGlobalMcp")(function* (name: string, original: McpSnapshot) {
       const observed = yield* mcpSnapshot()
       if (observed.source !== original.source) return yield* new McpRemovalError({ reason: "changed" })
-      if (Object.hasOwn(observed.config.mcp ?? {}, name) && observed.config.mcp_origins?.[name] !== Global.Path.config)
+      if (Object.hasOwn(observed.config.mcp ?? {}, name) && observed.config.mcp_origins?.[name] !== globalConfigFile())
         return yield* new McpRemovalError({ reason: "readonly" })
       const file = globalConfigFile()
       const expected = yield* ConfigFileWrite.read(file).pipe(fileWrite, Effect.orDie)

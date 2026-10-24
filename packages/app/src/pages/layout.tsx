@@ -67,6 +67,7 @@ import { ConstrainDragXAxis, getDraggableId, FixedDragDropSensors } from "@/util
 import { DebugBar } from "@/components/debug-bar"
 import { reviewSummary } from "@/components/review/dialog-review.api"
 import type { KnowledgeTab } from "@/components/knowledge/dialog-knowledge"
+import type { LibraryTab } from "@/components/library/dialog-library"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
@@ -97,6 +98,8 @@ import {
 } from "./layout/sidebar-workspace"
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { SidebarContent } from "./layout/sidebar-shell"
+import { createWorkspaceRemoval, WorkspaceRemovalProvider } from "./layout/workspace-removal"
+import { IMNavigationEntry } from "@/components/im/navigation-entry"
 
 export const NOTIFICATION_ALERT_LIMIT = 128
 
@@ -1024,33 +1027,6 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
     }
   }
 
-  // W3-3 — parity with the TUI /move command: relocate the session to another project directory
-  // through the same experimental.controlPlane.moveSession admission (durable transfer). The
-  // destination is entered directly (the desktop native directory picker is available via the
-  // preload bridge; the web app uses the text prompt).
-  async function moveSessionDialog() {
-    const session = currentSessions().find((s) => s.id === params.id)
-    if (!session) return
-    const destination = window.prompt(language.t("command.session.move.prompt"), session.directory)
-    if (!destination || destination === session.directory) return
-    try {
-      await serverSDK.client.experimental.controlPlane.moveSession(
-        {
-          sessionID: session.id,
-          destination: { directory: destination },
-        },
-        { throwOnError: true },
-      )
-      showToast({ variant: "success", title: language.t("command.session.move.done") })
-    } catch (error) {
-      showToast({
-        variant: "error",
-        title: language.t("common.requestFailed"),
-        description: error instanceof Error ? error.message : undefined,
-      })
-    }
-  }
-
   async function archiveSession(session: Session) {
     const [store, setStore] = serverSync.child(session.directory)
     const sessions = store.session ?? []
@@ -1192,13 +1168,6 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
           const session = currentSessions().find((s) => s.id === params.id)
           if (session) void archiveSession(session)
         },
-      },
-      {
-        id: "session.move",
-        title: language.t("command.session.move"),
-        category: language.t("command.category.session"),
-        disabled: !params.dir || !params.id,
-        onSelect: () => void moveSessionDialog(),
       },
       {
         id: "session.archived",
@@ -1359,54 +1328,50 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
     const captured = { directory: currentDir(), scope: server.scope() }
     void import("@/components/settings-v2").then((x) => {
       if (dialogDead || dialogRun !== run) return
-      dialog.show(() => <x.DialogSettings mcp={{
-        directory: captured.directory,
-        current: () => !dialogDead && server.scope() === captured.scope && currentDir() === captured.directory,
-      }} />)
-    })
-  }
-
-  // WS1: one rail button opens the merged Knowledge dialog (审核 | Wiki | 领域包 tabs). The
-  // review-pending badge and wiki-capability gating carry over from the three old entries.
-  function openKnowledge(tab?: KnowledgeTab) {
-    const run = ++dialogRun
-    const dir = currentDir()
-    const sdk = serverSDK.createDirSdkContext(dir)
-    void import("@/components/knowledge/dialog-knowledge").then((x) => {
-      if (dialogDead || dialogRun !== run) return
       dialog.show(() => (
-        <x.DialogKnowledge client={sdk.client as never} tab={tab} wikiAvailable={!!wikiAvailable.latest} />
-      ))
-    })
-    // Refresh the sidebar badge once the reviewer closes.
-    setTimeout(() => void refetchReviewPending(), 1500)
-  }
-
-  function openHistoryProjects() {
-    const run = ++dialogRun
-    const activeWorktrees = new Set(server.projects.list().map((p) => p.worktree))
-    void import("@/components/history/dialog-history-projects").then((x) => {
-      if (dialogDead || dialogRun !== run) return
-      dialog.show(() => (
-        <x.DialogHistoryProjects
-          client={serverSDK.client as never}
-          activeWorktrees={activeWorktrees}
-          onOpen={(directory: string) => openProject(directory)}
-          onDeleted={(directory: string) => layout.projects.close(directory)}
+        <x.DialogSettings
+          mcp={{
+            directory: captured.directory,
+            current: () => !dialogDead && server.scope() === captured.scope && currentDir() === captured.directory,
+          }}
         />
       ))
     })
   }
 
-  function openArchivedSessions() {
+  // Library groups entry points, while each panel retains its original client scope and actions.
+  function openLibrary(tab: LibraryTab = "knowledge", knowledgeTab?: KnowledgeTab) {
     const run = ++dialogRun
-    void import("@/components/history/dialog-archived-sessions").then((x) => {
-      if (dialogDead || dialogRun !== run) return
-      // Cross-project list: use the global serverSDK client (not a per-directory one) so the
-      // archived fetch spans every project. Restore fires the live `session.updated` event with
-      // `archived` cleared, which event-reducer re-inserts into the sidebar automatically.
-      dialog.show(() => <x.DialogArchivedSessions client={serverSDK.client} />)
+    const dir = currentDir()
+    const scope = server.scope()
+    const sdk = serverSDK.createDirSdkContext(dir)
+    const activeWorktrees = new Set(server.projects.list().map((project) => project.worktree))
+    void import("@/components/library/dialog-library").then((module) => {
+      if (dialogDead || dialogRun !== run || server.scope() !== scope || currentDir() !== dir) return
+      layout.mobileSidebar.hide()
+      dialog.show(() => (
+        <module.DialogLibrary
+          tab={tab}
+          current={() => !dialogDead && server.scope() === scope && currentDir() === dir}
+          knowledge={{ client: sdk.client as never, tab: knowledgeTab, wikiAvailable: !!wikiAvailable.latest }}
+          history={{
+            client: serverSDK.client as never,
+            activeWorktrees,
+            onOpen: (directory) => {
+              openProject(directory)
+              dialog.close()
+            },
+            onDeleted: (directory) => layout.projects.close(directory),
+          }}
+          archived={{ client: serverSDK.client }}
+        />
+      ))
     })
+    setTimeout(() => void refetchReviewPending(), 1500)
+  }
+
+  function openArchivedSessions() {
+    openLibrary("archived")
   }
 
   function projectRoot(directory: string) {
@@ -1545,6 +1510,25 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
     navigateWithSidebarReset(`/${base64Encode(session.directory)}/session/${session.id}`)
   }
 
+  function openWorkPanel(directory: string, kind: "im" | "worktree" | "review") {
+    const slug = base64Encode(directory)
+    const sessionID = params.dir === slug ? params.id : undefined
+    const key = SessionStateKey.from(server.scope(), SessionRouteKey.fromRoute(slug, sessionID))
+    layout.view(key).workPanel.open(kind)
+    if (params.dir !== slug) navigateWithSidebarReset(`/${slug}/session`)
+    layout.mobileSidebar.hide()
+  }
+
+  function openMessages() {
+    const directory =
+      decode64(params.dir) ??
+      currentProject()?.worktree ??
+      layout.projects.list()[0]?.worktree ??
+      serverSync.data.path.home
+    if (directory) return openWorkPanel(directory, "im")
+    void chooseProject()
+  }
+
   function openProject(directory: string, navigate = true) {
     layout.projects.open(directory)
     if (navigate) return navigateToProject(directory)
@@ -1668,8 +1652,48 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
     })
   }
 
+  const workspaceRemoval = createWorkspaceRemoval({
+    scope: server.scope,
+    client: () => serverSDK.client,
+    project: (directory) => {
+      const [child] = serverSync.child(directory, { bootstrap: false })
+      const known = layout.projects
+        .list()
+        .find((project) => project.sandboxes?.some((sandbox) => pathKey(sandbox) === pathKey(directory)))
+      return serverSync.data.project.find(
+        (project) => project.id === child.project || (!!known && pathKey(project.worktree) === pathKey(known.worktree)),
+      )
+    },
+    currentDir,
+    lastSession: (root) => store.lastProjectSession[root],
+    clearLastSession: clearLastProjectSession,
+    removeSandbox: (project, directory) =>
+      serverSync.set(
+        "project",
+        produce((draft) => {
+          const item = draft.find(
+            (item) => item.id === project.id && pathKey(item.worktree) === pathKey(project.worktree),
+          )
+          if (!item) return
+          item.sandboxes = (item.sandboxes ?? []).filter((sandbox) => pathKey(sandbox) !== pathKey(directory))
+        }),
+      ),
+    removeOrder: (root, directory) =>
+      setStore("workspaceOrder", root, (order) =>
+        (order ?? []).filter((workspace) => pathKey(workspace) !== pathKey(directory)),
+      ),
+    closeProject: layout.projects.close,
+    openProject: layout.projects.open,
+    navigate: (root) => navigateWithSidebarReset(`/${base64Encode(root)}/session`),
+  })
+
   const deleteWorkspace = async (root: string, directory: string, leaveDeletedWorkspace = false) => {
     if (directory === root) return
+    const scope = server.scope()
+    const removedProject = {
+      id: serverSync.data.project.find((item) => item.worktree === root)?.id ?? "",
+      worktree: root,
+    }
 
     const current = currentDir()
     const currentKey = pathKey(current)
@@ -1694,24 +1718,9 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
 
     setBusy(directory, false)
 
-    if (!result) return
+    if (!result || server.scope() !== scope) return
 
-    if (pathKey(store.lastProjectSession[root]?.directory ?? "") === pathKey(directory)) {
-      clearLastProjectSession(root)
-    }
-
-    serverSync.set(
-      "project",
-      produce((draft) => {
-        const project = draft.find((item) => item.worktree === root)
-        if (!project) return
-        project.sandboxes = (project.sandboxes ?? []).filter((sandbox) => sandbox !== directory)
-      }),
-    )
-    setStore("workspaceOrder", root, (order) => (order ?? []).filter((workspace) => workspace !== directory))
-
-    layout.projects.close(directory)
-    layout.projects.open(root)
+    workspaceRemoval.complete(removedProject, directory)
 
     if (shouldLeave) return
 
@@ -2335,6 +2344,19 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
                     <DropdownMenu.Portal>
                       <DropdownMenu.Content class="mt-1">
                         <DropdownMenu.Item
+                          data-action="project-worktree-environment"
+                          onSelect={() => openWorkPanel(worktree(), "worktree")}
+                        >
+                          <DropdownMenu.ItemLabel>{language.t("workPanel.environment")}</DropdownMenu.ItemLabel>
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Item
+                          data-action="project-view-changes"
+                          onSelect={() => openWorkPanel(worktree(), "review")}
+                        >
+                          <DropdownMenu.ItemLabel>{language.t("session.tab.review")}</DropdownMenu.ItemLabel>
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Separator />
+                        <DropdownMenu.Item
                           data-action="project-new-chat"
                           data-project={slug()}
                           onSelect={() => {
@@ -2536,15 +2558,11 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
       settingsLabel={() => language.t("sidebar.settings")}
       settingsKeybind={() => command.keybind("settings.open")}
       onOpenSettings={openSettings}
-      knowledgeLabel={() => language.t("knowledge.title")}
-      onOpenKnowledge={() => openKnowledge()}
+      libraryLabel={() => language.t("sidebar.library")}
+      onOpenLibrary={() => openLibrary()}
       reviewPending={() => !!reviewPending.latest}
       attentionLabel={() => language.t("attention.title")}
       onOpenAttention={() => void openAttention()}
-      historyLabel={() => language.t("sidebar.history")}
-      onOpenHistory={openHistoryProjects}
-      archivedLabel={() => language.t("session.archived.title")}
-      onOpenArchived={openArchivedSessions}
       renderPanel={() =>
         mobile ? <SidebarPanel project={currentProject} mobile /> : <SidebarPanel project={currentProject} merged />
       }
@@ -2554,7 +2572,23 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
   return (
     <div class="workbench relative bg-background-base flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text">
       {autoselecting() ?? ""}
-      <Titlebar update={titlebarUpdate} />
+      <Titlebar
+        update={titlebarUpdate}
+        messages={
+          <IMNavigationEntry
+            onOpen={openMessages}
+            active={
+              !!params.dir &&
+              layout
+                .view(SessionStateKey.from(server.scope(), SessionRouteKey.fromRoute(params.dir, params.id)))
+                .rightPanel.opened() &&
+              layout
+                .view(SessionStateKey.from(server.scope(), SessionRouteKey.fromRoute(params.dir, params.id)))
+                .rightPanel.mode() === "im"
+            }
+          />
+        }
+      />
       <Show when={readyUpdate()}>
         {(update) => <UpdateAvailableToast update={update()} install={installUpdate} language={language} />}
       </Show>
@@ -2649,7 +2683,7 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
                   "workbench-main size-full overflow-x-hidden flex flex-col items-start contain-strict": true,
                 }}
               >
-                {props.children}
+                <WorkspaceRemovalProvider value={workspaceRemoval}>{props.children}</WorkspaceRemovalProvider>
               </main>
             </div>
 

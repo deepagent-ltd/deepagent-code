@@ -58,23 +58,16 @@ fn open(root: Option<&File>, name: &OsStr, directory: bool) -> io::Result<File> 
 }
 
 pub fn open_root(path: &Path) -> io::Result<File> {
-    if !path.is_absolute() || path.components().any(|part| matches!(part, Component::CurDir | Component::ParentDir)) {
-        return Err(io::ErrorKind::InvalidInput.into());
+    let (alias, parts) = local_parts(path)?;
+    let root = local_device_root(&alias)?;
+    let mut chain = vec![open(None, &root, true)?];
+    for part in &parts {
+        let file = open(chain.last(), part, true)?;
+        require_name(&file, part)?;
+        chain.push(file);
     }
-    let offset = match path.components().next() {
-        Some(Component::Prefix(prefix)) => match prefix.kind() {
-            Prefix::Disk(_) => 0,
-            Prefix::VerbatimDisk(_) => 4,
-            // UNC and device namespaces are outside this local-file profile.
-            _ => return Err(io::ErrorKind::InvalidInput.into()),
-        },
-        _ => return Err(io::ErrorKind::InvalidInput.into()),
-    };
-    let source: Vec<u16> = path.as_os_str().encode_wide().skip(offset)
-        .map(|unit| if unit == b'/' as u16 { b'\\' as u16 } else { unit }).collect();
-    let name = OsStr::new("\\??\\").encode_wide().chain(source).collect::<Vec<_>>();
-    use std::os::windows::ffi::OsStringExt;
-    open(None, &std::ffi::OsString::from_wide(&name), true)
+    if local_device_root(&alias)? != root { return Err(io::ErrorKind::PermissionDenied.into()); }
+    chain.pop().ok_or(io::ErrorKind::InvalidData.into())
 }
 
 fn information(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
@@ -192,7 +185,8 @@ impl LockedPath {
     }
 
     fn open_image(path: &Path, directory: bool, executable: bool, single_link: bool, sharing: u32) -> io::Result<Self> {
-        let (root, parts) = local_parts(path)?;
+        let (alias, parts) = local_parts(path)?;
+        let root = local_device_root(&alias)?;
         if parts.is_empty() && !directory { return Err(io::ErrorKind::InvalidInput.into()); }
         let mut ancestors = vec![locked_open(None, &root, true, false, 1)?];
         for part in &parts[..parts.len().saturating_sub(1)] {
@@ -214,6 +208,7 @@ impl LockedPath {
         }
         let canonical = final_path(&file)?;
         let identity = identity(&file)?;
+        if local_device_root(&alias)? != root { return Err(io::ErrorKind::PermissionDenied.into()); }
         Ok(Self { file, ancestors, canonical, identity })
     }
 
@@ -231,7 +226,7 @@ fn local_parts(path: &Path) -> io::Result<(std::ffi::OsString, Vec<std::ffi::OsS
     let mut components = path.components();
     let root = match components.next() {
         Some(Component::Prefix(prefix)) => match prefix.kind() {
-            Prefix::Disk(drive) if drive.is_ascii_uppercase() => format!("\\??\\{}:\\", drive as char),
+            Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) if drive.is_ascii_alphabetic() => format!("{}:", drive.to_ascii_uppercase() as char),
             Prefix::Verbatim(name) => {
                 let name = name.to_str().ok_or(io::ErrorKind::InvalidInput)?;
                 let guid = name.strip_prefix("Volume{").and_then(|value| value.strip_suffix('}')).ok_or(io::ErrorKind::InvalidInput)?;
@@ -239,7 +234,7 @@ fn local_parts(path: &Path) -> io::Result<(std::ffi::OsString, Vec<std::ffi::OsS
                     if [8, 13, 18, 23].contains(&index) { byte == b'-' } else { byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) }) {
                     return Err(io::ErrorKind::InvalidInput.into());
                 }
-                format!("\\??\\{name}\\")
+                name.to_owned()
             },
             _ => return Err(io::ErrorKind::InvalidInput.into()),
         },
@@ -255,6 +250,27 @@ fn local_parts(path: &Path) -> io::Result<(std::ffi::OsString, Vec<std::ffi::OsS
     }
     if parts.len() > 32 { return Err(io::ErrorKind::InvalidInput.into()); }
     Ok((root.into(), parts))
+}
+
+/// DOS drive/Volume-GUID names are Object Manager links, so OBJ_DONT_REPARSE
+/// rejects opening them directly. Only the OS-resolved local physical volume
+/// is opened; callers recheck this same mapping after the held-handle walk.
+fn local_device_root(alias: &OsStr) -> io::Result<std::ffi::OsString> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Storage::FileSystem::QueryDosDeviceW;
+    let name = alias.encode_wide().chain(Some(0)).collect::<Vec<_>>();
+    let mut buffer = [0u16; 4096];
+    let count = unsafe { QueryDosDeviceW(name.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32) };
+    if count == 0 { return Err(io::Error::last_os_error()); }
+    if count as usize > buffer.len() { return Err(io::ErrorKind::InvalidData.into()); }
+    let end = buffer[..count as usize].iter().position(|unit| *unit == 0).ok_or(io::ErrorKind::InvalidData)?;
+    if buffer[end..count as usize].iter().any(|unit| *unit != 0) { return Err(io::ErrorKind::PermissionDenied.into()); }
+    let target = String::from_utf16(&buffer[..end]).map_err(|_| io::ErrorKind::InvalidData)?;
+    let volume = target.strip_prefix("\\Device\\HarddiskVolume").ok_or(io::ErrorKind::PermissionDenied)?;
+    if volume.is_empty() || !volume.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    Ok(std::ffi::OsString::from_wide(&target.encode_utf16().chain(Some(b'\\' as u16)).collect::<Vec<_>>()))
 }
 
 fn validate_component(name: &str) -> io::Result<()> {

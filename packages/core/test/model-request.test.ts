@@ -41,4 +41,17 @@ describe("ModelRequest", () => {
       body: {},
     })
   })
+
+  test("keeps Anthropic thinking and effort in the native provider namespace", () => {
+    expect(
+      ModelRequest.normalizeAiSdkOptions("@ai-sdk/anthropic", {
+        thinking: { type: "adaptive", display: "summarized" },
+        effort: "high",
+      }),
+    ).toEqual({
+      generation: {},
+      options: { thinking: { type: "adaptive", display: "summarized" }, effort: "high" },
+      body: {},
+    })
+  })
 })

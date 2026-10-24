@@ -22,6 +22,7 @@ export function SettingsIMModel(props: {
   return (
     <div class="flex flex-col gap-2" data-component="settings-im-model">
       <SettingsRowV2
+        layout="field"
         title={language.t("settings.im.model.title")}
         description={language.t("settings.im.model.description")}
       >

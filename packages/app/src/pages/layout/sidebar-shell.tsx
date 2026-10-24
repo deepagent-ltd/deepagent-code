@@ -23,13 +23,9 @@ export const SidebarContent = (props: {
   onOpenSettings: () => void
   attentionLabel: Accessor<string>
   onOpenAttention: () => void
-  historyLabel: Accessor<string>
-  onOpenHistory: () => void
-  knowledgeLabel: Accessor<string>
-  onOpenKnowledge: () => void
+  libraryLabel: Accessor<string>
+  onOpenLibrary: () => void
   reviewPending?: Accessor<boolean>
-  archivedLabel: Accessor<string>
-  onOpenArchived: () => void
   renderPanel: () => JSX.Element
 }): JSX.Element => {
   const expanded = createMemo(() => !!props.mobile || props.opened())
@@ -53,7 +49,7 @@ export const SidebarContent = (props: {
         class="w-16 shrink-0 bg-background-base flex flex-col items-center overflow-hidden"
         onMouseMove={props.aimMove}
       >
-        <div class="flex-1 min-h-0 w-full">
+        <div class="flex-1 min-h-0 w-full flex flex-col items-center">
           <DragDropProvider
             onDragStart={props.handleDragStart}
             onDragEnd={props.handleDragEnd}
@@ -62,7 +58,7 @@ export const SidebarContent = (props: {
           >
             <FixedDragDropSensors />
             <ConstrainDragXAxis />
-            <div class="h-full w-full flex flex-col items-center gap-3 px-3 py-3 overflow-y-auto no-scrollbar">
+            <div class="min-h-0 w-full shrink flex flex-col items-center gap-3 px-3 pt-3 pb-2 overflow-y-auto no-scrollbar">
               <SortableProvider ids={props.projects().map((p) => p.worktree)}>
                 {/* Keep component identity on worktree; project objects are rebuilt by list(). */}
                 <For each={props.projects().map((p) => p.worktree)}>
@@ -76,68 +72,53 @@ export const SidebarContent = (props: {
             </div>
             <DragOverlay>{props.renderProjectOverlay()}</DragOverlay>
           </DragDropProvider>
-        </div>
-        {/* Open-project lives OUTSIDE the scrollable project list: inside it, a few projects
-            scroll the button out of view when the rail is collapsed, and its collapsed
-            visibility otherwise depended on clip arithmetic. A fixed slot keeps the primary
-            "add project" entry permanently visible in both rail states. */}
-        <div class="shrink-0 w-full px-3 pb-1 flex justify-center">
-          <Tooltip
-            placement={placement()}
-            value={
-              <div class="flex items-center gap-2">
-                <span>{props.openProjectLabel}</span>
-                <Show when={!props.mobile && !!props.openProjectKeybind()}>
-                  <span class="text-icon-base text-12-medium">{props.openProjectKeybind()}</span>
-                </Show>
-              </div>
-            }
-          >
-            <IconButton
-              icon="folder-add-left"
-              variant="ghost"
-              size="large"
-              onClick={props.onOpenProject}
-              aria-label={typeof props.openProjectLabel === "string" ? props.openProjectLabel : undefined}
-            />
-          </Tooltip>
+          {/* Keep the action below the projects, outside their scroll region. */}
+          <div class="shrink-0 w-full px-3 flex justify-center">
+            <Tooltip
+              placement={placement()}
+              value={
+                <div class="flex items-center gap-2">
+                  <span>{props.openProjectLabel}</span>
+                  <Show when={!props.mobile && !!props.openProjectKeybind()}>
+                    <span class="text-icon-base text-12-medium">{props.openProjectKeybind()}</span>
+                  </Show>
+                </div>
+              }
+            >
+              <IconButton
+                icon="folder-add-left"
+                variant="ghost"
+                size="large"
+                class="workbench-rail-action"
+                data-action="sidebar-open-project"
+                onClick={props.onOpenProject}
+                aria-label={typeof props.openProjectLabel === "string" ? props.openProjectLabel : undefined}
+              />
+            </Tooltip>
+          </div>
         </div>
         <div class="shrink-0 w-full pt-3 pb-6 flex flex-col items-center gap-2">
           <Tooltip placement={placement()} value={props.attentionLabel()}>
             <IconButton
-              icon="warning"
+              icon="inbox"
               variant="ghost"
               size="large"
+              class="workbench-rail-action"
+              data-action="sidebar-attention"
               onClick={props.onOpenAttention}
               aria-label={props.attentionLabel()}
             />
           </Tooltip>
-          <Tooltip placement={placement()} value={props.historyLabel()}>
-            <IconButton
-              icon="history"
-              variant="ghost"
-              size="large"
-              onClick={props.onOpenHistory}
-              aria-label={props.historyLabel()}
-            />
-          </Tooltip>
-          <Tooltip placement={placement()} value={props.archivedLabel()}>
-            <IconButton
-              icon="archive"
-              variant="ghost"
-              size="large"
-              onClick={props.onOpenArchived}
-              aria-label={props.archivedLabel()}
-            />
-          </Tooltip>
-          <Tooltip placement={placement()} value={props.knowledgeLabel()}>
+          <Tooltip placement={placement()} value={props.libraryLabel()}>
             <div class="relative">
               <IconButton
-                icon="knowledge-check"
+                icon="library"
                 variant="ghost"
                 size="large"
-                onClick={props.onOpenKnowledge}
-                aria-label={props.knowledgeLabel()}
+                class="workbench-rail-action"
+                data-action="sidebar-library"
+                onClick={props.onOpenLibrary}
+                aria-label={props.libraryLabel()}
               />
               <Show when={props.reviewPending?.()}>
                 <span class="absolute top-1 right-1 size-2 rounded-full bg-text-interactive-base ring-2 ring-background-base" />
@@ -149,6 +130,8 @@ export const SidebarContent = (props: {
               icon="settings-gear"
               variant="ghost"
               size="large"
+              class="workbench-rail-action"
+              data-action="sidebar-settings"
               onClick={props.onOpenSettings}
               aria-label={props.settingsLabel()}
             />

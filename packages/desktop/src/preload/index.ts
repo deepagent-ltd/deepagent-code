@@ -11,6 +11,39 @@ const updaterHandler = (_: unknown, state: UpdaterState) => {
 }
 
 const api: ElectronAPI = {
+  sharedBrowser: {
+    register: () => {
+      // This one bounded handshake performs only Main owner checks and in-memory
+      // generation rotation, so the first user stamp never waits behind startup IO.
+      const value: unknown = ipcRenderer.sendSync("shared-browser-register")
+      if (!value || typeof value !== "object" || !("generation" in value) || typeof value.generation !== "string")
+        throw new Error("The local shared browser bridge could not be registered")
+      return { generation: value.generation }
+    },
+    detach: (generation) => ipcRenderer.invoke("shared-browser-detach", generation),
+    list: (generation, sessionID) => ipcRenderer.invoke("shared-browser-list", { generation, value: sessionID }),
+    create: (generation, input) => ipcRenderer.invoke("shared-browser-create", { generation, value: input }),
+    takeover: (generation, input) => ipcRenderer.invoke("shared-browser-takeover", { generation, value: input }),
+    close: (generation, input) => ipcRenderer.invoke("shared-browser-close", { generation, value: input }),
+    approveOrigin: (generation, input) => ipcRenderer.invoke("shared-browser-approve-origin", { generation, value: input }),
+    cancelOrigin: (generation, input) => ipcRenderer.invoke("shared-browser-cancel-origin", { generation, value: input }),
+    preview: (generation, input) => ipcRenderer.invoke("shared-browser-preview", { generation, value: input }),
+    stampInput: (generation, input) => ipcRenderer.invoke("shared-browser-input", { generation, value: input }),
+    sealInput: (generation, input) => ipcRenderer.invoke("shared-browser-input-seal", { generation, value: input }),
+    tuiPending: (generation, rootSessionID) => ipcRenderer.invoke("shared-browser-tui-pending", { generation, value: rootSessionID }),
+    tuiApprove: (generation, input) => ipcRenderer.invoke("shared-browser-tui-approve", { generation, value: input }),
+    tuiDetach: (generation, input) => ipcRenderer.invoke("shared-browser-tui-detach", { generation, value: input }),
+    onTuiState: (callback) => {
+      const handler = (_event: unknown, value: Parameters<typeof callback>[0]) => callback(value)
+      ipcRenderer.on("shared-browser-tui-state", handler)
+      return () => ipcRenderer.removeListener("shared-browser-tui-state", handler)
+    },
+    onState: (callback) => {
+      const handler = (_event: unknown, value: Parameters<typeof callback>[0]) => callback(value)
+      ipcRenderer.on("shared-browser-state", handler)
+      return () => ipcRenderer.removeListener("shared-browser-state", handler)
+    },
+  },
   killSidecar: () => ipcRenderer.invoke("kill-sidecar"),
   installCli: () => ipcRenderer.invoke("install-cli"),
   awaitInitialization: () => ipcRenderer.invoke("await-initialization"),

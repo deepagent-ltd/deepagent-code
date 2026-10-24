@@ -76,13 +76,14 @@ export interface DiscoverModelsCachedInput {
 // (or a plan/tier change that alters which models are visible) must invalidate the cache rather than
 // serving the old list until the TTL lapses. The secret is hashed, never stored in the filename.
 const cacheFile = (input: DiscoverModelsCachedInput) => {
-  const headerSig = input.headers
-    ? Object.entries(input.headers)
-        .map(([k, v]) => `${k}=${v}`)
-        .sort()
-        .join("&")
-    : ""
-  const identity = `${input.providerID}\n${input.baseURL}\n${input.kind}\n${input.apiKey}\n${headerSig}`
+  // Header values may contain delimiters; preserve tuple boundaries before hashing.
+  const identity = JSON.stringify([
+    input.providerID,
+    input.baseURL,
+    input.kind,
+    input.apiKey ?? null,
+    Object.entries(input.headers ?? {}).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
+  ])
   return path.join(Global.Path.cache, `provider-models-${Hash.fast(identity)}.json`)
 }
 

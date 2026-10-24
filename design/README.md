@@ -1,14 +1,14 @@
 # DeepAgent Code Architecture & Design
 
-> **Public architecture overview for the 2.0.4 source line.** For installation and product usage, start with the [repository README](../README.md).
+> **Public architecture overview for the 2.0.5 source line.** For installation and product usage, start with the [repository README](../README.md).
 
 DeepAgent Code is a document-centered, event-driven AI coding system. It combines a coding-agent runtime with a durable control plane that owns context, planning, learning, collaboration, safety, and human oversight.
 
 The architecture is designed around one requirement: a long-running agent must remain correct and governable after many model turns, tool calls, user interventions, process restarts, and worker handoffs.
 
-## Product boundaries in 2.0.4
+## Product boundaries in 2.0.5
 
-GUI and TUI call the same local DAC backend for Sessions, models, permissions, and tools. Public IM is a messaging transport: `/dac` admits a normal local Session prompt, reuses the conversation's Session for follow-up, and returns the final answer through a durable outbox. Commands and execution remain private to the caller. IM attachments are bounded to 10 MiB, and IM activation requires an explicit purchase separate from provider connection.
+GUI and TUI call the same local DAC backend for Sessions, models, permissions, and tools. Public IM is a messaging transport: `/dac` admits a normal local Session prompt, reuses the conversation's Session for follow-up, and returns the final answer through a durable outbox. Commands and execution remain private to the caller. IM attachments are bounded to 10 MiB, and IM access uses a device-bound entitlement separate from provider connection.
 
 The Desktop-managed browser is a Session-authorized host capability. It supports only the interactions available on the current platform, validates targets before action, and applies separate controls to file exchange and clipboard operations. It is not a whole-desktop Computer Use service or a public remote-execution relay.
 
@@ -193,7 +193,7 @@ Hot plan edits preserve reusable step IDs and completed evidence, increment the 
 
 ## Event-Driven Agent Runtime
 
-The Event Bus provides persist-before-dispatch delivery, idempotency, priority, retry, acknowledgement, dead-letter handling, retention, replay, and correlation. The current production backend is local SQLite. A transport interface separates storage from delivery behavior; distributed Redis Streams or Kafka implementations are not part of the 2.0.4 delivery.
+The Event Bus provides persist-before-dispatch delivery, idempotency, priority, retry, acknowledgement, dead-letter handling, retention, replay, and correlation. The current production backend is local SQLite. A transport interface separates storage from delivery behavior; distributed Redis Streams or Kafka implementations are not part of the 2.0.5 source line.
 
 The Router combines event type, trusted source, actor identity, Agent trigger/capability metadata, autonomy ceiling, approval intent, context strategy, deduplication, priority, and workspace backpressure into one traceable route decision.
 
@@ -225,7 +225,7 @@ Repo & Wiki is a human-facing projection, never a second source of truth. It exp
 
 Public IM supports direct and group conversations, search, and file/image sharing with a 10 MiB per-attachment limit. The caller's explicit `/dac` command creates or reuses a normal local DAC Session, using its model, tools, and permission flow. Follow-up requests in the same conversation retain that Session unless the user explicitly starts a new one.
 
-Commands and execution are visible only to the caller, who can open the normal DAC Session for streaming progress. Only the final answer is returned to the original IM conversation through a durable outbox with delivery state and retry handling. IM activation is an explicit purchase; provider connection does not activate or charge for it. The caller can select a separate IM model from locally configured providers.
+Commands and execution are visible only to the caller, who can open the normal DAC Session for streaming progress. Only the final answer is returned to the original IM conversation through a durable outbox with delivery state and retry handling. IM access requires a separate device-bound entitlement; provider connection does not purchase or activate it. The caller can select a separate IM model from locally configured providers.
 
 ### Oversight
 

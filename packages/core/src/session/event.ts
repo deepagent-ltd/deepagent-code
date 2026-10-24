@@ -1,3 +1,4 @@
+import { RemoteCompactionWindow } from "./remote-compaction-window"
 import { Schema } from "effect"
 // Deep import: the llm barrel exports route/client (node transport) — browser bundles
 // reachable via app → legacy-wire → event cannot parse it.
@@ -745,6 +746,7 @@ export namespace Compaction {
       recent: Schema.String,
       checkpointID: Schema.String.pipe(Schema.optional),
       checkpointHash: Schema.String.pipe(Schema.optional),
+      remote: RemoteCompactionWindow.State.pipe(Schema.optional),
     },
   })
   export type Ended = typeof Ended.Type

@@ -1,6 +1,8 @@
 import { Effect, Layer, Context, SynchronizedRef, Option, Schedule } from "effect"
 import { GoalControl } from "@deepagent-code/core/deepagent/goal-control"
 import { GoalControlSchema } from "@deepagent-code/core/deepagent/goal-control.schema"
+import { GoalClient } from "@deepagent-code/core/deepagent/goal-client"
+import { GoalPauseBoundary } from "@deepagent-code/core/deepagent/goal-pause-boundary"
 import { initializeGoal } from "@deepagent-code/core/deepagent/goal-loop"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { Hash } from "@deepagent-code/core/util/hash"
@@ -175,6 +177,8 @@ export type StartGoalInput = {
    * on the first tick. Ignored when a plan already exists (the existing plan is the goal carrier).
    */
   readonly objective?: string
+  readonly codeRefs?: readonly string[]
+  readonly planSource?: "workspace-file"
   /** Objective completion criteria (AND). Defaults to plan_complete + no_diagnostics when omitted. */
   readonly criteria?: readonly CompletionCriterion[]
   /** Hard bounds; a goal with no bounds is rejected by the core (InvalidGoalError). */
@@ -513,6 +517,12 @@ export const layer = Layer.effect(
 
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
+        yield* Effect.try({
+          try: () => GoalClient.validateStartInput(input),
+          catch: (error) => new GoalControlSchema.Error({
+            code: "invalid_request", message: error instanceof Error ? error.message : "Invalid Goal start",
+          }),
+        })
         if (!input.requestID)
           return yield* new GoalControlSchema.Error({
             code: "invalid_request",
@@ -571,7 +581,14 @@ export const layer = Layer.effect(
         // Only fall back to the repo goal+plan.md (design mode) when there is NEITHER a session-state
         // plan (loop mode) NOR an explicit free-text objective. An explicit objective is a direct user
         // intent for THIS start and must win over a stale/leftover file in the workspace.
-        const fromFile = existing == null && !objective ? readGoalPlanFile(cwd, sessionID) : null
+        const fromFile = input.planSource === "workspace-file" || existing == null && !objective
+          ? readGoalPlanFile(cwd, sessionID) : null
+        if (input.planSource === "workspace-file" && !fromFile)
+          return yield* new InvalidGoalError({ reason: "The required workspace goal+plan.md is missing, unsafe or malformed" })
+        if (input.planSource === "workspace-file" && existing && fromFile &&
+          GoalControl.fingerprint([existing.goal, existing.assumptions, existing.steps, existing.active_step_id]) !==
+          GoalControl.fingerprint([fromFile.plan.goal, fromFile.plan.assumptions, fromFile.plan.steps, fromFile.plan.active_step_id]))
+          return yield* new GoalControlSchema.Error({ code: "target_conflict", message: "Workspace file conflicts with the existing Session plan" })
         const plan =
           existing ??
           (objective
@@ -600,11 +617,14 @@ export const layer = Layer.effect(
           },
           model: yield* resolveGoalModel(session),
           netTokenBudget: flags.goalNetTokenBudget,
-          panel: input.panelQuestion ?? {
+          panel: {
+            ...(input.panelQuestion ?? {
             question: "Is the current change safe and correct enough to complete this goal?",
             codeRefs: [],
             lenses: ["correctness", "security", "architecture"],
             maxRounds: 3,
+            }),
+            ...(input.codeRefs !== undefined ? { codeRefs: [...input.codeRefs] } : {}),
           },
         })
         const planDocId = initialization.spec.planDocId
@@ -663,7 +683,19 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const receipt = yield* GoalControl.control(db, { ...input, action })
         // The SQL control lock has been released. Revoke and interrupt only captured old frames.
-        if (Option.isSome(ownedFrames)) yield* ownedFrames.value.control(input.goalId, receipt.revision)
+        if (Option.isSome(ownedFrames)) yield* ownedFrames.value.control(input.goalId, receipt.revision,
+          action === "pause" && receipt.receiptID
+            ? { commandID: receipt.receiptID, directory: goalStoreRoot(input.sessionID) } : undefined)
+        if (action === "pause" && receipt.replayed && receipt.receiptID)
+          yield* GoalPauseBoundary.reconcileProjection(db, {
+            goalID: input.goalId,
+            sessionID: input.sessionID,
+            commandID: receipt.receiptID,
+            directory: goalStoreRoot(input.sessionID),
+          }).pipe(
+            // Historical ACKs cannot recover the lost live registry or authorize another tick.
+            Effect.catchTag("GoalControl.Error", () => Effect.void),
+          )
         yield* Effect.gen(function* () {
           const row = yield* GoalControl.current(db, input.sessionID)
           if (row?.goal_id !== input.goalId) return
@@ -675,8 +707,11 @@ export const layer = Layer.effect(
         }).pipe(Effect.catchCause(() => Effect.void))
         if (action === "resume")
           yield* GoalControlDispatcher.drain(db, eventBus).pipe(Effect.catchCause(() => Effect.void))
-        // inFlight remains explicit. This slice does not claim that a remote/cold child was interrupted.
-        return receipt
+        // Re-read the actual obligations after the narrow, original-frame pause settlement. The
+        // persisted command receipt remains immutable; exact retries expose current status too.
+        const current = yield* GoalControl.requireTarget(db, input.goalId, input.sessionID)
+        return { ...receipt, ...(yield* GoalControl.snapshot(db, current)), replayed: receipt.replayed,
+          receiptID: receipt.receiptID }
       })
     const pause: Interface["pause"] = (input) => applyControl("pause", input)
     const resume: Interface["resume"] = (input) => applyControl("resume", input)
@@ -684,7 +719,11 @@ export const layer = Layer.effect(
     const status: Interface["status"] = (sessionID) =>
       Effect.gen(function* () {
         const row = yield* GoalControl.current(db, sessionID)
-        if (row) return yield* GoalControl.snapshot(db, row)
+        if (row) {
+          const snapshot = yield* GoalControl.snapshot(db, row)
+          const progress = yield* GoalTickProjection.progress(db, row)
+          return { ...snapshot, ...(progress ? { progress } : {}) }
+        }
         const legacy = AgentGateway.DeepAgentSessionState.getActiveGoal(sessionID)
         if (!legacy) return null
         return {

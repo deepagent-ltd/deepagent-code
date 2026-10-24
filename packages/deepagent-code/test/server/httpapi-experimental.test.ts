@@ -7,18 +7,23 @@ import { ExperimentalPaths } from "../../src/server/routes/instance/httpapi/grou
 import { Session } from "@/session/session"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { Database } from "@deepagent-code/core/database/database"
+import { FSUtil } from "@deepagent-code/core/fs-util"
 import { AccountV2 } from "@deepagent-code/core/account"
 import { AccountTable } from "@deepagent-code/core/account/sql"
 import * as Log from "@deepagent-code/core/util/log"
 import { Worktree } from "../../src/worktree"
+import { Git } from "../../src/git"
+import { Project } from "../../src/project/project"
 import { resetDatabase } from "../fixture/db"
-import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import { disposeAllInstances, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { httpApiLayer, requestInDirectory } from "./httpapi-layer"
 
 void Log.init({ print: false })
 
-const it = testEffect(Layer.mergeAll(Session.defaultLayer, Database.defaultLayer, httpApiLayer))
+const it = testEffect(
+  Layer.mergeAll(Session.defaultLayer, Database.defaultLayer, FSUtil.defaultLayer, Git.defaultLayer, httpApiLayer),
+)
 const testWorktreeMutations = process.platform === "win32" ? it.instance.skip : it.instance
 
 function request(path: string, directory: string, init: RequestInit = {}) {
@@ -140,6 +145,64 @@ afterEach(async () => {
 })
 
 describe("experimental HttpApi", () => {
+  testWorktreeMutations("persists retained checkout adoption after linked-first safe removal", () =>
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const service = yield* Git.Service
+      const git = (directory: string, args: string[]) =>
+        service.run(args, { cwd: directory }).pipe(
+          Effect.map((result) => {
+            if (result.exitCode !== 0) throw new Error(`fixture git failed: ${result.stderr.toString("utf8")}`)
+            return result.text().trim()
+          }),
+        )
+      yield* Effect.forEach(["retained", "live", "removed"] as const, (mode) =>
+        Effect.gen(function* () {
+          const main = yield* tmpdirScoped({ git: true })
+          const linked = yield* tmpdirScoped()
+          yield* git(main, ["branch", "-M", "main"])
+          yield* git(main, ["worktree", "add", "-b", "http-linked", linked, "main"])
+          const first = yield* request("/project/current", mode === "live" ? main : linked)
+          expect(first.status).toBe(200)
+          const original = yield* json<Project.Info>(first)
+          expect(original.worktree).toBe(mode === "live" ? main : linked)
+          const directory = mode === "removed" ? linked : main
+          const current = yield* request("/project/current", directory)
+          expect(current.status).toBe(200)
+          expect((yield* json<Project.Info>(current)).id).toBe(original.id)
+          const updated: Project.Info[] = []
+          const on = (event: GlobalEvent) => {
+            if (event.payload.type === Project.Event.Updated.type && event.payload.properties.id === original.id)
+              updated.push(event.payload.properties)
+          }
+          GlobalBus.on("event", on)
+          yield* Effect.addFinalizer(() => Effect.sync(() => GlobalBus.off("event", on)))
+          const removed = yield* request(ExperimentalPaths.worktreeSafeRemove, directory, {
+            method: "DELETE",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ directory: linked }),
+          })
+          expect(removed.status).toBe(200)
+          expect(yield* json(removed)).toBe(true)
+          expect(yield* fs.exists(linked)).toBe(false)
+          expect((yield* git(main, ["branch", "--list", "http-linked"])).trim()).toBe("")
+          if (mode === "removed") {
+            expect(updated).toHaveLength(1)
+            expect(updated[0].worktree).toBe(linked)
+            return
+          }
+          const listed = yield* request("/project", main)
+          const persisted = (yield* json<Project.Info[]>(listed)).find((item) => item.id === original.id)
+          expect(persisted?.worktree).toBe(main)
+          expect(persisted?.sandboxes).not.toContain(linked)
+          expect(persisted?.sandboxes).not.toContain(main)
+          if (mode === "live") expect(updated).toHaveLength(1)
+          if (mode === "retained") expect(updated.at(-1)?.worktree).toBe(main)
+        }),
+      )
+    }),
+  )
+
   it.instance(
     "serves read-only experimental endpoints through the default server app",
     () =>

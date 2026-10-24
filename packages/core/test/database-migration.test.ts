@@ -7,6 +7,9 @@ import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { Effect, Exit, Layer, Logger } from "effect"
 import { eq, inArray, sql } from "drizzle-orm"
 import { DatabaseMigration } from "@deepagent-code/core/database/migration"
+import imActivationModelMigration from "@deepagent-code/core/database/migration/20261012140000_im_activation_model"
+import imActivationRecoveryMigration from "@deepagent-code/core/database/migration/20261012141000_im_activation_credential_recovery"
+import imActivationPaymentFactMigration from "@deepagent-code/core/database/migration/20261014100000_im_activation_payment_fact"
 import { MigrationIdentity } from "@deepagent-code/core/database/migration-identity"
 import { migrations } from "@deepagent-code/core/database/migration.gen"
 import sessionUsageMigration from "@deepagent-code/core/database/migration/20260510033149_session_usage"
@@ -109,6 +112,24 @@ const contextReadiness = {
 }
 
 describe("DatabaseMigration", () => {
+  test("IM payment-fact upgrade preserves released receipts and blocks a new purchase after paid rejection", async () => {
+    await run(Effect.gen(function* () {
+      const db = yield* makeDb
+      yield* db.run(sql`CREATE TABLE im_dac_command (id TEXT PRIMARY KEY)`)
+      yield* DatabaseMigration.applyOnly(db, [imActivationModelMigration, imActivationRecoveryMigration])
+      yield* db.run(sql`INSERT INTO im_activation VALUES ('original','realm','hash','alice','api_key','quote','unknown',NULL,0,NULL,1,1)`)
+      yield* DatabaseMigration.applyOnly(db, [imActivationPaymentFactMigration])
+      expect(yield* db.get(sql`SELECT transaction_id,state,charged_credits FROM im_activation`))
+        .toEqual({ transaction_id: "original", state: "unknown", charged_credits: null })
+      yield* db.run(sql`UPDATE im_activation SET state='pending', charged_credits=1 WHERE transaction_id='original'`)
+      yield* db.run(sql`UPDATE im_activation SET state='rejected' WHERE transaction_id='original'`)
+      expect(String(yield* db.run(sql`INSERT INTO im_activation VALUES ('new','realm','hash','alice','api_key','quote','unknown',NULL,0,NULL,2,2)`).pipe(Effect.exit)))
+        .toContain("UNIQUE constraint failed")
+      yield* DatabaseMigration.applyOnly(db, [imActivationPaymentFactMigration])
+      expect(yield* db.get(sql`SELECT transaction_id,state,charged_credits FROM im_activation`))
+        .toEqual({ transaction_id: "original", state: "rejected", charged_credits: 1 })
+    }))
+  })
   test("keeps historical attempt identities null and rejects later binding mutation", async () => {
     await run(Effect.gen(function* () {
       const db = yield* makeDb

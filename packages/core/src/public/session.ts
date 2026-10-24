@@ -106,7 +106,7 @@ export interface Interface {
   readonly create: (input: CreateInput) => Effect.Effect<Info>
   readonly get: (sessionID: ID) => Effect.Effect<Info, NotFoundError>
   readonly list: (input?: ListInput) => Effect.Effect<Info[]>
-  readonly prompt: (input: PromptInput) => Effect.Effect<Admission, NotFoundError | PromptConflictError>
+  readonly prompt: (input: PromptInput) => Effect.Effect<Admission, NotFoundError | PromptConflictError | SessionInput.ModeChangeRefused>
   readonly switchModel: (
     input: SwitchModelInput,
   ) => Effect.Effect<void, NotFoundError | ModelUnavailableError | VariantUnavailableError>

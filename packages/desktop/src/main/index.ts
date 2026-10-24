@@ -43,6 +43,10 @@ import { bindDesktopShutdownSignals, createDesktopShutdown } from "./shutdown"
 
 const jsCallStackFeature = "DocumentPolicyIncludeJSCallStacksInCrashReports"
 
+// Shared-page network grants cover the HTTP proxy path. QUIC/WebTransport must not
+// bypass that path; this switch applies only to this DAC Chromium process.
+app.commandLine.appendSwitch("disable-quic")
+
 let logger: ReturnType<typeof initLogging>
 let mainWindow: BrowserWindow | null = null
 let server: SidecarListener | null = null

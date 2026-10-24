@@ -7,6 +7,7 @@ import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { Api } from "../api"
 import { SessionsCursor } from "../groups/session"
+import { withBrowserUserInput } from "../browser-input"
 import {
   ConflictError,
   InvalidCursorError,
@@ -148,6 +149,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 revertEpoch: ctx.payload.revertEpoch,
               })
               .pipe(
+                withBrowserUserInput(ctx.params.sessionID, ctx.payload.id),
                 Effect.catchTag("GoalChild.Error", (error) => Effect.fail(new ConflictError({ message: error.message, resource: error.code }))),
                 Effect.catchTag("WorkAuthority.Error", (error) =>
                   Effect.fail(
@@ -172,6 +174,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                       resource: error.messageID,
                     }),
                   ),
+                ),
+                Effect.catchTag("SessionInput.ModeChangeRefused", (error) =>
+                  Effect.fail(new ConflictError({ message: error.message, resource: error.code })),
                 ),
                 Effect.catchTag("Session.LegacySessionRequiresAdoption", (error) =>
                   Effect.fail(
