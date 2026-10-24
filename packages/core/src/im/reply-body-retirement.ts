@@ -205,7 +205,18 @@ const actual = (db: Reader, outboxID: string) =>
  * current group with a reused ID or caller metadata. No row here is a grant. */
 const origin = (tx: Tx, row: Outbox) =>
   Effect.gen(function* () {
-    const dac = yield* tx.get<{ activity_id: string; trigger_input_id: string; final_message_id: string; binding_id: string }>(sql`
+    // Historical backfills run before DAC command tables exist. Such origins
+    // remain sealed legacy data and cannot acquire a later binding.
+    const tables = yield* tx.get<{ total: number }>(sql`SELECT count(*) total FROM sqlite_master
+      WHERE type='table' AND name IN ('im_dac_command','im_dac_binding')`)
+    const dac =
+      tables?.total === 2
+        ? yield* tx.get<{
+            activity_id: string
+            trigger_input_id: string
+            final_message_id: string
+            binding_id: string
+          }>(sql`
       SELECT a.activity_id,a.trigger_input_id,a.final_message_id,b.id AS binding_id FROM session_activity a
       JOIN session_activity_input ai ON ai.activity_id=a.activity_id
       JOIN im_dac_command c ON c.input_id=ai.input_id AND c.session_id=a.session_id AND c.state='admitted'
@@ -213,6 +224,7 @@ const origin = (tx: Tx, row: Outbox) =>
       WHERE a.session_id=${row.session_id} AND a.trigger_input_id IS ${row.trigger_message_id}
       AND b.group_id=${row.group_id} AND a.state='settled'
       AND (a.final_message_id=${row.reply_message_id} OR ${row.reply_message_id} GLOB a.final_message_id || '_impart_[0-9]*') LIMIT 1`)
+        : undefined
     if (dac) return { kind: "dac_session" as const, basisHash: ReplyBodyRetirementModel.hash(["dac_session", dac]) }
     return {
       kind: "legacy_unbound" as const,
