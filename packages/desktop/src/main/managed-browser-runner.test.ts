@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
+import { createRequire } from "node:module"
 import { Database, constants } from "bun:sqlite"
 import { pathToFileURL } from "node:url"
 import { managedBrowserInputFixtureDefine } from "./fixture/managed-browser-input-build"
@@ -18,7 +19,14 @@ async function run(mode: "missing-native-cohort" | "identity" | "interaction-red
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-managed-browser-runner-")))
   await fs.chmod(root, 0o700)
   await Promise.all(["home", "tmp", "config", "data", "cache", "state", "project", "chunks"].map((name) => fs.mkdir(path.join(root, name), { mode: 0o700 })))
-  await fs.symlink(path.resolve(import.meta.dir, "../../node_modules"), path.join(root, "node_modules"), "dir")
+  if (process.platform === "win32") {
+    await fs.mkdir(path.join(root, "node_modules/@lydell"), { recursive: true })
+    await fs.symlink(await fs.realpath(path.dirname(
+      createRequire(path.resolve(import.meta.dir, "../../package.json")).resolve("@lydell/node-pty/package.json"),
+    )), path.join(root, "node_modules/@lydell/node-pty"), "junction")
+  }
+  if (process.platform !== "win32")
+    await fs.symlink(path.resolve(import.meta.dir, "../../node_modules"), path.join(root, "node_modules"), "dir")
   // Windows source-only unit tests do not contain the publisher-issued cohort.
   // Their explicit assembly retains real routes/Session/ToolEffect without Native authority.
   const server = await Bun.build({ entrypoints: [process.platform === "win32"
@@ -196,6 +204,7 @@ for (const mode of ["interaction-path-denied", "interaction-body-denied", "inter
     const db = readAuthority(root)
     try {
       const clicks = db.query<{ outcome: string }, []>("SELECT outcome FROM browser_action WHERE json_extract(record, '$.command.type') = 'click'").all()
+      if (clicks.length !== 1) console.error("MANAGED_BROWSER_DENIED_PROGRESS", result.deniedDiagnostic)
       expect(clicks).toHaveLength(1)
       expect(["completed", "unknown"]).toContain(clicks[0]?.outcome)
       expect(db.query("SELECT * FROM session_input").all()).toHaveLength(1)

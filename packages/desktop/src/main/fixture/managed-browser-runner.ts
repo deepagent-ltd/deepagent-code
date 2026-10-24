@@ -338,23 +338,42 @@ async function main() {
         permissions, selectionMutationRejected, providerRequests: bodies.length, previewRequests }, null, 2))
       return
     }
+    const { DatabaseSync } = await import("node:sqlite")
+    const deniedProgress = () => {
+      const database = new DatabaseSync(path.join(root, "authority.sqlite"), { readOnly: true })
+      try {
+        return {
+          providerRequests: bodies.length,
+          providerFinished,
+          activity: database.prepare("SELECT a.state, s.execution_claim_token IS NOT NULL AS claimActive FROM session_activity a JOIN session s ON s.id=a.session_id WHERE a.session_id=? ORDER BY a.ordinal DESC LIMIT 1").get(invokeSession.data.id),
+          providerReceipts: database.prepare("SELECT request_ordinal, state, error_code FROM session_v2_provider_turn_receipt WHERE session_id=? ORDER BY request_ordinal").all(invokeSession.data.id),
+          toolEffects: database.prepare("SELECT a.tool_call_id, a.tool_name, a.effect_kind, e.state, e.error_code FROM session_v2_tool_effect_admission a LEFT JOIN session_v2_tool_effect e ON e.receipt_id=a.receipt_id AND e.tool_call_id=a.tool_call_id WHERE a.session_id=? ORDER BY a.time_created, a.tool_call_id").all(invokeSession.data.id),
+          actions: database.prepare("SELECT outcome, json_extract(record, '$.command.type') AS commandType, json_extract(record, '$.command.generation') AS generation FROM browser_action ORDER BY created_at").all(),
+        }
+      } finally { database.close() }
+    }
     const deadline = Date.now() + 40_000
     while (mode.endsWith("-denied") && bodies.length < 9 && Date.now() < deadline) {
-      if (mode.endsWith("-denied") && bodies.length >= 6) {
-        const { DatabaseSync } = await import("node:sqlite")
-        const observed = new DatabaseSync(path.join(root, "authority.sqlite"), { readOnly: true })
-        const latest = observed.prepare("SELECT outcome FROM browser_action ORDER BY created_at DESC LIMIT 1").get()
-        observed.close()
-        if (latest?.outcome === "unknown") break
+      const progress = deniedProgress()
+      // A failed earlier tool must not disappear behind the later click-count
+      // assertion after a full deadline. These reads never retry an input.
+      if (!progress.actions.some((action) => action.commandType === "click") &&
+          (["settled", "failed", "interrupted"].includes(String(progress.activity?.state)) ||
+            progress.providerReceipts.some((receipt) => receipt.state === "failed"))) {
+        await writeFile(path.join(root, "denied-progress.json"), JSON.stringify({ reason: "ended-before-click", ...progress }, null, 2))
+        throw new Error(`Denied interaction ended before its click: ${JSON.stringify(progress)}`)
       }
+      if (bodies.length >= 6 && progress.actions.at(-1)?.outcome === "unknown") break
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
+    const deniedDiagnostic = mode.endsWith("-denied") ? deniedProgress() : undefined
+    if (deniedDiagnostic)
+      await writeFile(path.join(root, "denied-progress.json"), JSON.stringify({ reason: Date.now() >= deadline ? "deadline" : "observed", ...deniedDiagnostic }, null, 2))
     const backgroundBoundary = mode.endsWith("-denied") ? undefined : await waitForSettled(invokeSession.data.id,
       interaction ? 10 : 6, 40_000, ["happy", "interaction"].includes(mode))
     const observed = await call(`/api/v1/browser/controls/${controlID}`)
     const stopped = await call(`/api/v1/browser/controls/${controlID}/cancel`, { requestID: "canonical-cancel", expectedRevision: observed.control.revision })
     const denied = await fetch(url + `/api/v1/browser/controls/${controlID}`)
-    const { DatabaseSync } = await import("node:sqlite")
     const database = new DatabaseSync(path.join(root, "authority.sqlite"), { readOnly: true })
     const getObservation = { backgroundBoundary, pendingBefore: backgroundWork(database),
       requests: [] as Array<{ route: string; status: number; elapsedMs: number }>, pendingAfter: {} as ReturnType<typeof backgroundWork> }
@@ -385,7 +404,7 @@ async function main() {
     }
     await writeFile(path.join(root, "result.json"), JSON.stringify({ control, observed, stopped, session, admitted,
       permissions, previewRequests, posted, outsideRequests, controlRead, getNoWrites: getWriteTables.length === 0, getWriteTables, getObservation, forbiddenActionStatus: forbiddenAction.status, queryAuthStatus: queryAuth.status, providerRequests: bodies.length, browserMissing, unauthorizedStatus: denied.status,
-      coldHistory,
+      coldHistory, deniedDiagnostic,
       fixtureDevMint: process.env.DEEPAGENT_CODE_V2_OWNER_DEV_MINT === "1" }, null, 2))
   } finally {
     await server.listener.stop()
