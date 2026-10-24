@@ -585,64 +585,184 @@ test("cold credential change excludes the previous ownsender receipt without blo
   expect(yield* s.db.get(sql`SELECT content,kernel_msg_id FROM im_messages WHERE id=${own.id}`)).toEqual({ content: "original ownsender", kernel_msg_id: null })
 }))))
 
-test("more than thirty-two persistent projections remain page-addressable and two fresh cuts run concurrently", () => isolated((filename) => run(filename, Effect.gen(function* () {
-  const s = yield* fixture
-  yield* KernelReader.ensureScope(s.runtime)
-  const now = Date.now()
-  const items = Array.from({ length: 33 }, (_, index) => ({ ...s.change, projectionKey: (index + 1).toString(16).padStart(64, "0"), targetId: `peer-${index}`, cursor: String(index + 1), admittedOrdinal: "0", readOrdinal: "0", liveUnread: "0", storedUnread: "0", latestMessageId: "", latestSequence: "", latestMessageTime: 0, nextExpiryAt: 0 }))
-  for (const page of [items.slice(0, 32), items.slice(32)]) {
-    const after = (yield* KernelReader.scope(s.runtime))!.completed_after
-    yield* KernelReader.applyChanges(s.runtime, { ...s.changes, after, upper: page.at(-1)!.cursor, scanCursor: page.at(-1)!.cursor, scanProjectionKey: page.at(-1)!.projectionKey, items: page, serverNow: now })
-    for (const item of page) yield* KernelReader.applyMessages(s.runtime, { ...s.messages, projectionKey: item.projectionKey, projectionRevision: item.revision, items: [], serverNow: now })
-    yield* KernelReader.checkpoint(s.runtime, page.map((item) => item.projectionKey), true)
-  }
-  yield* s.db.run(sql`UPDATE im_groups SET created_at=${now} WHERE workspace_id='workspace'`)
-  const readerKey = (yield* KernelReader.scope(s.runtime))!.reader_key
-  expect((yield* KernelReader.pageIdentity(s.runtime, { workspaceID: "workspace", userID: "server" })).readerKey).toBe(readerKey)
-  expect(yield* KernelReader.pageIdentity(s.runtime, { workspaceID: "different-workspace", userID: "server" }).pipe(Effect.flip)).toMatchObject({ code: "reader_scope_mismatch", operation: "group-page" })
-  const selected: string[] = []
-  let upper: KernelReaderSchema.GroupPosition | undefined
-  let after: KernelReaderSchema.GroupPosition | undefined
-  while (true) {
-    const page = yield* groupPageCandidates(s.db, { workspaceID: "workspace", userID: "server", lane: "protected", readerKey, limit: 2, upper, after })
-    selected.push(...page.rows.map((row) => row.id))
-    if (!page.hasMore) break
-    upper = page.upper
-    after = page.rows.at(-1)
-  }
-  expect(new Set(selected).size).toBe(33)
-  expect(selected.length).toBe(33)
-  expect(yield* KernelReader.projections(s.runtime).pipe(Effect.flip)).toMatchObject({ code: "reader_capacity" })
-  expect((yield* KernelReader.projection(s.runtime, items[32]!.projectionKey))?.target_id).toBe("peer-32")
-  const started = yield* Deferred.make<void>()
-  const release = yield* Deferred.make<void>()
-  const observed = { active: 0, maximum: 0, calls: 0 }
-  const current = KernelReader.attach({ db: s.db, workspaceID: "workspace", userID: "server", source, current: () => Effect.succeed(true), inspect: () => Effect.succeed({ name: "current peer" }), readCut: (request) => Effect.gen(function* () {
-    observed.active++
-    observed.calls++
-    observed.maximum = Math.max(observed.maximum, observed.active)
-    if (observed.active === 2) yield* Deferred.succeed(started, undefined)
-    yield* Deferred.await(release)
-    observed.active--
-    return { ...request, throughOrdinal: "0", targetAdmittedOrdinal: "0", readOrdinal: "0", liveUnread: "0", storedUnread: "0", serverNow: Date.now(), complete: true }
-  }) })
-  yield* Effect.addFinalizer(() => Effect.sync(() => KernelReader.close(current)))
-  yield* KernelReader.bind(current, scopeKey)
-  yield* KernelReader.ensureScope(current)
-  const page = yield* groupPageCandidates(s.db, { workspaceID: "workspace", userID: "server", lane: "protected", readerKey, limit: 2 })
-  const query = yield* Effect.forkChild(KernelReader.withOutput(current, { workspaceID: "workspace", userID: "server", groupIDs: page.rows.map((row) => row.id) }, Effect.gen(function* () {
-    const groups = yield* Effect.forEach(page.rows, (row) => s.repo.getGroup({ groupID: row.id, workspaceID: "workspace", userID: "server" }))
-    return { groups, reader: yield* KernelReader.groupPageState(s.db) }
-  })))
-  yield* Deferred.await(started)
-  expect(observed).toEqual({ active: 2, maximum: 2, calls: 2 })
-  yield* Deferred.succeed(release, undefined)
-  const result = yield* Fiber.join(query)
-  expect(result.groups.length).toBe(2)
-  expect(result.reader?.proofWindowMs).toBeGreaterThanOrEqual(999)
-  expect(result.reader?.proofWindowMs).toBeLessThanOrEqual(1000)
-  expect(observed.active).toBe(0)
-}))))
+test("more than thirty-two persistent projections remain page-addressable and two selected rows share one current output proof", () =>
+  isolated((filename) =>
+    run(
+      filename,
+      Effect.gen(function* () {
+        const s = yield* fixture
+        KernelReader.close(s.runtime)
+        const started = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const observed: KernelReaderSchema.OutputProofRequest[] = []
+        const proofSettled = { at: 0 }
+        const current = KernelReader.attach({
+          db: s.db,
+          workspaceID: "workspace",
+          userID: "server",
+          source,
+          current: () => Effect.succeed(true),
+          inspect: () => Effect.succeed({ name: "current peer" }),
+          readCut: () => Effect.die("A scalar cut cannot replace a page output proof"),
+          outputProof: (request) =>
+            Effect.gen(function* () {
+              observed.push(request)
+              yield* Deferred.succeed(started, undefined)
+              yield* Deferred.await(release)
+              const serverNow = Date.now()
+              proofSettled.at = performance.now()
+              return {
+                version: 2 as const,
+                scopeKey: request.scopeKey,
+                serverNow,
+                rows: request.rows.map((row) =>
+                  row.kind === "pending"
+                    ? row
+                    : {
+                        kind: "visible" as const,
+                        cut: {
+                          version: 2 as const,
+                          scopeKey: request.scopeKey,
+                          projectionKey: row.projectionKey,
+                          projectionRevision: row.projectionRevision,
+                          throughOrdinal: "0",
+                          targetAdmittedOrdinal: "0",
+                          readOrdinal: "0",
+                          liveUnread: "0",
+                          storedUnread: "0",
+                          serverNow,
+                          complete: true,
+                        },
+                      },
+                ),
+              }
+            }),
+        })
+        yield* Effect.addFinalizer(() => Effect.sync(() => KernelReader.close(current)))
+        yield* KernelReader.bind(current, scopeKey, 2)
+        yield* KernelReader.ensureScope(current)
+        const now = Date.now()
+        const items = Array.from({ length: 33 }, (_, index) => ({
+          ...s.change,
+          projectionKey: (index + 1).toString(16).padStart(64, "0"),
+          targetId: `peer-${index}`,
+          cursor: String(index + 1),
+          admittedOrdinal: "0",
+          readOrdinal: "0",
+          liveUnread: "0",
+          storedUnread: "0",
+          latestMessageId: "",
+          latestSequence: "",
+          latestMessageTime: 0,
+          nextExpiryAt: 0,
+        }))
+        for (const page of [items.slice(0, 32), items.slice(32)]) {
+          const after = (yield* KernelReader.scope(current))!.completed_after
+          yield* KernelReader.applyChanges(current, {
+            ...s.changes,
+            version: 2,
+            after,
+            upper: page.at(-1)!.cursor,
+            scanCursor: page.at(-1)!.cursor,
+            scanProjectionKey: page.at(-1)!.projectionKey,
+            items: page,
+            serverNow: now,
+          })
+          for (const item of page)
+            yield* KernelReader.applyMessages(current, {
+              ...s.messages,
+              version: 2,
+              projectionKey: item.projectionKey,
+              projectionRevision: item.revision,
+              items: [],
+              serverNow: now,
+            })
+          yield* KernelReader.checkpoint(
+            current,
+            page.map((item) => item.projectionKey),
+            true,
+          )
+        }
+        yield* s.db.run(sql`UPDATE im_groups SET created_at=${now} WHERE workspace_id='workspace'`)
+        const readerKey = (yield* KernelReader.scope(current))!.reader_key
+        expect(
+          (yield* KernelReader.pageIdentity(current, { workspaceID: "workspace", userID: "server" })).readerKey,
+        ).toBe(readerKey)
+        expect(
+          yield* KernelReader.pageIdentity(current, { workspaceID: "different-workspace", userID: "server" }).pipe(
+            Effect.flip,
+          ),
+        ).toMatchObject({ code: "reader_scope_mismatch", operation: "group-page" })
+        const selected: string[] = []
+        let upper: KernelReaderSchema.GroupPosition | undefined
+        let after: KernelReaderSchema.GroupPosition | undefined
+        while (true) {
+          const page = yield* groupPageCandidates(s.db, {
+            workspaceID: "workspace",
+            userID: "server",
+            lane: "protected",
+            readerKey,
+            limit: 2,
+            upper,
+            after,
+          })
+          selected.push(...page.rows.map((row) => row.id))
+          if (!page.hasMore) break
+          upper = page.upper
+          after = page.rows.at(-1)
+        }
+        expect(new Set(selected).size).toBe(33)
+        expect(selected.length).toBe(33)
+        expect(yield* KernelReader.projections(current).pipe(Effect.flip)).toMatchObject({ code: "reader_capacity" })
+        expect((yield* KernelReader.projection(current, items[32]!.projectionKey))?.target_id).toBe("peer-32")
+        const page = yield* groupPageCandidates(s.db, {
+          workspaceID: "workspace",
+          userID: "server",
+          lane: "protected",
+          readerKey,
+          limit: 2,
+        })
+        const query = yield* Effect.forkChild(
+          KernelReader.withOutput(
+            current,
+            { workspaceID: "workspace", userID: "server", groupIDs: page.rows.map((row) => row.id) },
+            Effect.gen(function* () {
+              const groups = yield* Effect.forEach(page.rows, (row) =>
+                s.repo.getGroup({ groupID: row.id, workspaceID: "workspace", userID: "server" }),
+              )
+              const reader = yield* KernelReader.groupPageState(s.db)
+              return { groups, reader, proofElapsedMs: performance.now() - proofSettled.at }
+            }),
+          ),
+        )
+        // Surface a failed child immediately instead of waiting forever for its callback.
+        yield* Effect.raceFirst(Deferred.await(started), Fiber.join(query))
+        const selectedRows = yield* KernelReader.projections(
+          current,
+          page.rows.map((row) => row.id),
+        )
+        expect(observed).toEqual([
+          {
+            version: 2,
+            scopeKey,
+            rows: selectedRows.map((row) => ({
+              kind: "visible",
+              projectionKey: row.projection_key!,
+              projectionRevision: s.permission.revision,
+            })),
+          },
+        ])
+        yield* Deferred.succeed(release, undefined)
+        const result = yield* Fiber.join(query)
+        expect(result.groups.length).toBe(2)
+        // The API returns the remaining 1000ms window after the actual SQL reads.
+        expect(result.proofElapsedMs).toBeLessThan(1000)
+        expect(result.reader?.proofWindowMs).toBeGreaterThanOrEqual(Math.floor(1000 - result.proofElapsedMs))
+        expect(result.reader?.proofWindowMs).toBeLessThanOrEqual(1000)
+        expect(observed).toHaveLength(1)
+      }),
+    ),
+  ))
 
 test("a later true read observation retains original recipient identity bytes and never creates a read action", () => isolated((filename) => run(filename, Effect.gen(function* () {
   const s = yield* fixture
