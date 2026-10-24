@@ -211,8 +211,9 @@ const targets = (
 
 const binaries: Record<string, string> = {}
 if (!skipInstall) {
-  await $`bun install --os="*" --cpu="*" @opentui/core@${pkg.dependencies["@opentui/core"]}`
-  await $`bun install --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
+  // Explicit package installs must preserve the frozen manifest and lockfile bytes.
+  await $`bun install --no-save --os="*" --cpu="*" @opentui/core@${pkg.dependencies["@opentui/core"]}`
+  await $`bun install --no-save --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
   // fff embeds its native lib per compile target through a `with { type: "file" }` import
   // (@ff-labs/fff-bun src/embedded.ts). The bundler folds process.platform/arch to the
   // compile target, so every cross target (win32 included) hard-fails resolution with

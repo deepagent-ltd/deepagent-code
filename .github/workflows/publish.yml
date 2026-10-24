@@ -26,6 +26,14 @@ on:
         description: "Completed candidate-SHA qualification run carrying release-qualification-v2 (required for release GO)"
         required: false
         type: string
+      owner_authorization_json:
+        description: "Original PUBLIC owner authorization JSON for retrying an existing release draft"
+        required: false
+        type: string
+      owner_public_key_pem:
+        description: "Matching PUBLIC Ed25519 PEM for the original owner authorization (never a private key)"
+        required: false
+        type: string
 
 # main, tag and manual runs share the same release draft and refs.
 concurrency:
@@ -80,6 +88,7 @@ jobs:
       candidate_commit: ${{ steps.version.outputs.candidate_commit }}
       candidate_tree: ${{ steps.version.outputs.candidate_tree }}
       channel: ${{ steps.version.outputs.channel }}
+      owner_reuse_required: ${{ steps.version.outputs.owner_reuse_required }}
 
   build-cli:
     needs: version
@@ -100,12 +109,22 @@ jobs:
           deepagent-code-app-id: ${{ vars.DEEPAGENT_CODE_APP_ID }}
           deepagent-code-app-secret: ${{ secrets.DEEPAGENT_CODE_APP_SECRET }}
 
+      - name: Prepare the original owner authorization for a release retry
+        id: owner-source
+        env:
+          DAC_OWNER_VERSION: ${{ needs.version.outputs.version }}
+          DAC_OWNER_REUSE_REQUIRED: ${{ needs.version.outputs.owner_reuse_required == 'true' || github.run_attempt > 1 }}
+          DAC_OWNER_AUTHORIZATION_JSON: ${{ inputs.owner_authorization_json }}
+          DAC_OWNER_PUBLIC_KEY_PEM: ${{ inputs.owner_public_key_pem }}
+        run: bun script/prepare-release-owner.ts
+
       # Owner authorization (2026-09-11 ruling): mint with a ONE-TIME Ed25519 pair BEFORE the
       # binaries build — the public half is pinned into this exact build via the
       # DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY define and the private half dies with the mint
       # process. No signing secret exists anywhere. The row never expires (no forced updates).
       - name: Mint V2 owner authorization (ephemeral per-release)
         id: mint-owner
+        if: steps.owner-source.outputs.reuse != 'true'
         working-directory: packages/deepagent-code
         env:
           DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
@@ -118,6 +137,19 @@ jobs:
             | tee "$RUNNER_TEMP/mint-result.json"
           jq -r '.public_key_pem' "$RUNNER_TEMP/mint-result.json" > "$RUNNER_TEMP/release-owner-public-key.pem"
           test -s "$RUNNER_TEMP/release-owner-public-key.pem"
+
+      # Retain the public pair even if a later build or frozen-candidate check fails.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: owner-authorization
+          path: ${{ runner.temp }}/owner-authorization.json
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-owner-public-key
+          path: ${{ runner.temp }}/release-owner-public-key.pem
+          if-no-files-found: error
 
       - name: Prepare Linux CLI Rust targets and musl linker
         run: |
@@ -159,21 +191,6 @@ jobs:
             --release-id "${{ needs.version.outputs.release }}" \
             --release-repo "${{ needs.version.outputs.repo }}" \
             --package-dir packages/deepagent-code/dist/deepagent-code-linux-x64
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: owner-authorization
-          path: ${{ runner.temp }}/owner-authorization.json
-          if-no-files-found: warn
-
-      # Public half of the ephemeral release owner key: the native Windows build job pins the
-      # same key into its binaries via DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY, keeping one
-      # build identity across every platform artifact. Public material — safe as an artifact.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: release-owner-public-key
-          path: ${{ runner.temp }}/release-owner-public-key.pem
-          if-no-files-found: warn
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
