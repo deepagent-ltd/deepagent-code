@@ -7,6 +7,7 @@ import { Config } from "@deepagent-code/core/config"
 import { ConfigProvider } from "@deepagent-code/core/config/provider"
 import { ConfigProviderPlugin } from "@deepagent-code/core/config/plugin/provider"
 import { ConfigAgentPlugin } from "@deepagent-code/core/config/plugin/agent"
+import { ConfigIM } from "@deepagent-code/core/config/im"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Catalog } from "@deepagent-code/core/catalog"
 import { ModelV2 } from "@deepagent-code/core/model"
@@ -254,11 +255,33 @@ describe("Config", () => {
 
   it.effect("migrates arbitrary v1 configuration into valid v2 configuration", () =>
     Effect.sync(() => {
+      // A generic String filtered to HTTPS URLs performs effectively unbounded synchronous
+      // rejection sampling, so Bun's timer cannot interrupt it. Keep the production check.
+      const schema = ConfigV1.Info.mapFields((fields) => ({
+        ...fields,
+        im: Schema.optional(
+          ConfigIM.Info.mapFields((im) => ({
+            ...im,
+            url: Schema.optional(
+              Schema.NullOr(
+                ConfigIM.ServiceURL.annotate({
+                  toArbitrary: () => (fc) =>
+                    fc
+                      .webUrl({ validSchemes: ["https"] })
+                      .filter((value) => ConfigIM.normalizeServiceURL(value) !== undefined),
+                }),
+              ),
+            ),
+          })),
+        ),
+      }))
       FastCheck.assert(
-        FastCheck.property(Schema.toArbitrary(ConfigV1.Info), (info) => {
+        FastCheck.property(Schema.toArbitrary(schema), (generated) => {
+          // Config files are JSON; decoded StructWithRest arbitraries may contain undefined keys.
+          const info = Schema.decodeUnknownSync(ConfigV1.Info)(JSON.parse(JSON.stringify(generated)), { errors: "all" })
           Schema.decodeUnknownSync(Config.Info)(ConfigMigrateV1.migrate(info), { errors: "all" })
         }),
-        { numRuns: 100 },
+        { numRuns: 100, examples: [[{ im: { url: null } }], [{ im: { url: "https://im-config.test/im" } }]] },
       )
     }),
   )
@@ -852,7 +875,8 @@ describe("Config", () => {
                 model: {
                   request: {
                     body: {
-                      output_config: { effort: "high", task_budget: 4096 },
+                      effort: "high",
+                      output_config: { task_budget: 4096 },
                       metadata: { user_id: "user-1" },
                     },
                   },

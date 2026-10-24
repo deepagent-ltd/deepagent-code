@@ -3499,7 +3499,10 @@ describe("SessionRunnerLLM", () => {
         .all()
         .pipe(Effect.orDie)
       expect(policies).toHaveLength(1)
-      expect(policies[0]).toMatchObject({ api_model_id: "replacement", policy: { state: "unmanaged" } })
+      expect(policies[0]).toMatchObject({
+        api_model_id: "replacement",
+        policy: { state: "managed", key: "default", action: "normal" },
+      })
     }),
   )
 
@@ -3986,12 +3989,17 @@ describe("SessionRunnerLLM", () => {
       Effect.gen(function* () {
         yield* setup
         const session = yield* SessionV2.Service
-        // recoveryModel (context 20_000) with the harness buffer 3_000 ⇒ the compaction trigger
-        // sits at 17_000 estimated tokens (85%), so a ~75% turn notices without compacting.
-        currentModel = recoveryModel
+        // Leave room for the actual full-request/summary reservation hard gate,
+        // while keeping the first request in the independently measured 70–85% notice tier.
+        const noticeModel = Model.make({
+          id: "budget-notice",
+          provider: "fake",
+          route: OpenAIChat.route.with({ limits: { context: 30_000, output: 1_000 } }),
+        })
+        currentModel = noticeModel
         requests.length = 0
         response = fragmentFixture("text", "text-answer", ["Done"]).completeEvents
-        yield* session.prompt({ sessionID, prompt: new Prompt({ text: "x".repeat(58_000) }), resume: false })
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: "x".repeat(84_000) }), resume: false })
         yield* session.resume(sessionID)
 
         expect(requests).toHaveLength(1)
@@ -4004,18 +4012,18 @@ describe("SessionRunnerLLM", () => {
         const percent = Number(notice.match(/~(\d+)% full/)![1])
         expect(percent).toBeGreaterThanOrEqual(70)
         expect(percent).toBeLessThan(85)
-        expect(percent).toBe(measuredBudgetPercent(requests[0]!, notice, recoveryModel))
+        expect(percent).toBe(measuredBudgetPercent(requests[0]!, notice, noticeModel))
         // Volatile only: nothing budget-shaped lands in durable history.
         expect(JSON.stringify(yield* session.context(sessionID))).not.toContain("BUDGET")
 
-        // Grow past the 85% trigger: the turn compacts, the rebuilt request rides the compacted
+        // Grow past the current hard gate: the turn compacts, the rebuilt request rides the compacted
         // history, and the notice is gone because occupancy fell below 70%.
         requests.length = 0
         responses = [
           fragmentFixture("text", "text-summary", ["## Goal\n- Preserve the task"]).completeEvents,
           fragmentFixture("text", "text-final", ["Continued"]).completeEvents,
         ]
-        yield* session.prompt({ sessionID, prompt: new Prompt({ text: "y".repeat(10_000) }), resume: false })
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: "y".repeat(16_000) }), resume: false })
         yield* session.resume(sessionID)
 
         expect(requests).toHaveLength(2)
@@ -4731,10 +4739,15 @@ describe("SessionRunnerLLM", () => {
         .all()
         .pipe(Effect.orDie)
       expect(policy).toHaveLength(2)
-      expect(policy.map((row) => row.policy.state).sort()).toEqual(["managed", "unmanaged"])
-      expect(policy.find((row) => row.policy.state === "managed")?.policy).toMatchObject({
+      expect(policy.map((row) => row.policy.state)).toEqual(["managed", "managed"])
+      expect(policy.find((row) => row.api_model_id === "deepseek-flash")?.policy).toMatchObject({
         state: "managed",
         key: "deepseek-v4-flash",
+        action: "normal",
+      })
+      expect(policy.find((row) => row.api_model_id === "replacement")?.policy).toMatchObject({
+        state: "managed",
+        key: "default",
         action: "normal",
       })
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
@@ -5588,8 +5601,8 @@ describe("SessionRunnerLLM", () => {
       expect(first[0]?.error_code).toMatch(/^provider_stream_failed:/)
       expect(first[0]?.outcome_artifact).toEqual([])
 
-      // A forced continuation must not silently rewrite the quarantined receipt into a retryable
-      // `failed` row; it stays indeterminate and any new work opens a separate receipt.
+      // A plain resume cannot replay an uncertain physical dispatch. Resolving
+      // that evidence requires its separate explicit recovery authority.
       responseStream = Stream.unwrap(
         Effect.gen(function* () {
           const seal = yield* V2ProviderTurn.CurrentRequestSeal
@@ -5606,14 +5619,16 @@ describe("SessionRunnerLLM", () => {
         }),
       )
       requests.length = 0
-      yield* session.resume(sessionID)
+      const retry = yield* session.resume(sessionID).pipe(Effect.exit)
+      expect(Exit.isFailure(retry)).toBe(true)
+      if (Exit.isFailure(retry))
+        expect(Cause.squash(retry.cause)).toMatchObject({
+          _tag: "V2ProviderTurn.UnsafeRetryError",
+          state: "indeterminate_after_crash",
+        })
+      expect(requests).toEqual([])
       const after = yield* receipts()
-      expect(after[0]).toMatchObject({
-        receipt_id: first[0]?.receipt_id,
-        state: "indeterminate_after_crash",
-      })
-      expect(after).toHaveLength(2)
-      expect(after[1]).toMatchObject({ state: "settled" })
+      expect(after).toEqual(first)
     }),
   )
 

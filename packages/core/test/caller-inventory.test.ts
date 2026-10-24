@@ -14,13 +14,16 @@
 import { describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { buildInventory } from "../script/caller-inventory/build"
 import { INVENTORY_SURFACE_IDS, SURFACE_IDS } from "../script/caller-inventory/types"
 import { DELEGATION_CLIENT_BINDINGS } from "../script/caller-inventory/authority"
 import { bodyLogsOnlyHit } from "../script/caller-inventory/graph"
 import { DIMENSIONS, VERDICTS } from "../script/caller-inventory/types"
 
-const ROOT = new URL("../", import.meta.url).pathname.replace(/\/$/, "")
+const ROOT = fileURLToPath(new URL("../", import.meta.url))
+  .replaceAll("\\", "/")
+  .replace(/\/$/, "")
 const PROBE_DIR = join(ROOT, "script/caller-inventory/__probe__")
 
 const inventory = await buildInventory()
@@ -67,7 +70,9 @@ describe("C0-01 caller inventory gate", () => {
     // Explicit final-delivery retry adds one reviewed adapter; it never admits Session work.
     // 2026-10-13 removes five retired IM HTTP task endpoints and its separate
     // im.agent-execution adapter; ordinary /dac and Session ownership stay.
-    expect(inventory.entries.length).toBe(520)
+    // 2.0.5 adds reviewed shared-browser/TUI and Session projection faces. Their
+    // original handler/owner chains are proved in v203-http, with no open-owner waiver.
+    expect(inventory.entries.length).toBe(546)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)
@@ -93,6 +98,35 @@ describe("C0-01 caller inventory gate", () => {
         "cli.lildax.serve",
       ].sort(),
     )
+  })
+
+  test("shared browser faces retain exact guarded owners and Session summaries stay read-only", () => {
+    const reviewed = {
+      "http.instance.browser.sharedCreate": "adapter",
+      "http.instance.browser.sharedTakeover": "adapter",
+      "http.instance.browser.sharedApproveOrigin": "adapter",
+      "http.instance.browser.sharedClose": "adapter",
+      "http.instance.browser.sharedFilesApprove": "adapter",
+      "http.instance.browser.tuiPair": "adapter",
+      "http.instance.browser.tuiOwner": "adapter",
+      "http.instance.browser.tuiReserve": "adapter",
+      "http.instance.browser.tuiSeal": "adapter",
+      "http.instance.browser.tuiDetach": "adapter",
+      "http.instance.browser.sharedList": "read_only",
+      "http.instance.browser.sharedGet": "read_only",
+      "http.instance.browser.sharedFilesPreview": "read_only",
+      "http.instance.browser.sharedFilesStatus": "read_only",
+      "http.instance.browser.sharedFilesList": "read_only",
+      "http.instance.session.taskSummary": "read_only",
+      "http.instance.session.contextUsage": "read_only",
+    } as const
+    for (const [id, verdict] of Object.entries(reviewed)) {
+      const entry = inventory.entries.find((item) => item.entry.id === id)
+      expect(entry).toBeDefined()
+      expect(entry?.unclassifiedCount).toBe(0)
+      expect(entry?.roles.map((role) => role.verdict)).toEqual(DIMENSIONS.map(() => verdict))
+      expect(entry?.roles.every((role) => role.evidence.length > 0)).toBe(true)
+    }
   })
 
   test("every entry is fully classified along the seven authority dimensions with legal verdicts and evidence", () => {

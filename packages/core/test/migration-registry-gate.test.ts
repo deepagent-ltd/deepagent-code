@@ -139,7 +139,10 @@ import { migrations } from "../src/database/migration.gen"
 // bodies are pinned after the affected fresh/upgrade/FK fixtures passed. The 207 identities
 // in the informational HEAD baseline are retained byte-for-byte; 52 forward additions cover
 // the reviewed v2.0.3 business/Native lifecycle work. This is not release approval.
-const PINNED_DIGEST = "c983db24529334edb193af6054dc6cfda43948b727f2bf14830da8791c79450c"
+// 2.0.5 retains the exact 259-entry pinned prefix and appends seven reviewed
+// identities: four IM Session/activation identities, two shared browser
+// resource/file identities, and the Goal pause boundary. No historical body changed.
+const PINNED_DIGEST = "5c187134c8d1f86830463d57d3749f4ab762d6be31d10af5b29975a9ad5849b5"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")
@@ -161,7 +164,8 @@ describe("migration registry gate", () => {
       const content = fs.readFileSync(path.join("src/database/migration", `${migration.id}.ts`), "utf8")
       return { id: migration.id, hash: createHash("sha256").update(content).digest("hex") }
     })
-    expect(entries.length).toBeGreaterThan(100)
+    expect(entries.length).toBe(266)
+    expect(digest(entries.slice(0, 259))).toBe("c983db24529334edb193af6054dc6cfda43948b727f2bf14830da8791c79450c")
     expect(digest(entries)).toBe(PINNED_DIGEST)
   })
 
