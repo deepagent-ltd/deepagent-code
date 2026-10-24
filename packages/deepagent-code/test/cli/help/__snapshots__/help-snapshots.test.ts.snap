@@ -107,6 +107,16 @@ Options:
                                       (requires --agent loop)             [boolean] [default: false]
       --request-id                    retry the same Goal start with --goal --session and the
                                       original message                                      [string]
+      --goal-test                     explicit Goal acceptance test command (repeat for multiple
+                                      commands)                                              [array]
+      --goal-diagnostics              Goal diagnostics acceptance threshold
+                                              [string] [choices: "error", "warning", "info", "hint"]
+      --goal-reviewer                 Goal independent review acceptance threshold
+                                                         [string] [choices: "high", "medium", "low"]
+      --goal-code-ref                 code reference for Goal diagnostics and review (repeat, at
+                                      most 32)                                               [array]
+      --goal-plan                     require the standard workspace goal+plan.md as the Goal source
+                                                                                           [boolean]
   -c, --continue                      continue the last session                            [boolean]
   -s, --session                       session id to continue                                [string]
       --fork                          fork the session before continuing (requires --continue or
