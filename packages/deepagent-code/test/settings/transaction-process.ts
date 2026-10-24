@@ -87,7 +87,12 @@ const result =
 const error = Exit.isFailure(result) ? Cause.squash(result.cause) : undefined
 await fs.writeFile(
   path.join(root, `child-result-${process.pid}.json`),
-  JSON.stringify({ ok: Exit.isSuccess(result), error: error instanceof Error ? error.message : undefined, writes }),
+  JSON.stringify({
+    ok: Exit.isSuccess(result),
+    error: error instanceof Error ? error.message : undefined,
+    stack: error instanceof Error ? error.stack : undefined,
+    writes,
+  }),
   { mode: 0o600 },
 )
 process.exit(Exit.isSuccess(result) ? 0 : 1)
