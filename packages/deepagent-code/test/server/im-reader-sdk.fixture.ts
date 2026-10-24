@@ -16,7 +16,9 @@ import type { InstanceContext } from "@/project/instance-context"
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex")
 interface Conversation { projectionKey: string; type: 1 | 2; target: string; name: string; revision: number; cursor: number; read: number; allowed: boolean; messages: DeliveryReadMessage[] }
-export const make = () => {
+export const make = (options?: { version?: 1 | 2; userID?: string }) => {
+  const version = options?.version ?? 1
+  const userID = options?.userID ?? "uuid-alice"
   const scopeKey = hash("controlled-sdk:appkey_1:org7:uuid-alice")
   const conversations = new Map<string, Conversation>()
   const readCutRefusal = { remaining: 0 }
@@ -38,7 +40,7 @@ export const make = () => {
     const now = Date.now()
     const cursor = String(item.messages.length + 1)
     const messageID = outgoing?.messageID ?? `sdk-incoming-${item.projectionKey.slice(0, 12)}-${cursor}`
-    item.messages.push({ effectKey: hash(`${scopeKey}:${item.projectionKey}:${messageID}`), messageId: messageID, sequence: cursor, deliveryCursor: cursor, messageTime: now, expiresAt: outgoing?.expiresAt ?? now + 600000, senderId: outgoing ? "uuid-alice" : target, targetId: target, conversationType: type, content: JSON.stringify({ content: text }), isSend: Boolean(outgoing), isRead: Boolean(outgoing) })
+    item.messages.push({ effectKey: hash(`${scopeKey}:${item.projectionKey}:${messageID}`), messageId: messageID, sequence: cursor, deliveryCursor: cursor, messageTime: now, expiresAt: outgoing?.expiresAt ?? now + 600000, senderId: outgoing ? userID : target, targetId: target, conversationType: type, content: JSON.stringify({ content: text }), isSend: Boolean(outgoing), isRead: Boolean(outgoing) })
     changed(item)
     return item
   }
@@ -50,7 +52,7 @@ export const make = () => {
   }
   const cut = (request: DeliveryProjectionRequest) => {
     const item = requireProjection(request)
-    return { ...request, throughOrdinal: String(item.messages.length), targetAdmittedOrdinal: String(item.messages.length), readOrdinal: String(item.read), liveUnread: String(item.messages.filter((message) => !message.isSend && Number(message.sequence) > item.read).length), storedUnread: String(item.messages.filter((message) => !message.isSend && Number(message.sequence) > item.read).length), serverNow: Date.now(), complete: true }
+    return { ...request, throughOrdinal: String(item.messages.length), targetAdmittedOrdinal: String(item.messages.length), readOrdinal: String(item.read), liveUnread: String(item.messages.filter((message) => !message.isSend && Number(message.sequence) > item.read).length), storedUnread: String(item.messages.filter((message) => !message.isSend && Number(message.sequence) > item.read).length), serverNow: Date.now(), complete: version === 1 || item.read >= item.messages.length }
   }
   const native = <A>(operation: string, run: () => PromiseLike<A>) => Effect.suspend(() => {
     observed.active++
@@ -63,7 +65,7 @@ export const make = () => {
     disconnect: Effect.void,
     fetchHistory: () => Effect.fail(new KernelSdk.KernelError({ operation: "fetchHistory", message: "Retired reader API was called" })),
     fetchConversations: () => Effect.fail(new KernelSdk.KernelError({ operation: "fetchConversations", message: "Retired reader API was called" })),
-    getDeliveryReader: () => native("getDeliveryReader", () => Promise.resolve({ version: 1 as const, scopeKey, currentCursor: String(observed.cursor), serverNow: Date.now(), maxPageItems: 32 as const, maxChangeBytes: 65536 as const, maxMessageBytes: 4194304 as const, maxWindowPages: 100000 as const })),
+    getDeliveryReader: () => native("getDeliveryReader", () => Promise.resolve({ version, ...(version === 2 ? { outputProofAvailable: true } : {}), scopeKey, currentCursor: String(observed.cursor), serverNow: Date.now(), maxPageItems: 32 as const, maxChangeBytes: 65536 as const, maxMessageBytes: 4194304 as const, maxWindowPages: 100000 as const })),
     getDeliveryChanges: (input) => native("getDeliveryChanges", () => {
       if (input.scopeKey !== scopeKey) return Promise.reject({ kind: "denied" })
       const items: DeliveryConversationChange[] = Array.from(conversations.values()).filter((item) => item.revision > 0 && item.cursor > Number(input.after)).sort((a, b) => a.cursor - b.cursor).map((item) => {
@@ -72,13 +74,24 @@ export const make = () => {
         const latest = item.messages.at(-1)
         return { ...identity, visibility: "visible", conversationType: item.type, targetId: item.target, admittedOrdinal: String(item.messages.length), readOrdinal: String(item.read), liveUnread: String(item.messages.filter((message) => !message.isSend && Number(message.sequence) > item.read).length), storedUnread: String(item.messages.filter((message) => !message.isSend && Number(message.sequence) > item.read).length), nextExpiryAt: Math.min(...item.messages.map((message) => message.expiresAt)), latestMessageId: latest?.messageId ?? "", latestSequence: latest?.sequence ?? "", latestMessageTime: latest?.messageTime ?? 0 }
       })
-      return Promise.resolve({ version: 1 as const, scopeKey, after: input.after, upper: String(observed.cursor), scanCursor: String(observed.cursor), scanProjectionKey: items.at(-1)?.projectionKey ?? "", pageToken: "", windowComplete: true, caughtUp: true, serverNow: Date.now(), items })
+      return Promise.resolve({ version, scopeKey, after: input.after, upper: String(observed.cursor), scanCursor: String(observed.cursor), scanProjectionKey: items.at(-1)?.projectionKey ?? "", pageToken: "", windowComplete: true, caughtUp: true, serverNow: Date.now(), items })
     }),
     getDeliveryMessages: (input) => native("getDeliveryMessages", () => {
       const item = requireProjection(input)
       const anchor = input.anchorDeliveryCursor === undefined ? input.direction === "older" ? Infinity : 0 : Number(input.anchorDeliveryCursor)
-      const items = item.messages.filter((message) => input.direction === "newer" ? Number(message.deliveryCursor) > anchor : Number(message.deliveryCursor) < anchor).sort((a, b) => input.direction === "newer" ? Number(a.deliveryCursor) - Number(b.deliveryCursor) : Number(b.deliveryCursor) - Number(a.deliveryCursor)).slice(0, input.limit).map((message) => ({ ...message, isRead: message.isSend || Number(message.sequence) <= item.read }))
-      return Promise.resolve({ version: 1 as const, scopeKey, projectionKey: input.projectionKey, projectionRevision: input.projectionRevision, direction: input.direction, nextDeliveryCursor: items.at(-1)?.deliveryCursor ?? input.anchorDeliveryCursor ?? "0", finished: true, serverNow: Date.now(), items })
+      const items = item.messages.filter((message) => input.direction === "newer" ? Number(message.deliveryCursor) > anchor : Number(message.deliveryCursor) < anchor).sort((a, b) => input.direction === "newer" ? Number(a.deliveryCursor) - Number(b.deliveryCursor) : Number(b.deliveryCursor) - Number(a.deliveryCursor)).slice(0, input.limit).map((message) => ({ ...message, ...(version === 2 ? { messageType: "jg:text" as const } : {}), isRead: message.isSend || Number(message.sequence) <= item.read }))
+      return Promise.resolve({ version, scopeKey, projectionKey: input.projectionKey, projectionRevision: input.projectionRevision, direction: input.direction, nextDeliveryCursor: items.at(-1)?.deliveryCursor ?? input.anchorDeliveryCursor ?? "0", finished: true, serverNow: Date.now(), items })
+    }),
+    getDeliveryOutputProof: (input) => native("getDeliveryOutputProof", () => {
+      if (version !== 2 || input.scopeKey !== scopeKey) return Promise.reject({ kind: "denied" })
+      const serverNow = Date.now()
+      return Promise.resolve({ version: 2 as const, scopeKey, serverNow, rows: input.rows.map((row) => {
+        if (row.kind === "pending") {
+          if (!conversation(row.conversationType, row.conversationID).allowed) throw { kind: "denied", wireCode: 1002 }
+          return row
+        }
+        return { kind: "visible" as const, cut: { ...cut({ ...row, version: 2, scopeKey }), serverNow } }
+      }) })
     }),
     getDeliveryReadCut: (input) => native("getDeliveryReadCut", () => {
       if (readCutRefusal.remaining > 0) {
@@ -117,7 +130,7 @@ export const make = () => {
     const delayed = connection.next
     connection.next = undefined
     return Layer.effect(IMKernelSync.Service, Effect.gen(function* () {
-      if (config.appkey !== "appkey_1" || config.identity?.orgID !== 7 || config.userID !== "uuid-alice") return yield* Effect.die("Controlled SDK credential generation mismatch")
+      if (config.appkey !== "appkey_1" || config.identity?.orgID !== 7 || config.userID !== userID) return yield* Effect.die("Controlled SDK credential generation mismatch")
       observed.factories++
       observed.database = yield* Database.Service
       observed.repository = yield* IMRepository

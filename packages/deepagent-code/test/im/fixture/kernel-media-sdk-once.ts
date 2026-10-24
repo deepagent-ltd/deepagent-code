@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import { randomUUID, createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { Schema } from "effect"
+import os from "node:os"
+import { Option, Schema } from "effect"
 import { createDeepAgentCodeClient } from "@deepagent-code/sdk/client"
 
 const Descriptor = Schema.Struct({
@@ -16,11 +17,11 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
 /** The CLI has exactly one producer. Every HTTP result is the generated SDK's
  * original result; fixed diagnostic output never includes an error payload. */
 export async function run(input: Input, root: string, attachments: 1 | 4 = 4) {
-  assert(root.startsWith("/tmp/dac-im-media-product-"))
+  assert(root.startsWith("/tmp/dac-im-media-product-") || root.startsWith(path.join(os.tmpdir(), "dac-im-media-product-lanes-")))
   assert(new URL(input.peers.A.url).hostname === "127.0.0.1")
-  assert(input.peers.A.directory.startsWith(root + "/A/"))
-  assert(input.peers.A.authorizationFile.startsWith(root + "/A/"))
-  assert(input.files.length === attachments && input.files.every((file) => file.path.startsWith(root + "/files/")))
+  assert(input.peers.A.directory.startsWith(path.join(root, "A") + path.sep))
+  assert(input.peers.A.authorizationFile.startsWith(path.join(root, "A") + path.sep))
+  assert(input.files.length === attachments && input.files.every((file) => file.path.startsWith(path.join(root, "files") + path.sep)))
   const auth = await Bun.file(input.peers.A.authorizationFile).text()
   assert(auth.startsWith("Basic ") && !auth.includes("\n"))
   const facts: object[] = []
@@ -40,7 +41,9 @@ export async function run(input: Input, root: string, attachments: 1 | 4 = 4) {
     const response = await client.im.attachments.upload({ directory: input.peers.A.directory, groupId: input.groups.A.id, file: new File([bytes], file.filename, { type: file.mime }) },
       { responseStyle: "fields", throwOnError: false, signal: AbortSignal.timeout(120000) })
     facts.push({ stage: "upload", index, status: response.response?.status ?? 0, expectedBytes: file.bytes, success: !!response.data, at: Date.now() })
-    assert(response.response?.status === 200 && response.data && response.data.sizeBytes === file.bytes)
+    const refusal = Schema.decodeUnknownOption(Schema.Struct({ name: Schema.optional(Schema.String), data: Schema.optional(Schema.Struct({ code: Schema.optional(Schema.String) })) }))(response.error)
+    assert(response.response?.status === 200 && response.data && response.data.sizeBytes === file.bytes,
+      JSON.stringify({ stage: "owned-sdk-upload", status: response.response?.status ?? 0, ...(Option.isSome(refusal) ? { name: refusal.value.name, code: refusal.value.data?.code } : {}) }))
     ids.push(response.data.id)
     await fs.writeFile(path.join(root, "cli-safe.json"), JSON.stringify({ facts, sendCalls: 0 }, null, 2), { mode: 0o600 })
   }

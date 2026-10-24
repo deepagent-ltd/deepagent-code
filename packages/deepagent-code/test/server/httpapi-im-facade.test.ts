@@ -1,146 +1,184 @@
-// B2 门面 HTTP 端点的端到端测试：真实 server 栈（HttpApiApp.routes 全图，含真 IMFacade 层）+
-// 一个假 new-api 门面（plain node http server，beforeAll 起在 127.0.0.1 随机端口）。
-//
-// 拓扑说明（非显而易见处）：
-// - 门面坐标走 env（DEEPAGENT_IM_FACADE_URL/KEY），IMFacade 层在 route graph 构建时读取——
-//   所以 env 必须在 per-test 图层构建之前就位（beforeAll/嵌套 beforeEach，与 httpapi-im-b3 的
-//   flag 模式同理）。
-// - 假门面的行为由模块级 `facadeBehavior` 可变引用驱动：boot exchange 在图层构建期发生，
-//   各 describe 在自己的 beforeEach 里先选好行为模式。
-// - "disabled" 用例需要 env 缺席——嵌套 beforeEach 在图层构建前删掉 env，afterEach 恢复。
-// - rebind 故意不在 HTTP 层测（成功路径会写真 auth.json；门面单测 test/im/im-facade.test.ts
-//   已用内存 Auth 覆盖持久化语义）。
-
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect } from "bun:test"
+// The full HTTP graph uses an owned DeviceStore and real HTTPS/DPoP transport.
+// The controlled platform implements current activation/login; it is not Native qualification.
+import { afterEach, beforeEach, describe, expect } from "bun:test"
+import path from "node:path"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
-import { Config, ConfigProvider, Effect, Layer } from "effect"
+import { ConfigProvider, Effect, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
-import Http from "node:http"
 import { Workspace } from "../../src/control-plane/workspace"
 import { InstanceBootstrap } from "../../src/project/bootstrap"
 import { InstanceStore } from "../../src/project/instance-store"
 import { Project } from "../../src/project/project"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { Session } from "@/session/session"
+import { IMDeviceStore } from "@/im/device-store"
+import { SecretStore } from "@/mcp/secret-store"
 import { Database } from "@deepagent-code/core/database/database"
 import { init } from "@deepagent-code/core/util/log"
 import { sql } from "drizzle-orm"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { IMDeviceRuntimeFixture } from "./im-device-runtime.fixture"
+import { IMReaderSDKFixture } from "./im-reader-sdk.fixture"
 
 void init({ print: false })
 
-// ── 假门面（new-api /api/im/*）─────────────────────────────────────────────────
-
-type FacadeReply = { status: number; body: unknown }
-
-const ok = (data: unknown): FacadeReply => ({ status: 200, body: { success: true, message: "", data } })
-const fail = (code: string, message: string, status: number): FacadeReply => ({
-  status,
-  body: { success: false, code, message },
-})
-
-const payload = (name = "alice", uuid = "uuid-alice") => ({
-  kernel_token: `kt_${uuid}`,
-  navigator_url: "http://127.0.0.1:9002",
-  appkey: "appkey_1",
-  identity: { uuid, name, org_id: 7, org_all_group_id: "org7" },
-  ttl: { msg_life_time_ms: 259200000 },
-})
-
-type FacadeMode = "active" | "unclaimed" | "name_taken"
+type FacadeMode = "active" | "unclaimed" | "name_taken" | "disabled" | "outage" | "recoverable"
 let facadeMode: FacadeMode = "active"
-let lastClaimBody: unknown
+let lastNameBody: unknown
 let platformMutations = 0
-
-const facadeBehavior = (req: { method: string; pathname: string; query: URLSearchParams; body?: unknown }): FacadeReply => {
-  if (req.pathname === "/api/im/exchange") {
-    if (facadeMode === "active") return ok(payload())
-    return fail("im_not_claimed", "im identity not claimed for this key", 409)
-  }
-  if (req.pathname === "/api/im/claim") {
-    lastClaimBody = req.body
-    if (facadeMode === "name_taken") return fail("im_name_taken", "name taken in org", 409)
-    return ok(payload("bob", "uuid-bob"))
-  }
-  if (req.pathname === "/api/im/resolve") {
-    const name = req.query.get("name")
-    if (name === "bob") return ok({ uuid: "uuid-bob", name: "bob" })
-    return fail("im_not_found", "no such name in org", 404)
-  }
-  if (req.pathname === "/api/im/groups") {
-    platformMutations++
-    const body = req.body as { name: string; member_names: string[] }
-    return ok({ group_id: "kg1", name: body.name, member_uuids: body.member_names.map((n) => `uuid-${n}`) })
-  }
-  if (req.pathname === "/api/im/groups/invite") { platformMutations++; return ok({}) }
-  return fail("http_error", `unexpected ${req.pathname}`, 500)
-}
-
-let facadeServer: Http.Server | undefined
-let facadeURL = ""
-const originalFacadeURL = process.env.DEEPAGENT_IM_FACADE_URL
-const originalFacadeKey = process.env.DEEPAGENT_IM_FACADE_KEY
-
-beforeAll(async () => {
-  facadeServer = Http.createServer((req, res) => {
-    const chunks: Buffer[] = []
-    req.on("data", (chunk) => chunks.push(chunk))
-    req.on("end", () => {
-      const url = new URL(req.url ?? "/", "http://localhost")
-      const raw = Buffer.concat(chunks).toString("utf8")
-      const reply = facadeBehavior({
-        method: req.method ?? "GET",
-        pathname: url.pathname,
-        query: url.searchParams,
-        body: raw ? JSON.parse(raw) : undefined,
-      })
-      res.writeHead(reply.status, { "content-type": "application/json" })
-      res.end(JSON.stringify(reply.body))
-    })
-  })
-  await new Promise<void>((resolve) => facadeServer!.listen(0, "127.0.0.1", resolve))
-  const address = facadeServer.address()
-  if (!address || typeof address === "string") throw new Error("facade stub has no address")
-  facadeURL = `http://127.0.0.1:${address.port}`
-  process.env.DEEPAGENT_IM_FACADE_URL = facadeURL
-  process.env.DEEPAGENT_IM_FACADE_KEY = "sk-test"
-})
-
-afterAll(async () => {
-  if (originalFacadeURL === undefined) delete process.env.DEEPAGENT_IM_FACADE_URL
-  else process.env.DEEPAGENT_IM_FACADE_URL = originalFacadeURL
-  if (originalFacadeKey === undefined) delete process.env.DEEPAGENT_IM_FACADE_KEY
-  else process.env.DEEPAGENT_IM_FACADE_KEY = originalFacadeKey
-  await new Promise<void>((resolve) => facadeServer?.close(() => resolve()))
-})
-
-// ── 真实 server 栈（与 httpapi-im-b3 同一 harness）─────────────────────────────
+let activationPurchases = 0
 
 const workspaceLayer = Workspace.defaultLayer.pipe(
   Layer.provide(InstanceStore.defaultLayer),
   Layer.provide(InstanceBootstrap.defaultLayer),
 )
 const instanceStoreLayer = InstanceStore.defaultLayer.pipe(
-  Layer.provide(
-    Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void })),
-  ),
+  Layer.provide(Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))),
 )
-const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
-  HttpApiApp.routes,
-  { disableListenLog: true, disableLogger: true },
+const servedRoutes: Layer.Layer<never, unknown, HttpServer.HttpServer> = Layer.unwrap(
+  Effect.gen(function* () {
+    const directory = yield* tmpdirScoped({ git: false })
+    const name = { value: "alice" }
+    const uuid = "a".repeat(32)
+    const platform =
+      facadeMode === "disabled"
+        ? undefined
+        : yield* IMDeviceRuntimeFixture.make({
+            directory: path.join(directory, "platform"),
+            uuid,
+            bound: facadeMode !== "unclaimed",
+            async fetch(request, identity) {
+              const url = new URL(request.url)
+              const body = request.method === "POST" ? await request.json() : undefined
+              const ok = (data: unknown) => Response.json({ success: true, message: "", data })
+              const legacy = () => ({
+                kernel_token: "daim2.facade-fixture",
+                navigator_url: "https://127.0.0.1:9",
+                appkey: "appkey_1",
+                identity: { uuid, name: name.value, org_id: 7, org_all_group_id: "org7" },
+                ttl: { msg_life_time_ms: 259200000 },
+                device: {
+                  profile: "dac-im-device-v1",
+                  entitlementID: "e".repeat(32),
+                  deviceJkt: identity.jkt,
+                  bindingVersion: 1,
+                  credentialGeneration: 1,
+                  socketAudience: "wss://127.0.0.1:9/im",
+                },
+              })
+              if (url.pathname === "/api/im/login" && facadeMode === "outage")
+                return Response.json(
+                  { success: false, code: "im_unavailable", message: "Controlled platform outage" },
+                  { status: 503 },
+                )
+              if (url.pathname === "/api/im/login")
+                return ok({
+                  profile: "dac-im-device-v1",
+                  entitlementID: "e".repeat(32),
+                  deviceJkt: identity.jkt,
+                  bindingVersion: 1,
+                  identity: legacy().identity,
+                  kernel: {
+                    appkey: "appkey_1",
+                    navigator: "https://127.0.0.1:9",
+                    socket_audience: "wss://127.0.0.1:9/im",
+                    token: "daim2.facade-fixture",
+                    user_id: uuid,
+                    credential_expires_at: Math.floor(Date.now() / 1000) + 3600,
+                    credential_generation: 1,
+                    device_profile: "dac-im-device-v1",
+                  },
+                })
+              if (url.pathname === "/api/im/activation/quote")
+                return ok({
+                  quoteID: "owned-quote",
+                  priceCredits: 1,
+                  quotaCost: 1,
+                  expiresAt: Date.now() + 60000,
+                  entitlementExpiresAt: null,
+                })
+              if (url.pathname === "/api/im/activation") {
+                activationPurchases++
+                name.value = body.name
+                return ok({
+                  profile: "dac-im-device-v1",
+                  transactionID: body.transactionID,
+                  method: body.method,
+                  state: "succeeded",
+                  chargedCredits: 1,
+                  entitlementExpiresAt: null,
+                  entitlementID: "e".repeat(32),
+                  deviceJkt: identity.jkt,
+                  bindingVersion: 1,
+                  imCredential: `iml2.${"a".repeat(64)}`,
+                  identity: legacy().identity,
+                })
+              }
+              if (url.pathname === "/api/im/rename") {
+                lastNameBody = body
+                if (facadeMode === "name_taken")
+                  return Response.json(
+                    { success: false, code: "im_name_taken", message: "name taken in org" },
+                    { status: 409 },
+                  )
+                name.value = body.name
+                return ok(legacy())
+              }
+              if (url.pathname === "/api/im/resolve")
+                return url.searchParams.get("name") === "bob"
+                  ? ok({ uuid: "uuid-bob", name: "bob" })
+                  : Response.json(
+                      { success: false, code: "im_not_found", message: "no such name in org" },
+                      { status: 404 },
+                    )
+              if (url.pathname === "/api/im/groups") {
+                platformMutations++
+                return ok({
+                  group_id: "kg1",
+                  name: body.name,
+                  member_uuids: body.member_names.map((value: string) => `uuid-${value}`),
+                })
+              }
+              if (url.pathname === "/api/im/groups/invite") {
+                platformMutations++
+                return ok({})
+              }
+              return Response.json(
+                { success: false, code: "http_error", message: "Unexpected controlled platform path" },
+                { status: 500 },
+              )
+            },
+          })
+    yield* IMDeviceRuntimeFixture.profile(platform?.url ?? null)
+    const device =
+      platform?.deviceLayer ??
+      Layer.succeed(
+        IMDeviceStore.Service,
+        IMDeviceStore.make({
+          directory: path.join(directory, "device"),
+          backend: SecretStore.fileBackend(path.join(directory, "custody.json")),
+        }),
+      )
+    const sdk =
+      facadeMode === "outage" || facadeMode === "recoverable"
+        ? IMReaderSDKFixture.make({ version: 2, userID: uuid })
+        : undefined
+    const runtime = HttpApiApp.createIMRuntimeLayer({ env: {}, buildEngine: sdk?.buildEngine }, device)
+    const imRuntime = platform ? runtime.pipe(Layer.provide(platform.httpLayer)) : runtime
+    return HttpRouter.serve(HttpApiApp.createRoutes(undefined, undefined, { imRuntime }), {
+      disableListenLog: true,
+      disableLogger: true,
+    }).pipe(Layer.provide(layerWebSocketConstructorGlobal))
+  }),
 )
 const httpApiLayer = servedRoutes.pipe(
-  Layer.provide(layerWebSocketConstructorGlobal),
   Layer.provideMerge(NodeHttpServer.layerTest),
   Layer.provideMerge(NodeServices.layer),
 )
-
-// 同 b3：env 在 per-test 图层构建时读取，ConfigProvider 必须每次构建重新快照 live env。
 const freshEnvProvider = Layer.suspend(() => ConfigProvider.layer(ConfigProvider.fromEnv()))
-
 const it = testEffect(
   Layer.mergeAll(
     instanceStoreLayer,
@@ -191,18 +229,17 @@ interface StatusBody {
 }
 
 afterEach(async () => {
-  process.env.DEEPAGENT_IM_FACADE_URL = facadeURL
-  process.env.DEEPAGENT_IM_FACADE_KEY = "sk-test"
   facadeMode = "active"
+  activationPurchases = 0
+  lastNameBody = undefined
   await disposeAllInstances()
   await resetDatabase()
 })
 
 describe("IM B2 facade HttpApi", () => {
-  describe("facade unconfigured (env removed before the layer builds)", () => {
+  describe("facade explicitly disabled in the global profile", () => {
     beforeEach(() => {
-      delete process.env.DEEPAGENT_IM_FACADE_URL
-      delete process.env.DEEPAGENT_IM_FACADE_KEY
+      facadeMode = "disabled"
     })
 
     it.live("plans and entitlement GET routes expose unknown without bootstrapping an identity or mutation", () =>
@@ -237,47 +274,78 @@ describe("IM B2 facade HttpApi", () => {
     )
   })
 
-  describe("unclaimed key → claim flow", () => {
+  describe("explicit device activation and retired claim boundary", () => {
     beforeEach(() => {
       facadeMode = "unclaimed"
     })
 
-    it.live("boot 409 lands claim_required; claim normalizes the name while the unreachable reader remains unavailable", () =>
-      Effect.gen(function* () {
-        const directory = yield* tmpdirScoped({ git: true })
-        const q = `directory=${encodeURIComponent(directory)}`
-
-        const boot = yield* requestJson<StatusBody>(`/api/v1/im/status?${q}`)
-        expect(boot.facade).toBe("claim_required")
-
-        // 重名：409 + 业务码透传
-        facadeMode = "name_taken"
-        const taken = yield* requestRaw(`/api/v1/im/facade/claim?${q}`, post({ name: "alice" }))
-        expect(taken.status).toBe(409)
-        expect(taken.body).toMatchObject({ data: { code: "im_name_taken" } })
-        const stillUnclaimed = yield* requestJson<StatusBody>(`/api/v1/im/status?${q}`)
-        expect(stillUnclaimed.facade).toBe("claim_required")
-
-        // 换名成功：归一化（全半角+大小写折叠+trim）后发送；状态进 active
-        facadeMode = "unclaimed"
-        const identity = yield* requestJson<{ uuid: string; name: string; orgID: number; orgAllGroupID: string }>(
-          `/api/v1/im/facade/claim?${q}`,
-          post({ name: " Ｂｏｂ " }),
-        )
-        expect(identity).toEqual({ uuid: "uuid-bob", name: "bob", orgID: 7, orgAllGroupID: "org7" })
-        expect(lastClaimBody).toEqual({ name: "bob" })
-
-        expect(yield* requestRaw(`/api/v1/im/status?${q}`)).toMatchObject({ status: 503, body: { name: "IM_READER_UNAVAILABLE", data: { code: "reader_unavailable", operation: "current" } } })
-      }),
+    it.live(
+      "explicit activation stores the original device login; retired claim stays denied and rename normalizes names",
+      () =>
+        Effect.gen(function* () {
+          const directory = yield* tmpdirScoped({ git: true })
+          const q = `directory=${encodeURIComponent(directory)}`
+          expect(yield* requestRaw(`/api/v1/im/status?${q}`)).toMatchObject({
+            status: 200,
+            body: { facade: "blocked", blocked: { code: "im_activation_required" } },
+          })
+          const quote = yield* requestJson<{ quoteID: string }>(`/api/v1/im/activation/quote?${q}`)
+          const activated = yield* requestRaw(
+            `/api/v1/im/activation?${q}`,
+            post({
+              transactionID: "owned_activation_0001",
+              name: "alice",
+              method: "api_key",
+              credential: "sk-owned-fixture",
+              quoteID: quote.quoteID,
+            }),
+          )
+          expect(activated).toMatchObject({
+            status: 200,
+            body: { state: "succeeded", chargedCredits: 1, credentialStored: true },
+          })
+          expect(activationPurchases).toBe(1)
+          const retired = yield* requestRaw(`/api/v1/im/facade/claim?${q}`, post({ name: "bob" }))
+          expect(retired).toMatchObject({ status: 409, body: { data: { code: "im_activation_required" } } })
+          facadeMode = "name_taken"
+          const taken = yield* requestRaw(`/api/v1/im/facade/rename?${q}`, post({ name: "bob" }))
+          expect(taken).toMatchObject({ status: 409, body: { data: { code: "im_name_taken" } } })
+          facadeMode = "active"
+          const renamed = yield* requestJson<{ uuid: string; name: string }>(
+            `/api/v1/im/facade/rename?${q}`,
+            post({ name: " Ｂｏｂ " }),
+          )
+          expect(renamed).toMatchObject({ uuid: "a".repeat(32), name: "bob" })
+          expect(lastNameBody).toEqual({ name: "bob" })
+          expect(activationPurchases).toBe(1)
+          expect(yield* requestRaw(`/api/v1/im/status?${q}`)).toMatchObject({
+            status: 503,
+            body: { name: "IM_READER_UNAVAILABLE", data: { code: "reader_unavailable", operation: "current" } },
+          })
+        }),
     )
 
-    it.live("local name-rule violations fail 400 without touching the facade", () =>
+    it.live("local activation name-rule violations fail 400 without touching the platform", () =>
       Effect.gen(function* () {
         const directory = yield* tmpdirScoped({ git: true })
         const q = `directory=${encodeURIComponent(directory)}`
-        const result = yield* requestRaw(`/api/v1/im/facade/claim?${q}`, post({ name: "bad name!" }))
-        expect(result.status).toBe(400)
-        expect(result.body).toMatchObject({ data: { code: "im_invalid_name" } })
+        const before = activationPurchases
+        const result = yield* requestRaw(
+          `/api/v1/im/activation?${q}`,
+          post({
+            transactionID: "owned_invalid_name_01",
+            name: "bad name!",
+            method: "api_key",
+            credential: "sk-owned-fixture",
+            quoteID: "owned-quote",
+          }),
+        )
+        expect(result).toMatchObject({
+          status: 400,
+          body: { name: "IM_FACADE_BAD_REQUEST", data: { code: "im_activation_invalid" } },
+        })
+        expect(activationPurchases).toBe(before)
+        expect(platformMutations).toBe(0)
       }),
     )
   })
@@ -288,51 +356,84 @@ describe("IM B2 facade HttpApi", () => {
       platformMutations = 0
     })
 
-    it.live("boot exchange permits directory resolve with a normalized name while the unreachable reader fails current status", () =>
-      Effect.gen(function* () {
-        const directory = yield* tmpdirScoped({ git: true })
-        const q = `directory=${encodeURIComponent(directory)}`
+    it.live(
+      "boot exchange permits directory resolve with a normalized name while the unreachable reader fails current status",
+      () =>
+        Effect.gen(function* () {
+          const directory = yield* tmpdirScoped({ git: true })
+          const q = `directory=${encodeURIComponent(directory)}`
 
-        expect(yield* requestRaw(`/api/v1/im/status?${q}`)).toMatchObject({ status: 503, body: { name: "IM_READER_UNAVAILABLE", data: { code: "reader_unavailable", operation: "current" } } })
+          expect(yield* requestRaw(`/api/v1/im/status?${q}`)).toMatchObject({
+            status: 503,
+            body: { name: "IM_READER_UNAVAILABLE", data: { code: "reader_unavailable", operation: "current" } },
+          })
 
-        const resolved = yield* requestJson<{ uuid: string; name: string }>(
-          `/api/v1/im/facade/resolve?${q}&name=${encodeURIComponent(" Ｂｏｂ ")}`,
-        )
-        expect(resolved).toEqual({ uuid: "uuid-bob", name: "bob" })
+          const resolved = yield* requestJson<{ uuid: string; name: string }>(
+            `/api/v1/im/facade/resolve?${q}&name=${encodeURIComponent(" Ｂｏｂ ")}`,
+          )
+          expect(resolved).toEqual({ uuid: "uuid-bob", name: "bob" })
 
-        const missing = yield* requestRaw(`/api/v1/im/facade/resolve?${q}&name=nobody`)
-        expect(missing.status).toBe(404)
-        expect(missing.body).toMatchObject({ data: { code: "im_not_found" } })
-      }),
+          const missing = yield* requestRaw(`/api/v1/im/facade/resolve?${q}&name=nobody`)
+          expect(missing.status).toBe(404)
+          expect(missing.body).toMatchObject({ data: { code: "im_not_found" } })
+        }),
     )
 
-    it.live("an unreachable protected reader rejects direct, group and invite before platform mutation or local projection", () =>
-      Effect.gen(function* () {
-        const directory = yield* tmpdirScoped({ git: false })
-        const q = `directory=${encodeURIComponent(directory)}`
-        for (const [path, body] of [
-          ["/api/v1/im/facade/direct", { name: "bob" }],
-          ["/api/v1/im/facade/groups", { name: "设计群", memberNames: ["bob"] }],
-          ["/api/v1/im/facade/groups/no-protected-group/invite", { name: "bob" }],
-        ] as const) {
-          expect(yield* requestRaw(`${path}?${q}`, post(body))).toMatchObject({ status: 502, body: { name: "IM_FACADE_UNAVAILABLE", data: { code: "im_unavailable" } } })
-        }
-        expect(platformMutations).toBe(0)
-        const db = (yield* Database.Service).db
-        expect((yield* db.get<{ count: number }>(sql`SELECT count(*) AS count FROM im_groups WHERE kernel_conv_id IS NOT NULL`))?.count).toBe(0)
-        expect((yield* db.get<{ count: number }>(sql`SELECT count(*) AS count FROM im_kernel_reader_message`))?.count).toBe(0)
-        expect((yield* db.get<{ count: number }>(sql`SELECT count(*) AS count FROM im_kernel_reader_read_intent`))?.count).toBe(0)
-      }),
+    it.live(
+      "an unreachable protected reader rejects direct, group and invite before platform mutation or local projection",
+      () =>
+        Effect.gen(function* () {
+          const directory = yield* tmpdirScoped({ git: false })
+          const q = `directory=${encodeURIComponent(directory)}`
+          for (const [path, body] of [
+            ["/api/v1/im/facade/direct", { name: "bob" }],
+            ["/api/v1/im/facade/groups", { name: "设计群", memberNames: ["bob"] }],
+            ["/api/v1/im/facade/groups/no-protected-group/invite", { name: "bob" }],
+          ] as const) {
+            expect(yield* requestRaw(`${path}?${q}`, post(body))).toMatchObject({
+              status: 502,
+              body: { name: "IM_FACADE_UNAVAILABLE", data: { code: "im_unavailable" } },
+            })
+          }
+          expect(platformMutations).toBe(0)
+          const db = (yield* Database.Service).db
+          expect(
+            (yield* db.get<{ count: number }>(
+              sql`SELECT count(*) AS count FROM im_groups WHERE kernel_conv_id IS NOT NULL`,
+            ))?.count,
+          ).toBe(0)
+          expect(
+            (yield* db.get<{ count: number }>(sql`SELECT count(*) AS count FROM im_kernel_reader_message`))?.count,
+          ).toBe(0)
+          expect(
+            (yield* db.get<{ count: number }>(sql`SELECT count(*) AS count FROM im_kernel_reader_read_intent`))?.count,
+          ).toBe(0)
+        }),
     )
 
-    it.live("retry after a facade outage recovers to active (engine hot-start path)", () =>
-      Effect.gen(function* () {
-        const directory = yield* tmpdirScoped({ git: true })
-        const q = `directory=${encodeURIComponent(directory)}`
-        // boot 已 active；retry 幂等再换一轮坐标。
-        const identity = yield* requestJson<{ name: string }>(`/api/v1/im/facade/retry?${q}`, post({}))
-        expect(identity.name).toBe("alice")
-      }),
-    )
+    describe("controlled platform recovery", () => {
+      beforeEach(() => {
+        facadeMode = "outage"
+      })
+      it.live("retry after a facade outage recovers the actual connected protected reader", () =>
+        Effect.gen(function* () {
+          const directory = yield* tmpdirScoped({ git: true })
+          const q = `directory=${encodeURIComponent(directory)}`
+          expect(yield* requestRaw(`/api/v1/im/status?${q}`)).toMatchObject({
+            status: 200,
+            body: { facade: "blocked", blocked: { code: "im_unavailable" } },
+          })
+          facadeMode = "recoverable"
+          const identity = yield* requestJson<{ name: string }>(`/api/v1/im/facade/retry?${q}`, post({}))
+          expect(identity.name).toBe("alice")
+          expect(yield* requestRaw(`/api/v1/im/status?${q}`)).toMatchObject({
+            status: 200,
+            body: { facade: "active", identity: { name: "alice" }, kernel: "connected" },
+          })
+          const db = (yield* Database.Service).db
+          expect((yield* db.get<{ count: number }>(sql`SELECT COUNT(*) AS count FROM session_input`))?.count).toBe(0)
+        }),
+      )
+    })
   })
 })
