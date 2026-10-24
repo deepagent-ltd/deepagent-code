@@ -9,7 +9,7 @@ import {
   OrchestrationSchemas,
   type OrchestrationSchemaName,
 } from "../deepagent/orchestration"
-import { PermissionV2 } from "../permission"
+import { PermissionPolicy } from "../permission/policy"
 import type { PermissionSchema } from "../permission/schema"
 import type { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
@@ -126,7 +126,7 @@ export const inheritedTaskPermissions = (
   ...parentSession.flatMap((rule) => {
     if (rule.effect !== "allow") return [{ action: rule.action, resource: rule.resource, effect: "deny" as const }]
     if (rule.action.includes("*")) return []
-    return PermissionV2.evaluate(rule.action, rule.resource, subagent).effect === "allow" ? [rule] : []
+    return PermissionPolicy.evaluate(rule.action, rule.resource, subagent).effect === "allow" ? [rule] : []
   }),
 ]
 
