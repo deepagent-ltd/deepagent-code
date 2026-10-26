@@ -199,6 +199,8 @@ export const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 "*": "deny",
+                // Legacy delegation forwards explicit edit rules to the child Session.
+                edit: "deny",
                 read: { "*": "allow", "*.env": "ask", "*.env.*": "ask", "*.env.example": "allow" },
                 grep: "allow",
                 glob: "allow",
