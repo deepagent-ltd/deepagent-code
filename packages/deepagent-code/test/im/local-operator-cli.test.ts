@@ -5,7 +5,7 @@ import path from "node:path"
 import { Database } from "bun:sqlite"
 import { WorkAuthorityPolicy } from "@deepagent-code/core/session/work-authority-policy"
 
-test("actual offline operator CLI enroll/rotate/revoke exact retries preserve identity", async () => {
+test("source CLI rejects retired enrollment and rotates/revokes Core-prepared credentials with exact retries", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-operator-cli-")))
   await Promise.all(
     ["home", "tmp", "config", "data", "cache", "state", "project"].map((name) => fs.mkdir(path.join(root, name))),
@@ -47,9 +47,17 @@ test("actual offline operator CLI enroll/rotate/revoke exact retries preserve id
   )
   const previous = path.join(root, "previous.txt")
   await fs.writeFile(previous, "first-private-fixture-password", { mode: 0o600 })
-  async function run(args: string[], password = "first-private-fixture-password") {
+  async function run(args: string[], password = "first-private-fixture-password", prepare = false) {
     const child = Bun.spawn(
-      [process.execPath, path.resolve(import.meta.dir, "../../src/index.ts"), "operator", ...args],
+      [
+        process.execPath,
+        "--preload",
+        path.resolve(import.meta.dir, "../fixture/cli-secret-store.ts"),
+        ...(prepare
+          ? [path.resolve(import.meta.dir, "fixture/operator-credential-process.ts")]
+          : [path.resolve(import.meta.dir, "../../src/index.ts"), "operator"]),
+        ...args,
+      ],
       {
         cwd: directory,
         env: {
@@ -90,9 +98,20 @@ test("actual offline operator CLI enroll/rotate/revoke exact retries preserve id
   }
   const enroll = ["enroll", "--request-id", "one", "--policy", policyPath]
   expect((await run(enroll, "")).status).toBe(1)
-  const first = await run(enroll)
+  const refused = await run(enroll)
+  expect(refused.status).toBe(1)
+  expect(refused.stderr).toContain("LOCAL_TASK_EXECUTION_UNAVAILABLE")
+  const rejected = new Database(filename, { readonly: true })
+  try {
+    expect(rejected.query("SELECT count(*) count FROM local_operator_authority").get()).toEqual({ count: 0 })
+  } finally {
+    rejected.close()
+  }
+  // Credential lifecycle uses the real Core admission transaction with a registered
+  // v2 target carrying no tools or execution evidence. Source CLI enrollment stays refused.
+  const first = await run(["one"], "first-private-fixture-password", true)
   expect({ status: first.status, error: first.status === 0 ? "" : first.stderr }).toEqual({ status: 0, error: "" })
-  expect((await run(enroll)).stdout).toBe(first.stdout)
+  expect((await run(["one"], "first-private-fixture-password", true)).stdout).toBe(first.stdout)
   const read = () => {
     const db = new Database(filename, { readonly: true })
     try {
@@ -168,10 +187,7 @@ test("actual offline operator CLI enroll/rotate/revoke exact retries preserve id
   expect(revoked.status).toBe(0)
   expect((await run(revoke, "second-private-fixture-password")).stdout).toBe(revoked.stdout)
   expect(read()).toEqual({ operator_id: original.operator_id, revision: 3, credential_generation: 3, state: "revoked" })
-  const reenrolled = await run(
-    ["enroll", "--request-id", "two", "--policy", policyPath],
-    "second-private-fixture-password",
-  )
+  const reenrolled = await run(["two"], "second-private-fixture-password", true)
   expect(reenrolled.status).toBe(0)
   expect(read().operator_id).not.toBe(original.operator_id)
   expect(read().revision).toBe(4)

@@ -6,6 +6,7 @@ import { createRequire } from "node:module"
 import { Database } from "bun:sqlite"
 import { WorkAuthorityPolicy } from "@deepagent-code/core/session/work-authority-policy"
 import { AuthRuntime } from "../../src/im/auth-runtime"
+import { ownedSecretBuild } from "../fixture/owned-secret-build"
 import { managedBrowserInputRuntime } from "../../../desktop/scripts/managed-browser-input-runtime"
 import {
   managedBrowserInputFixtureEnvironment,
@@ -24,7 +25,8 @@ beforeAll(async () => {
     naming: "fixture.mjs",
     target: "node",
     format: "esm",
-    external: ["@lydell/node-pty", "bun"],
+    external: ["@lydell/node-pty", "jsonc-parser", "bun"],
+    plugins: [ownedSecretBuild],
   })
   expect(built.success, built.logs.map((item) => item.message).join("\n")).toBe(true)
   const source = await fs.readFile(path.join(directory, "fixture.mjs"), "utf8")
@@ -37,6 +39,14 @@ beforeAll(async () => {
     format: "esm",
   })
   expect(worker.success, worker.logs.map((item) => item.message).join("\n")).toBe(true)
+  const indexWorker = await Bun.build({
+    entrypoints: [path.resolve(import.meta.dir, "../../src/location-index/typescript-index.worker.ts")],
+    outdir: directory,
+    naming: "typescript-index.worker.js",
+    target: "node",
+    format: "esm",
+  })
+  expect(indexWorker.success, indexWorker.logs.map((item) => item.message).join("\n")).toBe(true)
   await fs.mkdir(path.join(directory, "node_modules/@lydell"), { recursive: true })
   await fs.symlink(
     await fs.realpath(
@@ -45,6 +55,14 @@ beforeAll(async () => {
       ),
     ),
     path.join(directory, "node_modules/@lydell/node-pty"),
+    process.platform === "win32" ? "junction" : "dir",
+  )
+  // Match the actual Node build's external UMD dependency and its relative impl files.
+  await fs.symlink(
+    await fs.realpath(
+      path.dirname(createRequire(path.resolve(import.meta.dir, "../../package.json")).resolve("jsonc-parser/package.json")),
+    ),
+    path.join(directory, "node_modules/jsonc-parser"),
     process.platform === "win32" ? "junction" : "dir",
   )
 })
@@ -224,7 +242,7 @@ test("real Electron worker hard deadlines terminate stalled workers before admis
   expect(result.maxRSSKiB).toBeGreaterThan(0)
 }, 50_000)
 
-test("actual Node operator enrollment, rotation, revocation and HTTP authentication use the bounded backend", async () => {
+test("actual Node refuses retired enrollment and verifies Core-prepared operator credentials through the bounded backend", async () => {
   const root = await fs.mkdtemp(path.join(directory, "operator-"))
   await Promise.all(
     ["home", "tmp", "config", "data", "cache", "state", "project"].map((name) => fs.mkdir(path.join(root, name))),
@@ -236,6 +254,7 @@ test("actual Node operator enrollment, rotation, revocation and HTTP authenticat
     JSON.stringify({
       formatter: false,
       lsp: false,
+      im: { url: null },
       providers: {
         fixture: {
           api: {
@@ -271,6 +290,7 @@ test("actual Node operator enrollment, rotation, revocation and HTTP authenticat
   const secondPassword = "second-synthetic-operator"
   await fs.writeFile(previousCredentialPath, firstPassword, { mode: 0o600 })
   const environment = {
+    PATH: process.env.PATH,
     HOME: path.join(root, "home"),
     TMPDIR: path.join(root, "tmp"),
     TMP: path.join(root, "tmp"),
@@ -291,9 +311,22 @@ test("actual Node operator enrollment, rotation, revocation and HTTP authenticat
     (await run("operator", input, false, { ...environment, DEEPAGENT_CODE_SERVER_PASSWORD: credential }, project))
       .result
   const enroll = { action: "enroll", operationID: "node-enroll", policyPath }
-  const enrolled = await operator(enroll)
+  const refused = await operator(enroll)
+  expect(refused).toEqual({ error: "LOCAL_TASK_EXECUTION_UNAVAILABLE" })
+  const rejected = new Database(`file:${filename}?immutable=1`, { readonly: true })
+  try {
+    expect(rejected.query("SELECT count(*) count FROM local_operator_authority").get()).toEqual({ count: 0 })
+  } finally {
+    rejected.close()
+  }
+  const prepare = async () =>
+    (
+      await run("prepare-credentials", enroll, false,
+        { ...environment, DEEPAGENT_CODE_SERVER_PASSWORD: firstPassword }, project)
+    ).result
+  const enrolled = await prepare()
   expect(enrolled.value.state).toBe("active")
-  expect(await operator(enroll)).toEqual(enrolled)
+  expect(await prepare()).toEqual(enrolled)
   const http = (
     await run("http", {}, false, { ...environment, DEEPAGENT_CODE_SERVER_PASSWORD: firstPassword }, project)
   ).result

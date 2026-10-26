@@ -384,7 +384,7 @@ export const DebugCommand = cmd({
               if (args.mode !== "approval-reopen") {
                 const policy = yield* LocalOperatorPolicy.resolve(
                   {
-                    version: 1,
+                    version: 2,
                     targets: [
                       {
                         id: "review",
@@ -392,7 +392,14 @@ export const DebugCommand = cmd({
                         agentID: "auto",
                         providerID: "fixture",
                         modelID: "snapshot-1",
-                        budget: WorkAuthorityPolicy.TEXT_ONLY_PROFILE.budget,
+                        budget: WorkAuthorityPolicy.PROJECT_PROFILE.budget,
+                        project: {
+                          tools: ["read"],
+                          fileScope: {
+                            read: [], write: [], deny: [], maxReadBytes: 0, maxPageBytes: 51200,
+                            maxHashBytes: 16777216, maxWriteBytes: 0, symlinks: "deny",
+                          },
+                        },
                       },
                     ],
                   },
