@@ -59,7 +59,7 @@ export function make(options: { outboundPublish?: (request: Record<string, unkno
               assert(!peer.data.challenge, "Original device challenge is single use")
               const challenge = { profile: IMDeviceProof.socketProfile, nonce: randomBytes(32).toString("base64url"), socketSession: randomBytes(24).toString("hex"),
                 audience: server.url.origin.replace(/^https:/, "wss:") + "/im", appkey: options.device.appkey,
-                credentialDigest: createHash("sha256").update(options.device.token).digest("hex"), expiresAt: Date.now() + 10000 } satisfies IMDeviceProof.SocketChallenge
+                credentialDigest: createHash("sha256").update(String(request.token)).digest("hex"), expiresAt: Date.now() + 10000 } satisfies IMDeviceProof.SocketChallenge
               peer.data.challenge = challenge
               send(peer, SIGNAL_CMD.CONNECT_ACK, "ConnectAckMsgBody", { code: 11024, ext: JSON.stringify(challenge), timestamp: Date.now() })
               return
@@ -74,7 +74,7 @@ export function make(options: { outboundPublish?: (request: Record<string, unkno
             const claims = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ v: Schema.Literal(1), purpose: Schema.Literal("im-connect"), aud: Schema.String,
               appkey: Schema.String, nonce: Schema.String, sid: Schema.String, ath: Schema.String, entitlementID: Schema.String, bindingVersion: Schema.Literal(1), iat: Schema.Number, exp: Schema.Number, jti: Schema.String })))(Buffer.from(parts[1]!, "base64url").toString())
             assert.equal(claims.aud, challenge.audience); assert.equal(claims.appkey, challenge.appkey); assert.equal(claims.nonce, challenge.nonce); assert.equal(claims.sid, challenge.socketSession)
-            assert.equal(claims.ath, IMDeviceProof.credentialHash(options.device.token)); assert.equal(claims.entitlementID, "e".repeat(32)); assert(claims.exp > Date.now() / 1000 && claims.exp - claims.iat <= 10)
+            assert.equal(claims.ath, IMDeviceProof.credentialHash(String(request.token))); assert.equal(claims.entitlementID, "e".repeat(32)); assert(claims.exp > Date.now() / 1000 && claims.exp - claims.iat <= 10)
             delete peer.data.challenge
           }
           peer.data.userID = options.secondIdentity && request.token === options.secondIdentity.token ? options.secondIdentity.userID : "receiver"

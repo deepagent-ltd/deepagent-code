@@ -1,206 +1,283 @@
-import { mock } from "bun:test"
 import fs from "node:fs"
-import { createHash } from "node:crypto"
-import { Effect, Layer } from "effect"
+import path from "node:path"
+import { Effect, Layer, Option, Schema, SubscriptionRef } from "effect"
+import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { Database } from "@deepagent-code/core/database/database"
-import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
-import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
+import { IMRepository, IMRepositoryLive, clientMessageID } from "@deepagent-code/core/im/repository"
+import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
+import { KernelDelivery } from "@deepagent-code/core/im/kernel-delivery"
+import { InstanceStore } from "@/project/instance-store"
+import { IMDeviceStore } from "@/im/device-store"
+import { IMDeviceTransport } from "@/im/device-transport"
+import { IMDeviceProof } from "@/im/device-proof"
+import { SecretStore } from "@/mcp/secret-store"
 import { KernelSdk } from "@/im/kernel/sdk"
 import { KernelClient } from "@/im/kernel/client"
+import { KernelConfig } from "@/im/kernel/config"
 import { IMKernelSync } from "@/im/kernel/sync"
-import { clientMessageID } from "@deepagent-code/core/im/repository"
-import { InstanceRegistry } from "@/effect/instance-registry"
+import { ReaderInstanceFixture } from "./reader-instance-fixture"
 
 const root = process.env.IM_DELIVERY_ORACLE_ROOT!
+if (
+  !path.isAbsolute(root) ||
+  !path.basename(path.dirname(root)).startsWith("im-kernel-delivery-cold-") ||
+  fs.realpathSync(root) !== root
+)
+  throw new Error("Owned cold authority required")
 const mode = process.argv[2]!
 const scenario = process.argv[3]!
-const clockAdvanceMS = mode === "p2" && ["lost", "ack-write"].includes(scenario) ? 660_000 : 0
-const now = Date.now
-Date.now = () => now() + clockAdvanceMS
-const filename = `${root}/authority.sqlite`
-const wire: Array<{ tid: string; clientMsgId: string; text: string }> = []
+const filename = path.join(root, "authority.sqlite")
+const connection = Schema.decodeUnknownSync(
+  Schema.Struct({
+    origin: Schema.String,
+    publicJwk: Schema.Struct({
+      kty: Schema.Literal("EC"),
+      crv: Schema.Literal("P-256"),
+      x: Schema.String,
+      y: Schema.String,
+    }),
+    jkt: Schema.String,
+    deviceDirectory: Schema.String,
+    backendFile: Schema.String,
+  }),
+)(await Bun.file(path.join(root, "connection.json")).json())
+const token = mode === "p2" && scenario === "identity" ? "daim2.delivery-cold-rebound" : "daim2.delivery-cold-original"
+const device = IMDeviceStore.make({
+  directory: connection.deviceDirectory,
+  backend: SecretStore.fileBackend(connection.backendFile),
+})
+const http = await Effect.runPromise(HttpClient.HttpClient.pipe(Effect.provide(FetchHttpClient.layer)))
+const transport = IMDeviceTransport.make({ store: device, http })
+const config: KernelConfig.Info = {
+  appkey: "delivery-cold-owned",
+  navigator: connection.origin,
+  token,
+  userID: "receiver",
+  protectedMedia: true,
+  ...(mode === "p2" && scenario === "missing-identity"
+    ? {}
+    : { identity: { uuid: "receiver", orgID: 1, name: "Receiver", orgAllGroupID: "unused" } }),
+  protectedDeviceAuth: {
+    profile: IMDeviceProof.profile,
+    publicJwk: connection.publicJwk,
+    jkt: connection.jkt,
+    entitlementID: "e".repeat(32),
+    bindingVersion: 1,
+    socketAudience: connection.origin.replace(/^https:/, "wss:") + "/im",
+    signConnect: (challenge, input) =>
+      Effect.runPromise(
+        device.socket(challenge, {
+          audience: input.audience,
+          appkey: "delivery-cold-owned",
+          token: input.token,
+          entitlementID: "e".repeat(32),
+          bindingVersion: 1,
+        }),
+      ),
+    signHttp: (request) =>
+      Effect.runPromise(
+        transport.headers({
+          realm: connection.origin,
+          kernelRealm: connection.origin,
+          method: request.method,
+          url: request.url,
+          purpose: "kernel-http",
+          credential: request.credential,
+          requestHash: IMDeviceProof.digest([
+            "dac.im.kernel-http.v1",
+            connection.origin,
+            IMDeviceProof.sha256(token),
+            connection.jkt,
+          ]),
+        }),
+      ),
+  },
+}
+const originalFetch = globalThis.fetch
+const external = { count: 0 }
+globalThis.fetch = Object.assign(
+  (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = new URL(input instanceof Request ? input.url : String(input))
+    if (url.origin !== connection.origin) {
+      external.count++
+      throw new Error("Cold fixture refuses external network")
+    }
+    return originalFetch(input, init)
+  },
+  { preconnect: () => {} },
+)
 const file = () => {
   const stat = fs.statSync(filename)
   return { path: fs.realpathSync(filename), dev: stat.dev, inode: stat.ino }
 }
-await import("@/im/kernel/shims")
-const installed = await Bun.file(new URL(import.meta.resolve("jugglechat-websdk"))).text()
-const bundle = await import(
-  `data:text/javascript;base64,${Buffer.from(`${installed}\nexport { Message$1 as AuditMessage };`).toString("base64")}`
-)
-let networks = 0
-globalThis.fetch = Object.assign(
-  () => {
-    networks++
-    throw new Error("external network forbidden")
-  },
-  {
-    preconnect: () => {
-      throw new Error("external preconnect forbidden")
-    },
-  },
-)
-const handlers = new Map<string, (value: unknown) => void>()
-const messages = bundle.AuditMessage(
-  {
-    on: () => {},
-    getCurrentUser: () => ({ id: "alice" }),
-    isConnected: () => true,
-    getConfig: () => ({ isPC: true }),
-    emit: () => {},
-    sendCommand: (
-      _command: unknown,
-      input: { tid: string; clientMsgId: string; content: { content: string } },
-      callback: (ack: unknown) => void,
-    ) => {
-      wire.push({ tid: input.tid, clientMsgId: input.clientMsgId, text: input.content.content })
-      fs.appendFileSync(`${root}/receiver.jsonl`, `${JSON.stringify(wire.at(-1))}\n`)
-      if (mode === "p1" && scenario === "lost") {
-        fs.writeFileSync(
-          `${root}/ready.json`,
-          JSON.stringify({ pid: process.pid, file: file(), wire, state: "remote_captured_ack_not_returned" }),
-        )
-        return
-      }
-      callback({ code: 0, messageId: `kernel-${input.clientMsgId}`, sentTime: Date.now(), msgIndex: 1 })
-    },
-  },
-  { emit: () => {} },
-  { info: () => {} },
-)
-mock.module("jugglechat-websdk", () => ({
-  default: {
-    Event: { STATE_CHANGED: "state", MESSAGE_RECEIVED: "message" },
-    MessageType: { TEXT: "jg:text" },
-    MessageOrder: { FORWARD: 1 },
-    init: () => ({
-      on: (key: string, callback: (value: unknown) => void) => handlers.set(key, callback),
-      connect: async () => handlers.get("state")?.({ state: mode === "p1" && scenario === "identity" ? 2 : 0 }),
-      disconnect: async () => {},
-      sendMessage: messages.sendMessage,
-      getMessages: async () => ({ messages: [], isFinished: true }),
-      getConversations: async () => ({ conversations: [], isFinished: true }),
-    }),
-  },
-}))
+const wire = () =>
+  fs.existsSync(path.join(root, "receiver.jsonl"))
+    ? fs
+        .readFileSync(path.join(root, "receiver.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.stage === mode)
+    : []
+const membership = { allowed: mode === "p1" || scenario !== "denied" }
+const observed = { ackFailed: false, deniedInspections: 0 }
 const database = Database.layerFromPath(filename)
-const repo = IMRepositoryLive.pipe(Layer.provide(database))
-const config = {
-  appkey: "fixture",
-  navigator: "http://127.0.0.1:9",
-  token: mode === "p2" && scenario === "identity" ? "new-fixture-credential" : "fixture-credential",
-  userID: "alice",
-  ...(scenario === "missing-identity"
-    ? {}
-    : { identity: { uuid: "alice", orgID: 1, name: "Alice", orgAllGroupID: "org1" } }),
-}
-const sdk = KernelSdk.liveFromConfig(config)
-const client = KernelClient.layer.pipe(Layer.provide(sdk))
-const sync = IMKernelSync.layer(config, {
-  workspaceID: root,
-  inspectConversation: (input) =>
-    Effect.succeed({
-      conversation_type: input.conversationType,
-      conversation_id: input.conversationID,
-      org_id: 1,
-      name: "fixture",
-      member_uuids: scenario === "denied" ? ["mallory"] : ["alice", "bob"],
-    }),
-}).pipe(
-  Layer.provide(repo),
-  Layer.provide(database),
-  Layer.provide(InstanceRegistry.layer),
-  Layer.provide(client),
-  Layer.provide(
-    Layer.succeed(IMBroadcasterService, {
-      broadcast: () => {},
-      sendToUser: () => {},
-      register: () => true,
-      unregister: () => {},
-      getConnectionCount: () => 0,
-      getUserConnectionCount: () => 0,
-    }),
-  ),
+const originalRepository = IMRepositoryLive.pipe(Layer.provide(database))
+const repository = Layer.effect(
+  IMRepository,
+  Effect.gen(function* () {
+    const repo = yield* IMRepository
+    return {
+      ...repo,
+      acknowledgeKernelDelivery: (...input: Parameters<typeof repo.acknowledgeKernelDelivery>) =>
+        repo.acknowledgeKernelDelivery(...input).pipe(
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              observed.ackFailed = true
+            }),
+          ),
+        ),
+    }
+  }),
+).pipe(Layer.provide(originalRepository))
+const client = KernelClient.layer.pipe(Layer.provide(KernelSdk.liveFromConfig(config)))
+const services = Layer.mergeAll(
+  database,
+  repository,
+  client,
+  ReaderInstanceFixture.layer,
+  ReaderInstanceFixture.registry,
+  IMBroadcasterLive,
 )
+const sync = IMKernelSync.layer(config, {
+  inspectConversation: (input) =>
+    Effect.sync(() => {
+      if (!membership.allowed) observed.deniedInspections++
+      return {
+        conversation_type: input.conversationType,
+        conversation_id: input.conversationID,
+        org_id: 1,
+        name: "Sender",
+        member_uuids: membership.allowed ? ["receiver", "sender"] : ["mallory"],
+      }
+    }),
+}).pipe(Layer.provide(services))
 const result = await Effect.runPromise(
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
-    const repository = yield* IMRepository
+    const repo = yield* IMRepository
+    const currentClient = yield* KernelClient.Service
+    for (const attempt of Array.from({ length: 500 }, (_, index) => index)) {
+      if ((yield* SubscriptionRef.get(currentClient.state)) === "connected") break
+      if (attempt === 499) return yield* Effect.die(new Error("Original device SDK did not connect"))
+      yield* Effect.sleep("10 millis")
+    }
     const engine = yield* IMKernelSync.Service
+    const store = yield* InstanceStore.Service
+    const directory = path.join(root, "workspace")
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+    const instance = yield* store.load({ directory })
+    const acquired = yield* engine.acquireReader!({
+      instance,
+      workspaceID: directory,
+      userID: "server",
+      instanceCurrent: store.peek(directory).pipe(Effect.map((current) => current === instance)),
+    }).pipe(Effect.option)
+    if (mode === "p1" && Option.isNone(acquired))
+      return yield* Effect.die(new Error("Original current reader was not admitted"))
+    const lease = Option.getOrUndefined(acquired)
+    const authority = KernelDelivery.runtime(KernelConfig.deliverySource(config))
+    yield* Effect.addFinalizer(() => Effect.sync(() => KernelDelivery.close(authority)))
     const messageID = clientMessageID("server", "stable-request")
+    const clockAdvanceMS = mode === "p2" && ["lost", "ack-write"].includes(scenario) ? 660000 : 0
+    const now = Date.now
+    Date.now = () => now() + clockAdvanceMS
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        Date.now = now
+      }),
+    )
     if (mode === "p1") {
-      const group = yield* repository.createGroup({
-        workspaceID: root,
-        name: "fixture",
-        type: "direct",
-        createdBy: "server",
-      })
-      yield* repository.bindKernelConversation({ groupID: group.id, kernelConvID: "k:1:bob" })
+      const groupID = yield* lease!.reader.pending({ conversationType: 1, conversationID: "sender", name: "Sender" })
       if (scenario === "ack-write")
         yield* db.run(
           "CREATE TRIGGER reject_delivery_ack BEFORE UPDATE OF kernel_msg_id ON im_messages BEGIN SELECT RAISE(ABORT, 'isolated ack failure'); END",
         )
-      const message = yield* engine.createMessage({
-        groupID: group.id,
+      const message = yield* lease!.engine.createMessage({
+        groupID,
         clientRequestID: "stable-request",
         senderID: "server",
         senderType: "user",
         type: "text",
         content: "one durable message",
       })
-      if (scenario === "identity")
-        return { pid: process.pid, file: file(), wire, status: yield* engine.deliveryStatus(message.id), networks }
-      yield* engine.send({ groupID: group.id, messageID: message.id, content: message.content })
+      if (scenario === "denied") membership.allowed = false
+      if (scenario === "missing-identity") {
+        yield* store.dispose(instance)
+        yield* lease!.engine.send({ groupID, messageID: message.id, content: message.content })
+      }
+      if (!["identity", "missing-identity"].includes(scenario))
+        yield* lease!.engine.send({ groupID, messageID: message.id, content: message.content })
       if (scenario === "lost") return yield* Effect.never
-      if (["denied", "missing-identity"].includes(scenario)) yield* engine.drainPending
-      for (let n = 0; n < 100 && !["denied", "missing-identity"].includes(scenario); n++) {
-        const state = yield* engine.deliveryStatus(message.id)
-        if (state.state === (scenario === "ack-write" ? "unknown" : "acknowledged")) break
-        yield* Effect.sleep("20 millis")
+      if (["success", "ack-write"].includes(scenario)) {
+        for (const attempt of Array.from({ length: 250 }, (_, index) => index)) {
+          if (
+            scenario === "ack-write"
+              ? observed.ackFailed
+              : (yield* repo.kernelDeliveryStatus(message.id, authority)).state === "acknowledged"
+          )
+            break
+          if (attempt === 249) return yield* Effect.die(new Error("Original send/ACK SQL boundary did not settle"))
+          yield* Effect.sleep("10 millis")
+        }
       }
       if (scenario === "ack-write") yield* db.run("DROP TRIGGER reject_delivery_ack")
-      const retry = yield* engine.createMessage({
-        groupID: group.id,
-        clientRequestID: "stable-request",
-        senderID: "server",
-        senderType: "user",
-        type: "text",
-        content: "one durable message",
-      })
-      if (retry.id !== message.id) return yield* Effect.die("exact retry changed message identity")
-      yield* engine
-        .createMessage({
-          groupID: group.id,
+      if (!["denied", "missing-identity"].includes(scenario)) {
+        const retry = yield* lease!.engine.createMessage({
+          groupID,
           clientRequestID: "stable-request",
           senderID: "server",
           senderType: "user",
           type: "text",
-          content: "changed body",
+          content: "one durable message",
         })
-        .pipe(Effect.flip)
+        if (retry.id !== message.id) return yield* Effect.die(new Error("Exact retry changed identity"))
+        yield* lease!.engine
+          .createMessage({
+            groupID,
+            clientRequestID: "stable-request",
+            senderID: "server",
+            senderType: "user",
+            type: "text",
+            content: "changed body",
+          })
+          .pipe(Effect.flip)
+      }
     }
-    // Both the process and actual SDK Message instance are new in p2. Reads never issue sends.
     const before = yield* db.all(
       "SELECT message_id,state,wire_id,dispatch_owner,kernel_message_id FROM im_kernel_delivery ORDER BY message_id",
     )
-    yield* engine.drainPending
+    if (mode !== "p1" || scenario !== "identity") yield* engine.drainPending
     const after = yield* db.all(
       "SELECT message_id,state,wire_id,dispatch_owner,kernel_message_id FROM im_kernel_delivery ORDER BY message_id",
     )
     return {
       pid: process.pid,
       file: file(),
-      wire,
-      status: yield* engine.deliveryStatus(messageID),
+      wire: wire(),
+      status: yield* repo.kernelDeliveryStatus(messageID, authority),
       before,
       after,
       messages: yield* db.all("SELECT id,content,kernel_msg_id FROM im_messages ORDER BY id"),
-      networks,
+      networks: external.count,
       clockAdvanceMS,
-      sdkSHA256: createHash("sha256").update(installed).digest("hex"),
+      ackSQLFailureObserved: observed.ackFailed,
+      readerAdmitted: lease !== undefined,
+      deniedInspections: observed.deniedInspections,
       sessionInputs: yield* db.get("SELECT count(*) AS n FROM session_input"),
       providerAttempts: yield* db.get("SELECT count(*) AS n FROM session_provider_attempt"),
     }
-  }).pipe(Effect.provide(Layer.mergeAll(database, repo, sync)), Effect.scoped),
+  }).pipe(Effect.provide(Layer.mergeAll(services, sync)), Effect.scoped),
 )
 process.stdout.write(`KERNEL_DELIVERY_RESULT ${JSON.stringify(result)}\n`)

@@ -1,147 +1,107 @@
-import { beforeEach, describe, expect } from "bun:test"
-import { Effect, Layer, PubSub, Stream, SubscriptionRef } from "effect"
-import { Database } from "@deepagent-code/core/database/database"
-import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
-import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
-import type { IMBroadcaster } from "@deepagent-code/core/im/websocket"
-import { KernelClient } from "@/im/kernel/client"
-import { KernelSdk } from "@/im/kernel/sdk"
+import { expect } from "bun:test"
+import { Effect } from "effect"
+import { sql } from "drizzle-orm"
+import { KernelReader } from "@deepagent-code/core/im/kernel-reader"
 import { IMKernelSync } from "@/im/kernel/sync"
-import type { KernelConfig } from "@/im/kernel/config"
-import { pollWithTimeout, testEffect } from "../lib/effect"
-import { InstanceRegistry } from "@/effect/instance-registry"
+import { bodies, cases, ready } from "./fixture/kernel-sync-current"
 
-// B2 全员群 provision：带门面身份的 config ⇒ 引擎启动时把组织全员群（k:2:org7）幂等镜像到本地
-// 群表（creator 坐本地操作者身份，facade uuid 坐成员），此后 org 群入站消息落库广播——B1 的
-// "unbound conversation skip" 对全员群不再发生。真 :memory: DB + 真 repo + 假 client。
-
-const config: KernelConfig.Info = {
-  appkey: "test-appkey",
-  navigator: "http://127.0.0.1:9",
-  token: "test-token",
-  userID: "uuid-alice",
-  identity: { uuid: "uuid-alice", name: "alice", orgAllGroupID: "org7", orgID: 7 },
-}
-
-let clientState: SubscriptionRef.SubscriptionRef<KernelClient.ConnectionState>
-let publishInbound: (msg: KernelClient.KernelTextMessage) => Effect.Effect<void>
-let broadcasts: Array<{ groupID: string; type: string }>
-
-const broadcaster: IMBroadcaster = {
-  broadcast: (groupID, event) => {
-    broadcasts.push({ groupID, type: event.type })
-  },
-  sendToUser: () => {},
-  register: () => true,
-  unregister: () => {},
-  getConnectionCount: () => 0,
-  getUserConnectionCount: () => 0,
-}
-
-const fakeClient = Layer.unwrap(
-  Effect.gen(function* () {
-    const state = yield* SubscriptionRef.make<KernelClient.ConnectionState>("disconnected")
-    const pubsub = yield* PubSub.bounded<KernelClient.KernelTextMessage>(16)
-    clientState = state
-    publishInbound = (msg) => PubSub.publish(pubsub, msg).pipe(Effect.asVoid)
-    return Layer.succeed(
-      KernelClient.Service,
-      KernelClient.Service.of({
-        state,
-        messages: Stream.fromPubSub(pubsub),
-        sendText: () => Effect.succeed({ messageID: "km_ack_1" }),
-        fetchHistory: () => Effect.succeed({ messages: [], isFinished: true, latestTime: 0 }),
-        fetchConversations: () => Effect.succeed({ conversations: [], isFinished: true }),
-
-        getDeliveryReader: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryReader", message: "Protected reader unavailable in legacy fixture" })),
-        getDeliveryChanges: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryChanges", message: "Protected reader unavailable in legacy fixture" })),
-        getDeliveryMessages: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryMessages", message: "Protected reader unavailable in legacy fixture" })),
-        getDeliveryReadCut: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryReadCut", message: "Protected reader unavailable in legacy fixture" })),
-        markDeliveryRead: () => Effect.fail(new KernelSdk.KernelError({ operation: "markDeliveryRead", message: "Protected reader unavailable in legacy fixture" })),
-        disconnect: Effect.void,
+cases(import.meta.path, [
+  {
+    id: "org-current-group",
+    name: "an inspected current workspace reader provisions the org group and seats its local operator",
+    run: (state) =>
+      Effect.gen(function* () {
+        expect(yield* state.database.db.get(sql`SELECT count(*) n FROM im_groups`)).toEqual({ n: 0 })
+        const groupID = yield* state.lease.reader.pending({
+          conversationType: 2,
+          conversationID: "org7",
+          name: "全员群",
+        })
+        expect(
+          yield* state.database.db.get(
+            sql`SELECT id,name,workspace_id,kernel_conv_id FROM im_groups WHERE id=${groupID}`,
+          ),
+        ).toMatchObject({ id: groupID, name: "全员群", workspace_id: state.lease.workspaceID })
+        expect((yield* state.repo.getGroupByID(groupID))?.kernelConvID).toStartWith("kr1:")
+        yield* state.lease.reader.withOutput(
+          { workspaceID: state.lease.workspaceID, userID: "server", groupIDs: [groupID] },
+          Effect.gen(function* () {
+            expect((yield* state.repo.getGroup({ groupID, userID: "server" }))?.id).toBe(groupID)
+          }),
+        )
+        expect(state.inspected).toContainEqual({ conversationType: 2, conversationID: "org7", senderID: "receiver" })
+        expect(
+          yield* state.database.db.get(
+            sql`SELECT count(*) n FROM im_members WHERE group_id=${groupID} AND member_id='server'`,
+          ),
+        ).toEqual({ n: 1 })
       }),
-    )
-  }),
-)
-
-const database = Database.layerFromPath(":memory:")
-const repo = IMRepositoryLive.pipe(Layer.provide(database))
-const syncLayer = IMKernelSync.layer(config, {
-  workspaceID: "ws",
-  inspectConversation: (input) =>
-    Effect.succeed({
-      conversation_type: input.conversationType,
-      conversation_id: input.conversationID,
-      name: "全员群",
-      member_uuids: ["uuid-alice", "uuid-bob"],
-      org_id: 7,
-    }),
-}).pipe(Layer.provide(database),
-  Layer.provide(InstanceRegistry.layer), Layer.provide(repo), Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)), Layer.provide(fakeClient))
-
-const it = testEffect(Layer.mergeAll(database, repo, syncLayer))
-
-beforeEach(() => {
-  broadcasts = []
-})
-
-const provisionedGroup = Effect.gen(function* () {
-  const repoSvc = yield* IMRepository
-  return yield* repoSvc.getGroupByKernelConvID("k:2:org7")
-})
-
-describe("IMKernelSync org all-group provision (B2)", () => {
-  it.live("layer build mirrors the org all-group locally: created, bound, and seated", () =>
-    Effect.gen(function* () {
-      const group = yield* provisionedGroup
-      expect(group).toBeDefined()
-      expect(group?.name).toBe("全员群")
-      expect(group?.workspaceID).toBe("ws")
-      expect(group?.kernelConvID).toBe("k:2:org7")
-
-      const repoSvc = yield* IMRepository
-      // membership-enforced fetch doubles as the seating assertion: the local operator identity
-      // (GUI listGroups) and the facade identity must both resolve the group.
-      expect((yield* repoSvc.getGroup({ groupID: group!.id, userID: "server" }))?.id).toBe(group!.id)
-      expect((yield* repoSvc.getGroup({ groupID: group!.id, userID: "uuid-alice" }))?.id).toBe(group!.id)
-    }),
-  )
-
-  it.live("provision is idempotent: a direct re-run keeps exactly one bound group", () =>
-    Effect.gen(function* () {
-      const first = yield* provisionedGroup
-      const repoSvc = yield* IMRepository
-      yield* IMKernelSync.provisionOrgAllGroup(repoSvc, config.identity!, "ws")
-      const second = yield* provisionedGroup
-      expect(second?.id).toBe(first?.id)
-      expect(second?.createdAt).toBe(first?.createdAt)
-      const page = yield* repoSvc.listGroups({ workspaceID: "ws", userID: "server" })
-      expect(page).toHaveLength(1)
-    }),
-  )
-
-  it.live("an inbound org-group message lands in the provisioned group and broadcasts", () =>
-    Effect.gen(function* () {
-      const group = yield* provisionedGroup
-      expect(group).toBeDefined()
-      const row = yield* pollWithTimeout(
-        Effect.gen(function* () {
-          yield* publishInbound({
-            messageID: "km_org_1",
-            conversationType: 2,
-            conversationID: "org7",
-            senderID: "uuid-bob",
-            text: "hello org",
-            msgTime: 1_700_000_000_000,
-          })
-          const repoSvc = yield* IMRepository
-          return (yield* repoSvc.getMessageByKernelMsgID("km_org_1")) ?? undefined
-        }),
-        "org-group message never landed",
-      )
-      expect(row.groupID).toBe(group!.id)
-      expect(row.senderID).toBe("uuid-bob")
-      expect(broadcasts).toContainEqual({ groupID: group!.id, type: "message_created" })
-    }),
-  )
-})
+  },
+  {
+    id: "org-idempotent",
+    name: "repeated authenticated org-group provisioning preserves one group, one membership and original creation time",
+    run: (state) =>
+      Effect.gen(function* () {
+        const first = yield* state.lease.reader.pending({ conversationType: 2, conversationID: "org7", name: "全员群" })
+        const before = yield* state.repo.getGroupByID(first)
+        const second = yield* state.lease.reader.pending({
+          conversationType: 2,
+          conversationID: "org7",
+          name: "全员群",
+        })
+        expect(second).toBe(first)
+        expect((yield* state.repo.getGroupByID(second))?.createdAt).toBe(before?.createdAt)
+        expect(
+          yield* state.database.db.get(
+            sql`SELECT count(*) n FROM im_groups WHERE workspace_id=${state.lease.workspaceID}`,
+          ),
+        ).toEqual({ n: 1 })
+        expect(
+          yield* state.database.db.get(
+            sql`SELECT count(*) n FROM im_members WHERE group_id=${first} AND member_id='server'`,
+          ),
+        ).toEqual({ n: 1 })
+      }),
+  },
+  {
+    id: "org-inbound",
+    name: "an authenticated org projection binds the pending group and broadcasts its actual incoming body",
+    run: (state) =>
+      Effect.gen(function* () {
+        const groupID = yield* state.lease.reader.pending({
+          conversationType: 2,
+          conversationID: "org7",
+          name: "全员群",
+        })
+        state.remote.add(2, "org7", "org-message", { sender: "member-bob" })
+        yield* ready(state)
+        expect(yield* bodies(state)).toMatchObject([
+          {
+            message_id: "org-message",
+            sender_id: "member-bob",
+            content: JSON.stringify({ content: "original org-message" }),
+            local_group_id: groupID,
+          },
+        ])
+        expect(state.broadcasts).toContainEqual({ groupID, type: "reader_changed" })
+        expect(
+          (yield* KernelReader.projection(state.lease.reader.runtime, state.remote.conversation(2, "org7").key))
+            ?.local_group_id,
+        ).toBe(groupID)
+      }),
+  },
+  {
+    id: "org-retired-global",
+    name: "retired global org provisioning and catch-up cannot manufacture a workspace mirror or admit work",
+    run: (state) =>
+      Effect.gen(function* () {
+        yield* IMKernelSync.provisionOrgAllGroup(state.repo, state.config.identity!, state.lease.workspaceID)
+        yield* IMKernelSync.provisionOrgAllGroup(state.repo, state.config.identity!, state.lease.workspaceID)
+        yield* state.sync.catchUp
+        expect(yield* state.database.db.get(sql`SELECT count(*) n FROM im_groups`)).toEqual({ n: 0 })
+        expect(yield* bodies(state)).toEqual([])
+        expect(state.legacy.reads).toBe(0)
+        expect(state.remote.sent).toHaveLength(0)
+      }),
+  },
+])

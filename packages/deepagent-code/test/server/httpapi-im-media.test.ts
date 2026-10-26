@@ -139,7 +139,7 @@ describe("IM media real loopback HTTP", () => {
           created_at: Date.now() - AttachmentStorage.ttlMs() - 1000,
         }))
         yield* db.insert(AttachmentTable).values(expired).run()
-        yield* Effect.forEach(expired, (item) => Effect.promise(() => fs.writeFile(item.storage_path, "expired")))
+        yield* Effect.forEach(expired, (item) => Effect.promise(() => fs.writeFile(item.storage_path, "expired", { mode: 0o600, flag: "wx" })))
         const before = yield* db.select().from(AttachmentTable).all()
         const response = yield* requestInDirectory(`/api/v1/im/attachments?groupId=${group.id}`, directory).pipe(
           Effect.flatMap(json<Attachment[]>),
