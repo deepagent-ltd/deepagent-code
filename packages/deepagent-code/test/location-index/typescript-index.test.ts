@@ -81,6 +81,8 @@ test("actual worker failure releases the compiler slot only after exit and permi
 })
 
 test("actual Node bundle and Bun compiled binary resolve their fixed semantic worker assets", async () => {
+  // Share the original 30s test budget, reserving 5s for child termination and joining.
+  const deadline = performance.now() + 25_000
   await using tmp = await tmpdir()
   const root = path.join(tmp.path, "workspace")
   await mkdir(root)
@@ -125,11 +127,25 @@ test("actual Node bundle and Bun compiled binary resolve their fixed semantic wo
     [process.env.NODE_BINARY ?? "node", path.join(node, "typescript-index-packaged.js"), request],
     [compiledPath, request],
   ]) {
+    const remaining = deadline - performance.now()
+    if (remaining <= 0) throw new Error("Packaged semantic worker exceeded its shared execution deadline")
     const child = Bun.spawn(command, { cwd: tmp.path, stdout: "pipe", stderr: "pipe" })
     const stdout = new Response(child.stdout).text()
     const stderr = new Response(child.stderr).text()
-    expect(await child.exited, await stderr).toBe(0)
-    expect(JSON.parse(await stdout)).toEqual(JSON.parse(JSON.stringify(expected)))
+    const watchdog = setTimeout(() => child.kill("SIGKILL"), remaining)
+    try {
+      const result = await Promise.all([child.exited, stdout, stderr])
+      expect(result[0], result[2] || "Packaged semantic worker reached its shared execution deadline").toBe(0)
+      expect(JSON.parse(result[1])).toEqual(JSON.parse(JSON.stringify(expected)))
+    } finally {
+      clearTimeout(watchdog)
+      try {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+      } finally {
+        await child.exited
+        await Promise.allSettled([stdout, stderr])
+      }
+    }
   }
 }, 30_000)
 
