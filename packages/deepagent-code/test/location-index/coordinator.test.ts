@@ -7,14 +7,44 @@ import { LocationChangeJournal } from "@deepagent-code/core/location-index/chang
 import { LocationCommitLock } from "@deepagent-code/core/location-index/commit-lock"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Hash } from "@deepagent-code/core/util/hash"
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Exit, Fiber, Layer } from "effect"
 import { mkdir, rename } from "node:fs/promises"
 import path from "node:path"
 import { Service, layer } from "../../src/location-index/coordinator"
+import { TypeScriptIndex } from "../../src/location-index/typescript-index"
 import { open } from "#location-index-sqlite"
 import { tmpdir } from "../fixture/fixture"
 
 describe("LocationIndexCoordinator", () => {
+  test("interrupts a real semantic worker without publishing or acknowledging dirty work", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "repo")
+    await mkdir(root)
+    await Bun.write(path.join(root, "source.ts"), "export const retainedSnapshot = true\n")
+    const harness = await makeHarness(tmp.path, root)
+    await harness.run(Effect.gen(function* () {
+      const coordinator = yield* Service
+      const journal = yield* LocationChangeJournal.Service
+      yield* coordinator.initialize()
+      yield* Effect.promise(() => Bun.write(path.join(root, "source.ts"), "export const pendingSnapshot = true\n"))
+      yield* coordinator.observe({ file: path.join(root, "source.ts"), event: "change" })
+      const pending = yield* Effect.forkChild(coordinator.drain("code"))
+      yield* Effect.promise(async () => {
+        const deadline = performance.now() + 5_000
+        while (TypeScriptIndex.activity().active === 0 && performance.now() < deadline) await Bun.sleep(1)
+      })
+      expect(TypeScriptIndex.activity()).toEqual({ active: 1 })
+      yield* Fiber.interrupt(pending)
+      expect(TypeScriptIndex.activity()).toEqual({ active: 0 })
+      expect((yield* coordinator.searchCode({ query: "retainedSnapshot", limit: 10 })).revision?.generation).toBe(1)
+      expect((yield* coordinator.searchCode({ query: "pendingSnapshot", limit: 10 })).hits).toEqual([])
+      expect((yield* journal.capture({ indexSpaceId: harness.identity.indexSpaceId, projectionKind: "code" })).dirty).toHaveLength(1)
+      yield* coordinator.drain("code")
+      expect((yield* coordinator.searchCode({ query: "pendingSnapshot", limit: 10 })).revision?.generation).toBe(2)
+      expect((yield* journal.capture({ indexSpaceId: harness.identity.indexSpaceId, projectionKind: "code" })).dirty).toEqual([])
+    }))
+  })
+
   test("builds, incrementally deletes Documents, reconciles watcher loss, and publishes trusted rename aliases", async () => {
     await using tmp = await tmpdir()
     await mkdir(path.join(tmp.path, "repo"))

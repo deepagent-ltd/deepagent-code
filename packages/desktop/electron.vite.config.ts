@@ -99,7 +99,7 @@ export default defineConfig(async () => {
           for (const file of await readdir(DEEPAGENT_CODE_SERVER_DIST)) {
             if (
               !file.endsWith(".wasm") &&
-              !["node.js", "node.js.map", "auth-password-worker.node.js", "auth-password-worker.node.js.map", "NOTICE",
+              !["node.js", "node.js.map", "auth-password-worker.node.js", "auth-password-worker.node.js.map", "typescript-index.worker.js", "typescript-index.worker.js.map", "NOTICE",
                 "node.js.native-components.json", "node.js.native-installation.json", "deepagent-work-file-helper",
                 "deepagent-work-file-helper.exe", "deepagent-work-storage-cleanup", "deepagent-work-storage-cleanup.exe",
                 "deepagent-work-process-supervisor", "deepagent-work-process-supervisor.exe", "bun-command-runtime.exe", "linux-native-dev-assets.json",

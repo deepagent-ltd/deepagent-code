@@ -12,10 +12,11 @@ import { Context, Effect, Exit, Layer, Schema } from "effect"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { make as makeCodeStore } from "../code-intelligence/live-code-graph-store"
-import { fileEntityId, fileProjection, indexWorkspace } from "../code-intelligence/typescript-workspace-adapter"
+import { fileEntityId, fileProjection } from "../code-intelligence/typescript-workspace-adapter"
 import { indexMarkdown } from "../document-intelligence/markdown-adapter"
 import { make as makeDocumentStore } from "../document-intelligence/live-repo-document-store"
 import { isRepoDocument, normalizeRelative, scan } from "./manifest"
+import { TypeScriptIndex } from "./typescript-index"
 
 const AdapterSet = { code: "ts-js-v1", repo_documents: "markdown-v1" } as const
 const LeaseMs = 30_000
@@ -147,13 +148,14 @@ export function layer(config: {
           try: () => scan({ root: config.identity.canonicalRoot }),
           catch: () => new IndexError({ projectionKind, reason: "build" }),
         })
+        if (projectionKind === "code") return {
+          projectionKind,
+          build: yield* TypeScriptIndex.build({ root: config.identity.canonicalRoot, files: manifest.files }).pipe(
+            Effect.mapError(() => new IndexError({ projectionKind, reason: "build" })),
+          ),
+        } as const
         return yield* Effect.try({
-          try: () => projectionKind === "code"
-            ? { projectionKind, build: indexWorkspace({ root: config.identity.canonicalRoot, files: manifest.files }) } as const
-            : {
-                projectionKind,
-                documents: manifest.files.filter((file) => isRepoDocument(file.path)).flatMap(indexMarkdown),
-              } as const,
+          try: () => ({ projectionKind, documents: manifest.files.filter((file) => isRepoDocument(file.path)).flatMap(indexMarkdown) }),
           catch: () => new IndexError({ projectionKind, reason: "build" }),
         })
       })
@@ -393,17 +395,19 @@ export function layer(config: {
         })
         const changed = new Set(work.dirty.flatMap((item) => [item.path, ...(item.previousPath ? [item.previousPath] : [])]))
         const semanticChange = [...changed].some((filePath) => /\.(?:[cm]?[jt]sx?)$/i.test(filePath))
-        const build = yield* Effect.try({
-          try: () => semanticChange
-            ? indexWorkspace({ root: config.identity.canonicalRoot, files: manifest.files })
-            : {
+        const build = yield* (semanticChange
+          ? TypeScriptIndex.build({ root: config.identity.canonicalRoot, files: manifest.files }).pipe(
+              Effect.mapError(() => new IndexError({ projectionKind: "code", reason: "build" })),
+            )
+          : Effect.try({
+            try: () => ({
                 files: manifest.files.filter((file) => changed.has(file.path)).map((file) => fileProjection(file)),
                 externalEntities: [],
                 edges: [],
                 aliases: [],
-              },
+              }),
           catch: () => new IndexError({ projectionKind: "code", reason: "build" }),
-        })
+        }))
         yield* Effect.gen(function* () {
           yield* coordination.validate({ lease })
           const current = yield* journal.capture({ indexSpaceId: config.identity.indexSpaceId, projectionKind: "code" })
