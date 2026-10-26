@@ -705,6 +705,11 @@ for (const mode of ["closed-socket", "deadline"] as const) {
               }),
           },
         }
+        const logging = { print: !Log.file(), dev: path.basename(Log.file()) === "dev.log", level: Log.getLevel() }
+        yield* Effect.acquireRelease(
+          Effect.promise(() => Log.init({ print: true, level: logging.level })),
+          () => Effect.promise(() => Log.init(logging)),
+        )
         const lines: string[] = []
         const sink = spyOn(process.stderr, "write").mockImplementation((chunk) => {
           lines.push(String(chunk))

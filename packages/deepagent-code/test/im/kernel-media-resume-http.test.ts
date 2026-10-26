@@ -81,7 +81,8 @@ async function fixture(mode: "partial" | "fresh" | "lost-chunk" | "legacy" | "co
   } })
   state.navigator = server.url.origin
   const native = MediaClient({ isConnected: () => true, deliveryMediaContext: () => state,
-    deviceHttpHeaders: input => signHttp(undefined, input, () => true) }, true) as Pick<ReturnType<typeof JuggleIM.init>,
+    deviceHttpHeaders: (input: { method: string; url: string; credential: string; currentSourceEpoch: number }) =>
+      signHttp(undefined, input, () => true) }, true) as Pick<ReturnType<typeof JuggleIM.init>,
     "getProtectedMediaCapabilities" | "getProtectedMediaTransferCapabilities" | "getProtectedMediaUploadProgress" | "beginProtectedMedia" |
     "putProtectedMediaChunk" | "finalizeProtectedMedia" | "getProtectedMedia" | "cancelProtectedMedia" | "readProtectedMediaRange">
   const media: KernelSdk.Media = {

@@ -63,7 +63,8 @@ test("private uploader reaches every official MediaClient HTTP chunk after an em
     const invalidators = new Set<() => void>()
     const native = MediaClient({ isConnected: () => true, deliveryMediaContext: () => ({
       generation: 1, user: "private-http-sender", token: "private-http-token", navigator: server.url.origin,
-    }), deviceHttpHeaders: input => signHttp(undefined, input, () => true),
+    }), deviceHttpHeaders: (input: { method: string; url: string; credential: string; currentSourceEpoch: number }) =>
+      signHttp(undefined, input, () => true),
     onDeliveryInvalidation: (callback: () => void) => { invalidators.add(callback); return () => invalidators.delete(callback) } }, true) as unknown as Pick<ReturnType<typeof JuggleIM.init>,
       "getProtectedMediaCapabilities" | "beginProtectedMedia" | "putProtectedMediaChunk" | "finalizeProtectedMedia" | "getProtectedMedia" | "cancelProtectedMedia" | "readProtectedMediaRange">
     const media: KernelSdk.Media = {
