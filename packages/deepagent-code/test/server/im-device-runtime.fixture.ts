@@ -55,6 +55,7 @@ export const make = (input: {
   directory: string
   uuid: string
   bound?: boolean
+  certificate?: { ca: string; keyPath: string; certificatePath: string }
   protectedPath?: (pathname: string) => boolean
   listen?: (transport: {
     tls: { key: Bun.BunFile; cert: Bun.BunFile }
@@ -70,7 +71,7 @@ export const make = (input: {
     const { certificate } = yield* Effect.promise(
       () => import("../installation/fixture/event-investigation-installation"),
     )
-    const tls = yield* Effect.promise(() => certificate(path.join(input.directory, "tls")))
+    const tls = input.certificate ?? (yield* Effect.promise(() => certificate(path.join(input.directory, "tls"))))
     const directory = path.join(input.directory, "device")
     const backendFile = path.join(input.directory, "custody.json")
     yield* Effect.promise(() => fs.mkdir(directory, { recursive: true, mode: 0o700 }))

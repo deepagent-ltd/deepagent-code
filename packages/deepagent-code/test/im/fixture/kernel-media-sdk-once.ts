@@ -17,7 +17,7 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
 /** The CLI has exactly one producer. Every HTTP result is the generated SDK's
  * original result; fixed diagnostic output never includes an error payload. */
 export async function run(input: Input, root: string, attachments: 1 | 4 = 4) {
-  assert(root.startsWith("/tmp/dac-im-media-product-") || root.startsWith(path.join(os.tmpdir(), "dac-im-media-product-lanes-")))
+  assert(root.startsWith("/tmp/dac-im-media-product-") || (path.basename(root).startsWith("dac-im-media-product-lanes-") && path.dirname(root) === await fs.realpath(os.tmpdir())))
   assert(new URL(input.peers.A.url).hostname === "127.0.0.1")
   assert(input.peers.A.directory.startsWith(path.join(root, "A") + path.sep))
   assert(input.peers.A.authorizationFile.startsWith(path.join(root, "A") + path.sep))
