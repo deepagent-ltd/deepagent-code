@@ -11,6 +11,7 @@ import { LocationIdentity } from "@deepagent-code/core/context-federation/identi
 import {
   SessionActivityTable,
   SessionContextSelectionTable,
+  SessionProviderAttemptTable,
   SessionProviderOwnerLeaseTable,
 } from "@deepagent-code/core/context-federation/session-sql"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
@@ -90,6 +91,7 @@ import { SessionV2 } from "@deepagent-code/core/session"
 import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { QuestionV2 } from "@deepagent-code/core/question"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
+import { SessionModelPolicyReceiptTable } from "@deepagent-code/core/session/long-context.sql"
 import {
   CurrentBuildIdentity,
   CurrentOwnerAuthorizationPublicKey,
@@ -1571,10 +1573,8 @@ providerHistoryTransform.instance.skip("isolates provider message transforms fro
   }),
 )
 
-// RI-132（P1，CLOSED）：unknown-context-limit host guard 在 V2 prepare seam 有消费点——core runner
-// 在 commitTurn 后、dispatch 前用估计 token 数评估 host guard，unavailable 即 abandon receipt（failed +
-// context_limit_unknown）并以 typed assistant error 终态结束 turn（0 次 provider dispatch）。
-// V2-only 证据映射：legacy request/provider receipt 表保持零行，guard 证据在 V2 provider-turn receipt。
+// The current model policy checks an explicit host guard before admitting a
+// provider attempt. A blocked request retains its policy diagnostic only.
 v2Real.instance("rejects an oversized unknown-limit request before provider dispatch", () => {
   const previous = process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"]
   process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"] = "1000"
@@ -1599,27 +1599,50 @@ v2Real.instance("rejects an oversized unknown-limit request before provider disp
       }),
     )
 
-    const result = yield* provideR0OwnerRefs(prompt.loop({ sessionID: chat.id }))
+    const result = yield* provideR0OwnerRefs(prompt.loop({ sessionID: chat.id })).pipe(Effect.exit)
     expect(yield* llm.calls).toBe(0)
-    expect(result.info.role).toBe("assistant")
-    if (result.info.role === "assistant") {
-      // V2 投影面把 turn 错误统一折叠为 UnknownError（finish "error"）；guard 文案保持不变。
-      expect(result.info.error).toMatchObject({ name: "UnknownError" })
-      expect(JSON.stringify(result.info.error?.data)).toContain("Provider context limit is unknown")
-      expect(result.info.finish).toBe("error")
-    }
-    const receipt = yield* db
+    expect(Exit.isFailure(result)).toBe(true)
+    if (!Exit.isFailure(result)) throw new Error("The oversized request unexpectedly completed")
+    expect(Cause.squash(result.cause)).toMatchObject({
+      _tag: "SessionRunner.ContextBudgetHardGateError",
+      sessionID: chat.id,
+      effectiveHardGate: 0,
+      reason: "auto_compaction_disabled",
+    })
+    const policy = yield* db
       .select()
-      .from(V2ProviderTurnReceiptTable)
-      .where(eq(V2ProviderTurnReceiptTable.session_id, chat.id))
+      .from(SessionModelPolicyReceiptTable)
+      .where(eq(SessionModelPolicyReceiptTable.session_id, chat.id))
       .get()
       .pipe(Effect.orDie)
-    expect(receipt?.state).toBe("failed")
-    expect(receipt?.error_code).toBe("context_limit_unknown")
-    expect(receipt?.request_input_hash).toHaveLength(64)
-    expect(receipt?.prepared_turn_hash).toBeNull()
-    expect(receipt?.terminal_at).toBeNumber()
-    // V2-only：legacy per-request receipt 表保持零行。
+    expect(policy?.policy).toMatchObject({
+      state: "managed",
+      key: "default",
+      limitProvenance: "host_guard",
+      physicalInputBudget: 1000,
+      effectiveHardGate: 0,
+      action: "hard_gate_blocked",
+    })
+    expect(policy?.estimated_full_request_tokens).toBeGreaterThan(1000)
+    expect(policy?.blocked_reason).toBe("auto_compaction_disabled")
+    expect(policy?.provider_attempt_id).toBeNull()
+    expect(policy?.request_hash).toHaveLength(64)
+    expect(
+      yield* db
+        .select()
+        .from(SessionProviderAttemptTable)
+        .where(eq(SessionProviderAttemptTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie),
+    ).toHaveLength(0)
+    expect(
+      yield* db
+        .select()
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie),
+    ).toHaveLength(0)
     expect(
       yield* db
         .select()
