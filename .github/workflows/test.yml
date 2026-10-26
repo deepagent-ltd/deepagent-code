@@ -171,6 +171,12 @@ jobs:
           test "$(stat -c '%U:%G:%a' "$dac_electron_sandbox")" = 'root:root:4755'
           command -v xvfb-run
 
+      - name: Build the current POSIX file protocol test helper
+        if: matrix.suite == 'cli' && runner.os != 'Windows'
+        # This test speaks the POSIX dev/inode protocol directly; it does not
+        # grant installed Native authority or use the Windows handle protocol.
+        run: cargo build --locked --manifest-path packages/work-file-helper/Cargo.toml --bin deepagent-work-file-helper
+
       - name: Run unit tests
         timeout-minutes: ${{ matrix.settings.timeout }}
         run: |
