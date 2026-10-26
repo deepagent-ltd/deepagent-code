@@ -150,7 +150,14 @@ test("actual HTTP rebase waits an active provider boundary, preserves its first 
 
 function spawn(root: string, scenario: string) {
   return Bun.spawn(
-    [process.execPath, path.resolve(import.meta.dir, "../fixture/goal-child-c2-host.ts"), root, scenario],
+    [
+      process.execPath,
+      "--preload",
+      path.resolve(import.meta.dir, "../fixture/cli-secret-store.ts"),
+      path.resolve(import.meta.dir, "../fixture/goal-child-c2-host.ts"),
+      root,
+      scenario,
+    ],
     {
       cwd: path.join(root, "project"),
       stdout: "pipe",

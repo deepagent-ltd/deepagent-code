@@ -61,7 +61,7 @@ if (scenario === "control-race-actor") {
   process.exit(0)
 }
 if (scenario.startsWith("recover-")) {
-  const result = await AppRuntime.runPromise(
+  const result = await Effect.runPromise(
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const rows = yield* db.all<{ permit_id: string }>("SELECT permit_id FROM goal_tick_checkpoint")
@@ -98,7 +98,7 @@ if (scenario.startsWith("recover-")) {
         inputs: yield* db.all("SELECT id FROM session_input"),
         projection: Exit.isSuccess(projected) ? "confirmed" : "rejected",
       }
-    }),
+    }).pipe(Effect.provide(WorkAuthorityFixture.database(path.join(root, "authority.sqlite"))), Effect.scoped),
   )
   await Bun.write(path.join(root, "recovered.json"), JSON.stringify(result))
   process.exit(0)
@@ -610,7 +610,7 @@ try {
           const raced = yield* db.transaction(
             () =>
               Effect.gen(function* () {
-                const actor = Bun.spawn([process.execPath, import.meta.path, root, "control-race-actor"], {
+                const actor = Bun.spawn([process.execPath, "--preload", path.join(import.meta.dir, "cli-secret-store.ts"), import.meta.path, root, "control-race-actor"], {
                   env: process.env,
                   stdout: "pipe",
                   stderr: "pipe",
@@ -643,8 +643,9 @@ try {
           yield* Effect.promise(() => Bun.write(path.join(root, "control-retry"), "same request retry"))
           yield* Effect.promise(async () => {
             const status = await raced.actor.exited
-            await Bun.write(path.join(root, "control-race.log"), (await raced.output).join("\n"))
-            assert.equal(status, 0)
+            const log = (await raced.output).join("\n")
+            await Bun.write(path.join(root, "control-race.log"), log)
+            assert.equal(status, 0, log)
           })
           assert.equal((yield* GoalControl.get(db, goal.row.goal_id))!.requested_phase, "paused")
           assert.equal(DocumentStore.openExact(path.join(root, "documents"), [plan.id]).get(plan.id)!.version, 2)

@@ -4,7 +4,7 @@ import { GoalPlanClient } from "@deepagent-code/core/deepagent/goal-plan-client"
 import fs from "node:fs/promises"
 import path from "node:path"
 const root = process.env.DAC_GOAL_PLAN_FIXTURE_ROOT!
-const worker = new Worker(new URL("./goal-plan-worker.ts", import.meta.url))
+const worker = new Worker(new URL("./goal-plan-worker-entry.ts", import.meta.url))
 const requests: { kind: string; data: unknown }[] = []
 const seed = new Promise<{ sessionID: string; goalID: string }>((resolve) =>
   worker.addEventListener("message", (event) => {
