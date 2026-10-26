@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { execFile } from "node:child_process"
 import { Database } from "bun:sqlite"
 import { Backup } from "@deepagent-code/core/database/backup"
 import { Effect } from "effect"
@@ -47,13 +48,52 @@ describe("Backup (C1A-06)", () => {
     }
   })
 
-  test("writes the backup with 0600 permissions alongside a readable manifest", async () => {
+  test("writes the backup with private platform permissions alongside a readable manifest", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "app.db")
     const live = makeFixture(filename)
     try {
       const manifest = await run(Backup.create({ sourcePath: filename, destDir: tmp.path, buildId: "build-x" }))
-      expect((await fs.stat(manifest.backup.filePath)).mode & 0o777).toBe(0o600)
+      if (process.platform !== "win32") expect((await fs.stat(manifest.backup.filePath)).mode & 0o777).toBe(0o600)
+      if (process.platform === "win32") {
+        // Windows chmod/stat expose DOS read-only bits, not the NTFS access policy. Inspect
+        // actual ACLs for both published files; administrators/System retain OS-level access.
+        const script = `[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
+$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
+$inputValue=[Console]::In.ReadToEnd() | ConvertFrom-Json
+@{sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;files=@($inputValue.paths | ForEach-Object {
+  $acl=Get-Acl -LiteralPath $_
+  @{rules=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | ForEach-Object {
+    @{sid=$_.IdentityReference.Value;rights=[int64]$_.FileSystemRights;allow=($_.AccessControlType -eq 'Allow')}
+  })}
+})} | ConvertTo-Json -Depth 5 -Compress`
+        const text = await new Promise<string>((resolve, reject) => {
+          const child = execFile(
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            [
+              "-NoLogo",
+              "-NoProfile",
+              "-NonInteractive",
+              "-EncodedCommand",
+              Buffer.from(script, "utf16le").toString("base64"),
+            ],
+            { timeout: 10_000, maxBuffer: 8_192, windowsHide: true },
+            (error, stdout) => (error ? reject(error) : resolve(stdout)),
+          )
+          child.stdin?.end(
+            JSON.stringify({ paths: [manifest.backup.filePath, `${manifest.backup.filePath}.manifest.json`] }),
+          )
+        })
+        const acl: { sid: string; files: { rules: { sid: string; rights: number; allow: boolean }[] }[] } =
+          JSON.parse(text)
+        expect(acl.files).toHaveLength(2)
+        for (const file of acl.files) {
+          const allowed = file.rules.filter((rule) => rule.allow)
+          expect(allowed.every((rule) => [acl.sid, "S-1-5-18", "S-1-5-32-544"].includes(rule.sid))).toBe(true)
+          expect(allowed.some((rule) => rule.sid === acl.sid && (rule.rights & 3) === 3)).toBe(true)
+        }
+      }
       const manifestText = await fs.readFile(manifest.backup.filePath + ".manifest.json", "utf8")
       expect(JSON.parse(manifestText)).toEqual(manifest)
     } finally {

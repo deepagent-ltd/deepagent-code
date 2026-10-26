@@ -6,6 +6,7 @@ import path from "node:path"
 import { Data, Effect } from "effect"
 import { Database } from "#sqlite-native"
 import { sha256File } from "./file-sha256"
+import { DurablePublish } from "./durable-publish"
 
 // §10.4 Consistency backup. A pending migration must never run on a live database copy: the
 // backup is produced by SQLite's own online-safe snapshot path (VACUUM INTO on a separate,
@@ -169,9 +170,9 @@ export const create = Effect.fn("Backup.create")(function* (options: BackupOptio
           .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration'")
           .get()
         if (migrationTable) {
-          appliedMigrationIds = (source
-            .query("SELECT id FROM migration ORDER BY id")
-            .all() as { id: string }[]).map((row) => row.id)
+          appliedMigrationIds = (source.query("SELECT id FROM migration ORDER BY id").all() as { id: string }[]).map(
+            (row) => row.id,
+          )
         }
 
         source.exec(`VACUUM INTO '${tmpPath.replaceAll("'", "''")}'`)
@@ -211,23 +212,30 @@ export const create = Effect.fn("Backup.create")(function* (options: BackupOptio
     catch: () => new BackupError({ code: "temp_fsync_failed", detail: `cannot read temp backup: ${tmpPath}` }),
   })
 
-  yield* Effect.tryPromise({
-    try: () => fs.rename(tmpPath, finalPath),
-    catch: (cause) =>
-      new BackupError({ code: "rename_failed", detail: cause instanceof Error ? cause.message : String(cause) }),
-  })
-  // Persist the rename across power loss by fsyncing the containing directory.
-  yield* Effect.tryPromise({
-    try: async () => {
-      const handle = await fs.open(destDir, "r")
-      try {
-        await handle.sync()
-      } finally {
-        await handle.close()
-      }
-    },
-    catch: () => new BackupError({ code: "dir_fsync_failed", detail: `cannot fsync backup directory: ${destDir}` }),
-  })
+  if (process.platform === "win32") {
+    yield* DurablePublish.windows(tmpPath, finalPath, false).pipe(
+      Effect.mapError((error) => new BackupError({ code: "rename_failed", detail: error.detail })),
+    )
+  }
+  if (process.platform !== "win32") {
+    yield* Effect.tryPromise({
+      try: () => fs.rename(tmpPath, finalPath),
+      catch: (cause) =>
+        new BackupError({ code: "rename_failed", detail: cause instanceof Error ? cause.message : String(cause) }),
+    })
+    // Persist the rename across power loss by fsyncing the containing directory.
+    yield* Effect.tryPromise({
+      try: async () => {
+        const handle = await fs.open(destDir, "r")
+        try {
+          await handle.sync()
+        } finally {
+          await handle.close()
+        }
+      },
+      catch: () => new BackupError({ code: "dir_fsync_failed", detail: `cannot fsync backup directory: ${destDir}` }),
+    })
+  }
 
   const walPath = `${sourcePath}-wal`
   const walSizeBytes = yield* Effect.tryPromise({
@@ -285,7 +293,8 @@ export const create = Effect.fn("Backup.create")(function* (options: BackupOptio
   const manifestPath = `${finalPath}.manifest.json`
   yield* Effect.tryPromise({
     try: async () => {
-      const manifestHandle = await fs.open(manifestPath, "w")
+      const target = process.platform === "win32" ? `${tmpPath}.manifest.json` : manifestPath
+      const manifestHandle = await (process.platform === "win32" ? fs.open(target, "wx", 0o600) : fs.open(target, "w"))
       try {
         await manifestHandle.writeFile(JSON.stringify(manifest, null, 2))
         await manifestHandle.sync()
@@ -295,6 +304,12 @@ export const create = Effect.fn("Backup.create")(function* (options: BackupOptio
     },
     catch: () => new BackupError({ code: "manifest_write_failed", detail: manifestPath }),
   })
+
+  if (process.platform === "win32") {
+    yield* DurablePublish.windows(`${tmpPath}.manifest.json`, manifestPath, false).pipe(
+      Effect.mapError((error) => new BackupError({ code: "manifest_write_failed", detail: error.detail })),
+    )
+  }
 
   return manifest
 })
