@@ -1,13 +1,6 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
-import { Effect } from "effect"
 import { HttpRouter } from "effect/unstable/http"
-import { Project } from "@deepagent-code/core/project"
-import { ProjectTable } from "@deepagent-code/core/project/sql"
-import { SessionSchema } from "@deepagent-code/core/session/schema"
-import { SessionTable } from "@deepagent-code/core/session/sql"
-import { Database } from "@deepagent-code/core/database/database"
-import { AbsolutePath } from "@deepagent-code/core/schema"
 import { HttpApiApp } from "@/server/routes/instance/httpapi/server"
 import { tmpdir } from "../fixture/fixture"
 
@@ -20,50 +13,33 @@ test("production readiness registration shares the runner Gateway without reques
   await Bun.write(path.join(directory, "README.md"), "# REGISTRATIONCONTEXTFACT\n")
   await Bun.write(path.join(directory, "main.ts"), "export const actual = 'REGISTRATIONCONTEXTFACT'\n")
   await Bun.write(path.join(foreign, "README.md"), "# FOREIGNREGISTRATIONFACT\n")
-  const currentID = SessionSchema.ID.create()
-  const foreignID = SessionSchema.ID.create()
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const db = (yield* Database.Service).db
-      yield* db
-        .insert(ProjectTable)
-        .values({ id: Project.ID.global, worktree: AbsolutePath.make(directory), sandboxes: [] })
-        .onConflictDoNothing()
-        .run()
-        .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionTable)
-        .values([
-          {
-            id: currentID,
-            project_id: Project.ID.global,
-            directory,
-            title: "current registration",
-            slug: "current",
-            version: "test",
-          },
-          {
-            id: foreignID,
-            project_id: Project.ID.global,
-            directory: foreign,
-            title: "foreign registration",
-            slug: "foreign",
-            version: "test",
-          },
-        ])
-        .run()
-        .pipe(Effect.orDie)
-    }).pipe(Effect.provide(Database.defaultLayer)),
-  )
   const web = HttpRouter.toWebHandler(HttpApiApp.createRoutes(), { disableLogger: true })
   try {
+    // Admit both Sessions through this listener's actual Root and location store.
+    const create = async (directory: string, title: string) => {
+      const response = await web.handler(
+        new Request("http://localhost/session", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-deepagent-code-directory": directory },
+          body: JSON.stringify({ title }),
+        }),
+        HttpApiApp.context,
+      )
+      expect(response.status, response.status === 200 ? undefined : await response.clone().text()).toBe(200)
+      const body: unknown = await response.json()
+      if (!body || typeof body !== "object" || !("id" in body) || typeof body.id !== "string")
+        throw new Error("Session creation did not return its durable identity")
+      return body.id
+    }
+    const currentID = await create(directory, "current registration")
+    const foreignID = await create(foreign, "foreign registration")
     const current = await web.handler(
       new Request(
         `http://localhost/context/readiness?session_id=${currentID}&directory=${encodeURIComponent(directory)}`,
       ),
       HttpApiApp.context,
     )
-    expect(current.status).toBe(200)
+    expect(current.status, current.status === 200 ? undefined : await current.clone().text()).toBe(200)
     const result = await current.json()
     expect(result.session_id).toBe(currentID)
     expect(result.statuses.knowledge.revision).toBe("released:none")
