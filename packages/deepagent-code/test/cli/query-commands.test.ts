@@ -19,6 +19,7 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
         expect(deepagentCode.expectJsonStdout(json, "oversight list --format json")).toEqual([])
       }),
     60_000,
+    { isolatedSecretStore: true },
   )
 
   cliIt.concurrent(
@@ -39,6 +40,7 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
         expect(parsed.explicit).toBe(false)
       }),
     60_000,
+    { isolatedSecretStore: true },
   )
 
   cliIt.concurrent(
@@ -50,6 +52,7 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
         expect(deepagentCode.expectJsonStdout(json, "review list --format json")).toEqual([])
       }),
     60_000,
+    { isolatedSecretStore: true },
   )
 
   cliIt.concurrent(
@@ -81,6 +84,7 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
         expect(Array.isArray(hits)).toBe(true)
       }),
     150_000,
+    { isolatedSecretStore: true },
   )
 
   cliIt.concurrent(
@@ -104,5 +108,6 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
         expect(catalog.packs.length).toBeGreaterThan(0)
       }),
     60_000,
+    { isolatedSecretStore: true },
   )
 })

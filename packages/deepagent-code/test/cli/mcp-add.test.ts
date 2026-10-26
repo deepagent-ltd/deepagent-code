@@ -33,10 +33,13 @@ describe("deepagentCode mcp add (non-interactive subprocess)", () => {
           },
         })
         expect(
-          yield* Effect.promise(() => Bun.file(path.join(home, ".config", "deepagent-code", "deepagent-code.json")).exists()),
+          yield* Effect.promise(() =>
+            Bun.file(path.join(home, ".config", "deepagent-code", "deepagent-code.json")).exists(),
+          ),
         ).toBe(false)
       }),
     60_000,
+    { isolatedSecretStore: true },
   )
 
   cliIt.concurrent(
@@ -71,9 +74,12 @@ describe("deepagentCode mcp add (non-interactive subprocess)", () => {
           },
         })
         expect(
-          yield* Effect.promise(() => Bun.file(path.join(home, ".config", "deepagent-code", "deepagent-code.json")).exists()),
+          yield* Effect.promise(() =>
+            Bun.file(path.join(home, ".config", "deepagent-code", "deepagent-code.json")).exists(),
+          ),
         ).toBe(false)
       }),
     60_000,
+    { isolatedSecretStore: true },
   )
 })
