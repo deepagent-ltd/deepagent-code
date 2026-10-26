@@ -64,11 +64,11 @@ export type Event =
   | EventModelsDevRefreshed
   | EventPluginAdded
   | EventCatalogModelUpdated
-  | EventPermissionV2Asked
-  | EventPermissionV2Replied
   | EventAccountAdded
   | EventAccountRemoved
   | EventAccountSwitched
+  | EventPermissionV2Asked
+  | EventPermissionV2Replied
   | EventFileEdited
   | EventFileWatcherUpdated
   | EventFileWatcherOverflow
@@ -1658,6 +1658,29 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "account.added"
+        properties: {
+          account: AuthInfo
+        }
+      }
+    | {
+        id: string
+        type: "account.removed"
+        properties: {
+          account: AuthInfo
+        }
+      }
+    | {
+        id: string
+        type: "account.switched"
+        properties: {
+          serviceID: string
+          from?: string
+          to?: string
+        }
+      }
+    | {
+        id: string
         type: "permission.v2.asked"
         properties: {
           id: string
@@ -1678,29 +1701,6 @@ export type GlobalEvent = {
           sessionID: string
           requestID: string
           reply: PermissionV2Reply
-        }
-      }
-    | {
-        id: string
-        type: "account.added"
-        properties: {
-          account: AuthInfo
-        }
-      }
-    | {
-        id: string
-        type: "account.removed"
-        properties: {
-          account: AuthInfo
-        }
-      }
-    | {
-        id: string
-        type: "account.switched"
-        properties: {
-          serviceID: string
-          from?: string
-          to?: string
         }
       }
     | {
@@ -6940,23 +6940,6 @@ export type ModelV2Info = {
   }
 }
 
-export type PermissionV2Source =
-  | {
-      type: "tool"
-      messageID: string
-      callID: string
-    }
-  | {
-      type: "mcp_app"
-      invocationID: string
-      viewID: string
-      server: string
-      tool: string
-      generation: string
-    }
-
-export type PermissionV2Reply = "once" | "always" | "reject"
-
 export type AuthOAuthCredential = {
   type: "oauth"
   refresh: string
@@ -6980,6 +6963,23 @@ export type AuthInfo = {
   description: string
   credential: AuthCredential
 }
+
+export type PermissionV2Source =
+  | {
+      type: "tool"
+      messageID: string
+      callID: string
+    }
+  | {
+      type: "mcp_app"
+      invocationID: string
+      viewID: string
+      server: string
+      tool: string
+      generation: string
+    }
+
+export type PermissionV2Reply = "once" | "always" | "reject"
 
 export type QuestionV2Option = {
   /**
@@ -10070,32 +10070,6 @@ export type EventCatalogModelUpdated = {
   }
 }
 
-export type EventPermissionV2Asked = {
-  id: string
-  type: "permission.v2.asked"
-  properties: {
-    id: string
-    sessionID: string
-    action: string
-    resources: Array<string>
-    save?: Array<string>
-    metadata?: {
-      [key: string]: unknown
-    }
-    source?: PermissionV2Source
-  }
-}
-
-export type EventPermissionV2Replied = {
-  id: string
-  type: "permission.v2.replied"
-  properties: {
-    sessionID: string
-    requestID: string
-    reply: PermissionV2Reply
-  }
-}
-
 export type EventAccountAdded = {
   id: string
   type: "account.added"
@@ -10119,6 +10093,32 @@ export type EventAccountSwitched = {
     serviceID: string
     from?: string
     to?: string
+  }
+}
+
+export type EventPermissionV2Asked = {
+  id: string
+  type: "permission.v2.asked"
+  properties: {
+    id: string
+    sessionID: string
+    action: string
+    resources: Array<string>
+    save?: Array<string>
+    metadata?: {
+      [key: string]: unknown
+    }
+    source?: PermissionV2Source
+  }
+}
+
+export type EventPermissionV2Replied = {
+  id: string
+  type: "permission.v2.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    reply: PermissionV2Reply
   }
 }
 
