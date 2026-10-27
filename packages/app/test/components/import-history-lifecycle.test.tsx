@@ -55,6 +55,29 @@ async function processFor(root: string, count: number) {
       stdio: ["ignore", "pipe", "pipe"],
     },
   )
+  const observations: {
+    phase: string
+    at: number
+    elapsedMs: number
+    pid?: number
+    status?: number
+    state?: string
+    hasTarget?: boolean
+    hasSourceDigest?: boolean
+    count?: number
+    committedBatches?: number
+    deadlineAt?: number
+    code?: number | null
+  }[] = []
+  const observe = (
+    phase: string,
+    facts: Omit<(typeof observations)[number], "phase" | "at" | "elapsedMs" | "pid"> = {},
+  ) => {
+    if (observations.length < 128)
+      observations.push({ phase, at: Date.now(), elapsedMs: Date.now() - startedAt, pid: child.pid, ...facts })
+  }
+  const timeout = { fired: false }
+  observe("spawn", { deadlineAt: startedAt + 60_000 })
   let stdout = ""
   let stderr = ""
   let spawnError: string | undefined
@@ -67,7 +90,12 @@ async function processFor(root: string, count: number) {
   child.once("error", (error) => {
     spawnError = error.message
   })
-  const exited = new Promise<number | null>((resolve) => child.once("close", resolve))
+  const exited = new Promise<number | null>((resolve) =>
+    child.once("close", (code) => {
+      observe("child-close", { code })
+      resolve(code)
+    }),
+  )
   const diagnostic = async () =>
     JSON.stringify({
       root,
@@ -75,6 +103,8 @@ async function processFor(root: string, count: number) {
       exitCode: child.exitCode,
       signal: child.signalCode,
       spawnError,
+      deadlineExpired: timeout.fired,
+      observations,
       readyPath: path.join(root, "ready.json"),
       resultFiles: (await fs.readdir(root))
         .filter((name) => name.endsWith(".json"))
@@ -83,8 +113,14 @@ async function processFor(root: string, count: number) {
       stdout,
       stderr,
     })
-  const deadline = setTimeout(() => child.kill("SIGTERM"), 60_000)
-  const ready = await waitForImportFixtureReady({ root, startedAt,
+  const deadline = setTimeout(() => {
+    timeout.fired = true
+    observe("child-deadline-fired", { deadlineAt: startedAt + 60_000 })
+    child.kill("SIGTERM")
+  }, 60_000)
+  const ready = (await waitForImportFixtureReady({
+    root,
+    startedAt,
     ended: () => child.exitCode !== null || child.signalCode !== null || spawnError !== undefined,
   }).catch(async (error: unknown) => {
     clearTimeout(deadline)
@@ -93,7 +129,8 @@ async function processFor(root: string, count: number) {
     await exited
     clearTimeout(force)
     throw new Error(`Private import fixture not ready: ${String(error)}\n${await diagnostic()}`, { cause: error })
-  }) as { url: string; sourcePath: string; count: number; packetSourcePath: string; packetCount: number }
+  })) as { url: string; sourcePath: string; count: number; packetSourcePath: string; packetCount: number }
+  observe("ready-observed")
   const calls: { method: string; path: string }[] = []
   const transport = {
     gate: undefined as Promise<void> | undefined,
@@ -109,6 +146,7 @@ async function processFor(root: string, count: number) {
         const incoming = request instanceof Request ? request : new Request(request)
         const route = new URL(incoming.url).pathname
         calls.push({ method: incoming.method, path: route })
+        if (incoming.method === "POST" && route === "/global/import/jobs") observe("create-post-start")
         const response = await fetch(request).catch((error: unknown) => {
           transport.error = String(error)
           throw error
@@ -118,9 +156,17 @@ async function processFor(root: string, count: number) {
           transport.received = { status: response.status, body: text }
           const body: unknown = JSON.parse(text)
           transport.accepted = body as ImportJobInfo
+          observe("original-create-ack", {
+            status: response.status,
+            state: transport.accepted.state,
+            hasTarget: Boolean(transport.accepted.target),
+            hasSourceDigest: Boolean(transport.accepted.sourceDigest),
+            committedBatches: transport.accepted.committedBatches,
+          })
           // Only packet delivery is held. The original authenticated route already
           // admitted the job and its original worker continues independently.
           await transport.gate
+          observe("create-response-delivered")
           // HappyDOM cannot tee this socket-backed response with clone(). Preserve
           // the original bytes/status/headers while delaying their delivery.
           return new Response(text, {
@@ -141,6 +187,7 @@ async function processFor(root: string, count: number) {
     calls,
     transport,
     diagnostic,
+    observe,
     posts: () => calls.filter((call) => call.method === "POST" && call.path === "/global/import/jobs").length,
     async close() {
       clearTimeout(deadline)
@@ -216,6 +263,8 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
     expect(screen.getByRole("checkbox", { name: "Memory" }).hasAttribute("disabled")).toBe(true)
     progress.phase = "partial committed boundary"
     await publishImportFixturePacket(path.join(a.root, "monitor.json"), { jobID: first.id })
+    a.observe("monitor-published")
+    a.observe("first-commit-wait-start", { deadlineAt: Date.now() + 15_000 })
     // A real immutable destination receipt opens this test boundary. No job row,
     // target lock or executor is modified to create a partial state.
     const committed = await waitFor(
@@ -227,6 +276,7 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
         },
       { timeout: 15_000 },
     )
+    a.observe("first-commit-observed", { count: committed.count })
     expect(committed.jobID).toBe(first.id)
     expect(committed.count).toBeGreaterThan(0)
     setOwner("scope", "private-a-new-owner")

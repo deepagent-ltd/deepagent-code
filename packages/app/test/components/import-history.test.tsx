@@ -250,23 +250,61 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     env: importFixtureEnvironment(root),
     stdio: ["ignore", "pipe", "pipe"],
   })
+  const observations: {
+    phase: string
+    at: number
+    elapsedMs: number
+    pid?: number
+    status?: number
+    state?: string
+    hasTarget?: boolean
+    hasSourceDigest?: boolean
+    committedBatches?: number
+    deadlineAt?: number
+    code?: number | null
+  }[] = []
+  const observe = (
+    phase: string,
+    facts: Omit<(typeof observations)[number], "phase" | "at" | "elapsedMs" | "pid"> = {},
+  ) => {
+    if (observations.length < 128)
+      observations.push({ phase, at: Date.now(), elapsedMs: Date.now() - progress.startedAt, pid: child.pid, ...facts })
+  }
+  const observed = { copy: "" }
+  observe("spawn", { deadlineAt: progress.startedAt + 25000 })
   let output = ""
   child.stdout?.on("data", (data: Buffer) => { output = (output + data.toString()).slice(-65536) })
   child.stderr?.on("data", (data: Buffer) => { output = (output + data.toString()).slice(-65536) })
   child.once("error", (error) => { progress.spawnError = error.message })
-  const exited = new Promise<number | null>((resolve) => child.once("close", resolve))
-  const diagnostic = async () => JSON.stringify({ ...progress, elapsedMs: Date.now() - progress.startedAt,
-    root, pid: child.pid, exitCode: child.exitCode, signal: child.signalCode,
-    resultFiles: (await fs.readdir(root)).filter((name) => name.endsWith(".json")),
-    startup: await fs.readFile(path.join(root, "startup.jsonl"), "utf8").catch(() => null), output })
+  const exited = new Promise<number | null>((resolve) =>
+    child.once("close", (code) => {
+      observe("child-close", { code })
+      resolve(code)
+    }),
+  )
+  const diagnostic = async () =>
+    JSON.stringify({
+      ...progress,
+      elapsedMs: Date.now() - progress.startedAt,
+      root,
+      pid: child.pid,
+      exitCode: child.exitCode,
+      signal: child.signalCode,
+      resultFiles: (await fs.readdir(root)).filter((name) => name.endsWith(".json")),
+      startup: await fs.readFile(path.join(root, "startup.jsonl"), "utf8").catch(() => null),
+      observations,
+      output,
+    })
   const deadline = setTimeout(() => {
     progress.deadlineExpired = true
+    observe("child-deadline-fired", { deadlineAt: progress.startedAt + 25000 })
     child.kill("SIGTERM")
   }, 25000)
   try {
     await fs.mkdir(path.join(root, "home"), { recursive: true })
     await waitForImportFixtureReady({ root, startedAt: progress.startedAt,
       ended: () => child.exitCode !== null || child.signalCode !== null || progress.spawnError !== undefined })
+    observe("ready-observed")
     expect(await fs.stat(path.join(root, "ready.json"))).toBeTruthy()
     const ready = JSON.parse(await fs.readFile(path.join(root, "ready.json"), "utf8")) as { url: string; sourcePath: string }
     progress.phase = "authenticated capability"
@@ -276,12 +314,16 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     vi.unstubAllGlobals()
     const client = createOpencodeClient({ baseUrl: ready.url, headers: { Authorization: `Basic ${btoa("deepagent-code:gui-private-auth")}` } })
     const capability = await client.global.capabilities()
+    observe("capability-returned", { status: capability.response?.status })
     if (capability.error) throw new Error(`Private capability transport: ${String(capability.error)}`)
     expect(capability.response?.status).toBe(200)
     expect(capability.data?.features.importFileJobs).toBe(true)
     setServer({ key: "private-http", current: { http: { url: ready.url, password: "gui-private-auth" } } })
     transport.capabilities.mockImplementation((options) => client.global.capabilities(options))
-    transport.importCreate.mockImplementation((parameters, options) => client.global.importCreate(parameters, options))
+    transport.importCreate.mockImplementation((parameters, options) => {
+      observe("create-post-start")
+      return client.global.importCreate(parameters, options)
+    })
     transport.importGet.mockImplementation((parameters, options) => client.global.importGet(parameters, options))
     transport.importList.mockImplementation((parameters, options) => client.global.importList(parameters, options))
     transport.importCancel.mockImplementation((parameters, options) => client.global.importCancel(parameters, options))
@@ -307,21 +349,44 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     const original = transport.importCreate.mock.calls[0]![0] as { importJobRequest: ImportJobRequest }
     expect(original.importJobRequest).toMatchObject({ source: "claude", sourcePath: ready.sourcePath, scopes: ["memory", "skill"], mode: "copy_to_new_db", copyLiveDb: true, dryRun: false })
     const accepted = await client.global.importCreate(original)
+    observe("original-create-ack", {
+      status: accepted.response?.status,
+      state: accepted.data?.state,
+      hasTarget: Boolean(accepted.data?.target),
+      hasSourceDigest: Boolean(accepted.data?.sourceDigest),
+      committedBatches: accepted.data?.committedBatches,
+    })
     expect(accepted.data?.id).toBeTruthy()
     progress.phase = `copy ${accepted.data!.id}`
-    await waitFor(async () => {
-      const current = await client.global.importGet({ jobID: accepted.data!.id })
-      if (current.data?.state === "failed" || current.data?.state === "recovery_required") {
+    observe("copy-wait-start", { deadlineAt: Date.now() + 10000 })
+    await waitFor(
+      async () => {
+        const current = await client.global.importGet({ jobID: accepted.data!.id })
+        const facts = {
+          status: current.response?.status,
+          state: current.data?.state ?? "missing",
+          hasTarget: Boolean(current.data?.target),
+          hasSourceDigest: Boolean(current.data?.sourceDigest),
+          committedBatches: current.data?.committedBatches,
+        }
+        if (observed.copy !== JSON.stringify(facts)) {
+          observed.copy = JSON.stringify(facts)
+          observe("copy-observed", facts)
+        }
+        if (current.data?.state === "failed" || current.data?.state === "recovery_required") {
         if (process.env.DAC_GUI_IMPORT_EVIDENCE_DIR) {
           await fs.mkdir(process.env.DAC_GUI_IMPORT_EVIDENCE_DIR, { recursive: true })
           await fs.writeFile(path.join(process.env.DAC_GUI_IMPORT_EVIDENCE_DIR, "gui-http-failed-job.json"), JSON.stringify({ request: original.importJobRequest, job: current.data }, null, 2))
         }
         throw new Error(`Actual import ${current.data.state}: ${JSON.stringify(current.data.error)}`)
       }
-      expect(current.data?.state).toBe("completed")
-      expect(current.data?.committedSessions).toBe(0)
-      expect(current.data?.fileResults).toHaveLength(2)
-    }, { timeout: 10000 })
+        expect(current.data?.state).toBe("completed")
+        expect(current.data?.committedSessions).toBe(0)
+        expect(current.data?.fileResults).toHaveLength(2)
+      },
+      { timeout: 10000 },
+    )
+    observe("copy-completed")
     fireEvent.click(screen.getByRole("button", { name: dict["settings.import.job.refresh"] }))
     await screen.findByText(dict["settings.import.job.fileSets"])
     expect(screen.queryByText(dict["settings.import.job.imported"])).toBeNull()
@@ -333,7 +398,9 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     view.unmount()
     progress.phase = "original immutable receipt inspection"
     await publishImportFixturePacket(path.join(root, "inspect.json"), { jobID: accepted.data!.id })
+    observe("inspect-published", { deadlineAt: Date.now() + 10000 })
     await waitFor(async () => expect(await fs.stat(path.join(root, "proof.json"))).toBeTruthy(), { timeout: 10000 })
+    observe("proof-observed")
     const proof = JSON.parse(await fs.readFile(path.join(root, "proof.json"), "utf8")) as {
       before: unknown; after: unknown; sourceBefore: unknown; sourceAfter: unknown; binary: number[]; liveSessions: unknown[]; jobs: unknown[];
       proof: { count: number; fileResults: unknown[] }

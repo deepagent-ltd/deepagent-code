@@ -10,8 +10,29 @@ import { importServer, importSource } from "./import-job"
 import { importFixtureSourceInventory, publishImportFixturePacket } from "../../../app/test/components/fixture/import-control"
 
 const root = process.argv[2]!
-const stage = (phase: string) => appendFileSync(path.join(root, "startup.jsonl"),
-  JSON.stringify({ phase, at: Date.now(), elapsedMs: performance.now() }) + "\n", { mode: 0o600 })
+const observations = { count: 0, monitor: false, job: "", receipt: "", error: "" }
+const stage = (
+  phase: string,
+  facts: {
+    state?: string
+    hasTarget?: boolean
+    hasSourceDigest?: boolean
+    committedBatches?: number
+    available?: boolean
+    count?: number
+    tag?: string
+    code?: string
+  } = {},
+) => {
+  if (observations.count++ >= 128) return
+  try {
+    appendFileSync(
+      path.join(root, "startup.jsonl"),
+      JSON.stringify({ phase, at: Date.now(), elapsedMs: performance.now(), ...facts }) + "\n",
+      { mode: 0o600 },
+    )
+  } catch {}
+}
 stage("fixture-module-loaded")
 const count = Number(process.argv[3] ?? "400")
 const abort = new AbortController()
@@ -82,8 +103,22 @@ await Effect.runPromise(
         yield* Effect.sleep("10 millis")
         const monitor = Bun.file(path.join(root, "monitor.json"))
         if (yield* Effect.promise(() => monitor.exists())) {
+          if (!observations.monitor) {
+            observations.monitor = true
+            stage("monitor-seen")
+          }
           const input = yield* Effect.promise(() => monitor.json() as Promise<{ jobID: string }>)
           const row = yield* ImportJob.get(input.jobID)
+          const facts = {
+            state: row?.state ?? "missing",
+            hasTarget: Boolean(row?.target),
+            hasSourceDigest: Boolean(row?.source_digest),
+            committedBatches: row?.committed_batches,
+          }
+          if (observations.job !== JSON.stringify(facts)) {
+            observations.job = JSON.stringify(facts)
+            stage("original-job-observed", facts)
+          }
           if (
             row?.target &&
             row.source_digest &&
@@ -93,8 +128,47 @@ await Effect.runPromise(
               filename: row.target.dbPath,
               jobID: row.job_id,
               sourceDigest: row.source_digest,
-            }).pipe(Effect.option)
-            if (receipt._tag === "Some" && receipt.value.count > 0)
+            }).pipe(
+              Effect.tapError((error) =>
+                Effect.sync(() => {
+                  try {
+                    const cause = error.cause
+                    const code = cause && typeof cause === "object" && "code" in cause ? cause.code : undefined
+                    const failure = {
+                      tag: "UnknownError",
+                      code:
+                        typeof code === "string" &&
+                        [
+                          "SQLITE_BUSY",
+                          "SQLITE_LOCKED",
+                          "SQLITE_ERROR",
+                          "SQLITE_CANTOPEN",
+                          "ENOENT",
+                          "EACCES",
+                          "EPERM",
+                        ].includes(code)
+                          ? code
+                          : "other",
+                    }
+                    if (observations.error !== JSON.stringify(failure)) {
+                      observations.error = JSON.stringify(failure)
+                      stage("original-receipt-failed", failure)
+                    }
+                  } catch {}
+                }),
+              ),
+              Effect.option,
+            )
+            const receiptFacts = {
+              available: receipt._tag === "Some",
+              count: receipt._tag === "Some" ? receipt.value.count : undefined,
+            }
+            if (observations.receipt !== JSON.stringify(receiptFacts)) {
+              observations.receipt = JSON.stringify(receiptFacts)
+              stage("original-receipt-observed", receiptFacts)
+            }
+            if (receipt._tag === "Some") observations.error = ""
+            if (receipt._tag === "Some" && receipt.value.count > 0) {
               yield* Effect.promise(() =>
                 publishImportFixturePacket(path.join(root, "first-commit.json"), {
                   jobID: row.job_id,
@@ -102,10 +176,13 @@ await Effect.runPromise(
                   count: receipt.value.count,
                 }),
               )
+              stage("first-commit-published")
+            }
           }
         }
         const inspect = Bun.file(path.join(root, "inspect.json"))
         if (!(yield* Effect.promise(() => inspect.exists()))) continue
+        stage("inspect-seen")
         const input = yield* Effect.promise(() => inspect.json() as Promise<{ jobID: string; name: string }>)
         const row = yield* ImportJob.get(input.jobID)
         if (!row?.target || !row.source_digest) return yield* Effect.die("Missing original import target")
@@ -145,6 +222,7 @@ await Effect.runPromise(
             jobs,
           }),
         )
+        stage("proof-published")
         yield* Effect.promise(() => inspect.delete())
       }
     }),
