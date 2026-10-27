@@ -104,7 +104,7 @@ it.live("original listener and QA composition cold roots complete one formal SDK
     const port = yield* Effect.promise(freePort)
     const log = yield* Effect.acquireRelease(Effect.promise(() => fs.open(path.join(home, "child.log"), "wx", 0o600)), (file) => Effect.promise(() => file.close()))
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("DEEPAGENT_") && !key.startsWith("DAC_IM_")))
-    const child = Bun.spawn([process.execPath, path.resolve("test/im/fixture/kernel-media-listener-lane.ts"), home, lane], { cwd: process.cwd(), stdout: log.fd, stderr: log.fd,
+    const child = Bun.spawn([process.execPath, "--preload", path.resolve("test/fixture/cli-secret-store.ts"), path.resolve("test/im/fixture/kernel-media-listener-lane.ts"), home, lane], { cwd: process.cwd(), stdout: log.fd, stderr: log.fd,
       env: { ...env, HOME: home, XDG_CONFIG_HOME: path.join(home, "config"), XDG_DATA_HOME: path.join(home, "data"), XDG_CACHE_HOME: path.join(home, "cache"),
         DEEPAGENT_CODE_TEST_HOME: home, DEEPAGENT_CODE_DB: path.join(home, "data/database.sqlite"), DEEPAGENT_CODE_SERVER_PASSWORD: "private-listener-password",
         DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1", DEEPAGENT_CODE_DISABLE_AUTOUPDATE: "1", DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG: "1", DEEPAGENT_IM_AGENT_RESPONDER: "off",
