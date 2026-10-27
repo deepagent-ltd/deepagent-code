@@ -100,6 +100,8 @@ export interface PreflightObservations {
   pageCount: number | null
   journalMode: string | null
   dbReadable: boolean
+  /** A valid closed-WAL file was not opened because its original runtime owner is active. */
+  dbInspectionDeferred?: "active_owner"
   journalRows: JournalRow[]
   capabilities: CapabilityRow[]
   upgradeRuns: UpgradeRunRow[]
@@ -375,8 +377,10 @@ export const analyzePreflight = (
       actual: "invalid header",
     })
 
-  // A non-empty existing DB that cannot be opened read-only cannot be proven safe.
-  if (observations.exists && observations.size > 0 && !observations.dbReadable)
+  // An owner-deferred observation is not a failed SQLite open. Other known blockers
+  // still run below, and an actual/unclassified read failure remains a hard blocker.
+  if (observations.exists && observations.size > 0 && !observations.dbReadable &&
+    !(observations.dbInspectionDeferred === "active_owner" && observations.activeProcess))
     issues.push({
       code: "db_open_failed",
       message: "unable to open database read-only: " + observations.filename,
@@ -564,9 +568,10 @@ export const withReadOnlyPreflight = async <A,>(
     return use(analyzePreflight(options, await gatherObservations(options, defaultProbes)), options.filename)
   }
   if (observations.journalMode !== "wal") return unavailable(original)
-  if (observations.activeProcess) return unavailable(original)
   const before = await closedFileStamp(options.filename).catch(() => undefined)
   if (!before) return unavailable(original)
+  if (observations.activeProcess)
+    return unavailable(analyzePreflight(options, { ...observations, dbInspectionDeferred: "active_owner" }))
   const obtained = await Effect.runPromise(
     Effect.result(
       DatabaseMigrationLease.acquireProcessLock(`${options.filename}.runtime.lock`, {
