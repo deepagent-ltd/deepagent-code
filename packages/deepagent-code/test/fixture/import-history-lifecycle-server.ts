@@ -1,4 +1,5 @@
 import path from "node:path"
+import { appendFileSync } from "node:fs"
 import { NodeServices } from "@effect/platform-node"
 import { Effect } from "effect"
 import { HttpServer } from "effect/unstable/http"
@@ -9,12 +10,17 @@ import { importServer, importSource } from "./import-job"
 import { importFixtureSourceInventory, publishImportFixturePacket } from "../../../app/test/components/fixture/import-control"
 
 const root = process.argv[2]!
+const stage = (phase: string) => appendFileSync(path.join(root, "startup.jsonl"),
+  JSON.stringify({ phase, at: Date.now(), elapsedMs: performance.now() }) + "\n", { mode: 0o600 })
+stage("fixture-module-loaded")
 const count = Number(process.argv[3] ?? "400")
 const abort = new AbortController()
 process.once("SIGTERM", () => abort.abort())
+stage("acquiring-http-and-database")
 await Effect.runPromise(
   Effect.scoped(
     Effect.gen(function* () {
+      stage("http-and-database-acquired")
       const db = (yield* Database.Service).db
       const names = (yield* db
         .all<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
@@ -36,6 +42,7 @@ await Effect.runPromise(
           { concurrency: 1 },
         )
       const before = yield* census()
+      stage("initial-database-census-complete")
       const sourcePath = yield* Effect.promise(() => importSource(root, "claude", count))
       const packetCount = Math.min(count, 2)
       const packetSourcePath = count
@@ -57,6 +64,7 @@ await Effect.runPromise(
         })
       const sources = count ? [sourcePath, packetSourcePath] : []
       const sourceBefore = yield* Effect.promise(() => Promise.all(sources.map(importFixtureSourceInventory)))
+      stage("source-inventory-complete")
       const url = HttpServer.formatAddress((yield* HttpServer.HttpServer).address)
       yield* Effect.promise(() =>
         publishImportFixturePacket(path.join(root, "ready.json"), {
@@ -67,6 +75,7 @@ await Effect.runPromise(
           packetCount,
         }),
       )
+      stage("ready-published")
       // This only observes real destination receipts. It never pauses a writer,
       // changes a job row, or fabricates a completed/partial state for the UI.
       for (;;) {
@@ -145,5 +154,6 @@ await Effect.runPromise(
   ),
   { signal: abort.signal },
 ).catch((error: unknown) => {
+  stage(abort.signal.aborted ? "aborted" : "failed")
   if (!abort.signal.aborted) throw error
 })

@@ -4,6 +4,7 @@ import path from "node:path"
 // Preload runs before the server's transitive imports, so startup failures retain a phase.
 appendFileSync(path.join(process.argv[2]!, "startup.jsonl"), JSON.stringify({
   phase: "bun-preload-entered",
+  at: Date.now(),
   elapsedMs: performance.now(),
   pid: process.pid,
   platform: process.platform,

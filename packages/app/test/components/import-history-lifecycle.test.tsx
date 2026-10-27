@@ -12,6 +12,7 @@ import { ImportSection } from "@/components/settings-v2/import-history"
 import { dict } from "@/i18n/en"
 import { publishImportFixturePacket } from "./fixture/import-control"
 import { importFixtureEnvironment } from "./fixture/import-environment"
+import { waitForImportFixtureReady } from "./fixture/import-readiness"
 
 const [server, setServer] = createStore({
   key: "private-a",
@@ -44,6 +45,7 @@ vi.mock("@deepagent-code/ui/context/i18n", () => ({ useI18n: () => ({ t: (key: s
 async function processFor(root: string, count: number) {
   await fs.mkdir(path.join(root, "home"), { recursive: true })
   const packageDirectory = path.resolve(process.cwd(), "../deepagent-code")
+  const startedAt = Date.now()
   const child = spawn(
     "bun",
     ["--preload", path.resolve("test/components/fixture/import-startup.ts"), path.join(packageDirectory, "test/fixture/import-history-lifecycle-server.ts"), root, String(count)],
@@ -82,27 +84,16 @@ async function processFor(root: string, count: number) {
       stderr,
     })
   const deadline = setTimeout(() => child.kill("SIGTERM"), 60_000)
-  const ready = await waitFor(
-    async () => {
-      if (child.exitCode !== null || child.signalCode !== null || spawnError)
-        throw new Error(`Private import fixture ended: ${await diagnostic()}`)
-      return JSON.parse(await fs.readFile(path.join(root, "ready.json"), "utf8")) as {
-        url: string
-        sourcePath: string
-        count: number
-        packetSourcePath: string
-        packetCount: number
-      }
-    },
-    { timeout: 15_000 },
-  ).catch(async (error: unknown) => {
+  const ready = await waitForImportFixtureReady({ root, startedAt,
+    ended: () => child.exitCode !== null || child.signalCode !== null || spawnError !== undefined,
+  }).catch(async (error: unknown) => {
     clearTimeout(deadline)
     child.kill("SIGTERM")
     const force = setTimeout(() => child.kill("SIGKILL"), 2000)
     await exited
     clearTimeout(force)
     throw new Error(`Private import fixture not ready: ${String(error)}\n${await diagnostic()}`, { cause: error })
-  })
+  }) as { url: string; sourcePath: string; count: number; packetSourcePath: string; packetCount: number }
   const calls: { method: string; path: string }[] = []
   const transport = {
     gate: undefined as Promise<void> | undefined,

@@ -14,6 +14,7 @@ import { ImportSection } from "@/components/settings-v2/import-history"
 import { dict } from "@/i18n/en"
 import { publishImportFixturePacket } from "./fixture/import-control"
 import { importFixtureEnvironment } from "./fixture/import-environment"
+import { waitForImportFixtureReady } from "./fixture/import-readiness"
 
 const transport = vi.hoisted(() => ({
   capabilities: vi.fn(),
@@ -264,7 +265,9 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
   }, 25000)
   try {
     await fs.mkdir(path.join(root, "home"), { recursive: true })
-    await waitFor(async () => expect(await fs.stat(path.join(root, "ready.json"))).toBeTruthy(), { timeout: 15000 })
+    await waitForImportFixtureReady({ root, startedAt: progress.startedAt,
+      ended: () => child.exitCode !== null || child.signalCode !== null || progress.spawnError !== undefined })
+    expect(await fs.stat(path.join(root, "ready.json"))).toBeTruthy()
     const ready = JSON.parse(await fs.readFile(path.join(root, "ready.json"), "utf8")) as { url: string; sourcePath: string }
     progress.phase = "authenticated capability"
     // Use this owned listener as the actual test window origin; no HTTP authorization or

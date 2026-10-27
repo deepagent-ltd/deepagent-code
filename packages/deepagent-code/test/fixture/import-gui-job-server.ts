@@ -11,7 +11,7 @@ import { importFixtureSourceInventory, publishImportFixturePacket } from "../../
 
 const root = process.argv[2]!
 const stage = (phase: string) => appendFileSync(path.join(root, "startup.jsonl"),
-  JSON.stringify({ phase, elapsedMs: performance.now() }) + "\n", { mode: 0o600 })
+  JSON.stringify({ phase, at: Date.now(), elapsedMs: performance.now() }) + "\n", { mode: 0o600 })
 stage("fixture-module-loaded")
 const abort = new AbortController()
 process.once("SIGTERM", () => abort.abort())
