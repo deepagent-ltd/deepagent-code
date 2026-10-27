@@ -1,15 +1,20 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { createHash, generateKeyPairSync, sign } from "node:crypto"
+import { createHash, createPublicKey, generateKeyPairSync, sign, verify } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { NativeInstallationSchema } from "../../src/installation/native-installation.schema"
+import { WindowsNativeCliCohort } from "../fixture/windows-native-cli-cohort"
+import { windowsNativePublisherTools } from "../../../desktop/scripts/test-native-publisher"
 
 const fixture = path.join(import.meta.dir, "fixture/native-installation-process.ts")
 const repository = path.resolve(import.meta.dir, "../../../..")
-const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-native-installation-"))
-const executable = path.join(directory, process.platform === "win32" ? "native-fixture.exe" : "native-fixture")
+const temporary = process.platform === "win32" ? path.join(repository, ".artifacts/unit") : os.tmpdir()
+if (process.platform === "win32") await fs.mkdir(temporary, { recursive: true })
+const directory = await fs.mkdtemp(path.join(temporary, "dac-native-installation-"))
+const executable = path.join(directory, process.platform === "win32" ? "deepagent-code.exe" : "native-fixture")
 const pair = generateKeyPairSync("ed25519")
 const publicKey = pair.publicKey.export({ type: "spki", format: "pem" }).toString()
 const privateSentinel = "private-native-manifest-content-must-not-escape"
@@ -33,9 +38,36 @@ const components = new NativeInstallationSchema.Components({
   ),
 })
 const componentsText = CanonicalJson.stringify(components)
-const state: { payload?: NativeInstallationSchema.Payload } = {}
+const state: { payload?: NativeInstallationSchema.Payload; windows?: {
+  cohort: Awaited<ReturnType<typeof WindowsNativeCliCohort.build>>
+  publicKey: string
+  componentsText: string
+} } = {}
 
 beforeAll(async () => {
+  if (process.platform === "win32") {
+    const cohort = await WindowsNativeCliCohort.build({ directory: await fs.realpath(directory), businessEntry: fixture,
+      extraSources: [fileURLToPath(import.meta.url)],
+      manifestVariants: (payload) => Object.fromEntries(["components", "commit", "target", "binary", "size"].map((kind) => [kind,
+        new NativeInstallationSchema.Payload({ ...payload,
+          ...(kind === "components" ? { componentsHash: "c".repeat(64) } : {}),
+          ...(kind === "commit" ? { sourceCommit: "c".repeat(40) } : {}),
+          ...(kind === "target" ? { target: "linux-x64" } : {}),
+          ...(kind === "binary" ? { executable: new NativeInstallationSchema.Executable({ ...payload.executable, sha256: "d".repeat(64) }) } : {}),
+          ...(kind === "size" ? { executable: new NativeInstallationSchema.Executable({ ...payload.executable, bytes: 1 }) } : {}),
+        }),
+      ])),
+    })
+    state.payload = cohort.payload
+    state.windows = { cohort, publicKey: await fs.readFile(path.join(cohort.root, "publisher-public.pem"), "utf8"),
+      componentsText: CanonicalJson.stringify(cohort.components) }
+    for (const text of Object.values(cohort.manifests)) {
+      const manifest = JSON.parse(text) as NativeInstallationSchema.Manifest
+      expect(verify(null, Buffer.from(CanonicalJson.stringify(manifest.payload)), state.windows.publicKey,
+        Buffer.from(manifest.signature, "hex"))).toBe(true)
+    }
+    return
+  }
   const result = await Bun.build({
     entrypoints: [fixture],
     target: "bun",
@@ -65,9 +97,13 @@ beforeAll(async () => {
       path.join(process.env.DAC_NATIVE_INSTALLATION_EVIDENCE, "compiled-artifact.json"),
       CanonicalJson.stringify({ directory, executable: state.payload.executable, publicKey, components }),
     )
-}, 60_000)
+}, process.platform === "win32" ? 240_000 : 60_000)
 
 afterAll(async () => {
+  if (state.windows) {
+    await state.windows.cohort.dispose()
+    return
+  }
   if (!process.env.DAC_NATIVE_INSTALLATION_EVIDENCE) await fs.rm(directory, { recursive: true, force: true })
 })
 
@@ -82,6 +118,23 @@ async function writeManifest(binary: string, payload: NativeInstallationSchema.P
 }
 
 async function isolated(name: string) {
+  if (state.windows) {
+    const root = path.join(state.windows.cohort.root, name)
+    await fs.mkdir(root, { mode: 0o700 })
+    const prefix = `packages/work-file-helper/bin/win32-${process.arch}/`
+    const assets = state.windows.cohort.components.components.filter((entry) => entry.path.startsWith(prefix))
+      .map((entry) => entry.path.slice(prefix.length))
+    expect(assets.every((name) => name && !name.includes("/") && !name.includes("\\"))).toBe(true)
+    const names = [...new Set(["deepagent-code.exe", "deepagent-code.exe.native-components.json",
+      "deepagent-code.exe.native-installation.json", "native-preloader.installation.json", ...assets])]
+    for (const file of names)
+      await fs.copyFile(path.join(state.windows.cohort.root, file), path.join(root, file), fs.constants.COPYFILE_EXCL)
+    for (const name of ["profile", "profile/appdata", "profile/localappdata", "tmp", "data", "config", "cache", "state"])
+      await fs.mkdir(path.join(root, name), { recursive: true, mode: 0o700 })
+    const binary = path.join(root, "deepagent-code.exe")
+    await windowsAccepted(binary)
+    return { root, binary }
+  }
   const root = path.join(directory, name)
   await fs.mkdir(root, { mode: 0o700 })
   const binary = path.join(root, path.basename(executable))
@@ -92,18 +145,26 @@ async function isolated(name: string) {
 }
 
 function spawn(binary: string, mode = "inspect", source = false) {
-  return Bun.spawn(source ? [process.execPath, fixture, mode] : [binary, mode], {
+  const actual = state.windows && binary === executable ? state.windows.cohort.executable : binary
+  const root = path.dirname(actual)
+  return Bun.spawn(source ? [process.execPath, fixture, mode] : [actual, mode], {
     cwd: directory,
     env: {
-      HOME: directory,
-      TMPDIR: directory,
-      XDG_DATA_HOME: directory,
-      XDG_CONFIG_HOME: directory,
-      XDG_CACHE_HOME: directory,
-      XDG_STATE_HOME: directory,
+      ...(state.windows ? { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
+        WINDIR: process.env.WINDIR ?? process.env.SystemRoot, USERPROFILE: path.join(root, "profile"),
+        APPDATA: path.join(root, "profile/appdata"), LOCALAPPDATA: path.join(root, "profile/localappdata"),
+        TEMP: path.join(root, "tmp"), TMP: path.join(root, "tmp"),
+        DEEPAGENT_CODE_TEST_HOME: root, DEEPAGENT_CODE_HOME: path.join(root, "data"),
+      } : {}),
+      HOME: state.windows ? path.join(root, "profile") : directory,
+      TMPDIR: state.windows ? path.join(root, "tmp") : directory,
+      XDG_DATA_HOME: state.windows ? path.join(root, "data") : directory,
+      XDG_CONFIG_HOME: state.windows ? path.join(root, "config") : directory,
+      XDG_CACHE_HOME: state.windows ? path.join(root, "cache") : directory,
+      XDG_STATE_HOME: state.windows ? path.join(root, "state") : directory,
       // Environment names must never become the compiled issuance pin or component manifest.
-      DEEPAGENT_CODE_NATIVE_RUNTIME_PUBLIC_KEY: publicKey,
-      DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST: componentsText,
+      DEEPAGENT_CODE_NATIVE_RUNTIME_PUBLIC_KEY: state.windows?.publicKey ?? publicKey,
+      DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST: state.windows?.componentsText ?? componentsText,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -133,7 +194,121 @@ async function rejected(binary: string, code: string, source = false) {
   expect(JSON.parse(result.stdout).ok).toBe(false)
 }
 
+async function windowsAccepted(binary: string) {
+  const result = await output(spawn(binary))
+  expect(result.code).toBe(0)
+  const parsed = JSON.parse(result.stdout) as { ok: boolean; result: { description: unknown; rechecked: unknown } }
+  expect(parsed.ok).toBe(true)
+  expect(parsed.result.description).toMatchObject({ target: `win32-${process.arch}`,
+    executableHash: state.payload!.executable.sha256, executableBytes: state.payload!.executable.bytes,
+    componentsHash: hash(state.windows!.componentsText),
+    signerHash: hash(createPublicKey(state.windows!.publicKey).export({ type: "spki", format: "der" })) })
+  expect(parsed.result.description).toEqual(parsed.result.rechecked)
+  expect(parsed.result.description).not.toHaveProperty("generation")
+  expect(parsed.result.description).not.toHaveProperty("approved")
+}
+
+function windowsEntryDenied(result: Awaited<ReturnType<typeof output>>, marker?: string) {
+  expect(result.code).toBe(1)
+  expect(result.stderr).toContain('"stage":"windows-cli-entry"')
+  expect(result.stderr).toContain('"code":"WINDOWS_FIRST_LOADER_UNAVAILABLE"')
+  expect(result.stderr).toContain("WINDOWS_CLI_NATIVE_BOOTSTRAP_UNAVAILABLE")
+  if (marker) expect(result.stderr).toContain(marker)
+  expect(result.stdout).not.toContain('"ok":true')
+  expect(result.stdout).not.toContain('"ready":true')
+}
+
+async function windowsRejected(binary: string, code: string, allowPreloader = false, marker?: string) {
+  const result = await output(spawn(binary))
+  if (allowPreloader && result.code !== 2) {
+    windowsEntryDenied(result)
+    return
+  }
+  expect(result.code).toBe(2)
+  const parsed = JSON.parse(result.stdout) as { ok: boolean; structured: { code: string } }
+  expect(parsed.ok).toBe(false)
+  expect(parsed.structured.code).toBe(code)
+  if (marker) expect(result.stderr).toContain(marker)
+}
+
+async function untrustedWriter(filename: string) {
+  const result = Bun.spawnSync([windowsNativePublisherTools().acl, filename, "/grant:r", "*S-1-1-0:(W)"], {
+    stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 15_000,
+  })
+  expect(result.exitCode).toBe(0)
+}
+
+async function windowsHeld(binary: string, kind: string) {
+  const filename = kind === "sidecar" ? `${binary}${NativeInstallationSchema.SIDECAR_SUFFIX}` : binary
+  const replacement = `${filename}.replacement`
+  if (kind !== "changed-bytes") await fs.copyFile(filename, replacement, fs.constants.COPYFILE_EXCL)
+  const child = spawn(binary, "hold")
+  const reader = child.stdout.getReader()
+  const errors = new Response(child.stderr).text()
+  const identity = async () => {
+    const stat = await fs.stat(filename, { bigint: true })
+    return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.nlink].join(":")
+  }
+  try {
+    const ready = { text: "" }
+    while (!ready.text.includes("\n")) {
+      const value = await reader.read()
+      expect(value.done).toBe(false)
+      ready.text += new TextDecoder().decode(value.value)
+    }
+    const boundary = ready.text.indexOf("\n")
+    const captured = JSON.parse(ready.text.slice(0, boundary)) as { ready: boolean; description: unknown }
+    expect(captured.ready).toBe(true)
+    const before = { identity: await identity(), hash: hash(await fs.readFile(filename)) }
+    if (kind === "changed-bytes")
+      await expect(fs.appendFile(filename, "fixture changed binary bytes")).rejects.toMatchObject({
+        code: expect.stringMatching(/^(?:EACCES|EPERM|EBUSY)$/),
+      })
+    if (kind !== "changed-bytes") {
+      await expect(fs.rename(replacement, filename)).rejects.toMatchObject({
+        code: expect.stringMatching(/^(?:EACCES|EPERM|EBUSY)$/),
+      })
+    }
+    expect(await identity()).toBe(before.identity)
+    expect(hash(await fs.readFile(filename))).toBe(before.hash)
+    child.stdin.write("continue\n")
+    child.stdin.end()
+    const rest = [ready.text.slice(boundary + 1)]
+    for (;;) {
+      const value = await reader.read()
+      if (value.done) break
+      rest.push(new TextDecoder().decode(value.value))
+    }
+    expect(await child.exited).toBe(0)
+    const parsed = JSON.parse(rest.join("")) as { ok: boolean; result: { description: unknown; rechecked: unknown } }
+    expect(parsed.ok).toBe(true)
+    expect(parsed.result.description).toEqual(captured.description)
+    expect(parsed.result.rechecked).toEqual(captured.description)
+    expect(rest.join("") + await errors).not.toContain(directory)
+    expect(rest.join("") + await errors).not.toContain(privateSentinel)
+    // The same owned mutation must work after the original process tree joins;
+    // a permanent ACL denial is not evidence of the Native held-file lease.
+    if (kind === "changed-bytes") {
+      await fs.appendFile(filename, "fixture changed binary bytes")
+      expect(hash(await fs.readFile(filename))).not.toBe(before.hash)
+    }
+    if (kind !== "changed-bytes") {
+      await fs.rename(replacement, filename)
+      expect(hash(await fs.readFile(filename))).toBe(before.hash)
+    }
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL")
+    await child.exited
+    await errors
+    reader.releaseLock()
+  }
+}
+
 test("compiled process verifies its own signed executable and immutable local handle", async () => {
+  if (state.windows) {
+    await windowsAccepted(executable)
+    return
+  }
   const result = await output(spawn(executable))
   expect(result.code).toBe(0)
   const parsed = JSON.parse(result.stdout)
@@ -170,11 +345,25 @@ test("a different valid Ed25519 issuer cannot replace the compiled pin", async (
     state.payload!,
     sign(null, Buffer.from(CanonicalJson.stringify(state.payload!)), wrong.privateKey).toString("hex"),
   )
+  if (state.windows) {
+    await windowsRejected(item.binary, "NATIVE_SIGNATURE_INVALID", true)
+    return
+  }
   await rejected(item.binary, "NATIVE_SIGNATURE_INVALID")
 })
 
 test.each(["hardlink", "writable"])("rejects unsafe executable identity: %s", async (kind) => {
   const item = await isolated(`binary-${kind}`)
+  if (state.windows) {
+    if (kind === "hardlink") {
+      await fs.link(item.binary, `${item.binary}.link`)
+      expect((await fs.stat(item.binary)).nlink).toBe(2)
+    }
+    if (kind === "writable") await untrustedWriter(item.binary)
+    windowsEntryDenied(await output(spawn(item.binary)), kind === "hardlink"
+      ? "dac-native-path-lease:singlelink:" : "dac-native-first-load:module-private-dacl:deepagent-code.exe:")
+    return
+  }
   if (kind === "hardlink") await fs.link(item.binary, `${item.binary}.link`)
   if (kind === "writable") await fs.chmod(item.binary, 0o777)
   await rejected(item.binary, "NATIVE_INSTALLATION_UNAVAILABLE")
@@ -189,6 +378,20 @@ test.each([
   ["size", "NATIVE_BYTES_MISMATCH"],
 ] as const)("rejects signed artifact mismatch: %s", async (kind, error) => {
   const item = await isolated(kind)
+  if (state.windows) {
+    const manifest = kind === "signature"
+      ? CanonicalJson.stringify(new NativeInstallationSchema.Manifest({ payload: state.payload!, signature: "0".repeat(128) }))
+      : state.windows.cohort.manifests[kind]!
+    expect(typeof manifest).toBe("string")
+    if (kind !== "signature") {
+      const parsed = JSON.parse(manifest) as NativeInstallationSchema.Manifest
+      expect(verify(null, Buffer.from(CanonicalJson.stringify(parsed.payload)), state.windows.publicKey,
+        Buffer.from(parsed.signature, "hex"))).toBe(true)
+    }
+    await fs.writeFile(`${item.binary}${NativeInstallationSchema.SIDECAR_SUFFIX}`, manifest)
+    await windowsRejected(item.binary, error, true)
+    return
+  }
   const payload = new NativeInstallationSchema.Payload({
     ...state.payload!,
     ...(kind === "components" ? { componentsHash: "c".repeat(64) } : {}),
@@ -226,8 +429,18 @@ test.each(["excess", "duplicate", "domain", "oversize", "utf8", "bom", "missing"
       await fs.rename(sidecar, `${sidecar}.target`)
       await fs.symlink(`${sidecar}.target`, sidecar)
     }
-    if (kind === "writable") await fs.chmod(sidecar, 0o666)
+    if (kind === "writable" && state.windows) await untrustedWriter(sidecar)
+    if (kind === "writable" && !state.windows) await fs.chmod(sidecar, 0o666)
     if (kind === "hardlink") await fs.link(sidecar, `${sidecar}.linked`)
+    if (state.windows) {
+      if (kind === "symlink") expect((await fs.lstat(sidecar)).isSymbolicLink()).toBe(true)
+      if (kind === "hardlink") expect((await fs.stat(sidecar)).nlink).toBe(2)
+      await windowsRejected(item.binary, ["excess", "duplicate", "domain", "bom"].includes(kind)
+        ? "NATIVE_MANIFEST_INVALID" : "NATIVE_INSTALLATION_UNAVAILABLE", false,
+      ["missing", "symlink", "writable", "hardlink", "utf8"].includes(kind)
+        ? "dac-native-preload:installation-open:" : undefined)
+      return
+    }
     await rejected(
       item.binary,
       ["excess", "duplicate", "domain", "bom"].includes(kind)
@@ -239,8 +452,12 @@ test.each(["excess", "duplicate", "domain", "oversize", "utf8", "bom", "missing"
   },
 )
 
-test.each(["sidecar", "executable", "changed-bytes"])("requireCurrent refuses post-capture %s drift", async (kind) => {
+test.each(["sidecar", "executable", "changed-bytes"])(process.platform === "win32" ? "Windows held installation lease denies captured %s mutation" : "requireCurrent refuses post-capture %s drift", async (kind) => {
   const item = await isolated(`drift-${kind}`)
+  if (state.windows) {
+    await windowsHeld(item.binary, kind)
+    return
+  }
   const child = spawn(item.binary, "hold")
   const reader = child.stdout.getReader()
   const initial = await reader.read()

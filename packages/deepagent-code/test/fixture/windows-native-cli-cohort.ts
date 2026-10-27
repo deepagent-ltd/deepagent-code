@@ -3,7 +3,7 @@ export * as WindowsNativeCliCohort from "./windows-native-cli-cohort"
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { createHash } from "node:crypto"
+import { createHash, sign } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { Schema } from "effect"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
@@ -27,6 +27,7 @@ export async function build(input: {
   businessEntry: string
   extraSources?: string[]
   plugins?: Bun.BunPlugin[]
+  manifestVariants?: (payload: NativeInstallationSchema.Payload) => Record<string, NativeInstallationSchema.Payload>
 }) {
   if (process.platform !== "win32" || !["x64", "arm64"].includes(process.arch))
     throw new Error("The Native CLI cohort requires its actual Windows target")
@@ -74,7 +75,8 @@ export async function build(input: {
       "packages/deepagent-code/test/lib", "packages/deepagent-code/test/fixture",
       "packages/core/test/fixture", "packages/core/test/lib"], { cwd: repository, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
     assert.equal(helpers.exitCode, 0, "Native CLI fixture dependency inventory is unavailable")
-    assert(!input.plugins?.length || input.extraSources?.length, "Plugin implementation sources must enter the Native fixture inventory")
+    assert(!(input.plugins?.length || input.manifestVariants) || input.extraSources?.length,
+      "Plugin and negative-manifest implementation sources must enter the Native fixture inventory")
     const additional = await Promise.all([source, businessEntry,
       path.join(import.meta.dir, "windows-native-node-cohort.ts"),
       path.join(repository, "packages/desktop/scripts/test-native-publisher.ts"),
@@ -137,13 +139,37 @@ export async function build(input: {
     await verifyTestNativeReceipt({ executable, target: components.target, releaseID: "owned-native-cli-cohort",
       publicKeyFile: publisher.publicKeyFile })
     await verifyTestWindowsCLIPreloader({ executable, target: components.target, publicKeyFile: publisher.publicKeyFile })
+    const variantInput = new NativeInstallationSchema.Payload({ ...signed.payload,
+      executable: new NativeInstallationSchema.Executable({ ...signed.payload.executable }) })
+    Object.freeze(variantInput.executable)
+    Object.freeze(variantInput)
+    const variants = Object.entries(input.manifestVariants?.(variantInput) ?? {})
+    assert(variants.length <= 6, "Only the original bounded installation mismatch vectors are accepted")
+    const manifests = Object.fromEntries(variants.map(([name, value]) => {
+      assert(["signature", "components", "commit", "target", "binary", "size"].includes(name))
+      const payload = Schema.decodeUnknownSync(NativeInstallationSchema.Payload, { onExcessProperty: "error" })(value)
+      const expected = new NativeInstallationSchema.Payload({ ...signed.payload,
+        ...(name === "components" ? { componentsHash: payload.componentsHash } : {}),
+        ...(name === "commit" ? { sourceCommit: payload.sourceCommit } : {}),
+        ...(name === "target" ? { target: payload.target } : {}),
+        ...(name === "binary" ? { executable: new NativeInstallationSchema.Executable({ ...signed.payload.executable,
+          sha256: payload.executable.sha256 }) } : {}),
+        ...(name === "size" ? { executable: new NativeInstallationSchema.Executable({ ...signed.payload.executable,
+          bytes: payload.executable.bytes }) } : {}),
+      })
+      assert.equal(CanonicalJson.stringify(payload), CanonicalJson.stringify(expected), "Installation negative must change only its declared field")
+      assert(name === "signature" || CanonicalJson.stringify(payload) !== CanonicalJson.stringify(signed.payload))
+      return [name, CanonicalJson.stringify(new NativeInstallationSchema.Manifest({ payload,
+        signature: sign(null, Buffer.from(CanonicalJson.stringify(payload)), keys.privateKey).toString("hex") }))]
+    }))
+    await fs.writeFile(path.join(root, "negative-manifests.json"), JSON.stringify(manifests))
     remaining()
     await fs.writeFile(path.join(root, "cohort.json"), JSON.stringify({ target: components.target,
       sourceCommit: components.sourceCommit, sourceTree: components.sourceTree, componentsHash: hash(text),
       executable: signed.payload.executable, signerHash: keys.signerHash, preloaderReceiptHash: preloader.receiptHash,
       toolchain, productionOwnerMaterial: false }))
     const state = { disposed: false, counter: 0, stops: new Set<() => Promise<void>>(), runs: new Set<Promise<unknown>>() }
-    return { root, executable, components, payload: signed.payload,
+    return { root, executable, components, payload: signed.payload, manifests,
       async run(input: { args?: string[]; env?: Record<string, string>; stdin?: string | Uint8Array; milliseconds?: number } = {}) {
         assert(!state.disposed, "Native CLI cohort is disposed")
         assert((input.args ?? []).length <= 64 && (input.args ?? []).every((arg) => arg.length <= 8192 && !arg.includes("\0")))
