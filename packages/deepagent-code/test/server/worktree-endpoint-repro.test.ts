@@ -34,7 +34,14 @@ type CreatedWorktree = { directory: string }
 type ScopedWorktree = { directory: string; body: CreatedWorktree; ready: Effect.Effect<void, Error> }
 
 function serverScoped() {
-  return Effect.sync(() => Server.Default().app)
+  return Effect.gen(function* () {
+    const server = Server.Default().app
+    const instance = yield* TestInstance
+    // Verify real listener/Location startup before timing worktree dispatch and its independent boot.
+    const ready = yield* request(server, `/project/current?directory=${encodeURIComponent(instance.directory)}`)
+    expect(ready.status).toBe(200)
+    return server
+  })
 }
 
 function request(server: TestServer, input: string, init?: RequestInit) {
