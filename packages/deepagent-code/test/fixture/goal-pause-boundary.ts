@@ -3,9 +3,9 @@
 // absent owned Settings store at Root composition; they do not qualify Native storage.
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
-import { writeFileSync } from "node:fs"
+import { writeFileSync, writeSync } from "node:fs"
 import path from "node:path"
-import { Context, Effect, Exit, Layer, Schema } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Schema } from "effect"
 import { eq, sql } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { GoalControl } from "@deepagent-code/core/deepagent/goal-control"
@@ -39,6 +39,39 @@ import { Server } from "@/server/server"
 const root = process.argv[2]!
 const phase = process.argv[3]
 const directory = path.join(root, "project")
+const stage = (event: string, details?: Record<string, unknown>) =>
+  writeSync(2, `[goal-pause-fixture] ${JSON.stringify({
+    phase: phase ?? "default", event, at: Date.now(), elapsedMs: Math.round(performance.now()), ...details,
+  })}\n`)
+const frameExit = (event: string, exit: Exit.Exit<unknown, unknown>) => stage(event, {
+  exit: exit._tag,
+  errors: Exit.isFailure(exit) ? Cause.prettyErrors(exit.cause).slice(0, 2).map((error) => {
+    const codes = {
+      PROFILE_UNAVAILABLE: "profile_unavailable",
+      LOCAL_OPERATOR_UNAVAILABLE: "native_operator_unavailable",
+      WORK_BINDING_CONFLICT: "work_binding_conflict",
+      EVENT_CONSUMPTION_UNAVAILABLE: "event_consumption_unavailable",
+      SQLITE_BUSY: "sqlite_busy", SQLITE_LOCKED: "sqlite_locked", SQLITE_CANTOPEN: "sqlite_unavailable",
+      SQLITE_READONLY: "sqlite_readonly", SQLITE_IOERR: "sqlite_io", SQLITE_CORRUPT: "sqlite_corrupt",
+      SQLITE_NOTADB: "sqlite_not_database", ENOENT: "filesystem_missing", EACCES: "filesystem_denied",
+      EPERM: "filesystem_denied", ERR_ASSERTION: "assertion_failed",
+    } as const
+    const rawCode: unknown = Object.getOwnPropertyDescriptor(error, "code")?.value
+    const code = typeof rawCode === "string" && Object.hasOwn(codes, rawCode) ? rawCode as keyof typeof codes : undefined
+    const tag: unknown = Object.getOwnPropertyDescriptor(error, "_tag")?.value
+    const name: unknown = Object.getOwnPropertyDescriptor(error, "name")?.value
+    return {
+      name: name === "AssertionError" ? "AssertionError" : error instanceof TypeError ? "TypeError"
+        : error instanceof RangeError ? "RangeError" : error instanceof SyntaxError ? "SyntaxError" : "Error",
+      tag: tag === "OwnedValidationError" ? "OwnedValidationError" : tag === "WorkAuthorityError" ? "WorkAuthorityError"
+        : tag === "LocalOperatorError" ? "LocalOperatorError" : tag === "GoalChild.Error" ? "GoalChild.Error"
+        : tag === "DatabaseBootstrapError" ? "DatabaseBootstrapError" : "UnclassifiedError",
+      code: code ?? "UNCLASSIFIED",
+      reason: code ? codes[code] : "unclassified_error",
+    }
+  }) : [],
+})
+stage("fixture-module-loaded")
 await Bun.write(
   path.join(directory, "deepagent-code.json"),
   JSON.stringify({
@@ -65,6 +98,7 @@ await fs.copyFile(rg, path.join(bin, path.basename(rg)))
 const setup = (name: string, maxTicks = 4) =>
   AppRuntime.runPromise(
     Effect.gen(function* () {
+      stage("setup-entered")
       const db = (yield* Database.Service).db
       const session = yield* (yield* SessionV2.Service).create({
         location: { directory: AbsolutePath.make(directory) },
@@ -111,10 +145,13 @@ const setup = (name: string, maxTicks = 4) =>
         expectedPlanVersion: 1,
         mode: "event",
       })
+      stage("tick-issued")
       const context = yield* (yield* InstanceStore.Service).load({ directory })
+      stage("instance-ready")
       const program = yield* GoalOwnedLoop.prepare({ permitID: tick.permit.permit_id, directory: docroot }).pipe(
         Effect.provideService(InstanceRef, context),
       )
+      stage("program-prepared")
       return { session, tick, program, docroot, context }
     }),
   )
@@ -122,6 +159,7 @@ type Setup = Awaited<ReturnType<typeof setup>>
 
 const admit = (setup: Setup, frame: GoalTickExecution.Frame, permitID = setup.tick.permit.permit_id) =>
   Effect.gen(function* () {
+    stage("admit-entered")
     const db = (yield* Database.Service).db
     const frames = yield* GoalTickExecution.Service
     const current = (yield* GoalTickCheckpointV2.read(db, permitID))!
@@ -131,6 +169,7 @@ const admit = (setup: Setup, frame: GoalTickExecution.Frame, permitID = setup.ti
       role: 0,
       text: "Never dispatch this retained original stage",
     })
+    stage("checkpoint-activated")
     const role = activated.journal.program.roles[0]
     const framePolicy = frames.policy(frame)
     assert(framePolicy)
@@ -142,6 +181,7 @@ const admit = (setup: Setup, frame: GoalTickExecution.Frame, permitID = setup.ti
       agent: role.agent,
       mode: role.mode,
     })
+    stage("policy-prepared")
     const view = GoalChildPolicy.inspect(policy)
     assert(view)
     const source = yield* GoalControl.get(db, setup.tick.row.goal_id)
@@ -149,7 +189,7 @@ const admit = (setup: Setup, frame: GoalTickExecution.Frame, permitID = setup.ti
     const permit = (yield* db.all<GoalControl.Permit>(
       sql`SELECT * FROM goal_tick_permit WHERE permit_id=${permitID}`,
     ))[0]
-    return yield* GoalChild.admitV2(db, yield* SessionV2.Service, {
+    const child = yield* GoalChild.admitV2(db, yield* SessionV2.Service, {
       permitID,
       permitToken: permit.token,
       roleKey: role.key,
@@ -160,6 +200,8 @@ const admit = (setup: Setup, frame: GoalTickExecution.Frame, permitID = setup.ti
       text: "Never dispatch this retained original stage",
       policy,
     })
+    stage("child-admitted")
+    return child
   }).pipe(Effect.provideService(InstanceRef, setup.context))
 
 let listener: Awaited<ReturnType<typeof Server.listen>> | undefined
@@ -172,6 +214,7 @@ const control = async (
   assert(listener)
   const url = new URL(`/deepagent/goal/${action}`, listener.url)
   url.searchParams.set("directory", directory)
+  stage("control-dispatched", { action })
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -181,14 +224,18 @@ const control = async (
     body: JSON.stringify({ sessionID: setup.session.id, goalId: setup.tick.row.goal_id, expectedRevision, requestID }),
   })
   const body: unknown = await response.json()
+  stage("control-response", { status: response.status })
   assert.equal(response.status, 200, JSON.stringify(body))
   return Schema.decodeUnknownSync(GoalControlSchema.Snapshot)(body)
 }
 
 const cleanup = { server: false, runtime: false }
 try {
+  stage("runtime-build-started")
   await AppRuntime.runPromise(Database.Service)
+  stage("runtime-ready")
   listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
+  stage("listener-ready")
   if (phase === "crash-after-cas") {
     const first = await setup("pause-real-cas-crash")
     const ready = Promise.withResolvers<void>()
@@ -196,14 +243,16 @@ try {
       Effect.gen(function* () {
         return yield* (yield* GoalTickExecution.Service).withFrame(first.tick.permit, (frame) =>
           Effect.gen(function* () {
+            stage("frame-entered")
             yield* admit(first, frame)
             ready.resolve()
             return yield* Effect.never
           }),
         )
       }).pipe(Effect.exit),
-    )
+    ).then((exit) => frameExit("crash-frame-exited", exit))
     await ready.promise
+    stage("frame-ready")
     await Bun.write(
       path.join(root, "crash-case.json"),
       JSON.stringify({
@@ -229,6 +278,7 @@ try {
             originalMethodReturned: true,
           }),
         )
+        stage("cas-observed")
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0)
       }
       return observed
@@ -358,14 +408,19 @@ try {
       Effect.gen(function* () {
         return yield* (yield* GoalTickExecution.Service).withFrame(first.tick.permit, (frame) =>
           Effect.gen(function* () {
+            stage("frame-entered")
             yield* admit(first, frame)
             ready.resolve(frame)
             return yield* Effect.never
           }),
         )
       }).pipe(Effect.exit),
-    )
+    ).then((exit) => {
+      frameExit("foreign-frame-exited", exit)
+      return exit
+    })
     const actual = await ready.promise
+    stage("frame-ready")
     const foreign = await AppRuntime.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -393,6 +448,7 @@ try {
         }),
       ),
     )
+    stage("foreign-checks-complete")
     const paused = await control("pause", first, 1, "pause-after-foreign-refusal")
     assert(!paused.inFlight && !paused.recoveryRequired)
     assert(Exit.isFailure(await frame))

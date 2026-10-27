@@ -1,7 +1,7 @@
 // Actual AppRuntime/Location/SessionRunner. Only the loopback provider response is deterministic.
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
-import { writeFileSync } from "node:fs"
+import { writeFileSync, writeSync } from "node:fs"
 import path from "node:path"
 import { createServer } from "node:http"
 import net from "node:net"
@@ -41,6 +41,15 @@ import { SessionID } from "@/session/schema"
 const root = process.argv[2]!
 const scenario = process.argv[3]!
 const directory = path.join(root, "project")
+const observed = ["loop", "loop-failed", "steer-valid", "loop-stop", "loop-proposal-two",
+  "loop-proposal-diagnostics-stale", "loop-cold", "loop-cold-recover", "loop-proposal-two-cold",
+  "loop-proposal-two-recover"].includes(scenario)
+const stage = (event: string, details?: Record<string, unknown>) => {
+  if (!observed) return
+  writeSync(2, `[goal-c2-fixture] ${JSON.stringify({
+    scenario, event, at: Date.now(), elapsedMs: Math.round(performance.now()), ...details,
+  })}\n`)
+}
 import { GoalTickProgram } from "@deepagent-code/core/deepagent/goal-tick-program"
 import { GoalTickCheckpointV2 } from "@deepagent-code/core/deepagent/goal-tick-checkpoint-v2"
 import { GoalTickExecution } from "@/session/goal-tick-execution"
@@ -54,6 +63,8 @@ import { GoalPlanRebaseSchema } from "@deepagent-code/core/deepagent/goal-plan-r
 import { DeepAgentPlanStore } from "@deepagent-code/core/deepagent/plan-store"
 import { createPlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
 const requests: unknown[] = []
+const firstProviderRequest = Promise.withResolvers<void>()
+stage("fixture-module-loaded")
 let rebaseBegin: GoalPlanRebaseSchema.Response | undefined
 let rebaseControl: Promise<unknown> | undefined
 const goalControlHTTP = async (action: "stop" | "pause", payload: object) => {
@@ -80,6 +91,8 @@ const provider = createServer(async (request, response) => {
   const chunks: Buffer[] = []
   for await (const chunk of request) chunks.push(Buffer.from(chunk))
   requests.push(JSON.parse(Buffer.concat(chunks).toString()))
+  firstProviderRequest.resolve()
+  stage("provider-request-observed", { requests: requests.length })
   await Bun.write(path.join(root, "provider.json"), JSON.stringify(requests))
   if (scenario.startsWith("loop-proposal-two-rebase") && requests.length === 1) {
     const goal = await AppRuntime.runPromise(Effect.gen(function* () {
@@ -308,15 +321,18 @@ await fs.mkdir(bin, { recursive: true })
 await fs.copyFile(rg, path.join(bin, "rg"))
 let listener: Awaited<ReturnType<typeof Server.listen>> | undefined
 try {
+  stage("runtime-build-started")
   if (scenario !== "loop-cold-recover" && scenario !== "loop-proposal-two-recover" && !scenario.startsWith("loop-proposal-two-rebase-recover"))
     await AppRuntime.runPromise(WorkAuthorityFixture.initialize())
   else await AppRuntime.runPromise(Database.Service)
+  stage("runtime-ready")
   const probe = net.createServer()
   await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve))
   const port = probe.address()
   assert(port && typeof port !== "string")
   await new Promise<void>((resolve) => probe.close(() => resolve()))
   listener = await Server.listen({ hostname: "127.0.0.1", port: port.port })
+  stage("listener-ready")
   const result = await AppRuntime.runPromise(
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
@@ -784,6 +800,37 @@ try {
               active: Array.from(yield* (yield* SessionExecution.Service).active),
             }
           }
+          const unavailableValidation = Effect.gen(function* () {
+            const exited = yield* GoalOwnedLoop.run({ permitID: tick.permit.permit_id, directory: docroot }).pipe(Effect.exit)
+            assert(Exit.isFailure(exited))
+            const failure = Cause.squash(exited.cause)
+            assert(failure instanceof OwnedValidation.Error)
+            assert.equal(failure.code, "PROFILE_UNAVAILABLE")
+            const checkpoint = yield* GoalTickCheckpointV2.read(db, tick.permit.permit_id)
+            assert(checkpoint)
+            assert.equal(checkpoint.state, "recovery_required")
+            assert.deepEqual(checkpoint.journal.localEffects, [])
+            assert.equal(checkpoint.journal.nextState, null)
+            const permit = yield* db.get<{ state: string }>(sql`SELECT state FROM goal_tick_permit WHERE permit_id=${tick.permit.permit_id}`)
+            assert.equal(permit?.state, "unknown")
+            const status = yield* (yield* GoalManager.Service).status(parent.id)
+            assert(status?.recoveryRequired)
+            assert.notEqual(status.phase, "done")
+            assert.equal(requests.length, 1)
+            const inputs = yield* db.all("SELECT * FROM session_input")
+            const units = yield* db.all<{ state: string }>("SELECT * FROM goal_child_unit")
+            assert.equal(inputs.length, 1)
+            assert.equal(units.length, 1)
+            assert.equal(units[0].state, "result_recorded")
+            assert.deepEqual(OwnedValidation.inspectCustody(), {
+              limit: OwnedValidation.VALIDATION_CUSTODY_LIMIT, live: 0, quarantine: 0,
+            })
+            stage("validation-refused", { code: failure.code, checkpoint: checkpoint.state, permit: permit.state,
+              requests: requests.length, localEffects: checkpoint.journal.localEffects.length })
+            return { refusal: failure.code, checkpoint, status, permit, inputs, units,
+              validationCustody: OwnedValidation.inspectCustody(),
+              active: Array.from(yield* (yield* SessionExecution.Service).active) }
+          })
           if (scenario.startsWith("steer")) {
             const steer = yield* SessionSteer.Service
             const first = yield* steer.admit({
@@ -821,6 +868,14 @@ try {
                   ),
                 )
               } else {
+                if (process.platform !== "darwin" && scenario === "steer-valid") {
+                  const result = yield* unavailableValidation
+                  assert.equal(result.checkpoint.journal.parent.steering.rows[0].id,
+                    frozen.checkpoint.journal.parent.steering.rows[0].id)
+                  assert(JSON.stringify(requests).includes("FIRST_FROZEN_GUIDANCE"))
+                  assert(!JSON.stringify(requests).includes("LATER_GUIDANCE_NEXT_TICK"))
+                  return { ...result, steers: yield* db.all("SELECT id,prompt,consumed_seq FROM session_steer ORDER BY seq") }
+                }
                 const complete = yield* GoalOwnedLoop.run({ permitID: tick.permit.permit_id, directory: docroot })
                 assert.equal(complete.state, "committed")
                 assert.equal(
@@ -874,10 +929,15 @@ try {
               scenario === "loop-stop"
                 ? Effect.gen(function* () {
                     const fiber = yield* body.pipe(Effect.forkChild)
-                    for (let n = 0; requests.length === 0; n++) {
-                      if (n === 500) throw new Error("Provider dispatch missing")
-                      yield* Effect.sleep("10 millis")
-                    }
+                    stage("stop-waiting-for-provider")
+                    yield* Effect.promise(() => firstProviderRequest.promise)
+                    const admission = yield* db.all<{ unit_id: string; input_id: string }>(sql`
+                      SELECT u.unit_id,i.id AS input_id FROM goal_child_unit u
+                      JOIN session_input i ON i.session_id=u.child_session_id
+                      WHERE u.permit_id=${tick.permit.permit_id}`)
+                    assert.equal(requests.length, 1)
+                    assert.equal(admission.length, 1)
+                    stage("stop-admission-observed", { requests: requests.length, admissions: admission.length })
                     yield* (yield* GoalManager.Service).stop({
                       sessionID: parent.id,
                       goalId: prepared.row.goal_id,
@@ -919,6 +979,8 @@ try {
             }
           }
           if (scenario.startsWith("loop")) {
+            if (process.platform !== "darwin" && (scenario === "loop" || scenario === "loop-failed"))
+              return yield* unavailableValidation
             if (scenario === "loop-cold") {
               const original = DocumentStore.prototype.projectExact
               DocumentStore.prototype.projectExact = function (payload, expected) {
@@ -928,12 +990,15 @@ try {
                     path.join(root, "cold-window.json"),
                     JSON.stringify({ pid: process.pid, docID: doc.id, version: doc.version, hash: doc.hash }),
                   )
+                  stage("cold-window-published")
                   process.kill(process.pid, "SIGSTOP")
                 }
                 return doc
               }
             }
+            stage("loop-run-started")
             const complete = yield* GoalOwnedLoop.run({ permitID: tick.permit.permit_id, directory: docroot })
+            stage("loop-run-completed", { checkpoint: complete.state, requests: requests.length })
             const beforeRetry = requests.length
             const retried = yield* GoalOwnedLoop.run({ permitID: tick.permit.permit_id, directory: docroot })
             assert.equal(retried.revision, complete.revision)
@@ -1476,7 +1541,32 @@ try {
         units,
         active: Array.from(yield* (yield* SessionExecution.Service).active),
       }
-    }).pipe(Effect.provide(SessionSteer.layer), Effect.scoped),
+    }).pipe(Effect.provide(SessionSteer.layer), Effect.scoped, Effect.tapCause((cause) => Effect.sync(() =>
+      stage("runtime-failed", { errors: Cause.prettyErrors(cause).slice(0, 2).map((error) => {
+        const codes = {
+          PROFILE_UNAVAILABLE: "profile_unavailable",
+          LOCAL_OPERATOR_UNAVAILABLE: "native_operator_unavailable",
+          WORK_BINDING_CONFLICT: "work_binding_conflict",
+          EVENT_CONSUMPTION_UNAVAILABLE: "event_consumption_unavailable",
+          SQLITE_BUSY: "sqlite_busy", SQLITE_LOCKED: "sqlite_locked", SQLITE_CANTOPEN: "sqlite_unavailable",
+          SQLITE_READONLY: "sqlite_readonly", SQLITE_IOERR: "sqlite_io", SQLITE_CORRUPT: "sqlite_corrupt",
+          SQLITE_NOTADB: "sqlite_not_database", ENOENT: "filesystem_missing", EACCES: "filesystem_denied",
+          EPERM: "filesystem_denied", ERR_ASSERTION: "assertion_failed",
+        } as const
+        const rawCode: unknown = Object.getOwnPropertyDescriptor(error, "code")?.value
+        const code = typeof rawCode === "string" && Object.hasOwn(codes, rawCode) ? rawCode as keyof typeof codes : undefined
+        const tag: unknown = Object.getOwnPropertyDescriptor(error, "_tag")?.value
+        const name: unknown = Object.getOwnPropertyDescriptor(error, "name")?.value
+        return {
+          name: name === "AssertionError" ? "AssertionError" : error instanceof TypeError ? "TypeError"
+            : error instanceof RangeError ? "RangeError" : error instanceof SyntaxError ? "SyntaxError" : "Error",
+          tag: tag === "OwnedValidationError" ? "OwnedValidationError" : tag === "WorkAuthorityError" ? "WorkAuthorityError"
+            : tag === "LocalOperatorError" ? "LocalOperatorError" : tag === "GoalChild.Error" ? "GoalChild.Error"
+            : tag === "DatabaseBootstrapError" ? "DatabaseBootstrapError" : "UnclassifiedError",
+          code: code ?? "UNCLASSIFIED",
+          reason: code ? codes[code] : "unclassified_error",
+        }
+      }) })))),
   )
   await Bun.write(path.join(root, "result.json"), JSON.stringify({ requests: requests.length, result }))
 } finally {

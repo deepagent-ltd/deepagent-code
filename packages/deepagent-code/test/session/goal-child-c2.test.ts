@@ -3,6 +3,19 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
+function captureOutput(child: ReturnType<typeof spawn>) {
+  const tail = { stdout: "", stderr: "" }
+  const output = Promise.all((["stdout", "stderr"] as const).map((stream) => new Response(
+    child[stream].pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        tail[stream] = (tail[stream] + Buffer.from(chunk).toString()).slice(-16_384)
+        controller.enqueue(chunk)
+      },
+    })),
+  ).text()))
+  return { tail, output }
+}
+
 function spawn(root: string, scenario: string) {
   return Bun.spawn(
     [
@@ -99,14 +112,19 @@ for (const scenario of [
     await Promise.all(
       ["home", "tmp", "config", "data", "cache", "state", "project"].map((name) => fs.mkdir(path.join(root, name))),
     )
+    const startedAt = Date.now()
     const child = spawn(root, scenario)
-    const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
+    const captured = ["loop", "loop-failed", "steer-valid", "loop-stop", "loop-proposal-two",
+      "loop-proposal-diagnostics-stale"].includes(scenario) ? captureOutput(child) : undefined
+    const output = captured?.output ?? Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
     const timeout = setTimeout(() => child.kill("SIGKILL"), 45000)
     try {
       const status = await child.exited
       const log = (await output).join("\n")
       await Bun.write(path.join(root, "output.log"), log)
-      expect({ status, log, root }).toMatchObject({ status: 0 })
+      expect({ status, log, root }, captured ? JSON.stringify({ phase: "child-exited", scenario,
+        elapsedMs: Date.now() - startedAt, status, pid: child.pid, output: captured.tail }) : undefined)
+        .toMatchObject({ status: 0 })
       const result = await Bun.file(path.join(root, "result.json")).json()
       if (scenario.startsWith("initial-selection-")) {
         expect(result.requests).toBe(0)
@@ -140,6 +158,24 @@ for (const scenario of [
           scenario === "manager-tests" ? "done" : "needs_human",
         )
         expect(result.result.active).toEqual([])
+      } else if (process.platform !== "darwin" && ["loop", "loop-failed", "steer-valid"].includes(scenario)) {
+        expect(result.requests).toBe(1)
+        expect(result.result.refusal).toBe("PROFILE_UNAVAILABLE")
+        expect(result.result.checkpoint.state).toBe("recovery_required")
+        expect(result.result.checkpoint.journal.localEffects).toEqual([])
+        expect(result.result.checkpoint.journal.nextState).toBeNull()
+        expect(result.result.permit.state).toBe("unknown")
+        expect(result.result.status.recoveryRequired).toBe(true)
+        expect(result.result.status.phase).not.toBe("done")
+        expect(result.result.inputs).toHaveLength(1)
+        expect(result.result.units).toHaveLength(1)
+        expect(result.result.units[0].state).toBe("result_recorded")
+        expect(result.result.validationCustody).toMatchObject({ live: 0, quarantine: 0 })
+        expect(result.result.active).toEqual([])
+        if (scenario === "steer-valid") {
+          expect(result.result.steers[0].consumed_seq).not.toBeNull()
+          expect(result.result.steers[1].consumed_seq).toBeNull()
+        }
       } else if (scenario.startsWith("steer")) {
         expect(result.requests).toBe(scenario === "steer-valid" ? 1 : 0)
         expect(result.result.inputs).toHaveLength(scenario === "steer-valid" ? 1 : 0)
@@ -296,11 +332,16 @@ for (const cold of ["mirror", "verified-step"])
     await Promise.all(
       ["home", "tmp", "config", "data", "cache", "state", "project"].map((name) => fs.mkdir(path.join(root, name))),
     )
+    const startedAt = Date.now()
     const first = spawn(root, cold === "mirror" ? "loop-cold" : "loop-proposal-two-cold")
-    const firstOutput = Promise.all([new Response(first.stdout).text(), new Response(first.stderr).text()])
+    const firstCaptured = captureOutput(first)
+    const firstOutput = firstCaptured.output
     try {
       for (let n = 0; !(await Bun.file(path.join(root, "cold-window.json")).exists()); n++) {
-        if (first.exitCode !== null || n >= 3000) throw new Error(`Cold window unavailable: ${root}`)
+        if (first.exitCode !== null || n >= 3000) throw new Error(`Cold window unavailable: ${root}; ${JSON.stringify({
+          phase: "waiting-first-cold-window", cold, elapsedMs: Date.now() - startedAt, pid: first.pid,
+          code: first.exitCode, signal: first.signalCode, output: firstCaptured.tail,
+        })}`)
         await Bun.sleep(10)
       }
       const window = await Bun.file(path.join(root, "cold-window.json")).json()
@@ -309,13 +350,16 @@ for (const cold of ["mirror", "verified-step"])
       await first.exited
       await Bun.write(path.join(root, "first.log"), (await firstOutput).join("\n"))
       const second = spawn(root, cold === "mirror" ? "loop-cold-recover" : "loop-proposal-two-recover")
-      const secondOutput = Promise.all([new Response(second.stdout).text(), new Response(second.stderr).text()])
+      const secondCaptured = captureOutput(second)
+      const secondOutput = secondCaptured.output
       const timeout = setTimeout(() => second.kill("SIGKILL"), 30000)
       const code = await second.exited
       clearTimeout(timeout)
       const log = (await secondOutput).join("\n")
       await Bun.write(path.join(root, "second.log"), log)
-      expect({ code, log, root }).toMatchObject({ code: 0 })
+      expect({ code, log, root }, JSON.stringify({ phase: "cold-recovery-exited", cold,
+        elapsedMs: Date.now() - startedAt, pid: second.pid, code, output: secondCaptured.tail }))
+        .toMatchObject({ code: 0 })
       const result = await Bun.file(path.join(root, "result.json")).json()
       expect(result.requests).toBe(0)
       expect(result.result.checkpoint.state).toBe("committed")
