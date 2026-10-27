@@ -26,7 +26,7 @@ export function instrument(source: string) {
     "          const lines = phaseOutput.pending.split(/\\r?\\n/)",
     '          phaseOutput.pending = lines.pop() ?? ""',
     "          for (const line of lines) {",
-    "            const match = /^DAC_DURABLE_PUBLISH_PHASE:(input-wait|input-read|compile-start|compile-done|publish-start|publish-done):(\\d{1,15})$/.exec(line)",
+    "            const match = /^DAC_DURABLE_PUBLISH_PHASE:(process-entry|encoding-start|input-encoding|output-encoding|language-checked|input-wait|input-read|compile-start|compile-done|publish-start|publish-done):(\\d{1,15})$/.exec(line)",
     "            if (!match) continue",
     '            process.stderr.write("DURABLE_PUBLISH_PS_PHASE " + JSON.stringify({ phase: match[1], atMs: Number(match[2]), receivedMs: Math.round(performance.now() - phaseOutput.started) }) + "\\n")',
     "          }",
@@ -35,6 +35,22 @@ export function instrument(source: string) {
   ].join("\n")
   inserted.push(listener)
   const points = [
+    { anchor: "$ErrorActionPreference='Stop'", before: log("process-entry"), after: "" },
+    {
+      anchor: "[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)",
+      before: log("encoding-start"),
+      after: log("input-encoding"),
+    },
+    {
+      anchor: "[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)",
+      before: "",
+      after: log("output-encoding"),
+    },
+    {
+      anchor: "  if($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage'){throw 'unsupported_language_mode'}",
+      before: "",
+      after: log("language-checked"),
+    },
     {
       anchor: "  $inputValue=[Console]::In.ReadToEnd() | ConvertFrom-Json",
       before: log("input-wait"),

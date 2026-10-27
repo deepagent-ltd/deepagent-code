@@ -18,6 +18,11 @@ const Receipt = Schema.Struct({
 })
 const Phase = Schema.Struct({
   phase: Schema.Literals([
+    "process-entry",
+    "encoding-start",
+    "input-encoding",
+    "output-encoding",
+    "language-checked",
     "input-wait",
     "input-read",
     "compile-start",
@@ -124,6 +129,11 @@ test("actual durable publication compares narrow and merged owned Windows enviro
     expect(result.sourceGone).toBe(true)
     expect(result.targetEqual).toBe(true)
     expect(result.phases.map((value) => value.phase)).toEqual([
+      "process-entry",
+      "encoding-start",
+      "input-encoding",
+      "output-encoding",
+      "language-checked",
       "input-wait",
       "input-read",
       "compile-start",
