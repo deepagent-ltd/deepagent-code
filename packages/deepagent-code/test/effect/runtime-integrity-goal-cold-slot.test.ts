@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Catalog } from "@deepagent-code/core/catalog"
 import { Database } from "@deepagent-code/core/database/database"
@@ -19,10 +19,12 @@ import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { GoalChildC1Fixture } from "../../../core/test/fixture/goal-child-c1"
-import { AppRuntime } from "../../src/effect/app-runtime"
+import { AppLayer, AppRuntime } from "../../src/effect/app-runtime"
 import { CompositionDigest } from "../../src/effect/composition-digest"
 import { RuntimeIntegrityIdentity } from "../../src/effect/runtime-integrity-identity"
 import { tmpdir } from "../fixture/fixture"
+import { EmptySettingsFixture } from "../fixture/empty-settings"
+import { NativeWindowsBootstrap } from "../../src/installation/windows-native-bootstrap"
 
 // A new isolated root and two loopback requests exercise the cold transaction boundary.
 // No precomputed fixture identity, database proof rewrite, model account or Native qualification.
@@ -32,6 +34,19 @@ test("a real cold root slot fails inside Goal transactions and warms outside bef
   const filename = path.join(fixture.path, "cold-goal-proof.sqlite")
   Flag.DEEPAGENT_CODE_DB = filename
   const observed = { requests: 0 }
+  const runtime = process.platform === "win32"
+    ? ManagedRuntime.make(
+      AppLayer.pipe(
+        Layer.provideMerge(
+          Layer.unwrap(Effect.gen(function* () {
+            if (yield* NativeWindowsBootstrap.Registered)
+              return yield* Effect.die(new Error("Empty settings cold Root fixture cannot replace registered Native storage"))
+            return EmptySettingsFixture.layer
+          })),
+        ),
+      ),
+    )
+    : AppRuntime
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
     observed.requests++
     if (observed.requests === 1)
@@ -49,7 +64,7 @@ test("a real cold root slot fails inside Goal transactions and warms outside bef
     })
   } })
   try {
-    await AppRuntime.runPromise(Effect.gen(function* () {
+    await runtime.runPromise(Effect.gen(function* () {
       const db = (yield* Database.Service).db
       expect((yield* db.all<{ file: string }>("PRAGMA database_list"))[0]?.file)
         .toBe(filename)
@@ -130,7 +145,7 @@ test("a real cold root slot fails inside Goal transactions and warms outside bef
     }).pipe(Effect.scoped))
   } finally {
     await server.stop(true)
-    await AppRuntime.dispose()
+    await runtime.dispose()
     Flag.DEEPAGENT_CODE_DB = original
   }
 }, 45_000)

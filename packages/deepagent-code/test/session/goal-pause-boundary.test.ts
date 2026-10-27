@@ -15,6 +15,9 @@ function fixture(root: string, phase?: string) {
   return Bun.spawn(
     [
       process.execPath,
+      ...(process.platform === "win32"
+        ? ["--preload", path.resolve(import.meta.dir, "../fixture/source-empty-settings-preload.ts")]
+        : []),
       path.resolve(import.meta.dir, "../fixture/goal-pause-boundary.ts"),
       root,
       ...(phase ? [phase] : []),
@@ -34,7 +37,7 @@ function fixture(root: string, phase?: string) {
         XDG_DATA_HOME: path.join(root, "data"),
         XDG_CACHE_HOME: path.join(root, "cache"),
         XDG_STATE_HOME: path.join(root, "state"),
-        DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
+        DEEPAGENT_CODE_TEST_HOME: process.platform === "win32" ? root : path.join(root, "home"),
         DEEPAGENT_CODE_HOME: path.join(root, "data"),
         DEEPAGENT_CODE_DB: path.join(root, "authority.sqlite"),
         DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(root, "managed"),

@@ -15,7 +15,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import * as Log from "@deepagent-code/core/util/log"
-import { Server } from "../../src/server/server"
+import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, provideInstance, tmpdirScoped } from "../fixture/fixture"
 import { InstanceBootstrap } from "../../src/project/bootstrap"
@@ -25,6 +25,8 @@ import { InstancePaths } from "../../src/server/routes/instance/httpapi/groups/i
 import { testEffect } from "../lib/effect"
 import { httpApiLayer, requestInDirectory } from "./httpapi-layer"
 import { SyncPaths } from "../../src/server/routes/instance/httpapi/groups/sync"
+import { SourceEmptySettingsRoot } from "../fixture/source-empty-settings-root"
+import { Root } from "../../src/effect/root"
 
 void Log.init({ print: false })
 
@@ -55,7 +57,13 @@ function requestDefault(path: string, directory: string, init: RequestInit = {})
 function requestServer(path: string, directory: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers)
   headers.set("x-deepagent-code-directory", directory)
-  return Effect.promise(() => Promise.resolve(Server.Default().app.request(path, { ...init, headers })))
+  return Effect.gen(function* () {
+    // The builtin adapter calls AppRuntime, so it must share the original root's database.
+    const handler = yield* SourceEmptySettingsRoot.webHandler(undefined, Root.embeddedServerMemoMap())
+    return yield* Effect.promise(() =>
+      handler.handler(new Request(new URL(path, "http://localhost"), { ...init, headers }), HttpApiApp.context),
+    )
+  })
 }
 
 function localAdapter(directory: string): WorkspaceAdapter {

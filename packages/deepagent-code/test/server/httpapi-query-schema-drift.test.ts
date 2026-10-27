@@ -2,7 +2,7 @@ import { afterEach, describe, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import { OpenApi } from "effect/unstable/httpapi"
 import { Flag } from "@deepagent-code/core/flag/flag"
-import { Server } from "../../src/server/server"
+import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { SessionID } from "../../src/session/schema"
 import { PublicApi } from "../../src/server/routes/instance/httpapi/public"
 import {
@@ -29,6 +29,8 @@ import { QueryBoolean, QueryBooleanOpenApi } from "../../src/server/routes/insta
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { it } from "../lib/effect"
+import { SourceEmptySettingsRoot } from "../fixture/source-empty-settings-root"
+import { Root } from "../../src/effect/root"
 
 const originalWorkspaces = Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES
 
@@ -95,12 +97,13 @@ const pathParamPatterns = [
   { method: "delete", path: WorkspacePaths.remove, name: "id", pattern: "^wrk" },
 ] satisfies Array<{ method: Method; path: string; name: string; pattern: string }>
 
-function app() {
-  return Server.Default().app
-}
-
 function request(url: string, init?: RequestInit) {
-  return Effect.promise(async () => app().request(url, init))
+  return Effect.gen(function* () {
+    const handler = yield* SourceEmptySettingsRoot.webHandler(undefined, Root.embeddedServerMemoMap())
+    return yield* Effect.promise(() =>
+      handler.handler(new Request(new URL(url, "http://localhost"), init), HttpApiApp.context),
+    )
+  })
 }
 
 function withTmp<A, E, R>(

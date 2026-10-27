@@ -1,5 +1,6 @@
 // Real AppRuntime, durable producers, HTTP control, frame finalizers and file DB. No provider
-// requests, mocks, SQL authority writes, or copied user data are used by this finite oracle.
+// requests, SQL authority writes, or copied user data. Source Windows tests supply an explicitly
+// absent owned Settings store at Root composition; they do not qualify Native storage.
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import { writeFileSync } from "node:fs"

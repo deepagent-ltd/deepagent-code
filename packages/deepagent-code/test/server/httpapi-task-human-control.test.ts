@@ -9,7 +9,14 @@ test("formal HTTP human Task control authenticates the real operator and keeps u
     ["home", "tmp", "config", "data", "cache", "state", "project"].map((name) => fs.mkdir(path.join(root, name))),
   )
   const child = Bun.spawn(
-    [process.execPath, path.resolve(import.meta.dir, "../fixture/task-human-control-host.ts"), root],
+    [
+      process.execPath,
+      ...(process.platform === "win32"
+        ? ["--preload", path.resolve(import.meta.dir, "../fixture/source-empty-settings-preload.ts")]
+        : []),
+      path.resolve(import.meta.dir, "../fixture/task-human-control-host.ts"),
+      root,
+    ],
     {
       cwd: path.join(root, "project"),
       stdout: "pipe",
@@ -25,7 +32,7 @@ test("formal HTTP human Task control authenticates the real operator and keeps u
         XDG_DATA_HOME: path.join(root, "data"),
         XDG_CACHE_HOME: path.join(root, "cache"),
         XDG_STATE_HOME: path.join(root, "state"),
-        DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
+        DEEPAGENT_CODE_TEST_HOME: process.platform === "win32" ? root : path.join(root, "home"),
         DEEPAGENT_CODE_HOME: path.join(root, "data"),
         DEEPAGENT_CODE_DB: path.join(root, "authority.sqlite"),
         DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(root, "managed"),

@@ -28,6 +28,7 @@ import { HEADER as FenceHeader } from "../../src/server/shared/fence"
 import { resetDatabase } from "../fixture/db"
 import { tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { SourceEmptySettingsRoot } from "../fixture/source-empty-settings-root"
 
 // Flip the experimental workspaces flag so EventV2.run actually writes to
 // EventSequenceTable (the source of truth the fence middleware reads). Reset
@@ -357,9 +358,10 @@ describe("instance HttpApi", () => {
   it.live("rejects malformed permission and question request ids", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
+      const handler = yield* SourceEmptySettingsRoot.webHandler()
       const request = (path: string, init?: RequestInit) =>
         Effect.promise(() =>
-          HttpApiApp.webHandler().handler(
+          handler.handler(
             new Request(`http://localhost${path}`, {
               ...init,
               headers: { "x-deepagent-code-directory": dir, "content-type": "application/json", ...init?.headers },
@@ -391,9 +393,10 @@ describe("instance HttpApi", () => {
   it.live("returns typed not found bodies for missing permission and question requests", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
+      const handler = yield* SourceEmptySettingsRoot.webHandler()
       const request = (path: string, init?: RequestInit) =>
         Effect.promise(() =>
-          HttpApiApp.webHandler().handler(
+          handler.handler(
             new Request(`http://localhost${path}`, {
               ...init,
               headers: { "x-deepagent-code-directory": dir, "content-type": "application/json", ...init?.headers },
@@ -444,8 +447,9 @@ describe("instance HttpApi", () => {
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
       const projectID = ProjectV2.ID.make("project_missing")
+      const handler = yield* SourceEmptySettingsRoot.webHandler()
       const response = yield* Effect.promise(() =>
-        HttpApiApp.webHandler().handler(
+        handler.handler(
           new Request(`http://localhost/project/${projectID}`, {
             method: "PATCH",
             headers: { "x-deepagent-code-directory": dir, "content-type": "application/json" },
