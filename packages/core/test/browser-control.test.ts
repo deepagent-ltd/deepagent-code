@@ -1,3 +1,4 @@
+import os from "node:os"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -45,7 +46,7 @@ const admission = (suffix = "one") => ({ admissionId: `admission-${suffix}`, ses
   receiptId: "receipt", toolCallId: `call-${suffix}`, toolName: "browser", effectKind: "mutating" as const, ownerToken: "owner", timeCreated: Date.now() })
 
 test("public interaction pins exact page mode and same-origin targets without granting scripts or cold execution", async () => {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-public-interaction-control-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-public-interaction-control-")))
   const filename = path.join(directory, "control.sqlite")
   const records = await Effect.runPromise(Effect.gen(function* () {
     const value = yield* setup(directory)
@@ -115,7 +116,7 @@ test("public interaction pins exact page mode and same-origin targets without gr
 }, 30_000)
 
 test("file-backed programs require their own immutable grant and retain one exact action through cold history", async () => {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-program-control-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-program-control-")))
   const filename = path.join(directory, "control.sqlite")
   const source = 'return {version:1,steps:[{type:"fill",target:"field",text:args.value}]}'
   const argsJSON = '{"value":"approved value"}'
@@ -171,7 +172,7 @@ test("file-backed programs require their own immutable grant and retain one exac
 }, 30_000)
 
 test("file-backed clipboard grants preserve old control bytes, exact admission and command-bound terminal evidence", async () => {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-clipboard-control-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-clipboard-control-")))
   const filename = path.join(directory, "control.sqlite")
   const records = await Effect.runPromise(Effect.gen(function* () {
     const value = yield* setup(directory)
@@ -219,7 +220,7 @@ test("file-backed clipboard grants preserve old control bytes, exact admission a
 }, 30_000)
 
 test("public readonly profile persists exact origins and resolver, rejects interaction before admission and reopens without writes", async () => {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-public-control-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-public-control-")))
   const filename = path.join(directory, "control.sqlite")
   const record = await Effect.runPromise(Effect.gen(function* () {
     const { db, input } = yield* setup(directory)
@@ -262,7 +263,7 @@ test("public readonly profile persists exact origins and resolver, rejects inter
 }, 30_000)
 
 test("formal file DB: exact identity, current namespace, atomic rollback, one admitted action and cold read-only history", async () => {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-control-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-control-")))
   const filename = path.join(directory, "control.sqlite")
   const record = await Effect.runPromise(Effect.gen(function* () {
     const { db, input, control } = yield* setup(directory)
@@ -317,7 +318,7 @@ test("formal file DB: exact identity, current namespace, atomic rollback, one ad
 }, 30_000)
 
 test("record mirror corruption and physical bounds fail closed; capacity never consumes cancel terminal reserve", async () => {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-control-bounds-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-control-bounds-")))
   await Effect.runPromise(Effect.gen(function* () {
     const { db, control } = yield* setup(directory)
     const invalid = yield* Effect.exit(db.run(sql`UPDATE browser_control SET revision = 1.5 WHERE control_id = ${control.controlID}`))
@@ -339,7 +340,7 @@ test("record mirror corruption and physical bounds fail closed; capacity never c
 }, 30_000)
 
 test("instance logical reservation budget rejects new actions but preserves existing unknown and cancel evidence", async () => {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-capacity-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-capacity-")))
   await Effect.runPromise(Effect.gen(function* () {
     const { db, control } = yield* setup(directory)
     const pending = yield* BrowserControl.prepareAction(db, { control, command: { type: "tabs.list" },

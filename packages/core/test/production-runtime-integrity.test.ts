@@ -27,11 +27,15 @@ import { readonlyMap, readonlySet } from "../src/util/readonly-collections"
 
 const repository = path.resolve(import.meta.dir, "../../..")
 
+async function repositoryFiles(pattern: string) {
+  return (await Array.fromAsync(new Bun.Glob(pattern).scan({ cwd: repository, onlyFiles: true })))
+    .map((file) => file.replaceAll("\\", "/"))
+    .filter((file) => !file.split("/").some((part) => ["node_modules", ".output", "dist"].includes(part)))
+}
+
 describe("production runtime integrity", () => {
   test("source modules cannot create a private Database runtime or nested Database build", async () => {
-    const files = await Array.fromAsync(
-      new Bun.Glob("packages/*/src/**/*.ts").scan({ cwd: repository, onlyFiles: true }),
-    )
+    const files = await repositoryFiles("packages/*/src/**/*.ts")
     const violations = (
       await Promise.all(
         files.map(async (file) => ({ file, source: await Bun.file(path.join(repository, file)).text() })),
@@ -162,9 +166,7 @@ describe("production runtime integrity", () => {
   })
 
   test("production queues, pubsubs, and callback streams declare finite backpressure", async () => {
-    const files = await Array.fromAsync(
-      new Bun.Glob("packages/*/src/**/*.{ts,tsx}").scan({ cwd: repository, onlyFiles: true }),
-    )
+    const files = await repositoryFiles("packages/*/src/**/*.{ts,tsx}")
     const violations = (
       await Promise.all(
         files.map(async (file) => runtimeChannelViolations(file, await Bun.file(path.join(repository, file)).text())),
@@ -174,9 +176,7 @@ describe("production runtime integrity", () => {
       .sort()
     expect(violations).toEqual([])
     expect(
-      await Array.fromAsync(
-        new Bun.Glob("packages/*/src/**/*.{ts,tsx}").scan({ cwd: repository, onlyFiles: true }),
-      ).then(async (sourceFiles) =>
+      await repositoryFiles("packages/*/src/**/*.{ts,tsx}").then(async (sourceFiles) =>
         (
           await Promise.all(
             sourceFiles.map(async (file) =>
@@ -189,9 +189,7 @@ describe("production runtime integrity", () => {
   })
 
   test("createRuntimeFeatureRegistry is only constructed by the canonical runtime root", async () => {
-    const files = await Array.fromAsync(
-      new Bun.Glob("packages/*/src/**/*.{ts,tsx}").scan({ cwd: repository, onlyFiles: true }),
-    )
+    const files = await repositoryFiles("packages/*/src/**/*.{ts,tsx}")
     const violations = (
       await Promise.all(
         files.map(async (file) => registryConstructionCalls(file, await Bun.file(path.join(repository, file)).text())),
@@ -210,9 +208,7 @@ describe("production runtime integrity", () => {
   })
 
   test("exported authority collections cannot expose mutable runtime objects", async () => {
-    const files = await Array.fromAsync(
-      new Bun.Glob("packages/*/src/**/*.{ts,tsx}").scan({ cwd: repository, onlyFiles: true }),
-    )
+    const files = await repositoryFiles("packages/*/src/**/*.{ts,tsx}")
     const violations = (
       await Promise.all(
         files.map(async (file) => {
@@ -247,9 +243,7 @@ describe("production runtime integrity", () => {
   })
 
   test("source EventV2 definitions have literal identities and no exact type/version collisions", async () => {
-    const files = await Array.fromAsync(
-      new Bun.Glob("packages/*/src/**/*.ts").scan({ cwd: repository, onlyFiles: true }),
-    )
+    const files = await repositoryFiles("packages/*/src/**/*.ts")
     const definitions = (
       await Promise.all(
         files.map(async (file) => eventDefinitions(file, await Bun.file(path.join(repository, file)).text())),
@@ -307,9 +301,7 @@ describe("production runtime integrity", () => {
     const routes = await Bun.file(path.join(repository, "packages/server/src/routes.ts")).text()
     const serve = await Bun.file(path.join(repository, "packages/cli/src/commands/handlers/serve.ts")).text()
     const daemon = await Bun.file(path.join(repository, "packages/cli/src/services/daemon.ts")).text()
-    const previewSources = await Array.fromAsync(
-      new Bun.Glob("packages/cli/src/**/*.ts").scan({ cwd: repository, onlyFiles: true }),
-    )
+    const previewSources = await repositoryFiles("packages/cli/src/**/*.ts")
     expect(packageJson.bin).toEqual({ lildax: "./bin/lildax.cjs" })
     expect(publisher).toContain('bin: { lildax: "./bin/lildax" }')
     expect(publisher).not.toMatch(/bin:\s*\{[^}]*dacode/)
@@ -333,9 +325,7 @@ describe("production runtime integrity", () => {
     expect(acp).toContain("ACPSession.make()")
     expect(acp).toContain("Directory.make(")
 
-    const commands = await Array.fromAsync(
-      new Bun.Glob("packages/deepagent-code/src/cli/**/*.{ts,tsx}").scan({ cwd: repository, onlyFiles: true }),
-    )
+    const commands = await repositoryFiles("packages/deepagent-code/src/cli/**/*.{ts,tsx}")
     expect(
       (
         await Promise.all(
@@ -349,9 +339,7 @@ describe("production runtime integrity", () => {
   })
 
   test("every package executable is real and every source runtime is in the caller denominator", async () => {
-    const packageFiles = (
-      await Array.fromAsync(new Bun.Glob("packages/**/package.json").scan({ cwd: repository, onlyFiles: true }))
-    ).filter((file) => !file.includes("/node_modules/") && !file.includes("/.output/") && !file.includes("/dist/"))
+    const packageFiles = await repositoryFiles("packages/**/package.json")
     const packages = await Promise.all(
       packageFiles.map(async (file) => ({ file, manifest: await Bun.file(path.join(repository, file)).json() })),
     )
@@ -578,6 +566,10 @@ describe("production runtime integrity", () => {
     expect(candidates.find((candidate) => candidate.name === "staticValues")?.verdict).toBe("safe_static")
     expect(candidates.find((candidate) => candidate.name === "pending")?.verdict).toBe("review_required")
     expect(candidates.find((candidate) => candidate.name === "HiddenState.pending")?.verdict).toBe("review_required")
+    expect(runtimeStateCandidates("packages\\core\\node_modules\\probe\\src\\runtime.ts", "const pending = new Map()"))
+      .toEqual([])
+    expect(runtimeStateCandidates("packages\\probe\\src\\runtime.ts", "let pending = new Map()" )[0]?.key)
+      .toBe("packages/probe/src/runtime.ts:pending")
   })
 
   // RI-94 asserts a PROPERTY, not a snapshot. The previous form compared the generator's output
@@ -611,6 +603,16 @@ describe("production runtime integrity", () => {
         ].every((field) => field.length > 0),
     )
     expect(unclassified.map((candidate) => `${candidate.key} (${candidate.verdict})`)).toEqual([])
+
+    // Qualification children remain visible in the denominator without claiming production
+    // lifecycle safety. Their fixed Rollup entry and tsconfig boundary is reviewed separately.
+    const testOnly = candidates.filter((candidate) => candidate.verdict === "test_only")
+    expect(testOnly).toHaveLength(19)
+    expect(testOnly.every((candidate) =>
+      candidate.file.startsWith("packages/desktop/src/main/fixture/") &&
+      candidate.reachability.startsWith("test_only:") &&
+      candidate.durability === "test evidence only; never product Native/Work authority",
+    )).toBe(true)
 
     // These 18 bindings moved with 2.0.2 source edits. Their owners and exit paths are reviewed
     // in runtime-state-inventory.ts; a stale source anchor must reopen review instead of falling

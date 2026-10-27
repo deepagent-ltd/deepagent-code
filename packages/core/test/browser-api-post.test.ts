@@ -1,3 +1,4 @@
+import os from "node:os"
 import { expect, test } from "bun:test"
 import { Option, Schema } from "effect"
 import { BrowserSchema } from "../src/browser/schema"
@@ -130,7 +131,7 @@ test("old public profiles retain exact decoded field bytes and reject API policy
 })
 
 test("real file DB retains API actions across retries and cold reads with controlled admissions and two real permissions", async () => {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-api-post-store-"))
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-api-post-store-")))
   const file = path.join(root, "browser.sqlite")
   const database = Database.layerFromPath(file)
   const dependencies = Layer.mergeAll(database, Layer.succeed(Location.Service, location({ directory: AbsolutePath.make(root) })),

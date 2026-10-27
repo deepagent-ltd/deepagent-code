@@ -17,7 +17,7 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
 /** The CLI has exactly one producer. Every HTTP result is the generated SDK's
  * original result; fixed diagnostic output never includes an error payload. */
 export async function run(input: Input, root: string, attachments: 1 | 4 = 4) {
-  assert(root.startsWith("/tmp/dac-im-media-product-") || (path.basename(root).startsWith("dac-im-media-product-lanes-") && path.dirname(root) === await fs.realpath(os.tmpdir())))
+  await requireRoot(root)
   assert(new URL(input.peers.A.url).hostname === "127.0.0.1")
   assert(input.peers.A.directory.startsWith(path.join(root, "A") + path.sep))
   assert(input.peers.A.authorizationFile.startsWith(path.join(root, "A") + path.sep))
@@ -66,9 +66,17 @@ export async function run(input: Input, root: string, attachments: 1 | 4 = 4) {
     })
 }
 
+async function requireRoot(root: string) {
+  const canonical = await fs.realpath(root)
+  const owned = ["original", "qa"].includes(path.basename(canonical)) ? path.dirname(canonical) : canonical
+  assert(path.basename(owned).startsWith("dac-im-media-product-") && path.dirname(owned) === await fs.realpath(os.tmpdir()),
+    "Private media fixture requires an owned temporary root")
+}
+
 if (import.meta.main) {
   const file = path.resolve(process.argv[2] ?? "")
-  assert(file.startsWith("/tmp/dac-im-media-product-") && path.basename(file) === "descriptor-private.json")
+  assert(path.basename(file) === "descriptor-private.json")
+  await requireRoot(path.dirname(file))
   const input = Schema.decodeUnknownSync(Descriptor)(await Bun.file(file).json())
   if (process.argv.includes("--dry")) {
     assert(input.files.length === 4 && input.files.map((item) => item.bytes).join(",") === "52428800,0,2432,70")

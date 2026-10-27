@@ -24,6 +24,9 @@ async function run(mode: "missing-native-cohort" | "identity" | "interaction-red
     await fs.symlink(await fs.realpath(path.dirname(
       createRequire(path.resolve(import.meta.dir, "../../package.json")).resolve("@lydell/node-pty/package.json"),
     )), path.join(root, "node_modules/@lydell/node-pty"), "junction")
+    await fs.symlink(await fs.realpath(path.dirname(
+      createRequire(path.resolve(import.meta.dir, "../../package.json")).resolve("jsonc-parser/package.json"),
+    )), path.join(root, "node_modules/jsonc-parser"), "junction")
   }
   if (process.platform !== "win32")
     await fs.symlink(path.resolve(import.meta.dir, "../../node_modules"), path.join(root, "node_modules"), "dir")
@@ -32,7 +35,7 @@ async function run(mode: "missing-native-cohort" | "identity" | "interaction-red
   const server = await Bun.build({ entrypoints: [process.platform === "win32"
     ? path.resolve(import.meta.dir, "../../../deepagent-code/test/fixture/unsealed-canonical-server.ts")
     : path.resolve(import.meta.dir, "../../../deepagent-code/src/node.ts")],
-    outdir: path.join(root, "chunks"), naming: "node.js", target: "node", external: ["@lydell/node-pty", "bun", ...(process.platform === "win32" ? [] : ["jsonc-parser"])],
+    outdir: path.join(root, "chunks"), naming: "node.js", target: "node", external: ["@lydell/node-pty", "bun", "jsonc-parser"],
     define: { "Bun.main": '""', DEEPAGENT_CODE_VERSION: '"2.0.3"', DEEPAGENT_CODE_CHANNEL: '"dev"' }, files: { "deepagent-code-web-ui.gen.ts": "" } })
   // The real sidecar imports its physical adjacent chunks/node.js entry.
   const sidecar = await Bun.build({ entrypoints: [path.join(import.meta.dir, "sidecar.ts")], outdir: root, naming: "sidecar.js", target: "node" })

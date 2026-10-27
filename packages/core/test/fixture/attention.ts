@@ -1,3 +1,4 @@
+import os from "node:os"
 import { mkdtemp, rm } from "node:fs/promises"
 import path from "node:path"
 import { Effect, Layer, LayerMap } from "effect"
@@ -28,7 +29,7 @@ import { WorkspaceV2 } from "../../src/workspace"
 export const capability = Attention.localCapability({ profile: "implicit-local", gateway: false })
 
 export const temporary = Effect.acquireRelease(
-  Effect.promise(() => mkdtemp("/tmp/deepagent-attention-")),
+  Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "deepagent-attention-"))),
   (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
 )
 

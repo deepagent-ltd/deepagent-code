@@ -3,15 +3,18 @@ import { resolveDeepAgentCodeHome } from "../../src/deepagent/workspace"
 
 // P0-0 guard: the DeepAgent storage root must be a SINGLE source of truth. resolveDeepAgentCodeHome
 // (used by the control plane) must compute the identical root as core's Global.Path resolution for
-// every env combination. Production is fixed to ~/.deepagent/code; tests may use an isolated home
+// every env combination. Production follows the platform data home; tests may use an isolated home
 // and may choose an exact data root only inside that explicit test boundary.
 describe("P0-0 storage root single source", () => {
   const homedir = require("node:os").homedir() as string
   const path = require("node:path") as typeof import("node:path")
+  const production = process.platform === "win32"
+    ? path.win32.join(homedir, "AppData", "Local", "deepagent-code")
+    : path.resolve(homedir, ".deepagent", "code")
 
   test("DEEPAGENT_CODE_HOME is ignored outside an explicit test boundary", () => {
     expect(resolveDeepAgentCodeHome({ DEEPAGENT_CODE_HOME: "/explicit/home" })).toBe(
-      path.resolve(homedir, ".deepagent", "code"),
+      production,
     )
   })
 
@@ -28,6 +31,6 @@ describe("P0-0 storage root single source", () => {
   })
 
   test("falls back to real homedir only when neither env is set", () => {
-    expect(resolveDeepAgentCodeHome({})).toBe(path.resolve(homedir, ".deepagent", "code"))
+    expect(resolveDeepAgentCodeHome({})).toBe(production)
   })
 })

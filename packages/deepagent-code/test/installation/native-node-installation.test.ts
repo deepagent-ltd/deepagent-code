@@ -10,8 +10,15 @@ test("sealed Node entry verifies its actual runtime, immutable handles and adjac
   const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-native-node-module-"))
   const key = generateKeyPairSync("ed25519")
   const runtimeProbe = Bun.spawn(["node", "-p", "process.execPath"], { stdout: "pipe", stderr: "pipe" })
-  const runtime = (await new Response(runtimeProbe.stdout).text()).trim()
+  const runtimeSource = (await new Response(runtimeProbe.stdout).text()).trim()
   expect(await runtimeProbe.exited).toBe(0)
+  // Hosted Linux Node installations can be hard-linked or group-writable. Verify
+  // an owned copy with the normal publisher checks; macOS Node may need adjacent dylibs.
+  const runtime = process.platform === "linux" ? path.join(root, "node") : await fs.realpath(runtimeSource)
+  if (process.platform === "linux") {
+    await fs.copyFile(await fs.realpath(runtimeSource), runtime)
+    await fs.chmod(runtime, 0o700)
+  }
   const fixture = path.join(import.meta.dir, "fixture/native-node-installation-process.ts")
   const source = await fs.readFile(fixture)
   const components = new NativeInstallationSchema.Components({ schemaVersion: "dac.native-components.v1",

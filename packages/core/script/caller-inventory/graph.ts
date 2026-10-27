@@ -8,6 +8,7 @@
  * files cannot enter the denominator (anti-pollution guarantee).
  */
 import ts from "typescript"
+import path from "node:path"
 import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { HandlerSite, Requirement } from "./types"
@@ -44,9 +45,9 @@ export function resolveSpecifier(fromFile: string, spec: string): string | undef
   } else {
     const ownPackageRoot = (file: string): string => {
       const marker = "/packages/"
-      const index = file.indexOf(marker)
+      const index = file.replaceAll("\\", "/").indexOf(marker)
       if (index === -1) return ""
-      const rest = file.slice(index + marker.length)
+      const rest = file.replaceAll("\\", "/").slice(index + marker.length)
       const slash = rest.indexOf("/")
       const pkg = slash === -1 ? rest : rest.slice(0, slash)
       return `${marker}${pkg}/src`
@@ -296,7 +297,7 @@ export function bodyScopes(sites: readonly HandlerSite[]): BodyScope {
   const chains = new Map<string, { repoFile: string; line: number }>()
   const files: string[] = []
   for (const [repoFile, sitesInFile] of [...byFile].sort(([a], [b]) => (a < b ? -1 : 1))) {
-    const mod = parseModule(`${rootRepoPath()}/${repoFile}`)
+    const mod = parseModule(path.resolve(rootRepoPath(), repoFile))
     files.push(repoFile)
     const queue: ts.Node[] = []
     const seenNodes = new Set<ts.Node>()

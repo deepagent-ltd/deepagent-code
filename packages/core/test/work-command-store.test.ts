@@ -1,3 +1,4 @@
+import os from "node:os"
 import { expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import fs from "node:fs/promises"
@@ -13,7 +14,7 @@ import { WorkCommand } from "../src/session/work-command"
 const source = process.env.DAC_WORK_COMMAND_DB
 test.skipIf(!source)("actual released command cannot launch, regress or release custody twice", async () => {
   if (!source) throw new Error("An actual signed command result database is required")
-  const root = await fs.mkdtemp("/tmp/dac-command-store-")
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-command-store-"))
   const filename = path.join(root, "copy.sqlite")
   const original = new Database(source, { readonly: true })
   try { await fs.writeFile(filename, original.serialize()) } finally { original.close() }

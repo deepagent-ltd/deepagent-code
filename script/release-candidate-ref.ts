@@ -18,8 +18,8 @@ export function releaseCandidateReplacement(version: string, release?: Candidate
         }
       : version === "2.0.5"
         ? {
-            candidate: "acc5c804339540defa793fc16a397e2fe329b85a",
-            tag: "acc5c804339540defa793fc16a397e2fe329b85a",
+            candidate: "04f248daca1b4a97a9b5730a1e5240cb8184d51b",
+            tag: "04f248daca1b4a97a9b5730a1e5240cb8184d51b",
             releaseID: 422617422,
           }
         : undefined

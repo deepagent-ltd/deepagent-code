@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url"
 import { describe, expect, test } from "bun:test"
 import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
@@ -192,7 +193,7 @@ describe("V2 provider owner containment", () => {
     const filename = `${tmp.path}/takeover.sqlite`
     const marker = `${tmp.path}/physical-dispatch.json`
     const fixture = new URL("./fixture/v2-provider-owner-process.ts", import.meta.url)
-    const first = Bun.spawn([process.execPath, fixture.pathname, "dispatch", filename, marker], {
+    const first = Bun.spawn([process.execPath, fileURLToPath(fixture), "dispatch", filename, marker], {
       cwd: import.meta.dir,
       stdout: "pipe",
       stderr: "pipe",
@@ -203,7 +204,7 @@ describe("V2 provider owner containment", () => {
     const dispatched = JSON.parse(firstOutput) as { receiptId: string }
 
     await Bun.sleep(650)
-    const second = Bun.spawn([process.execPath, fixture.pathname, "recover", filename, marker, dispatched.receiptId], {
+    const second = Bun.spawn([process.execPath, fileURLToPath(fixture), "recover", filename, marker, dispatched.receiptId], {
       cwd: import.meta.dir,
       stdout: "pipe",
       stderr: "pipe",

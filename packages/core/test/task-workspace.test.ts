@@ -83,6 +83,7 @@ const gitIn = (cwd: string, args: string[]) =>
 const makeRepo = async (root: string) => {
   await fs.mkdir(root, { recursive: true })
   expectExit0(gitIn(root, ["init", "-b", "main"]), "git init")
+  gitIn(root, ["config", "core.autocrlf", "false"])
   gitIn(root, ["config", "user.email", "test@deepagent.local"])
   gitIn(root, ["config", "user.name", "DeepAgent Test"])
   await fs.writeFile(path.join(root, "README.md"), "# fixture repo\n")
@@ -102,7 +103,7 @@ const worktreePaths = (repo: string) =>
     .stdout.toString()
     .split("\n")
     .filter((line) => line.startsWith("worktree "))
-    .map((line) => line.slice("worktree ".length).trim())
+    .map((line) => path.normalize(line.slice("worktree ".length).trim()))
 
 const porcelainStatus = (repo: string) => gitIn(repo, ["status", "--porcelain"]).stdout.toString().trim()
 
@@ -172,7 +173,7 @@ describe("Core V2 TaskWorkspace", () => {
         parentDirectory: repo,
       })
       const derived = TaskWorkspace.derive({
-        repositoryRoot: repo,
+        repositoryRoot: gitIn(repo, ["rev-parse", "--show-toplevel"]).stdout.toString().trim(),
         operationKey: admitted.run.childSessionID,
       })
       expect(receipt.baseCommit).toBe(head)

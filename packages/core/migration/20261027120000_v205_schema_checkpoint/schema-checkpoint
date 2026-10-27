@@ -1,0 +1,1 @@
+Schema baseline checkpoint only. Do not register or execute this SQL: browser shared resource/input-origin tables already execute in 20261015120000_browser_shared_resource, Goal pause boundary in 20261015130000_goal_pause_boundary, and browser file binding/backfill/constraints in 20261015140000_browser_shared_file_binding.

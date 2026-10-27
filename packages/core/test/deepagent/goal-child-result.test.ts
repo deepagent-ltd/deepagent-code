@@ -3,8 +3,11 @@ import { Effect, Layer } from "effect"
 import { LLM, LLMClient, LLMEvent } from "@deepagent-code/llm"
 import { RequestExecutor } from "@deepagent-code/llm/route"
 import { AmazonBedrock } from "@deepagent-code/llm/providers/compat"
-import { EventStreamCodec } from "../../../llm/node_modules/@smithy/eventstream-codec"
+import path from "node:path"
+
 import { GoalChildResult } from "../../src/deepagent/goal-child-result"
+
+const { EventStreamCodec } = await import(Bun.resolveSync("@smithy/eventstream-codec", path.resolve(import.meta.dir, "../../../llm")))
 
 // Exercise the shipped binary framing/encoder over a real loopback socket. Bedrock is not a
 // supported production SessionRunnerModel route; this is a protocol/accounting oracle only.

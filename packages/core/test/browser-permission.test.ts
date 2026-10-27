@@ -1,3 +1,4 @@
+import os from "node:os"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -22,7 +23,7 @@ const rules = (permissions: PermissionV2.Ruleset) => Effect.gen(function* () {
 })
 
 test("real PermissionV2 once permits bind exact action, live policy and scope; checks never ask again", async () => {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-permission-"))
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-permission-")))
   const database = Database.layerFromPath(path.join(root, "permissions.sqlite"))
   const current = Layer.succeed(Location.Service, location({ directory: AbsolutePath.make(root) }))
   const dependencies = Layer.mergeAll(database, current,

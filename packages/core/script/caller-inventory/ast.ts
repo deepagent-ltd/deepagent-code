@@ -150,7 +150,8 @@ export function declarationNodes(mod: ParsedModule, name: string): readonly ts.N
   return found
 }
 
-export function parseModule(file: string): ParsedModule {
+export function parseModule(input: string): ParsedModule {
+  const file = input.replaceAll("\\", "/")
   const cached = cache.get(file)
   if (cached) return cached
   const text = readFileSync(file, "utf8")
