@@ -15,14 +15,14 @@ on:
         description: Unit suite for a manual diagnostic run; main pushes test every suite
         type: choice
         default: all
-        options: [all, common, core, cli]
+        options: [all, common, core, cli, desktop]
       shard:
         description: Unit shard (common 1, core 1-4, cli 1-8); main pushes test every shard
         type: choice
         default: all
         options: [all, "1", "2", "3", "4", "5", "6", "7", "8"]
       test_file:
-        description: Optional package-relative test file for a manual core or cli diagnostic; main pushes run every file
+        description: Package-relative file for a manual core, cli or desktop diagnostic; desktop requires a file; main pushes run every file
         type: string
         default: ""
 
@@ -56,7 +56,7 @@ jobs:
       - name: Validate the manual unit selection
         if: github.event_name == 'workflow_dispatch'
         run: |
-          bun -e 'const suite=process.env.DAC_UNIT_SUITE; const shard=process.env.DAC_UNIT_SHARD; const file=process.env.DAC_UNIT_TEST_FILE; if (shard !== "all" && (!/^[1-8]$/.test(shard ?? "") || Number(shard) > (suite === "common" ? 1 : suite === "core" ? 4 : suite === "cli" ? 8 : 0))) throw new Error("Select a specific suite and one of its valid shards, or choose all shards"); if (file && (!["core","cli"].includes(suite ?? "") || shard !== "all" || !/^test\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.test\.tsx?$/.test(file) || file.split("/").includes(".."))) throw new Error("A file diagnostic requires core or cli, all shards, and a package-relative test file")'
+          bun -e 'const suite=process.env.DAC_UNIT_SUITE; const shard=process.env.DAC_UNIT_SHARD; const file=process.env.DAC_UNIT_TEST_FILE; if (shard !== "all" && (!/^[1-8]$/.test(shard ?? "") || Number(shard) > (suite === "common" ? 1 : suite === "core" ? 4 : suite === "cli" ? 8 : 0))) throw new Error("Select a specific suite and one of its valid shards, or choose all shards"); if (suite === "desktop" && !file) throw new Error("A desktop diagnostic requires a test file"); if (file && (!["core","cli","desktop"].includes(suite ?? "") || shard !== "all" || !/^(?:test|src)\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.test\.tsx?$/.test(file) || !file.startsWith(suite === "desktop" ? "src/" : "test/") || file.split("/").includes(".."))) throw new Error("A file diagnostic requires core, cli or desktop, all shards, and a package-relative test file")'
         env:
           DAC_UNIT_SUITE: ${{ inputs.suite || 'all' }}
           DAC_UNIT_SHARD: ${{ inputs.shard || 'all' }}
@@ -127,7 +127,8 @@ jobs:
           ${{ fromJSON(
             inputs.suite == 'common' && '["common"]' ||
             inputs.suite == 'core' && '["core"]' ||
-            inputs.suite == 'cli' && '["cli"]' || '["common","core","cli"]'
+            inputs.suite == 'cli' && '["cli"]' ||
+            inputs.suite == 'desktop' && '["desktop"]' || '["common","core","cli"]'
           ) }}
         shard: ${{ fromJSON(inputs.test_file && '[1]' || inputs.shard && inputs.shard != 'all' && format('[{0}]', inputs.shard) || '[1,2,3,4,5,6,7,8]') }}
         exclude:
@@ -248,8 +249,12 @@ jobs:
       - name: Run unit tests
         timeout-minutes: ${{ matrix.settings.timeout }}
         run: |
+          if [[ "$DAC_TEST_SUITE" == 'desktop' && -z "$DAC_TEST_FILE" ]]; then
+            echo 'A desktop diagnostic requires a test file' >&2
+            exit 1
+          fi
           if [[ "$DAC_TEST_SUITE" == 'common' ]]; then
-            dac_test_command=(bun run test:ci --filter='!@deepagent-code/core' --filter='!deepagent-code' --log-order=stream --log-prefix=task)
+            dac_test_command=(bun run test:ci --filter='!@deepagent-code/core' --filter='!deepagent-code' --continue=always --log-order=stream --log-prefix=task)
             # The Windows App and Electron fixtures each need their original cold-start budget.
             # Run every package while keeping their heavy child processes from competing here.
             if [[ "$RUNNER_OS" == 'Windows' ]]; then
@@ -258,6 +263,8 @@ jobs:
           else
             if [[ "$DAC_TEST_SUITE" == 'core' ]]; then
               dac_test_directory='packages/core'
+            elif [[ "$DAC_TEST_SUITE" == 'desktop' ]]; then
+              dac_test_directory='packages/desktop'
             else
               bun turbo build --filter='deepagent-code^...'
               dac_test_directory='packages/deepagent-code'
@@ -265,9 +272,15 @@ jobs:
             # Keep shard flags on the package test command, away from dependency compilers.
             dac_test_command=(bun run --cwd "$dac_test_directory" test:ci)
             if [[ -n "$DAC_TEST_FILE" ]]; then
-              bun -e 'const file=process.env.DAC_TEST_FILE; if (!file || !/^test\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.test\.tsx?$/.test(file) || file.split("/").includes("..")) throw new Error("Invalid diagnostic test file")'
+              bun -e 'const file=process.env.DAC_TEST_FILE; const prefix=process.env.DAC_TEST_SUITE === "desktop" ? "src/" : "test/"; if (!file || !/^(?:test|src)\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.test\.tsx?$/.test(file) || !file.startsWith(prefix) || file.split("/").includes("..")) throw new Error("Invalid diagnostic test file")'
               git ls-files --error-unmatch "$dac_test_directory/$DAC_TEST_FILE"
-              dac_test_command+=("./$DAC_TEST_FILE")
+              if [[ "$DAC_TEST_SUITE" == 'desktop' ]]; then
+                # test:ci includes ./src; invoking it would also select every other Desktop test.
+                mkdir -p "$dac_test_directory/.artifacts/unit"
+                dac_test_command=(bun --cwd "$dac_test_directory" test "./$DAC_TEST_FILE" --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml)
+              else
+                dac_test_command+=("./$DAC_TEST_FILE")
+              fi
             else
               dac_test_command+=("--shard=$DAC_TEST_SHARD/$DAC_TEST_SHARDS")
             fi
