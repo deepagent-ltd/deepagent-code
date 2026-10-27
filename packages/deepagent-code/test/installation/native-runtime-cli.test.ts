@@ -573,7 +573,13 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
       await fs.writeFile(path.join(root, "matrix.json"), JSON.stringify(rows, null, 2))
       console.info("NATIVE_CLI_CASE", JSON.stringify(row))
       const result = await Bun.file(path.join(root, `${mode}-result.json`)).json()
-      expect({ mode, exit, diagnostic: exit === (success ? 0 : 2) ? "expected" : result }).toEqual({
+      // Native selection maps its first cause to a public refusal. Only its fixed
+      // classifications may leave the owned child log; raw stderr can contain secrets.
+      const classifications = stderr.split(/\r?\n/).filter((line) =>
+        /^Local operator diagnostic: \{"version":1,"stage":"(?:operator-command|factory-load|project-select|contract-select|location-open|model-descriptor|model-resolve|runtime-approve|request-bind|credential-capture|encoder)","kind":"(?:interrupted|defect|failure)","tag":"(?:NativeRuntimeError|NativeInstallationError|WorkRouteApproval\.Error|LocalOperator\.Error|WorkFileCapability\.Error|CatalogV2\.(?:ProviderNotFound|ModelNotFound)|SessionRunnerModel\.(?:ModelNotSelectedError|UnsupportedApiError|ModelProtocolDisabledError)|LocationIdentity\.(?:RootUnavailableError|NotFoundError|RetiredError|ConflictError|WorkUnsettledError)|unknown)","code":"[A-Z][A-Z0-9_]{0,79}"\}$/.test(line) ||
+        /^WINDOWS_WORK_(?:CHILD|FACTORY|HELPER)_FAILURE (?:stage|phase)=[a-z][a-z-]{0,47} kind=[A-Za-z]{1,40} os=-?\d{1,10}(?: exit_known=(?:true|false) exit_code=\d{1,10})?$/.test(line),
+      ).slice(-32)
+      expect({ mode, exit, diagnostic: exit === (success ? 0 : 2) ? "expected" : { result, classifications } }).toEqual({
         mode,
         exit: success ? 0 : 2,
         diagnostic: "expected",

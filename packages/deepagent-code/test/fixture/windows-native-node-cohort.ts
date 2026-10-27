@@ -66,23 +66,34 @@ export async function build(input: { directory: string; nodeEntry: string }) {
 /** Query the usable runner toolchain before replacing its profile environment.
  * These commands neither install Rust nor change its default configuration. */
 export async function captureToolchain() {
-  const query = (command: string[], env = process.env) => {
-    const result = Bun.spawnSync(command, { cwd: path.join(repository, "packages/work-file-helper"), env,
-      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 15_000 })
-    assert.equal(result.exitCode, 0, `Original toolchain query failed (${command.join(" ")}): ${result.stderr.toString().slice(-2048)}`)
-    return result.stdout.toString().trim()
+  const query = async (command: string[], env = process.env) => {
+    const child = Bun.spawn(command, { cwd: path.join(repository, "packages/work-file-helper"), env,
+      stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+    const state = { timedOut: false }
+    const timer = setTimeout(() => { state.timedOut = true; child.kill("SIGKILL") }, 15_000)
+    try {
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+      ])
+      assert(!state.timedOut && code === 0, `Original toolchain query failed (${command.join(" ")}): ${JSON.stringify({ code, timedOut: state.timedOut, stderr: stderr.slice(-2048) })}`)
+      return stdout.trim()
+    } finally {
+      clearTimeout(timer)
+      if (child.exitCode === null) child.kill("SIGKILL")
+      await child.exited
+    }
   }
-  const rustupHome = await fs.realpath(query(["rustup", "show", "home"]))
+  const rustupHome = await fs.realpath(await query(["rustup", "show", "home"]))
   assert(path.isAbsolute(rustupHome))
   const env = { ...process.env, RUSTUP_HOME: rustupHome }
-  const cargo = await fs.realpath(query(["rustup", "which", "cargo"], env))
-  const rustc = await fs.realpath(query(["rustup", "which", "rustc"], env))
-  const cargoVersion = query([cargo, "--version"], env)
-  const rustcVersion = query([rustc, "--version"], env)
-  assert.equal(query(["cargo", "--version"], env), cargoVersion)
-  assert.equal(query(["rustc", "--version"], env), rustcVersion)
+  const cargo = await fs.realpath(await query(["rustup", "which", "cargo"], env))
+  const rustc = await fs.realpath(await query(["rustup", "which", "rustc"], env))
+  const cargoVersion = await query([cargo, "--version"], env)
+  const rustcVersion = await query([rustc, "--version"], env)
+  assert.equal(await query(["cargo", "--version"], env), cargoVersion)
+  assert.equal(await query(["rustc", "--version"], env), rustcVersion)
   return { rustupHome, cargo, rustc, cargoVersion, rustcVersion,
-    activeToolchain: query(["rustup", "show", "active-toolchain"], env) }
+    activeToolchain: await query(["rustup", "show", "active-toolchain"], env) }
 }
 
 async function assemble(input: { root: string; nodeEntry: string; privateKeyFile: string; publicKeyFile: string;
