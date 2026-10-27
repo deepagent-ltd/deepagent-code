@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "27ca4d8a-a35a-4ada-832a-4163895a3d83",
+  "id": "7e9c3b23-9e24-4ab3-a069-464acf01fc1a",
   "prevIds": [
-    "e2014d4d-4aff-47a1-a914-120138501fbd"
+    "27ca4d8a-a35a-4ada-832a-4163895a3d83"
   ],
   "ddl": [
     {
@@ -24,6 +24,30 @@
     },
     {
       "name": "browser_control",
+      "entityType": "tables"
+    },
+    {
+      "name": "browser_shared_action",
+      "entityType": "tables"
+    },
+    {
+      "name": "browser_shared_lease",
+      "entityType": "tables"
+    },
+    {
+      "name": "browser_shared_request",
+      "entityType": "tables"
+    },
+    {
+      "name": "browser_shared_resource",
+      "entityType": "tables"
+    },
+    {
+      "name": "browser_user_selection",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_user_input_origin",
       "entityType": "tables"
     },
     {
@@ -156,6 +180,10 @@
     },
     {
       "name": "goal_tick_permit",
+      "entityType": "tables"
+    },
+    {
+      "name": "goal_pause_boundary",
       "entityType": "tables"
     },
     {
@@ -779,8 +807,18 @@
       "table": "browser_file_artifact"
     },
     {
-      "type": "text",
+      "type": "integer",
       "notNull": true,
+      "autoincrement": false,
+      "default": "1",
+      "generated": null,
+      "name": "binding_version",
+      "entityType": "columns",
+      "table": "browser_file_artifact"
+    },
+    {
+      "type": "text",
+      "notNull": false,
       "autoincrement": false,
       "default": null,
       "generated": null,
@@ -790,11 +828,41 @@
     },
     {
       "type": "text",
-      "notNull": true,
+      "notNull": false,
       "autoincrement": false,
       "default": null,
       "generated": null,
       "name": "control_id",
+      "entityType": "columns",
+      "table": "browser_file_artifact"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "shared_resource_id",
+      "entityType": "columns",
+      "table": "browser_file_artifact"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "shared_lease_id",
+      "entityType": "columns",
+      "table": "browser_file_artifact"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "shared_action_id",
       "entityType": "columns",
       "table": "browser_file_artifact"
     },
@@ -989,12 +1057,42 @@
       "table": "browser_file_grant"
     },
     {
-      "type": "text",
+      "type": "integer",
       "notNull": true,
+      "autoincrement": false,
+      "default": "1",
+      "generated": null,
+      "name": "binding_version",
+      "entityType": "columns",
+      "table": "browser_file_grant"
+    },
+    {
+      "type": "text",
+      "notNull": false,
       "autoincrement": false,
       "default": null,
       "generated": null,
       "name": "control_id",
+      "entityType": "columns",
+      "table": "browser_file_grant"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "shared_resource_id",
+      "entityType": "columns",
+      "table": "browser_file_grant"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "shared_lease_id",
       "entityType": "columns",
       "table": "browser_file_grant"
     },
@@ -1030,7 +1128,7 @@
     },
     {
       "type": "integer",
-      "notNull": true,
+      "notNull": false,
       "autoincrement": false,
       "default": null,
       "generated": null,
@@ -1040,7 +1138,7 @@
     },
     {
       "type": "integer",
-      "notNull": true,
+      "notNull": false,
       "autoincrement": false,
       "default": null,
       "generated": null,
@@ -1557,6 +1655,666 @@
       "name": "updated_at",
       "entityType": "columns",
       "table": "browser_control"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "action_id",
+      "entityType": "columns",
+      "table": "browser_shared_action"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "admission_id",
+      "entityType": "columns",
+      "table": "browser_shared_action"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "resource_id",
+      "entityType": "columns",
+      "table": "browser_shared_action"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "lease_id",
+      "entityType": "columns",
+      "table": "browser_shared_action"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "outcome",
+      "entityType": "columns",
+      "table": "browser_shared_action"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record",
+      "entityType": "columns",
+      "table": "browser_shared_action"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record_hash",
+      "entityType": "columns",
+      "table": "browser_shared_action"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "lease_id",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "resource_id",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "main_incarnation",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sidecar_incarnation",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "lease_epoch",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "manual_epoch",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin_input_id",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record_hash",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "browser_shared_lease"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "resource_id",
+      "entityType": "columns",
+      "table": "browser_shared_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "browser_shared_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "browser_shared_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_digest",
+      "entityType": "columns",
+      "table": "browser_shared_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "manual_epoch",
+      "entityType": "columns",
+      "table": "browser_shared_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "browser_shared_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "lease_id",
+      "entityType": "columns",
+      "table": "browser_shared_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record",
+      "entityType": "columns",
+      "table": "browser_shared_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record_hash",
+      "entityType": "columns",
+      "table": "browser_shared_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "browser_shared_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "browser_shared_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "resource_id",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_digest",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "principal",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "main_incarnation",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "manual_epoch",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "barrier_order",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "core_cutoff",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "live_lease_id",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record_hash",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "browser_shared_resource"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "receipt_id",
+      "entityType": "columns",
+      "table": "browser_user_selection"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "selection_id",
+      "entityType": "columns",
+      "table": "browser_user_selection"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "browser_user_selection"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "activity_id",
+      "entityType": "columns",
+      "table": "browser_user_selection"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_ordinal",
+      "entityType": "columns",
+      "table": "browser_user_selection"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "projection_hash",
+      "entityType": "columns",
+      "table": "browser_user_selection"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input_id",
+      "entityType": "columns",
+      "table": "browser_user_selection"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin_hash",
+      "entityType": "columns",
+      "table": "browser_user_selection"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "promoted_seq",
+      "entityType": "columns",
+      "table": "browser_user_selection"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "browser_user_selection"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input_id",
+      "entityType": "columns",
+      "table": "session_user_input_origin"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_user_input_origin"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "original_submission_id",
+      "entityType": "columns",
+      "table": "session_user_input_origin"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "main_incarnation",
+      "entityType": "columns",
+      "table": "session_user_input_origin"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "submission_order",
+      "entityType": "columns",
+      "table": "session_user_input_origin"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "admitted_seq",
+      "entityType": "columns",
+      "table": "session_user_input_origin"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record",
+      "entityType": "columns",
+      "table": "session_user_input_origin"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record_hash",
+      "entityType": "columns",
+      "table": "session_user_input_origin"
     },
     {
       "type": "text",
@@ -5897,6 +6655,106 @@
       "name": "settled_at",
       "entityType": "columns",
       "table": "goal_tick_permit"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "permit_id",
+      "entityType": "columns",
+      "table": "goal_pause_boundary"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "goal_id",
+      "entityType": "columns",
+      "table": "goal_pause_boundary"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "command_id",
+      "entityType": "columns",
+      "table": "goal_pause_boundary"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "goal_pause_boundary"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record",
+      "entityType": "columns",
+      "table": "goal_pause_boundary"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "record_hash",
+      "entityType": "columns",
+      "table": "goal_pause_boundary"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "logical_bytes",
+      "entityType": "columns",
+      "table": "goal_pause_boundary"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reserved_bytes",
+      "entityType": "columns",
+      "table": "goal_pause_boundary"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "goal_pause_boundary"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "goal_pause_boundary"
     },
     {
       "type": "text",
@@ -25240,6 +26098,51 @@
     },
     {
       "columns": [
+        "shared_resource_id"
+      ],
+      "tableTo": "browser_shared_resource",
+      "columnsTo": [
+        "resource_id"
+      ],
+      "onUpdate": "RESTRICT",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_browser_file_artifact_shared_resource_id_browser_shared_resource_resource_id_fk",
+      "entityType": "fks",
+      "table": "browser_file_artifact"
+    },
+    {
+      "columns": [
+        "shared_lease_id"
+      ],
+      "tableTo": "browser_shared_lease",
+      "columnsTo": [
+        "lease_id"
+      ],
+      "onUpdate": "RESTRICT",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_browser_file_artifact_shared_lease_id_browser_shared_lease_lease_id_fk",
+      "entityType": "fks",
+      "table": "browser_file_artifact"
+    },
+    {
+      "columns": [
+        "shared_action_id"
+      ],
+      "tableTo": "browser_shared_action",
+      "columnsTo": [
+        "action_id"
+      ],
+      "onUpdate": "RESTRICT",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_browser_file_artifact_shared_action_id_browser_shared_action_action_id_fk",
+      "entityType": "fks",
+      "table": "browser_file_artifact"
+    },
+    {
+      "columns": [
         "instance_id"
       ],
       "tableTo": "browser_file_capacity",
@@ -25265,6 +26168,36 @@
       "onDelete": "RESTRICT",
       "nameExplicit": false,
       "name": "fk_browser_file_grant_control_id_browser_control_control_id_fk",
+      "entityType": "fks",
+      "table": "browser_file_grant"
+    },
+    {
+      "columns": [
+        "shared_resource_id"
+      ],
+      "tableTo": "browser_shared_resource",
+      "columnsTo": [
+        "resource_id"
+      ],
+      "onUpdate": "RESTRICT",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_browser_file_grant_shared_resource_id_browser_shared_resource_resource_id_fk",
+      "entityType": "fks",
+      "table": "browser_file_grant"
+    },
+    {
+      "columns": [
+        "shared_lease_id"
+      ],
+      "tableTo": "browser_shared_lease",
+      "columnsTo": [
+        "lease_id"
+      ],
+      "onUpdate": "RESTRICT",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_browser_file_grant_shared_lease_id_browser_shared_lease_lease_id_fk",
       "entityType": "fks",
       "table": "browser_file_grant"
     },
@@ -27506,6 +28439,16 @@
     },
     {
       "columns": [
+        "resource_id",
+        "request_id"
+      ],
+      "nameExplicit": false,
+      "name": "browser_shared_request_pk",
+      "entityType": "pks",
+      "table": "browser_shared_request"
+    },
+    {
+      "columns": [
         "activity_kind",
         "activity_id",
         "receipt_id"
@@ -27913,6 +28856,51 @@
     },
     {
       "columns": [
+        "action_id"
+      ],
+      "nameExplicit": false,
+      "name": "browser_shared_action_pk",
+      "table": "browser_shared_action",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "lease_id"
+      ],
+      "nameExplicit": false,
+      "name": "browser_shared_lease_pk",
+      "table": "browser_shared_lease",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "resource_id"
+      ],
+      "nameExplicit": false,
+      "name": "browser_shared_resource_pk",
+      "table": "browser_shared_resource",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "receipt_id"
+      ],
+      "nameExplicit": false,
+      "name": "browser_user_selection_pk",
+      "table": "browser_user_selection",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "input_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_user_input_origin_pk",
+      "table": "session_user_input_origin",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "id"
       ],
       "nameExplicit": false,
@@ -28161,6 +29149,15 @@
       "nameExplicit": false,
       "name": "goal_tick_permit_pk",
       "table": "goal_tick_permit",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "permit_id"
+      ],
+      "nameExplicit": false,
+      "name": "goal_pause_boundary_pk",
+      "table": "goal_pause_boundary",
       "entityType": "pks"
     },
     {
@@ -29192,6 +30189,24 @@
     {
       "columns": [
         {
+          "value": "shared_action_id",
+          "isExpression": false
+        },
+        {
+          "value": "ordinal",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"browser_file_artifact\".\"binding_version\"=2",
+      "origin": "manual",
+      "name": "browser_file_artifact_shared_action_ordinal_idx",
+      "entityType": "indexes",
+      "table": "browser_file_artifact"
+    },
+    {
+      "columns": [
+        {
           "value": "grant_id",
           "isExpression": false
         }
@@ -29222,6 +30237,28 @@
       "where": null,
       "origin": "manual",
       "name": "browser_file_artifact_control_idx",
+      "entityType": "indexes",
+      "table": "browser_file_artifact"
+    },
+    {
+      "columns": [
+        {
+          "value": "shared_resource_id",
+          "isExpression": false
+        },
+        {
+          "value": "created_at",
+          "isExpression": false
+        },
+        {
+          "value": "artifact_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "browser_file_artifact_shared_idx",
       "entityType": "indexes",
       "table": "browser_file_artifact"
     },
@@ -29268,6 +30305,24 @@
     {
       "columns": [
         {
+          "value": "shared_resource_id",
+          "isExpression": false
+        },
+        {
+          "value": "request_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"browser_file_grant\".\"binding_version\"=2",
+      "origin": "manual",
+      "name": "browser_file_grant_shared_request_idx",
+      "entityType": "indexes",
+      "table": "browser_file_grant"
+    },
+    {
+      "columns": [
+        {
           "value": "control_id",
           "isExpression": false
         },
@@ -29284,6 +30339,28 @@
       "where": null,
       "origin": "manual",
       "name": "browser_file_grant_control_idx",
+      "entityType": "indexes",
+      "table": "browser_file_grant"
+    },
+    {
+      "columns": [
+        {
+          "value": "shared_resource_id",
+          "isExpression": false
+        },
+        {
+          "value": "created_at",
+          "isExpression": false
+        },
+        {
+          "value": "grant_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "browser_file_grant_shared_idx",
       "entityType": "indexes",
       "table": "browser_file_grant"
     },
@@ -29412,6 +30489,172 @@
       "name": "browser_control_state_idx",
       "entityType": "indexes",
       "table": "browser_control"
+    },
+    {
+      "columns": [
+        {
+          "value": "admission_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "browser_shared_action_admission_idx",
+      "entityType": "indexes",
+      "table": "browser_shared_action"
+    },
+    {
+      "columns": [
+        {
+          "value": "resource_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"browser_shared_lease\".\"state\" IN ('pending','active')",
+      "origin": "manual",
+      "name": "browser_shared_lease_live_idx",
+      "entityType": "indexes",
+      "table": "browser_shared_lease"
+    },
+    {
+      "columns": [
+        {
+          "value": "resource_id",
+          "isExpression": false
+        },
+        {
+          "value": "lease_epoch",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "browser_shared_lease_epoch_idx",
+      "entityType": "indexes",
+      "table": "browser_shared_lease"
+    },
+    {
+      "columns": [
+        {
+          "value": "resource_id",
+          "isExpression": false
+        },
+        {
+          "value": "origin_input_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"browser_shared_lease\".\"origin_input_id\" IS NOT NULL",
+      "origin": "manual",
+      "name": "browser_shared_lease_input_idx",
+      "entityType": "indexes",
+      "table": "browser_shared_lease"
+    },
+    {
+      "columns": [
+        {
+          "value": "principal",
+          "isExpression": false
+        },
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "request_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "browser_shared_resource_request_idx",
+      "entityType": "indexes",
+      "table": "browser_shared_resource"
+    },
+    {
+      "columns": [
+        {
+          "value": "main_incarnation",
+          "isExpression": false
+        },
+        {
+          "value": "state",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "browser_shared_resource_live_idx",
+      "entityType": "indexes",
+      "table": "browser_shared_resource"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "activity_id",
+          "isExpression": false
+        },
+        {
+          "value": "request_ordinal",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "browser_user_selection_activity_idx",
+      "entityType": "indexes",
+      "table": "browser_user_selection"
+    },
+    {
+      "columns": [
+        {
+          "value": "main_incarnation",
+          "isExpression": false
+        },
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "original_submission_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "session_user_input_origin_submission_idx",
+      "entityType": "indexes",
+      "table": "session_user_input_origin"
+    },
+    {
+      "columns": [
+        {
+          "value": "main_incarnation",
+          "isExpression": false
+        },
+        {
+          "value": "submission_order",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "session_user_input_origin_order_idx",
+      "entityType": "indexes",
+      "table": "session_user_input_origin"
     },
     {
       "columns": [
@@ -30672,6 +31915,20 @@
       "name": "goal_tick_permit_active_idx",
       "entityType": "indexes",
       "table": "goal_tick_permit"
+    },
+    {
+      "columns": [
+        {
+          "value": "goal_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "goal_pause_boundary_goal_idx",
+      "entityType": "indexes",
+      "table": "goal_pause_boundary"
     },
     {
       "columns": [
@@ -35416,6 +36673,12 @@
       "table": "task_notification_outbox"
     },
     {
+      "value": "typeof(\"binding_version\")='integer' AND ((\"binding_version\"=1 AND \"control_id\" IS NOT NULL AND \"action_id\" IS NOT NULL AND \"shared_resource_id\" IS NULL AND \"shared_lease_id\" IS NULL AND \"shared_action_id\" IS NULL) OR (\"binding_version\"=2 AND \"control_id\" IS NULL AND \"action_id\" IS NULL AND \"shared_resource_id\" IS NOT NULL AND \"shared_lease_id\" IS NOT NULL AND \"shared_action_id\" IS NOT NULL))",
+      "name": "browser_file_artifact_binding_check",
+      "entityType": "checks",
+      "table": "browser_file_artifact"
+    },
+    {
       "value": "typeof(\"artifact_id\")='text' AND length(CAST(\"artifact_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"artifact_id\",char(0))=0",
       "name": "browser_file_artifact_artifact_id_text_check",
       "entityType": "checks",
@@ -35434,14 +36697,32 @@
       "table": "browser_file_artifact"
     },
     {
-      "value": "typeof(\"action_id\")='text' AND length(CAST(\"action_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"action_id\",char(0))=0",
+      "value": "\"action_id\" IS NULL OR (typeof(\"action_id\")='text' AND length(CAST(\"action_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"action_id\",char(0))=0)",
       "name": "browser_file_artifact_action_id_text_check",
       "entityType": "checks",
       "table": "browser_file_artifact"
     },
     {
-      "value": "typeof(\"control_id\")='text' AND length(CAST(\"control_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"control_id\",char(0))=0",
+      "value": "\"control_id\" IS NULL OR (typeof(\"control_id\")='text' AND length(CAST(\"control_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"control_id\",char(0))=0)",
       "name": "browser_file_artifact_control_id_text_check",
+      "entityType": "checks",
+      "table": "browser_file_artifact"
+    },
+    {
+      "value": "\"shared_resource_id\" IS NULL OR (typeof(\"shared_resource_id\")='text' AND length(CAST(\"shared_resource_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"shared_resource_id\",char(0))=0)",
+      "name": "browser_file_artifact_shared_resource_id_text_check",
+      "entityType": "checks",
+      "table": "browser_file_artifact"
+    },
+    {
+      "value": "\"shared_lease_id\" IS NULL OR (typeof(\"shared_lease_id\")='text' AND length(CAST(\"shared_lease_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"shared_lease_id\",char(0))=0)",
+      "name": "browser_file_artifact_shared_lease_id_text_check",
+      "entityType": "checks",
+      "table": "browser_file_artifact"
+    },
+    {
+      "value": "\"shared_action_id\" IS NULL OR (typeof(\"shared_action_id\")='text' AND length(CAST(\"shared_action_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"shared_action_id\",char(0))=0)",
+      "name": "browser_file_artifact_shared_action_id_text_check",
       "entityType": "checks",
       "table": "browser_file_artifact"
     },
@@ -35512,7 +36793,7 @@
       "table": "browser_file_artifact"
     },
     {
-      "value": "typeof(\"record\")='text' AND length(CAST(\"record\" AS BLOB)) BETWEEN 1 AND 8192 AND json_valid(\"record\") AND json_type(\"record\") IS 'object' AND json_type(\"record\",'$.version') IS 'integer' AND json_extract(\"record\",'$.version') IS 1",
+      "value": "typeof(\"record\")='text' AND length(CAST(\"record\" AS BLOB)) BETWEEN 1 AND 8192 AND json_valid(\"record\") AND json_type(\"record\") IS 'object' AND json_type(\"record\",'$.version') IS 'integer' AND json_extract(\"record\",'$.version') IS \"binding_version\"",
       "name": "browser_file_artifact_record_check",
       "entityType": "checks",
       "table": "browser_file_artifact"
@@ -35542,18 +36823,6 @@
       "table": "browser_file_artifact"
     },
     {
-      "value": "json_type(\"record\",'$.actionID') IS 'text' AND json_extract(\"record\",'$.actionID') IS \"action_id\"",
-      "name": "browser_file_artifact_action_id_mirror_check",
-      "entityType": "checks",
-      "table": "browser_file_artifact"
-    },
-    {
-      "value": "json_type(\"record\",'$.controlID') IS 'text' AND json_extract(\"record\",'$.controlID') IS \"control_id\"",
-      "name": "browser_file_artifact_control_id_mirror_check",
-      "entityType": "checks",
-      "table": "browser_file_artifact"
-    },
-    {
       "value": "json_type(\"record\",'$.scopeHash') IS 'text' AND json_extract(\"record\",'$.scopeHash') IS \"scope_hash\"",
       "name": "browser_file_artifact_scope_hash_mirror_check",
       "entityType": "checks",
@@ -35562,6 +36831,24 @@
     {
       "value": "json_type(\"record\",'$.state') IS 'text' AND json_extract(\"record\",'$.state') IS \"state\"",
       "name": "browser_file_artifact_state_mirror_check",
+      "entityType": "checks",
+      "table": "browser_file_artifact"
+    },
+    {
+      "value": "\"binding_version\"<>1 OR (json_type(\"record\",'$.actionID') IS 'text' AND json_extract(\"record\",'$.actionID') IS \"action_id\")",
+      "name": "browser_file_artifact_action_id_mirror_check",
+      "entityType": "checks",
+      "table": "browser_file_artifact"
+    },
+    {
+      "value": "\"binding_version\"<>1 OR (json_type(\"record\",'$.controlID') IS 'text' AND json_extract(\"record\",'$.controlID') IS \"control_id\")",
+      "name": "browser_file_artifact_control_id_mirror_check",
+      "entityType": "checks",
+      "table": "browser_file_artifact"
+    },
+    {
+      "value": "\"binding_version\"<>2 OR (json_type(\"record\",'$.binding') IS 'object' AND json_extract(\"record\",'$.binding.kind') IS 'shared-v2' AND json_type(\"record\",'$.binding.resourceID') IS 'text' AND json_extract(\"record\",'$.binding.resourceID') IS \"shared_resource_id\" AND json_type(\"record\",'$.binding.leaseID') IS 'text' AND json_extract(\"record\",'$.binding.leaseID') IS \"shared_lease_id\" AND json_type(\"record\",'$.binding.scopeHash') IS 'text' AND json_extract(\"record\",'$.binding.scopeHash') IS \"scope_hash\" AND json_type(\"record\",'$.actionID') IS 'text' AND json_extract(\"record\",'$.actionID') IS \"shared_action_id\" AND json_type(\"record\",'$.bindingHash') IS 'text' AND length(CAST(json_extract(\"record\",'$.bindingHash') AS BLOB))=64 AND json_extract(\"record\",'$.bindingHash') NOT GLOB '*[^0-9a-f]*')",
+      "name": "browser_file_artifact_shared_mirror_check",
       "entityType": "checks",
       "table": "browser_file_artifact"
     },
@@ -35650,6 +36937,12 @@
       "table": "browser_file_capacity"
     },
     {
+      "value": "typeof(\"binding_version\")='integer' AND ((\"binding_version\"=1 AND \"control_id\" IS NOT NULL AND \"control_epoch\" IS NOT NULL AND \"policy_revision\" IS NOT NULL AND \"shared_resource_id\" IS NULL AND \"shared_lease_id\" IS NULL) OR (\"binding_version\"=2 AND \"control_id\" IS NULL AND \"control_epoch\" IS NULL AND \"policy_revision\" IS NULL AND \"shared_resource_id\" IS NOT NULL AND \"shared_lease_id\" IS NOT NULL))",
+      "name": "browser_file_grant_binding_check",
+      "entityType": "checks",
+      "table": "browser_file_grant"
+    },
+    {
       "value": "typeof(\"grant_id\")='text' AND length(CAST(\"grant_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"grant_id\",char(0))=0",
       "name": "browser_file_grant_grant_id_text_check",
       "entityType": "checks",
@@ -35662,14 +36955,26 @@
       "table": "browser_file_grant"
     },
     {
-      "value": "typeof(\"control_id\")='text' AND length(CAST(\"control_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"control_id\",char(0))=0",
+      "value": "typeof(\"request_id\")='text' AND length(CAST(\"request_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"request_id\",char(0))=0",
+      "name": "browser_file_grant_request_id_text_check",
+      "entityType": "checks",
+      "table": "browser_file_grant"
+    },
+    {
+      "value": "\"control_id\" IS NULL OR (typeof(\"control_id\")='text' AND length(CAST(\"control_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"control_id\",char(0))=0)",
       "name": "browser_file_grant_control_id_text_check",
       "entityType": "checks",
       "table": "browser_file_grant"
     },
     {
-      "value": "typeof(\"request_id\")='text' AND length(CAST(\"request_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"request_id\",char(0))=0",
-      "name": "browser_file_grant_request_id_text_check",
+      "value": "\"shared_resource_id\" IS NULL OR (typeof(\"shared_resource_id\")='text' AND length(CAST(\"shared_resource_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"shared_resource_id\",char(0))=0)",
+      "name": "browser_file_grant_shared_resource_id_text_check",
+      "entityType": "checks",
+      "table": "browser_file_grant"
+    },
+    {
+      "value": "\"shared_lease_id\" IS NULL OR (typeof(\"shared_lease_id\")='text' AND length(CAST(\"shared_lease_id\" AS BLOB)) BETWEEN 1 AND 512 AND instr(\"shared_lease_id\",char(0))=0)",
+      "name": "browser_file_grant_shared_lease_id_text_check",
       "entityType": "checks",
       "table": "browser_file_grant"
     },
@@ -35692,18 +36997,6 @@
       "table": "browser_file_grant"
     },
     {
-      "value": "typeof(\"control_epoch\")='integer' AND \"control_epoch\" BETWEEN 1 AND 9007199254740991",
-      "name": "browser_file_grant_control_epoch_integer_check",
-      "entityType": "checks",
-      "table": "browser_file_grant"
-    },
-    {
-      "value": "typeof(\"policy_revision\")='integer' AND \"policy_revision\" BETWEEN 1 AND 9007199254740991",
-      "name": "browser_file_grant_policy_revision_integer_check",
-      "entityType": "checks",
-      "table": "browser_file_grant"
-    },
-    {
       "value": "typeof(\"expires_at\")='integer' AND \"expires_at\" BETWEEN 1 AND 9007199254740991",
       "name": "browser_file_grant_expires_at_integer_check",
       "entityType": "checks",
@@ -35712,6 +37005,18 @@
     {
       "value": "typeof(\"created_at\")='integer' AND \"created_at\" BETWEEN 1 AND 9007199254740991",
       "name": "browser_file_grant_created_at_integer_check",
+      "entityType": "checks",
+      "table": "browser_file_grant"
+    },
+    {
+      "value": "\"control_epoch\" IS NULL OR (typeof(\"control_epoch\")='integer' AND \"control_epoch\" BETWEEN 1 AND 9007199254740991)",
+      "name": "browser_file_grant_control_epoch_integer_check",
+      "entityType": "checks",
+      "table": "browser_file_grant"
+    },
+    {
+      "value": "\"policy_revision\" IS NULL OR (typeof(\"policy_revision\")='integer' AND \"policy_revision\" BETWEEN 1 AND 9007199254740991)",
+      "name": "browser_file_grant_policy_revision_integer_check",
       "entityType": "checks",
       "table": "browser_file_grant"
     },
@@ -35728,7 +37033,7 @@
       "table": "browser_file_grant"
     },
     {
-      "value": "typeof(\"record\")='text' AND length(CAST(\"record\" AS BLOB)) BETWEEN 1 AND 8192 AND json_valid(\"record\") AND json_type(\"record\") IS 'object' AND json_type(\"record\",'$.version') IS 'integer' AND json_extract(\"record\",'$.version') IS 1",
+      "value": "typeof(\"record\")='text' AND length(CAST(\"record\" AS BLOB)) BETWEEN 1 AND 8192 AND json_valid(\"record\") AND json_type(\"record\") IS 'object' AND json_type(\"record\",'$.version') IS 'integer' AND json_extract(\"record\",'$.version') IS \"binding_version\"",
       "name": "browser_file_grant_record_check",
       "entityType": "checks",
       "table": "browser_file_grant"
@@ -35746,12 +37051,6 @@
       "table": "browser_file_grant"
     },
     {
-      "value": "json_type(\"record\",'$.controlID') IS 'text' AND json_extract(\"record\",'$.controlID') IS \"control_id\"",
-      "name": "browser_file_grant_control_id_mirror_check",
-      "entityType": "checks",
-      "table": "browser_file_grant"
-    },
-    {
       "value": "json_type(\"record\",'$.commandHash') IS 'text' AND json_extract(\"record\",'$.commandHash') IS \"command_hash\"",
       "name": "browser_file_grant_command_hash_mirror_check",
       "entityType": "checks",
@@ -35764,13 +37063,19 @@
       "table": "browser_file_grant"
     },
     {
-      "value": "json_type(\"record\",'$.controlEpoch') IS 'integer' AND json_extract(\"record\",'$.controlEpoch') IS \"control_epoch\"",
+      "value": "\"binding_version\"<>1 OR (json_type(\"record\",'$.controlID') IS 'text' AND json_extract(\"record\",'$.controlID') IS \"control_id\")",
+      "name": "browser_file_grant_control_id_mirror_check",
+      "entityType": "checks",
+      "table": "browser_file_grant"
+    },
+    {
+      "value": "\"binding_version\"<>1 OR (json_type(\"record\",'$.controlEpoch') IS 'integer' AND json_extract(\"record\",'$.controlEpoch') IS \"control_epoch\")",
       "name": "browser_file_grant_control_epoch_mirror_check",
       "entityType": "checks",
       "table": "browser_file_grant"
     },
     {
-      "value": "json_type(\"record\",'$.policyRevision') IS 'integer' AND json_extract(\"record\",'$.policyRevision') IS \"policy_revision\"",
+      "value": "\"binding_version\"<>1 OR (json_type(\"record\",'$.policyRevision') IS 'integer' AND json_extract(\"record\",'$.policyRevision') IS \"policy_revision\")",
       "name": "browser_file_grant_policy_revision_mirror_check",
       "entityType": "checks",
       "table": "browser_file_grant"
@@ -35790,6 +37095,12 @@
     {
       "value": "json_type(\"record\",'$.command.requestID') IS 'text' AND json_extract(\"record\",'$.command.requestID') IS \"request_id\" AND json_type(\"record\",'$.preview.direction') IS 'text' AND json_extract(\"record\",'$.preview.direction') IS \"direction\"",
       "name": "browser_file_grant_request_mirror_check",
+      "entityType": "checks",
+      "table": "browser_file_grant"
+    },
+    {
+      "value": "\"binding_version\"<>2 OR (json_type(\"record\",'$.binding') IS 'object' AND json_extract(\"record\",'$.binding.kind') IS 'shared-v2' AND json_type(\"record\",'$.binding.resourceID') IS 'text' AND json_extract(\"record\",'$.binding.resourceID') IS \"shared_resource_id\" AND json_type(\"record\",'$.binding.leaseID') IS 'text' AND json_extract(\"record\",'$.binding.leaseID') IS \"shared_lease_id\" AND json_type(\"record\",'$.binding.scopeHash') IS 'text' AND json_extract(\"record\",'$.binding.scopeHash') IS \"scope_hash\" AND json_type(\"record\",'$.bindingHash') IS 'text' AND length(CAST(json_extract(\"record\",'$.bindingHash') AS BLOB))=64 AND json_extract(\"record\",'$.bindingHash') NOT GLOB '*[^0-9a-f]*')",
+      "name": "browser_file_grant_shared_mirror_check",
       "entityType": "checks",
       "table": "browser_file_grant"
     },
@@ -36098,6 +37409,84 @@
       "name": "browser_control_credential_binding_digest_check",
       "entityType": "checks",
       "table": "browser_control"
+    },
+    {
+      "value": "\"outcome\" IN ('pending','completed','cancelled','unknown')",
+      "name": "browser_shared_action_outcome_check",
+      "entityType": "checks",
+      "table": "browser_shared_action"
+    },
+    {
+      "value": "json_valid(\"record\") AND length(CAST(\"record\" AS BLOB)) BETWEEN 1 AND 131072",
+      "name": "browser_shared_action_record_check",
+      "entityType": "checks",
+      "table": "browser_shared_action"
+    },
+    {
+      "value": "\"state\" IN ('pending','active','revoked','unknown')",
+      "name": "browser_shared_lease_state_check",
+      "entityType": "checks",
+      "table": "browser_shared_lease"
+    },
+    {
+      "value": "json_valid(\"record\") AND length(CAST(\"record\" AS BLOB)) BETWEEN 1 AND 16384",
+      "name": "browser_shared_lease_record_check",
+      "entityType": "checks",
+      "table": "browser_shared_lease"
+    },
+    {
+      "value": "\"kind\" IN ('takeover','acquire','close')",
+      "name": "browser_shared_request_kind_check",
+      "entityType": "checks",
+      "table": "browser_shared_request"
+    },
+    {
+      "value": "\"state\" IN ('pending','completed','unknown')",
+      "name": "browser_shared_request_state_check",
+      "entityType": "checks",
+      "table": "browser_shared_request"
+    },
+    {
+      "value": "json_valid(\"record\") AND length(CAST(\"record\" AS BLOB)) BETWEEN 1 AND 16384",
+      "name": "browser_shared_request_record_check",
+      "entityType": "checks",
+      "table": "browser_shared_request"
+    },
+    {
+      "value": "\"state\" IN ('creating','agent_owned','takeover_pending','human_owned','acquire_pending','fenced_blocked','recovery_required','resource_lost','closing','closed')",
+      "name": "browser_shared_resource_state_check",
+      "entityType": "checks",
+      "table": "browser_shared_resource"
+    },
+    {
+      "value": "\"revision\">0 AND \"manual_epoch\">=0 AND \"barrier_order\">=0 AND \"core_cutoff\">=-1",
+      "name": "browser_shared_resource_revision_check",
+      "entityType": "checks",
+      "table": "browser_shared_resource"
+    },
+    {
+      "value": "json_valid(\"record\") AND length(CAST(\"record\" AS BLOB)) BETWEEN 1 AND 16384",
+      "name": "browser_shared_resource_record_check",
+      "entityType": "checks",
+      "table": "browser_shared_resource"
+    },
+    {
+      "value": "(\"input_id\" IS NULL AND \"origin_hash\" IS NULL AND \"promoted_seq\" IS NULL) OR (\"input_id\" IS NOT NULL AND \"origin_hash\" IS NOT NULL AND \"promoted_seq\" IS NOT NULL)",
+      "name": "browser_user_selection_null_check",
+      "entityType": "checks",
+      "table": "browser_user_selection"
+    },
+    {
+      "value": "\"submission_order\">0 AND \"admitted_seq\">=0",
+      "name": "session_user_input_origin_seq_check",
+      "entityType": "checks",
+      "table": "session_user_input_origin"
+    },
+    {
+      "value": "json_valid(\"record\") AND length(CAST(\"record\" AS BLOB)) BETWEEN 1 AND 4096",
+      "name": "session_user_input_origin_record_check",
+      "entityType": "checks",
+      "table": "session_user_input_origin"
     },
     {
       "value": "length(\"raw_snapshot_hash\") = 64 AND \"raw_snapshot_hash\" NOT GLOB '*[^0-9a-f]*' AND length(\"receipt_hash\") = 64 AND \"receipt_hash\" NOT GLOB '*[^0-9a-f]*'",
@@ -36554,6 +37943,30 @@
       "name": "goal_tick_permit_outcome_check",
       "entityType": "checks",
       "table": "goal_tick_permit"
+    },
+    {
+      "value": "\"state\" IN ('prepared','committed')",
+      "name": "goal_pause_boundary_state_check",
+      "entityType": "checks",
+      "table": "goal_pause_boundary"
+    },
+    {
+      "value": "json_valid(\"record\") AND json_type(\"record\")='object' AND length(CAST(\"record\" AS BLOB)) BETWEEN 2 AND 1048576",
+      "name": "goal_pause_boundary_record_check",
+      "entityType": "checks",
+      "table": "goal_pause_boundary"
+    },
+    {
+      "value": "\"logical_bytes\"=length(CAST(\"record\" AS BLOB)) AND \"reserved_bytes\"=1048576",
+      "name": "goal_pause_boundary_size_check",
+      "entityType": "checks",
+      "table": "goal_pause_boundary"
+    },
+    {
+      "value": "length(\"record_hash\")=64 AND \"record_hash\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "goal_pause_boundary_hash_check",
+      "entityType": "checks",
+      "table": "goal_pause_boundary"
     },
     {
       "value": "\"edit_id\" IS NOT NULL AND typeof(\"edit_id\")='text' AND length(CAST(\"edit_id\" AS BLOB)) BETWEEN 1 AND 128 AND \"edit_id\" NOT GLOB '*[^A-Za-z0-9_.:~-]*' AND typeof(\"goal_id\")='text' AND length(CAST(\"goal_id\" AS BLOB)) BETWEEN 1 AND 512 AND typeof(\"session_id\")='text' AND length(CAST(\"session_id\" AS BLOB)) BETWEEN 1 AND 512",
