@@ -26,6 +26,7 @@ const sessionID = SessionV2.ID.make("ses_bash_tool_test")
 const assertions: PermissionV2.AssertInput[] = []
 const runs: Array<{
   readonly command: string
+  readonly args: readonly string[]
   readonly cwd?: string
   readonly shell?: string | boolean
   readonly options?: AppProcess.RunOptions
@@ -76,7 +77,7 @@ const appProcess = Layer.succeed(
     run: (command: ChildProcess.Command, options?: AppProcess.RunOptions) =>
       Effect.suspend(() => {
         if (command._tag !== "StandardCommand") throw new Error("expected standard command")
-        runs.push({ command: command.command, cwd: command.options.cwd, shell: command.options.shell, options })
+        runs.push({ command: command.command, args: command.args, cwd: command.options.cwd, shell: command.options.shell, options })
         return runFailure ? Effect.fail(runFailure) : Effect.succeed(result)
       }),
   } as unknown as AppProcess.Interface),
@@ -273,7 +274,7 @@ describe("BashTool", () => {
                 content: [{ type: "text", text: "hello\n\n\nexit code: 0" }],
               },
             })
-            expect(runs).toMatchObject([{ command: "pwd", cwd: realpathSync(tmp.path) }])
+            expectShellRun("pwd", realpathSync(tmp.path))
             expect(runs[0]?.options).toMatchObject({
               maxOutputBytes: BashTool.MAX_CAPTURE_BYTES,
               maxErrorBytes: BashTool.MAX_CAPTURE_BYTES,
@@ -673,7 +674,7 @@ describe("BashTool", () => {
             // A non-push git command is unaffected by the git.push deny.
             const status = yield* settleTool(registry, call({ command: "git status" }))
             expect(status.result).toMatchObject({ type: "text" })
-            expect(runs).toMatchObject([{ command: "git status" }])
+            expectShellRun("git status")
           }),
         )
       },
@@ -691,7 +692,7 @@ describe("BashTool", () => {
           Effect.andThen((settled) =>
             Effect.sync(() => {
               expect(settled.result).toMatchObject({ type: "text" })
-              expect(runs).toMatchObject([{ command: "git push origin main" }])
+              expectShellRun("git push origin main")
             }),
           ),
         )
@@ -783,3 +784,13 @@ test("keeps locked deferred parity TODOs visible", async () => {
     expect(source).toContain(`TODO: ${todo}`)
   }
 })
+
+function expectShellRun(command: string, cwd?: string) {
+  expect(runs).toMatchObject([{
+    ...(cwd === undefined ? {} : { cwd }),
+    ...(process.platform === "win32"
+      ? { command: expect.stringMatching(/(?:pwsh|powershell)(?:\.exe)?$/i),
+          args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], shell: undefined }
+      : { command, args: [], shell: "/bin/sh" }),
+  }])
+}

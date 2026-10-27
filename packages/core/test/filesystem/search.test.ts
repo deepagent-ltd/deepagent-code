@@ -53,7 +53,7 @@ describe("file.search", () => {
 
       expect(result.engine).toBe("fff")
       expect(result.items).toHaveLength(1)
-      expect(result.items[0]?.path.text).toBe("src/match.ts")
+      expect(result.items[0]?.path.text.replaceAll("\\", "/")).toBe("src/match.ts")
     }),
   )
 
@@ -226,7 +226,7 @@ describe("file.search", () => {
 
       expect(result.engine).toBe("ripgrep")
       expect(result.items).toHaveLength(1)
-      expect(result.items[0]?.path.text).toBe("src/match.ts")
+      expect(result.items[0]?.path.text.replaceAll("\\", "/")).toBe("src/match.ts")
       expect(globbed.files).toEqual([path.join(dir, "src", "match.ts")])
       expect(picked).toBeUndefined()
     }),

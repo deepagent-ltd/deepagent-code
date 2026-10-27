@@ -19,6 +19,13 @@ test("runtime graph resolves real source paths containing spaces, hash and perce
   }
 })
 
+test("package-local aliases resolve from native and canonical source paths", () => {
+  const file = join(rootRepoPath(), "packages/deepagent-code/src/node.ts")
+  const target = join(rootRepoPath(), "packages/deepagent-code/src/installation/index.ts").replaceAll("\\", "/")
+  expect(resolveSpecifier(file, "@/installation")).toBe(target)
+  expect(resolveSpecifier(file.replaceAll("/", "\\"), "@/installation")).toBe(target)
+})
+
 test("runtime graph excludes type-only imports and retains mixed, side-effect and dynamic imports", () => {
   const directory = mkdtempSync(join(tmpdir(), "dac-caller-runtime-"))
   const file = join(directory, "imports.ts")

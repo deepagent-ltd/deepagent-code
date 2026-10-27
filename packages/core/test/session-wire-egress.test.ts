@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import path from "node:path"
 import { DateTime, Effect, Layer } from "effect"
 import { eq, sql } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
@@ -171,7 +172,7 @@ describe("SessionProjector wire egress (W4-6)", () => {
           .pipe(Effect.orDie)
         expect((wire?.data as { path?: { cwd: string; root: string } } | undefined)?.path).toEqual({
           cwd: directory,
-          root,
+          root: path.resolve(root),
         })
       }
     }),

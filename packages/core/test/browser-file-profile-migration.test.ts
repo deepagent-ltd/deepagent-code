@@ -1,3 +1,4 @@
+import os from "node:os"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -22,7 +23,7 @@ const insert = (db: Db, table: string, row: Record<string, string | number | nul
 const snapshot = (db: Db) => Effect.all(tables.map((table) => db.all(sql`SELECT * FROM ${sql.identifier(table)}`)))
 
 test("file-profile forward preserves populated RESTRICT children, audit objects and every record through rollback and file reopen", async () => {
-  const root = await fs.mkdtemp("/tmp/dac-file-profile-forward-")
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-file-profile-forward-"))
   const filename = path.join(root, "profile.sqlite")
   try {
     const saved = await Effect.runPromise(Effect.gen(function* () {

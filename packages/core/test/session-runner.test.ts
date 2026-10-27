@@ -2166,7 +2166,7 @@ describe("SessionRunnerLLM", () => {
       expect(settleHookInputs[0]?.sessionID).toBe(sessionID)
       // The workspace path is the runner's Location project root (informational; the deepagent-code
       // admission derives its authoritative workspacePath from the canonical Session row).
-      expect(settleHookInputs[0]?.workspacePath).toBe("/")
+      expect(settleHookInputs[0]?.workspacePath).toBe(path.parse(process.cwd()).root)
       expect(settleHookInputs[0]?.activityId).toMatch(/^activity_/)
     }),
   )

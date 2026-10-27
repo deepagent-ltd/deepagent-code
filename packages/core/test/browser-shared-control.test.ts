@@ -1,3 +1,4 @@
+import os from "node:os"
 import { expect, test } from "bun:test"
 import { mkdtemp, realpath, rm } from "node:fs/promises"
 import path from "node:path"
@@ -154,7 +155,7 @@ function observation(
 }
 
 test("shared close settlement requires complete cleanup and adopts only a monotone Main close frontier", async () => {
-  const directory = await realpath(await mkdtemp("/tmp/dac-shared-close-"))
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "dac-shared-close-")))
   try {
     await Effect.runPromise(Effect.gen(function* () {
       const fixture = yield* setup(directory)
@@ -197,7 +198,7 @@ test("shared close settlement requires complete cleanup and adopts only a monoto
 })
 
 test("shared fileDB keeps exact receipts, monotone barriers and real durable queue cutoff", async () => {
-  const directory = await realpath(await mkdtemp("/tmp/dac-shared-sql-"))
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "dac-shared-sql-")))
   try {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -319,7 +320,7 @@ test("shared fileDB keeps exact receipts, monotone barriers and real durable que
 })
 
 test("v1 and shared resources share four active slots while retaining v1 record bytes", async () => {
-  const directory = await realpath(await mkdtemp("/tmp/dac-shared-capacity-"))
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "dac-shared-capacity-")))
   try {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -372,7 +373,7 @@ test("v1 and shared resources share four active slots while retaining v1 record 
 })
 
 test("trusted origin admission is atomic and only actual current promotion supplies receipt lineage", async () => {
-  const directory = await realpath(await mkdtemp("/tmp/dac-shared-origin-"))
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "dac-shared-origin-")))
   try {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -727,7 +728,7 @@ test("trusted origin admission is atomic and only actual current promotion suppl
 })
 
 test("trusted reducing barrier tolerates committed observation ahead of Main projection without granting stale ownership", async () => {
-  const directory = await realpath(await mkdtemp("/tmp/dac-shared-projection-race-"))
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "dac-shared-projection-race-")))
   try {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -817,7 +818,7 @@ test("trusted reducing barrier tolerates committed observation ahead of Main pro
 })
 
 test("shared action journal persists an unknown once and does not redispatch the same canonical admission", async () => {
-  const directory = await realpath(await mkdtemp("/tmp/dac-shared-action-"))
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "dac-shared-action-")))
   try {
     const saved = await Effect.runPromise(
       Effect.gen(function* () {
@@ -883,7 +884,7 @@ test("shared action journal persists an unknown once and does not redispatch the
 })
 
 test("private-port capacity withholds origin without replaying the prompt body or inheriting an outer stamp", async () => {
-  const directory = await realpath(await mkdtemp("/tmp/dac-shared-origin-capacity-"))
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "dac-shared-origin-capacity-")))
   try {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -950,7 +951,7 @@ test("private-port capacity withholds origin without replaying the prompt body o
 })
 
 test("blocked manual setup leaves takeover retryable until the same reducing ticket confirms real manual availability", async () => {
-  const directory = await realpath(await mkdtemp("/tmp/dac-shared-takeover-recovery-"))
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "dac-shared-takeover-recovery-")))
   try {
     await Effect.runPromise(
       Effect.gen(function* () {

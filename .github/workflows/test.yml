@@ -98,7 +98,7 @@ jobs:
         # Fresh isolated databases deliberately exercise the full migration chain.
         # Partition the two large packages by file while running every other package once.
         suite: [common, core, cli]
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
         exclude:
           - suite: common
             shard: 2
@@ -106,11 +106,32 @@ jobs:
             shard: 3
           - suite: common
             shard: 4
+          - suite: common
+            shard: 5
+          - suite: common
+            shard: 6
+          - suite: common
+            shard: 7
+          - suite: common
+            shard: 8
+          - suite: core
+            shard: 5
+          - suite: core
+            shard: 6
+          - suite: core
+            shard: 7
+          - suite: core
+            shard: 8
     runs-on: ${{ matrix.settings.host }}
     defaults:
       run:
         shell: bash
     steps:
+      - name: Preserve source bytes on Windows
+        if: runner.os == 'Windows'
+        # Frozen migration and manifest digests bind the committed LF source bytes.
+        run: git config --global core.autocrlf false
+
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -161,6 +182,18 @@ jobs:
           bun -e 'if (!Bun.which("rg")) throw new Error("ripgrep test executable is unavailable")'
           rg --version
 
+      - name: Prepare Windows archive test dependencies
+        if: runner.os == 'Windows'
+        run: |
+          for dac_archive_command in zip unzip; do
+            if ! command -v "$dac_archive_command" >/dev/null; then
+              choco install "$dac_archive_command" --yes --no-progress
+            fi
+          done
+          command -v zip
+          command -v unzip
+          zip -v
+
       - name: Prepare the locked Linux Electron sandbox
         if: runner.os == 'Linux'
         run: |
@@ -175,7 +208,11 @@ jobs:
         if: matrix.suite == 'cli' && runner.os != 'Windows'
         # This test speaks the POSIX dev/inode protocol directly; it does not
         # grant installed Native authority or use the Windows handle protocol.
-        run: cargo build --locked --manifest-path packages/work-file-helper/Cargo.toml --bin deepagent-work-file-helper
+        run: |
+          cargo build --locked --manifest-path packages/work-file-helper/Cargo.toml --bin deepagent-work-file-helper
+          dac_work_file_helper="$PWD/packages/work-file-helper/target/debug/deepagent-work-file-helper"
+          test -x "$dac_work_file_helper"
+          echo "DAC_WORK_FILE_HELPER_BINARY=$dac_work_file_helper" >> "$GITHUB_ENV"
 
       - name: Run unit tests
         timeout-minutes: ${{ matrix.settings.timeout }}
@@ -190,7 +227,7 @@ jobs:
               dac_test_directory='packages/deepagent-code'
             fi
             # Keep shard flags on the package test command, away from dependency compilers.
-            dac_test_command=(bun run --cwd "$dac_test_directory" test:ci "--shard=$DAC_TEST_SHARD/4")
+            dac_test_command=(bun run --cwd "$dac_test_directory" test:ci "--shard=$DAC_TEST_SHARD/$DAC_TEST_SHARDS")
           fi
           if [[ "$RUNNER_OS" == 'Linux' ]]; then
             xvfb-run -a --server-args='-screen 0 1920x1080x24' "${dac_test_command[@]}"
@@ -200,6 +237,7 @@ jobs:
         env:
           DAC_TEST_SUITE: ${{ matrix.suite }}
           DAC_TEST_SHARD: ${{ matrix.shard }}
+          DAC_TEST_SHARDS: ${{ matrix.suite == 'cli' && 8 || 4 }}
           DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
       - name: Run HttpApi exerciser gates
@@ -212,12 +250,11 @@ jobs:
         if: always()
         uses: mikepenz/action-junit-report@bccf2e31636835cf0874589931c4116687171386 # v6.4.0
         with:
-          report_paths: |
-            packages/*/.artifacts/unit/junit.xml
-            .artifacts/unit/junit.xml
+          report_paths: ${{ matrix.suite == 'core' && 'packages/core/.artifacts/unit/junit.xml' || matrix.suite == 'cli' && 'packages/deepagent-code/.artifacts/unit/junit.xml' || 'packages/**/.artifacts/unit/junit.xml' }}
           check_name: "unit results (${{ matrix.settings.name }}, ${{ matrix.suite }}, ${{ matrix.shard }})"
           detailed_summary: true
           include_time_in_summary: true
+          resolve_ignore_classname: true
           fail_on_failure: false
 
       - name: Upload unit artifacts
@@ -228,9 +265,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
-          path: |
-            packages/*/.artifacts/unit/junit.xml
-            .artifacts/unit/junit.xml
+          path: ${{ matrix.suite == 'core' && 'packages/core/.artifacts/unit/junit.xml' || matrix.suite == 'cli' && 'packages/deepagent-code/.artifacts/unit/junit.xml' || 'packages/**/.artifacts/unit/junit.xml' }}
 
   desktop-smoke:
     name: desktop-smoke (macos)

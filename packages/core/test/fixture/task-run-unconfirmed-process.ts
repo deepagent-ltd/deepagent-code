@@ -89,6 +89,7 @@ await Effect.gen(function* () {
     yield* Effect.promise(async () => {
       await mkdir(repository, { recursive: true })
       git(["init", "-b", "dev"])
+      git(["config", "core.autocrlf", "false"])
       git(["config", "user.name", "Task recovery fixture"])
       git(["config", "user.email", "fixture@deepagent.local"])
       await Bun.write(path.join(repository, "original.txt"), "original fixture\n")
@@ -170,7 +171,7 @@ await Effect.gen(function* () {
   const content = yield* Effect.promise(() => Bun.file(path.join(facts.directory, "unconfirmed.txt")).text())
   if (
     content !== "Unconfirmed child evidence\n" ||
-    !git(["worktree", "list", "--porcelain"]).includes(`worktree ${facts.directory}\n`)
+    !git(["worktree", "list", "--porcelain"]).includes(`worktree ${facts.directory.replaceAll("\\", "/")}\n`)
   )
     return yield* Effect.die("Original physical workspace evidence was lost")
   if ((yield* TaskWorkspace.reclaimStale(db, { now: Date.now() + 86400000, retentionMs: 1 })).scanned !== 0)

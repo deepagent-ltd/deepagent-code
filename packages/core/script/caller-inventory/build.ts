@@ -39,10 +39,10 @@ function classifyOne(item: EntryWithHandlers): ClassifiedEntry {
   const rules = rulesForEntry(item.entry.id)
   const roles: RoleClassification[] = []
   const openOwners: Partial<Record<Dimension, string>> = {}
-  const entryFile = join(rootRepoPath(), item.entry.repoFile)
+  const entryFile = join(rootRepoPath(), item.entry.repoFile).replaceAll("\\", "/")
   // Structurally linked handler modules join the entry's verification roots; the
   // registered `.handle` sites define this entry's own handler-body scope.
-  const extraRoots = [...new Set(item.handlers.map((handler) => join(rootRepoPath(), handler.repoFile)))]
+  const extraRoots = [...new Set(item.handlers.map((handler) => join(rootRepoPath(), handler.repoFile).replaceAll("\\", "/")))]
   for (const dimension of DIMENSIONS) {
     const rule: VerdictRule | undefined = rules[dimension]
     if (!rule) {

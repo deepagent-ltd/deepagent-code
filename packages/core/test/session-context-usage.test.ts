@@ -1,3 +1,5 @@
+import path from "node:path"
+import os from "node:os"
 import { describe, expect } from "bun:test"
 import { Context, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Scope } from "effect"
 import { eq } from "drizzle-orm"
@@ -90,7 +92,7 @@ plain.effect("renders prospective DeepAgent state on a detached copy without cre
     const { mkdtemp, readdir, readFile, rm } = yield* Effect.promise(() => import("node:fs/promises"))
     const state = yield* Effect.promise(() => import("../src/deepagent/session-state"))
     const directory = yield* Effect.acquireRelease(
-      Effect.promise(() => mkdtemp("/tmp/dac-context-observe-")),
+      Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "dac-context-observe-"))),
       (value) => Effect.promise(() => rm(value, { recursive: true, force: true })),
     )
     const runtime = state.createRuntime(directory)
@@ -121,7 +123,7 @@ plain.effect("observes an absent plan without creating graph or docs directories
     const { mkdtemp, readdir, rm } = yield* Effect.promise(() => import("node:fs/promises"))
     const { DeepAgentPlanStore } = yield* Effect.promise(() => import("../src/deepagent/plan-store"))
     const directory = yield* Effect.acquireRelease(
-      Effect.promise(() => mkdtemp("/tmp/dac-plan-observe-")),
+      Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "dac-plan-observe-"))),
       (value) => Effect.promise(() => rm(value, { recursive: true, force: true })),
     )
     const runtime = DeepAgentPlanStore.createRuntime(directory)

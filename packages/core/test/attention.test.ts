@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url"
 import { describe, expect } from "bun:test"
 import path from "node:path"
 import { eq, sql } from "drizzle-orm"
@@ -167,7 +168,7 @@ describe("durable attention", () => {
       }).pipe(Effect.provide(services(filename)))
       const reopened = yield* Effect.promise(async () => {
         const child = Bun.spawn(
-          [process.execPath, "run", new URL("./fixture/attention-reopen.ts", import.meta.url).pathname, filename],
+          [process.execPath, "run", fileURLToPath(new URL("./fixture/attention-reopen.ts", import.meta.url)), filename],
           {
             stdout: "pipe",
             stderr: "pipe",

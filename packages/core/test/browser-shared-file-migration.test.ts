@@ -1,3 +1,4 @@
+import os from "node:os"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -64,7 +65,7 @@ test("shared file schema stays strict, browser-compatible and distinct from v1 c
 })
 
 test("same file tables migrate byte-exact under immediate FKs, roll back atomically and retain v2 FK and once boundaries", async () => {
-  const root = await fs.mkdtemp("/tmp/dac-shared-file-forward-")
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-shared-file-forward-"))
   const filename = path.join(root, "files.sqlite")
   try {
     const saved = await Effect.runPromise(Effect.gen(function* () {

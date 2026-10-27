@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url"
 // W0.5 (blocker-2) seed verification: seedOwnerAuthorization is the only channel that delivers a
 // release-minted owner-authorization.json into a user DB. Three states are exercised (no file,
 // verification failure, success) plus the two refusal edges that must never overwrite a row:
@@ -30,7 +31,7 @@ const runMint = async (args: string[], extraEnv: Record<string, string> = {}) =>
   const env = { ...process.env }
   delete env.DEEPAGENT_CODE_OWNER_SIGNING_KEY
   Object.assign(env, extraEnv)
-  const child = Bun.spawn([process.execPath, script.pathname, ...args], {
+  const child = Bun.spawn([process.execPath, fileURLToPath(script), ...args], {
     cwd: import.meta.dir,
     env,
     stdout: "pipe",

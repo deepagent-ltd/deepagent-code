@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url"
 // W0.3/W0.5 production mint verification: script/mint-owner-campaign.ts (packages/deepagent-code)
 // writes a signed session_v2_owner_authorization row that the V2 runtime verifier
 // (V2ProviderTurn.ownerQualified) accepts, and --revoke rejects afterwards. The mint script is
@@ -42,7 +43,7 @@ const runMint = async (args: string[], extraEnv: Record<string, string> = {}) =>
   const env = { ...process.env }
   delete env.DEEPAGENT_CODE_OWNER_SIGNING_KEY
   Object.assign(env, extraEnv)
-  const child = Bun.spawn([process.execPath, script.pathname, ...args], {
+  const child = Bun.spawn([process.execPath, fileURLToPath(script), ...args], {
     cwd: import.meta.dir,
     env,
     stdout: "pipe",
@@ -418,8 +419,8 @@ describe("V2 owner campaign production mint (W0.3)", () => {
     // subprocess): `+` build metadata makes `v2-owner-2.0.0-beta.0+...` an illegal campaign id.
     const probe = `
       globalThis.DEEPAGENT_CODE_VERSION = "2.0.0-beta.0+exp.sha.17b0d"
-      const { V2ProviderTurn } = await import(${JSON.stringify(new URL("../src/session/runner/v2-provider-turn.ts", import.meta.url).pathname)})
-      const { Database } = await import(${JSON.stringify(new URL("../src/database/database.ts", import.meta.url).pathname)})
+      const { V2ProviderTurn } = await import(${JSON.stringify(fileURLToPath(new URL("../src/session/runner/v2-provider-turn.ts", import.meta.url)))})
+      const { Database } = await import(${JSON.stringify(fileURLToPath(new URL("../src/database/database.ts", import.meta.url)))})
       const { Effect } = await import("effect")
       try {
         const db = (await Effect.runPromise(

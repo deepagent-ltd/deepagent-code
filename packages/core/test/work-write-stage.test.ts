@@ -1,3 +1,4 @@
+import os from "node:os"
 import { expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import fs from "node:fs/promises"
@@ -15,7 +16,7 @@ const releasedSources = process.env.DAC_WORK_WRITE_RELEASED_DBS?.split(",") ?? [
 const unknownSource = process.env.DAC_WORK_WRITE_UNKNOWN_DB
 test.skipIf(!source)("actual native terminal custody observes growth and releases once, preserving its audit row", async () => {
   if (!source) throw new Error("A completed owned native write database is required")
-  const root = await fs.mkdtemp("/tmp/dac-write-stage-terminal-")
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-write-stage-terminal-"))
   const filename = path.join(root, "copy.sqlite")
   const original = new Database(source, { readonly: true })
   try {
@@ -47,7 +48,7 @@ test.skipIf(!source)("actual native terminal custody observes growth and release
 })
 
 for (const source of releasedSources) test(`actual released custody cannot release or account growth again: ${path.basename(path.dirname(source))}`, async () => {
-  const root = await fs.mkdtemp("/tmp/dac-write-stage-released-")
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-write-stage-released-"))
   const filename = path.join(root, "copy.sqlite")
   const original = new Database(source, { readonly: true })
   try { await fs.writeFile(filename, original.serialize()) } finally { original.close() }
@@ -70,7 +71,7 @@ for (const source of releasedSources) test(`actual released custody cannot relea
 
 test.skipIf(!unknownSource)("actual published-without-ACK custody cannot release its reservation", async () => {
   if (!unknownSource) throw new Error("An actual unknown-publication database is required")
-  const root = await fs.mkdtemp("/tmp/dac-write-stage-unknown-")
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-write-stage-unknown-"))
   const filename = path.join(root, "copy.sqlite")
   const original = new Database(unknownSource, { readonly: true })
   try { await fs.writeFile(filename, original.serialize()) } finally { original.close() }

@@ -1,3 +1,4 @@
+import os from "node:os"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -35,7 +36,7 @@ async function fixture(run: (input: {
   original: WorkCountAcquisitionSchema.Record
   execute: <A, E>(effect: Effect.Effect<A, E, Database.Service>) => Promise<A>
 }) => Promise<void>) {
-  const directory = await fs.mkdtemp("/tmp/dac-project-migration-")
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-project-migration-"))
   const proof = WorkRouteApprovalFixture.authority()
   const executeAt = <A, E>(filename: string, effect: Effect.Effect<A, E, Database.Service>) => Effect.runPromise(effect.pipe(
     Effect.provide(Layer.mergeAll(WorkAuthorityFixture.database(filename), proof.route, proof.count, WorkAuthorityFixture.verifier)),

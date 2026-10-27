@@ -1,3 +1,4 @@
+import os from "node:os"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -37,7 +38,7 @@ test("AliDNS is an explicit fixed policy for all public profiles, without endpoi
 })
 
 test("original file-backed controls retain AliDNS across exact retry, resolver conflict and cold read-only reopen", async () => {
-  const directory = await fs.realpath(await fs.mkdtemp("/tmp/dac-alidns-core-"))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-alidns-core-")))
   const filename = path.join(directory, "control.sqlite")
   const layer = () => LocationIdentity.layer.pipe(Layer.provideMerge(Database.layerFromPath(filename)),
     Layer.provide(FSUtil.defaultLayer))

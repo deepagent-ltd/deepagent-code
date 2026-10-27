@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test"
-import { chmod, mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { assertReleaseCandidate } from "../../../../script/assert-release-candidate"
 import { uploadReleaseAsset } from "../../../../script/upload-release-asset"
+import { jsonCommand } from "../fixture/json-command"
 
 test("ID-pinned release upload clobbers, retries a starter asset, and refuses draft drift", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "deepagent-release-upload-"))
@@ -84,10 +85,8 @@ test("ID-pinned release upload clobbers, retries a starter asset, and refuses dr
     git(repository, "tag", "v2.0.2")
     git(repository, "remote", "add", "origin", origin)
     git(repository, "push", "origin", "HEAD", "refs/tags/v2.0.2")
-    const gh = path.join(root, "gh")
     const view = path.join(root, "view.json")
-    await Bun.write(gh, `#!/bin/sh\ncat '${view}'\n`)
-    await chmod(gh, 0o755)
+    const gh = await jsonCommand(root, "gh", view)
     await Bun.write(view, JSON.stringify({ databaseId: 101, isDraft: true, tagName: "v2.0.2" }))
     const file = path.join(root, "owner-authorization.json")
     const checkCandidate = () =>

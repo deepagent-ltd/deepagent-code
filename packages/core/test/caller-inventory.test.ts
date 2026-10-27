@@ -404,9 +404,9 @@ describe("C0-01 caller inventory gate", () => {
 
   test("NEW-P6 call-path / bodyLogsOnly / external-receiver soundness", () => {
     const byId = new Map(inventory.entries.map((e) => [e.entry.id, e]))
-    const ROOT = new URL("../", import.meta.url).pathname.replace(/\/$/, "")
+    const ROOT = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "")
     // repoFile is repo-relative to the worktree root; ROOT here is packages/core, so go up to it.
-    const REPO_ROOT = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "")
+    const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url)).replace(/\/$/, "")
     const abs = (repoFile: string) => join(REPO_ROOT, repoFile)
     // (a) every delegation/port edge must be attributed to a real CALL site (a line in the cited
     // source that contains a call expression) — never a passive import/self-export/reference line.
@@ -459,7 +459,7 @@ describe("C0-01 caller inventory gate", () => {
   test("NEW-P7-A: bodyLogsOnly scans the resolved handler, not the command-tree registration", () => {
     // bodyLogsOnlyHit must scan the entry's handler module for business callees. A probe handler that
     // performs a business call must NOT satisfy bodyLogsOnly; the real no-op handler (migrate.ts) must.
-    const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "")
+    const REPO = fileURLToPath(new URL("../../../", import.meta.url)).replace(/\/$/, "")
     const probe = join(PROBE_DIR, "probe-biz-handler.ts")
     try {
       mkdirSync(PROBE_DIR, { recursive: true })

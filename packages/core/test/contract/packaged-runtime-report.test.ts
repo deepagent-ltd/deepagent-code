@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url"
 import { describe, expect, test } from "bun:test"
 import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
@@ -128,7 +129,7 @@ describe("RI-24 packaged runtime report", () => {
     const child = Bun.spawn(
       [
         process.execPath,
-        script.pathname,
+        fileURLToPath(script),
         "--candidate",
         candidateId,
         "--commit",
@@ -160,7 +161,7 @@ describe("RI-24 packaged runtime report", () => {
     const mismatch = Bun.spawn(
       [
         process.execPath,
-        script.pathname,
+        fileURLToPath(script),
         "--candidate",
         candidateId,
         "--commit",
@@ -187,7 +188,7 @@ describe("RI-24 packaged runtime report", () => {
     const wrongAttempt = Bun.spawn(
       [
         process.execPath,
-        script.pathname,
+        fileURLToPath(script),
         "--candidate",
         candidateId,
         "--commit",
@@ -221,7 +222,7 @@ describe("RI-24 packaged runtime report", () => {
     const wrongPackage = Bun.spawn(
       [
         process.execPath,
-        script.pathname,
+        fileURLToPath(script),
         "--candidate",
         candidateId,
         "--commit",
@@ -254,7 +255,7 @@ describe("RI-24 packaged runtime report", () => {
     const dirtyPackage = Bun.spawn(
       [
         process.execPath,
-        script.pathname,
+        fileURLToPath(script),
         "--candidate",
         candidateId,
         "--commit",
@@ -287,7 +288,7 @@ describe("RI-24 packaged runtime report", () => {
     const wrongBinary = Bun.spawn(
       [
         process.execPath,
-        script.pathname,
+        fileURLToPath(script),
         "--candidate",
         candidateId,
         "--commit",
@@ -315,7 +316,7 @@ describe("RI-24 packaged runtime report", () => {
     const missingBinary = Bun.spawn(
       [
         process.execPath,
-        script.pathname,
+        fileURLToPath(script),
         "--candidate",
         candidateId,
         "--commit",
@@ -343,7 +344,7 @@ describe("RI-24 packaged runtime report", () => {
     const gateChild = Bun.spawn(
       [
         process.execPath,
-        gate.pathname,
+        fileURLToPath(gate),
         "--package-dir",
         packageDir,
         "--runs",
@@ -374,7 +375,7 @@ describe("RI-24 packaged runtime report", () => {
     const unboundDir = join(root.path, "unbound")
     await mkdir(unboundDir)
     const unboundGate = Bun.spawn(
-      [process.execPath, gate.pathname, "--gates", gatesPath, "--out", join(unboundDir, "ledger.json")],
+      [process.execPath, fileURLToPath(gate), "--gates", gatesPath, "--out", join(unboundDir, "ledger.json")],
       { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
     )
     const [unboundGateStderr, unboundGateExitCode] = await Promise.all([
@@ -385,7 +386,7 @@ describe("RI-24 packaged runtime report", () => {
     expect(unboundGateStderr).toContain("packaged_report_missing")
 
     const multiplePackages = Bun.spawn(
-      [process.execPath, gate.pathname, "--package-dir", packageDir, "--package-dir", packageDir],
+      [process.execPath, fileURLToPath(gate), "--package-dir", packageDir, "--package-dir", packageDir],
       { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
     )
     const [multiplePackagesStderr, multiplePackagesExitCode] = await Promise.all([
@@ -408,7 +409,7 @@ describe("RI-24 packaged runtime report", () => {
     const wrongRunArtifact = Bun.spawn(
       [
         process.execPath,
-        script.pathname,
+        fileURLToPath(script),
         "--candidate",
         candidateId,
         "--commit",

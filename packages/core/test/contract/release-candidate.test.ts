@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test"
-import { chmod, mkdir } from "node:fs/promises"
+import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { assertReleaseCandidate } from "../../../../script/assert-release-candidate"
 import { ensureReleaseCandidateRef } from "../../../../script/release-candidate-ref"
 import { tmpdir } from "../fixture/tmpdir"
+import { jsonCommand } from "../fixture/json-command"
 
 test("release candidate guard binds HEAD, remote tag, clean tree, and packaged binary", async () => {
   await using root = await tmpdir()
@@ -46,11 +47,10 @@ test("release candidate guard binds HEAD, remote tag, clean tree, and packaged b
   const candidate = { repository, commit, tree, tag: "v2.0.2", packageDir }
   await expect(assertReleaseCandidate(candidate)).resolves.toBeUndefined()
 
-  const ghCommand = join(root.path, "fake-gh")
-  const releaseView = async (view: { databaseId: number; isDraft: boolean; tagName: string }) => {
-    await Bun.write(ghCommand, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(view)}'\n`)
-    await chmod(ghCommand, 0o755)
-  }
+  const viewPath = join(root.path, "release-view.json")
+  const ghCommand = await jsonCommand(root.path, "fake-gh", viewPath)
+  const releaseView = (view: { databaseId: number; isDraft: boolean; tagName: string }) =>
+    Bun.write(viewPath, JSON.stringify(view))
   const pinned = { ...candidate, releaseID: "101", releaseRepository: "deepagent-ltd/deepagent-code", ghCommand }
   await releaseView({ databaseId: 101, isDraft: true, tagName: "v2.0.2" })
   await expect(assertReleaseCandidate(pinned)).resolves.toBeUndefined()
