@@ -45,6 +45,7 @@ import { GoalTickProgram } from "@deepagent-code/core/deepagent/goal-tick-progra
 import { GoalTickCheckpointV2 } from "@deepagent-code/core/deepagent/goal-tick-checkpoint-v2"
 import { GoalTickExecution } from "@/session/goal-tick-execution"
 import { GoalOwnedTurn } from "@/session/goal-owned-turn"
+import { OwnedValidation } from "@/deepagent/owned-validation"
 import { GoalTickProjection } from "@/session/goal-tick-projection"
 import { GoalManager } from "@/session/goal-manager"
 import { GoalOwnedLoop } from "@/session/goal-owned-loop"
@@ -586,11 +587,43 @@ try {
         for (let n = 0; n < 3000; n++) {
           const status = yield* manager.status(parent.id)
           if (status && ["done", "needs_human"].includes(status.phase)) break
+          if (scenario === "manager-tests" && process.platform !== "darwin" && status?.recoveryRequired) {
+            const receipts = yield* db.all<{ last_error: string | null }>(
+              "SELECT last_error FROM deepagent_consumer_receipt WHERE consumer_kind='goal_tick'",
+            )
+            if (receipts.some((row) => row.last_error === "Owned validation is unavailable")) break
+          }
           if (n === 2999) throw new Error("Actual Manager event consumer did not reach a terminal state")
           yield* Effect.sleep("10 millis")
         }
         const row = (yield* db.all<{ permit_id: string }>("SELECT permit_id FROM goal_tick_checkpoint"))[0]
         const checkpoint = yield* GoalTickCheckpointV2.read(db, row.permit_id)
+        if (scenario === "manager-tests" && process.platform !== "darwin") {
+          const status = yield* manager.status(parent.id)
+          assert(status?.recoveryRequired)
+          assert(checkpoint)
+          assert.equal(checkpoint.state, "recovery_required")
+          assert.deepEqual(checkpoint.journal.localEffects, [])
+          assert.equal(checkpoint.journal.nextState, null)
+          assert.equal(requests.length, 1)
+          const failures = yield* db.all<{ status: string; last_error: string | null }>(
+            "SELECT status,last_error FROM deepagent_consumer_receipt WHERE consumer_kind='goal_tick'",
+          )
+          assert.deepEqual(failures, [{ status: "pending", last_error: "Owned validation is unavailable" }])
+          assert.deepEqual(OwnedValidation.inspectCustody(), {
+            limit: OwnedValidation.VALIDATION_CUSTODY_LIMIT, live: 0, quarantine: 0,
+          })
+          console.error(JSON.stringify({ probe: "manager-tests-native-refusal", phase: status.phase,
+            recoveryRequired: status.recoveryRequired, checkpoint: checkpoint.state,
+            localEffects: checkpoint.journal.localEffects.length, requests: requests.length, failures }))
+          return {
+            status, checkpoint, failures,
+            inputs: yield* db.all("SELECT * FROM session_input"),
+            units: yield* db.all("SELECT * FROM goal_child_unit"),
+            active: Array.from(yield* (yield* SessionExecution.Service).active),
+            validationCustody: OwnedValidation.inspectCustody(),
+          }
+        }
         assert.equal(checkpoint?.state, "committed")
         assert.equal((yield* manager.status(parent.id))!.phase, scenario === "manager-tests" ? "done" : "needs_human")
         if (scenario.startsWith("manager")) {
@@ -1303,7 +1336,7 @@ try {
           }),
         )
         const completed = yield* (
-          scenario === "validation-control" || scenario.startsWith("validation-ask-")
+          process.platform === "darwin" && (scenario === "validation-control" || scenario.startsWith("validation-ask-"))
             ? Effect.gen(function* () {
                 const fiber = yield* task.pipe(Effect.forkChild)
                 for (let n = 0; n < 500; n++) {
@@ -1376,6 +1409,27 @@ try {
               })
             : task
         ).pipe(Effect.exit)
+        if (process.platform !== "darwin") {
+          assert(Exit.isFailure(completed))
+          const failure = Cause.squash(completed.cause)
+          assert(failure instanceof OwnedValidation.Error)
+          assert.equal(failure.code, "PROFILE_UNAVAILABLE")
+          const checkpoint = yield* GoalTickCheckpointV2.read(db, tick.permit.permit_id)
+          assert(checkpoint)
+          assert.equal(checkpoint.state, "recovery_required")
+          assert.deepEqual(checkpoint.journal.localEffects, [])
+          assert(!(yield* Effect.promise(() => Bun.file(path.join(directory, "denied-marker")).exists())))
+          assert.deepEqual(OwnedValidation.inspectCustody(), {
+            limit: OwnedValidation.VALIDATION_CUSTODY_LIMIT, live: 0, quarantine: 0,
+          })
+          return {
+            refusal: failure.code, checkpoint,
+            inputs: yield* db.all("SELECT * FROM session_input"),
+            units: yield* db.all("SELECT * FROM goal_child_unit"),
+            active: Array.from(yield* (yield* SessionExecution.Service).active),
+            validationCustody: OwnedValidation.inspectCustody(),
+          }
+        }
         if (scenario === "validation") {
           assert(Exit.isSuccess(completed), Exit.isFailure(completed) ? Cause.pretty(completed.cause) : "")
           assert(completed.value.pass)

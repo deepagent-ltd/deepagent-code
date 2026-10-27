@@ -116,6 +116,19 @@ for (const scenario of [
         expect(result.result.units).toEqual([])
         expect(result.result.checkpoints).toEqual([])
         expect(result.result.active).toEqual([])
+      } else if (scenario === "manager-tests" && process.platform !== "darwin") {
+        expect(result.requests).toBe(1)
+        expect(result.result.inputs).toHaveLength(1)
+        expect(result.result.units).toHaveLength(1)
+        expect(result.result.units[0].state).toBe("result_recorded")
+        expect(result.result.checkpoint.state).toBe("recovery_required")
+        expect(result.result.checkpoint.journal.localEffects).toEqual([])
+        expect(result.result.checkpoint.journal.nextState).toBeNull()
+        expect(result.result.status.recoveryRequired).toBe(true)
+        expect(result.result.status.phase).not.toBe("done")
+        expect(result.result.failures).toEqual([{ status: "pending", last_error: "Owned validation is unavailable" }])
+        expect(result.result.validationCustody).toMatchObject({ live: 0, quarantine: 0 })
+        expect(result.result.active).toEqual([])
       } else if (scenario.startsWith("manager")) {
         expect(result.requests).toBe(scenario === "manager-tests" ? 3 : 1)
         expect(result.result.inputs).toHaveLength(scenario === "manager-tests" ? 3 : 1)
@@ -224,6 +237,13 @@ for (const scenario of [
         expect(result.result.inputs).toEqual([])
         expect(result.result.units).toEqual([])
         expect(result.result.active).toEqual([])
+        if (process.platform !== "darwin") {
+          expect(result.result.refusal).toBe("PROFILE_UNAVAILABLE")
+          expect(result.result.checkpoint.state).toBe("recovery_required")
+          expect(result.result.checkpoint.journal.localEffects).toEqual([])
+          expect(result.result.validationCustody).toMatchObject({ live: 0, quarantine: 0 })
+          return
+        }
         expect(result.result.checkpoint.journal.localEffects).toHaveLength(1)
         const receipt = result.result.checkpoint.journal.localEffects[0]
         expect(receipt.containment).toBe("single-process")
