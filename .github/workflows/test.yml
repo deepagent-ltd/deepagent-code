@@ -5,11 +5,22 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Unit platform for a manual diagnostic run; main pushes test every platform
+        type: choice
+        default: all
+        options: [all, linux, windows, macos]
+      suite:
+        description: Unit suite for a manual diagnostic run; main pushes test every suite
+        type: choice
+        default: all
+        options: [all, common, core, cli]
 
 concurrency:
   # Keep every run on dev so cancelled checks do not pollute the default branch
   # commit history. PRs and other branches still share a group and cancel stale runs.
-  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}
+  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.suite || 'all' }}
   cancel-in-progress: true
 
 permissions:
@@ -85,19 +96,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        settings:
-          - name: linux
-            host: ubuntu-24.04
-            timeout: 60
-          - name: windows
-            host: windows-2025
-            timeout: 60
-          - name: macos
-            host: macos-14
-            timeout: 120
+        settings: >-
+          ${{ fromJSON(
+            inputs.platform == 'linux' && '[{"name":"linux","host":"ubuntu-24.04","timeout":60}]' ||
+            inputs.platform == 'windows' && '[{"name":"windows","host":"windows-2025","timeout":60}]' ||
+            inputs.platform == 'macos' && '[{"name":"macos","host":"macos-14","timeout":120}]' ||
+            '[{"name":"linux","host":"ubuntu-24.04","timeout":60},{"name":"windows","host":"windows-2025","timeout":60},{"name":"macos","host":"macos-14","timeout":120}]'
+          ) }}
         # Fresh isolated databases deliberately exercise the full migration chain.
         # Partition the two large packages by file while running every other package once.
-        suite: [common, core, cli]
+        suite: >-
+          ${{ fromJSON(
+            inputs.suite == 'common' && '["common"]' ||
+            inputs.suite == 'core' && '["core"]' ||
+            inputs.suite == 'cli' && '["cli"]' || '["common","core","cli"]'
+          ) }}
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
         exclude:
           - suite: common

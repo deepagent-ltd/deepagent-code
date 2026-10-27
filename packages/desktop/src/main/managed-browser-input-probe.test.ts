@@ -15,14 +15,25 @@ test("original Electron native input hooks are classified against the raw CDP ca
   const before = await Promise.all(production.map(async (filename) => ({ filename, sha256: createHash("sha256").update(await fs.readFile(filename)).digest("hex") })))
   const built = await Bun.build({ entrypoints: [fixture], outdir: root, target: "node", format: "cjs", external: ["electron"] })
   expect(built.success).toBe(true)
+  const started = performance.now()
+  const state = { deadlineExpired: false }
   const child = Bun.spawn([managedBrowserInputFixtureExecutable, built.outputs[0]!.path], {
     cwd: root, env: { ...managedBrowserInputFixtureEnvironment, PATH: process.env.PATH, HOME: path.join(root, "home"), TMPDIR: root, DAC_BROWSER_INPUT_PROBE_ROOT: root },
     stdout: "pipe", stderr: "pipe" })
-  const timer = setTimeout(() => child.kill("SIGTERM"), 15_000)
+  const timer = setTimeout(() => { state.deadlineExpired = true; child.kill("SIGTERM") }, 15_000)
   const code = await child.exited
   clearTimeout(timer)
   const diagnostic = await new Response(child.stdout).text() + await new Response(child.stderr).text()
   await fs.writeFile(path.join(root, "process.log"), diagnostic, { mode: 0o600 })
+  if (code !== 0) {
+    const read = async (name: string) => {
+      const file = Bun.file(path.join(root, name))
+      return await file.exists() ? (await file.text()).slice(0, 8192) : null
+    }
+    console.error("INPUT_PROBE_FAILURE", JSON.stringify({ root, code, exitSignal: child.signalCode,
+      deadlineExpired: state.deadlineExpired, elapsedMs: Math.round(performance.now() - started),
+      phase: await read("phase.json"), failure: await read("failure.json") }))
+  }
   expect({ code, diagnostic: code ? diagnostic : null }).toEqual({ code: 0, diagnostic: null })
   const result = await Bun.file(path.join(root, "result.json")).json()
   expect(result.electron).toBe(managedBrowserInputRuntime.electronVersion)
