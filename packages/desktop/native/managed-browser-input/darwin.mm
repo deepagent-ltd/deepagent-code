@@ -3,6 +3,7 @@
 #include <node_api.h>
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <dlfcn.h>
@@ -28,6 +29,7 @@ struct Watch : std::enable_shared_from_this<Watch> {
   id closing = nil;
   bool invalid = false;
   bool closed = false;
+  std::atomic<bool> diagnosed{false};
 };
 struct Owner {
   napi_env env;
@@ -121,25 +123,55 @@ static HookSlot *requireHooks() {
   }
   HookSlot *result = hooks.release(); slot.store(result); return result;
 }
-static bool collectClients(NSView *view, HookSlot *hooks, NSMutableArray<NSView *> *clients, unsigned depth, unsigned& nodes) {
-  if (!view || depth > 32 || ++nodes > 1024) return false;
+static bool collectClients(NSView *view, HookSlot *hooks, NSMutableArray<NSView *> *clients, unsigned depth, unsigned& nodes,
+    const char **failure = nullptr) {
+  if (!view || depth > 32 || ++nodes > 1024) {
+    if (failure) *failure = !view ? "client_tree_missing" : depth > 32 ? "client_tree_depth" : "client_tree_nodes";
+    return false;
+  }
   if ([view isKindOfClass:hooks->type]) {
     // Subclasses can override these methods without entering our exact class.
-    if (object_getClass(view) != hooks->type || clients.count >= 16) return false;
+    if (object_getClass(view) != hooks->type || clients.count >= 16) {
+      if (failure) *failure = object_getClass(view) != hooks->type ? "client_class_changed" : "client_tree_capacity";
+      return false;
+    }
     [clients addObject:view];
   }
-  for (NSView *child in view.subviews) if (!collectClients(child, hooks, clients, depth + 1, nodes)) return false;
+  for (NSView *child in view.subviews) if (!collectClients(child, hooks, clients, depth + 1, nodes, failure)) return false;
   return true;
 }
+static bool sourceRejected(const std::shared_ptr<Watch>& watch, const char *reason, long clients = -1) {
+  const char *diagnostics = std::getenv("DAC_MANAGED_BROWSER_INPUT_DIAGNOSTICS");
+  if (diagnostics && std::strcmp(diagnostics, "1") == 0 && !watch->diagnosed.exchange(true)) {
+    // Fixed categories and bounded counts only; -1 means the tree was not collected.
+    // Never emit a view address or input payload.
+    static std::atomic<unsigned> reported{0};
+    if (reported.fetch_add(1) < 128) std::fprintf(stderr,
+      "MANAGED_BROWSER_INPUT_DIAGNOSTIC {\"at\":%lld,\"reason\":\"%s\",\"expectedClients\":%zu,\"actualClients\":%ld}\n",
+      (long long)(NSDate.date.timeIntervalSince1970 * 1000), reason, watch->clients.size(), clients);
+  }
+  return false;
+}
 static bool currentWindow(const std::shared_ptr<Watch>& watch) {
-  if (watch->closed || watch->invalid || !NSThread.isMainThread || !watch->window || !watch->root || !hooksOwned(watch->hooks)) return false;
+  if (watch->closed) return sourceRejected(watch, "lease_closed");
+  if (watch->invalid) return sourceRejected(watch, "lease_invalid");
+  if (!NSThread.isMainThread) return sourceRejected(watch, "not_main_thread");
+  if (!watch->window) return sourceRejected(watch, "window_released");
+  if (!watch->root) return sourceRejected(watch, "root_released");
+  if (!hooksOwned(watch->hooks)) return sourceRejected(watch, "hooks_unowned");
   bool owned = false;
   for (NSWindow *window in NSApp.windows) if (window == watch->window && window.contentView == watch->root) owned = true;
-  if (!owned) return false;
+  if (!owned) return sourceRejected(watch, "window_root_changed");
   NSMutableArray<NSView *> *clients = [NSMutableArray new]; unsigned nodes = 0;
-  if (!collectClients(watch->root, watch->hooks, clients, 0, nodes) || clients.count != watch->clients.size()) return false;
-  for (size_t i = 0; i < watch->clients.size(); i++) if (!watch->clients[i].view || clients[i] != watch->clients[i].view ||
-      watch->clients[i].view.window != watch->window || object_getClass(watch->clients[i].view) != watch->hooks->type) return false;
+  const char *failure = nullptr;
+  if (!collectClients(watch->root, watch->hooks, clients, 0, nodes, &failure)) return sourceRejected(watch, failure, clients.count);
+  if (clients.count != watch->clients.size()) return sourceRejected(watch, "client_count_changed", clients.count);
+  for (size_t i = 0; i < watch->clients.size(); i++) {
+    if (!watch->clients[i].view) return sourceRejected(watch, "client_released", clients.count);
+    if (clients[i] != watch->clients[i].view) return sourceRejected(watch, "client_identity_changed", clients.count);
+    if (watch->clients[i].view.window != watch->window) return sourceRejected(watch, "client_window_changed", clients.count);
+    if (object_getClass(watch->clients[i].view) != watch->hooks->type) return sourceRejected(watch, "client_class_changed", clients.count);
+  }
   return true;
 }
 static void signalWatch(const std::shared_ptr<Watch>& watch) {
@@ -171,6 +203,7 @@ static void platformSource(NSView *view, HookSlot *hooks, bool lifecycle) {
       [view](const auto& client) { return client.view == view; });
     if (!known && view.window != watch->window) continue;
     if (lifecycle || !known || !currentWindow(watch)) {
+      if (lifecycle || !known) sourceRejected(watch, lifecycle ? "client_view_moved" : "client_unobserved");
       watch->invalid = true; signalWatch(watch); releaseWatch(watch); continue;
     }
     signalWatch(watch);
@@ -293,7 +326,9 @@ static napi_value observe(napi_env env, napi_callback_info info) {
     return event;
   }];
   watch->closing = [NSNotificationCenter.defaultCenter addObserverForName:NSWindowWillCloseNotification
-    object:window queue:nil usingBlock:^(NSNotification *) { releaseWatch(pointer->shared_from_this()); }];
+    object:window queue:nil usingBlock:^(NSNotification *) {
+      auto held = pointer->shared_from_this(); sourceRejected(held, "window_closing"); releaseWatch(held);
+    }];
   if (!watch->monitor || !watch->closing) {
     releaseWatch(watch); napi_throw_error(env, nullptr, "MANAGED_BROWSER_INPUT_MONITOR"); return nullptr;
   }
