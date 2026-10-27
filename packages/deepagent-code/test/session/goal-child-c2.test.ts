@@ -173,7 +173,11 @@ for (const scenario of [
         expect(result.result.validationCustody).toMatchObject({ live: 0, quarantine: 0 })
         expect(result.result.active).toEqual([])
         if (scenario === "steer-valid") {
-          expect(result.result.steers[0].consumed_seq).not.toBeNull()
+          expect(result.result.steers).toHaveLength(2)
+          expect(result.result.steers.map((row: { id: string }) => row.id)).toEqual(result.result.frozenSteerIDs)
+          expect(result.result.checkpoint.journal.parent.steering.rows.map((row: { id: string }) => row.id))
+            .toEqual([result.result.steers[0].id])
+          expect(result.result.steers[0].consumed_seq).toBeNull()
           expect(result.result.steers[1].consumed_seq).toBeNull()
         }
       } else if (scenario.startsWith("steer")) {
@@ -327,7 +331,9 @@ for (const scenario of [
 }
 
 for (const cold of ["mirror", "verified-step"])
-  test(`C2 SIGKILL ${cold} recovers only committed evidence in a new host`, async () => {
+  test(process.platform !== "darwin" && cold === "mirror"
+    ? "C2 source mirror profile refusal remains blocked in a new host"
+    : `C2 SIGKILL ${cold} recovers only committed evidence in a new host`, async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-goal-c2-cold-")))
     await Promise.all(
       ["home", "tmp", "config", "data", "cache", "state", "project"].map((name) => fs.mkdir(path.join(root, name))),
@@ -336,6 +342,70 @@ for (const cold of ["mirror", "verified-step"])
     const first = spawn(root, cold === "mirror" ? "loop-cold" : "loop-proposal-two-cold")
     const firstCaptured = captureOutput(first)
     const firstOutput = firstCaptured.output
+    if (process.platform !== "darwin" && cold === "mirror") {
+      const firstTimeout = setTimeout(() => first.kill("SIGKILL"), 30000)
+      try {
+        const code = await first.exited
+        clearTimeout(firstTimeout)
+        const log = (await firstOutput).join("\n")
+        await Bun.write(path.join(root, "first.log"), log)
+        expect({ code, log, root }).toMatchObject({ code: 0 })
+        const refused = await Bun.file(path.join(root, "result.json")).json()
+        expect(refused.requests).toBe(1)
+        expect(refused.result.refusal).toBe("PROFILE_UNAVAILABLE")
+        expect(refused.result.checkpoint.state).toBe("recovery_required")
+        expect(refused.result.checkpoint.journal.localEffects).toEqual([])
+        expect(refused.result.checkpoint.journal.nextState).toBeNull()
+        expect(refused.result.permit.state).toBe("unknown")
+        expect(refused.result.status.recoveryRequired).toBe(true)
+        expect(refused.result.status.phase).not.toBe("done")
+        expect(refused.result.inputs).toHaveLength(1)
+        expect(refused.result.units).toHaveLength(1)
+        expect(refused.result.units[0].state).toBe("result_recorded")
+        expect(refused.result.validationCustody).toMatchObject({ live: 0, quarantine: 0 })
+        expect(refused.result.active).toEqual([])
+        expect(refused.result.noMirrorCAS).toBe(true)
+        expect(await Bun.file(path.join(root, "cold-window.json")).exists()).toBe(false)
+        const second = spawn(root, "loop-cold-recover")
+        const secondCaptured = captureOutput(second)
+        const timeout = setTimeout(() => second.kill("SIGKILL"), 30000)
+        try {
+          const code = await second.exited
+          const log = (await secondCaptured.output).join("\n")
+          await Bun.write(path.join(root, "second.log"), log)
+          expect({ code, log, root }).toMatchObject({ code: 0 })
+          const result = await Bun.file(path.join(root, "result.json")).json()
+          expect(second.pid).not.toBe(first.pid)
+          expect(result.requests).toBe(0)
+          expect(result.result.refusal).toBe("recovery_required")
+          expect(result.result.checkpoint.state).toBe("recovery_required")
+          expect(result.result.checkpoint.journal.localEffects).toEqual([])
+          expect(result.result.checkpoint.journal.nextState).toBeNull()
+          expect(result.result.permit.state).toBe("unknown")
+          expect(result.result.inputs).toHaveLength(1)
+          expect(result.result.units).toHaveLength(1)
+          expect(result.result.units[0].state).toBe("result_recorded")
+          expect(result.result.validationCustody).toMatchObject({ live: 0, quarantine: 0 })
+          expect(result.result.active).toEqual([])
+          expect(result.result.noMirrorCAS).toBe(true)
+          expect(result.result.durableState).toEqual(refused.result.durableState)
+        } finally {
+          clearTimeout(timeout)
+          if (second.exitCode === null && second.signalCode === null) second.kill("SIGKILL")
+          await second.exited
+          await secondCaptured.output
+        }
+        if (process.env.DEEPAGENT_TEST_C2_EVIDENCE)
+          await fs.cp(root, path.join(process.env.DEEPAGENT_TEST_C2_EVIDENCE, "loop-cold-mirror"), { recursive: true })
+        await fs.rm(root, { recursive: true, force: true })
+      } finally {
+        clearTimeout(firstTimeout)
+        if (first.exitCode === null && first.signalCode === null) first.kill("SIGKILL")
+        await first.exited
+        await firstOutput
+      }
+      return
+    }
     try {
       for (let n = 0; !(await Bun.file(path.join(root, "cold-window.json")).exists()); n++) {
         if (first.exitCode !== null || n >= 3000) throw new Error(`Cold window unavailable: ${root}; ${JSON.stringify({

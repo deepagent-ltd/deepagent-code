@@ -17,6 +17,7 @@ import { GoalTickCheckpoint } from "@deepagent-code/core/deepagent/goal-tick-che
 import { GoalChildExecution } from "@deepagent-code/core/deepagent/goal-child-execution"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import { GoalControl } from "@deepagent-code/core/deepagent/goal-control"
+import { GoalControlSchema } from "@deepagent-code/core/deepagent/goal-control.schema"
 import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { PluginBoot } from "@deepagent-code/core/plugin/boot"
 import { ModelV2 } from "@deepagent-code/core/model"
@@ -65,6 +66,14 @@ import { createPlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
 const requests: unknown[] = []
 const firstProviderRequest = Promise.withResolvers<void>()
 stage("fixture-module-loaded")
+async function documentFiles(directory: string) {
+  const files = (await Array.fromAsync(new Bun.Glob("docs/**/*.json").scan({ cwd: directory }))).sort()
+  assert(files.length > 0 && files.length <= 64)
+  return Promise.all(files.map(async (file) => ({
+    file,
+    sha256: new Bun.CryptoHasher("sha256").update(await fs.readFile(path.join(directory, file))).digest("hex"),
+  })))
+}
 let rebaseBegin: GoalPlanRebaseSchema.Response | undefined
 let rebaseControl: Promise<unknown> | undefined
 const goalControlHTTP = async (action: "stop" | "pause", payload: object) => {
@@ -338,6 +347,22 @@ try {
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const sessions = yield* SessionV2.Service
+      const refusedMirrorState = (permitID: string, sessionID: string) => Effect.gen(function* () {
+        const checkpoint = yield* GoalTickCheckpointV2.read(db, permitID)
+        assert(checkpoint)
+        const permit = yield* db.get<Record<string, unknown>>(sql`SELECT * FROM goal_tick_permit WHERE permit_id=${permitID}`)
+        assert(permit)
+        const inputs = yield* db.all("SELECT * FROM session_input")
+        const units = yield* db.all("SELECT * FROM goal_child_unit")
+        return {
+          checkpoint: GoalControl.fingerprint(checkpoint),
+          permit: GoalControl.fingerprint(permit),
+          inputs: GoalControl.fingerprint(inputs),
+          units: GoalControl.fingerprint(units),
+          goal: GoalControl.fingerprint(yield* GoalControl.get(db, checkpoint.goal_id)),
+          documents: yield* Effect.promise(() => documentFiles(DeepAgentPlanStore.planStoreRoot(sessionID))),
+        }
+      })
       if (scenario.startsWith("loop-proposal-two-rebase-recover")) {
         const request = Schema.decodeUnknownSync(GoalPlanRebaseSchema.Apply)(yield* Effect.promise(() => Bun.file(path.join(root, "rebase-request.json")).json()))
         const inputs = yield* db.all("SELECT * FROM session_input")
@@ -381,6 +406,39 @@ try {
         const source = (yield* db.all<{ permit_id: string; session_id: string }>(
           "SELECT c.permit_id,g.session_id FROM goal_tick_checkpoint c JOIN goal_control g ON g.goal_id=c.goal_id",
         ))[0]
+        if (process.platform !== "darwin" && scenario === "loop-cold-recover") {
+          const recorded = yield* Effect.promise(() => Bun.file(path.join(root, "refused-mirror.json")).json())
+          assert.equal(source.permit_id, recorded.permitID)
+          assert.equal(source.session_id, recorded.sessionID)
+          const before = yield* refusedMirrorState(source.permit_id, source.session_id)
+          assert.deepEqual(before, recorded.state)
+          const refused = yield* GoalOwnedLoop.project({
+            permitID: source.permit_id,
+            directory: DeepAgentPlanStore.planStoreRoot(source.session_id),
+          }).pipe(Effect.exit)
+          assert(Exit.isFailure(refused))
+          const failure = Cause.squash(refused.cause)
+          assert(failure instanceof GoalControlSchema.Error)
+          assert.equal(failure.code, "recovery_required")
+          assert.equal(failure.message, "Only a complete prepared projection can be recovered without execution")
+          const after = yield* refusedMirrorState(source.permit_id, source.session_id)
+          assert.deepEqual(after, before)
+          assert.equal(requests.length, 0)
+          assert.deepEqual(OwnedValidation.inspectCustody(), {
+            limit: OwnedValidation.VALIDATION_CUSTODY_LIMIT, live: 0, quarantine: 0,
+          })
+          return {
+            refusal: failure.code,
+            checkpoint: yield* GoalTickCheckpointV2.read(db, source.permit_id),
+            permit: yield* db.get<{ state: string }>(sql`SELECT state FROM goal_tick_permit WHERE permit_id=${source.permit_id}`),
+            inputs: yield* db.all("SELECT * FROM session_input"),
+            units: yield* db.all("SELECT * FROM goal_child_unit"),
+            active: Array.from(yield* (yield* SessionExecution.Service).active),
+            validationCustody: OwnedValidation.inspectCustody(),
+            durableState: after,
+            noMirrorCAS: !(yield* Effect.promise(() => Bun.file(path.join(root, "cold-window.json")).exists())),
+          }
+        }
         const before = yield* db.all("SELECT id FROM session_input")
         const complete = yield* GoalOwnedLoop.project({
           permitID: source.permit_id,
@@ -832,6 +890,17 @@ try {
               validationCustody: OwnedValidation.inspectCustody(),
               active: Array.from(yield* (yield* SessionExecution.Service).active) }
           })
+          if (process.platform !== "darwin" && scenario === "loop-cold") {
+            const before = yield* Effect.promise(() => documentFiles(docroot))
+            const result = yield* unavailableValidation
+            assert.deepEqual(yield* Effect.promise(() => documentFiles(docroot)), before)
+            assert(!(yield* Effect.promise(() => Bun.file(path.join(root, "cold-window.json")).exists())))
+            const state = yield* refusedMirrorState(tick.permit.permit_id, parent.id)
+            yield* Effect.promise(() => Bun.write(path.join(root, "refused-mirror.json"), JSON.stringify({
+              permitID: tick.permit.permit_id, sessionID: parent.id, state,
+            })))
+            return { ...result, durableState: state, noMirrorCAS: true }
+          }
           if (scenario.startsWith("steer")) {
             const steer = yield* SessionSteer.Service
             const first = yield* steer.admit({
@@ -853,7 +922,7 @@ try {
               assert.equal((yield* db.all("SELECT permit_id FROM goal_tick_checkpoint")).length, 0)
             } else {
               const frozen = yield* GoalOwnedLoop.prepare({ permitID: tick.permit.permit_id, directory: docroot })
-              yield* steer.admit({
+              const later = yield* steer.admit({
                 sessionID: SessionID.make(parent.id),
                 delivery: "goal_steer",
                 correlationID: "later-steer",
@@ -875,7 +944,16 @@ try {
                     frozen.checkpoint.journal.parent.steering.rows[0].id)
                   assert(JSON.stringify(requests).includes("FIRST_FROZEN_GUIDANCE"))
                   assert(!JSON.stringify(requests).includes("LATER_GUIDANCE_NEXT_TICK"))
-                  return { ...result, steers: yield* db.all("SELECT id,prompt,consumed_seq FROM session_steer ORDER BY seq") }
+                  const steers = yield* db.all<{ id: string; consumed_seq: number | null }>(
+                    "SELECT id,prompt,consumed_seq FROM session_steer ORDER BY seq",
+                  )
+                  assert.equal(steers.length, 2)
+                  assert.equal(steers[0].id, first.id)
+                  assert.equal(steers[1].id, later.id)
+                  assert.deepEqual(result.checkpoint.journal.parent.steering.rows.map((row) => row.id), [first.id])
+                  assert.equal(steers[0].consumed_seq, null)
+                  assert.equal(steers[1].consumed_seq, null)
+                  return { ...result, steers, frozenSteerIDs: [first.id, later.id] }
                 }
                 const complete = yield* GoalOwnedLoop.run({ permitID: tick.permit.permit_id, directory: docroot })
                 assert.equal(complete.state, "committed")

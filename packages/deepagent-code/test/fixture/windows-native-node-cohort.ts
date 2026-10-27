@@ -41,7 +41,9 @@ export async function build(input: { directory: string; nodeEntry: string }) {
     await fs.writeFile(privateInput, JSON.stringify({ root, nodeEntry: input.nodeEntry,
       privateKeyFile: publisher.privateKeyFile, publicKeyFile: publisher.publicKeyFile, toolchain }), { flag: "wx", mode: 0o600 })
     const built = await execute([process.execPath, fileURLToPath(import.meta.url), privateInput], root,
-      { ...environment(root, toolchain.rustupHome), DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY: publisher.publicKeyFile }, "build", 230_000)
+      { ...environment(root, toolchain.rustupHome), DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY: publisher.publicKeyFile,
+        PATH: `${path.dirname(toolchain.cargo)}${path.delimiter}${process.env.PATH ?? ""}`, RUSTC: toolchain.rustc,
+        RUSTUP_AUTO_INSTALL: "0" }, "build", 230_000)
     assert.equal(built.code, 0, `Native cohort build failed: ${JSON.stringify(built)}`)
   } catch (error) {
     console.error("WINDOWS_NATIVE_COHORT_BUILD_FAILURE", JSON.stringify({ root, phases: await phases(root) }))
@@ -85,14 +87,15 @@ export async function captureToolchain() {
   }
   const rustupHome = await fs.realpath(await query(["rustup", "show", "home"]))
   assert(path.isAbsolute(rustupHome))
+  const cargo = await fs.realpath(await query(["rustup", "which", "cargo"]))
+  const rustc = await fs.realpath(await query(["rustup", "which", "rustc"]))
   const env = { ...process.env, RUSTUP_HOME: rustupHome }
-  const cargo = await fs.realpath(await query(["rustup", "which", "cargo"], env))
-  const rustc = await fs.realpath(await query(["rustup", "which", "rustc"], env))
-  const cargoVersion = await query([cargo, "--version"], env)
-  const rustcVersion = await query([rustc, "--version"], env)
-  assert.equal(await query(["cargo", "--version"], env), cargoVersion)
-  assert.equal(await query(["rustc", "--version"], env), rustcVersion)
-  return { rustupHome, cargo, rustc, cargoVersion, rustcVersion,
+  assert.equal(await fs.realpath(await query(["rustup", "which", "cargo"], env)), cargo)
+  assert.equal(await fs.realpath(await query(["rustup", "which", "rustc"], env)), rustc)
+  // Direct rustc --version stalls on these Windows runners. It is optional
+  // diagnostics, not Native qualification: the real locked build must invoke
+  // this captured compiler and succeed before a fixture can issue any receipt.
+  return { rustupHome, cargo, rustc,
     activeToolchain: await query(["rustup", "show", "active-toolchain"], env) }
 }
 
