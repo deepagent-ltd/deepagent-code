@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
-import { createHash, generateKeyPairSync, sign } from "node:crypto"
+import { createHash, createPublicKey, generateKeyPairSync, sign } from "node:crypto"
 import { createServer, request } from "node:http"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
@@ -129,13 +129,59 @@ describe.serial("signed compiled actual CLI uses Root catalog and native factory
   })
 })
 
+// Windows accepts the original compiled entry and offline publisher receipt,
+// rather than a JavaScript signature around a source-style executable.
+async function prepareWindowsCLI(root: string) {
+  if (process.platform !== "win32") return
+  const { prepareTestNativePublisher, verifyNativePublisherKeys } = await import("../../../desktop/scripts/test-native-publisher")
+  const { buildWindowsNativeBootstrap } = await import("../../script/build-windows-native-bootstrap")
+  const environmentFile = path.join(root, "publisher.env")
+  await fs.writeFile(environmentFile, "", { flag: "wx", mode: 0o600 })
+  const publisher = await prepareTestNativePublisher({ runnerTemp: root, environmentFile,
+    target: `win32-${process.arch}`, releaseID: "signed-cli-test" })
+  const previousCargoHome = process.env.CARGO_HOME
+  process.env.CARGO_HOME = path.join(publisher.directory, "cargo-cache")
+  try {
+    const verified = await verifyNativePublisherKeys(publisher.privateKeyFile, publisher.publicKeyFile)
+    const publicKey = createPublicKey(await fs.readFile(publisher.publicKeyFile))
+    const assets = await buildWindowsNativeBootstrap({ repository, staging: publisher.directory, publicKey })
+    const cargo = path.join(publisher.directory, "native-bootstrap-cargo")
+    const child = Bun.spawn(["cargo", "build", "--locked", "--release", "--bin", "deepagent-work-file-helper"], {
+      cwd: path.join(repository, "packages/work-file-helper"),
+      env: { ...process.env, CARGO_TARGET_DIR: cargo, DAC_NATIVE_PRELOADER_PUBLISHER_HEX: assets.publisherPin },
+      stdin: "ignore", stdout: "inherit", stderr: "inherit",
+    })
+    if (await child.exited !== 0) throw new Error("Windows Native CLI helper build failed")
+    const filename = "deepagent-work-file-helper.exe"
+    await fs.copyFile(path.join(cargo, "release", filename), path.join(publisher.directory, filename))
+    const bytes = await fs.readFile(path.join(publisher.directory, filename))
+    const helper = { path: `packages/work-file-helper/bin/win32-${process.arch}/${filename}`,
+      bytes: bytes.byteLength, sha256: hash(bytes) }
+    return { root: publisher.directory, publisher, keys: { privateKey: verified.privateKey, publicKey }, assets, helper,
+      [Symbol.asyncDispose]: () => Promise.all([publisher.privateKeyFile, environmentFile]
+        .map((file) => fs.rm(file, { force: true }))).then(() => undefined),
+    }
+  } catch (error) {
+    await Promise.all([publisher.privateKeyFile, environmentFile].map((file) => fs.rm(file, { force: true })))
+    throw error
+  } finally {
+    // This file's serial setup restores the caller after its owned D: build.
+    if (previousCargoHome === undefined) delete process.env.CARGO_HOME
+    if (previousCargoHome !== undefined) process.env.CARGO_HOME = previousCargoHome
+  }
+}
+
 async function prepareFixture(registerServer: (server: ReturnType<typeof createServer>) => void) {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-native-cli-")))
-  const executable = path.join(root, "deepagent-code")
-  const pair = generateKeyPairSync("ed25519")
+  const temporary = process.platform === "win32" ? path.join(host, ".artifacts/unit") : os.tmpdir()
+  if (process.platform === "win32") await fs.mkdir(temporary, { recursive: true })
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(temporary, "dac-native-cli-")))
+  await using windows = await prepareWindowsCLI(directory)
+  const root = windows?.root ?? directory
+  const executable = path.join(root, process.platform === "win32" ? "deepagent-code.exe" : "deepagent-code")
+  const pair = windows?.keys ?? generateKeyPairSync("ed25519")
   const pin = pair.publicKey.export({ type: "spki", format: "pem" }).toString()
   const fixture = path.join(import.meta.dir, "fixture/native-runtime-cli-command.ts")
-  const helper = await buildWorkFileHelper({ os: process.platform, arch: process.arch, destination: root })
+  const helper = windows?.helper ?? await buildWorkFileHelper({ os: process.platform, arch: process.arch, destination: root })
   const files = Bun.spawnSync(
     [
       "git",
@@ -177,7 +223,10 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
     target: `${process.platform}-${process.arch}`,
     sourceCommit: Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repository }).stdout.toString().trim(),
     sourceTree: Bun.spawnSync(["git", "rev-parse", "HEAD^{tree}"], { cwd: repository }).stdout.toString().trim(),
-    components: [...sourceComponents, new NativeInstallationSchema.Component(helper)].toSorted((a, b) =>
+    components: [...sourceComponents, new NativeInstallationSchema.Component(helper),
+      ...(windows ? [windows.assets, ...windows.assets.assets, ...windows.assets.licenses].map((entry) =>
+        new NativeInstallationSchema.Component({ path: entry.path, bytes: entry.bytes, sha256: entry.sha256 })) : []),
+    ].toSorted((a, b) =>
       a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
     ),
   })
@@ -185,7 +234,7 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
   const parserWorker = await fs.realpath(Bun.resolveSync("@opentui/core/parser.worker", host))
   const build = await Bun.build({
     entrypoints: [
-      path.join(host, "src/index.ts"),
+      path.join(host, process.platform === "win32" ? "src/windows-cli.ts" : "src/index.ts"),
       parserWorker,
       path.join(host, "src/cli/tui/worker.ts"),
       path.join(host, "src/location-index/typescript-index.worker.ts"),
@@ -202,7 +251,7 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
       {
         name: "signed-test-debug-command",
         setup(builder) {
-          builder.onLoad({ filter: /\/cli\/cmd\/debug\/index\.ts$/ }, async () => ({
+          builder.onLoad({ filter: /[/\\]cli[/\\]cmd[/\\]debug[/\\]index\.ts$/ }, async () => ({
             contents: await fs.readFile(fixture, "utf8"),
             loader: "ts",
           }))
@@ -217,7 +266,7 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
       DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST: JSON.stringify(componentsText),
       DEEPAGENT_CODE_WORKER_PATH: JSON.stringify("./src/cli/tui/worker.ts"),
       DEEPAGENT_CODE_INDEX_WORKER_PATH: JSON.stringify("./src/location-index/typescript-index.worker.ts"),
-      OTUI_TREE_SITTER_WORKER_PATH: JSON.stringify(`/$bunfs/root/${path.relative(host, parserWorker)}`),
+      OTUI_TREE_SITTER_WORKER_PATH: JSON.stringify(`${process.platform === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"}${path.relative(host, parserWorker).replaceAll("\\", "/")}`),
     },
   })
   await fs.writeFile(
@@ -251,15 +300,22 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
     componentsHash: hash(componentsText),
     executable: new NativeInstallationSchema.Executable({ bytes: bytes.byteLength, sha256: hash(bytes) }),
   })
-  await fs.writeFile(
-    `${executable}${NativeInstallationSchema.SIDECAR_SUFFIX}`,
-    CanonicalJson.stringify(
-      new NativeInstallationSchema.Manifest({
-        payload,
-        signature: sign(null, Buffer.from(CanonicalJson.stringify(payload)), pair.privateKey).toString("hex"),
-      }),
-    ),
-  )
+  if (windows) {
+    const { sealTestNativeCLI } = await import("../../../desktop/scripts/test-native-publisher")
+    await fs.writeFile(`${executable}.native-components.json`, componentsText, { flag: "wx" })
+    await sealTestNativeCLI({ executable, target: components.target, releaseID: "signed-cli-test",
+      privateKeyFile: windows.publisher.privateKeyFile, publicKeyFile: windows.publisher.publicKeyFile })
+  }
+  if (!windows)
+    await fs.writeFile(
+      `${executable}${NativeInstallationSchema.SIDECAR_SUFFIX}`,
+      CanonicalJson.stringify(
+        new NativeInstallationSchema.Manifest({
+          payload,
+          signature: sign(null, Buffer.from(CanonicalJson.stringify(payload)), pair.privateKey).toString("hex"),
+        }),
+      ),
+    )
   await fs.writeFile(path.join(root, "components.json"), componentsText)
   await fs.writeFile(path.join(root, "public-key.pem"), pin)
   const state = { mode: "happy", proxy: 0 }
@@ -325,6 +381,7 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
       fs.mkdir(path.join(root, name)),
     ),
   )
+  if (windows) await Promise.all(["appdata", "localappdata"].map((name) => fs.mkdir(path.join(root, name))))
   await fs.writeFile(
     path.join(project, "deepagent-code.json"),
     JSON.stringify({
@@ -353,7 +410,7 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
   await fs.mkdir(bin, { recursive: true })
   const rg = Bun.which("rg")
   expect(rg).toBeDefined()
-  await fs.copyFile(rg!, path.join(bin, "rg"))
+  await fs.copyFile(rg!, path.join(bin, process.platform === "win32" ? "rg.exe" : "rg"))
   const manifest = await fs.readFile(`${executable}${NativeInstallationSchema.SIDECAR_SUFFIX}`)
   const rows: { mode: string; exit: number; requests: number; proxy: number }[] = []
 
@@ -460,6 +517,10 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
       cwd: project,
       env: {
         PATH: process.env.PATH,
+        ...(windows ? { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR ?? process.env.SystemRoot,
+          USERPROFILE: path.join(root, "home"), APPDATA: path.join(root, "appdata"),
+          LOCALAPPDATA: path.join(root, "localappdata"), TEMP: path.join(root, "tmp"), TMP: path.join(root, "tmp"),
+        } : {}),
         HOME: path.join(root, "home"),
         TMPDIR: path.join(root, "tmp"),
         XDG_CONFIG_HOME: path.join(root, "config"),
