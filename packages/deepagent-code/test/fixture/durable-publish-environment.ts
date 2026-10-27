@@ -6,9 +6,15 @@ import { DurablePublish } from "@deepagent-code/core/database/durable-publish"
 
 export * as DurablePublishEnvironment from "./durable-publish-environment"
 
-/** Test-build logging only. Removing every insertion must restore the exact bridge source. */
-export function instrument(source: string) {
+/** The candidate changes exactly two expressions; reversing them and logging restores the bridge. */
+export function instrument(source: string, candidate = false) {
   assert(!source.includes("DAC_TEST_PS_TRACE"))
+  const original = "New-Object System.Text.UTF8Encoding($false)"
+  const constructor = "[System.Text.UTF8Encoding]::new($false)"
+  assert.equal(source.split(original).length, 3, "The original bridge must contain exactly two encoding expressions")
+  assert(!source.includes(constructor))
+  const encoding = candidate ? constructor : original
+  const prepared = candidate ? source.replaceAll(original, constructor) : source
   const inserted: string[] = []
   const log = (phase: string) => {
     const text =
@@ -37,12 +43,12 @@ export function instrument(source: string) {
   const points = [
     { anchor: "$ErrorActionPreference='Stop'", before: log("process-entry"), after: "" },
     {
-      anchor: "[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)",
+      anchor: "[Console]::InputEncoding=" + encoding,
       before: log("encoding-start"),
       after: log("input-encoding"),
     },
     {
-      anchor: "[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)",
+      anchor: "[Console]::OutputEncoding=" + encoding,
       before: "",
       after: log("output-encoding"),
     },
@@ -69,9 +75,11 @@ export function instrument(source: string) {
   const contents = points.reduce((value, point) => {
     assert.equal(value.split(point.anchor).length, 2, "Durable publish phase anchor must occur exactly once")
     return value.replace(point.anchor, point.before + point.anchor + point.after)
-  }, source)
+  }, prepared)
+  const stripped = inserted.reduce((value, text) => value.replace(text, ""), contents)
+  if (candidate) assert.equal(stripped.split(constructor).length, 3)
   assert.equal(
-    inserted.reduce((value, text) => value.replace(text, ""), contents),
+    candidate ? stripped.replaceAll(constructor, original) : stripped,
     source,
     "Phase logging must preserve the original bridge bytes",
   )
@@ -92,7 +100,7 @@ if (import.meta.main) {
   assert.equal(await Bun.stdin.text(), "GO\n")
   const started = performance.now()
   console.info("DURABLE_PUBLISH_ENV_PHASE", JSON.stringify({ phase: "bridge-start" }))
-  // This is the original bridge, including its 30s watchdog and nonce receipt.
+  // Both test builds keep the original 30s watchdog and nonce receipt.
   const result = await Effect.runPromiseExit(DurablePublish.windows(source, target, false))
   const receipt = {
     pid: process.pid,

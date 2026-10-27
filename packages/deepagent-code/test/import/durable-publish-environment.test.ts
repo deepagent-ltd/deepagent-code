@@ -34,7 +34,7 @@ const Phase = Schema.Struct({
   receivedMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 })
 
-test("actual durable publication compares narrow and merged owned Windows environments", async () => {
+test("actual durable publication compares original and constructor-only scripts in the same owned Windows environment", async () => {
   const parent = process.platform === "win32" ? path.resolve(import.meta.dir, "../../.artifacts/unit") : os.tmpdir()
   await fs.mkdir(parent, { recursive: true })
   const root = await fs.realpath(await fs.mkdtemp(path.join(parent, "durable-env-")))
@@ -58,69 +58,52 @@ test("actual durable publication compares narrow and merged owned Windows enviro
   }
   assert.equal(path.win32.parse(root).root.toUpperCase(), "D:\\")
   const core = await fs.realpath(path.resolve(import.meta.dir, "../../../core/src/database/durable-publish.ts"))
-  const instrumented = DurablePublishEnvironment.instrument(await fs.readFile(core, "utf8"))
-  const loaded = { count: 0 }
-  const build = await Bun.build({
-    entrypoints: [path.resolve(import.meta.dir, "../fixture/durable-publish-environment.ts")],
-    outdir: root,
-    naming: "durable-publish-environment.js",
-    target: "bun",
-    format: "esm",
-    plugins: [
-      {
-        name: "test-only-original-durable-publish-phases",
-        setup(builder) {
-          builder.onLoad({ filter: /[/\\]database[/\\]durable-publish\.ts$/ }, async (input) => {
-            if ((await fs.realpath(input.path)) !== core) return
-            loaded.count++
-            return { contents: instrumented, loader: "ts" }
-          })
+  const source = await fs.readFile(core, "utf8")
+  const entries = []
+  for (const mode of ["original", "candidate"] as const) {
+    const instrumented = DurablePublishEnvironment.instrument(source, mode === "candidate")
+    const loaded = { count: 0 }
+    const filename = "durable-publish-" + mode + ".js"
+    const build = await Bun.build({
+      entrypoints: [path.resolve(import.meta.dir, "../fixture/durable-publish-environment.ts")],
+      outdir: root,
+      naming: filename,
+      target: "bun",
+      format: "esm",
+      plugins: [
+        {
+          name: "test-only-durable-publish-encoding-comparison",
+          setup(builder) {
+            builder.onLoad({ filter: /[/\\]database[/\\]durable-publish\.ts$/ }, async (input) => {
+              if ((await fs.realpath(input.path)) !== core) return
+              loaded.count++
+              return { contents: instrumented, loader: "ts" }
+            })
+          },
         },
-      },
-    ],
-  })
-  expect(build.success).toBe(true)
-  expect(loaded.count).toBe(1)
-  const entry = path.join(root, "durable-publish-environment.js")
-  expect(await fs.exists(entry)).toBe(true)
+      ],
+    })
+    expect(build.success).toBe(true)
+    expect(loaded.count).toBe(1)
+    const entry = path.join(root, filename)
+    expect(await fs.exists(entry)).toBe(true)
+    entries.push({ mode, entry })
+  }
   const results = []
-  // Keep this order explicit. A failed narrow leg still yields the merged facts;
+  // Keep this order explicit. A failed original leg still yields the candidate facts;
   // an unconfirmed child-tree retirement aborts before starting another leg.
-  for (const mode of ["narrow", "merged"] as const) {
-    const directory = path.join(root, mode)
+  for (const value of entries) {
+    const directory = path.join(root, value.mode)
     await Promise.all(
       ["home", "config", "data", "cache", "state"].map((name) =>
         fs.mkdir(path.join(directory, name), { recursive: true, mode: 0o700 }),
       ),
     )
-    const narrow = importFixtureEnvironment(directory)
-    const env: Record<string, string | undefined> =
-      mode === "narrow"
-        ? narrow
-        : {
-            ...Object.fromEntries(
-              Object.entries(process.env).filter(
-                ([name]) => !Object.keys(narrow).some((key) => key.toUpperCase() === name.toUpperCase()),
-              ),
-            ),
-            ...narrow,
-          }
-    // Explicit inherited caches must not write back into the runner's profile.
-    for (const [name, relative] of [
-      ["PSModuleAnalysisCachePath", "cache/ps-module-analysis"],
-      ["BUN_RUNTIME_TRANSPILER_CACHE_PATH", "cache/bun"],
-      ["DOTNET_CLI_HOME", "cache/dotnet"],
-    ] as const) {
-      const key = Object.keys(env).find((key) => key.toUpperCase() === name.toUpperCase())
-      if (!key || !env[key]) continue
-      env[key] = path.join(directory, relative)
-      await fs.mkdir(path.dirname(env[key]!), { recursive: true, mode: 0o700 })
-    }
-    const result = await observe(directory, env, entry)
-    results.push({ mode, ...result })
-    console.info("DURABLE_PUBLISH_ENV_RESULT", JSON.stringify({ mode, ...result }))
+    const result = await observe(directory, importFixtureEnvironment(directory), value.entry)
+    results.push({ mode: value.mode, ...result })
+    console.info("DURABLE_PUBLISH_ENV_RESULT", JSON.stringify({ mode: value.mode, ...result }))
   }
-  expect(results.map((result) => result.mode)).toEqual(["narrow", "merged"])
+  expect(results.map((result) => result.mode)).toEqual(["original", "candidate"])
   // Assert only after both actual legs have published their independent facts.
   for (const result of results) {
     expect(result.phase).toBe("completed")
