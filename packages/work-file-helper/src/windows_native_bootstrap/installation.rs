@@ -36,15 +36,28 @@ impl Installed {
         Ok(&self.encoded)
     }
     fn current(&self, original: &FirstLoad, proof: &Evidence) -> io::Result<()> {
-        original.current()?; proof.current()?; self.manifest.current()?;
-        super::loader::require_trusted(&self.manifest.file)?; super::loader::require_trusted(proof.node_file()?)?;
-        if no_follow::stamp(proof.node_file()?)? != self.description.artifact.identity
-            || no_follow::stamp(&self.manifest.file)? != self.description.manifest.identity
-            || no_follow::stamp(original.original_host_file()?)? != self.description.runtime.identity {
+        checked("original-current", original.current())?;
+        checked("preload-current", proof.current())?;
+        checked("manifest-current", self.manifest.current())?;
+        checked("manifest-trusted", super::loader::require_trusted(&self.manifest.file))?;
+        checked("artifact-trusted", (|| super::loader::require_trusted(proof.node_file()?))())?;
+        if changed("artifact-stamp", || Ok(no_follow::stamp(proof.node_file()?)? != self.description.artifact.identity))?
+            || changed("manifest-stamp", || Ok(no_follow::stamp(&self.manifest.file)? != self.description.manifest.identity))?
+            || changed("runtime-stamp", || Ok(no_follow::stamp(original.original_host_file()?)? != self.description.runtime.identity))? {
             return Err(io::ErrorKind::PermissionDenied.into());
         }
         Ok(())
     }
+}
+fn checked<Value>(stage: &'static str, result: io::Result<Value>) -> io::Result<Value> {
+    result.inspect_err(|error| eprintln!("dac-native-installation-current:{stage}:{:?}:{:?}", error.kind(), error.raw_os_error()))
+}
+fn changed(stage: &'static str, read: impl FnOnce() -> io::Result<bool>) -> io::Result<bool> {
+    let changed = checked(stage, read())?;
+    if changed {
+        eprintln!("dac-native-installation-current:{stage}:{:?}:{:?}", io::ErrorKind::PermissionDenied, None::<i32>);
+    }
+    Ok(changed)
 }
 fn observe(file: &File, limit: u64, text: bool) -> io::Result<Observation> {
     let identity = no_follow::stamp(file)?;
