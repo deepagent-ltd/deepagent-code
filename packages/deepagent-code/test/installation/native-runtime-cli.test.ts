@@ -385,6 +385,7 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
   await fs.writeFile(
     path.join(project, "deepagent-code.json"),
     JSON.stringify({
+      $schema: "https://ai.deepagent.ltd/config.schema.json",
       formatter: false,
       lsp: false,
       model: "fixture/snapshot",
@@ -419,6 +420,7 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
       path.join(project, "deepagent-code.json"),
       mode.startsWith("privacy")
         ? JSON.stringify({
+            $schema: "https://ai.deepagent.ltd/config.schema.json",
             formatter: false,
             lsp: false,
             model: "fixture/snapshot",
@@ -446,6 +448,7 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
           })
         : mode.startsWith("approval")
           ? JSON.stringify({
+              $schema: "https://ai.deepagent.ltd/config.schema.json",
               formatter: false,
               lsp: false,
               model: "fixture/snapshot-1",

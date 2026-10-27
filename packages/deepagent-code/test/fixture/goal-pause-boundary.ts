@@ -75,6 +75,7 @@ stage("fixture-module-loaded")
 await Bun.write(
   path.join(directory, "deepagent-code.json"),
   JSON.stringify({
+    $schema: "https://ai.deepagent.ltd/config.schema.json",
     formatter: false,
     lsp: false,
     model: "fixture/test-model",

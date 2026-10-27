@@ -280,6 +280,7 @@ assert(address && typeof address !== "string")
 await Bun.write(
   path.join(directory, "deepagent-code.json"),
   JSON.stringify({
+    $schema: "https://ai.deepagent.ltd/config.schema.json",
     formatter: false,
     lsp: scenario.startsWith("loop-proposal-diagnostics")
       ? {
