@@ -40,6 +40,8 @@ if (scenario === "control-race-actor") {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
+      // The first attempt must observe the held writer without waiting for this host to release it.
+      yield* db.run("PRAGMA busy_timeout = 0")
       const first = yield* GoalControl.control(db, input).pipe(Effect.exit)
       assert(Exit.isFailure(first))
       const error = Exit.isFailure(first) ? Cause.squash(first.cause) : undefined
@@ -54,6 +56,9 @@ if (scenario === "control-race-actor") {
           await Bun.sleep(10)
         }
       })
+      // Reopening the store directly skips production connection setup. Restore its
+      // bounded writer wait for the exact retry while runtime consumers are active.
+      yield* db.run("PRAGMA busy_timeout = 5000")
       return yield* GoalControl.control(db, input)
     }).pipe(Effect.provide(WorkAuthorityFixture.database(path.join(root, "authority.sqlite"))), Effect.scoped),
   )

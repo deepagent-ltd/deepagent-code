@@ -8,6 +8,7 @@ import { makeMemoMap } from "@deepagent-code/core/effect/memo-map"
 import type { Config } from "@/config/config"
 import { TestInstance, withTmpdirInstance } from "../fixture/fixture"
 import { InstanceStore } from "@/project/instance-store"
+import { EmptySettingsFixture } from "../fixture/empty-settings"
 
 type Body<A, E, R> = Effect.Effect<A, E, R> | (() => Effect.Effect<A, E, R>)
 type InstanceOptions<E, R> = {
@@ -130,11 +131,16 @@ const make = <R, E>(testLayer: Layer.Layer<R, E>, liveLayer: Layer.Layer<R, E>, 
   return { effect, live, instance }
 }
 
+// Source-only Windows tests may observe the explicitly absent private settings leaves.
+// The existing fixture refuses every existing leaf, private write and storage preparation;
+// actual Native/DACL settings tests must still supply their own original storage owner.
+const privateSettings = process.platform === "win32" ? EmptySettingsFixture.layer : Layer.empty
+
 // Test environment with TestClock and TestConsole
-const testEnv = Layer.mergeAll(TestConsole.layer, TestClock.layer())
+const testEnv = Layer.mergeAll(TestConsole.layer, TestClock.layer(), privateSettings)
 
 // Live environment - uses real clock, but keeps TestConsole for output capture
-const liveEnv = TestConsole.layer
+const liveEnv = Layer.mergeAll(TestConsole.layer, privateSettings)
 
 export const it = make<never, never>(testEnv, liveEnv)
 
