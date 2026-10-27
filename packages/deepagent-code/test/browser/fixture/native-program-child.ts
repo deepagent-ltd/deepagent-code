@@ -168,13 +168,11 @@ try {
   const page = async (url: string) => {
     tab = (await execute({ type: "navigate", tabID: tab.tabID, generation: tab.generation, url: control.origin + url }))
       .result.tabs[0]!
-    return snapshot(true)
+    return snapshot()
   }
-  const snapshot = async (afterNavigation = false): Promise<BrowserSchema.Result> => {
-    if (!afterNavigation)
-      return execute({ type: "snapshot", tabID: tab.tabID, generation: tab.generation }).then((value) => value.result)
-    // loadURL can settle before the native document source finishes changing.
-    // Reobserve only this readonly boundary with fresh action IDs and one deadline.
+  const snapshot = async (): Promise<BrowserSchema.Result> => {
+    // The native source can advance between ordinary readonly observations too.
+    // Reobserve with fresh action IDs and one deadline; never replay side effects.
     const deadline = Date.now() + 10_000
     while (true) {
       const listed = await Effect.runPromise(host.execute(active, { ...action({ type: "tabs.list" }), deadline }, current))
