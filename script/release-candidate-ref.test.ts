@@ -380,7 +380,7 @@ const draft205: Release = {
   isDraft: true,
   publishedAt: null,
   assets: [],
-  targetCommitish: "acc5c804339540defa793fc16a397e2fe329b85a",
+  targetCommitish: "04f248daca1b4a97a9b5730a1e5240cb8184d51b",
 }
 
 test("release recovery authorization pins the observed 2.0.5 generation and preserves the 2.0.4 authorization", () => {
