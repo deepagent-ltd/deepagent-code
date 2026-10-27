@@ -195,23 +195,53 @@ impl FirstLoad {
             .map(|image| &image.path.file).ok_or_else(|| io::ErrorKind::PermissionDenied.into())
     }
     pub fn current(&self) -> io::Result<()> {
-        self.system.current()?;
-        require_machine(&self.system.file)?;
+        current_checked("system", "system-lease", self.system.current())?;
+        current_checked("system", "system-machine", require_machine(&self.system.file))?;
         for image in &self.images {
-            image.path.current()?;
-            let name = module_path(image.module.0)?;
+            let role = if image.description.identity == self.description.bootstrap.identity { "bootstrap" }
+                else if image.description.identity == self.description.host.identity { "runtime" }
+                else if image.description.system { "system" } else { "module" };
+            current_checked(role, "image-lease", image.path.current())?;
+            let name = current_checked(role, "mapped-path", module_path(image.module.0))?;
             // The original no-follow ancestor handles still deny WRITE/DELETE.
             // Match the actual mapped image to that held namespace rather than
             // acquiring a second copy of its entire immutable directory chain.
-            if name != image.observed || no_follow::stamp(&image.path.file)? != image.stamp ||
-                no_follow::identity(&image.path.file)? != image.description.identity {
+            if current_changed(role, "mapped-path", || Ok(name != image.observed))?
+                || current_changed(role, "stamp", || Ok(current_stamp(role, no_follow::stamp(&image.path.file)?, &image.stamp) != image.stamp))?
+                || current_changed(role, "identity", || Ok(no_follow::identity(&image.path.file)? != image.description.identity))? {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
-            if image.description.system { require_machine(&image.path.file)?; }
-            if !image.description.system { require_trusted(&image.path.file)?; }
+            if image.description.system { current_checked(role, "image-machine", require_machine(&image.path.file))?; }
+            if !image.description.system { current_checked(role, "private-trust", require_trusted(&image.path.file))?; }
         }
         Ok(())
     }
+}
+
+fn current_diagnostic(role: &'static str, stage: &'static str, field: &'static str, error: &io::Error) {
+    eprintln!("dac-native-first-load-current:{role}:{stage}:{field}:{:?}:{:?}", error.kind(), error.raw_os_error());
+}
+fn current_checked<Value>(role: &'static str, stage: &'static str, result: io::Result<Value>) -> io::Result<Value> {
+    result.inspect_err(|error| current_diagnostic(role, stage, "none", error))
+}
+fn current_changed(role: &'static str, stage: &'static str, read: impl FnOnce() -> io::Result<bool>) -> io::Result<bool> {
+    let changed = current_checked(role, stage, read())?;
+    if changed { current_diagnostic(role, stage, "none", &io::ErrorKind::PermissionDenied.into()); }
+    Ok(changed)
+}
+fn current_stamp(role: &'static str, actual: String, expected: &str) -> String {
+    if actual != expected {
+        // The identity's Debug text can contain colons. Split only the seven
+        // numeric suffix fields; diagnostics never emit either stamp's values.
+        let left = actual.rsplitn(8, ':').collect::<Vec<_>>();
+        let right = expected.rsplitn(8, ':').collect::<Vec<_>>();
+        if left.len() == 8 && right.len() == 8 {
+            for (index, field) in ["links", "size-low", "size-high", "attrs", "change", "write", "creation", "identity"].into_iter().enumerate() {
+                if left[index] != right[index] { current_diagnostic(role, "stamp", field, &io::ErrorKind::PermissionDenied.into()); }
+            }
+        }
+    }
+    actual
 }
 
 struct Snapshot(HANDLE);
