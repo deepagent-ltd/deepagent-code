@@ -24,7 +24,9 @@ const run = async (args: readonly string[], cwd: string, timeoutMs: number): Pro
     const proc = Process.spawn(["git", ...args], {
       cwd,
       stdout: "pipe",
-      stderr: "pipe",
+      // This best-effort probe never consumes stderr. An unread pipe can block
+      // git's non-repository usage output until the timeout instead of exiting.
+      stderr: "ignore",
       env: { ...process.env },
     })
     const stdout = proc.stdout

@@ -5,8 +5,9 @@
 // `DEEPAGENT_CODE_CONFIG_CONTENT` providing the test provider config inline.
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
-import { mkdir } from "node:fs/promises"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { pathToFileURL } from "node:url"
 import { Database } from "bun:sqlite"
 import { cliIt } from "../../lib/cli-process"
@@ -17,6 +18,13 @@ const goalEnvironment = {
   DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP: "true",
   DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "false",
   DEEPAGENT_CODE_V4_GOAL_TICK_EVENT_DRIVEN: "true",
+}
+
+function externalDirectory() {
+  return Effect.acquireRelease(
+    Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "oc-cli-external-"))),
+    (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+  )
 }
 
 const completeCurrentPlan = (hit: { body: Record<string, unknown> }) => {
@@ -187,11 +195,11 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
 
   cliIt.live(
     "auto-approves an asked permission without human input when explicitly requested",
-    ({ llm, home, deepagentCode }) =>
+    ({ llm, deepagentCode }) =>
       Effect.gen(function* () {
         // V2 read hard-errors on external absolute paths (no permission path); write is the tool
         // that surfaces the external_directory approval this scenario is about.
-        const target = path.join(home, "marker.txt")
+        const target = path.join(yield* externalDirectory(), "marker.txt")
         yield* llm.tool("write", { path: target, content: "UNATTENDED_PERMISSION_MARKER\n" })
         yield* llm.text("permission flow completed")
 
@@ -225,14 +233,14 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
   )
 
   // PARITY-002: --permission-mode read-only mirrors the GUI read-only
-  // directory mode — mutating permissions are auto-rejected. In this harness
-  // the session root differs from the tmp home, so file tools surface the
-  // external_directory permission, which is part of the shared mutating set.
+  // directory mode — mutating permissions are auto-rejected. The owned external
+  // directory is separate from the CLI's home/Location, so the write must ask.
   cliIt.live(
     "read-only permission mode rejects mutating permissions",
-    ({ llm, home, deepagentCode }) =>
+    ({ llm, deepagentCode }) =>
       Effect.gen(function* () {
-        yield* llm.tool("write", { path: path.join(home, "mutated.txt"), content: "nope\n" })
+        const target = path.join(yield* externalDirectory(), "mutated.txt")
+        yield* llm.tool("write", { path: target, content: "nope\n" })
         yield* llm.text("read-only flow completed")
 
         const result = yield* deepagentCode.run("try to mutate", {
@@ -255,7 +263,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
           }),
         )
         // The rejection must be effective: no mutation reached the disk.
-        const mutated = yield* Effect.promise(() => Bun.file(path.join(home, "mutated.txt")).exists())
+        const mutated = yield* Effect.promise(() => Bun.file(target).exists())
         expect(mutated).toBe(false)
       }),
     60_000,
