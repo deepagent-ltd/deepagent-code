@@ -11,12 +11,12 @@ import { importFixtureSourceInventory, publishImportFixturePacket } from "../../
 
 const root = process.argv[2]!
 const observations = { count: 0 }
-const stage = (phase: string) => {
+const stage = (phase: string, facts: { activeBatch?: "prepare" | "other" | "none" } = {}) => {
   if (observations.count++ >= 128) return
   try {
     appendFileSync(
       path.join(root, "startup.jsonl"),
-      JSON.stringify({ phase, at: Date.now(), elapsedMs: performance.now() }) + "\n",
+      JSON.stringify({ phase, at: Date.now(), elapsedMs: performance.now(), ...facts }) + "\n",
       { mode: 0o600 },
     )
   } catch {}
@@ -53,6 +53,7 @@ await Effect.runPromise(
         stage("inspect-seen")
         const input = yield* Effect.promise(() => Bun.file(path.join(root, "inspect.json")).json() as Promise<{ jobID: string }>)
         const row = yield* ImportJob.get(input.jobID)
+        stage("original-job-observed", { activeBatch: row?.active_batch_id === "prepare" ? "prepare" : row?.active_batch_id ? "other" : "none" })
         if (!row?.target || row.state !== "completed") return yield* Effect.die("GUI did not complete its original copy job")
         const proof = yield* ImportJob.receipts({ filename: row.target.dbPath, jobID: row.job_id, sourceDigest: row.source_digest!, includeResults: true })
         stage("original-receipts-read")

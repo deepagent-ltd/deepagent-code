@@ -18,6 +18,7 @@ const stage = (
     hasTarget?: boolean
     hasSourceDigest?: boolean
     committedBatches?: number
+    activeBatch?: "prepare" | "other" | "none"
     available?: boolean
     count?: number
     tag?: string
@@ -114,7 +115,8 @@ await Effect.runPromise(
             hasTarget: Boolean(row?.target),
             hasSourceDigest: Boolean(row?.source_digest),
             committedBatches: row?.committed_batches,
-          }
+            activeBatch: row?.active_batch_id === "prepare" ? "prepare" : row?.active_batch_id ? "other" : "none",
+          } satisfies Parameters<typeof stage>[1]
           if (observations.job !== JSON.stringify(facts)) {
             observations.job = JSON.stringify(facts)
             stage("original-job-observed", facts)

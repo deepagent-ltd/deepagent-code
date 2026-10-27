@@ -14,6 +14,40 @@ import { publishImportFixturePacket } from "./fixture/import-control"
 import { importFixtureEnvironment } from "./fixture/import-environment"
 import { waitForImportFixtureReady } from "./fixture/import-readiness"
 
+async function backupState(root: string, jobID: string) {
+  const state = { selected: false, complete: false, directory: false,
+    tempDB: false, finalDB: false, tempManifest: false, finalManifest: false }
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(jobID)) return state
+  state.selected = true
+  try {
+    const owned = await fs.realpath(root)
+    // importFixtureEnvironment fixes dataRoot to root/data; prepareImportTarget
+    // uses this job's backup directory and the fixed "before-import" basename.
+    const relative = path.join("data", "imports", jobID, "backup")
+    const current = await fs.realpath(path.join(owned, relative))
+    if (path.relative(owned, current) !== relative) return state
+    const directory = await fs.opendir(current)
+    state.directory = true
+    try {
+      for (let count = 0; count < 16; count++) {
+        const entry = await directory.read()
+        if (!entry) {
+          state.complete = true
+          return state
+        }
+        if (!entry.isFile() || entry.isSymbolicLink()) continue
+        if (/^\.before-import\.tmp-[a-z0-9]*$/.test(entry.name)) state.tempDB = true
+        if (entry.name === "before-import.db") state.finalDB = true
+        if (/^\.before-import\.tmp-[a-z0-9]*\.manifest\.json$/.test(entry.name)) state.tempManifest = true
+        if (entry.name === "before-import.db.manifest.json") state.finalManifest = true
+      }
+    } finally {
+      await directory.close()
+    }
+  } catch {}
+  return state
+}
+
 const [server, setServer] = createStore({
   key: "private-a",
   current: { http: { url: "", password: "lifecycle-private-auth" } },
@@ -66,9 +100,11 @@ async function processFor(root: string, count: number) {
     hasSourceDigest?: boolean
     count?: number
     committedBatches?: number
+    activeBatch?: "prepare" | "other" | "none"
     deadlineAt?: number
     code?: number | null
   }[] = []
+  const observed = { jobID: "", backup: undefined as ReturnType<typeof backupState> | undefined }
   const observe = (
     phase: string,
     facts: Omit<(typeof observations)[number], "phase" | "at" | "elapsedMs" | "pid"> = {},
@@ -105,6 +141,7 @@ async function processFor(root: string, count: number) {
       spawnError,
       deadlineExpired: timeout.fired,
       observations,
+      backup: await (observed.backup ??= backupState(root, observed.jobID)),
       readyPath: path.join(root, "ready.json"),
       resultFiles: (await fs.readdir(root))
         .filter((name) => name.endsWith(".json"))
@@ -156,12 +193,14 @@ async function processFor(root: string, count: number) {
           transport.received = { status: response.status, body: text }
           const body: unknown = JSON.parse(text)
           transport.accepted = body as ImportJobInfo
+          observed.jobID = transport.accepted.id
           observe("original-create-ack", {
             status: response.status,
             state: transport.accepted.state,
             hasTarget: Boolean(transport.accepted.target),
             hasSourceDigest: Boolean(transport.accepted.sourceDigest),
             committedBatches: transport.accepted.committedBatches,
+            activeBatch: transport.accepted.activeBatchID === "prepare" ? "prepare" : transport.accepted.activeBatchID ? "other" : "none",
           })
           // Only packet delivery is held. The original authenticated route already
           // admitted the job and its original worker continues independently.
