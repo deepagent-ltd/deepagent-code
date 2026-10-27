@@ -141,15 +141,23 @@ export const deepagentScenarios: Scenario[] = [
   http.protected
     .post("/deepagent/panel/arm", "deepagent.panel.arm")
     .mutating()
-    .seeded(() => Effect.sync(() => AgentGateway.DeepAgentSessionState.getOrCreate("session_httpapi_panel", "high")))
+    .seeded(() =>
+      Effect.sync(() =>
+        JSON.stringify(AgentGateway.DeepAgentSessionState.getOrCreate("session_httpapi_panel", "high")),
+      ),
+    )
     .at((ctx) => ({
       path: "/deepagent/panel/arm",
       headers: ctx.headers(),
       body: { sessionID: "session_httpapi_panel", armed: true, rounds: "multi" },
     }))
-    .json(200, (body) => {
+    .json(400, (body, ctx) => {
       object(body)
-      check(body.armed === true && body.rounds === "multi", "panel arm should persist the requested mode")
+      check(body.message === "expert panel is disabled", "disabled panel must reject before arming")
+      check(
+        JSON.stringify(AgentGateway.DeepAgentSessionState.getOrCreate("session_httpapi_panel", "high")) === ctx.state,
+        "refusal must preserve the original panel state",
+      )
     }),
   http.protected
     .get("/deepagent/panel/status", "deepagent.panel.status")

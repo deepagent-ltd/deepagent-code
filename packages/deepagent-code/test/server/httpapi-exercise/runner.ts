@@ -77,7 +77,9 @@ function withContext<A, E>(
     Effect.gen(function* () {
       yield* trace(options, scenario, `${label} context acquire start`)
       const llm = scenario.project?.llm ? yield* TestLLMServer : undefined
+      yield* trace(options, scenario, `${label} LLM service acquired`)
       const project = scenario.project
+      yield* trace(options, scenario, `${label} project fixture start (git=${project?.git === true})`)
       const dir = project
         ? yield* Effect.promise(async () => (await runtime()).tmpdir(projectOptions(project, llm?.url)))
         : undefined
@@ -157,6 +159,10 @@ function withContext<A, E>(
           sessionGet: (sessionID) =>
             run(modules.Session.Service.use((svc) => svc.get(sessionID))).pipe(
               Effect.catchCause(() => Effect.succeed(undefined)),
+            ),
+          sessionExecutionActive: (sessionID) =>
+            run(modules.SessionExecution.Service.use((svc) => svc.active)).pipe(
+              Effect.map((active) => active.has(sessionID)),
             ),
           project: () =>
             Effect.sync(() => {

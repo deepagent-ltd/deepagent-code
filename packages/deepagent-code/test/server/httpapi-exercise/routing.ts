@@ -66,12 +66,14 @@ export function matches(options: Options, scenario: Scenario) {
 
 export function selectedScenarios(options: Options, scenarios: Scenario[]) {
   const included = scenarios.filter((scenario) => matches(options, scenario))
+  if (options.include && included.length === 0) throw new Error(`--include matched no scenario: ${options.include}`)
   const start = options.startAt ? included.findIndex((scenario) => matchesName(options.startAt!, scenario)) : 0
   const end = options.stopAt
     ? included.findIndex((scenario) => matchesName(options.stopAt!, scenario))
     : included.length - 1
   if (start === -1) throw new Error(`--start-at matched no scenario: ${options.startAt}`)
   if (end === -1) throw new Error(`--stop-at matched no scenario: ${options.stopAt}`)
+  if (start > end) throw new Error("scenario range is reversed; use a more specific --start-at or --stop-at")
   return included.slice(start, end + 1)
 }
 

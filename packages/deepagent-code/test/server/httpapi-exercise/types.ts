@@ -6,6 +6,7 @@ import type { Project } from "../../../src/project/project"
 import type { Worktree } from "../../../src/worktree"
 import type { MessageV2 } from "../../../src/session/message-v2"
 import type { SessionID } from "../../../src/session/schema"
+import type { Session } from "../../../src/session/session"
 
 export const OpenApiMethods = ["get", "post", "put", "delete", "patch"] as const
 export const Methods = ["GET", "POST", "PUT", "DELETE", "PATCH"] as const
@@ -14,7 +15,7 @@ export type Method = (typeof Methods)[number]
 export type OpenApiMethod = (typeof OpenApiMethods)[number]
 export type Mode = "effect" | "coverage" | "auth"
 export type Comparison = "none" | "status" | "json"
-export type CaptureMode = "full" | "headers" | "stream"
+export type CaptureMode = "full" | "headers" | "stream" | "finite-stream"
 export type AuthPolicy = "protected" | "public" | "public-bypass" | "ticket-bypass"
 export type ProjectOptions = { git?: boolean; config?: Partial<ConfigV1.Info>; llm?: boolean }
 export type OpenApiSpec = { paths?: Record<string, Partial<Record<OpenApiMethod, unknown>>> }
@@ -57,6 +58,7 @@ export type ScenarioContext = {
   file: (name: string, content: string) => Effect.Effect<void>
   session: (input?: { title?: string; parentID?: SessionID }) => Effect.Effect<SessionInfo>
   sessionGet: (sessionID: SessionID) => Effect.Effect<SessionInfo | undefined>
+  sessionExecutionActive: (sessionID: SessionID) => Effect.Effect<boolean>
   project: () => Effect.Effect<Project.Info>
   message: (sessionID: SessionID, input?: { text?: string }) => Effect.Effect<MessageSeed>
   messages: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts[]>
@@ -88,6 +90,7 @@ export type ActiveScenario = {
   mutates: boolean
   reset: boolean
   auth: AuthPolicy
+  serverAuth?: true
 }
 
 export type BuilderState<S> = {
@@ -102,6 +105,7 @@ export type BuilderState<S> = {
   mutates: boolean
   reset: boolean
   auth: AuthPolicy
+  serverAuth?: true
 }
 
 export type TodoScenario = {
@@ -117,6 +121,6 @@ export type Result =
   | { status: "fail"; scenario: ActiveScenario; message: string }
   | { status: "skip"; scenario: TodoScenario }
 
-export type SessionInfo = { id: SessionID; title: string; parentID?: SessionID }
+export type SessionInfo = Pick<Session.Info, "id" | "title" | "parentID" | "share">
 export type TodoInfo = { content: string; status: string; priority: string }
 export type MessageSeed = { info: SessionV1.User; part: SessionV1.TextPart }
