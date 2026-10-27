@@ -3,7 +3,21 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { parseModule, rootRepoPath } from "../script/caller-inventory/ast"
-import { bodyScopes, edges, verifyRequirements } from "../script/caller-inventory/graph"
+import { bodyScopes, edges, resolveSpecifier, verifyRequirements } from "../script/caller-inventory/graph"
+
+test("runtime graph resolves real source paths containing spaces, hash and percent characters", () => {
+  const directory = mkdtempSync(join(rootRepoPath(), "packages/core/src/__caller-path space # %-"))
+  const file = join(directory, "entry.ts")
+  const dependency = join(directory, "dependency.ts")
+  try {
+    writeFileSync(file, 'export { value } from "./dependency"')
+    writeFileSync(dependency, 'export const value = "actual source"')
+    expect(resolveSpecifier(file, "./dependency")).toBe(dependency.replaceAll("\\", "/"))
+    expect(edges(file).map((edge) => edge.target)).toEqual([dependency.replaceAll("\\", "/")])
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
 
 test("runtime graph excludes type-only imports and retains mixed, side-effect and dynamic imports", () => {
   const directory = mkdtempSync(join(tmpdir(), "dac-caller-runtime-"))
@@ -18,7 +32,7 @@ test("runtime graph excludes type-only imports and retains mixed, side-effect an
       'export { type Session } from "@deepagent-code/core/session"',
       'export { type Session, SessionV2 } from "@deepagent-code/core/session"',
     ].join("\n"))
-    expect(edges(file).map((edge) => ({ line: edge.line, file: relative(rootRepoPath(), edge.target) }))).toEqual([
+    expect(edges(file).map((edge) => ({ line: edge.line, file: relative(rootRepoPath(), edge.target).replaceAll("\\", "/") }))).toEqual([
       { line: 3, file: "packages/core/src/session.ts" },
       { line: 7, file: "packages/core/src/session.ts" },
       { line: 4, file: "packages/core/src/session/input.ts" },

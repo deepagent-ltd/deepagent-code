@@ -17,7 +17,7 @@
  * - `.json(...)` / `.jsonEffect(...)` assert response shape and optional side effects.
  * - `.mutating()` tells the runner to reset isolated state after destructive routes.
  */
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
 import { OpenApi } from "effect/unstable/httpapi"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { TestLLMServer } from "../../lib/llm-server"
@@ -43,6 +43,19 @@ import { imScenarios } from "./scenarios/im"
 import { runtimeScenarios } from "./scenarios/runtime"
 import { deepagentScenarios } from "./scenarios/deepagent"
 import { oversightScenarios } from "./scenarios/oversight"
+import { browserMcpScenarios } from "./scenarios/browser-mcp"
+import { agentControlScenarios } from "./scenarios/agent-control"
+import { imImportScenarios } from "./scenarios/im-import"
+import { releaseStorageScenarios } from "./scenarios/release-storage"
+import {
+  canonicalHistory,
+  idleModelSession,
+  modelRequest,
+  modelServer,
+  modelState,
+  settledReply,
+} from "./session-model-fixture"
+import { modelTracer } from "./session-model-tracer"
 
 void (await import("@deepagent-code/core/util/log")).init({ print: false })
 
@@ -69,18 +82,47 @@ function locationData(validate: (value: any) => void) {
 const configureDeepAgentExercise = () =>
   AgentGateway.configure({ enabled: true, runsDir: path.join(exerciseDataDirectory, "deepagent", "runs") })
 
-const deepagentCandidate = (id: string) => ({
-  candidate_id: `strategy_candidate:httpapi:${id}`,
-  type: "strategy" as const,
-  status: "staged" as const,
-  source_run_id: `run_httpapi_${id}`,
-  source_round: 1,
-  summary: `HTTP API ${id} strategy candidate`,
-  evidence_refs: [`evidence:httpapi:${id}`],
-  confidence: 0.8,
-})
+function deepagentCandidate(id: "promote" | "reject", directory?: string) {
+  const candidate = {
+    candidate_id: `strategy_candidate:httpapi:${id}`,
+    type: "strategy" as const,
+    status: "staged" as const,
+    source_run_id: `run_httpapi_${id}`,
+    source_round: 1,
+    summary:
+      id === "promote"
+        ? "Reproduce release artifact checksums before promoting verified build outputs"
+        : "Keep cursor checkpoints unchanged when a remote history page is malformed",
+    evidence_refs: [`evidence:httpapi:${id}`],
+    confidence: 0.8,
+  }
+  const store = AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(directory)[0]
+  if (!store) throw new Error("The owned HTTP fixture has no knowledge store")
+  const document = store.stageReviewCandidate({
+    type: candidate.type,
+    description: candidate.summary,
+    body: candidate.summary,
+    domain: null,
+    tags: ["learned"],
+    scope: "user-global",
+    sensitivity: "source_code",
+    risk: "low",
+    confidence: { evidence_strength: "medium", support_count: 1 },
+    provenance: { source: "runner", run_ref: candidate.source_run_id, evidence_refs: candidate.evidence_refs },
+    idSlug: candidate.candidate_id,
+  })
+  check(
+    document.status === "candidate" && document.extensions?.candidate_id === candidate.candidate_id,
+    "each manual decision fixture must stage its exact original candidate for review",
+  )
+  return { candidate, document, baseDir: AgentGateway.learningAuthorityConfig().baseDir }
+}
 
 const scenarios: Scenario[] = [
+  ...browserMcpScenarios,
+  ...agentControlScenarios,
+  ...imImportScenarios,
+  ...releaseStorageScenarios,
   ...platformScenarios,
   ...fileScenarios,
   ...imScenarios,
@@ -114,8 +156,12 @@ const scenarios: Scenario[] = [
     .seeded(() =>
       Effect.promise(() =>
         Bun.write(
-          path.join(exerciseConfigDirectory, "deepagent-code.jsonc"),
-          JSON.stringify({ username: "httpapi-global" }, null, 2),
+          path.join(exerciseConfigDirectory, "config.jsonc"),
+          JSON.stringify(
+            { $schema: "https://ai.deepagent.ltd/config.schema.json", im: { url: null }, username: "httpapi-global" },
+            null,
+            2,
+          ),
         ),
       ),
     )
@@ -126,9 +172,7 @@ const scenarios: Scenario[] = [
         Effect.gen(function* () {
           object(body)
           check(body.username === "httpapi-global", "global config update should return patched config")
-          const text = yield* Effect.promise(() =>
-            Bun.file(path.join(exerciseConfigDirectory, "deepagent-code.jsonc")).text(),
-          )
+          const text = yield* Effect.promise(() => Bun.file(path.join(exerciseConfigDirectory, "config.jsonc")).text())
           check(text.includes('"username": "httpapi-global"'), "global config update should write isolated config file")
         }),
       "status",
@@ -356,7 +400,7 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({ path: `/file/content?${new URLSearchParams({ path: "hello.txt" })}`, headers: ctx.headers() }))
     .json(200, (body) => {
       object(body)
-      check(body.content === "hello", `content should match seeded file: ${JSON.stringify(body)}`)
+      check(body.content === "hello\n", `content should preserve the exact seeded bytes: ${JSON.stringify(body)}`)
     }),
   http.protected
     .get("/file/content", "file.read.missing")
@@ -399,6 +443,7 @@ const scenarios: Scenario[] = [
   http.protected.get("/mcp", "mcp.status").json(),
   http.protected
     .post("/mcp", "mcp.add")
+    .withServerAuth()
     .mutating()
     .at((ctx) => ({
       path: "/mcp",
@@ -416,6 +461,7 @@ const scenarios: Scenario[] = [
     ),
   http.protected
     .post("/mcp", "mcp.add.invalid")
+    .withServerAuth()
     .at((ctx) => ({
       path: "/mcp",
       headers: ctx.headers(),
@@ -424,15 +470,18 @@ const scenarios: Scenario[] = [
     .status(400),
   http.protected
     .post("/mcp/{name}/auth", "mcp.auth.start")
+    .withServerAuth()
     .at((ctx) => ({ path: route("/mcp/{name}/auth", { name: "httpapi-missing" }), headers: ctx.headers() }))
     .json(404, object, "status"),
   http.protected
     .delete("/mcp/{name}/auth", "mcp.auth.remove")
+    .withServerAuth()
     .mutating()
     .at((ctx) => ({ path: route("/mcp/{name}/auth", { name: "httpapi-missing" }), headers: ctx.headers() }))
     .json(404, object, "status"),
   http.protected
     .post("/mcp/{name}/auth/authenticate", "mcp.auth.authenticate")
+    .withServerAuth()
     .at((ctx) => ({
       path: route("/mcp/{name}/auth/authenticate", { name: "httpapi-missing" }),
       headers: ctx.headers(),
@@ -440,6 +489,7 @@ const scenarios: Scenario[] = [
     .json(404, object, "status"),
   http.protected
     .post("/mcp/{name}/auth/callback", "mcp.auth.callback")
+    .withServerAuth()
     .at((ctx) => ({
       path: route("/mcp/{name}/auth/callback", { name: "httpapi-missing" }),
       headers: ctx.headers(),
@@ -448,11 +498,13 @@ const scenarios: Scenario[] = [
     .json(404, object, "status"),
   http.protected
     .post("/mcp/{name}/connect", "mcp.connect")
+    .withServerAuth()
     .mutating()
     .at((ctx) => ({ path: route("/mcp/{name}/connect", { name: "httpapi-missing" }), headers: ctx.headers() }))
     .json(404, object, "status"),
   http.protected
     .post("/mcp/{name}/disconnect", "mcp.disconnect")
+    .withServerAuth()
     .mutating()
     .at((ctx) => ({ path: route("/mcp/{name}/disconnect", { name: "httpapi-missing" }), headers: ctx.headers() }))
     .json(404, object, "status"),
@@ -616,21 +668,19 @@ const scenarios: Scenario[] = [
     }),
   http.protected.get("/experimental/resource", "experimental.resource.list").json(),
   http.protected
-    .post("/sync/history", "sync.history.list")
+    .post("/sync/history", "sync.history.requiresWorkspace")
     .at((ctx) => ({ path: "/sync/history", headers: ctx.headers(), body: {} }))
-    .json(200, array),
+    .json(400, (body) => {
+      object(body)
+      check(body._tag === "BadRequest", "implicit-local context must not acquire an explicit workspace sync scope")
+    }),
   http.protected
     .post("/sync/replay", "sync.replay")
     .at((ctx) => ({ path: "/sync/replay", headers: ctx.headers(), body: { directory: ctx.directory, events: [] } }))
     .status(400),
   http.protected
-    .post("/sync/steal", "sync.steal.invalid")
-    .at((ctx) => ({ path: "/sync/steal", headers: ctx.headers(), body: {} }))
-    .status(400, undefined, "status"),
-  http.protected
     .post("/sync/start", "sync.start")
     .mutating()
-    .preserveDatabase()
     .json(200, (body) => {
       check(body === true, "sync start should return true when no workspace sessions exist")
     }),
@@ -735,48 +785,66 @@ const scenarios: Scenario[] = [
   http.protected
     .post("/deepagent/knowledge/promote", "deepagent.knowledge.promote")
     .mutating()
-    .seeded(() =>
+    .seeded((ctx) =>
       Effect.sync(() => {
         configureDeepAgentExercise()
-        return deepagentCandidate("promote")
+        return deepagentCandidate("promote", ctx.directory)
       }),
     )
     .at((ctx) => ({
       path: "/deepagent/knowledge/promote",
       headers: ctx.headers(),
       body: {
-        candidate: ctx.state,
+        candidate: ctx.state.candidate,
         origin: "run_local",
         verdict: { pass: true, reason: "httpapi exercise", evidence: ["evidence:httpapi:promote"] },
         approval: { approver: "httpapi-exercise", approved: true, note: "route coverage" },
       },
     }))
-    .json(200, (body) => {
+    .json(200, (body, ctx) => {
       object(body)
       object(body.promoted)
       check(
         body.promoted.source_candidate_id === "strategy_candidate:httpapi:promote",
         "promote should preserve source candidate id",
       )
+      check(body.promoted.id === ctx.state.document.id, "promotion must retain the actual durable document identity")
+      const stored = AgentGateway.DeepAgentDurableKnowledgeStore.openUserGlobalStore(ctx.state.baseDir)
+      check(
+        stored
+          .listByStatus("active")
+          .some((doc) => doc.id === ctx.state.document.id && doc.version === ctx.state.document.version + 1),
+        "HTTP approval must persist a new active revision of the original staged document",
+      )
     }),
   http.protected
     .post("/deepagent/knowledge/reject", "deepagent.knowledge.reject")
     .mutating()
-    .seeded(() =>
+    .seeded((ctx) =>
       Effect.sync(() => {
         configureDeepAgentExercise()
-        return deepagentCandidate("reject")
+        return deepagentCandidate("reject", ctx.directory)
       }),
     )
     .at((ctx) => ({
       path: "/deepagent/knowledge/reject",
       headers: ctx.headers(),
-      body: { candidate: ctx.state, reason: "httpapi exercise rejection" },
+      body: { candidate: ctx.state.candidate, reason: "httpapi exercise rejection" },
     }))
-    .json(200, (body) => {
+    .json(200, (body, ctx) => {
       object(body)
       object(body.rejected)
-      check(body.rejected.candidateId === "strategy_candidate:httpapi:reject", "reject should preserve candidate id")
+      check(
+        body.rejected.candidateId === ctx.state.document.id,
+        "rejection must retain the actual durable document identity",
+      )
+      const stored = AgentGateway.DeepAgentDurableKnowledgeStore.openUserGlobalStore(ctx.state.baseDir)
+      check(
+        stored
+          .listByStatus("rejected")
+          .some((doc) => doc.id === ctx.state.document.id && doc.version === ctx.state.document.version + 1),
+        "HTTP rejection must persist a new rejected revision of the original staged document",
+      )
       check(typeof body.rejected.fingerprint === "string", "reject should return candidate fingerprint")
     }),
   http.protected.get("/api/health", "v2.health.get").json(200, (body) => {
@@ -1154,19 +1222,27 @@ const scenarios: Scenario[] = [
     }),
   http.protected
     .get("/session/{sessionID}/task-summary", "session.taskSummary")
-    .seeded((ctx) => Effect.gen(function* () {
-      const parent = yield* ctx.session({ title: "Task summary parent" })
-      const child = yield* ctx.session({ title: "Historical child", parentID: parent.id })
-      return { parent, child }
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const parent = yield* ctx.session({ title: "Task summary parent" })
+        const child = yield* ctx.session({ title: "Historical child", parentID: parent.id })
+        return { parent, child }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/task-summary", { sessionID: ctx.state.parent.id }),
+      headers: ctx.headers(),
     }))
-    .at((ctx) => ({ path: route("/session/{sessionID}/task-summary", { sessionID: ctx.state.parent.id }),
-      headers: ctx.headers() }))
     .json(200, (body, ctx) => {
       object(body)
       array(body.items)
       check(body.parentSessionID === ctx.state.parent.id, "summary should retain the original parent")
-      check(body.items.some((item) => isRecord(item) && item.childSessionID === ctx.state.child.id &&
-        item.state === "unknown"), "historical child without a TaskRun should remain unknown")
+      check(
+        body.items.some(
+          (item) => isRecord(item) && item.childSessionID === ctx.state.child.id && item.state === "unknown",
+        ),
+        "historical child without a TaskRun should remain unknown",
+      )
       check(body.hasMore === false && body.nextCursor === null, "complete summary should not advertise another page")
     }),
   http.protected
@@ -1242,12 +1318,24 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
       body: { ...ctx.state.message.part, text: "after" },
     }))
-    .json(
-      200,
-      (body) => {
-        object(body)
-        check(body.type === "text" && body.text === "after", "updated part should be returned")
-      },
+    .jsonEffect(
+      503,
+      (body, ctx) =>
+        Effect.gen(function* () {
+          object(body)
+          check(body.service === "session.updatePart", "legacy part mutation must require the canonical V2 API")
+          const messages = yield* ctx.messages(ctx.state.session.id)
+          check(
+            messages.length === 1 && messages[0]?.info.id === ctx.state.message.info.id,
+            "refusal must retain the original message",
+          )
+          check(
+            messages[0]?.parts.some(
+              (part) => part.id === ctx.state.message.part.id && part.type === "text" && part.text === "before",
+            ),
+            "refusal must retain the original part bytes",
+          )
+        }),
       "status",
     ),
   http.protected
@@ -1268,11 +1356,18 @@ const scenarios: Scenario[] = [
       }),
       headers: ctx.headers(),
     }))
-    .jsonEffect(200, (body, ctx) =>
+    .jsonEffect(503, (body, ctx) =>
       Effect.gen(function* () {
-        check(body === true, "delete part should return true")
+        object(body)
+        check(body.service === "session.deletePart", "legacy part deletion must require the canonical V2 API")
         const messages = yield* ctx.messages(ctx.state.session.id)
-        check(messages[0]?.parts.length === 0, "deleted part should not remain on message")
+        check(
+          messages.length === 1 &&
+            messages[0]?.parts.some(
+              (part) => part.id === ctx.state.message.part.id && part.type === "text" && part.text === "delete part",
+            ),
+          "refused deletion must preserve the original part",
+        )
       }),
     ),
   http.protected
@@ -1292,10 +1387,19 @@ const scenarios: Scenario[] = [
       }),
       headers: ctx.headers(),
     }))
-    .jsonEffect(200, (body, ctx) =>
+    .jsonEffect(503, (body, ctx) =>
       Effect.gen(function* () {
-        check(body === true, "delete message should return true")
-        check((yield* ctx.messages(ctx.state.session.id)).length === 0, "deleted message should not remain")
+        object(body)
+        check(body.service === "session.deleteMessage", "legacy message deletion must require the canonical V2 API")
+        const messages = yield* ctx.messages(ctx.state.session.id)
+        check(
+          messages.length === 1 &&
+            messages[0]?.info.id === ctx.state.message.info.id &&
+            messages[0]?.parts.some(
+              (part) => part.id === ctx.state.message.part.id && part.type === "text" && part.text === "delete message",
+            ),
+          "refused deletion must preserve the original message and part",
+        )
       }),
     ),
   http.protected
@@ -1334,7 +1438,6 @@ const scenarios: Scenario[] = [
     }),
   http.protected
     .post("/session/{sessionID}/init", "session.init")
-    .preserveDatabase()
     .withLlm()
     .seeded((ctx) =>
       Effect.gen(function* () {
@@ -1342,7 +1445,7 @@ const scenarios: Scenario[] = [
         const message = yield* ctx.message(session.id, { text: "initialize" })
         yield* ctx.llmText("initialized")
         yield* ctx.llmText("initialized")
-        return { session, message }
+        return { session, message, server: yield* modelServer }
       }),
     )
     .at((ctx) => ({
@@ -1354,22 +1457,23 @@ const scenarios: Scenario[] = [
       Effect.gen(function* () {
         check(body === true, "init should return true")
         yield* ctx.llmWait(1)
+        yield* settledReply(ctx, ctx.state.session, "initialized")
+        yield* modelRequest(ctx.state.server, "AGENTS.md")
       }),
     ),
   http.protected
     .post("/session/{sessionID}/message", "session.prompt")
-    .preserveDatabase()
     .withLlm()
     .seeded((ctx) =>
       Effect.gen(function* () {
         const session = yield* ctx.session({ title: "LLM prompt session" })
         yield* ctx.llmText("fake assistant")
         yield* ctx.llmText("fake assistant")
-        return session
+        return { session, server: yield* modelServer }
       }),
     )
     .at((ctx) => ({
-      path: route("/session/{sessionID}/message", { sessionID: ctx.state.id }),
+      path: route("/session/{sessionID}/message", { sessionID: ctx.state.session.id }),
       headers: ctx.headers(),
       body: {
         agent: "build",
@@ -1388,23 +1492,24 @@ const scenarios: Scenario[] = [
             "assistant message should use fake LLM text",
           )
           yield* ctx.llmWait(1)
+          yield* settledReply(ctx, ctx.state.session, "fake assistant")
+          yield* modelRequest(ctx.state.server, "hello llm")
         }),
       "status",
     ),
   http.protected
     .post("/session/{sessionID}/prompt_async", "session.prompt_async")
-    .preserveDatabase()
     .withLlm()
     .seeded((ctx) =>
       Effect.gen(function* () {
         const session = yield* ctx.session({ title: "Async prompt session" })
         yield* ctx.llmText("fake async assistant")
         yield* ctx.llmText("fake async assistant")
-        return session
+        return { session, server: yield* modelServer }
       }),
     )
     .at((ctx) => ({
-      path: route("/session/{sessionID}/prompt_async", { sessionID: ctx.state.id }),
+      path: route("/session/{sessionID}/prompt_async", { sessionID: ctx.state.session.id }),
       headers: ctx.headers(),
       body: {
         agent: "build",
@@ -1421,25 +1526,34 @@ const scenarios: Scenario[] = [
             typeof body.messageID === "string" && body.messageID.length > 0,
             "async prompt should return message ID",
           )
-          check(body.delivery === "turn", "async prompt should return the durable delivery mode")
+          check(body.delivery === "steer", "async prompt should return its canonical durable steer admission")
           yield* ctx.llmWait(1)
+          yield* settledReply(ctx, ctx.state.session, "fake async assistant")
+          yield* modelRequest(ctx.state.server, "hello async")
+          const admitted = modelState(ctx.state.session.id).inputs
+          check(
+            admitted.length === 1 &&
+              admitted[0]?.id === body.messageID &&
+              admitted[0]?.delivery === body.delivery &&
+              admitted[0]?.promoted_seq !== null,
+            "async acknowledgement must identify the actual admitted and promoted durable input",
+          )
         }),
       "status",
     ),
   http.protected
     .post("/session/{sessionID}/command", "session.command")
-    .preserveDatabase()
     .withLlm()
     .seeded((ctx) =>
       Effect.gen(function* () {
         const session = yield* ctx.session({ title: "Command session" })
         yield* ctx.llmText("command done")
         yield* ctx.llmText("command done")
-        return session
+        return { session, server: yield* modelServer }
       }),
     )
     .at((ctx) => ({
-      path: route("/session/{sessionID}/command", { sessionID: ctx.state.id }),
+      path: route("/session/{sessionID}/command", { sessionID: ctx.state.session.id }),
       headers: ctx.headers(),
       body: { command: "init", arguments: "", model: "test/test-model" },
     }))
@@ -1450,12 +1564,13 @@ const scenarios: Scenario[] = [
           object(body)
           check(isRecord(body.info) && body.info.role === "assistant", "command should return assistant message")
           yield* ctx.llmWait(1)
+          yield* settledReply(ctx, ctx.state.session, "command done")
+          yield* modelRequest(ctx.state.server, "AGENTS.md")
         }),
       "status",
     ),
   http.protected
     .post("/session/{sessionID}/shell", "session.shell")
-    .preserveDatabase()
     .mutating()
     .seeded((ctx) => ctx.session({ title: "Shell session" }))
     .at((ctx) => ({
@@ -1477,12 +1592,11 @@ const scenarios: Scenario[] = [
     ),
   http.protected
     .post("/session/{sessionID}/summarize", "session.summarize")
-    .preserveDatabase()
     .withLlm()
     .seeded((ctx) =>
       Effect.gen(function* () {
         const session = yield* ctx.session({ title: "Summarize session" })
-        yield* ctx.message(session.id, { text: "summarize this work" })
+        const history = yield* canonicalHistory(ctx, session)
         const summary = [
           "## Goal",
           "- Exercise session summarize.",
@@ -1513,12 +1627,16 @@ const scenarios: Scenario[] = [
           "- test/server/httpapi-exercise/index.ts: scenario",
         ].join("\n")
         yield* ctx.llmText(summary)
-        yield* ctx.llmText(summary)
-        return session
+        return {
+          session,
+          server: history.server,
+          compactAdmission: history.compactAdmission,
+          beforeSummaryCalls: yield* history.server.calls,
+        }
       }),
     )
     .at((ctx) => ({
-      path: route("/session/{sessionID}/summarize", { sessionID: ctx.state.id }),
+      path: route("/session/{sessionID}/summarize", { sessionID: ctx.state.session.id }),
       headers: ctx.headers(),
       body: { providerID: "test", modelID: "test-model", auto: false },
     }))
@@ -1527,12 +1645,40 @@ const scenarios: Scenario[] = [
       (body, ctx) =>
         Effect.gen(function* () {
           check(body === true, "summarize should return true")
-          const messages = yield* ctx.messages(ctx.state.id)
-          check(
-            messages.some((message) => message.info.role === "assistant" && message.info.summary === true),
-            "summarize should create a summary assistant message",
-          )
+          yield* Fiber.join(ctx.state.compactAdmission)
           yield* ctx.llmWait(1)
+          yield* idleModelSession(ctx, ctx.state.session)
+          const state = modelState(ctx.state.session.id)
+          const request = state.compactions[0]
+          check(
+            state.receipts.length === 3 && state.receipts.every((receipt) => receipt.state === "settled"),
+            "two original history turns and one summary must each settle exactly one provider receipt",
+          )
+          check(
+            (yield* ctx.state.server.calls) === 3,
+            "manual compaction must dispatch exactly one additional physical provider request",
+          )
+          check(
+            state.compactions.length === 1 &&
+              request?.status === "settled" &&
+              request.provider_id === "test" &&
+              request.model_id === "test-model",
+            "manual summary must settle its original canonical compaction request",
+          )
+          check(
+            request.summary_receipt_id !== null &&
+              state.receipts.some(
+                (receipt) => receipt.receipt_id === request.summary_receipt_id && receipt.state === "settled",
+              ),
+            "summary must reference its actual settled provider dispatch receipt",
+          )
+          check(
+            state.messages.some(
+              (message) => message.type === "compaction" && message.data.includes("Summary generated."),
+            ),
+            "the model summary must be present in canonical history",
+          )
+          yield* modelRequest(ctx.state.server, "canonical summarize work 1", ctx.state.beforeSummaryCalls)
         }),
       "status",
     ),
@@ -1596,12 +1742,18 @@ const scenarios: Scenario[] = [
     .mutating()
     .seeded((ctx) => ctx.session({ title: "Share session" }))
     .at((ctx) => ({ path: route("/session/{sessionID}/share", { sessionID: ctx.state.id }), headers: ctx.headers() }))
-    .json(
-      200,
-      (body, ctx) => {
-        object(body)
-        check(body.id === ctx.state.id, "share should return the session")
-      },
+    .jsonEffect(
+      503,
+      (body, ctx) =>
+        Effect.gen(function* () {
+          object(body)
+          check(
+            body.service === "session.share" && body.message === "Public sharing is disabled",
+            "explicit sharing disablement must reject before upload",
+          )
+          const session = yield* ctx.sessionGet(ctx.state.id)
+          check(session !== undefined && session.share === undefined, "refusal must retain an unshared local Session")
+        }),
       "status",
     ),
   http.protected
@@ -1724,7 +1876,10 @@ const main = Effect.gen(function* () {
   return undefined
 })
 
-Effect.runPromise(main.pipe(Effect.provide(TestLLMServer.layer), Effect.scoped)).then(
+const exercise = main.pipe(Effect.provide(TestLLMServer.layer), Effect.scoped)
+Effect.runPromise(
+  process.env.DAC_HTTPAPI_MODEL_SPANS === "1" ? exercise.pipe(Effect.withTracer(modelTracer)) : exercise,
+).then(
   () => process.exit(0),
   (error: unknown) => {
     console.error(`${color.red}${message(error)}${color.reset}`)

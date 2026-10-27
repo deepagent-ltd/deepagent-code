@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -10,7 +11,7 @@ import { WorkTaskKnownProof } from "../src/session/work-task-known-proof"
 import { WorkAuthorityFixture } from "./fixture/work-authority"
 
 test("cold task proof reads, cloned settlement and serialized continuation cannot release a real claim", async () => {
-  const root = await fs.mkdtemp("/tmp/dac-task-known-proof-unavailable-")
+  const root = await fs.mkdtemp(path.join(tmpdir(), "dac-task-known-proof-unavailable-"))
   const binding = WorkAuthorityFixture.binding("task-known-no-authority")
   const run = <A,E>(effect: Effect.Effect<A,E,Database.Service | Scope.Scope>) => Effect.runPromise(effect.pipe(
     Effect.provide(WorkAuthorityFixture.verifier), Effect.provide(WorkAuthorityFixture.database(path.join(root,"database.sqlite"))), Effect.scoped))

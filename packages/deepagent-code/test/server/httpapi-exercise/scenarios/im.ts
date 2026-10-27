@@ -43,12 +43,10 @@ export const imScenarios: Scenario[] = [
   http.protected.get("/api/v1/im/agents", "im.agents.list").json(200, array),
   // ── B2 门面端点（exercise 环境无 DEEPAGENT_IM_FACADE_* ⇒ 门面 disabled）：status 永远 200
   // （disabled 快照）；mutation 一律 502 im_unavailable（fail-closed，GUI 按 data.code 出文案）。
-  http.protected
-    .get("/api/v1/im/status", "im.facade.status")
-    .json(200, (body) => {
-      object(body)
-      check(body.facade === "disabled", "facade status should be disabled without facade env")
-    }),
+  http.protected.get("/api/v1/im/status", "im.facade.status").json(200, (body) => {
+    object(body)
+    check(body.facade === "disabled", "facade status should be disabled without facade env")
+  }),
   http.protected
     .post("/api/v1/im/facade/claim", "im.facade.claim")
     .mutating()
@@ -99,7 +97,7 @@ export const imScenarios: Scenario[] = [
   http.protected
     .get("/api/v1/im/messages/{messageId}", "im.messages.get")
     .at((ctx) => ({
-      path: route("/api/v1/im/messages/{messageId}", { messageId: "message_httpapi_missing" }),
+      path: route("/api/v1/im/messages/{messageId}", { messageId: "imsg_httpapi_missing" }),
       headers: ctx.headers(),
     }))
     .json(404, object, "status"),
@@ -125,7 +123,10 @@ export const imScenarios: Scenario[] = [
     .post("/api/v1/im/attachments", "im.attachments.upload")
     .probe({ path: "/api/v1/im/attachments", body: {} })
     .at((ctx) => ({ path: "/api/v1/im/attachments", headers: ctx.headers(), body: {} }))
-    .status(415),
+    .json(404, (body) => {
+      object(body)
+      check(body.name === "FILE_UPLOAD_DISABLED", "the explicit disabled flag must refuse before multipart persistence")
+    }),
   http.protected.get("/api/v1/im/attachments", "im.attachments.list").json(404, object, "status"),
   http.protected
     .get("/ws/im/group/{groupId}", "im.websocket.connect")

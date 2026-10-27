@@ -47,13 +47,27 @@ test.skipIf(process.platform !== "darwin")("actual Main input source retires onl
   const child = Bun.spawn([managedBrowserInputFixtureExecutable, path.join(root, entry), root],
   { cwd: root, env: { PATH: process.env.PATH, HOME: root, TMPDIR: root, XDG_DATA_HOME: root,
     XDG_CONFIG_HOME: root, XDG_CACHE_HOME: root }, stdout: "pipe", stderr: "pipe" })
-  const timer = setTimeout(() => child.kill(), 25_000)
+  const timeout = { fired: false }
+  const timer = setTimeout(() => { timeout.fired = true; child.kill() }, 25_000)
   const result = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
   clearTimeout(timer)
   await Bun.write(path.join(root, "process.log"), result[1] + result[2])
   console.log("MANAGED_BROWSER_INPUT_MAIN_EVIDENCE", root)
-  expect({ code: result[0], output: result[0] === 0 ? null : result[1] + result[2] }).toEqual({ code: 0, output: null })
+  const diagnostics = result[0] === 0 ? null : Object.fromEntries(await Promise.all(
+    ["main-stages.jsonl", "utility-stages.jsonl", "main-error.json", "utility-error.json", "runtime-paths.json", "result.json"].map(async (name) =>
+      [name, await Bun.file(path.join(root, name)).exists() ? await Bun.file(path.join(root, name)).text() : null]),
+  ))
+  expect({ code: result[0], timedOut: timeout.fired, diagnostics,
+    output: result[0] === 0 ? null : result[1] + result[2] }).toEqual({ code: 0, timedOut: false, diagnostics: null, output: null })
   const facts = await Bun.file(path.join(root, "result.json")).json()
+  expect(facts.runtimePaths).toEqual({ userData: path.join(root, "profile"), sessionData: path.join(root, "profile") })
+  const stages = (await Bun.file(path.join(root, "main-stages.jsonl")).text()).trim().split("\n")
+    .map((line) => (JSON.parse(line) as { phase: string }).phase)
+  expect(stages.indexOf("other-window-created")).toBeGreaterThanOrEqual(0)
+  expect(stages.indexOf("utility-forked")).toBeGreaterThan(stages.indexOf("other-window-created"))
+  expect(stages.indexOf("message-listener-installed")).toBeGreaterThan(stages.indexOf("utility-forked"))
+  expect(stages.indexOf("bootstrap-ready")).toBeGreaterThan(stages.indexOf("message-listener-installed"))
+  expect(stages).toContain("window-shown-offpointer")
   expect(facts.runtime).toMatchObject({
     electron: managedBrowserInputRuntime.electronVersion, node: managedBrowserInputRuntime.nodeVersion,
   })

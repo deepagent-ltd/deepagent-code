@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
 import { Cause, Effect, Exit, Layer } from "effect"
 import { sql } from "drizzle-orm"
@@ -24,7 +25,7 @@ async function isolated(
     run: <A, E>(effect: Effect.Effect<A, E, Database.Service>) => Promise<A>
   }) => Promise<void>,
 ) {
-  const root = await fs.mkdtemp("/tmp/dac-approval-store-")
+  const root = await fs.mkdtemp(path.join(tmpdir(), "dac-approval-store-"))
   const key = randomBytes(32)
   const proof = WorkRouteApprovalFixture.authority(key)
   const run = <A, E>(effect: Effect.Effect<A, E, Database.Service>) =>

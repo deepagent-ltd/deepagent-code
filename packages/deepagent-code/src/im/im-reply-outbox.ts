@@ -299,6 +299,19 @@ export function collectSessionReply(deps: CollectDeps, sessionID: string, now?: 
       .where(and(eq(SessionActivityTable.session_id, sessionID), eq(SessionActivityTable.state, "settled"))).all().pipe(Effect.orDie)
     const results = yield* Effect.forEach(activities, (activity) => Effect.gen(function* () {
       if (!activity.finalMessageID) return false
+      // Resolve original custody before opening a whole final, including when only one
+      // real split part expired. Recollecting the final would restore that retired text.
+      const originalReplies = yield* deps.db.select({ id: IMReplyOutboxTable.id })
+        .from(IMReplyOutboxTable).where(and(
+          eq(IMReplyOutboxTable.session_id, sessionID), eq(IMReplyOutboxTable.group_id, activity.groupID),
+          sql`${IMReplyOutboxTable.trigger_message_id} IS ${activity.triggerInputID}`,
+          or(eq(IMReplyOutboxTable.reply_message_id, activity.finalMessageID), and(
+            sql`substr(${IMReplyOutboxTable.reply_message_id}, 1, length(${activity.finalMessageID}) + 8) = ${activity.finalMessageID + "_impart_"}`,
+            sql`substr(${IMReplyOutboxTable.reply_message_id}, length(${activity.finalMessageID}) + 9) GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'`,
+          )),
+        )).all().pipe(Effect.orDie)
+      const custody = yield* Effect.forEach(originalReplies, (row) => ReplyBodyRetirement.read(deps.db, row.id))
+      if (custody.some((value) => value.record.bodyState === "retired")) return false
       const final = yield* deps.v2Session.message({ sessionID: SessionV2.ID.make(sessionID), messageID: SessionMessage.ID.make(activity.finalMessageID) })
       if (!final || final.type !== "assistant" || final.error) return false
       const text = ReplyParts.text(final)

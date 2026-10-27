@@ -5,7 +5,9 @@ import os from "node:os"
 import { managedBrowserInputFixtureDefine } from "./fixture/managed-browser-input-build"
 import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
-test("actual Electron private utility channel isolates network, observes AX/PNG, fences generations and destroys exact resource", async () => {
+test(process.platform === "darwin"
+  ? "actual Electron private utility channel isolates network, observes AX/PNG, fences generations and destroys exact resource"
+  : "actual Electron private utility channel preserves scoped readonly navigation and refuses references without a qualified native input source", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-managed-browser-electron-"))
   await fs.chmod(root, 0o700)
   const main = await Bun.build({ entrypoints: [path.join(import.meta.dir, "fixture/managed-browser.ts")],
@@ -25,11 +27,20 @@ test("actual Electron private utility channel isolates network, observes AX/PNG,
   await Bun.write(path.join(root, "process.log"), stdout + "\n" + stderr)
   console.log("MANAGED_BROWSER_EVIDENCE", root)
   const result = await Bun.file(path.join(root, "result.json")).json()
-  expect(code).toBe(0)
+  expect({ code, error: code ? result : null }).toEqual({ code: 0, error: null })
   expect(result.deniedTCP).toBe(0)
   expect(result.inheritedProxyConfigured).toBe(true)
   expect(result.requests).toContain("/")
   expect(result.requests).not.toContain("/revoked")
+  if (globalThis.process.platform !== "darwin") {
+    expect(result.message.inputSource).toBe("unsupported")
+    expect(result.message.first.result.tabs[0].url).toBe("about:blank")
+    expect(result.message.navigated.result.tabs[0].url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/)
+    expect(result.message.snapshotCode).toBe("BROWSER_DRIVER_UNAVAILABLE")
+    expect(result.message.stopped).toBe(true)
+    expect(result.message.verify.stopped).toBe(true)
+    return
+  }
   expect(result.message.snapshot.result.text).toContain("原生浏览器 fixture")
   expect(result.message.image.mime).toBe("image/png")
   expect(result.message.image.bytes).toBeGreaterThan(100)

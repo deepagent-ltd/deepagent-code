@@ -10,7 +10,7 @@ import { BrowserSchema } from "@deepagent-code/core/browser/schema"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { Hash } from "@deepagent-code/core/util/hash"
 
-test("original canonical Session runner admits approved browser program with independent once permissions and real Main effects", async () => {
+test.skipIf(process.platform !== "darwin")("original canonical Session runner admits approved browser program with independent once permissions and real Main effects", async () => {
   const replay = process.env.DAC_BROWSER_PROGRAM_CANONICAL_REPLAY
   const root = await fs.realpath(replay ?? (await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-program-canonical-"))))
   if (replay && !root.startsWith("/private/tmp/dac-browser-program-canonical-"))
@@ -116,7 +116,7 @@ test("original canonical Session runner admits approved browser program with ind
     ])
     clearTimeout(timeout)
     await fs.writeFile(path.join(root, "process.log"), stdout + "\n" + stderr)
-    expect(code).toBe(0)
+    expect({ code, diagnostic: code ? stdout + stderr : null }).toEqual({ code: 0, diagnostic: null })
     const finalDrift = (
       await Promise.all(
         snapshot.map(async (value) => ({

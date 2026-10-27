@@ -15,6 +15,8 @@ import { GroupChatPanel } from "@/components/im/group-chat-panel"
 import { createIMClient, type IMClient } from "@/utils/im-client"
 import { dict } from "@/i18n/en"
 import { createBrowserMediaStoreFixture } from "./fixture/browser-media-store"
+import { clickIMAction } from "./fixture/im-actions"
+import { imSummaryOwner } from "@/components/im/summary-owner"
 
 const runtime = vi.hoisted(() => ({ directory: "", storage: undefined as Awaited<ReturnType<typeof createBrowserMediaStoreFixture>> | undefined, client: undefined as IMClient | undefined, sdk: undefined as ReturnType<typeof createSdkForServer> | undefined, connected: true }))
 vi.mock("@/utils/im-client", async (original) => ({
@@ -37,7 +39,12 @@ vi.mock("@/context/command", async (original) => ({
   useCommand: () => ({ register: vi.fn() }),
 }))
 vi.mock("@/context/sdk", () => ({ useSDK: () => ({ client: runtime.sdk!, directory: "/private", url: runtime.client!.scope().url }) }))
-vi.mock("@/context/server", async (original) => ({ ...(await original<typeof import("@/context/server")>()), useServer: () => ({ key: "parent-media-fixture", all: [], projects: () => ({ list: [] }) }) }))
+vi.mock("@/context/server", async (original) => ({ ...(await original<typeof import("@/context/server")>()), useServer: () => ({
+  key: "parent-media-fixture",
+  scope: () => "parent-media-fixture",
+  get current() { return { type: "sidecar", http: { ...runtime.client!.scope() } } },
+  all: [], projects: () => ({ list: [] }),
+}) }))
 vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ show() {} }) }))
 vi.mock("@/hooks/use-im-websocket", () => ({
   useIMWebSocket: () => ({
@@ -73,6 +80,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   cleanup()
+  imSummaryOwner.stop()
   vi.unstubAllGlobals()
   await runtime.storage!.drain()
 })
@@ -318,7 +326,7 @@ it("a history-only 503 keeps the real parent media sender alive while clearing p
     await screen.findByText("Observed history before temporary failure")
     const reads = api.state.historyReads
     api.state.historyUnavailable = true
-    fireEvent.click(screen.getByRole("button", { name: dict["im.transport.refresh"] }))
+    await clickIMAction(dict["im.transport.refresh"])
     await waitFor(() => expect(api.state.historyReads).toBeGreaterThan(reads))
     await screen.findByText(dict["im.reader.unavailable"])
     expect(screen.queryByText("Observed history before temporary failure")).toBeNull()
@@ -343,15 +351,13 @@ it.each(["epoch", "source", "member", "unverified-expiry"])("real parent %s deni
       api.state.historyUnavailable = true
       api.state.historyStatus = 403
       api.state.historyCode = "forbidden"
-      fireEvent.click(screen.getByRole("button", { name: dict["im.transport.refresh"] }))
+      await clickIMAction(dict["im.transport.refresh"])
       await waitFor(() => expect(send.observed[0].aborted).toBe(true))
       return
     }
     const reads = api.state.statusReads
-    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" })
-    document.dispatchEvent(new Event("visibilitychange"))
-    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" })
-    document.dispatchEvent(new Event("visibilitychange"))
+    vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1001)
+    await imSummaryOwner.refresh()
     await waitFor(() => expect(api.state.statusReads).toBeGreaterThan(reads))
     await waitFor(() => expect(send.observed[0].aborted).toBe(true))
     expect(api.state.sends).toHaveLength(1)

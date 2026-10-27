@@ -86,7 +86,7 @@ async function expectTerminalPaneInHost(page: import("@playwright/test").Page, h
 test("Bottom terminal and right-rail views respond to clicks on desktop and mobile", async ({ page }) => {
   const runtime = await openSession(page)
   const bottomToggle = page.getByRole("button", { name: "Toggle bottom panel" })
-  const rightToggle = page.getByRole("button", { name: "Toggle right sidebar" })
+  const rightToggle = page.getByRole("banner").getByRole("button", { name: "Toggle right sidebar" })
   const bottom = page.locator("#bottom-panel")
   const side = page.locator("#review-panel")
 
@@ -96,8 +96,10 @@ test("Bottom terminal and right-rail views respond to clicks on desktop and mobi
   await expect(bottom.getByLabel("New terminal")).toBeVisible()
   await expect(bottom.getByLabel("Split terminal")).toBeVisible()
 
+  await rightToggle.click()
+  await side.getByText("Developer diagnostics", { exact: true }).click()
+  await side.getByRole("button", { name: "Problems", exact: true }).click()
   const problems = side.getByRole("tab", { name: "Problems", exact: true })
-  await problems.click()
   await expect(problems).toHaveAttribute("aria-selected", "true")
   await expect.poll(runtime.diagnosticsRequests).toBeGreaterThan(0)
   await expect(side.getByText("Type mismatch")).toBeVisible()
@@ -107,15 +109,20 @@ test("Bottom terminal and right-rail views respond to clicks on desktop and mobi
   await side.getByText("Type mismatch").click()
   await expect(page.getByText("app.ts").first()).toBeVisible()
 
+  await side.getByRole("tab", { name: "New tab", exact: true }).click()
+  await side.getByText("Developer diagnostics", { exact: true }).click()
+  await side.getByRole("button", { name: "Debug Console", exact: true }).click()
   const debugConsole = side.getByRole("tab", { name: "Debug Console", exact: true })
-  await debugConsole.click()
   await expect(debugConsole).toHaveAttribute("aria-selected", "true")
   await problems.click()
   await expect(problems).toHaveAttribute("aria-selected", "true")
 
   await rightToggle.click()
-  await expect(problems).toHaveAttribute("aria-selected", "false")
+  await expect(problems).toBeHidden()
   await expect(side.getByText("Type mismatch")).toBeHidden()
+  await rightToggle.click()
+  await expect(problems).toHaveAttribute("aria-selected", "true")
+  await rightToggle.click()
   await bottomToggle.click()
   await expect(bottom).toBeHidden()
 

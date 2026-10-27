@@ -57,7 +57,6 @@ for (const scenario of ["normal", "failed", "interrupted", "timeout"] as const) 
       outdir: path.join(root, "chunks"),
       naming: "node.js",
       target: "node",
-      external: ["effect"],
     })
     expect(built.success).toBe(true)
     expect(server.success).toBe(true)

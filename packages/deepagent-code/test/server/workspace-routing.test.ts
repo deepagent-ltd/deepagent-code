@@ -76,6 +76,10 @@ describe("getWorkspaceRouteSessionID", () => {
     expect(getWorkspaceRouteSessionID(url)).toBeNull()
   })
 
+  test("keeps the static context cohort route outside session placement lookup", () => {
+    expect(getWorkspaceRouteSessionID(new URL("http://localhost/session/context/cohort?sinceMs=0"))).toBeNull()
+  })
+
   test("returns null for non-session paths", () => {
     const url = new URL("http://localhost/config")
     expect(getWorkspaceRouteSessionID(url)).toBeNull()

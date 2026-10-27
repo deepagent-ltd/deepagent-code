@@ -106,6 +106,7 @@ const getBase = (): Configuration => ({
     "out/main/chunks/ed25519-dalek.LICENSE",
     "out/main/chunks/curve25519-dalek.LICENSE",
     "out/main/chunks/auth-password-worker.node.js",
+    "out/main/chunks/typescript-index.worker.js",
     "out/main/chunks/node.js.native-installation.json",
     "out/main/chunks/node.js.native-components.json",
     "out/main/chunks/deepagent-work-file-helper{,.exe}",

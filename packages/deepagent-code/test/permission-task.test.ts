@@ -1,11 +1,14 @@
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { describe, test, expect } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { Permission } from "../src/permission"
 import { Config } from "@/config/config"
 import { testEffect } from "./lib/effect"
+import { EmptySettingsFixture } from "./fixture/empty-settings"
 
-const it = testEffect(Config.defaultLayer)
+const it = testEffect(
+  Config.defaultLayer.pipe(Layer.provideMerge(process.platform === "win32" ? EmptySettingsFixture.layer : Layer.empty)),
+)
 
 const load = Config.use.get()
 

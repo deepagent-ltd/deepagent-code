@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -12,7 +13,7 @@ import { WorkAuthorityFixture } from "./fixture/work-authority"
 // This verifies the actual default-unavailable store boundary with the formal registry and a
 // retained real Session claim. Native authorization/known result success is the signed CLI test.
 test("uninstalled known-recovery authority cannot release a real Work claim or record a resume, including after reopen", async () => {
-  const root = await fs.mkdtemp("/tmp/dac-known-recovery-store-")
+  const root = await fs.mkdtemp(path.join(tmpdir(), "dac-known-recovery-store-"))
   const filename = path.join(root, "work.sqlite")
   const binding = WorkAuthorityFixture.binding("known-recovery-unavailable")
   const run = <A, E>(effect: Effect.Effect<A, E, Database.Service | Scope.Scope>) => Effect.runPromise(effect.pipe(

@@ -5,7 +5,7 @@ import { writeFileSync } from "node:fs"
 import path from "node:path"
 import { createServer } from "node:http"
 import net from "node:net"
-import { Cause, Effect, Exit, Fiber, Schema } from "effect"
+import { Cause, DateTime, Effect, Exit, Fiber, Schema } from "effect"
 import { sql } from "drizzle-orm"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Database } from "@deepagent-code/core/database/database"
@@ -26,6 +26,8 @@ import { PermissionV2 } from "@deepagent-code/core/permission"
 import { Policy } from "@deepagent-code/core/policy"
 import { ServerCapabilities } from "@deepagent-code/core/server-capabilities"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionEvent } from "@deepagent-code/core/session/event"
+import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { GoalControlFixture } from "../../../core/test/fixture/goal-control"
@@ -818,8 +820,8 @@ try {
             if (scenario.endsWith("-stop-boundary")) assert.equal(edit.journal.controlInterruption?.reason, "control_stop")
             assert.deepEqual(edit.journal.commands[0].receipt, rebaseBegin!.originalReceipt)
             assert.equal((yield* GoalTickCheckpointV2.read(db, tick.permit.permit_id))!.state, "recovery_required")
-            // This fixture owns the actual loop/frame, outside GoalTickPort's outer unknown tombstone finalizer.
-            assert.equal((yield* db.get<{ state: string }>(sql`SELECT state FROM goal_tick_permit WHERE permit_id=${tick.permit.permit_id}`))!.state, "issued")
+            // The frame failure publishes its unknown obligation before waking control callers.
+            assert.equal((yield* db.get<{ state: string }>(sql`SELECT state FROM goal_tick_permit WHERE permit_id=${tick.permit.permit_id}`))!.state, "unknown")
             assert(Exit.isFailure(yield* GoalTickCheckpoint.currentPermit(db, tick.permit.permit_id, tick.permit.token).pipe(Effect.exit)))
             const current = yield* Effect.promise(() => rebaseHTTP(`/${edit.edit_id}`, { sessionID: parent.id,
               goalID: goal.goal_id, requestID: "rebase-during-provider" }, "GET"))
@@ -1317,8 +1319,32 @@ try {
                 }
                 if (scenario.startsWith("validation-ask-") && scenario !== "validation-ask-stop") {
                   if (scenario === "validation-ask-agent") {
-                    yield* sessions.switchAgent({ sessionID: parent.id, agent: "plan" })
-                    yield* sessions.switchAgent({ sessionID: parent.id, agent: parent.agent ?? "auto" })
+                    const sessions = yield* SessionV2.Service
+                    const refused = yield* sessions.switchAgent({ sessionID: parent.id, agent: "plan" }).pipe(Effect.exit)
+                    assert(Exit.isFailure(refused))
+                    const error = Exit.isFailure(refused) ? Cause.squash(refused.cause) : undefined
+                    assert(error && typeof error === "object" && "code" in error && error.code === "GOAL_MODE_CHANGE_BUSY")
+                    // Admission prevents a public mode change during a Goal. The real historical
+                    // event projector still has to reject a parent ABA, as in the Core oracle.
+                    const events = yield* EventV2Bridge.Service
+                    const timestamp = yield* DateTime.now
+                    const original = yield* GoalControl.session(db, parent.id)
+                    yield* events.publish(SessionEvent.AgentSwitched, {
+                      sessionID: parent.id,
+                      agent: AgentV2.ID.make("plan"),
+                      timestamp,
+                      messageID: SessionMessage.ID.create(),
+                    })
+                    yield* events.publish(SessionEvent.Updated, {
+                      sessionID: parent.id,
+                      info: parent,
+                      slug: original.slug,
+                      version: original.version,
+                    })
+                    assert.equal(
+                      GoalControl.fingerprint(GoalTickCheckpoint.authority(yield* GoalControl.session(db, parent.id))),
+                      (yield* GoalTickCheckpointV2.read(db, tick.permit.permit_id))!.journal.parent.authorityHash,
+                    )
                   }
                   if (scenario === "validation-ask-roster")
                     yield* AgentV2.Service.use((agents) =>

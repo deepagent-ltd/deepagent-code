@@ -6,7 +6,7 @@ import { expectAppVisible } from "../utils/waits"
 const directory = "C:/DeepAgent Code/WorkbenchNavigation"
 const sessionID = "ses_workbench_navigation"
 
-test("left rail opens settings, knowledge, history, and archived sessions", async ({ page }) => {
+test("left rail opens settings and Library knowledge, history, and archived sessions", async ({ page }) => {
   await mockDeepAgentCodeServer(page, {
     directory,
     project: {
@@ -43,17 +43,27 @@ test("left rail opens settings, knowledge, history, and archived sessions", asyn
   await expect(page.getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true")
   await page.keyboard.press("Escape")
 
-  await page.getByRole("button", { name: "Knowledge", exact: true }).click()
-  await expect(page.getByRole("dialog")).toBeVisible()
-  await expect(page.getByRole("tab", { name: "Review" })).toBeVisible()
-  await page.getByRole("tab", { name: "Domain Packs" }).click()
-  await expect(page.getByRole("tab", { name: "Domain Packs" })).toHaveAttribute("aria-selected", "true")
-  await page.keyboard.press("Escape")
+  await page.getByRole("button", { name: "Library", exact: true }).click()
+  const library = page.getByRole("dialog", { name: "Library", exact: true })
+  await expect(library).toBeVisible()
+  await expect(library.getByRole("tab", { name: "Knowledge", exact: true })).toHaveAttribute("aria-selected", "true")
+  await expect(library.getByRole("tab", { name: "Review", exact: true })).toBeVisible()
+  await library.getByRole("tab", { name: "Domain Packs", exact: true }).click()
+  await expect(library.getByRole("tab", { name: "Domain Packs", exact: true })).toHaveAttribute("aria-selected", "true")
 
-  await page.getByRole("button", { name: "History projects" }).click()
+  await library.getByRole("tab", { name: "History projects", exact: true }).click()
+  await expect(library.getByRole("tab", { name: "History projects", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  )
   await expect(page.locator('[data-component="history-projects-dialog"]')).toBeVisible()
-  await page.keyboard.press("Escape")
 
-  await page.getByRole("button", { name: "Archived sessions" }).click()
+  await library.getByRole("tab", { name: "Archived sessions", exact: true }).click()
+  await expect(library.getByRole("tab", { name: "Archived sessions", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  )
   await expect(page.locator('[data-component="archived-sessions-dialog"]')).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(library).toBeHidden()
 })

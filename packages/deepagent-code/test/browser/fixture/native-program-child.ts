@@ -83,32 +83,37 @@ let allowed = true
 const current = Effect.suspend(() =>
   allowed ? Effect.void : Effect.fail(BrowserControl.failure("BROWSER_SCOPE_DENIED")),
 )
-const action = (command: BrowserSchema.Command): BrowserSchema.Action => ({
-  version: 1,
-  actionID: `program-action-${++seq}`,
-  controlID: control.controlID,
-  requestID: `program-request-${seq}`,
-  commandDigest: BrowserControl.hash(command),
-  command,
-  admissionID: `program-admission-${seq}`,
-  providerReceiptID: "program-receipt",
-  providerAttemptID: "program-attempt",
-  toolCallID: `program-call-${seq}`,
-  sessionID: control.scope.sessionID,
-  hostIncarnation: control.hostIncarnation,
-  resourceID: control.resourceID,
-  controlEpoch: 1,
-  policyRevision: 1,
-  revision: 1,
-  deadline: Date.now() + 10_000,
-  outcome: "pending",
-  result: null,
-  errorCode: null,
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
-  terminalAt: null,
-  stopConfirmedAt: null,
-})
+const action = (command: BrowserSchema.Command): BrowserSchema.Action => {
+  const admitted: BrowserSchema.Action = {
+    version: 1,
+    actionID: `program-action-${++seq}`,
+    controlID: control.controlID,
+    requestID: `program-request-${seq}`,
+    commandDigest: BrowserControl.hash(command),
+    command,
+    admissionID: `program-admission-${seq}`,
+    providerReceiptID: "program-receipt",
+    providerAttemptID: "program-attempt",
+    toolCallID: `program-call-${seq}`,
+    sessionID: control.scope.sessionID,
+    hostIncarnation: control.hostIncarnation,
+    resourceID: control.resourceID,
+    controlEpoch: 1,
+    policyRevision: 1,
+    revision: 1,
+    deadline: Date.now() + 10_000,
+    outcome: "pending",
+    result: null,
+    errorCode: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    terminalAt: null,
+    stopConfirmedAt: null,
+  }
+  port.postMessage({ type: "action-stage", phase: "admitted", actionID: admitted.actionID,
+    commandType: command.type, generation: "generation" in command ? command.generation : null })
+  return admitted
+}
 const code = (exit: Exit.Exit<unknown, BrowserSchema.Error>) =>
   Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause))?.code : null
 const unexpectedFailures: unknown[] = []
@@ -118,6 +123,8 @@ const execute = (command: BrowserSchema.Command) => {
     host.execute(active, admitted, current).pipe(
       Effect.catchCause((cause) =>
         Effect.gen(function* () {
+          port.postMessage({ type: "action-stage", phase: "failed", actionID: admitted.actionID,
+            commandType: command.type, generation: "generation" in command ? command.generation : null })
           // Observe only after the original failure. Never dispatch the failed command again.
           const observed = yield* host.execute(active, action({ type: "tabs.list" }), current).pipe(Effect.exit)
           unexpectedFailures.push({
@@ -140,10 +147,20 @@ const execute = (command: BrowserSchema.Command) => {
         }),
       ),
     ),
-  )
+  ).then((value) => {
+    port.postMessage({ type: "action-stage", phase: "completed", actionID: admitted.actionID,
+      commandType: command.type, generation: value.result.tabs[0]?.generation ?? null })
+    return value
+  })
 }
-const rejected = (command: BrowserSchema.Command) =>
-  Effect.runPromise(host.execute(active, action(command), current).pipe(Effect.exit)).then(code)
+const rejected = (command: BrowserSchema.Command) => {
+  const admitted = action(command)
+  return Effect.runPromise(host.execute(active, admitted, current).pipe(Effect.exit)).then((exit) => {
+    port.postMessage({ type: "action-stage", phase: Exit.isFailure(exit) ? "rejected" : "completed", actionID: admitted.actionID,
+      commandType: command.type, generation: "generation" in command ? command.generation : null })
+    return code(exit)
+  })
+}
 
 try {
   await Effect.runPromise(host.create(control))

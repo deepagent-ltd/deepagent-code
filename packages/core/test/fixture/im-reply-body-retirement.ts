@@ -1,14 +1,34 @@
 export * as ReplyBodyFixture from "./im-reply-body-retirement"
 import { expect } from "bun:test"
-import { Effect } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import { sql } from "drizzle-orm"
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import { SecurityNamespaceID } from "../../src/context-federation/reference"
 import { Database } from "../../src/database/database"
+import { EventV2 } from "../../src/event"
+import { IMDacSession } from "../../src/im/dac-session"
 import { IMRepository } from "../../src/im/repository"
 import { KernelDelivery } from "../../src/im/kernel-delivery"
 import { KernelReader } from "../../src/im/kernel-reader"
 import { ReplyBodyRetirement } from "../../src/im/reply-body-retirement"
 import { ReplyBodyRetirementModel } from "../../src/im/reply-body-retirement.model"
 import { ReplyDeliveryID } from "../../src/im/reply-delivery-id"
+import { ModelV2 } from "../../src/model"
+import { ProjectV2 } from "../../src/project"
+import { ProviderV2 } from "../../src/provider"
+import { AbsolutePath } from "../../src/schema"
+import { SessionV2 } from "../../src/session"
+import { SessionEvent } from "../../src/session/event"
+import { SessionExecution } from "../../src/session/execution"
+import { SessionInput } from "../../src/session/input"
+import { SessionMessage } from "../../src/session/message"
+import { SessionProjector } from "../../src/session/projector"
+import { SessionStore } from "../../src/session/store"
+import { SessionV1 } from "../../src/v1/session"
+import { openFixtureActivity, settleFixtureActivity } from "./open-activity"
+import { projectLayer } from "./project-layer"
 export const source = {
   realm: "http://127.0.0.1:9/",
   appkey: "reply-custody",
@@ -18,18 +38,24 @@ export const source = {
 }
 export const scopeKey = "b".repeat(64)
 export const reply = "ReplyCustodyCanary 中文🙂"
-/** Legal historical settled/admitted storage specimen, not current prompt
- * admission or execution. Original Core repository/transport/reader APIs below
- * run against actual FK-on file SQL; no provider, service or attachment starts. */
-export const make = (input?: { append?: boolean; projection?: boolean }) =>
+/** Admit and settle a private DAC command through the domain APIs. Execution is
+ * explicitly noop: deterministic terminal events are fixture material, with no
+ * provider, Native qualification, remote service or attachment started. */
+export const make = (input?: {
+  append?: boolean
+  projection?: boolean
+  bindingWorkspaceID?: string
+  finalText?: string
+}) =>
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const repo = yield* IMRepository
+    const workspaceID = input?.bindingWorkspaceID ?? "ws"
     const active = { value: true }
     const observations = new WeakMap<object, { serverNow: number; scopeKey: string; version: 2; deadline: number }>()
     const reader = KernelReader.attach({
       db,
-      workspaceID: "ws",
+      workspaceID,
       userID: "server",
       source,
       current: () => Effect.succeed(active.value),
@@ -91,49 +117,30 @@ export const make = (input?: { append?: boolean; projection?: boolean }) =>
           sql`SELECT id,kernel_conv_id kernelConvID FROM im_groups WHERE id=${existingGroup}`,
         )
       : yield* repo.createGroup({
-          workspaceID: "ws",
+          workspaceID,
           type: "project",
           name: "Reply custody private",
           createdBy: "server",
         })
     if (!group) return yield* Effect.die("Original reader group absent")
-    const sourceMessage = yield* KernelDelivery.withCreation(
-      authority,
-      group.id,
-      repo.createMessage({
-        id: "imsg_source_reply",
-        groupID: group.id,
-        senderID: "server",
-        senderType: "user",
-        type: "text",
-        content: "Historical accepted input",
-      }),
-    )
+    const command = yield* settledCommand(group.id, {
+      bindingWorkspaceID: input?.bindingWorkspaceID,
+      finalText: input?.finalText,
+    })
     const now = Date.now()
-    yield* db.run(
-      sql`INSERT INTO project(id,worktree,sandboxes,time_created,time_updated) VALUES('reply-project','/private/reply-history','[]',${now},${now})`,
-    )
-    yield* db.run(sql`INSERT INTO session(id,project_id,slug,directory,title,version,time_created,time_updated,v2_authority)
-    VALUES('ses_im_reply_history','reply-project','reply-history','/private/reply-history','History','2',${now},${now},1)`)
-    yield* db.run(sql`INSERT INTO session_input(id,session_id,prompt,delivery,admitted_seq,promoted_seq,time_created)
-    VALUES('msg_reply_input','ses_im_reply_history','{"text":"Historical admitted input"}','steer',1,1,${now})`)
-    yield* db.run(sql`INSERT INTO session_activity(activity_id,session_id,ordinal,trigger_input_id,delivery,state,created_at,settled_at,final_message_id)
-    VALUES('activity_reply','ses_im_reply_history',1,'msg_reply_input','steer','settled',${now},${now},'msg_reply_final')`)
-    yield* db.run(sql`INSERT INTO session_activity_input(activity_id,input_id,ordinal,admitted_seq,role,promoted_at)
-    VALUES('activity_reply','msg_reply_input',1,1,'trigger',${now})`)
-    yield* db.run(sql`INSERT INTO im_mention_intent(id,message_id,agent_name,directory,workspace_id,user_id,origin,session_id,input_id,status,created_at,updated_at)
-    VALUES('imi_reply_history',${sourceMessage.id},'auto','/private/reply-history','ws','server','local','ses_im_reply_history','msg_reply_input','admitted',${now},${now})`)
     const id = "imo_reply_history"
     if (input?.append !== false)
       yield* db.transaction(
         (tx) =>
           Effect.gen(function* () {
             yield* tx.run(sql`INSERT INTO im_reply_outbox(id,delivery_message_id,session_id,group_id,agent_id,trigger_message_id,reply_message_id,reply_text,time_created,time_updated)
-      VALUES(${id},${ReplyDeliveryID.fromOutbox(id)},'ses_im_reply_history',${group.id},'auto','msg_reply_input','msg_reply_final',${reply},${now},${now})`)
+      VALUES(${id},${ReplyDeliveryID.fromOutbox(id)},${command.sessionID},${group.id},'auto',${command.inputID},'msg_reply_final',${reply},${now},${now})`)
             yield* ReplyBodyRetirement.initialize(tx, id)
           }),
         { behavior: "immediate" },
       )
+    if (input?.append !== false)
+      expect((yield* ReplyBodyRetirement.read(db, id)).record.origin.kind).toBe("dac_session")
     const create = (kernel = true) =>
       Effect.gen(function* () {
         if (kernel && !group.kernelConvID?.startsWith("kr1:"))
@@ -146,7 +153,7 @@ export const make = (input?: { append?: boolean; projection?: boolean }) =>
           type: "text" as const,
           content: reply,
           mentions: [],
-          metadata: { type: "agent_run" as const, sessionID: "ses_im_reply_history", status: "success" as const },
+          metadata: { type: "agent_run" as const, sessionID: command.sessionID, status: "success" as const },
         }
         return yield* kernel
           ? KernelDelivery.withCreation(authority, group.id, repo.createMessage(input))
@@ -182,7 +189,134 @@ export const make = (input?: { append?: boolean; projection?: boolean }) =>
         observations.set(handle, { serverNow, scopeKey, version: 2, deadline: performance.now() + 1000 })
         return yield* KernelDelivery.withSenderRetirement(reader, handle, purpose)
       })
-    return { db, repo, id, group, create, dispatch, acknowledge, delivered, retire, active, reader, authority }
+    return {
+      db,
+      repo,
+      id,
+      group,
+      create,
+      dispatch,
+      acknowledge,
+      delivered,
+      retire,
+      active,
+      reader,
+      authority,
+      sessionID: command.sessionID,
+      inputID: command.inputID,
+    }
+  })
+
+export const settledCommand = (
+  groupID: string,
+  input?: {
+    directory?: string
+    bindingWorkspaceID?: string
+    finalText?: string
+    scope?: Pick<IMDacSession.Scope, "accountKey" | "executorID" | "conversationKey">
+  },
+) =>
+  Effect.gen(function* () {
+    const database = Layer.succeed(Database.Service, yield* Database.Service)
+    const events = EventV2.layer.pipe(Layer.provide(database))
+    const projects = projectLayer(database)
+    const sessions = SessionV2.layer.pipe(
+      Layer.provide(SessionExecution.noopLayer),
+      Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
+      Layer.provide(SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))),
+      Layer.provide(events),
+      Layer.provide(database),
+      Layer.provide(projects),
+    )
+    const directory =
+      input?.directory ??
+      (yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "dac-reply-command-"))),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true })),
+      ))
+    return yield* Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const project = yield* (yield* ProjectV2.Service).resolve(AbsolutePath.make(directory))
+      const command = yield* IMDacSession.make(db, yield* SessionV2.Service).submit(
+        {
+          ownerID: "server",
+          accountKey: input?.scope?.accountKey ?? "reply-custody",
+          executorID: input?.scope?.executorID ?? "auto",
+          conversationKey: input?.scope?.conversationKey ?? "direct:bob",
+          groupID,
+          projectID: project.id,
+          directory,
+          workspaceID: input?.bindingWorkspaceID ?? null,
+        },
+        { commandID: "reply-custody", text: "Historical admitted input", delivery: "steer" },
+        Effect.succeed([]),
+      )
+      expect(command.state).toBe("admitted")
+      const admitted = yield* SessionInput.find(db, SessionMessage.ID.make(command.inputID))
+      if (!admitted) return yield* Effect.die("The original DAC command was not admitted")
+      expect(admitted.promotedSeq).toBeUndefined()
+      const events = yield* EventV2.Service
+      const sessionID = SessionV2.ID.make(command.sessionID)
+      expect(yield* SessionInput.promoteSteers(db, events, sessionID, admitted.admittedSeq)).toEqual([admitted.id])
+      const securityNamespaceId = SecurityNamespaceID.make("sec_reply_custody")
+      const activity = yield* openFixtureActivity({
+        sessionId: sessionID,
+        triggerInputId: command.inputID,
+        securityNamespaceId,
+        now: Date.now(),
+      })
+      const assistantMessageID = SessionMessage.ID.make("msg_reply_final")
+      const textID = SessionMessage.ID.make("msg_reply_text")
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        agent: "build",
+        model: { id: ModelV2.ID.make("fixture-model"), providerID: ProviderV2.ID.make("fixture-provider") },
+      })
+      const assistant = yield* (yield* SessionV2.Service).message({ sessionID, messageID: assistantMessageID })
+      if (assistant?.type !== "assistant") return yield* Effect.die("The original assistant projection is absent")
+      // With no provider receipt this fixture is host-owned. Publish its normal
+      // compatibility parent through the existing API before projecting parts.
+      yield* events.publish(SessionV1.Event.MessageUpdated, {
+        sessionID,
+        info: SessionV2.legacyAssistant({
+          sessionID,
+          parentMessageID: SessionV1.MessageID.ascending(command.inputID),
+          directory,
+          root: project.directory,
+          message: assistant,
+        }).info,
+      })
+      yield* events.publish(SessionEvent.Text.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        textID,
+      })
+      yield* events.publish(SessionEvent.Text.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        textID,
+        text: input?.finalText ?? reply,
+      })
+      yield* events.publish(SessionEvent.Step.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        finish: "stop",
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      yield* settleFixtureActivity({
+        activityId: activity.activityId,
+        finalMessageId: assistantMessageID,
+        securityNamespaceId,
+        now: Date.now(),
+      })
+      return command
+    }).pipe(Effect.provide(Layer.mergeAll(database, events, projects, sessions)))
   })
 
 export const setup = make()

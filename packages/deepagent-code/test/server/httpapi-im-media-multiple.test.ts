@@ -140,7 +140,7 @@ it.live(
         enabled: true,
         multipleAttachments: true,
         maxAttachments: 4,
-        maxAttachmentBytes: 50 * 1024 * 1024,
+        maxAttachmentBytes: 10 * 1024 * 1024,
         ttlMs: 86400000,
       })
       expect(yield* db.select().from(AttachmentTable)).toEqual(before)

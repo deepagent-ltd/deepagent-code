@@ -2,9 +2,16 @@ import { beforeAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { createRequire } from "node:module"
 import { Database } from "bun:sqlite"
 import { WorkAuthorityPolicy } from "@deepagent-code/core/session/work-authority-policy"
 import { AuthRuntime } from "../../src/im/auth-runtime"
+import { ownedSecretBuild } from "../fixture/owned-secret-build"
+import { managedBrowserInputRuntime } from "../../../desktop/scripts/managed-browser-input-runtime"
+import {
+  managedBrowserInputFixtureEnvironment,
+  managedBrowserInputFixtureExecutable,
+} from "../../../desktop/src/main/fixture/managed-browser-input-runtime"
 
 const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-auth-runtime-")))
 const fixture = path.resolve(import.meta.dir, "fixture/auth-runtime.ts")
@@ -19,6 +26,7 @@ beforeAll(async () => {
     target: "node",
     format: "esm",
     external: ["@lydell/node-pty", "jsonc-parser", "bun"],
+    plugins: [ownedSecretBuild],
   })
   expect(built.success, built.logs.map((item) => item.message).join("\n")).toBe(true)
   const source = await fs.readFile(path.join(directory, "fixture.mjs"), "utf8")
@@ -31,14 +39,31 @@ beforeAll(async () => {
     format: "esm",
   })
   expect(worker.success, worker.logs.map((item) => item.message).join("\n")).toBe(true)
+  const indexWorker = await Bun.build({
+    entrypoints: [path.resolve(import.meta.dir, "../../src/location-index/typescript-index.worker.ts")],
+    outdir: directory,
+    naming: "typescript-index.worker.js",
+    target: "node",
+    format: "esm",
+  })
+  expect(indexWorker.success, indexWorker.logs.map((item) => item.message).join("\n")).toBe(true)
   await fs.mkdir(path.join(directory, "node_modules/@lydell"), { recursive: true })
   await fs.symlink(
-    path.resolve(import.meta.dir, "../../../desktop/node_modules/@lydell/node-pty"),
+    await fs.realpath(
+      path.dirname(
+        createRequire(path.resolve(import.meta.dir, "../../../desktop/package.json")).resolve("@lydell/node-pty/package.json"),
+      ),
+    ),
     path.join(directory, "node_modules/@lydell/node-pty"),
+    process.platform === "win32" ? "junction" : "dir",
   )
+  // Match the actual Node build's external UMD dependency and its relative impl files.
   await fs.symlink(
-    path.resolve(import.meta.dir, "../../node_modules/jsonc-parser"),
+    await fs.realpath(
+      path.dirname(createRequire(path.resolve(import.meta.dir, "../../package.json")).resolve("jsonc-parser/package.json")),
+    ),
     path.join(directory, "node_modules/jsonc-parser"),
+    process.platform === "win32" ? "junction" : "dir",
   )
 })
 
@@ -74,15 +99,22 @@ child.on("exit", code => { clearTimeout(timer); app.exit(code ?? 1) });
 void main().catch(() => app.exit(1));
 `,
     )
-  const executable = path.resolve(
-    import.meta.dir,
-    "../../../desktop/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
-  )
   const child = Bun.spawn(
-    desktop ? [executable, main] : [node, path.join(directory, "fixture.mjs"), mode, request, result],
+    desktop
+      ? [managedBrowserInputFixtureExecutable, main]
+      : [node, path.join(directory, "fixture.mjs"), mode, request, result],
     {
       cwd,
-      env: { PATH: path.dirname(node), HOME: directory, NO_COLOR: "1", ...environment },
+      env: {
+        ...managedBrowserInputFixtureEnvironment,
+        PATH: path.dirname(node),
+        HOME: directory,
+        TMPDIR: directory,
+        TEMP: directory,
+        TMP: directory,
+        NO_COLOR: "1",
+        ...environment,
+      },
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -210,7 +242,7 @@ test("real Electron worker hard deadlines terminate stalled workers before admis
   expect(result.maxRSSKiB).toBeGreaterThan(0)
 }, 50_000)
 
-test("actual Node operator enrollment, rotation, revocation and HTTP authentication use the bounded backend", async () => {
+test("actual Node refuses retired enrollment and verifies Core-prepared operator credentials through the bounded backend", async () => {
   const root = await fs.mkdtemp(path.join(directory, "operator-"))
   await Promise.all(
     ["home", "tmp", "config", "data", "cache", "state", "project"].map((name) => fs.mkdir(path.join(root, name))),
@@ -222,6 +254,7 @@ test("actual Node operator enrollment, rotation, revocation and HTTP authenticat
     JSON.stringify({
       formatter: false,
       lsp: false,
+      im: { url: null },
       providers: {
         fixture: {
           api: {
@@ -257,6 +290,7 @@ test("actual Node operator enrollment, rotation, revocation and HTTP authenticat
   const secondPassword = "second-synthetic-operator"
   await fs.writeFile(previousCredentialPath, firstPassword, { mode: 0o600 })
   const environment = {
+    PATH: process.env.PATH,
     HOME: path.join(root, "home"),
     TMPDIR: path.join(root, "tmp"),
     TMP: path.join(root, "tmp"),
@@ -277,9 +311,22 @@ test("actual Node operator enrollment, rotation, revocation and HTTP authenticat
     (await run("operator", input, false, { ...environment, DEEPAGENT_CODE_SERVER_PASSWORD: credential }, project))
       .result
   const enroll = { action: "enroll", operationID: "node-enroll", policyPath }
-  const enrolled = await operator(enroll)
+  const refused = await operator(enroll)
+  expect(refused).toEqual({ error: "LOCAL_TASK_EXECUTION_UNAVAILABLE" })
+  const rejected = new Database(`file:${filename}?immutable=1`, { readonly: true })
+  try {
+    expect(rejected.query("SELECT count(*) count FROM local_operator_authority").get()).toEqual({ count: 0 })
+  } finally {
+    rejected.close()
+  }
+  const prepare = async () =>
+    (
+      await run("prepare-credentials", enroll, false,
+        { ...environment, DEEPAGENT_CODE_SERVER_PASSWORD: firstPassword }, project)
+    ).result
+  const enrolled = await prepare()
   expect(enrolled.value.state).toBe("active")
-  expect(await operator(enroll)).toEqual(enrolled)
+  expect(await prepare()).toEqual(enrolled)
   const http = (
     await run("http", {}, false, { ...environment, DEEPAGENT_CODE_SERVER_PASSWORD: firstPassword }, project)
   ).result
@@ -394,11 +441,15 @@ test("actual Node OwnedValidation resolves its executable from the fixed PATH an
 test("actual Electron utility uses the bounded WASM worker for unsupported native Argon2", async () => {
   expect((await run("crypto-probe", {}, true)).result).toMatchObject({ code: "ERR_CRYPTO_ARGON2_NOT_SUPPORTED" })
   const result = await run("desktop", { password, verifier: hash }, true)
-  expect(result.runtime).toEqual({ node: "24.18.0", electron: "41.10.3", bun: null })
+  expect(result.runtime).toEqual({
+    node: managedBrowserInputRuntime.nodeVersion,
+    electron: managedBrowserInputRuntime.electronVersion,
+    bun: null,
+  })
   expect(result.result).toMatchObject({
     matched: { value: true },
     wrong: { value: false },
-    appVersion: "Electron/41.10.3 Node/24.18.0",
+    appVersion: `Electron/${managedBrowserInputRuntime.electronVersion} Node/${managedBrowserInputRuntime.nodeVersion}`,
   })
   expect(await Bun.password.verify(password, result.result.hashed.value)).toBe(true)
   const concurrent = (await run("bounded", { password, verifier: hash }, true)).result

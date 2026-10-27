@@ -15,6 +15,7 @@ const client = vi.hoisted(() => ({
   listThread: vi.fn(),
   listAgents: vi.fn(),
   markRead: vi.fn(),
+  dacBinding: vi.fn(),
 }))
 vi.mock("@/utils/im-client", async (original) => ({
   ...(await original<typeof import("@/utils/im-client")>()),
@@ -65,21 +66,37 @@ const message = (id: string, senderID: string, senderType = "user"): LocalMessag
   updatedAt: 1000,
   deletedAt: null,
 })
-const page = (messages: LocalMessage[]) => ({ messages, hasMore: false, nextCursor: null,
-  reader: { state: "ready", displayEpoch: "sender-fixture", projectionRevision: "1", validatedServerNow: 1, nextExpiryAt: null },
+const page = (messages: LocalMessage[]) => ({
+  messages,
+  hasMore: false,
+  nextCursor: null,
+  reader: {
+    state: "ready",
+    displayEpoch: "sender-fixture",
+    projectionRevision: "1",
+    validatedServerNow: 1,
+    nextExpiryAt: null,
+  },
 })
 
 beforeEach(async () => {
   Object.values(client).forEach((fn) => fn.mockReset())
   const { createIMClient } = await vi.importActual<typeof import("@/utils/im-client")>("@/utils/im-client")
-  client.scope.mockImplementation(createIMClient(() => ({ url: "http://fixture.test", directory: "/private/sender" })).scope)
+  client.scope.mockImplementation(
+    createIMClient(() => ({ url: "http://fixture.test", directory: "/private/sender" })).scope,
+  )
   // These controlled UI pages model the current split read API, not a legacy WS writer.
   client.listGroupPage.mockImplementation(async (lane: "ordinary" | "protected") => ({
-    version: 1, lane, groups: (await client.listGroups()).filter((group: { kernelConvID?: string }) =>
-      lane === "protected" ? !!group.kernelConvID : !group.kernelConvID),
-    hasMore: false, nextCursor: null,
+    version: 1,
+    lane,
+    groups: (await client.listGroups()).filter((group: { kernelConvID?: string }) =>
+      lane === "protected" ? !!group.kernelConvID : !group.kernelConvID,
+    ),
+    hasMore: false,
+    nextCursor: null,
   }))
-  client.getGroup.mockImplementation(async (id: string) => ({ version: 1,
+  client.getGroup.mockImplementation(async (id: string) => ({
+    version: 1,
     group: (await client.listGroups()).find((group: { id: string }) => group.id === id),
   }))
   client.facadeStatus.mockResolvedValue({
@@ -91,6 +108,16 @@ beforeEach(async () => {
   })
   client.listAgents.mockResolvedValue([])
   client.markRead.mockResolvedValue({ ok: true })
+  client.dacBinding.mockResolvedValue({
+    version: 1,
+    groupID: "conversation",
+    bindingID: null,
+    sessionID: null,
+    directory: "/private/sender",
+    projectID: null,
+    workspaceID: null,
+    recentCommands: [],
+  })
   client.listMessages.mockResolvedValue(
     page([
       message("peer message", "bob-uuid"),
@@ -107,7 +134,11 @@ it("uses the verified direct peer's name through the panel, history, and thread 
   client.listGroups.mockResolvedValue([
     { id: "conversation", name: "Bob", type: "direct", kernelConvID: "k:1:bob-uuid" },
   ])
-  render(() => <MemoryRouter><Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} /></MemoryRouter>)
+  render(() => (
+    <MemoryRouter>
+      <Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} />
+    </MemoryRouter>
+  ))
   fireEvent.click(await screen.findByRole("button", { name: /Bob/ }))
   const peer = await screen.findByRole("article", { name: "Message from Bob" })
   expect(within(peer).getByTitle("bob-uuid").textContent).toBe("Bob")
@@ -128,7 +159,11 @@ it.each([
   { type: "direct", kernelConvID: "k:1:different-peer" },
 ])("preserves sender IDs without an exact direct peer binding (%j)", async (binding) => {
   client.listGroups.mockResolvedValue([{ id: "conversation", name: "Bob", ...binding }])
-  render(() => <MemoryRouter><Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} /></MemoryRouter>)
+  render(() => (
+    <MemoryRouter>
+      <Route path="/" component={() => <SidePanelIM onClose={vi.fn()} />} />
+    </MemoryRouter>
+  ))
   fireEvent.click(await screen.findByRole("button", { name: /Bob/ }))
   await screen.findByText("peer message")
   expect(screen.queryByRole("article", { name: "Message from Bob" })).toBeNull()

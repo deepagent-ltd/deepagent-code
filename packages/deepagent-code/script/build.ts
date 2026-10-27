@@ -243,6 +243,7 @@ for (const item of targets) {
   const rootPath = path.resolve(dir, "../../node_modules/@opentui/core/parser.worker.js")
   const parserWorker = fs.realpathSync(fs.existsSync(localPath) ? localPath : rootPath)
   const workerPath = "./src/cli/tui/worker.ts"
+  const indexWorkerPath = "./src/location-index/typescript-index.worker.ts"
 
   // Use platform-specific bunfs root path based on target OS
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
@@ -311,6 +312,7 @@ for (const item of targets) {
       item.os === "win32" ? "./src/windows-cli.ts" : "./src/index.ts",
       parserWorker,
       workerPath,
+      indexWorkerPath,
       ...(embeddedFileMap ? ["deepagent-code-web-ui.gen.ts"] : []),
     ],
     define: {
@@ -323,6 +325,7 @@ for (const item of targets) {
       ...(native?.defines ?? {}),
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
       DEEPAGENT_CODE_WORKER_PATH: workerPath,
+      DEEPAGENT_CODE_INDEX_WORKER_PATH: JSON.stringify(indexWorkerPath),
       DEEPAGENT_CODE_CHANNEL: `'${Script.channel}'`,
       ...(sourceCommit ? { DEEPAGENT_CODE_COMMIT: JSON.stringify(sourceCommit) } : {}),
       DEEPAGENT_CODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",

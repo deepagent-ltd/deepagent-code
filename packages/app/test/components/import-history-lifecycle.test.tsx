@@ -10,6 +10,7 @@ import path from "node:path"
 import type { Window } from "happy-dom"
 import { ImportSection } from "@/components/settings-v2/import-history"
 import { dict } from "@/i18n/en"
+import { publishImportFixturePacket } from "./fixture/import-control"
 
 const [server, setServer] = createStore({
   key: "private-a",
@@ -100,6 +101,8 @@ async function processFor(root: string, count: number) {
         url: string
         sourcePath: string
         count: number
+        packetSourcePath: string
+        packetCount: number
       }
     },
     { timeout: 15_000 },
@@ -157,6 +160,7 @@ async function processFor(root: string, count: number) {
     client,
     calls,
     transport,
+    diagnostic,
     posts: () => calls.filter((call) => call.method === "POST" && call.path === "/global/import/jobs").length,
     async close() {
       clearTimeout(deadline)
@@ -206,9 +210,11 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
   const origin = window.location.href
   const processes: Awaited<ReturnType<typeof processFor>>[] = []
   const gates: ReturnType<typeof Promise.withResolvers<void>>[] = []
+  const progress = { phase: "startup", startedAt: Date.now(), failed: false }
   try {
     const a = await processFor(path.join(root, "a"), 400)
     processes.push(a)
+    expect(a.ready.packetCount).toBe(2)
     const b = await processFor(path.join(root, "b"), 0)
     processes.push(b)
     surface.happyDOM.setURL(a.ready.url)
@@ -228,7 +234,8 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
     const first = a.transport.accepted!
     expect(first.scopes).toEqual(["session", "memory", "skill"])
     expect(screen.getByRole("checkbox", { name: "Memory" }).hasAttribute("disabled")).toBe(true)
-    await fs.writeFile(path.join(a.root, "monitor.json"), JSON.stringify({ jobID: first.id }))
+    progress.phase = "partial committed boundary"
+    await publishImportFixturePacket(path.join(a.root, "monitor.json"), { jobID: first.id })
     // A real immutable destination receipt opens this test boundary. No job row,
     // target lock or executor is modified to create a partial state.
     const committed = await waitFor(
@@ -268,12 +275,14 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
     await screen.findByText(new RegExp(dict["settings.import.job.stopped"]))
     expect(screen.getByText(dict["settings.import.job.partial"])).toBeTruthy()
     await diagnostics(first.id)
-    await fs.writeFile(path.join(a.root, "inspect.json"), JSON.stringify({ jobID: first.id, name: "partial-proof" }))
+    await publishImportFixturePacket(path.join(a.root, "inspect.json"), { jobID: first.id, name: "partial-proof" })
     const partial = await waitFor(
       async () =>
         JSON.parse(await fs.readFile(path.join(a.root, "partial-proof.json"), "utf8")) as {
           before: unknown
           after: unknown
+          sourceBefore: unknown
+          sourceAfter: unknown
           proof: { count: number; results: unknown[]; fileResults: unknown[] }
           target: { sessions: number; messages: number }
           liveSessions: unknown[]
@@ -283,6 +292,7 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
       { timeout: 10_000 },
     )
     expect(partial.after).toEqual(partial.before)
+    expect(partial.sourceAfter).toEqual(partial.sourceBefore)
     expect(partial.liveSessions).toEqual([])
     expect(partial.target.sessions).toBe(partial.proof.results.length)
     expect(partial.target.sessions).toBeGreaterThan(0)
@@ -291,6 +301,7 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
     view.unmount()
 
     for (const change of ["instance", "unmount"] as const) {
+      progress.phase = `${change} packet loss`
       surface.happyDOM.setURL(a.ready.url)
       setServer({ key: "private-a", current: { http: { url: a.ready.url, password: "lifecycle-private-auth" } } })
       setOwner({ scope: "private-a", url: a.ready.url, client: a.client })
@@ -300,7 +311,9 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
       a.transport.accepted = undefined
       view = render(() => <ImportSection />)
       const beforePosts = a.posts()
-      await chooseSource(a.ready.sourcePath)
+      // Only the first job needs a large source to observe a real partial cancel.
+      // Packet delivery and owner lifetime use complete small copies of all scopes.
+      await chooseSource(a.ready.packetSourcePath)
       await waitFor(() => expect(a.transport.accepted?.id).toBeTruthy())
       const accepted = a.transport.accepted!
       if (change === "instance") {
@@ -324,7 +337,21 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
       }
       surface.happyDOM.setURL(a.ready.url)
       await waitFor(
-        async () => expect((await a.client.global.importGet({ jobID: accepted.id })).data?.state).toBe("completed"),
+        async () => {
+          const current = await a.client.global.importGet({ jobID: accepted.id })
+          expect(
+            current.data?.state,
+            JSON.stringify({
+              phase: progress.phase,
+              elapsedMs: Date.now() - progress.startedAt,
+              job: current.data,
+              error: current.error,
+              process: await a.diagnostic(),
+            }),
+          ).toBe("completed")
+          expect(current.data?.committedSessions).toBe(a.ready.packetCount)
+          expect(current.data?.fileResults).toHaveLength(2)
+        },
         { timeout: 15_000 },
       )
       surface.happyDOM.setURL(a.ready.url)
@@ -337,15 +364,18 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
       expect(screen.getByText(dict["settings.import.job.copyComplete"])).toBeTruthy()
       view.unmount()
     }
-    await fs.writeFile(
-      path.join(a.root, "inspect.json"),
-      JSON.stringify({ jobID: a.transport.accepted!.id, name: "final-proof" }),
-    )
+    progress.phase = "final immutable receipts"
+    await publishImportFixturePacket(path.join(a.root, "inspect.json"), {
+      jobID: a.transport.accepted!.id,
+      name: "final-proof",
+    })
     const proof = await waitFor(
       async () =>
         JSON.parse(await fs.readFile(path.join(a.root, "final-proof.json"), "utf8")) as {
           before: unknown
           after: unknown
+          sourceBefore: unknown
+          sourceAfter: unknown
           proof: { count: number; results: unknown[]; fileResults: unknown[] }
           target: { sessions: number; messages: number }
           liveSessions: unknown[]
@@ -354,9 +384,10 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
       { timeout: 10_000 },
     )
     expect(proof.before).toEqual(proof.after)
+    expect(proof.sourceAfter).toEqual(proof.sourceBefore)
     expect(proof.liveSessions).toEqual([])
-    expect(proof.target.sessions).toBe(400)
-    expect(proof.proof.results).toHaveLength(400)
+    expect(proof.target.sessions).toBe(a.ready.packetCount)
+    expect(proof.proof.results).toHaveLength(a.ready.packetCount)
     expect(proof.proof.fileResults).toHaveLength(2)
     expect(proof.jobs).toHaveLength(3)
     expect(a.posts()).toBe(3)
@@ -366,11 +397,26 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
         process.env.DAC_IMPORT_LIFECYCLE_EVIDENCE,
         JSON.stringify({ partial, proof, callsA: a.calls, callsB: b.calls }, null, 2),
       )
+  } catch (error) {
+    progress.failed = true
+    throw new Error(
+      `Import lifecycle failure: ${JSON.stringify({
+        ...progress,
+        root,
+        processes: await Promise.all(processes.map((process) => process.diagnostic())),
+      })}`,
+      { cause: error },
+    )
   } finally {
     gates.forEach((gate) => gate.resolve())
     cleanup()
     surface.happyDOM.setURL(origin)
-    await Promise.all(processes.map((process) => process.close()))
-    await fs.rm(root, { recursive: true, force: true })
+    const closed = await Promise.allSettled(processes.map((process) => process.close()))
+    if (progress.failed || closed.some((result) => result.status === "rejected"))
+      console.error("Private import lifecycle evidence retained", root, closed)
+    if (!progress.failed) {
+      for (const result of closed) if (result.status === "rejected") throw result.reason
+      await fs.rm(root, { recursive: true, force: true })
+    }
   }
 }, 60_000)

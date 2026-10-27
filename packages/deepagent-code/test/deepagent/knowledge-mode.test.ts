@@ -8,16 +8,15 @@ describe("DeepAgent max knowledge mode", () => {
     const dir = await tempRunsDir()
     try {
       AgentGateway.configure({ enabled: true, agentMode: "max", runsDir: dir, allowProviderExecutedTools: false })
+      await AgentGateway.flushKnowledgeSeed()
       const store = AgentGateway.DeepAgentKnowledgeSource.userGlobalStoreFor()
       const documents = AgentGateway.DeepAgentReleasedSnapshot.normalizeDocumentRefs(
-        store
-          .listByStatus("active")
-          .flatMap((ref) => {
-            const doc = store.documentStore.get(ref.id, ref.version)
-            return doc?.tags.includes("pack:code.gpu-kernel")
-              ? [AgentGateway.DeepAgentReleasedSnapshot.documentRef(doc, "user_global")]
-              : []
-          }),
+        store.listByStatus("active").flatMap((ref) => {
+          const doc = store.documentStore.get(ref.id, ref.version)
+          return doc?.tags.includes("pack:code.gpu-kernel")
+            ? [AgentGateway.DeepAgentReleasedSnapshot.documentRef(doc, "user_global")]
+            : []
+        }),
       )
       const releasedKnowledgeSelection = {
         snapshotId: "knowledge-mode-gpu-kernel",
@@ -30,6 +29,7 @@ describe("DeepAgent max knowledge mode", () => {
         manifestHash: Hash.sha256("knowledge-mode-gpu-kernel"),
         documents,
       }
+      expect(documents.length).toBeGreaterThan(0)
       const runDir = await runDeepAgentStream(dir, undefined, "max", {
         ...deepagentRunInput,
         feature: "optimize sgemm cuda kernel shared memory",

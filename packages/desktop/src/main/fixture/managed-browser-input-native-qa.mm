@@ -14,6 +14,7 @@ static IMP originalRemove;
 static NSMutableArray<NSWindow *> *windows;
 static NSMutableSet<NSValue *> *monitors;
 static bool tracking = false;
+static std::string tracePath;
 static bool trackedMask(NSEventMask mask) {
 #if defined(DAC_QA_SOURCE_MASK_ONLY) && DAC_QA_SOURCE_MASK_ONLY
   // Main integration can keep tracking enabled while Electron installs unrelated monitors.
@@ -32,7 +33,19 @@ static bool trackedMask(NSEventMask mask) {
 #endif
 }
 static id countedAdd(id self, SEL command, NSEventMask mask, id block) {
-  id monitor = ((id (*)(id, SEL, NSEventMask, id))originalAdd)(self, command, mask, block);
+  NSEvent *(^handler)(NSEvent *) = block;
+  if (!tracePath.empty() && trackedMask(mask)) {
+    NSEvent *(^delegate)(NSEvent *) = handler;
+    handler = ^NSEvent *(NSEvent *event) {
+      // Diagnostic categories only. The original source monitor receives the
+      // exact event, and remains the sole authority for invalidation.
+      std::ofstream file(tracePath, std::ios::app);
+      file << "{\"at\":" << (long long)(NSDate.date.timeIntervalSince1970 * 1000)
+        << ",\"type\":" << (unsigned long long)event.type << "}\n";
+      return delegate(event);
+    };
+  }
+  id monitor = ((id (*)(id, SEL, NSEventMask, id))originalAdd)(self, command, mask, handler);
   if (monitor && tracking && trackedMask(mask)) {
     installed++;
     [monitors addObject:[NSValue valueWithPointer:(__bridge void *)monitor]];
@@ -117,6 +130,18 @@ static napi_value track(napi_env env, napi_callback_info info) {
   napi_get_undefined(env, &result);
   return result;
 }
+static napi_value trace(napi_env env, napi_callback_info info) {
+  size_t count = 1, length = 0;
+  napi_value argument;
+  char value[4096];
+  napi_get_cb_info(env, info, &count, &argument, nullptr, nullptr);
+  if (count != 1 || napi_get_value_string_utf8(env, argument, value, sizeof(value), &length) != napi_ok ||
+      !length || length >= sizeof(value)) { napi_throw_error(env, nullptr, "QA_TRACE_PATH"); return nullptr; }
+  tracePath.assign(value, length);
+  napi_value result;
+  napi_get_undefined(env, &result);
+  return result;
+}
 static napi_value initialize(napi_env env, napi_value exports) {
   windows = [NSMutableArray new];
   monitors = [NSMutableSet new];
@@ -131,8 +156,9 @@ static napi_value initialize(napi_env env, napi_value exports) {
     {"makeWindow", nullptr, makeWindow, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"closeWindows", nullptr, closeWindows, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"tracking", nullptr, track, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"trace", nullptr, trace, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
-  napi_define_properties(env, exports, 6, properties);
+  napi_define_properties(env, exports, 7, properties);
   napi_add_env_cleanup_hook(env, [](void *) {
     if (cleanupPath.empty()) return;
     std::ofstream file(cleanupPath);

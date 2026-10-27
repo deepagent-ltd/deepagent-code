@@ -6,7 +6,7 @@ import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { createServer } from "node:http"
 import type { Duplex } from "node:stream"
 import { join } from "node:path"
-import { eq, sql } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { IMKernelDeliveryTable } from "@deepagent-code/core/im/kernel-delivery.sql"
@@ -23,7 +23,8 @@ import { Project } from "@/project/project"
 import { Workspace } from "@/control-plane/workspace"
 import { Session } from "@/session/session"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { deliverReply, authorizeReply } from "@/im/im-reply-outbox"
+import { deliverReply, authorizeReply, authorizeRegisteredReply, appendReply, replyOutboxID } from "@/im/im-reply-outbox"
+import { ReplyBodyFixture } from "../../../core/test/fixture/im-reply-body-retirement"
 import { IMDacBindingTable } from "@deepagent-code/core/im/dac-session.sql"
 import { IMFacade } from "@/im/facade"
 import { createHash } from "node:crypto"
@@ -31,6 +32,7 @@ import { HttpApiApp } from "@/server/routes/instance/httpapi/server"
 import { GroupDetailResponse, IMGroupResponse, IMPaths, MarkReadResponse, MessagePageResponse } from "@/server/routes/instance/httpapi/groups/im"
 import { IMWebSocketPaths } from "@/server/routes/instance/httpapi/groups/im-websocket"
 import { IMReaderSDKFixture } from "./im-reader-sdk.fixture"
+import { IMDeviceRuntimeFixture } from "./im-device-runtime.fixture"
 import { tmpdirScoped } from "../fixture/fixture"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 import { withTimeout } from "@/util/timeout"
@@ -67,35 +69,37 @@ const run = <A, E, R>(sdk: IMReaderSDKFixture.Interface, effect: (base: URL) => 
   const original = Flag.DEEPAGENT_CODE_DB
   Flag.DEEPAGENT_CODE_DB = join(directory, "reader-file.sqlite")
   yield* Effect.addFinalizer(() => Effect.sync(() => { Flag.DEEPAGENT_CODE_DB = original }))
-  const platform = createServer((incoming, outgoing) => {
-    const chunks: Buffer[] = []
-    incoming.on("data", (chunk) => chunks.push(chunk))
-    incoming.on("end", () => {
-      const url = new URL(incoming.url ?? "/", "http://localhost")
-      const input = chunks.length ? Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(Buffer.concat(chunks).toString("utf8")) as { conversation_type: 1 | 2; conversation_id: string; name?: string } : undefined
-      if (url.pathname.endsWith("/inspect") && metadata) metadata.inspections++
-      const payload = url.pathname.endsWith("/login") || url.pathname.endsWith("/rename") ? { kernel_token: metadata?.token ?? "controlled-token", navigator_url: "http://127.0.0.1:9", appkey: "appkey_1", identity: { uuid: "uuid-alice", name: "alice", org_id: 7, org_all_group_id: "org7" }, ttl: { msg_life_time_ms: 259200000 } }
-        : url.pathname.endsWith("/resolve") ? { uuid: `uuid-${url.searchParams.get("name")}`, name: url.searchParams.get("name") }
-        : url.pathname.endsWith("/inspect") && input ? { conversation_type: input.conversation_type, conversation_id: input.conversation_id, org_id: 7, member_uuids: sdk.conversation(input.conversation_type, input.conversation_id).allowed && metadata?.allowed !== false ? ["uuid-alice", input.conversation_id] : [input.conversation_id], name: metadata?.name ?? input.conversation_id }
-        : url.pathname.endsWith("/groups") ? { group_id: "kg-lease", name: input?.name, member_uuids: ["uuid-alice", "uuid-boba"] }
-        : {}
-      if (url.pathname.endsWith("/groups") || url.pathname.endsWith("/invite")) sdk.observed.platformMutations++
-      outgoing.writeHead(200, { "content-type": "application/json" })
-      const body = JSON.stringify({ success: true, message: "", data: payload })
-      if (url.pathname.endsWith("/inspect") && metadata?.delayMs) { setTimeout(() => outgoing.end(body), metadata.delayMs); return }
-      outgoing.end(body)
-    })
-  })
-  yield* Effect.promise(() => new Promise<void>((resolve) => platform.listen(0, "127.0.0.1", resolve)))
-  yield* Effect.addFinalizer(() => Effect.promise(() => new Promise<void>((resolve) => platform.close(() => resolve()))))
-  const address = platform.address()
-  if (!address || typeof address === "string") return yield* Effect.die("controlled platform did not listen")
+  const platform = yield* IMDeviceRuntimeFixture.make({ directory: join(directory, "platform"), uuid: "uuid-alice", async fetch(request, identity) {
+    const url = new URL(request.url)
+    const input = request.method === "POST" ? Schema.decodeUnknownSync(Schema.Struct({
+      conversation_type: Schema.optional(Schema.Literals([1, 2])), conversation_id: Schema.optional(Schema.String), name: Schema.optional(Schema.String),
+    }))(await request.json()) : undefined
+    if (url.pathname.endsWith("/inspect") && metadata) metadata.inspections++
+    const payload = url.pathname.endsWith("/login") ? {
+      profile: "dac-im-device-v1", entitlementID: "e".repeat(32), deviceJkt: identity.jkt, bindingVersion: 1,
+      identity: { uuid: "uuid-alice", name: "alice", org_id: 7, org_all_group_id: "org7" },
+      kernel: { token: `daim2.${metadata?.token ?? "controlled-token"}`, navigator: "https://127.0.0.1:9", appkey: "appkey_1",
+        user_id: "uuid-alice", socket_audience: "wss://127.0.0.1:9/im", credential_expires_at: Math.floor(Date.now() / 1000) + 3600,
+        credential_generation: 1, device_profile: "dac-im-device-v1" },
+    } : url.pathname.endsWith("/rename") ? {
+      kernel_token: metadata?.token ?? "controlled-token", navigator_url: "https://127.0.0.1:9", appkey: "appkey_1",
+      identity: { uuid: "uuid-alice", name: "alice", org_id: 7, org_all_group_id: "org7" }, ttl: { msg_life_time_ms: 259200000 },
+      device: { profile: "dac-im-device-v1", entitlementID: "e".repeat(32), deviceJkt: identity.jkt, bindingVersion: 1, credentialGeneration: 1, socketAudience: "owned-reader" },
+    } : url.pathname.endsWith("/resolve") ? { uuid: `uuid-${url.searchParams.get("name")}`, name: url.searchParams.get("name") }
+      : url.pathname.endsWith("/inspect") && input?.conversation_type && input.conversation_id ? { conversation_type: input.conversation_type, conversation_id: input.conversation_id, org_id: 7, member_uuids: sdk.conversation(input.conversation_type, input.conversation_id).allowed && metadata?.allowed !== false ? ["uuid-alice", input.conversation_id] : [input.conversation_id], name: metadata?.name ?? input.conversation_id }
+      : url.pathname.endsWith("/groups") ? { group_id: "kg-lease", name: input?.name, member_uuids: ["uuid-alice", "uuid-boba"] } : {}
+    if (url.pathname.endsWith("/groups") || url.pathname.endsWith("/invite")) sdk.observed.platformMutations++
+    if (url.pathname.endsWith("/inspect") && metadata?.delayMs) await Bun.sleep(metadata.delayMs)
+    return Response.json({ success: true, message: "", data: payload })
+  } })
+  yield* IMDeviceRuntimeFixture.profile(platform.url)
   const node = createServer()
   const upgraded = new Set<Duplex>()
   node.on("upgrade", (_request, socket) => { upgraded.add(socket); socket.once("close", () => upgraded.delete(socket)) })
   const instanceStore = InstanceStore.defaultLayer.pipe(Layer.provide(Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })))
   const workspace = Workspace.defaultLayer.pipe(Layer.provide(InstanceStore.defaultLayer), Layer.provide(InstanceBootstrap.defaultLayer))
-  const serving = HttpRouter.serve(HttpApiApp.createRoutes(undefined, RuntimeFlags.defaultLayer, { imFacade: { buildEngine: sdk.buildEngine, env: { DEEPAGENT_IM_FACADE_URL: `http://127.0.0.1:${address.port}`, DEEPAGENT_IM_FACADE_KEY: "sk-controlled" } } }), { disableListenLog: true, disableLogger: true }).pipe(
+  const imRuntime = HttpApiApp.createIMRuntimeLayer({ buildEngine: sdk.buildEngine, env: {} }, platform.deviceLayer).pipe(Layer.provide(platform.httpLayer))
+  const serving = HttpRouter.serve(HttpApiApp.createRoutes(undefined, RuntimeFlags.defaultLayer, { imRuntime }), { disableListenLog: true, disableLogger: true }).pipe(
     Layer.provide(layerWebSocketConstructorGlobal),
     Layer.provideMerge(HttpServer.layerTestClient.pipe(Layer.provide(FetchHttpClient.layer), Layer.provideMerge(NodeHttpServer.layer(() => node, { port: 0, host: "127.0.0.1", gracefulShutdownTimeout: "1 second" })))),
     Layer.provideMerge(NodeServices.layer),
@@ -104,11 +108,17 @@ const run = <A, E, R>(sdk: IMReaderSDKFixture.Interface, effect: (base: URL) => 
   yield* Effect.addFinalizer(() => Effect.sync(() => { node.closeAllConnections(); upgraded.forEach((socket) => socket.destroy()); upgraded.clear() }))
   const server = node.address()
   if (!server || typeof server === "string") return yield* Effect.die("controlled DAC did not listen")
-  return yield* effect(new URL(`http://127.0.0.1:${server.port}`)).pipe(Effect.provide(context))
+  return yield* effect(new URL(`http://127.0.0.1:${server.port}`)).pipe(
+    Effect.tapCause(() => Effect.sync(() => console.error("IM_READER_FIXTURE_STAGE", {
+      proofs: platform.observations, factories: sdk.observed.factories,
+      calls: sdk.observed.calls, errors: sdk.observed.errors,
+    }))),
+    Effect.provide(context),
+  )
 })
 
 it.live("personal DAC binding accepts owner-created pending conversations before any mirrored message", () => Effect.gen(function* () {
-  const sdk = IMReaderSDKFixture.make()
+  const sdk = IMReaderSDKFixture.make({ version: 2 })
   yield* run(sdk, () => Effect.gen(function* () {
     const directory = yield* tmpdirScoped({ git: false, config: { formatter: false, lsp: false } })
     const direct = yield* group(directory, "newpeer")
@@ -134,7 +144,7 @@ it.live("personal DAC binding accepts owner-created pending conversations before
 }), 30000)
 
 it.live("personal DAC pending admission rejects tampered mapping, foreign owner, revoked membership and unverified message references", () => Effect.gen(function* () {
-  const sdk = IMReaderSDKFixture.make()
+  const sdk = IMReaderSDKFixture.make({ version: 2 })
   yield* run(sdk, () => Effect.gen(function* () {
     const directory = yield* tmpdirScoped({ git: false, config: { formatter: false, lsp: false } })
     const direct = yield* group(directory, "newpeer")
@@ -189,7 +199,7 @@ it.live("personal DAC pending admission rejects tampered mapping, foreign owner,
 }), 30000)
 
 it.live("explicit selected group refresh uses the original authenticated inspector and fileSQLite without new changes or sends", () => Effect.gen(function* () {
-  const sdk = IMReaderSDKFixture.make()
+  const sdk = IMReaderSDKFixture.make({ version: 2 })
   const metadata = { name: "uuid-boba", allowed: true, inspections: 0 }
   yield* run(sdk, () => Effect.gen(function* () {
     const directory = yield* tmpdirScoped({ git: false, config: { formatter: false, lsp: false } })
@@ -234,7 +244,7 @@ it.live("explicit selected group refresh uses the original authenticated inspect
 }))
 
 it.live("normal facade retry restores cold pending conversation selection without a known group ID and rejects revoked membership", () => Effect.gen(function* () {
-  const sdk = IMReaderSDKFixture.make()
+  const sdk = IMReaderSDKFixture.make({ version: 2 })
   const metadata = { name: "unchanged conversation", allowed: true, inspections: 0, token: "original-test-token" }
   yield* run(sdk, () => Effect.gen(function* () {
     const directory = yield* tmpdirScoped({ git: false, config: { formatter: false, lsp: false } })
@@ -290,7 +300,7 @@ it.live("normal facade retry restores cold pending conversation selection withou
 }), 30000)
 
 it.live("normal facade retry rejects failed, disconnected and retired connections before pending metadata recovery", () => Effect.gen(function* () {
-  const sdk = IMReaderSDKFixture.make()
+  const sdk = IMReaderSDKFixture.make({ version: 2 })
   const metadata = { name: "unchanged conversation", allowed: true, inspections: 0, token: "original-test-token" }
   yield* run(sdk, () => Effect.gen(function* () {
     const directory = yield* tmpdirScoped({ git: false, config: { formatter: false, lsp: false } })
@@ -322,7 +332,7 @@ it.live("normal facade retry rejects failed, disconnected and retired connection
 }), 30000)
 
 it.live("complete App HTTP and sockets retain the actual workspace lease through stalled A, first B, disposal, recreation, membership and background ACK", () => Effect.gen(function* () {
-  const sdk = IMReaderSDKFixture.make()
+  const sdk = IMReaderSDKFixture.make({ version: 2 })
   yield* run(sdk, (base) => Effect.gen(function* () {
     const directoryA = yield* tmpdirScoped({ git: false, config: { formatter: false, lsp: false } })
     const directoryB = yield* tmpdirScoped({ git: false, config: { formatter: false, lsp: false } })
@@ -399,20 +409,38 @@ it.live("complete App HTTP and sockets retain the actual workspace lease through
     expect([404, 503]).toContain(denied.status)
     expect(JSON.stringify(denied.body)).not.toContain("CONTROLLED_BODY_A")
     expect(sdk.observed.marks).toBe(0)
-    const background = yield* deliverReply({ db: database, repo: sdk.observed.repository!, broadcaster: sdk.observed.broadcaster!, kernelSync: sdk.observed.engine! }, { id: "controlled-background-reply", sessionID: "controlled-no-provider", groupID: groupB.id, agentID: "controlled-agent", replyText: "CONTROLLED_BACKGROUND_REPLY", attempts: 1 })
+    const leaseB = sdk.observed.lease.get(directoryB)!
+    const accountB = KernelReaderSchema.decode(KernelReaderSchema.Binding, (yield* KernelReader.scope(leaseB.reader.runtime))!.binding, 8192)
+    const command = yield* ReplyBodyFixture.settledCommand(groupB.id, { directory: directoryB, scope: {
+      accountKey: createHash("sha256").update(JSON.stringify([accountB.realm, accountB.appkey, accountB.orgID, accountB.userID])).digest("hex"),
+      executorID: accountB.instanceID, conversationKey: JSON.stringify([1, "uuid-bobb"]),
+    } })
+    const id = replyOutboxID(command.sessionID, "msg_reply_final")
+    yield* appendReply(database, { id, sessionID: command.sessionID, groupID: groupB.id, agentID: "build", triggerMessageID: command.inputID, replyMessageID: "msg_reply_final", replyText: ReplyBodyFixture.reply, now: Date.now() })
+    const engine = sdk.observed.engine!
+    const withReader: IMFacade.Interface["withReader"] = (context, use) => Effect.scoped(Effect.gen(function* () {
+      const instance = yield* store.peek(context.directory ?? context.workspaceID)
+      if (!instance || !engine.acquireReader) return yield* KernelReaderSchema.failure("reader_scope_mismatch", "workspace-lease")
+      return yield* use(yield* engine.acquireReader({ ...context, instance, instanceCurrent: store.peek(instance.directory).pipe(Effect.map((current) => current === instance)) }))
+    }))
+    const background = yield* deliverReply({ db: database, repo: sdk.observed.repository!, broadcaster: sdk.observed.broadcaster!, kernelSync: sdk.observed.engine!,
+      authorize: (binding, use) => authorizeRegisteredReply({ db: database, repo: sdk.observed.repository!, facade: { withReader }, kernelSync: engine, instanceStore: store }, binding, use),
+    }, { id, sessionID: command.sessionID, groupID: groupB.id, agentID: "build", triggerMessageID: command.inputID, replyMessageID: "msg_reply_final", replyText: ReplyBodyFixture.reply, attempts: 1 })
     const receipt = yield* pollWithTimeout(database.select().from(IMKernelDeliveryTable).where(eq(IMKernelDeliveryTable.message_id, background.id)).get().pipe(Effect.map((row) => row?.state === "acknowledged" ? row : undefined)), "background send did not persist SDK ACK")
     expect(receipt.binding?.workspaceID).toBe(directoryB)
     expect(receipt.kernel_message_id).toBe(sdk.observed.sent[0]?.messageID)
-    expect(sdk.observed.sent[0]?.text).toBe("[Agent·controlled-agent] CONTROLLED_BACKGROUND_REPLY")
+    expect(sdk.observed.sent[0]?.text).toBe(`[Agent·build] ${ReplyBodyFixture.reply}`)
     expect(sdk.observed.sends).toBe(1)
     expect(sdk.observed.factories).toBe(1)
     expect(sdk.observed.maximum).toBeLessThanOrEqual(2)
-    expect((yield* database.get<{ count: number }>(sql`SELECT COUNT(*) AS count FROM session_input`))?.count).toBe(0)
+    expect((yield* database.get<{ count: number }>(sql`SELECT COUNT(*) AS count FROM session_input`))?.count).toBe(1)
+    expect((yield* database.get<{ count: number }>(sql`SELECT COUNT(*) AS count FROM session_provider_attempt`))?.count).toBe(0)
+    expect((yield* database.get<{ count: number }>(sql`SELECT COUNT(*) AS count FROM session_v2_tool_effect_admission`))?.count).toBe(0)
   }))
 }), 30000)
 
 it.live("a pending actual mark is retired to unknown before native settlement; a fresh higher action preserves that original fact", () => Effect.gen(function* () {
-  const sdk = IMReaderSDKFixture.make()
+  const sdk = IMReaderSDKFixture.make({ version: 2 })
   yield* run(sdk, () => Effect.gen(function* () {
     const directory = yield* tmpdirScoped({ git: false, config: { formatter: false, lsp: false } })
     const store = yield* InstanceStore.Service
@@ -467,7 +495,7 @@ it.live("a pending actual mark is retired to unknown before native settlement; a
 
 
 it.live("reply delivery enters the current protected frame before metadata and keeps slow sending outside that frame", () => Effect.gen(function* () {
-  const sdk = IMReaderSDKFixture.make()
+  const sdk = IMReaderSDKFixture.make({ version: 2 })
   const metadata = { name: "replypeer", allowed: true, inspections: 0, delayMs: 0 }
   yield* run(sdk, () => Effect.gen(function* () {
     const directory = yield* tmpdirScoped({ git: false, config: { formatter: false, lsp: false } })
@@ -494,10 +522,20 @@ it.live("reply delivery enters the current protected frame before metadata and k
     expect(sent.id).toBe("imsg_transport_slow_exact")
     expect((yield* db.select().from(IMKernelDeliveryTable).where(eq(IMKernelDeliveryTable.message_id, sent.id)).get())?.state).toBe("prepared")
     metadata.delayMs = 0
-    const changedMember = authorizeReply(deps, binding, Effect.sync(() => { metadata.allowed = false }).pipe(Effect.andThen(create("imsg_transport_member_revoked"))))
+    const membership = and(eq(MemberTable.group_id, GroupID.make(direct.id)), eq(MemberTable.member_id, "server"), eq(MemberTable.member_type, "user"))
+    const member = yield* db.select().from(MemberTable).where(membership).get()
+    if (!member) return yield* Effect.die("The actual current membership is absent")
+    metadata.allowed = false
+    sdk.revoke(1, "uuid-replypeer")
+    // The protected metadata admission observes an already persisted revocation.
+    // Changing a future platform response after that admission is not an event receipt.
+    yield* db.delete(MemberTable).where(membership).run()
+    const changedMember = authorizeReply(deps, binding, create("imsg_transport_member_revoked"))
     expect((yield* changedMember.pipe(Effect.exit))._tag).toBe("Failure")
     expect(yield* db.select().from(MessageTable).where(eq(MessageTable.id, MessageID.make("imsg_transport_member_revoked"))).get()).toBeUndefined()
     metadata.allowed = true
+    sdk.conversation(1, "uuid-replypeer").allowed = true
+    yield* repo.addMember({ groupID: direct.id, memberID: member.member_id, memberType: member.member_type, role: member.role })
     const changedSource = authorizeReply(deps, binding, Effect.sync(() => KernelReader.close(lease.reader.runtime)).pipe(Effect.andThen(create("imsg_transport_source_revoked"))))
     expect((yield* changedSource.pipe(Effect.exit))._tag).toBe("Failure")
     expect(yield* db.select().from(MessageTable).where(eq(MessageTable.id, MessageID.make("imsg_transport_source_revoked"))).get()).toBeUndefined()

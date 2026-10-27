@@ -63,8 +63,9 @@ test("normally closed WAL is physically readonly, fenced and byte-preserving", a
     options(filename),
     async (result, uri) => {
       expect(result.ok).toBe(true)
-      expect(uri.includes("immutable=1")).toBe(true)
-      expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(true)
+      const immutable = uri.includes("immutable=1")
+      if (!immutable) expect(uri).toBe(filename)
+      expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(immutable)
       const db = openImmutableReadOnly(filename)
       try {
         expect(db.query("SELECT count(*) AS n FROM migration").get()).toEqual({
@@ -83,7 +84,7 @@ test("normally closed WAL is physically readonly, fenced and byte-preserving", a
         }).pipe(Effect.provide(layer({ filename: uri, readonly: true, disableWAL: true })), Effect.scoped),
       )
       expect(inventoryReader).toEqual({ rows: [{ n: 1 }], writeFailed: true })
-      expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(true)
+      expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(immutable)
       return result
     },
     (result) => result,
@@ -158,13 +159,14 @@ test("incompatible capability survives closed immutable inspection", async () =>
   expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(false)
 })
 
-test("changed stamp denies returned ready result without repeating callback", async () => {
+test("immutable fallback fences a changed stamp while ordinary RO preserves its original result, without repeating callback", async () => {
   const filename = await fixture("changed")
-  const calls = { use: 0, unavailable: 0 }
+  const calls = { use: 0, unavailable: 0, immutable: false }
   const result = await DatabasePreflight.withReadOnlyPreflight(
     options(filename),
-    async (result) => {
+    async (result, uri) => {
       calls.use++
+      calls.immutable = uri.includes("immutable=1")
       expect(result.ok).toBe(true)
       const current = await fs.stat(filename)
       await fs.utimes(filename, current.atime, new Date(current.mtimeMs + 1000))
@@ -175,7 +177,9 @@ test("changed stamp denies returned ready result without repeating callback", as
       return result
     },
   )
-  expect(result.ok).toBe(false)
-  expect(calls).toEqual({ use: 1, unavailable: 1 })
+  // Ordinary RO uses SQLite's read transactions. The immutable fallback alone
+  // needs the retained owner lease and post-callback file stamp fence.
+  expect(result.ok).toBe(!calls.immutable)
+  expect(calls).toEqual({ use: 1, unavailable: calls.immutable ? 1 : 0, immutable: calls.immutable })
   expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(false)
 })

@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -8,7 +9,7 @@ import { WorkStorageCleanup } from "../src/session/work-storage-cleanup"
 import { WorkAuthorityFixture } from "./fixture/work-authority"
 
 test("cold reads and copied cleanup handles cannot admit storage retirement or release a real claim", async () => {
-  const root = await fs.mkdtemp("/tmp/dac-storage-cleanup-unavailable-")
+  const root = await fs.mkdtemp(path.join(tmpdir(), "dac-storage-cleanup-unavailable-"))
   const filename = path.join(root, "database.sqlite")
   const binding = WorkAuthorityFixture.binding("storage-no-authority")
   const run = <A,E>(effect: Effect.Effect<A,E,Database.Service | Scope.Scope>) => Effect.runPromise(effect.pipe(

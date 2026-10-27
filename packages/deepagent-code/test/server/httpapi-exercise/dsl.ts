@@ -46,6 +46,10 @@ class ScenarioBuilder<S = undefined> {
     return this.clone({ project: { ...(this.state.project ?? { git: true }), llm: true } })
   }
 
+  withServerAuth() {
+    return this.clone({ serverAuth: true })
+  }
+
   at(request: BuilderState<S>["request"]) {
     return this.clone({ request })
   }
@@ -64,6 +68,10 @@ class ScenarioBuilder<S = undefined> {
 
   stream() {
     return this.clone({ capture: "stream" })
+  }
+
+  finiteStream() {
+    return this.clone({ capture: "finite-stream" })
   }
 
   headersOnly() {
@@ -171,6 +179,7 @@ class ScenarioBuilder<S = undefined> {
       mutates: state.mutates,
       reset: state.reset,
       auth: state.auth,
+      serverAuth: state.serverAuth,
     }
   }
 }

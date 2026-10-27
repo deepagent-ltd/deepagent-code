@@ -103,7 +103,7 @@ test("ACK plus original expiry atomically clears both copies and FTS, cold exact
         expect((yield* KernelDelivery.history(s.db, message.id)).kind).toBe("reply_retired")
         expect((yield* KernelDelivery.statuses(s.db, [message.id]))[message.id]).toEqual({ state: "acknowledged" })
         expect(Exit.isFailure(yield* Effect.exit(KernelDelivery.read(s.db, message.id)))).toBe(true)
-        return { messageID: message.id, expiry, meter: yield* ReplyBodyRetirement.currentMeter(s.db) }
+        return { messageID: message.id, sessionID: s.sessionID, expiry, meter: yield* ReplyBodyRetirement.currentMeter(s.db) }
       }),
     )
     await run(
@@ -114,7 +114,7 @@ test("ACK plus original expiry atomically clears both copies and FTS, cold exact
         expect(yield* ReplyBodyRetirement.currentMeter(db)).toEqual(result.meter)
         expect(
           yield* ReplyBodyRetirement.exactCollected(db, {
-            sessionID: "ses_im_reply_history",
+            sessionID: result.sessionID,
             replyMessageID: "msg_reply_final",
           }),
         ).toBe(true)

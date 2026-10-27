@@ -166,6 +166,7 @@ export const fileScenarios: Scenario[] = [
   http.protected.get("/mcp/catalog", "mcp.catalog").json(200, array),
   http.protected
     .post("/mcp/catalog/enable", "mcp.catalogEnable")
+    .withServerAuth()
     .at((ctx) => ({
       path: "/mcp/catalog/enable",
       headers: ctx.headers(),

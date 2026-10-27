@@ -1,16 +1,21 @@
-import type { ServerWebSocket } from "bun"
-import { createHash } from "node:crypto"
+import type { ServerWebSocket, TLSOptions } from "bun"
+import { createHash, createPublicKey, randomBytes, verify } from "node:crypto"
+import assert from "node:assert/strict"
+import { Schema } from "effect"
+import { IMDeviceProof } from "../../../src/im/device-proof"
 import Proto from "../../../../im-kernel-sdk/upstream/src/socket/proto"
 import { SIGNAL_CMD } from "../../../../im-kernel-sdk/upstream/src/enum"
 
 const root = Proto as { lookup: (name: string) => { encode: (value: unknown) => { finish: () => Uint8Array }; decode: (value: Uint8Array) => Record<string, unknown> } }
-type Peer = ServerWebSocket<{ key: Uint8Array | undefined; userID: string }>
+type Peer = ServerWebSocket<{ key: Uint8Array | undefined; userID: string; challenge?: IMDeviceProof.SocketChallenge }>
 type Message = { effectKey: string; messageId: string; sequence: string; deliveryCursor: string; messageTime: number; expiresAt: number; senderId: string; targetId: string; conversationType: 1 | 2; content: string; isSend: boolean; isRead: boolean; messageType: "jg:text" }
 export type Options = {
   userID?: string
   token?: string
   conversationType?: 1 | 2
   targetID?: string
+  tls?: TLSOptions
+  device?: { publicJwk: IMDeviceProof.PublicJwk; appkey: string }
   queryDelayMs?: (topic: string, request: Readonly<Record<string, unknown>>) => number
   beforeQuery?: (topic: string, request: Readonly<Record<string, unknown>>) => void
   fetch?: (request: Request) => Response | Promise<Response> | undefined
@@ -43,8 +48,8 @@ export function makeNativeV2Peer(options: Options = {}) {
   }
   const rejectFrame = (peer: Peer, code: typeof errors[number]) => { errors.push(code); peer.close(1002, "PRIVATE_NATIVE_V2_PEER_REJECTED") }
   const advanceRevision = () => { current.revision++; current.cursor++; return String(current.revision) }
-  const server = Bun.serve<{ key: Uint8Array | undefined; userID: string }>({
-    hostname: "127.0.0.1", port: 0,
+  const server = Bun.serve<{ key: Uint8Array | undefined; userID: string; challenge?: IMDeviceProof.SocketChallenge }>({
+    hostname: "127.0.0.1", port: 0, tls: options.tls,
     fetch(request, owner) {
       const supplied = options.fetch?.(request)
       if (supplied) return supplied
@@ -68,6 +73,30 @@ export function makeNativeV2Peer(options: Options = {}) {
           peer.data.key = Uint8Array.from([10, 8, 106, 117, 103, 57, 108, 101], (value, index) => value ^ bytes[index])
           const request = root.lookup("codec.ConnectMsgBody").decode(xor(bytes, peer.data.key))
           if (request.protoId !== "jug9le1m" || request.token !== token) { rejectFrame(peer, "invalid_connect"); return }
+          if (options.device) {
+            const ext = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ profile: Schema.Literal(IMDeviceProof.socketProfile), proof: Schema.optional(Schema.String) })))(request.ext)
+            if (!ext.proof) {
+              assert(!peer.data.challenge, "Original device challenge is single use")
+              const challenge = { profile: IMDeviceProof.socketProfile, nonce: randomBytes(32).toString("base64url"), socketSession: randomBytes(24).toString("hex"),
+                audience: server.url.origin.replace(/^https:/, "wss:") + "/im", appkey: options.device.appkey,
+                credentialDigest: createHash("sha256").update(token).digest("hex"), expiresAt: Date.now() + 10000 } satisfies IMDeviceProof.SocketChallenge
+              peer.data.challenge = challenge
+              send(peer, SIGNAL_CMD.CONNECT_ACK, "ConnectAckMsgBody", { code: 11024, ext: JSON.stringify(challenge), timestamp: Date.now() })
+              return
+            }
+            const challenge = peer.data.challenge
+            assert(challenge && challenge.expiresAt > Date.now(), "Original live challenge must exist")
+            const parts = ext.proof.split(".")
+            assert.equal(parts.length, 3)
+            const header = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ typ: Schema.Literal("dac-im-connect-proof+jwt"), alg: Schema.Literal("ES256"), jwk: Schema.Unknown })))(Buffer.from(parts[0]!, "base64url").toString())
+            assert.deepEqual(IMDeviceProof.publicJwk(header.jwk), options.device.publicJwk)
+            assert(verify("sha256", Buffer.from(parts[0] + "." + parts[1]), { key: createPublicKey({ format: "jwk", key: options.device.publicJwk }), dsaEncoding: "ieee-p1363" }, Buffer.from(parts[2]!, "base64url")))
+            const claims = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ v: Schema.Literal(1), purpose: Schema.Literal("im-connect"), aud: Schema.String,
+              appkey: Schema.String, nonce: Schema.String, sid: Schema.String, ath: Schema.String, entitlementID: Schema.String, bindingVersion: Schema.Literal(1), iat: Schema.Number, exp: Schema.Number, jti: Schema.String })))(Buffer.from(parts[1]!, "base64url").toString())
+            assert.equal(claims.aud, challenge.audience); assert.equal(claims.appkey, challenge.appkey); assert.equal(claims.nonce, challenge.nonce); assert.equal(claims.sid, challenge.socketSession)
+            assert.equal(claims.ath, IMDeviceProof.credentialHash(token)); assert.equal(claims.entitlementID, "e".repeat(32)); assert(claims.exp > Date.now() / 1000 && claims.exp - claims.iat <= 10)
+            delete peer.data.challenge
+          }
           peer.data.userID = userID
           peers.add(peer)
           current.connections++
@@ -138,7 +167,7 @@ export function makeNativeV2Peer(options: Options = {}) {
     server, scopeKey, projectionKey, requests, errors, topics: () => requests.map((request) => request.topic),
     // This uses the original SDK's protectedMedia reader-version selector only.
     // No media/send endpoint or live capability is implemented by this peer.
-    config: { appkey: `private-native-v2-peer-${server.port}`, navigator: server.url.origin, token, userID, protectedMedia: true,
+    config: { appkey: options.device?.appkey ?? `private-native-v2-peer-${server.port}`, navigator: server.url.origin, token, userID, protectedMedia: true,
       identity: { uuid: userID, orgID: 1, name: userID, orgAllGroupID: "unused" } },
     get state() { return Object.freeze({ revision: String(current.revision), cursor: String(current.cursor), readOrdinal: current.readOrdinal, messages: messages.length, connections: current.connections, disconnected: current.disconnected }) },
     advanceRevision,

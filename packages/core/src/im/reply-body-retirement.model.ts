@@ -239,8 +239,10 @@ export function retire(record: Record, status: string, transportState: string, s
   const value = validate(record)
   Schema.decodeUnknownSync(KernelDeliverySchema.Time)(serverNow)
   if (value.bodyState === "retired") return value
+  // Existing sealed copies may expire after their execution origin is disabled;
+  // this cleanup never grants a new binding or permission to resend.
   if (
-    value.origin.kind === "legacy_unbound" ||
+    value.custody === "legacy_unbound" ||
     value.transport === null ||
     status !== "delivered" ||
     transportState !== "acknowledged" ||

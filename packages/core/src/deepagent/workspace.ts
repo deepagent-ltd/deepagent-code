@@ -289,7 +289,7 @@ export class DeepAgentCodeHome {
     if (existsSync(paths.publicLink)) {
       const stat = lstatSync(paths.publicLink)
       if (!stat.isSymbolicLink()) throw new Error(`ProjectStore.InvalidPublicLink: ${paths.publicLink}`)
-      if (readlinkSync(paths.publicLink) !== "../../public")
+      if (readlinkSync(paths.publicLink).split(path.sep).join("/") !== "../../public")
         throw new Error(`ProjectStore.InvalidPublicLink: ${paths.publicLink}`)
     } else if (!existsSync(`${paths.publicLink}.link.json`)) {
       this.createPublicPointer(paths.publicLink)

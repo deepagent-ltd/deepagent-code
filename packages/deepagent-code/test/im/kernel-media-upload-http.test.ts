@@ -10,6 +10,7 @@ import { MediaFiles } from "@/im/media-files"
 import { IMKernelMediaUpload } from "@/im/kernel/media-upload"
 import { KernelSdk } from "@/im/kernel/sdk"
 import MediaClient from "../../../im-kernel-sdk/upstream/src/delivery/media-client"
+import { signHttp } from "../../../im-kernel-sdk/upstream/src/delivery/device-auth"
 
 test("private uploader reaches every official MediaClient HTTP chunk after an empty-MIME Begin response", async () => {
   const workspaceID = `upload-http-${randomUUID()}`
@@ -35,7 +36,7 @@ test("private uploader reaches every official MediaClient HTTP chunk after an em
     wire.push(`${request.method} ${pathname}`)
     const value = pathname.endsWith("/capabilities") ? {
       version: 1, profile: "mysql-protected-media-v1", capability: "dac:media.v1", readerVersion: 2,
-      maxFileBytes: 52428800, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true,
+      maxFileBytes: 10485760, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true,
     } : metadata
     if (request.method === "POST" && pathname.endsWith("/objects")) {
       const input = await request.json()
@@ -62,7 +63,9 @@ test("private uploader reaches every official MediaClient HTTP chunk after an em
     const invalidators = new Set<() => void>()
     const native = MediaClient({ isConnected: () => true, deliveryMediaContext: () => ({
       generation: 1, user: "private-http-sender", token: "private-http-token", navigator: server.url.origin,
-    }), onDeliveryInvalidation: (callback: () => void) => { invalidators.add(callback); return () => invalidators.delete(callback) } }, true) as unknown as Pick<ReturnType<typeof JuggleIM.init>,
+    }), deviceHttpHeaders: (input: { method: string; url: string; credential: string; currentSourceEpoch: number }) =>
+      signHttp(undefined, input, () => true),
+    onDeliveryInvalidation: (callback: () => void) => { invalidators.add(callback); return () => invalidators.delete(callback) } }, true) as unknown as Pick<ReturnType<typeof JuggleIM.init>,
       "getProtectedMediaCapabilities" | "beginProtectedMedia" | "putProtectedMediaChunk" | "finalizeProtectedMedia" | "getProtectedMedia" | "cancelProtectedMedia" | "readProtectedMediaRange">
     const media: KernelSdk.Media = {
       capabilities: () => KernelSdk.request("media_capabilities", () => native.getProtectedMediaCapabilities()),

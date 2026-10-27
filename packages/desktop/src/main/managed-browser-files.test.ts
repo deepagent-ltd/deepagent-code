@@ -10,7 +10,9 @@ import type { SharedBrowserFileSchema } from "@deepagent-code/core/browser/share
 import { createManagedBrowserActions } from "./managed-browser-actions"
 import { createManagedBrowserFiles } from "./managed-browser-files"
 
-test("Main file leaf: concurrent close joins delayed cleanup of the actual private stage", async () => {
+test(process.platform === "win32"
+  ? "Main file leaf: missing native stage refuses selection and concurrent close joins delayed cleanup"
+  : "Main file leaf: concurrent close joins delayed cleanup of the actual private stage", async () => {
   const bytes = Buffer.from("private stage")
   const digest = createHash("sha256").update(bytes).digest("hex")
   const now = Date.now()
@@ -151,7 +153,7 @@ test("Main file leaf: concurrent close joins delayed cleanup of the actual priva
   const selection = Promise.withResolvers<void>()
   const cleaning = Promise.withResolvers<void>()
   const cleaned = Promise.withResolvers<boolean>()
-  const facts = { settled: 0, submitted: 0, destroyed: 0 }
+  const facts = { settled: 0, selected: 0, submitted: 0, destroyed: 0 }
   const fail = (code: BrowserSchema.Error["code"]): never => {
     throw new Error(code)
   }
@@ -174,6 +176,7 @@ test("Main file leaf: concurrent close joins delayed cleanup of the actual priva
       ...original,
       fileTarget: async () => ({ direction: "upload", multiple: false, targetPath: "/upload", field: "asset" }),
       selectFiles: async (_command, stage) => {
+        facts.selected++
         selected.resolve(stage[0]!.path)
         await selection.promise
       },
@@ -200,6 +203,22 @@ test("Main file leaf: concurrent close joins delayed cleanup of the actual priva
     () => "completed",
     (error: Error) => error.message,
   )
+  if (process.platform === "win32") {
+    // No Native upload.seal descriptor was supplied; a POSIX path cannot stand in for it.
+    expect(await run).toBe("BROWSER_UNKNOWN")
+    expect(facts.selected).toBe(0)
+    expect(facts.submitted).toBe(0)
+    const first = files.close()
+    await cleaning.promise
+    expect(files.close()).toBe(first)
+    void first.then(() => facts.settled++)
+    await Promise.resolve()
+    expect(facts.settled).toBe(0)
+    cleaned.resolve(false)
+    expect(await first).toBe(false)
+    expect(facts.destroyed).toBe(1)
+    return
+  }
   const stage = await selected.promise
   expect(await fs.readFile(stage)).toEqual(bytes)
   const first = files.close()
@@ -259,7 +278,7 @@ test("shared file leaf: close joins actual stage allocation and pending selectio
     console.log("SHARED_FILE_PREPARATION_EVIDENCE", root)
     expect(code, stderr).toBe(0)
     const result = await Bun.file(path.join(root, "result.json")).json()
-    expect(result.phases).toEqual(process.platform === "win32" ? ["unsupported"] : ["allocation", "selection"])
+    expect(result.phases).toEqual(process.platform === "win32" ? ["native-stage-unavailable"] : ["allocation", "selection"])
     expect(result.productionHelper).toBe(true)
     expect(result.nativeProof).toBe(false)
     expect(result.modelCalls).toBe(0)
@@ -282,7 +301,7 @@ test("shared file leaf: close joins actual stage allocation and pending selectio
     submitCalls: number
     runError: string
   }> = []
-  const phases = process.platform === "win32" ? (["unsupported"] as const) : (["allocation", "selection"] as const)
+  const phases = process.platform === "win32" ? (["native-stage-unavailable"] as const) : (["allocation", "selection"] as const)
   for (const phase of phases) {
     const now = Date.now()
     const binding: SharedBrowserFileSchema.Binding = {
@@ -436,11 +455,10 @@ test("shared file leaf: close joins actual stage allocation and pending selectio
       () => "unexpected-success",
       (error: Error) => error.message,
     )
-    if (phase === "unsupported") {
-      // Windows staging is deliberately unavailable. Verify the production
-      // refusal instead of waiting for an allocation/selection that cannot start.
+    if (phase === "native-stage-unavailable") {
+      // A Native stage descriptor is required; this controlled fixture supplies none.
       const error = await running
-      expect(error).toBe("BROWSER_DRIVER_UNAVAILABLE")
+      expect(error).toBe("BROWSER_UNKNOWN")
       expect(await files.close()).toBe(true)
       expect(facts.submitCalls).toBe(0)
       expect(allocated).toEqual([])

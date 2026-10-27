@@ -10,6 +10,7 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionEvent } from "@deepagent-code/core/session/event"
+import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
@@ -182,13 +183,18 @@ describe("SessionProjector wire egress (W4-6)", () => {
       yield* seedSession(sessionID)
       yield* seedV2Ownership(sessionID, "owner_wire_basic")
       const events = yield* EventV2.Service
-      yield* events.publish(SessionEvent.Prompted, {
+      const { db } = yield* Database.Service
+      // Admission is durable inbox state; only the explicit promotion boundary exposes its user wire row.
+      const admitted = yield* SessionInput.admit(db, events, {
         sessionID,
-        messageID: SessionMessage.ID.make("msg_wire_user"),
+        id: SessionMessage.ID.make("msg_wire_user"),
         prompt: new Prompt({ text: "hello wire" }),
         delivery: "steer",
-        timestamp: zero,
       })
+      expect(yield* wireMessageRole(admitted.id)).toBeUndefined()
+      expect((yield* SessionInput.find(db, admitted.id))?.promotedSeq).toBeUndefined()
+      expect(yield* SessionInput.promoteSteers(db, events, sessionID, admitted.admittedSeq)).toEqual([admitted.id])
+      expect((yield* SessionInput.find(db, admitted.id))?.promotedSeq).toBeGreaterThan(admitted.admittedSeq)
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
         timestamp: DateTime.makeUnsafe(1),

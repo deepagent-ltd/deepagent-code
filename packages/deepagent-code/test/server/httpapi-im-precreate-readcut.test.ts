@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { createHash } from "node:crypto"
 import { createServer } from "node:http"
 import { inspect } from "node:util"
 import { writeSync } from "node:fs"
@@ -12,7 +11,7 @@ import type { IMFacade } from "@/im/facade"
 import type { IMKernelSync } from "@/im/kernel/sync"
 import { makeNativeV2Peer } from "../im/fixture/kernel-native-v2-peer"
 
-// The original SDK, Flag and startup Auth are process-global. Keep the full
+// The original SDK, Flag and device configuration are process-global. Keep the full
 // HTTP graph in a child rather than repoint the suite's shared TEST_HOME.
 async function runBoundary(directory: string) {
   const project = path.join(directory, "project")
@@ -41,58 +40,18 @@ async function runBoundary(directory: string) {
   process.once("SIGTERM", stop)
   const observed: { database?: Database.Interface; originalEngine?: IMKernelSync.Interface; lease?: IMFacade.ReaderLease; creates: number; sends: number; login: number; inspect: number; resolved: number; configs: number } =
     { creates: 0, sends: 0, login: 0, inspect: 0, resolved: 0, configs: 0 }
-  const native = makeNativeV2Peer({ userID: "receiver", targetID: "sender" })
-  native.addMessage("native-http-baseline", { content: "private native baseline" })
-  const key = "iml1_private_native_v2_http_boundary_only"
-  const platform = createServer((incoming, outgoing) => {
-    const chunks: Buffer[] = []
-    incoming.on("data", (chunk) => chunks.push(Buffer.from(chunk)))
-    incoming.on("end", () => {
-      const url = new URL(incoming.url ?? "/", "http://localhost")
-      if (incoming.headers.authorization !== `Bearer ${key}`) {
-        outgoing.writeHead(401, { "content-type": "application/json" })
-        outgoing.end(JSON.stringify({ success: false, code: "im_key_invalid", message: "PRIVATE_HTTP_AUTH_REJECTED" }))
-        return
-      }
-      const body: unknown = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {}
-      if (url.pathname === "/api/im/login") {
-        observed.login++
-        outgoing.writeHead(200, { "content-type": "application/json" })
-        outgoing.end(JSON.stringify({ success: true, message: "", data: {
-          kernel_token: native.config.token, navigator_url: native.config.navigator, appkey: native.config.appkey,
-          identity: { uuid: native.config.userID, name: "Receiver", org_id: 1, org_all_group_id: "unused" }, ttl: { msg_life_time_ms: 259200000 },
-        } }))
-        return
-      }
-      if (url.pathname === "/api/im/resolve") {
-        observed.resolved++
-        outgoing.writeHead(200, { "content-type": "application/json" })
-        outgoing.end(JSON.stringify({ success: true, message: "", data: { uuid: "sender", name: "sender" } }))
-        return
-      }
-      if (url.pathname === "/api/im/conversations/inspect" || url.pathname.endsWith("/inspect")) {
-        observed.inspect++
-        const conversationType: unknown = typeof body === "object" && body !== null ? Reflect.get(body, "conversation_type") : undefined
-        const target: unknown = typeof body === "object" && body !== null ? Reflect.get(body, "conversation_id") : undefined
-        const allowed = conversationType === 1 && target === "sender"
-        outgoing.writeHead(200, { "content-type": "application/json" })
-        outgoing.end(JSON.stringify({ success: true, message: "", data: { conversation_type: conversationType, conversation_id: target, org_id: 1, name: "sender", member_uuids: allowed ? ["receiver", "sender"] : [] } }))
-        return
-      }
-      outgoing.writeHead(404, { "content-type": "application/json" })
-      outgoing.end(JSON.stringify({ success: false, code: "im_unavailable", message: "PRIVATE_HTTP_ROUTE_UNSUPPORTED" }))
-    })
-  })
+  const peers: ReturnType<typeof makeNativeV2Peer>[] = []
+  const readers = new WeakSet<IMFacade.ReaderLease["reader"]>()
+  const outputFrames: { start: number; end: number; refreshBeforeEffect: boolean }[] = []
   const node = createServer()
-  const receipt: { normalScopeClosed: boolean; beforeRows?: number; afterRows?: number; getStatus?: number; postStatus?: number; getQueries?: typeof native.requests; postQueries?: typeof native.requests; databaseIdentity?: { dev: number; ino: number } } = { normalScopeClosed: false }
+  const receipt: { normalScopeClosed: boolean; beforeRows?: number; afterRows?: number; getStatus?: number; postStatus?: number; getQueries?: ReturnType<typeof makeNativeV2Peer>["requests"]; postQueries?: ReturnType<typeof makeNativeV2Peer>["requests"]; outputFrames?: typeof outputFrames; databaseIdentity?: { dev: number; ino: number } } = { normalScopeClosed: false }
   try {
-    // Environment and normal Auth storage are fixed before production imports.
-    const { Effect, Layer, ConfigProvider, Logger, Context } = await import("effect")
+    // The owned environment is fixed before production runtime imports.
+    const { Effect, Layer, ConfigProvider, Logger, Context, Stream, SubscriptionRef, Option } = await import("effect")
     const { NodeHttpServer, NodeServices } = await import("@effect/platform-node")
     const { HttpRouter } = await import("effect/unstable/http")
     const { layerWebSocketConstructorGlobal } = await import("effect/unstable/socket/Socket")
     const { sql } = await import("drizzle-orm")
-    const { Auth } = await import("@/auth")
     const { Flag } = await import("@deepagent-code/core/flag/flag")
     Flag.DEEPAGENT_CODE_DB = database
     const { init } = await import("@deepagent-code/core/util/log")
@@ -107,20 +66,9 @@ async function runBoundary(directory: string) {
     const { IMPaths, IMGroupResponse } = await import("@/server/routes/instance/httpapi/groups/im")
     const { Schema } = await import("effect")
     await init({ print: false })
-    await new Promise<void>((resolve) => platform.listen(0, "127.0.0.1", resolve))
-    const address = platform.address()
-    if (!address || typeof address === "string") throw new Error("HTTP_BOUNDARY_PLATFORM_ADDRESS_REQUIRED")
-    const platformURL = `http://127.0.0.1:${address.port}`
-    // Original Auth.Api + Auth.set, with source metadata tied to this purpose
-    // slot's controlled platform. No injected Auth service or JSON authority.
-    await Effect.runPromise(Effect.gen(function* () {
-      const auth = yield* Auth.Service
-      yield* auth.set("im-facade", new Auth.Api({ type: "api", key,
-        metadata: { imSource: createHash("sha256").update(JSON.stringify(new URL(platformURL).href.replace(/\/+$/, ""))).digest("hex") } }))
-      const stored = yield* auth.get("im-facade")
-      expect(stored?.type === "api" && stored.key === key).toBe(true)
-    }).pipe(Effect.provide(Auth.defaultLayer), Effect.provide(NodeServices.layer), Effect.scoped))
+    const { IMDeviceRuntimeFixture } = await import("./im-device-runtime.fixture")
     const buildEngine: IMFacade.EngineBuilder = (config, options) => {
+      const native = peers[0]!
       if (config.appkey !== native.config.appkey || config.navigator !== native.config.navigator || config.token !== native.config.token || config.userID !== "receiver" || config.identity?.orgID !== 1 || config.protectedMedia !== true)
         throw new Error("HTTP_BOUNDARY_ORIGINAL_CONFIG_REQUIRED")
       observed.configs++
@@ -135,6 +83,15 @@ async function runBoundary(directory: string) {
         // continue through the original engine and original fixed-entry engine.
         return IMKernelSync.Service.of({ ...engine, acquireReader: (context) => acquire(context).pipe(Effect.map((lease) => {
           observed.lease = lease
+          if (!readers.has(lease.reader)) {
+            readers.add(lease.reader)
+            const output = lease.reader.withOutput
+            Object.defineProperty(lease.reader, "withOutput", { configurable: true, enumerable: true, value: ((request, effect, options) => Effect.suspend(() => {
+              const frame = { start: native.requests.length, end: -1, refreshBeforeEffect: options?.refreshBeforeEffect === true }
+              outputFrames.push(frame)
+              return output(request, effect, options).pipe(Effect.ensuring(Effect.sync(() => { frame.end = native.requests.length })))
+            })) as typeof output })
+          }
           return { ...lease, engine: { ...lease.engine,
             createMessage: (input) => Effect.suspend(() => { observed.creates++; return lease.engine.createMessage(input) }),
             send: (input) => Effect.suspend(() => { observed.sends++; return lease.engine.send(input) }),
@@ -144,10 +101,47 @@ async function runBoundary(directory: string) {
     }
     const authorized = `Basic ${Buffer.from("private-native-boundary:private-offline-http-password").toString("base64")}`
     const program = Effect.gen(function* () {
+      const certificatePath = path.join(directory, "tls", "ca.pem")
+      expect(process.env.NODE_EXTRA_CA_CERTS).toBe(certificatePath)
+      const platform = yield* IMDeviceRuntimeFixture.make({
+        directory: path.join(directory, "platform"), uuid: "receiver",
+        certificate: { ca: yield* Effect.promise(() => Bun.file(certificatePath).text()), keyPath: path.join(directory, "tls", "ca-key.pem"), certificatePath },
+        protectedPath: (pathname) => pathname.startsWith("/navigator/"),
+        listen: (transport) => {
+          const peer = makeNativeV2Peer({ userID: "receiver", targetID: "sender", token: "daim2.private-native-v2-http", tls: transport.tls,
+            device: { publicJwk: transport.identity.publicJwk, appkey: "private-native-v2-http" },
+            fetch(request) { const pathname = new URL(request.url).pathname; return pathname === "/health" || pathname === "/im" ? undefined : transport.fetch(request) } })
+          peer.addMessage("native-http-baseline", { content: "private native baseline" })
+          peers.push(peer)
+          return peer.server
+        },
+        async fetch(request, identity): Promise<Response> {
+          const url = new URL(request.url)
+          const ok = (data: unknown) => Response.json({ success: true, data }, { headers: { "cache-control": "no-store" } })
+          if (url.pathname === "/navigator/general") return Response.json({ code: 0, data: { user_id: "receiver", servers: [platform.server.url.origin] } }, { headers: { "cache-control": "no-store" } })
+          if (url.pathname === "/api/im/login") {
+            observed.login++
+            return ok({ profile: "dac-im-device-v1", entitlementID: "e".repeat(32), deviceJkt: identity.jkt, bindingVersion: 1,
+              identity: { uuid: "receiver", name: "Receiver", org_id: 1, org_all_group_id: "unused" },
+              kernel: { token: "daim2.private-native-v2-http", navigator: platform.server.url.origin, appkey: "private-native-v2-http", user_id: "receiver",
+                socket_audience: platform.server.url.origin.replace(/^https:/, "wss:") + "/im", credential_expires_at: Math.floor(Date.now() / 1000) + 3600,
+                credential_generation: 1, device_profile: "dac-im-device-v1" } })
+          }
+          if (url.pathname === "/api/im/resolve") { observed.resolved++; return ok({ uuid: "sender", name: "sender" }) }
+          if (url.pathname.endsWith("/inspect")) {
+            observed.inspect++
+            const input = Schema.decodeUnknownSync(Schema.Struct({ conversation_type: Schema.Number, conversation_id: Schema.String }))(await request.json())
+            return ok({ ...input, org_id: 1, name: "sender", member_uuids: input.conversation_type === 1 && input.conversation_id === "sender" ? ["receiver", "sender"] : [] })
+          }
+          return new Response(null, { status: 404 })
+        },
+      })
+      const native = peers[0]!
+      yield* IMDeviceRuntimeFixture.profile(platform.url)
       yield* Effect.addFinalizer(() => Effect.sync(() => node.closeAllConnections()))
-      const context = yield* Layer.build(HttpRouter.serve(HttpApiApp.createRoutes(undefined, RuntimeFlags.defaultLayer, { imFacade: {
-        buildEngine, env: { DEEPAGENT_IM_FACADE_URL: platformURL, DEEPAGENT_IM_KERNEL_MEDIA_PROFILE: "mysql-protected-media-v1" },
-      } }), { disableListenLog: true, disableLogger: true }).pipe(
+      const context = yield* Layer.build(HttpRouter.serve(HttpApiApp.createRoutes(undefined, RuntimeFlags.defaultLayer, { imRuntime:
+        HttpApiApp.createIMRuntimeLayer({ buildEngine, env: { DEEPAGENT_IM_KERNEL_MEDIA_PROFILE: "mysql-protected-media-v1" } }, platform.deviceLayer).pipe(Layer.provide(platform.httpLayer)),
+      }), { disableListenLog: true, disableLogger: true }).pipe(
         Layer.provide(layerWebSocketConstructorGlobal),
         Layer.provideMerge(Layer.fresh(WebSocketTracker.layer)),
         Layer.provideMerge(NodeHttpServer.layer(() => node, { port: 0, host: "127.0.0.1", gracefulShutdownTimeout: "1 second" })),
@@ -167,6 +161,9 @@ async function runBoundary(directory: string) {
         const body: unknown = await response.json()
         return { status: response.status, body }
       })
+      if (!observed.originalEngine) return yield* Effect.die(new Error("HTTP_BOUNDARY_ORIGINAL_ENGINE_REQUIRED"))
+      const connection = yield* SubscriptionRef.changes(observed.originalEngine.state).pipe(Stream.filter((state) => state !== "connecting"), Stream.runHead, Effect.timeout("3 seconds"))
+      expect(Option.getOrUndefined(connection)).toBe("connected")
       const direct = yield* request(IMPaths.facadeDirect, { name: "sender" })
       expect(direct.status).toBe(200)
       const group = Schema.decodeUnknownSync(IMGroupResponse)(direct.body)
@@ -205,10 +202,19 @@ async function runBoundary(directory: string) {
       expect(observed.creates).toBe(1)
       expect(observed.sends).toBe(1)
       const cuts = receipt.postQueries.filter((item) => item.topic === "qry_delivery_read_cut")
-      expect(cuts).toHaveLength(2)
+      expect(cuts).toHaveLength(5)
       expect(cuts[0]?.ackCode).toBe(12203)
       expect(cuts[1]?.ackCode).toBe(0)
       expect(cuts[1]?.requestRevision).toBe(native.state.revision)
+      const frames = outputFrames.filter((frame) => frame.start >= postStart)
+      receipt.outputFrames = frames
+      expect(frames).toHaveLength(4)
+      expect(frames.every((frame) => frame.refreshBeforeEffect && frame.end >= frame.start)).toBe(true)
+      const preparation = native.requests.slice(frames[0]!.start, frames[0]!.end)
+      expect(preparation.filter((item) => item.topic === "qry_delivery_read_cut").map((item) => item.ackCode)).toEqual([12203, 0])
+      for (const frame of frames.slice(1)) {
+        expect(native.requests.slice(frame.start, frame.end)).toEqual([expect.objectContaining({ topic: "qry_delivery_read_cut", ackCode: 0, requestRevision: native.state.revision, serverRevision: native.state.revision })])
+      }
       const sync = receipt.postQueries.filter((item) => ["qry_delivery_reader", "qry_delivery_changes", "qry_delivery_messages"].includes(item.topic))
       expect(sync.filter((item) => item.topic === "qry_delivery_reader")).toHaveLength(1)
       expect(sync.length).toBeLessThanOrEqual(4)
@@ -237,8 +243,6 @@ async function runBoundary(directory: string) {
       creates: observed.creates, delegatedSends: observed.sends, raw: path.join(directory, "raw-private.log"), remoteACKQualified: false }, null, 2) + "\n", { flag: "wx", mode: 0o600 })
     throw new Error(`HTTP_NATIVE_V2_BOUNDARY_FAILED_PRIVATE_DETAIL: ${directory}`)
   } finally {
-    await new Promise<void>((resolve) => platform.close(() => resolve()))
-    await native.stop()
     await raw.close()
     process.removeListener("SIGTERM", stop)
     Object.keys(process.env).filter((key) => !(key in originalEnvironment)).forEach((key) => { delete process.env[key] })
@@ -256,6 +260,8 @@ test("original V2 HTTP GET remains read-only and text precreate refreshes before
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-http-precreate-readcut-")))
   await fs.chmod(directory, 0o700)
   await seedRipgrep(directory)
+  const { certificate } = await import("../installation/fixture/event-investigation-installation")
+  const tls = await certificate(path.join(directory, "tls"))
   if (!await Bun.file(path.join(directory, ".deepagent", "code", "cache", "bin", process.platform === "win32" ? "rg.exe" : "rg")).exists())
     throw new Error("HTTP_BOUNDARY_LOCAL_RIPGREP_REQUIRED")
   const stdout = await fs.open(path.join(directory, "child-stdout-private.log"), "wx", 0o600)
@@ -263,9 +269,9 @@ test("original V2 HTTP GET remains read-only and text precreate refreshes before
   // Preserve only the ordinary execution environment. The package preload
   // supplies the dev owner chain; no provider credentials cross into this child.
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(API_KEY|ACCESS_TOKEN|SECRET|PASSWORD|CREDENTIAL|DEEPAGENT_|DAC_HTTP_PRECREATE_READCUT_)/.test(key)))
-  const child = Bun.spawn([process.execPath, "--conditions=browser", "test", import.meta.path], {
+  const child = Bun.spawn([process.execPath, "--conditions=browser", "test", "--preload", path.resolve(import.meta.dir, "../fixture/cli-secret-store.ts"), import.meta.path, "--timeout", "30000"], {
     cwd: path.resolve(import.meta.dir, "../.."), stdout: stdout.fd, stderr: stderr.fd,
-    env: { ...inherited, DAC_HTTP_PRECREATE_READCUT_CHILD: "1", DAC_HTTP_PRECREATE_READCUT_DIRECTORY: directory,
+    env: { ...inherited, NODE_EXTRA_CA_CERTS: tls.certificatePath, DAC_HTTP_PRECREATE_READCUT_CHILD: "1", DAC_HTTP_PRECREATE_READCUT_DIRECTORY: directory,
       DEEPAGENT_CODE_TEST_HOME: directory, DEEPAGENT_CODE_HOME: path.join(directory, ".deepagent", "code"),
       DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1", DEEPAGENT_CODE_DISABLE_AUTOUPDATE: "1", DEEPAGENT_CODE_DISABLE_PRUNE: "1" },
   })
@@ -273,10 +279,12 @@ test("original V2 HTTP GET remains read-only and text precreate refreshes before
     const exit = await child.exited
     if (exit !== 0) throw new Error(`HTTP_NATIVE_V2_BOUNDARY_CHILD_FAILED_PRIVATE_DETAIL: ${directory}`)
     const receipt = await Bun.file(path.join(directory, "http-boundary-safe.json")).json()
+    const terminal = await Bun.file(path.join(directory, "child-stderr-private.log")).text()
     expect(receipt.normalScopeClosed).toBe(true)
     console.info("http-precreate-readcut-isolated-safe", JSON.stringify({ childExit: exit, normalScopeClosed: receipt.normalScopeClosed,
       getStatus: receipt.getStatus, postStatus: receipt.postStatus, creates: receipt.creates, delegatedSends: receipt.delegatedSends,
-      remoteACKQualified: false, publicQualified: false }))
+      getQueries: receipt.getQueries, postQueries: receipt.postQueries, outputFrames: receipt.outputFrames, databaseIdentity: receipt.databaseIdentity,
+      terminal: terminal.match(/^\s*\d+ (?:pass|fail|expect\(\) calls).*$/gm), remoteACKQualified: false, publicQualified: false }))
   } finally {
     await stdout.close()
     await stderr.close()

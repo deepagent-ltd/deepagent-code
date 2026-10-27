@@ -12,6 +12,7 @@ import { DialogProvider, useDialog } from "@deepagent-code/ui/context/dialog"
 import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
 import { ImportSection } from "@/components/settings-v2/import-history"
 import { dict } from "@/i18n/en"
+import { publishImportFixturePacket } from "./fixture/import-control"
 
 const transport = vi.hoisted(() => ({
   capabilities: vi.fn(),
@@ -240,12 +241,16 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
   const surface = window as unknown as Window
   const origin = window.location.href
   const hostPackage = path.resolve(process.cwd(), "../deepagent-code")
+  const progress = { phase: "startup", startedAt: Date.now(), failed: false, deadlineExpired: false,
+    spawnError: undefined as string | undefined }
   const child = spawn("bun", [path.join(hostPackage, "test/fixture/import-gui-job-server.ts"), root], {
     cwd: hostPackage,
     env: {
       PATH: process.env.PATH,
       HOME: path.join(root, "home"),
       TMPDIR: root,
+      TEMP: root,
+      TMP: root,
       XDG_DATA_HOME: path.join(root, "data"),
       XDG_CONFIG_HOME: path.join(root, "config"),
       XDG_CACHE_HOME: path.join(root, "cache"),
@@ -261,12 +266,21 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
   let output = ""
   child.stdout?.on("data", (data: Buffer) => { output = (output + data.toString()).slice(-65536) })
   child.stderr?.on("data", (data: Buffer) => { output = (output + data.toString()).slice(-65536) })
-  const exited = new Promise<number | null>((resolve) => child.once("exit", resolve))
-  const deadline = setTimeout(() => child.kill("SIGTERM"), 25000)
+  child.once("error", (error) => { progress.spawnError = error.message })
+  const exited = new Promise<number | null>((resolve) => child.once("close", resolve))
+  const diagnostic = async () => JSON.stringify({ ...progress, elapsedMs: Date.now() - progress.startedAt,
+    root, pid: child.pid, exitCode: child.exitCode, signal: child.signalCode,
+    resultFiles: (await fs.readdir(root)).filter((name) => name.endsWith(".json")),
+    startup: await fs.readFile(path.join(root, "startup.jsonl"), "utf8").catch(() => null), output })
+  const deadline = setTimeout(() => {
+    progress.deadlineExpired = true
+    child.kill("SIGTERM")
+  }, 25000)
   try {
     await fs.mkdir(path.join(root, "home"), { recursive: true })
     await waitFor(async () => expect(await fs.stat(path.join(root, "ready.json"))).toBeTruthy(), { timeout: 15000 })
     const ready = JSON.parse(await fs.readFile(path.join(root, "ready.json"), "utf8")) as { url: string; sourcePath: string }
+    progress.phase = "authenticated capability"
     // Use this owned listener as the actual test window origin; no HTTP authorization or
     // production CORS gate is replaced to accommodate HappyDOM's same-origin enforcement.
     surface.happyDOM.setURL(ready.url)
@@ -305,6 +319,7 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     expect(original.importJobRequest).toMatchObject({ source: "claude", sourcePath: ready.sourcePath, scopes: ["memory", "skill"], mode: "copy_to_new_db", copyLiveDb: true, dryRun: false })
     const accepted = await client.global.importCreate(original)
     expect(accepted.data?.id).toBeTruthy()
+    progress.phase = `copy ${accepted.data!.id}`
     await waitFor(async () => {
       const current = await client.global.importGet({ jobID: accepted.data!.id })
       if (current.data?.state === "failed" || current.data?.state === "recovery_required") {
@@ -327,13 +342,15 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     const retried = await client.global.importCreate(original)
     expect(retried.data?.id).toBe(accepted.data!.id)
     view.unmount()
-    await fs.writeFile(path.join(root, "inspect.json"), JSON.stringify({ jobID: accepted.data!.id }))
+    progress.phase = "original immutable receipt inspection"
+    await publishImportFixturePacket(path.join(root, "inspect.json"), { jobID: accepted.data!.id })
     await waitFor(async () => expect(await fs.stat(path.join(root, "proof.json"))).toBeTruthy(), { timeout: 10000 })
     const proof = JSON.parse(await fs.readFile(path.join(root, "proof.json"), "utf8")) as {
-      before: unknown; after: unknown; binary: number[]; liveSessions: unknown[]; jobs: unknown[];
+      before: unknown; after: unknown; sourceBefore: unknown; sourceAfter: unknown; binary: number[]; liveSessions: unknown[]; jobs: unknown[];
       proof: { count: number; fileResults: unknown[] }
     }
     expect(proof.after).toEqual(proof.before)
+    expect(proof.sourceAfter).toEqual(proof.sourceBefore)
     expect(proof.binary).toEqual([0, 255, 128])
     expect(proof.liveSessions).toEqual([])
     expect(proof.jobs).toHaveLength(1)
@@ -345,17 +362,23 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
         ...proof, request: original.importJobRequest, job: retried.data,
       }, null, 2))
     }
+  } catch (error) {
+    progress.failed = true
+    throw new Error(`GUI import fixture failure: ${await diagnostic()}`, { cause: error })
   } finally {
     cleanup()
     surface.happyDOM.setURL(origin)
     clearTimeout(deadline)
-    child.kill("SIGTERM")
+    if (child.exitCode === null) child.kill("SIGTERM")
     const forced = setTimeout(() => child.kill("SIGKILL"), 2000)
     const code = await exited
     clearTimeout(forced)
-    await fs.rm(root, { recursive: true, force: true })
-    expect(output).not.toMatch(/Unexpected observer/)
-    expect(code).toBe(0)
+    if (code !== 0 || /Unexpected observer/.test(output)) {
+      if (!progress.failed) throw new Error(`GUI import fixture shutdown failed: ${await diagnostic()}`)
+      console.error("Private GUI import shutdown failure", await diagnostic())
+    }
+    if (progress.failed) console.error("Private GUI import evidence retained", root)
+    if (!progress.failed) await fs.rm(root, { recursive: true, force: true })
   }
 }, 30000)
 

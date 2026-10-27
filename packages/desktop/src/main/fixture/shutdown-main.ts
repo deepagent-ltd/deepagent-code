@@ -127,6 +127,8 @@ async function main() {
     assert.equal(facts.actionsWhenStopping, 0)
     assert.equal(facts.utilityStops, 1)
     if (scenario === "signal") {
+      // Windows SIGTERM kills the process directly; qualify its registered handler explicitly.
+      if (process.platform === "win32") { process.emit("SIGTERM"); process.emit("SIGTERM"); return }
       process.kill(process.pid, "SIGTERM")
       process.kill(process.pid, "SIGTERM")
       return

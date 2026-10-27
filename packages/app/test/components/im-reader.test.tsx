@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library"
 import { Show, createSignal } from "solid-js"
 import { MemoryRouter, Route } from "@solidjs/router"
 import { ThreadView } from "@/components/im/thread-view"
@@ -10,6 +10,7 @@ import { createIMClient, type IMClient } from "@/utils/im-client"
 import { imSummaryOwner } from "@/components/im/summary-owner"
 import type { IMMessage, IMReadAction, IMReaderGroup } from "@/components/im/types"
 import { dict } from "@/i18n/en"
+import { clickIMAction, closeIMActions, findIMAction } from "./fixture/im-actions"
 
 const runtime = vi.hoisted(() => ({ client: undefined as IMClient | undefined, connectedPanel: false }))
 vi.mock("@/utils/im-client", async (original) => ({
@@ -34,6 +35,11 @@ vi.mock("@/components/im/capabilities", () => ({ fetchIMCapabilities: async () =
 vi.mock("@/components/settings-v2/im", () => ({ SettingsIMV2: () => null }))
 vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ show: vi.fn() }) }))
 vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
+vi.mock("@/context/settings", () => ({
+  useSettings: () => ({ notifications: { agent: () => true }, sounds: { agentEnabled: () => true } }),
+}))
+vi.mock("@/context/server-sync", () => ({ useServerSync: () => ({ data: { config: {} } }) }))
+vi.mock("@/context/models", () => ({ useModels: () => ({ list: () => [], visible: () => false }) }))
 class Socket {
   static OPEN = 1
   static instances: Socket[] = []
@@ -321,6 +327,7 @@ it("expires the protected display without extending TTL on a late response; pend
 })
 
 it("protected thread expiry closes the root and its replies; no implicit read write", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] })
   expiry = 120
   const [open, setOpen] = createSignal(true)
   render(() => (
@@ -334,9 +341,15 @@ it("protected thread expiry closes the root and its replies; no implicit read wr
       />
     </Show>
   ))
-  await screen.findByText("protected first")
+  await vi.advanceTimersByTimeAsync(0)
+  expect(screen.getByText("protected first")).toBeTruthy()
   expect(screen.getByText("root body")).toBeTruthy()
-  await waitFor(() => expect(screen.queryByText("root body")).toBeNull())
+  await vi.advanceTimersByTimeAsync(119)
+  expect(screen.getByText("protected first")).toBeTruthy()
+  expect(screen.getByText("root body")).toBeTruthy()
+  expect(reads).toHaveLength(0)
+  await vi.advanceTimersByTimeAsync(1)
+  expect(screen.queryByText("root body")).toBeNull()
   expect(screen.queryByText("protected first")).toBeNull()
   expect(reads).toHaveLength(0)
 })
@@ -500,7 +513,8 @@ it("search lifecycle real epoch invalidation and scope changes reject their late
     await vi.advanceTimersByTimeAsync(0)
     expect(screen.queryByText(prior)).toBeNull()
     expect(screen.queryByText(response.body)).toBeNull()
-    expect(screen.getByText("local body")).toBeTruthy()
+    if (change === "scope") expect(screen.queryByText("local body")).toBeNull()
+    if (change !== "scope") expect(screen.getByText("local body")).toBeTruthy()
     expect(screen.getByText(dict["im.reader.unavailable"])).toBeTruthy()
     gate.resolve()
     await vi.advanceTimersByTimeAsync(0)
@@ -612,6 +626,7 @@ it("reopens prepared read intent without dispatch and explicitly cancels without
 })
 
 it("pages ordinary and protected groups separately and uses current detail for an off-page selection", async () => {
+  runtime.connectedPanel = true
   const groups = ["Alpha", "Beta", "Gamma"].map((name) => ({
     id: `protected_${name}`,
     name: `Protected ${name}`,
@@ -698,6 +713,7 @@ it("pages ordinary and protected groups separately and uses current detail for a
   expect(screen.getAllByRole("heading", { name: "Protected Gamma" })).toHaveLength(1)
   expect(calls.protected).toEqual(["", "page_tail"])
   expect(calls.details).toContain("protected_Gamma")
+  vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1001)
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" })
   document.dispatchEvent(new Event("visibilitychange"))
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" })
@@ -937,22 +953,24 @@ it("explicit group-list refresh observes current recovery and never reconnects o
   fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.settings"] }))
   await screen.findByText(dict["im.facade.recovery.pending"])
   fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.messages"] }))
+  const refreshAction = await findIMAction(dict["im.transport.refresh"])
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: dict["im.transport.refresh"] }).hasAttribute("disabled")).toBe(false),
+    expect(refreshAction.getAttribute("aria-disabled")).not.toBe("true"),
   )
   current.ready = true
-  fireEvent.click(screen.getByRole("button", { name: dict["im.transport.refresh"] }))
+  await clickIMAction(dict["im.transport.refresh"])
   await waitFor(() => expect(current.statuses).toBe(2))
-  const button = screen.getByRole("button", { name: dict["im.transport.refresh"] }) as HTMLButtonElement
-  expect(button.disabled).toBe(true)
-  button.click()
+  const button = await findIMAction(dict["im.transport.refresh"])
+  expect(button.getAttribute("aria-disabled")).toBe("true")
+  fireEvent.click(button)
   expect(current.statuses).toBe(2)
+  closeIMActions()
   gate.resolve()
   fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.settings"] }))
   await waitFor(() => expect(screen.queryByText(dict["im.facade.recovery.pending"])).toBeNull())
   await waitFor(() => expect(screen.queryByText(dict["im.reader.unavailable"])).toBeNull())
   fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.messages"] }))
-  expect(screen.getByRole("button", { name: dict["im.transport.refresh"] }).hasAttribute("disabled")).toBe(false)
+  expect((await findIMAction(dict["im.transport.refresh"])).getAttribute("aria-disabled")).not.toBe("true")
   expect(current.statuses).toBe(2)
   expect(calls).toHaveLength(6)
   expect(calls.every((request) => request.method === "GET")).toBe(true)
@@ -991,14 +1009,16 @@ it("explicit group-list refresh keeps protected content unavailable when the cur
     </MemoryRouter>
   ))
   await screen.findByText(dict["im.reader.unavailable"])
+  const refreshAction = await findIMAction(dict["im.transport.refresh"])
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: dict["im.transport.refresh"] }).hasAttribute("disabled")).toBe(false),
+    expect(refreshAction.getAttribute("aria-disabled")).not.toBe("true"),
   )
   current.ready = true
-  fireEvent.click(screen.getByRole("button", { name: dict["im.transport.refresh"] }))
+  await clickIMAction(dict["im.transport.refresh"])
   await waitFor(() => expect(calls).toHaveLength(6))
+  const completedRefresh = await findIMAction(dict["im.transport.refresh"])
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: dict["im.transport.refresh"] }).hasAttribute("disabled")).toBe(false),
+    expect(completedRefresh.getAttribute("aria-disabled")).not.toBe("true"),
   )
   expect(screen.getByText(dict["im.reader.unavailable"])).toBeTruthy()
   expect(screen.queryByText(dict["im.facade.recovery.failed"])).toBeNull()
@@ -1067,6 +1087,8 @@ it("current body success clears only an older refresh failure and fences a late 
 
 it("a verified owner keeps the editor openable during background status while submit remains gated", async () => {
   runtime.connectedPanel = true
+  const clock = { now: performance.now() }
+  vi.spyOn(performance, "now").mockImplementation(() => clock.now)
   const initial = Promise.withResolvers<void>()
   const background = Promise.withResolvers<void>()
   const current = { statuses: 0, refused: false }
@@ -1128,16 +1150,14 @@ it("a verified owner keeps the editor openable during background status while su
       <Route path="/" component={() => <SidePanelIM onClose={() => {}} />} />
     </MemoryRouter>
   ))
-  const opener = screen.getByRole("button", {
-    name: dict["im.direct.create"],
-  }) as HTMLButtonElement
-  expect(opener.disabled).toBe(true)
+  const opener = await findIMAction(dict["im.direct.create"])
+  expect(opener.getAttribute("aria-disabled")).toBe("true")
   initial.resolve()
-  await waitFor(() => expect(opener.disabled).toBe(false))
+  await waitFor(() => expect(opener.getAttribute("aria-disabled")).not.toBe("true"))
   const updating = imSummaryOwner.refresh()
   await waitFor(() => expect(current.statuses).toBe(2))
-  expect(opener.disabled).toBe(false)
-  fireEvent.click(opener)
+  expect(opener.getAttribute("aria-disabled")).not.toBe("true")
+  await clickIMAction(dict["im.direct.create"])
   const editor = await screen.findByPlaceholderText(dict["im.facade.direct.placeholder"])
   fireEvent.input(editor, { target: { value: "existing-person" } })
   const submit = screen.getAllByRole("button", { name: dict["im.direct.create"] }).at(-1) as HTMLButtonElement
@@ -1145,10 +1165,13 @@ it("a verified owner keeps the editor openable during background status while su
   background.resolve()
   await updating
   await waitFor(() => expect(submit.disabled).toBe(false))
+  // A third background refresh belongs to the coalescer's next one-second window.
+  clock.now += 1000
   current.refused = true
   await imSummaryOwner.refresh()
-  expect(opener.disabled).toBe(true)
   await waitFor(() => expect(current.statuses).toBeGreaterThanOrEqual(3))
+  expect((await findIMAction(dict["im.direct.create"])).getAttribute("aria-disabled")).toBe("true")
+  closeIMActions()
   await waitFor(() =>
     expect(
       screen
@@ -1207,25 +1230,28 @@ it("parent search survives a status context snapshot with the same real client s
   }))
   render(() => <MemoryRouter><Route path="/" component={() => <SidePanelIM onClose={() => {}} />} /></MemoryRouter>)
   await screen.findByRole("button", { name: /Local \/scope-a/ })
-  await waitFor(() => expect(screen.getByRole("button", { name: dict["im.transport.refresh"] }).hasAttribute("disabled")).toBe(false))
-  fireEvent.click(screen.getByRole("button", { name: dict["im.search.messages"] }))
-  const input = screen.getByPlaceholderText("Search messages…")
+  const input = screen.getByRole("textbox", { name: dict["im.workspace.filter"] })
   fireEvent.input(input, { target: { value: "body" } })
-  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  fireEvent.keyDown(input, { key: "Enter" })
   await screen.findByText("parent search body")
   const scope = runtime.client.scope()
-  fireEvent.click(screen.getByRole("button", { name: dict["im.transport.refresh"] }))
+  await clickIMAction(dict["im.transport.refresh"])
   await waitFor(() => expect(current.statuses).toBeGreaterThanOrEqual(2))
-  await waitFor(() => expect(screen.getByRole("button", { name: dict["im.transport.refresh"] }).hasAttribute("disabled")).toBe(false))
+  const refreshAction = await findIMAction(dict["im.transport.refresh"])
+  await waitFor(() => expect(refreshAction.getAttribute("aria-disabled")).not.toBe("true"))
+  closeIMActions()
   expect(runtime.client.scope()).toBe(scope)
-  expect(screen.queryByPlaceholderText("Search messages…")).toBe(input)
+  expect(screen.getByRole("textbox", { name: dict["im.workspace.filter"] })).toBe(input)
   expect(screen.getByText("parent search body")).toBeTruthy()
   expect((input as HTMLInputElement).value).toBe("body")
   setContext((value) => ({ ...value, directory: "/scope-b" }))
-  await screen.findByRole("button", { name: /Local \/scope-b/ })
+  await waitFor(() => expect(runtime.client!.scope()).not.toBe(scope))
   expect(runtime.client.scope()).not.toBe(scope)
-  expect(screen.queryByPlaceholderText("Search messages…")).toBeNull()
+  expect(screen.getByRole("textbox", { name: dict["im.workspace.filter"] })).toHaveProperty("value", "body")
   expect(screen.queryByText("parent search body")).toBeNull()
+  expect(calls.filter((request) => new URL(request.url).pathname.endsWith("/search"))).toHaveLength(1)
+  fireEvent.click(screen.getByRole("button", { name: dict["im.sidebar.clearSearch"] }))
+  await screen.findByRole("button", { name: /Local \/scope-b/ })
   expect(calls.every((request) => request.method === "GET")).toBe(true)
 })
 
@@ -1278,32 +1304,39 @@ it("parent anchor context survives same-owner metadata and status snapshots with
   }))
   render(() => <MemoryRouter><Route path="/" component={() => <SidePanelIM onClose={() => {}} />} /></MemoryRouter>)
   await screen.findByRole("button", { name: /Anchor protected conversation/ })
-  await waitFor(() => expect(screen.getByRole("button", { name: dict["im.transport.refresh"] }).hasAttribute("disabled")).toBe(false))
-  fireEvent.click(screen.getByRole("button", { name: dict["im.search.messages"] }))
-  fireEvent.input(screen.getByPlaceholderText("Search messages…"), { target: { value: "anchor" } })
-  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  const input = screen.getByRole("textbox", { name: dict["im.workspace.filter"] })
+  fireEvent.input(input, { target: { value: "anchor" } })
+  fireEvent.keyDown(input, { key: "Enter" })
   fireEvent.click(await screen.findByText("anchor current body"))
   await waitFor(() => expect(Socket.instances).toHaveLength(1))
   Socket.instances[0].open()
-  await screen.findByText("anchor current body")
+  const log = await screen.findByRole("log")
+  await within(log).findByText("anchor current body")
   expect(calls.filter((request) => new URL(request.url).pathname.endsWith("/messages"))
     .every((request) => new URL(request.url).searchParams.get("anchorID") === "anchor-target")).toBe(true)
   expect(screen.getByText(dict["im.message.location.context"])).toBeTruthy()
   expect(attached).toHaveBeenCalledTimes(1)
   const scope = runtime.client.scope()
+  const parentRefresh = vi.spyOn(attached.mock.calls[0][0].reader, "refresh")
+  vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1001)
   await imSummaryOwner.refresh()
+  expect(parentRefresh).toHaveBeenCalledTimes(1)
   await waitFor(() => expect(current.statuses).toBeGreaterThanOrEqual(2))
-  await waitFor(() => expect(screen.getAllByRole("button", { name: dict["im.transport.refresh"] }).every((button) => !button.hasAttribute("disabled"))).toBe(true))
+  const refreshAction = await findIMAction(dict["im.transport.refresh"])
+  await waitFor(() => expect(refreshAction.getAttribute("aria-disabled")).not.toBe("true"))
+  closeIMActions()
   expect(runtime.client.scope()).toBe(scope)
   expect(screen.queryByText(dict["im.message.location.context"])).not.toBeNull()
   expect(screen.getByRole("button", { name: dict["im.message.location.latest"] })).toBeTruthy()
-  expect(screen.getByText("anchor current body")).toBeTruthy()
+  expect(log.isConnected).toBe(true)
+  expect(within(log).getByText("anchor current body")).toBeTruthy()
   expect(attached).toHaveBeenCalledTimes(1)
   expect(calls.filter((request) => new URL(request.url).pathname.endsWith("/messages"))
     .every((request) => new URL(request.url).searchParams.get("anchorID") === "anchor-target")).toBe(true)
   current.account = "anchor-owner-replacement"
   vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1001)
   await imSummaryOwner.refresh()
+  expect(parentRefresh).toHaveBeenCalledTimes(2)
   await waitFor(() => expect(current.statuses).toBeGreaterThanOrEqual(3))
   await waitFor(() => expect(screen.queryByText(dict["im.message.location.context"])).toBeNull())
   expect(screen.queryByText("anchor current body")).toBeNull()

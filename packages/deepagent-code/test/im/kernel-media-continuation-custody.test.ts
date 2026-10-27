@@ -35,7 +35,7 @@ test("continuation admission bounds concurrent original producers, joins exact b
       expect(request.headers.get("authorization")).toBe("Bearer private-first-seen-token")
       calls.push(`${request.method} ${pathname}`)
       const value = pathname.endsWith("/capabilities") ? { version: 1, profile: "mysql-protected-media-v1", capability: "dac:media.v1", readerVersion: 2,
-        maxFileBytes: 52428800, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true } : metadata
+        maxFileBytes: 10485760, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true } : metadata
       if (request.method === "POST" && pathname.endsWith("/objects")) {
         metadata.uploadID = (await request.json()).upload.uploadID
         if (boundary.uncertain) return new Response("truncated native response", { status: 200,

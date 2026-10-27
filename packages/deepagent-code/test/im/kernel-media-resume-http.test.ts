@@ -10,6 +10,7 @@ import { MediaFiles } from "@/im/media-files"
 import { IMKernelMediaUpload } from "@/im/kernel/media-upload"
 import { KernelSdk } from "@/im/kernel/sdk"
 import MediaClient from "../../../im-kernel-sdk/upstream/src/delivery/media-client"
+import { signHttp } from "../../../im-kernel-sdk/upstream/src/delivery/device-auth"
 
 async function fixture(mode: "partial" | "fresh" | "lost-chunk" | "legacy" | "complete" | "bound" | "denied" | "bad-progress" | "changed-manifest" | "retired" | "expired" | "cancelled") {
   const workspaceID = `resume-http-${randomUUID()}`
@@ -42,10 +43,10 @@ async function fixture(mode: "partial" | "fresh" | "lost-chunk" | "legacy" | "co
     const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers })
     if (pathname.endsWith("/transfer/capabilities")) {
       if (mode === "legacy" || mode === "denied") return response({}, mode === "legacy" ? 404 : 403)
-      return response({ version: 1, protocol: "dac-media-resumable-v1", chunkBytes: 262144, maxChunks: 200, maxFileBytes: 52428800 })
+      return response({ version: 1, protocol: "dac-media-resumable-v1", chunkBytes: 262144, maxChunks: 40, maxFileBytes: 10485760 })
     }
     if (pathname.endsWith("/capabilities")) return response({ version: 1, profile: "mysql-protected-media-v1", capability: "dac:media.v1", readerVersion: 2,
-      maxFileBytes: 52428800, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true })
+      maxFileBytes: 10485760, maxAttachments: 4, chunkBytes: 262144, ttlMillis: 86400000, authenticatedContent: true })
     if (pathname.endsWith("/objects")) {
       const input = await request.json()
       metadata.uploadID = input.upload.uploadID
@@ -79,7 +80,9 @@ async function fixture(mode: "partial" | "fresh" | "lost-chunk" | "legacy" | "co
     return response(metadata)
   } })
   state.navigator = server.url.origin
-  const native = MediaClient({ isConnected: () => true, deliveryMediaContext: () => state }, true) as Pick<ReturnType<typeof JuggleIM.init>,
+  const native = MediaClient({ isConnected: () => true, deliveryMediaContext: () => state,
+    deviceHttpHeaders: (input: { method: string; url: string; credential: string; currentSourceEpoch: number }) =>
+      signHttp(undefined, input, () => true) }, true) as Pick<ReturnType<typeof JuggleIM.init>,
     "getProtectedMediaCapabilities" | "getProtectedMediaTransferCapabilities" | "getProtectedMediaUploadProgress" | "beginProtectedMedia" |
     "putProtectedMediaChunk" | "finalizeProtectedMedia" | "getProtectedMedia" | "cancelProtectedMedia" | "readProtectedMediaRange">
   const media: KernelSdk.Media = {

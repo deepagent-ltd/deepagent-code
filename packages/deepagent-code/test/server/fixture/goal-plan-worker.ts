@@ -17,6 +17,9 @@ import { PermissionV2 } from "@deepagent-code/core/permission"
 import { sql } from "drizzle-orm"
 
 NativeBootstrap.install()
+// Publish the real private transport's readiness independently of the owned
+// database/Goal seed. The parent still awaits both before issuing operations.
+await GoalPlanRebaseAccess.installTuiBridge()
 const seedFile = path.join(process.env.DAC_GOAL_PLAN_FIXTURE_ROOT!, "seed.json")
 const saved: { sessionID: string; goalID: string } | undefined = await fs
   .readFile(seedFile, "utf8")
@@ -56,15 +59,30 @@ const permissions = <A, E>(read: (value: PermissionV2.Interface) => Effect.Effec
       }).pipe(Effect.provide(locations.get({ directory: AbsolutePath.make(process.cwd()) })))
     }),
   )
-const before = await AppRuntime.runPromise(
-  Effect.gen(function* () {
-    const db = (yield* Database.Service).db
-    return {
-      inputs: yield* db.all(sql`SELECT * FROM session_input`),
-      events: yield* db.all(sql`SELECT * FROM session_activity`),
-    }
-  }),
+const snapshot = () =>
+  AppRuntime.runPromise(
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const goal = (yield* GoalControl.get(db, setup.goalID))!
+      return {
+        inputs: yield* db.all(sql`SELECT * FROM session_input`),
+        events: yield* db.all(sql`SELECT * FROM session_activity`),
+        edits: yield* db.all(sql`SELECT * FROM goal_plan_rebase`),
+        providers: yield* db.all(sql`SELECT receipt_id FROM session_v2_provider_turn_receipt`),
+        permits: yield* db.all(sql`SELECT permit_id,state FROM goal_tick_permit`),
+        goalInFlight: (yield* GoalControl.snapshot(db, goal)).inFlight,
+      }
+    }),
+  )
+const before = await snapshot()
+if (
+  before.inputs.length ||
+  before.events.length ||
+  before.providers.length ||
+  before.permits.length ||
+  before.goalInFlight
 )
+  throw new Error("Private Goal edit fixture must start without provider or tick execution")
 parentPort!.on("message", (value: unknown) => {
   if (!value || typeof value !== "object" || !("fixture" in value)) return
   if (value.fixture === "start-listener")
@@ -89,16 +107,7 @@ parentPort!.on("message", (value: unknown) => {
       }),
     ).then((count) => parentPort!.postMessage({ fixture: "approve", count }))
   if (value.fixture === "snapshot")
-    void AppRuntime.runPromise(
-      Effect.gen(function* () {
-        const db = (yield* Database.Service).db
-        return {
-          inputs: yield* db.all(sql`SELECT * FROM session_input`),
-          events: yield* db.all(sql`SELECT * FROM session_activity`),
-          edits: yield* db.all(sql`SELECT * FROM goal_plan_rebase`),
-        }
-      }),
-    ).then((data) => parentPort!.postMessage({ fixture: "snapshot", data, before }))
+    void snapshot().then((data) => parentPort!.postMessage({ fixture: "snapshot", data, before }))
   if (value.fixture === "http-forgery")
     void Promise.resolve(
       Server.Default().app.fetch(
@@ -138,4 +147,3 @@ parentPort!.postMessage({
   goalID: setup.goalID,
   url: listener?.url.toString(),
 })
-await GoalPlanRebaseAccess.installTuiBridge()

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library"
 import { createSignal } from "solid-js"
 import { MemoryRouter, Route } from "@solidjs/router"
 import { createServer } from "node:http"
@@ -242,8 +242,7 @@ const older = () => screen.getByRole("button", { name: dict["im.message.older"] 
 
 async function searchTarget() {
   await screen.findByRole("button", { name: /Remote \/a/ })
-  fireEvent.click(await screen.findByRole("button", { name: dict["im.search.messages"] }))
-  const input = await screen.findByPlaceholderText(`${dict["im.search.messages"]}…`)
+  const input = await screen.findByRole("textbox", { name: dict["im.workspace.filter"] })
   fireEvent.input(input, { target: { value: "history" } })
   fireEvent.keyDown(input, { key: "Enter" })
   fireEvent.click(await screen.findByRole("button", { name: /Search preview is not conversation history/ }))
@@ -260,7 +259,8 @@ it("a parent search selection reads the real anchored page, focuses its exact me
     expect(target.getAttribute("aria-current")).toBe("location")
     expect(document.activeElement).toBe(target)
     expect(count()).toBe(50)
-    expect(screen.queryByText("Search preview is not conversation history")).toBeNull()
+    expect(within(screen.getByRole("log")).queryByText("Search preview is not conversation history")).toBeNull()
+    expect(screen.getByText("Search preview is not conversation history").closest('[data-slot="im-message-search-results"]')?.classList.contains("hidden")).toBe(true)
     expect(api.state.requests.some((request) => request.anchorID === "/a-message-124" && request.cursor === null)).toBe(
       true,
     )
@@ -322,7 +322,7 @@ it("an invisible search target shows explicit feedback without injecting the sea
     await screen.findByText(dict["im.message.location.unavailable"])
     expect(count()).toBe(0)
     expect(screen.queryByText("/a history 0 中文")).toBeNull()
-    expect(screen.queryByText("Search preview is not conversation history")).toBeNull()
+    expect(screen.getByText("Search preview is not conversation history").closest('[data-slot="im-message-search-results"]')?.classList.contains("hidden")).toBe(true)
     expect(api.state.requests.every((request) => request.anchorID === "/a-message-124")).toBe(true)
     expect(api.state.posts).toBe(0)
   } finally {
@@ -339,6 +339,8 @@ it("a directory switch aborts the held anchored page and never displays its late
     await searchTarget()
     await waitFor(() => expect(api.state.requests.some((request) => request.anchorID === "/a-message-124")).toBe(true))
     api.setDirectory("/b")
+    await waitFor(() => expect(screen.queryByText("Search preview is not conversation history")).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: dict["im.sidebar.clearSearch"] }))
     await select("/b")
     await waitFor(() => expect(api.state.delayedClosed).toBe(true))
     gate.resolve()

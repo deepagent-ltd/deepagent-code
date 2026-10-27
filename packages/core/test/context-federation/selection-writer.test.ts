@@ -157,6 +157,27 @@ const attempt = {
 }
 
 describe("SelectionWriter (C3-05 production write + FK + no v2-none + successor)", () => {
+  test("persists the complete nonempty projection whose hash binds the canonical provider attempt", async () => {
+    const harness = harnessWith()
+    await harness.run(
+      (activityId) => Effect.gen(function* () {
+        const writer = yield* SelectionWriter.Service
+        const sel = build(result(activityId, [candidate({ graph: "code", entityId: "browser-context" })]), envelope(activityId), 0, 1)
+        expect(sel.selectedRefs).toHaveLength(1)
+        expect((yield* writer.write({ envelope: sel, attempt, now: 1_000 })).kind).toBe("written")
+        const row = yield* (yield* Database.Service).db.select().from(SessionContextSelectionTable)
+          .where(eq(SessionContextSelectionTable.selection_id, sel.selectionId)).get().pipe(Effect.orDie)
+        if (!row) throw new Error("Selection writer did not persist its projection")
+        expect(Hash.sha256(row.projection)).toBe(sel.projectionHash)
+        expect(row.projection_hash).toBe(sel.projectionHash)
+        expect(JSON.parse(row.projection).refs).toEqual([{
+          graph: "code", ref: sel.selectedRefs[0]!.ref, version: sel.selectedRefs[0]!.version,
+          provenanceRefs: sel.selectedRefs[0]!.provenanceRefs,
+        }])
+      }),
+    )
+  })
+
   test("writes a selection+validation row with a real identity (never v2-none) for an all-denied resolution", async () => {
     const harness = harnessWith()
     await harness.run(

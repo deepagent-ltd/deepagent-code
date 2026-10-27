@@ -98,7 +98,9 @@ describe("DatabaseMigrationLease", () => {
     expect(String(attempt)).toContain("lease timed out")
   })
 
-  test("a SIGSTOP-suspended owner still fences preemption: heartbeat frozen but the process is alive", async () => {
+  test(process.platform === "win32"
+    ? "a live child owner still fences preemption despite a stale heartbeat (Windows has no SIGSTOP)"
+    : "a SIGSTOP-suspended owner still fences preemption: heartbeat frozen but the process is alive", async () => {
     await using tmp = await tmpdir()
     const lockDir = path.join(tmp.path, "database.runtime.lock")
     const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" })
@@ -114,7 +116,7 @@ describe("DatabaseMigrationLease", () => {
       await utimes(path.join(lockDir, "heartbeat"), stale, stale)
       await utimes(path.join(lockDir, "meta.json"), stale, stale)
       await utimes(lockDir, stale, stale)
-      process.kill(child.pid, "SIGSTOP")
+      if (process.platform !== "win32") process.kill(child.pid, "SIGSTOP")
 
       // kill(pid, 0) succeeds for a suspended process, so it counts as alive despite the frozen heartbeat.
       expect(await DatabaseMigrationLease.processLockActive(lockDir, { staleMs: 1 })).toBe(true)
@@ -125,7 +127,7 @@ describe("DatabaseMigrationLease", () => {
       expect(String(attempt)).toContain("lease timed out")
     } finally {
       // A suspended process does not handle SIGTERM until it is continued.
-      process.kill(child.pid, "SIGCONT")
+      if (process.platform !== "win32") process.kill(child.pid, "SIGCONT")
       child.kill()
       await child.exited
     }

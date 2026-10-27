@@ -134,7 +134,7 @@ if (ownerKeyInput && !ownerPublicKey?.includes("-----BEGIN PUBLIC KEY-----"))
 
 const result = await Bun.build({
   target: "node",
-  entrypoints: ["./src/node.ts", "./src/im/auth-password-worker.node.ts"],
+  entrypoints: ["./src/node.ts", "./src/im/auth-password-worker.node.ts", "./src/location-index/typescript-index.worker.ts"],
   outdir: "./dist/node",
   naming: "[name].[ext]",
   format: "esm",

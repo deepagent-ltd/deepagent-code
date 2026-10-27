@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
-import * as fs from "node:fs"
-import * as os from "node:os"
-import * as path from "node:path"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { EVIDENCE_LEVEL_DECLARATION, buildAndWriteManifest } from "../script/perf-baseline/manifest"
 import { UNIT, writeSummariesJsonl } from "../script/perf-baseline/samples"
 import type { ScenarioOutcome } from "../script/perf-baseline/lib"
@@ -74,6 +74,21 @@ describe("perf baseline run manifest integrity", () => {
       expect(manifest.frozen_base.warn_mismatch).toBe(true) // real HEAD cannot equal the unit-test sentinel
       // Environment boundary fields must be populated objects, never empty stubs.
       expect(Object.keys(manifest.machine).length).toBeGreaterThan(0)
+      expect(manifest.machine).toMatchObject({
+        platform: process.platform,
+        arch: process.arch,
+        os_release: os.release(),
+        os_version: os.version(),
+        logical_cores: os.cpus().length || null,
+        memory_bytes: os.totalmem(),
+      })
+      if (process.platform !== "darwin") {
+        expect(manifest.machine).toMatchObject({
+          hw_model: null, physical_cores: null, macos_product_version: null, macos_build_version: null,
+        })
+        expect(manifest.power_state.exit_code).toBeNull()
+        expect(manifest.power_state.unavailable_reason).toContain(process.platform)
+      }
       expect(manifest.env_allowlist.DEEPAGENT_CODE_TEST_HOME).toBe("/tmp/perf-unit-test-home")
       // ok-only outcomes record a non-failing exit status.
       expect(manifest.exit_status).toBe(0)
@@ -100,6 +115,25 @@ describe("perf baseline run manifest integrity", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  test("missing optional platform tools preserve real host facts and explicit unavailable samples", async () => {
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { machineInfo, powerState, captureInterference } from ${JSON.stringify(path.resolve(import.meta.dir, "../script/perf-baseline/run-env.ts"))}
+      console.log(JSON.stringify({ machine: machineInfo(), power: powerState(), interference: captureInterference(0) }))
+    `], { env: { PATH: "", ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) }, stdout: "pipe", stderr: "pipe" })
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" })
+    const observed = JSON.parse(stdout)
+    expect(observed.machine).toMatchObject({
+      platform: process.platform, arch: process.arch, os_release: os.release(), os_version: os.version(),
+      logical_cores: os.cpus().length || null, memory_bytes: os.totalmem(),
+      physical_cores: null, hw_model: null, macos_product_version: null, macos_build_version: null,
+    })
+    expect(observed.power.exit_code).toBeNull()
+    expect(observed.power.unavailable_reason).toBeString()
+    expect(observed.interference.processes).toEqual([])
+    expect(observed.interference.unavailable_reason).toBeString()
   })
 
   test("interference at_start/at_end are genuine independent samples with capture timestamps", async () => {

@@ -632,7 +632,6 @@ function cleanupMediaBodies(frame: SenderRetirementFrame, domain: "media"|"reply
         .where(and(eq(IMReplyBodyTable.body_state,"live"),eq(IMReplyBodyTable.custody_state,"kernel"),lte(IMReplyBodyTable.original_expires_at,frame.serverNow),
           eq(IMReplyOutboxTable.status,"delivered"),eq(IMKernelDeliveryTable.state,"acknowledged"),eq(GroupTable.workspace_id,engine.workspaceID),
           eq(MessageTable.sender_type,"agent"),eq(MessageTable.type,"text"),isNull(MessageTable.deleted_at),isNull(GroupTable.deleted_at),
-          sql`${IMReplyBodyTable.origin_kind}<>'legacy_unbound'`,
           sql`json_extract(${IMKernelDeliveryTable.binding},'$.source.realm')=${engine.source.realm}`,
           sql`json_extract(${IMKernelDeliveryTable.binding},'$.source.appkey')=${engine.source.appkey}`,
           sql`json_extract(${IMKernelDeliveryTable.binding},'$.source.orgID') IS ${engine.source.orgID}`,

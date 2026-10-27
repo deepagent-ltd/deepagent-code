@@ -1,448 +1,332 @@
-import { beforeEach, describe, expect } from "bun:test"
-import { Context, Effect, Layer, PubSub, Stream, SubscriptionRef } from "effect"
-import { Database } from "@deepagent-code/core/database/database"
-import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
-import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
-import type { IMBroadcaster } from "@deepagent-code/core/im/websocket"
-import { KernelClient } from "@/im/kernel/client"
-import { KernelSdk } from "@/im/kernel/sdk"
-import { IMKernelSync } from "@/im/kernel/sync"
-import type { KernelConfig } from "@/im/kernel/config"
-import { pollWithTimeout, testEffect } from "../lib/effect"
-import { InstanceRegistry } from "@/effect/instance-registry"
+import { expect } from "bun:test"
+import { Effect, SubscriptionRef } from "effect"
+import fs from "node:fs/promises"
+import path from "node:path"
+import { sql } from "drizzle-orm"
+import { KernelReader } from "@deepagent-code/core/im/kernel-reader"
+import { KernelDelivery } from "@deepagent-code/core/im/kernel-delivery"
+import { bodies, cases, ready, wait, type State } from "./fixture/kernel-sync-current"
 
-// IMKernelSync over a real in-memory database + real IMRepository, with a fake KernelClient
-// (PubSub-driven inbound, recordable sendText) and a recording broadcaster. Covers the B1 contract:
-// inbound dedup → local write → broadcast → cursor advance; outbound local row → kernel (72h TTL is
-// the client's concern) → ack write-back; durable dispatch consumption without unknown replay; catch-up on
-// reconnect. The real SDK never loads here.
-
-const config: KernelConfig.Info = {
-  appkey: "test-appkey",
-  navigator: "http://127.0.0.1:9",
-  token: "test-token",
-  userID: "alice",
-  identity: { uuid: "alice", orgID: 1, name: "alice", orgAllGroupID: "org1" },
-}
-
-let clientState: SubscriptionRef.SubscriptionRef<KernelClient.ConnectionState>
-let publishInbound: (msg: KernelClient.KernelTextMessage) => Effect.Effect<void>
-let sentTexts: Array<KernelClient.SendTextInput>
-let sendBehavior: (
-  input: KernelClient.SendTextInput,
-) => Effect.Effect<{ readonly messageID: string }, KernelSdk.KernelError>
-let historyMessages: Array<KernelClient.KernelTextMessage>
-let historyRequests: KernelSdk.FetchHistoryInput[]
-let historyFailure: (input: KernelSdk.FetchHistoryInput) => boolean
-let broadcasts: Array<{ groupID: string; type: string }>
-
-const broadcaster: IMBroadcaster = {
-  broadcast: (groupID, event) => {
-    broadcasts.push({ groupID, type: event.type })
-  },
-  sendToUser: () => {},
-  register: () => true,
-  unregister: () => {},
-  getConnectionCount: () => 0,
-  getUserConnectionCount: () => 0,
-}
-
-const fakeClient = Layer.unwrap(
+const pending = (state: State) =>
+  state.lease.reader.pending({ conversationType: 1, conversationID: "sender", name: "Sender" })
+const create = (state: State, content: string) =>
   Effect.gen(function* () {
-    const state = yield* SubscriptionRef.make<KernelClient.ConnectionState>("disconnected")
-    const pubsub = yield* PubSub.bounded<KernelClient.KernelTextMessage>(16)
-    clientState = state
-    publishInbound = (msg) => PubSub.publish(pubsub, msg).pipe(Effect.asVoid)
-    return Layer.succeed(
-      KernelClient.Service,
-      KernelClient.Service.of({
-        state,
-        messages: Stream.fromPubSub(pubsub),
-        sendText: (input) => Effect.suspend(() => sendBehavior(input)),
-        fetchHistory: (input) =>
-          Effect.suspend(() => {
-            historyRequests.push(input)
-            if (historyFailure(input))
-              return KernelSdk.request("fetchHistory", () => Promise.reject(new Error("test link down")))
-            const remaining = historyMessages
-              .filter((message) =>
-                message.conversationType === input.conversationType && message.conversationID === input.conversationID,
-              )
-              .filter((message) => message.msgTime > input.after)
-              .sort((a, b) => a.msgTime - b.msgTime)
-            const messages = remaining.slice(0, input.count)
-            return Effect.succeed({
-              messages,
-              isFinished: remaining.length <= input.count,
-              latestTime: Math.max(input.after, ...messages.map((message) => message.msgTime)),
-            })
-          }),
-        fetchConversations: () => Effect.succeed({ conversations: [], isFinished: true }),
+    const groupID = yield* pending(state)
+    const message = yield* state.lease.engine.createMessage({
+      groupID,
+      clientRequestID: "original-sync-request",
+      senderID: "server",
+      senderType: "user",
+      type: "text",
+      content,
+    })
+    return { groupID, message }
+  })
 
-        getDeliveryReader: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryReader", message: "Protected reader unavailable in legacy fixture" })),
-        getDeliveryChanges: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryChanges", message: "Protected reader unavailable in legacy fixture" })),
-        getDeliveryMessages: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryMessages", message: "Protected reader unavailable in legacy fixture" })),
-        getDeliveryReadCut: () => Effect.fail(new KernelSdk.KernelError({ operation: "getDeliveryReadCut", message: "Protected reader unavailable in legacy fixture" })),
-        markDeliveryRead: () => Effect.fail(new KernelSdk.KernelError({ operation: "markDeliveryRead", message: "Protected reader unavailable in legacy fixture" })),
-        disconnect: Effect.void,
+// Each case owns a real SDK process, HTTPS/DPoP peer, captured Instance and file DB.
+// Reader cursors replace retired timestamp mirrors; delivery receipts own ACKs.
+cases(import.meta.path, [
+  {
+    id: "inbound-land",
+    name: "scoped protected traffic lands, broadcasts reader_changed and advances its delivery cursor",
+    run: (state) =>
+      Effect.gen(function* () {
+        const message = state.remote.add(1, "sender", "landed")
+        yield* ready(state)
+        const rows = yield* bodies(state)
+        expect(rows).toHaveLength(1)
+        expect(rows[0]).toMatchObject({
+          message_id: "landed",
+          sender_id: "sender",
+          content: message.content,
+          message_time: message.messageTime,
+        })
+        expect(state.broadcasts).toContainEqual({ groupID: rows[0]!.local_group_id, type: "reader_changed" })
+        expect((yield* KernelReader.scope(state.lease.reader.runtime))?.completed_after).toBe(
+          String(state.remote.state.revision),
+        )
+        expect(
+          (yield* KernelReader.projection(state.lease.reader.runtime, state.remote.conversation(1, "sender").key))
+            ?.newer_after,
+        ).toBe("1")
+        expect(
+          yield* state.database.db.get(sql`SELECT count(*) n FROM im_messages WHERE kernel_msg_id IS NOT NULL`),
+        ).toEqual({ n: 0 })
       }),
-    )
-  }),
-)
-
-const database = Database.layerFromPath(":memory:")
-const repo = IMRepositoryLive.pipe(Layer.provide(database))
-const syncOptions = {
-  workspaceID: "ws",
-  inspectConversation: (input: { conversationType: 1 | 2; conversationID: string }) => Effect.succeed({
-    conversation_type: input.conversationType,
-    conversation_id: input.conversationID,
-    org_id: 1,
-    name: "bound",
-    member_uuids: ["alice", "bob"],
-  }),
-}
-const syncLayer = IMKernelSync.layer(config, syncOptions).pipe(
-  Layer.provide(repo),
-  Layer.provide(database),
-  Layer.provide(InstanceRegistry.layer),
-  Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)),
-  Layer.provide(fakeClient),
-)
-
-const it = testEffect(Layer.mergeAll(database, repo, syncLayer))
-
-beforeEach(() => {
-  sentTexts = []
-  broadcasts = []
-  historyMessages = []
-  historyRequests = []
-  historyFailure = () => false
-  sendBehavior = (input) =>
-    Effect.sync(() => {
-      sentTexts.push(input)
-      return { messageID: `km_ack_${sentTexts.length}` }
-    })
-})
-
-const seedBoundGroup = (kernelConvID = "k:1:bob") =>
-  Effect.gen(function* () {
-    const repoSvc = yield* IMRepository
-    const group = yield* repoSvc.createGroup({ workspaceID: "ws", type: "project", name: "bound", createdBy: "alice" })
-    yield* repoSvc.bindKernelConversation({ groupID: group.id, kernelConvID })
-    return group
-  })
-
-const inbound = (overrides: Partial<KernelClient.KernelTextMessage> = {}): KernelClient.KernelTextMessage => ({
-  messageID: "km_in_1",
-  conversationType: 1,
-  conversationID: "bob",
-  senderID: "bob",
-  text: "hello alice",
-  msgTime: 1_700_000_000_000,
-  ...overrides,
-})
-
-const messageByKernelID = (kernelMsgID: string) =>
-  Effect.gen(function* () {
-    const repoSvc = yield* IMRepository
-    return yield* repoSvc.getMessageByKernelMsgID(kernelMsgID)
-  })
-
-const pollKernelMessage = (kernelMsgID: string) =>
-  pollWithTimeout(
-    Effect.gen(function* () {
-      const row = yield* messageByKernelID(kernelMsgID)
-      return row ?? undefined
-    }),
-    `kernel message ${kernelMsgID} never landed`,
-  )
-
-// PubSub drops pre-subscription publishes, so the first inbound message of a test is republished
-// until it lands (the engine dedups by kernel_msg_id — republishing is safe). Once one message has
-// landed the subscription is proven live and later one-shot publishes are guaranteed processed.
-const publishUntilLanded = (msg: KernelClient.KernelTextMessage) =>
-  pollWithTimeout(
-    Effect.gen(function* () {
-      yield* publishInbound(msg)
-      const row = yield* messageByKernelID(msg.messageID)
-      return row ?? undefined
-    }),
-    `kernel message ${msg.messageID} never landed`,
-  )
-
-describe("IMKernelSync inbound", () => {
-  it.live("lands in the local store, broadcasts message_created, and advances the cursor", () =>
-    Effect.gen(function* () {
-      const group = yield* seedBoundGroup()
-      const row = yield* publishUntilLanded(inbound())
-      expect(row.groupID).toBe(group.id)
-      expect(row.senderID).toBe("bob")
-      expect(row.senderType).toBe("user")
-      expect(row.type).toBe("text")
-      expect(row.content).toBe("hello alice")
-      expect(row.createdAt).toBe(1_700_000_000_000)
-      expect(broadcasts).toContainEqual({ groupID: group.id, type: "message_created" })
-
-      const repoSvc = yield* IMRepository
-      const cursor = yield* repoSvc.getSyncCursor("k:1:bob")
-      expect(cursor?.lastSyncTime).toBe(1_700_000_000_000)
-    }),
-  )
-
-  it.live("deduplicates at-least-once delivery by kernel_msg_id and still advances the cursor", () =>
-    Effect.gen(function* () {
-      const group = yield* seedBoundGroup()
-      yield* publishUntilLanded(inbound())
-
-      // Redelivery of the same kernel message id (newer msgTime): no second row, cursor moves on.
-      yield* publishInbound(inbound({ msgTime: 1_700_000_005_000 }))
-      const repoSvc = yield* IMRepository
-      yield* pollWithTimeout(
-        Effect.gen(function* () {
-          const cursor = yield* repoSvc.getSyncCursor("k:1:bob")
-          return cursor && cursor.lastSyncTime >= 1_700_000_005_000 ? (true as const) : undefined
-        }),
-        "cursor never advanced past the redelivery",
-      )
-      const page = yield* repoSvc.listMessages({ groupID: group.id, limit: 10 })
-      expect(page.messages).toHaveLength(1)
-    }),
-  )
-
-  it.live("skips the own-echo and unbound conversations; supported traffic still lands", () =>
-    Effect.gen(function* () {
-      const group = yield* seedBoundGroup()
-      // Warm-up: proves the inbound subscription is live so the skips below are real observations.
-      yield* publishUntilLanded(inbound({ messageID: "km_warm" }))
-      // Own echo (senderID === config.userID): skipped whole-message even before dedup.
-      yield* publishInbound(inbound({ messageID: "km_echo", senderID: "alice" }))
-      // Unbound conversation (no group carries k:1:stranger): skipped with a warn.
-      yield* publishInbound(inbound({ messageID: "km_stranger", conversationID: "stranger" }))
-      // Unsupported conversation type (system channel): skipped.
-      yield* publishInbound(inbound({ messageID: "km_sys", conversationType: 7 }))
-      // A real one proves the stream kept flowing past every skip.
-      yield* publishInbound(inbound({ messageID: "km_real" }))
-      yield* pollKernelMessage("km_real")
-
-      const repoSvc = yield* IMRepository
-      const page = yield* repoSvc.listMessages({ groupID: group.id, limit: 10 })
-      expect(page.messages.map((msg) => msg.kernelMsgID).sort()).toEqual(["km_real", "km_warm"])
-      expect(yield* messageByKernelID("km_echo")).toBeUndefined()
-      expect(yield* messageByKernelID("km_stranger")).toBeUndefined()
-      expect(yield* messageByKernelID("km_sys")).toBeUndefined()
-    }),
-  )
-
-  it.live("catch-up on reconnect lands history messages through the same inbound path", () =>
-    Effect.gen(function* () {
-      yield* seedBoundGroup()
-      historyMessages = [inbound({ messageID: "km_hist_1", msgTime: 1_700_000_100_000 })]
-      yield* SubscriptionRef.set(clientState, "connected")
-
-      const row = yield* pollKernelMessage("km_hist_1")
-      expect(row.createdAt).toBe(1_700_000_100_000)
-      const repoSvc = yield* IMRepository
-      const cursor = yield* repoSvc.getSyncCursor("k:1:bob")
-      expect(cursor?.lastSyncTime).toBe(1_700_000_100_000)
-    }),
-  )
-})
-
-describe("IMKernelSync durable history pagination", () => {
-  it.live("recovers more than 20 messages with overlapping pages and a saturated timestamp boundary", () =>
-    Effect.gen(function* () {
-      const group = yield* seedBoundGroup()
-      historyMessages = Array.from({ length: 255 }, (_, index) =>
-        inbound({ messageID: `history_${index}`, msgTime: 1_700_000_000_000 + (index < 205 ? 0 : index) }),
-      )
-      const sync = yield* IMKernelSync.Service
-      yield* sync.catchUp
-      const repoSvc = yield* IMRepository
-      const messages = yield* repoSvc.listMessages({ groupID: group.id, limit: 500 })
-      expect(messages.messages).toHaveLength(255)
-      expect(new Set(messages.messages.map((message) => message.kernelMsgID)).size).toBe(255)
-      expect(historyRequests.map((request) => request.count)).toContain(400)
-      expect((yield* SubscriptionRef.get(sync.recovery)).status).toBe("ready")
-      expect((yield* repoSvc.getSyncCursor(IMKernelSync.historyCursorKey("k:1:bob")))?.lastSyncTime).toBe(
-        1_700_000_000_253,
-      )
-      yield* sync.catchUp
-      expect((yield* repoSvc.listMessages({ groupID: group.id, limit: 500 })).messages).toHaveLength(255)
-    }),
-  )
-
-  it.live("a failed later page retains a durable checkpoint, and live traffic cannot skip the backlog", () =>
-    Effect.gen(function* () {
-      const group = yield* seedBoundGroup()
-      historyMessages = Array.from({ length: 225 }, (_, index) =>
-        inbound({ messageID: `retry_${index}`, msgTime: 1_700_000_000_000 + index }),
-      )
-      const sync = yield* IMKernelSync.Service
-      const repoSvc = yield* IMRepository
-      yield* publishUntilLanded(inbound({ messageID: "live_future", msgTime: 1_800_000_000_000 }))
-      historyFailure = (request) => request.after > 0
-      yield* sync.catchUp
-      expect((yield* SubscriptionRef.get(sync.recovery)).status).toBe("failed")
-      const checkpoint = yield* repoSvc.getSyncCursor(IMKernelSync.historyCursorKey("k:1:bob"))
-      expect(checkpoint?.lastSyncTime).toBe(1_700_000_000_098)
-      historyRequests = []
-      historyFailure = () => false
-      // Rebuild the engine against the same durable repository: no in-memory pagination state survives.
-      const restarted = yield* Layer.build(
-        IMKernelSync.layer(config, syncOptions).pipe(
-          Layer.provide(Layer.succeed(IMRepository, repoSvc)),
-          Layer.provide(database),
-  Layer.provide(InstanceRegistry.layer),
-          Layer.provide(Layer.succeed(IMBroadcasterService, broadcaster)),
-          Layer.provide(fakeClient),
-        ),
-      )
-      yield* Context.get(restarted, IMKernelSync.Service).catchUp
-      expect(
-        historyRequests.find((request) => request.conversationType === 1 && request.conversationID === "bob")?.after,
-      ).toBe(checkpoint!.lastSyncTime)
-      expect((yield* repoSvc.listMessages({ groupID: group.id, limit: 500 })).messages).toHaveLength(226)
-      expect((yield* SubscriptionRef.get(Context.get(restarted, IMKernelSync.Service).recovery)).status).toBe("ready")
-    }),
-  )
-
-  it.live("reports a non-progressing timestamp page and never skips its boundary", () =>
-    Effect.gen(function* () {
-      yield* seedBoundGroup()
-      historyMessages = Array.from({ length: 12_801 }, (_, index) =>
-        inbound({ messageID: `saturated_${index}`, msgTime: 1_700_000_000_000 }),
-      )
-      const sync = yield* IMKernelSync.Service
-      yield* sync.catchUp
-      const repoSvc = yield* IMRepository
-      expect((yield* SubscriptionRef.get(sync.recovery)).status).toBe("failed")
-      expect((yield* SubscriptionRef.get(sync.recovery)).message).toContain("synchronization failed")
-      expect((yield* repoSvc.getSyncCursor(IMKernelSync.historyCursorKey("k:1:bob")))?.lastSyncTime).toBe(
-        1_699_999_999_999,
-      )
-      expect(historyRequests.at(-1)?.count).toBe(12_800)
-      expect(yield* repoSvc.getMessageByKernelMsgID("saturated_12800")).toBeUndefined()
-    }),
-  )
-})
-
-describe("IMKernelSync outbound", () => {
-  const seedPendingMessage = (content: string) =>
-    Effect.gen(function* () {
-      const group = yield* seedBoundGroup()
-      const repoSvc = yield* IMRepository
-      const message = yield* (yield* IMKernelSync.Service).createMessage({
-        groupID: group.id,
-        senderID: "alice",
-        senderType: "user",
-        type: "text",
-        content,
-      })
-      return { group, message }
-    })
-
-  it.live("send → kernel ack writes kernel_msg_id back onto the local row", () =>
-    Effect.gen(function* () {
-      yield* SubscriptionRef.set(clientState, "connected")
-      const { group, message } = yield* seedPendingMessage("hi bob")
-      const sync = yield* IMKernelSync.Service
-      yield* sync.send({ groupID: group.id, messageID: message.id, content: "hi bob" })
-
-      const repoSvc = yield* IMRepository
-      const row = yield* pollWithTimeout(
-        Effect.gen(function* () {
-          const current = yield* repoSvc.getMessage(message.id)
-          return current?.kernelMsgID ? current : undefined
-        }),
-        "kernel ack never written back",
-      )
-      expect(row.kernelMsgID).toBe("km_ack_1")
-      expect(sentTexts).toHaveLength(1)
-      expect(sentTexts[0]).toMatchObject({ conversationType: 1, conversationID: "bob", text: "hi bob", messageID: message.id })
-    }),
-  )
-
-  it.live("send is a no-op for a group with no kernel binding (pure-local conversation)", () =>
-    Effect.gen(function* () {
-      const repoSvc = yield* IMRepository
-      const group = yield* repoSvc.createGroup({
-        workspaceID: "ws",
-        type: "project",
-        name: "local",
-        createdBy: "alice",
-      })
-      const message = yield* repoSvc.createMessage({
-        groupID: group.id,
-        senderID: "alice",
-        senderType: "user",
-        type: "text",
-        content: "local only",
-      })
-      const sync = yield* IMKernelSync.Service
-      // Deterministic: send() resolves the binding inline and returns without queueing, and the
-      // pending-drain join excludes unbound groups — no code path can reach sendText afterwards.
-      yield* sync.send({ groupID: group.id, messageID: message.id, content: "local only" })
-      expect(sentTexts).toHaveLength(0)
-    }),
-  )
-
-  it.live("a dispatched failure is unknown and reconnection never redelivers it", () =>
-    Effect.gen(function* () {
-      sendBehavior = (input) =>
-        Effect.suspend(() => {
-          sentTexts.push(input)
-          return KernelSdk.request("sendMessage", () => Promise.reject({ code: 503, msg: "link down" }))
+  },
+  {
+    id: "inbound-dedup",
+    name: "at-least-once protected pages keep immutable message identity while later delivery cursors progress",
+    run: (state) =>
+      Effect.gen(function* () {
+        state.remote.add(1, "sender", "dedup-original")
+        yield* ready(state)
+        const first = yield* bodies(state)
+        const projection = state.remote.conversation(1, "sender")
+        const page = yield* state.client.getDeliveryMessages({
+          version: 2,
+          scopeKey: "a".repeat(64),
+          projectionKey: projection.key,
+          projectionRevision: String(state.remote.state.revision),
+          direction: "older",
+          limit: 32,
         })
-      yield* SubscriptionRef.set(clientState, "connected")
-      const { group, message } = yield* seedPendingMessage("offline hello")
-      const sync = yield* IMKernelSync.Service
-      yield* sync.send({ groupID: group.id, messageID: message.id, content: "offline hello" })
-
-      yield* pollWithTimeout(
-        Effect.sync(() => (sentTexts.length >= 1 ? (true as const) : undefined)),
-        "failing send was never attempted",
-      )
-      const repoSvc = yield* IMRepository
-      expect((yield* repoSvc.getMessage(message.id))?.kernelMsgID).toBeNull()
-
-      // Link recovers: the state flip triggers drainPending (and an empty catch-up).
-      sendBehavior = (input) =>
-        Effect.sync(() => {
-          sentTexts.push(input)
-          return { messageID: "km_ack_recovered" }
+        yield* KernelReader.applyMessages(state.lease.reader.runtime, page)
+        expect(yield* bodies(state)).toEqual(first)
+        state.remote.add(1, "sender", "dedup-next")
+        yield* ready(state)
+        expect((yield* bodies(state)).find((row) => row.message_id === "dedup-original")).toEqual(first[0])
+        expect(yield* bodies(state)).toHaveLength(2)
+        expect((yield* KernelReader.projection(state.lease.reader.runtime, projection.key))?.newer_after).toBe("2")
+      }),
+  },
+  {
+    id: "inbound-legacy-skip",
+    name: "retired own-echo, unbound and system streams cannot write; authenticated scoped traffic still lands",
+    run: (state) =>
+      Effect.gen(function* () {
+        yield* state.sync.catchUp
+        state.remote.add(1, "sender", "protected-real")
+        yield* ready(state)
+        expect((yield* bodies(state)).map((row) => row.message_id)).toEqual(["protected-real"])
+        expect(state.legacy.reads).toBe(0)
+        expect(yield* state.database.db.get(sql`SELECT count(*) n FROM im_messages`)).toEqual({ n: 1 })
+        expect(
+          yield* state.database.db.get(
+            sql`SELECT count(*) n FROM im_messages WHERE kernel_msg_id IN ('legacy-own','legacy-unbound','legacy-system')`,
+          ),
+        ).toEqual({ n: 0 })
+      }),
+  },
+  {
+    id: "inbound-reconnect",
+    name: "a real SDK reconnect catches up protected history without replaying global mirrors",
+    run: (state) =>
+      Effect.gen(function* () {
+        const original = state.client.captureCurrentLink?.()
+        const connections = state.remote.state.connections
+        state.native.disconnect()
+        state.remote.add(1, "sender", "reconnect-history")
+        yield* wait(
+          SubscriptionRef.get(state.client.state).pipe(
+            Effect.map((value) =>
+              value === "connected" && state.remote.state.connections > connections ? true : undefined,
+            ),
+          ),
+        )
+        expect(state.client.captureCurrentLink?.()).not.toBe(original)
+        yield* ready(state)
+        expect((yield* bodies(state)).map((row) => row.message_id)).toEqual(["reconnect-history"])
+        expect((yield* KernelReader.scope(state.lease.reader.runtime))?.completed_after).toBe(
+          String(state.remote.state.revision),
+        )
+      }),
+  },
+  {
+    id: "history-paging",
+    name: "more than 20 messages and saturated timestamps recover through bounded overlapping V2 pages",
+    run: (state) =>
+      Effect.gen(function* () {
+        const timestamp = Date.now()
+        for (const index of Array.from({ length: 255 }, (_, index) => index))
+          state.remote.add(1, "sender", `history-${index}`, { time: timestamp })
+        yield* ready(state)
+        const rows = yield* bodies(state)
+        expect(rows).toHaveLength(255)
+        expect(new Set(rows.map((row) => row.message_id)).size).toBe(255)
+        expect(new Set(rows.map((row) => row.local_message_id)).size).toBe(255)
+        const pages = state.remote.queries.filter((query) => query.topic === "qry_delivery_messages")
+        expect(pages.length).toBeGreaterThan(1)
+        expect(pages.every((query) => query.request.limit === 32)).toBe(true)
+        expect(pages.some((query) => query.request.anchorDeliveryCursor)).toBe(true)
+        const projection = yield* KernelReader.projection(
+          state.lease.reader.runtime,
+          state.remote.conversation(1, "sender").key,
+        )
+        expect(projection).toMatchObject({ newer_after: "255", history_complete: 1 })
+        yield* ready(state)
+        expect(yield* bodies(state)).toEqual(rows)
+      }),
+  },
+  {
+    id: "history-cold-checkpoint",
+    name: "a failed later page preserves its physical checkpoint and a new Instance resumes without skipping older traffic",
+    run: (state) =>
+      Effect.gen(function* () {
+        for (const index of Array.from({ length: 225 }, (_, index) => index))
+          state.remote.add(1, "sender", `checkpoint-${index}`)
+        state.remote.add(1, "sender", "future-wall-clock", { time: Date.now() + 1000 })
+        state.remote.state.malformedAfter = "32"
+        yield* state.lease.engine.catchUp
+        expect((yield* SubscriptionRef.get(state.lease.reader.state)).state).toBe("unavailable")
+        const before = yield* bodies(state)
+        expect(before).toHaveLength(32)
+        const key = state.remote.conversation(1, "sender").key
+        expect((yield* KernelReader.projection(state.lease.reader.runtime, key))?.newer_after).toBe("32")
+        const originalFile = yield* Effect.promise(() => fs.stat(path.join(state.directory, "current.sqlite")))
+        state.remote.state.malformedAfter = ""
+        const start = state.remote.queries.length
+        const lease = yield* state.reopen
+        expect(lease.reader).not.toBe(state.lease.reader)
+        const reopenedFile = yield* Effect.promise(() => fs.stat(path.join(state.directory, "current.sqlite")))
+        expect({ dev: reopenedFile.dev, ino: reopenedFile.ino }).toEqual({
+          dev: originalFile.dev,
+          ino: originalFile.ino,
         })
-      yield* SubscriptionRef.set(clientState, "connected")
-      yield* sync.drainPending
-      expect((yield* repoSvc.getMessage(message.id))?.kernelMsgID).toBeNull()
-      expect((yield* sync.deliveryStatus(message.id)).state).toBe("unknown")
-      expect(sentTexts).toHaveLength(1)
-    }),
-  )
-
-  it.live("durable dispatched consumption allows only one attempt across repeated drains", () =>
-    Effect.gen(function* () {
-      // Connect first so the state-change drain fires on an empty pending list; every attempt
-      // below then comes from an explicit drainPending pass.
-      yield* SubscriptionRef.set(clientState, "connected")
-      sendBehavior = (input) =>
-        Effect.suspend(() => {
-          sentTexts.push(input)
-          return KernelSdk.request("sendMessage", () => Promise.reject({ code: 503, msg: "link down" }))
+        yield* ready({ lease })
+        const after = yield* bodies(state)
+        expect(after).toHaveLength(226)
+        expect(
+          before.every((row) =>
+            after.some(
+              (current) =>
+                current.message_id === row.message_id &&
+                current.immutable_hash === row.immutable_hash &&
+                current.local_message_id === row.local_message_id,
+            ),
+          ),
+        ).toBe(true)
+        expect(
+          state.remote.queries
+            .slice(start)
+            .some((query) => query.topic === "qry_delivery_messages" && query.request.anchorDeliveryCursor === "32"),
+        ).toBe(true)
+        expect((yield* KernelReader.projection(lease.reader.runtime, key))?.newer_after).toBe("226")
+      }),
+  },
+  {
+    id: "history-nonprogress",
+    name: "nonprogressing protected pages are bounded and never skip the original completed cursor",
+    run: (state) =>
+      Effect.gen(function* () {
+        const before = yield* KernelReader.scope(state.lease.reader.runtime)
+        state.remote.state.nonprogressing = true
+        state.remote.add(1, "sender", "stalled-boundary")
+        const start = state.remote.queries.length
+        yield* state.lease.engine.catchUp
+        expect((yield* SubscriptionRef.get(state.lease.reader.state)).state).not.toBe("ready")
+        expect((yield* KernelReader.scope(state.lease.reader.runtime))?.completed_after).toBe(before?.completed_after)
+        expect(state.remote.queries.length - start).toBeGreaterThan(1)
+        expect(state.remote.queries.length - start).toBeLessThanOrEqual(128)
+        expect(yield* bodies(state)).toEqual([])
+      }),
+  },
+  {
+    id: "outbound-ack",
+    name: "an original protected SDK send records its ACK on the durable delivery identity",
+    run: (state) =>
+      Effect.gen(function* () {
+        const { groupID, message } = yield* create(state, "hi sender")
+        yield* state.lease.engine.send({ groupID, messageID: message.id, content: message.content })
+        const status = yield* wait(
+          state.lease.engine
+            .deliveryStatus(message.id)
+            .pipe(Effect.map((status) => (status.state === "acknowledged" ? status : undefined))),
+        )
+        expect(status).toMatchObject({ messageID: message.id, state: "acknowledged", kernelMessageID: "ack-1" })
+        expect(state.remote.sent).toHaveLength(1)
+        const receipt = yield* KernelDelivery.read(state.database.db, message.id)
+        expect(receipt?.binding).toMatchObject({ messageID: message.id, conversationID: "sender", conversationType: 1 })
+        expect(state.remote.sent[0]).toMatchObject({
+          target: "sender",
+          text: "hi sender",
+          clientID: receipt?.binding.wireID,
+          expiresAt: receipt?.binding.expiresAt,
         })
-      const { message } = yield* seedPendingMessage("never deliverable")
-      const sync = yield* IMKernelSync.Service
-
-      for (let pass = 0; pass < 12; pass++) {
-        yield* sync.drainPending
-      }
-      // A failed first dispatch remains unknown; subsequent drains never touch the kernel.
-      expect(sentTexts).toHaveLength(1)
-      const repoSvc = yield* IMRepository
-      expect((yield* repoSvc.getMessage(message.id))?.kernelMsgID).toBeNull()
-
-      yield* sync.drainPending
-      expect(sentTexts).toHaveLength(1)
-    }),
-  )
-})
+        expect(yield* state.database.db.get(sql`SELECT kernel_msg_id FROM im_messages WHERE id=${message.id}`)).toEqual(
+          { kernel_msg_id: null },
+        )
+      }),
+  },
+  {
+    id: "outbound-local",
+    name: "an ordinary group without a kernel binding never reaches protected send or creates a delivery receipt",
+    run: (state) =>
+      Effect.gen(function* () {
+        const group = yield* state.repo.createGroup({
+          workspaceID: state.lease.workspaceID,
+          type: "project",
+          name: "local",
+          createdBy: "server",
+        })
+        const message = yield* state.repo.createMessage({
+          groupID: group.id,
+          senderID: "server",
+          senderType: "user",
+          type: "text",
+          content: "local only",
+        })
+        yield* state.lease.engine.send({ groupID: group.id, messageID: message.id, content: message.content })
+        yield* state.lease.engine.drainPending
+        expect(state.remote.sent).toHaveLength(0)
+        expect(yield* KernelDelivery.read(state.database.db, message.id)).toBeUndefined()
+        expect((yield* state.repo.getMessage(message.id))?.content).toBe("local only")
+      }),
+  },
+  {
+    id: "outbound-unknown-reconnect",
+    name: "a dispatched SDK failure remains unknown after a real reconnect and is never sent again",
+    run: (state) =>
+      Effect.gen(function* () {
+        state.remote.state.mode = "reject"
+        const { groupID, message } = yield* create(state, "unknown original")
+        yield* state.lease.engine.send({ groupID, messageID: message.id, content: message.content })
+        // Public status also reports an in-flight dispatched row as unknown.
+        // Observe the real settled receipt before closing its original socket.
+        yield* wait(
+          KernelDelivery.read(state.database.db, message.id).pipe(
+            Effect.map((value) => (value?.state === "unknown" ? value : undefined)),
+          ),
+        )
+        const before = yield* state.lease.engine.deliveryStatus(message.id)
+        expect(state.remote.sent).toHaveLength(1)
+        state.remote.state.mode = "ack"
+        const connections = state.remote.state.connections
+        state.native.disconnect()
+        yield* wait(
+          SubscriptionRef.get(state.client.state).pipe(
+            Effect.map((value) =>
+              value === "connected" && state.remote.state.connections > connections ? true : undefined,
+            ),
+          ),
+        )
+        yield* ready(state)
+        yield* state.lease.engine.drainPending
+        expect(yield* state.lease.engine.deliveryStatus(message.id)).toEqual(before)
+        expect(state.remote.sent).toHaveLength(1)
+      }),
+  },
+  {
+    id: "outbound-one-attempt",
+    name: "same-ID retries and repeated durable drains consume exactly one original send attempt",
+    run: (state) =>
+      Effect.gen(function* () {
+        state.remote.state.mode = "reject"
+        const { groupID, message } = yield* create(state, "single original attempt")
+        yield* state.lease.engine.drainPending
+        expect(yield* state.lease.engine.deliveryStatus(message.id)).toMatchObject({
+          state: "unknown",
+          kernelMessageID: null,
+        })
+        for (const pass of Array.from({ length: 12 }, (_, index) => index)) {
+          const retry = yield* state.lease.engine.createMessage({
+            groupID,
+            clientRequestID: "original-sync-request",
+            senderID: "server",
+            senderType: "user",
+            type: "text",
+            content: message.content,
+          })
+          expect(retry.id).toBe(message.id)
+          yield* state.lease.engine.drainPending
+          expect(state.remote.sent.length, `pass ${pass}`).toBe(1)
+        }
+        expect(yield* state.database.db.get(sql`SELECT count(*) n FROM im_messages WHERE id=${message.id}`)).toEqual({
+          n: 1,
+        })
+        expect(
+          yield* state.database.db.get(sql`SELECT count(*) n FROM im_kernel_delivery WHERE message_id=${message.id}`),
+        ).toEqual({ n: 1 })
+      }),
+  },
+])

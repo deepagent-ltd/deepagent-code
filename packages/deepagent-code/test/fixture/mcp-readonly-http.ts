@@ -22,6 +22,8 @@ import { InstanceRegistry } from "../../src/effect/instance-registry"
 import { Workspace } from "../../src/control-plane/workspace"
 import { registerAdapter } from "../../src/control-plane/adapters"
 import { Project } from "../../src/project/project"
+import { ConfigFileWrite } from "../../src/config/file-write"
+import { SettingsTransaction } from "../../src/settings/transaction"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 
 const root = process.env.DAC_MCP_READONLY_ROOT
@@ -208,6 +210,7 @@ while (
 const call = (route: string, method = "GET", body?: object) =>
   fetch(new URL(route, listener.url), {
     method,
+    ...(method === "GET" ? { signal: AbortSignal.timeout(3000) } : {}),
     headers: {
       "content-type": "application/json",
       "x-deepagent-code-directory": directory,
@@ -386,6 +389,21 @@ if (mode === "account") {
     ),
   )
 }
+const release = Promise.withResolvers<void>()
+const acquired = Promise.withResolvers<void>()
+// Warm mode deliberately edits a watched config below. Hold the real writer locks
+// while measuring reads so its unrelated reload cannot overlap the full snapshot.
+// A read that enters a writer path must still fail its HTTP deadline.
+const locking = mode === "warm"
+  ? ConfigFileWrite.run(ConfigFileWrite.transaction(
+      [...SettingsTransaction.globalFiles(), ...Object.values(SettingsTransaction.paths())],
+      () => Effect.promise(async () => {
+        acquired.resolve()
+        await release.promise
+      }),
+    ))
+  : undefined
+if (locking) await Promise.race([acquired.promise, locking])
 const before = { tables: facts(), config: await inventory(Global.Path.config), project: await inventory(directory) }
 const previousRequests = [...requests]
 const responses: { route: string; status: number }[] = []
@@ -567,6 +585,8 @@ try {
     ),
   )
 } finally {
+  release.resolve()
+  await locking
   pendingGate.resolve()
   if (pending) {
     const loaded = await pending.loading

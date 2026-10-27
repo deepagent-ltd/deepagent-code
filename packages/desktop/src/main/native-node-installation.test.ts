@@ -9,8 +9,12 @@ import { signNativeNodeArtifact } from "../../../deepagent-code/script/sign-nati
 import { managedBrowserInputRuntime } from "../../scripts/managed-browser-input-runtime"
 import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
-test("actual Electron utility interpreter verifies a sealed physical Node entry and adjacent assets", async () => {
+test(process.platform === "win32"
+  ? "unsealed Electron unit fixture refuses Windows signing without the physical native publisher cohort"
+  : "actual Electron utility interpreter verifies a sealed physical Node entry and adjacent assets", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-native-node-electron-")))
+  const completed = { value: false }
+  console.log("NATIVE_NODE_INSTALLATION_EVIDENCE", root)
   await fs.chmod(root, 0o700)
   const key = generateKeyPairSync("ed25519")
   const fixture = path.join(import.meta.dir, "../../../deepagent-code/test/installation/fixture/native-node-installation-process.ts")
@@ -47,6 +51,17 @@ test("actual Electron utility interpreter verifies a sealed physical Node entry 
         DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST: JSON.stringify(metadata), DEEPAGENT_CODE_NATIVE_NODE_ARTIFACT: "true" } })
     expect(build.success).toBe(true)
     await fs.writeFile(`${module}.native-components.json`, metadata)
+    if (process.platform === "win32") {
+      // A source-only fixture cannot issue the installed Windows image cohort.
+      await expect(signNativeNodeArtifact({ module, runtime: await fs.realpath(runtime.runtime), releaseID: "private-electron-module", privateKey: key.privateKey }))
+        .rejects.toMatchObject({ code: "MODULE_NOT_FOUND", message: expect.stringContaining(path.join(root, "native-image-factory.node")) })
+      expect(await Bun.file(`${module}${NativeInstallationSchema.SIDECAR_SUFFIX}`).exists()).toBe(false)
+      const refused = await run(module)
+      expect(refused.code).toBe(2)
+      expect(JSON.parse(refused.stdout)).toMatchObject({ ok: false, error: { code: "NATIVE_INSTALLATION_UNAVAILABLE" } })
+      completed.value = true
+      return
+    }
     await signNativeNodeArtifact({ module, runtime: await fs.realpath(runtime.runtime), releaseID: "private-electron-module", privateKey: key.privateKey })
     const second = await run(module)
     expect(second.code).toBe(0)
@@ -54,7 +69,8 @@ test("actual Electron utility interpreter verifies a sealed physical Node entry 
     expect(inspected.ok).toBe(true)
     expect(inspected.result?.assets).toBe(root)
     expect(inspected.result?.cloneRejected).toBe(true)
+    completed.value = true
   } finally {
-    await fs.rm(root, { recursive: true, force: true })
+    if (completed.value) await fs.rm(root, { recursive: true, force: true })
   }
 }, 45_000)

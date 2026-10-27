@@ -107,7 +107,7 @@ export const platformScenarios: Scenario[] = [
     .status(400),
   http.protected
     .post("/session/{sessionID}/prompt_prepare_stream", "session.prompt_prepare_stream")
-    .stream()
+    .finiteStream()
     .seeded((ctx) => ctx.session({ title: "Prompt prepare stream validation" }))
     .at((ctx) => ({
       path: route("/session/{sessionID}/prompt_prepare_stream", { sessionID: ctx.state.id }),

@@ -81,7 +81,7 @@ async function readEntry(file: string) {
     requirePrivate(after, false)
     requirePrivate(named, false)
     requirePrivate(directory, true)
-    if (!same(before, after) || !same(after, named) || !same(parent, directory) || length.value !== before.size)
+    if (!same(before, after) || !same(after, named) || !sameDirectory(parent, directory) || length.value !== before.size)
       throw new Error("changed")
     const bytes = buffer.subarray(0, length.value)
     const text = (() => {
@@ -122,6 +122,19 @@ function same(left: Stats, right: Stats) {
     left.size === right.size &&
     left.mtimeMs === right.mtimeMs &&
     left.ctimeMs === right.ctimeMs
+  )
+}
+
+function sameDirectory(left: Stats, right: Stats) {
+  // Unrelated sibling creation changes directory size and timestamps without
+  // changing the held file or its parent's identity and access boundary.
+  return (
+    left.isDirectory() &&
+    right.isDirectory() &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.uid === right.uid
   )
 }
 

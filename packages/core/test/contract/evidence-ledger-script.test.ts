@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url"
 import { describe, expect, test } from "bun:test"
 import { generateKeyPairSync } from "node:crypto"
 import { mkdir, rm } from "node:fs/promises"
@@ -129,7 +130,7 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
   const child = Bun.spawn(
     [
       process.execPath,
-      script.pathname,
+      fileURLToPath(script),
       "--manifest",
       manifestPath,
       "--source-manifest",
@@ -179,7 +180,7 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
       ...(scenario === "finding" ? { openFindings: ["unresolved"] } : {}),
       ...(scenario === "qualification" ? { packageDigests: { ...pending.packageDigests, "qualification-source-run": H("review") } } : {}),
       ...(scenario === "missing-assets" ? { packageDigests: manifest.packageDigests } : {}) }))
-    const child = Bun.spawn([process.execPath, script.pathname,
+    const child = Bun.spawn([process.execPath, fileURLToPath(script),
       ...(scenario === "strict" ? [] : ["--standard-distribution"]), "--manifest", manifestPath,
       ...(scenario === "missing-checks" ? [] : ["--source-checks", sourceChecksPath]),
       ...(scenario === "missing-source" ? [] : ["--source-manifest", sourcePath]),
@@ -230,7 +231,7 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
   const wrapperChild = Bun.spawn(
     [
       process.execPath,
-      wrapper.pathname,
+      fileURLToPath(wrapper),
       "--manifest",
       manifestPath,
       "--evidence-dir",
@@ -270,7 +271,7 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
   const verifier = new URL("../../script/evidence-ledger/verify-ledger-products.ts", import.meta.url)
   const verify = async () => {
     const child = Bun.spawn(
-      [process.execPath, verifier.pathname, "--ledger", wrapperOutputPath, "--artifact-dir", productDir],
+      [process.execPath, fileURLToPath(verifier), "--ledger", wrapperOutputPath, "--artifact-dir", productDir],
       { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
     )
     return { exitCode: await child.exited, stderr: await new Response(child.stderr).text() }
@@ -334,7 +335,7 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
   const unrelated = Bun.spawn(
     [
       process.execPath,
-      script.pathname,
+      fileURLToPath(script),
       "--manifest",
       manifestPath,
       "--source-manifest",
@@ -365,7 +366,7 @@ test("RI-51 source-only NO-GO readback accepts all-pending gates without gates.j
   const ledgerPath = join(root.path, "ledger.json")
   const artifactDir = join(root.path, "release-evidence-products")
   const gate = new URL("../../script/evidence-ledger/release-gate.ts", import.meta.url)
-  const child = Bun.spawn([process.execPath, gate.pathname, "--out", ledgerPath], {
+  const child = Bun.spawn([process.execPath, fileURLToPath(gate), "--out", ledgerPath], {
     cwd: join(import.meta.dir, "../.."),
     stdout: "pipe",
     stderr: "pipe",
@@ -385,7 +386,7 @@ test("RI-51 source-only NO-GO readback accepts all-pending gates without gates.j
 
   const verifier = new URL("../../script/evidence-ledger/verify-ledger-products.ts", import.meta.url)
   const readback = Bun.spawn(
-    [process.execPath, verifier.pathname, "--ledger", ledgerPath, "--artifact-dir", artifactDir],
+    [process.execPath, fileURLToPath(verifier), "--ledger", ledgerPath, "--artifact-dir", artifactDir],
     { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
   )
   const [readbackStderr, readbackExitCode] = await Promise.all([new Response(readback.stderr).text(), readback.exited])

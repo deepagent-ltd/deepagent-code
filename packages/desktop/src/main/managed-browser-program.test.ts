@@ -10,9 +10,16 @@ import os from "node:os"
 import { managedBrowserInputFixtureDefine } from "./fixture/managed-browser-input-build"
 import { managedBrowserInputFixtureEnvironment, managedBrowserInputFixtureExecutable } from "./fixture/managed-browser-input-runtime"
 
-test("actual approved readonly planner mutates only native current leaves, submits once and keeps partial cancellation unknown", async () => {
+test.skipIf(process.platform !== "darwin")("actual approved readonly planner mutates only native current leaves, submits once and keeps partial cancellation unknown", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-managed-browser-program-"))
   await fs.chmod(root, 0o700)
+  const probe = Bun.spawn(["/usr/bin/xcrun", "clang++", "-std=c++17", "-bundle", "-undefined", "dynamic_lookup",
+    "-fobjc-arc", "-DNAPI_VERSION=8", "-DDAC_QA_SOURCE_MASK_ONLY=1", "-framework", "AppKit", "-I",
+    path.join(import.meta.dir, "../../native/managed-browser-input/include"),
+    path.join(import.meta.dir, "fixture/managed-browser-input-native-qa.mm"), "-o", path.join(root, "qa.node")],
+  { stdout: "pipe", stderr: "pipe" })
+  const compiled = await Promise.all([probe.exited, new Response(probe.stderr).text()])
+  expect({ code: compiled[0], error: compiled[0] ? compiled[1] : null }).toEqual({ code: 0, error: null })
   const main = await Bun.build({
     entrypoints: [path.join(import.meta.dir, "fixture/managed-browser-program.ts")],
     outdir: root,
@@ -46,7 +53,8 @@ test("actual approved readonly planner mutates only native current leaves, submi
     stdout: "pipe",
     stderr: "pipe",
   })
-  const timer = setTimeout(() => process.kill(), 50_000)
+  const timeout = { fired: false }
+  const timer = setTimeout(() => { timeout.fired = true; process.kill() }, 50_000)
   const [code, stdout, stderr] = await Promise.all([
     process.exited,
     new Response(process.stdout).text(),
@@ -55,8 +63,17 @@ test("actual approved readonly planner mutates only native current leaves, submi
   clearTimeout(timer)
   await Bun.write(path.join(root, "process.log"), stdout + "\n" + stderr)
   console.log("MANAGED_BROWSER_PROGRAM_EVIDENCE", root)
-  const result = await Bun.file(path.join(root, "result.json")).json()
-  expect({ code, error: code ? result : null }).toEqual({ code: 0, error: null })
+  const result = await Bun.file(path.join(root, "result.json")).exists()
+    ? await Bun.file(path.join(root, "result.json")).json() : null
+  const stages = (code !== 0 || result === null) && await Bun.file(path.join(root, "stages.json")).exists()
+    ? (await Bun.file(path.join(root, "stages.json")).json()).slice(-80) : null
+  const platformEvents = (code !== 0 || result === null) && await Bun.file(path.join(root, "platform-events.jsonl")).exists()
+    ? (await Bun.file(path.join(root, "platform-events.jsonl")).text()).trim().split("\n").slice(-20).map((line) => JSON.parse(line)) : null
+  expect({ code, timedOut: timeout.fired, error: code !== 0 || result === null ? { result, stdout, stderr } : null,
+    stages, platformEvents }).toEqual({ code: 0, timedOut: false, error: null, stages: null, platformEvents: null })
+  expect(result.runtimePaths).toEqual({
+    userData: path.join(root, "electron-user"), sessionData: path.join(root, "electron-session"),
+  })
   expect(result.message.normal.program.totalSteps).toBe(3)
   expect(result.message.normal.program.completedSteps).toBe(3)
   expect(result.message.normal.program.steps).toEqual([

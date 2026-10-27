@@ -76,6 +76,7 @@ afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
   runtime.local = true
+  runtime.serverScope = {}
   runtime.actualDialogs = false
   runtime.location.pathname = "/original/chat"
   runtime.navigate.mockImplementation((path: string) => {

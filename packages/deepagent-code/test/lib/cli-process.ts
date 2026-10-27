@@ -31,10 +31,19 @@ import { it } from "./effect"
 const deepagentCodeRoot = path.resolve(import.meta.dir, "../../")
 const cliEntry = path.join(deepagentCodeRoot, "src/index.ts")
 
-function cliCommand(args: string[]) {
+function cliCommand(args: string[], isolatedSecretStore = false) {
   const packagedBinary = process.env.DEEPAGENT_CODE_TEST_BINARY
+  if (packagedBinary && isolatedSecretStore) throw new Error("CLI secret-store fixture requires the source CLI")
   if (packagedBinary) return [packagedBinary, ...args]
-  return ["bun", "run", "--conditions=browser", cliEntry, ...args]
+  return [
+    "bun",
+    ...(isolatedSecretStore
+      ? ["--preload", path.join(deepagentCodeRoot, "test/fixture/cli-secret-store.ts")]
+      : ["run"]),
+    "--conditions=browser",
+    cliEntry,
+    ...args,
+  ]
 }
 
 export const testModelID = "test/test-model"
@@ -213,6 +222,7 @@ export type CliFixture = {
 // the surrounding Scope.
 export function withCliFixture<A, E>(
   fn: (input: CliFixture) => Effect.Effect<A, E, Scope.Scope | HttpClient.HttpClient>,
+  options?: { isolatedSecretStore?: boolean },
 ): Effect.Effect<A, E | unknown, Scope.Scope> {
   return Effect.gen(function* () {
     const llm = yield* TestLLMServer
@@ -240,7 +250,8 @@ export function withCliFixture<A, E>(
       // on `Bun.stdin.text()` (see src/cli/cmd/run.ts — non-TTY stdin is
       // consumed as the prompt). The old Process.run wrapper defaulted to
       // ignore; ChildProcess.make defaults to pipe, so we set it explicitly.
-      const command = ChildProcess.make(cliCommand(args)[0]!, cliCommand(args).slice(1), {
+      const argv = cliCommand(args, options?.isolatedSecretStore)
+      const command = ChildProcess.make(argv[0]!, argv.slice(1), {
         cwd: home,
         env: { ...env, ...opts?.env },
         extendEnv: true,
@@ -537,5 +548,6 @@ export const cliIt = {
     name: string,
     body: (input: CliFixture) => Effect.Effect<A, E, Scope.Scope | HttpClient.HttpClient>,
     opts?: number | TestOptions,
-  ) => test.concurrent(name, () => Effect.runPromise(Effect.scoped(withCliFixture(body))), opts),
+    options?: { isolatedSecretStore?: boolean },
+  ) => test.concurrent(name, () => Effect.runPromise(Effect.scoped(withCliFixture(body, options))), opts),
 }

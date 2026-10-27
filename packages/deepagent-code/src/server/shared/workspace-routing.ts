@@ -27,6 +27,7 @@ export function isLocalWorkspaceRoute(method: string, path: string) {
 export function getWorkspaceRouteSessionID(url: URL) {
   if ([
     "/session/status",
+    "/session/context/cohort",
     "/session/import-snapshot",
     "/session/import-bundle",
     "/session/import-bundle-share",

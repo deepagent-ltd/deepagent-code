@@ -1,11 +1,17 @@
 export * as IMReaderProductDescriptor from "./im-reader-product-descriptor"
 
 import { Schema } from "effect"
+import path from "node:path"
 import { IMMediaProductDescriptor } from "./im-media-product-descriptor"
 
-const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512),
-  Schema.makeFilter((value: string) => value.isWellFormed() && !/[\u0000-\u001f\u007f]/.test(value) && Buffer.byteLength(value) <= 512))
-const Absolute = Text.check(Schema.makeFilter((value: string) => value.startsWith("/")))
+const Text = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(512),
+  Schema.makeFilter(
+    (value: string) => value.isWellFormed() && !/[\u0000-\u001f\u007f]/.test(value) && Buffer.byteLength(value) <= 512,
+  ),
+)
+const Absolute = Text.check(Schema.makeFilter((value: string) => path.isAbsolute(value)))
 const Marker = Text.check(Schema.isMaxLength(48))
 const Group = Schema.Struct({ id: Text, name: Marker })
 const Scope = Schema.Struct({
@@ -40,23 +46,39 @@ export type Input = typeof Input.Type
 export function decode(value: unknown) {
   const input = Schema.decodeUnknownSync(Input)(value, { onExcessProperty: "error" })
   const url = new URL(input.root.url)
-  if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
-      !url.port || url.pathname !== "/" || url.username || url.password || url.search || url.hash)
+  if (
+    url.protocol !== "http:" ||
+    !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
+    !url.port ||
+    url.pathname !== "/" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  )
     throw new Error("An original private loopback Root is required")
-  if (input.deadlineAt <= input.createdAt || input.deadlineAt - input.createdAt > 900_000 ||
-      input.scopes.A.directory === input.scopes.B.directory ||
-      input.scopes.A.workspaceID === input.scopes.B.workspaceID)
+  if (
+    input.deadlineAt <= input.createdAt ||
+    input.deadlineAt - input.createdAt > 900_000 ||
+    input.scopes.A.directory === input.scopes.B.directory ||
+    input.scopes.A.workspaceID === input.scopes.B.workspaceID
+  )
     throw new Error("Two actual directory placements and a bounded window are required")
-  const groupIDs = Object.values(input.scopes).flatMap((scope) => [...scope.ordinary, ...scope.protected].map((group) => group.id))
+  const groupIDs = Object.values(input.scopes).flatMap((scope) =>
+    [...scope.ordinary, ...scope.protected].map((group) => group.id),
+  )
   if (new Set(groupIDs).size !== groupIDs.length) throw new Error("Directory group identities overlap")
   for (const scope of Object.values(input.scopes)) {
     const groups = [...scope.ordinary, ...scope.protected]
-    if (new Set(groups.map((group) => group.name)).size !== groups.length ||
-        !scope.protected.slice(2).some((group) => group.id === scope.selectedGroupID) ||
-        new Set(scope.messages.ids).size !== 125 || new Set(scope.messages.markers).size !== 125 ||
-        scope.messages.oldestMarker === scope.messages.newestMarker ||
-        !scope.messages.markers.includes(scope.messages.oldestMarker) ||
-        !scope.messages.markers.includes(scope.messages.newestMarker))
+    if (
+      new Set(groups.map((group) => group.name)).size !== groups.length ||
+      !scope.protected.slice(2).some((group) => group.id === scope.selectedGroupID) ||
+      new Set(scope.messages.ids).size !== 125 ||
+      new Set(scope.messages.markers).size !== 125 ||
+      scope.messages.oldestMarker === scope.messages.newestMarker ||
+      !scope.messages.markers.includes(scope.messages.oldestMarker) ||
+      !scope.messages.markers.includes(scope.messages.newestMarker)
+    )
       throw new Error("Distinct off-page groups and 125 exact original messages are required")
   }
   return input
@@ -71,9 +93,15 @@ export async function prepare(filename: string, live = false) {
 }
 
 export function safe(input: Input) {
-  return { version: input.version, window: input.window, rootCount: 1, directoryCount: 2,
+  return {
+    version: input.version,
+    window: input.window,
+    rootCount: 1,
+    directoryCount: 2,
     ordinaryCounts: [input.scopes.A.ordinary.length, input.scopes.B.ordinary.length],
     protectedCounts: [input.scopes.A.protected.length, input.scopes.B.protected.length],
-    messagesPerDirectory: 125, faultActions: input.faults.state,
-    faultCoverage: "OPEN: original backend held-page, epoch replacement and cold-ready signals required" }
+    messagesPerDirectory: 125,
+    faultActions: input.faults.state,
+    faultCoverage: "OPEN: original backend held-page, epoch replacement and cold-ready signals required",
+  }
 }

@@ -1431,9 +1431,14 @@ export const layer = Layer.effect(
             const value = ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(ConfigParse.jsonc(other.text, other.path), other.path), other.path)
             if (Object.hasOwn(value.mcp ?? {}, name)) throw new McpRemovalError({ reason: "changed" })
           }
-          const updated = applyEdits(text, modify(text, ["mcp", name], undefined, {
-            formattingOptions: { insertSpaces: true, tabSize: 2 },
-          }))
+          const updated = Object.hasOwn(parsed.mcp ?? {}, name)
+            ? applyEdits(
+                text,
+                modify(text, ["mcp", name], undefined, {
+                  formattingOptions: { insertSpaces: true, tabSize: 2 },
+                }),
+              )
+            : text
           ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(ConfigParse.jsonc(updated, file), file), file)
           return { config: current.text === undefined ? undefined : { file: current, text: updated }, settings, value: undefined }
         },

@@ -21,11 +21,14 @@ type WorkerInput = {
 }
 
 const runWorker = async (input: WorkerInput) => {
-  const child = Bun.spawn([process.execPath, "test/fixture/agent-execution-worker.ts", JSON.stringify(input)], {
-    cwd: import.meta.dir.replace(/\/test$/, ""),
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+  const child = Bun.spawn(
+    [process.execPath, join(import.meta.dir, "fixture/agent-execution-worker.ts"), JSON.stringify(input)],
+    {
+      cwd: join(import.meta.dir, ".."),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  )
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
@@ -77,9 +80,9 @@ describe("AgentExecution cross-process recovery", () => {
       })
       expect(takeover).toMatchObject({ type: "claimed", record: { generation: 2, ownerID: "process_b" } })
 
-      expect(
-        await runWorker({ ...base, action: "complete", now: 2_100, ownerID: "process_a", generation: 1 }),
-      ).toBe(false)
+      expect(await runWorker({ ...base, action: "complete", now: 2_100, ownerID: "process_a", generation: 1 })).toBe(
+        false,
+      )
       expect(
         await runWorker({
           ...base,

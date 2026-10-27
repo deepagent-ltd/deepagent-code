@@ -1,13 +1,14 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { BrowserFileSchema } from "@deepagent-code/core/browser/file-exchange.schema"
 
 // This is a native binary protocol/FD oracle, not an installed Native factory approval.
-test("actual Rust binary FD: 50MiB once, byte-preserving create-no-replace, inode drift and close custody", async () => {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-binary-"))
+test.skipIf(process.platform === "win32")("actual POSIX Rust binary FD: 50MiB once, byte-preserving create-no-replace, inode drift and close custody", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-binary-")))
   const project = path.join(root, "project")
   const stage = path.join(root, "stage")
   await fs.mkdir(project, { mode: 0o700 }); await fs.mkdir(stage, { mode: 0o700 })

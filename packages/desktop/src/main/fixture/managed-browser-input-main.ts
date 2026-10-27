@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import path from "node:path"
 import { writeFile } from "node:fs/promises"
+import { appendFileSync, writeFileSync } from "node:fs"
 import type { BrowserWindow } from "electron"
 import type { BrowserSchema } from "@deepagent-code/core/browser/schema"
 import { managedBrowserInputFixtureAsset } from "./managed-browser-input-fixture-asset"
@@ -8,6 +9,12 @@ import { managedBrowserInputFixtureAsset } from "./managed-browser-input-fixture
 const root = process.argv[2]!
 const utility = Reflect.get(process, "type") === "utility"
 const checkpoint = { phase: "startup", ordinal: 0 }
+const stage = (phase: string) => {
+  checkpoint.phase = phase
+  appendFileSync(path.join(root, utility ? "utility-stages.jsonl" : "main-stages.jsonl"),
+    JSON.stringify({ phase, ordinal: checkpoint.ordinal, at: Date.now(), elapsedMs: performance.now() }) + "\n", { mode: 0o600 })
+}
+stage("entry")
 
 async function runUtility() {
   const { Effect, Exit, Cause, Option } = await import("effect")
@@ -19,7 +26,9 @@ async function runUtility() {
     on(event: "message", listener: (message: { data: { type?: string; dispatches?: number } }) => void): void
     removeListener(event: "message", listener: (message: { data: { type?: string } }) => void): void
   }
+  stage("prepare-host")
   await BrowserNativeHost.prepare()
+  stage("host-prepared")
   const host = BrowserNativeHost.current()!
   const now = Date.now()
   const control: BrowserSchema.Control = { version: 1, controlID: "source-main", requestID: "create-source",
@@ -35,6 +44,7 @@ async function runUtility() {
     const id = ++sequence.value
     checkpoint.phase = command.type
     checkpoint.ordinal = id
+    stage(`request:${command.type}`)
     const action: BrowserSchema.Action = { version: 1, actionID: `source-${id}`, controlID: control.controlID,
       requestID: `request-${id}`, commandDigest: BrowserControl.hash(command), command, admissionID: `admission-${id}`,
       providerReceiptID: "qa-receipt", providerAttemptID: "qa-attempt", toolCallID: `qa-call-${id}`,
@@ -45,16 +55,19 @@ async function runUtility() {
   }
   const execute = (command: BrowserSchema.Command) => Effect.runPromise(request(command))
   const native = (kind: "other" | "own" | "counts") => new Promise<number>((resolve) => {
+    stage(`native:${kind}:request`)
     const listener = (message: { data: { type?: string; dispatches?: number } }) => {
       if (message.data.type !== "source-event-processed") return
       parent.removeListener("message", listener)
+      stage(`native:${kind}:processed`)
       resolve(message.data.dispatches!)
     }
     parent.on("message", listener)
     parent.postMessage({ type: "source-event", kind })
   })
+  stage("create-host")
   await Effect.runPromise(host.create(control))
-  checkpoint.phase = "created"
+  stage("created")
   const original = (await execute({ type: "tabs.list" })).result.tabs[0]!
   const tab = (await execute({ type: "navigate", tabID: original.tabID, generation: original.generation,
     url: control.origin + "/" })).result.tabs[0]!
@@ -112,54 +125,71 @@ async function runUtility() {
   parent.postMessage({ type: "source-result", result: { otherWindowResourcePreserved: true, reobserved,
     initialGeneration: tab.generation, afterOtherGeneration: otherWindowTab.generation, ownSourceRetired: true,
     staleDispatches: after - before, freshOwnCDPPreserved: true, stopped, actions: sequence.value } })
+  stage("source-result-posted")
   process.exit(0)
 }
 
 async function runMain() {
+  stage("main-imports")
   const { app, BrowserWindow, utilityProcess } = await import("electron")
   const { createServer } = await import("node:http")
   const { createRequire } = await import("node:module")
   const { installManagedBrowser } = await import("../managed-browser")
   app.setPath("userData", path.join(root, "profile"))
+  const runtimePaths = { userData: app.getPath("userData"), sessionData: app.getPath("sessionData") }
+  writeFileSync(path.join(root, "runtime-paths.json"), JSON.stringify(runtimePaths), { mode: 0o600 })
+  assert.ok(Object.values(runtimePaths).every((value) => value === path.join(root, "profile")))
   app.commandLine.appendSwitch("disable-background-networking")
-  // Keep qualification windows away from unrelated cursor/focus input. Native
-  // events below still target their original AppKit handles in this process.
-  app.on("browser-window-created", (_event, window) => window.hide())
+  // Keep a shown native input surface away from ambient pointer events. The
+  // constructor can show after browser-window-created; hiding there is not isolation.
+  app.on("browser-window-created", (_event, window) => {
+    window.on("show", () => { window.setPosition(-10_000, -10_000); stage("window-shown-offpointer") })
+    window.setPosition(-10_000, -10_000)
+    stage("window-created-offpointer")
+  })
   app.on("window-all-closed", () => {})
+  stage("app-ready:wait")
   await app.whenReady()
+  stage("app-ready")
   const qa = createRequire(import.meta.url)(path.join(root, "qa.node")) as {
     postKey(handle: Buffer): void; counts(): { installed: number; removed: number }
     tracking(value: boolean): void; cleanup(filename: string): void }
   qa.cleanup(path.join(root, "cleanup.json"))
+  stage("qa-loaded")
   const peer = createServer((_request, response) => {
     response.setHeader("Content-Type", "text/html; charset=utf-8")
     response.end('<label>Name<input autofocus></label><div style="height:1000px">Source target</div>')
   })
   await new Promise<void>((resolve) => peer.listen(0, "127.0.0.1", resolve))
+  stage("peer-listening")
   const address = peer.address()
   assert.ok(address && typeof address !== "string")
-  const child = utilityProcess.fork(process.argv[1]!, [root], { env: { ...process.env,
-    DAC_SOURCE_ORIGIN: `http://127.0.0.1:${address.port}` }, stdio: "pipe" })
-  child.stdout?.on("data", (bytes) => process.stdout.write(bytes))
-  child.stderr?.on("data", (bytes) => process.stderr.write(bytes))
   // Create the independent window before observing a target. Creating it later
-  // can legitimately retire the first window's IME source while focus changes.
+  // can retire the first window's IME source. Do not construct a Window between
+  // forking and installing the original bootstrap listener: Cocoa may reenter.
   const state = { close: undefined as undefined | (() => void), result: undefined as unknown,
     other: new BrowserWindow({ show: false,
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } }),
     dispatches: 0, observed: false }
-  const timer = setTimeout(() => { child.kill(); app.exit(2) }, 20_000)
+  stage("other-window-created")
+  const child = utilityProcess.fork(process.argv[1]!, [root], { env: { ...process.env,
+    DAC_SOURCE_ORIGIN: `http://127.0.0.1:${address.port}` }, stdio: "pipe" })
+  stage("utility-forked")
+  const timer = setTimeout(() => { stage("main-watchdog"); child.kill(); app.exit(2) }, 20_000)
   qa.tracking(true)
   child.on("message", (message) => {
     if (message.type === "managed-browser-bootstrap-ready-v1") {
+      stage("bootstrap-ready")
       // The default ESM qualification exercises the product's fixed build-selected asset path.
       state.close = process.argv[1]!.endsWith(".cjs")
         ? installManagedBrowser(child, "source-fixture", managedBrowserInputFixtureAsset(root))
         : installManagedBrowser(child, "source-fixture")
+      stage("browser-installed")
       return
     }
-    if (message.type === "source-result") { state.result = message.result; return }
+    if (message.type === "source-result") { stage("source-result"); state.result = message.result; return }
     if (message.type !== "source-event") return
+    stage(`source-event:${message.kind}`)
     const window = BrowserWindow.getAllWindows().find((window) => window !== state.other)!
     if (!state.observed) {
       state.observed = true
@@ -178,13 +208,18 @@ async function runMain() {
     // The later generation assertion proves that the actual AppKit event was consumed.
     setTimeout(() => child.postMessage({ type: "source-event-processed", dispatches: state.dispatches }), 75)
   })
+  stage("message-listener-installed")
+  child.stdout?.on("data", (bytes) => process.stdout.write(bytes))
+  child.stderr?.on("data", (bytes) => process.stderr.write(bytes))
   await new Promise<void>((resolve, reject) => child.once("exit", (code) => {
+    stage(`utility-exit:${code}`)
     clearTimeout(timer)
     state.close?.()
     if (state.other && !state.other.isDestroyed()) state.other.destroy()
     peer.closeAllConnections()
     peer.close(() => {
-      void writeFile(path.join(root, "result.json"), JSON.stringify({ childExit: code, result: state.result,
+      stage("peer-closed")
+      void writeFile(path.join(root, "result.json"), JSON.stringify({ childExit: code, result: state.result, runtimePaths,
         runtime: { electron: process.versions.electron, node: process.versions.node, arch: process.arch },
         defaultProductAsset: !process.argv[1]!.endsWith(".cjs"),
         monitors: qa.counts(), windows: BrowserWindow.getAllWindows().length,
@@ -192,6 +227,7 @@ async function runMain() {
       { mode: 0o600 }).then(() => code === 0 ? resolve() : reject(new Error("QA_CHILD_FAILED")))
     })
   }))
+  stage("complete")
   app.exit(0)
 }
 

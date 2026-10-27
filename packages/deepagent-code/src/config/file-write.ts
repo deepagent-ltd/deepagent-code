@@ -107,7 +107,11 @@ export const transaction = <A, E, R>(files: readonly string[], body: (tx: Transa
       return yield* body({
         files: observed,
         file: (name) => {
-          const file = observed.find((file) => file.path === names.find((item) => item[0] === path.resolve(name))?.[1])
+          const resolved = path.resolve(name)
+          // Settled journals retain the canonical identity returned by this transaction.
+          const file = observed.find((file) =>
+            file.path === resolved || file.path === names.find((item) => item[0] === resolved)?.[1],
+          )
           if (!file) throw new Error({ reason: "changed" })
           return file
         },

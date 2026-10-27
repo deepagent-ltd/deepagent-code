@@ -1,13 +1,18 @@
 export * as KernelLiveFirstSeenFixture from "./kernel-live-first-seen"
 
-import type { ServerWebSocket } from "bun"
-import { createHash } from "node:crypto"
+import type { ServerWebSocket, TLSOptions } from "bun"
+import { createHash, createPublicKey, randomBytes, verify } from "node:crypto"
+import assert from "node:assert/strict"
+import { Schema } from "effect"
+import { IMDeviceProof } from "../../../src/im/device-proof"
 import Proto from "../../../../im-kernel-sdk/upstream/src/socket/proto"
 import { SIGNAL_CMD } from "../../../../im-kernel-sdk/upstream/src/enum"
 
 const root = Proto as { lookup: (name: string) => { encode: (value: unknown) => { finish: () => Uint8Array }; decode: (value: Uint8Array) => Record<string, unknown> } }
-type Peer = ServerWebSocket<{ key: Uint8Array | undefined; userID: string }>
+type Peer = ServerWebSocket<{ key: Uint8Array | undefined; userID: string; challenge?: IMDeviceProof.SocketChallenge }>
 export function make(options: { outboundPublish?: (request: Record<string, unknown>, message: Record<string, unknown>) => Record<string, unknown>;
+  tls?: TLSOptions;
+  device?: { publicJwk: IMDeviceProof.PublicJwk; appkey: string; token: string };
   receiverBaseline?: (topic: string, request: Record<string, unknown>, receiverID: string) => Record<string, unknown>;
   afterOutboundPublish?: (close: () => void) => "drop_ack" | undefined;
   secondIdentity?: { token: string; userID: string };
@@ -24,12 +29,12 @@ export function make(options: { outboundPublish?: (request: Record<string, unkno
   const encode = (name: string, value: unknown) => root.lookup(`codec.${name}`).encode(canonical(value)).finish()
   const xor = (bytes: Uint8Array, key: Uint8Array) => Uint8Array.from(bytes, (value, index) => value ^ key[index % 8])
   const send = (peer: Peer, cmd: number, name: string, value: unknown) => peer.send(encode("ImWebsocketMsg", { version: 1, cmd, qos: 1, payload: xor(encode(name, value), peer.data.key!) }))
-  const server = Bun.serve<{ key: Uint8Array | undefined; userID: string }>({ hostname: "127.0.0.1", port: 0,
+  const server = Bun.serve<{ key: Uint8Array | undefined; userID: string; challenge?: IMDeviceProof.SocketChallenge }>({ hostname: "127.0.0.1", port: 0, tls: options.tls,
     fetch(request, owner) {
       const supplied = options.fetch?.(request)
       if (supplied) return supplied
       const pathname = new URL(request.url).pathname
-      if (pathname === "/navigator/general") return Response.json({ code: 0, data: { user_id: request.headers.get("x-token") === options.secondIdentity?.token ? options.secondIdentity.userID : "receiver", servers: [owner.url.origin] } })
+      if (pathname === "/navigator/general") return Response.json({ code: 0, data: { user_id: request.headers.get("x-token") === options.secondIdentity?.token ? options.secondIdentity.userID : "receiver", servers: [owner.url.origin] } }, { headers: { "cache-control": "no-store" } })
       if (pathname === "/health") return Response.json({ code: 0 })
       if (pathname === "/im" && owner.upgrade(request, { data: { key: undefined, userID: "receiver" } })) return
       return new Response(null, { status: 404 })
@@ -47,7 +52,31 @@ export function make(options: { outboundPublish?: (request: Record<string, unkno
           const known = [10, 8, 106, 117, 103, 57, 108, 101]
           peer.data.key = Uint8Array.from(known, (value, index) => value ^ payloadBytes[index])
           const request = root.lookup("codec.ConnectMsgBody").decode(xor(envelope.payload, peer.data.key))
-          if (request.protoId !== "jug9le1m" || (request.token !== "private-first-seen-token" && request.token !== options.secondIdentity?.token)) throw new Error("Unexpected original SDK CONNECT")
+          if (request.protoId !== "jug9le1m" || (request.token !== (options.device?.token ?? "private-first-seen-token") && request.token !== options.secondIdentity?.token)) throw new Error("Unexpected original SDK CONNECT")
+          if (options.device) {
+            const ext = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ profile: Schema.Literal(IMDeviceProof.socketProfile), proof: Schema.optional(Schema.String) })))(request.ext)
+            if (!ext.proof) {
+              assert(!peer.data.challenge, "Original device challenge is single use")
+              const challenge = { profile: IMDeviceProof.socketProfile, nonce: randomBytes(32).toString("base64url"), socketSession: randomBytes(24).toString("hex"),
+                audience: server.url.origin.replace(/^https:/, "wss:") + "/im", appkey: options.device.appkey,
+                credentialDigest: createHash("sha256").update(String(request.token)).digest("hex"), expiresAt: Date.now() + 10000 } satisfies IMDeviceProof.SocketChallenge
+              peer.data.challenge = challenge
+              send(peer, SIGNAL_CMD.CONNECT_ACK, "ConnectAckMsgBody", { code: 11024, ext: JSON.stringify(challenge), timestamp: Date.now() })
+              return
+            }
+            const challenge = peer.data.challenge
+            assert(challenge && challenge.expiresAt > Date.now(), "The original live challenge must exist")
+            const parts = ext.proof.split(".")
+            assert.equal(parts.length, 3)
+            const header = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ typ: Schema.Literal("dac-im-connect-proof+jwt"), alg: Schema.Literal("ES256"), jwk: Schema.Unknown })))(Buffer.from(parts[0]!, "base64url").toString())
+            assert.deepEqual(IMDeviceProof.publicJwk(header.jwk), options.device.publicJwk)
+            assert(verify("sha256", Buffer.from(parts[0] + "." + parts[1]), { key: createPublicKey({ format: "jwk", key: options.device.publicJwk }), dsaEncoding: "ieee-p1363" }, Buffer.from(parts[2]!, "base64url")))
+            const claims = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ v: Schema.Literal(1), purpose: Schema.Literal("im-connect"), aud: Schema.String,
+              appkey: Schema.String, nonce: Schema.String, sid: Schema.String, ath: Schema.String, entitlementID: Schema.String, bindingVersion: Schema.Literal(1), iat: Schema.Number, exp: Schema.Number, jti: Schema.String })))(Buffer.from(parts[1]!, "base64url").toString())
+            assert.equal(claims.aud, challenge.audience); assert.equal(claims.appkey, challenge.appkey); assert.equal(claims.nonce, challenge.nonce); assert.equal(claims.sid, challenge.socketSession)
+            assert.equal(claims.ath, IMDeviceProof.credentialHash(String(request.token))); assert.equal(claims.entitlementID, "e".repeat(32)); assert(claims.exp > Date.now() / 1000 && claims.exp - claims.iat <= 10)
+            delete peer.data.challenge
+          }
           peer.data.userID = options.secondIdentity && request.token === options.secondIdentity.token ? options.secondIdentity.userID : "receiver"
           peers.push(peer)
           send(peer, SIGNAL_CMD.CONNECT_ACK, "ConnectAckMsgBody", { code: 0, userId: peer.data.userID, timestamp: Date.now(),

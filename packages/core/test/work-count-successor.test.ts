@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
 import { Cause, Effect, Exit, Layer, Option, Schema } from "effect"
 import fs from "node:fs/promises"
@@ -13,7 +14,7 @@ import { WorkAuthorityFixture } from "./fixture/work-authority"
 import { WorkRouteApprovalFixture } from "./fixture/work-route-approval"
 
 test("project count data cannot silently upgrade the actual v1 file-DB slot or its MAC", async () => {
-  const root = await fs.mkdtemp("/tmp/dac-count-successor-")
+  const root = await fs.mkdtemp(path.join(tmpdir(), "dac-count-successor-"))
   const proof = WorkRouteApprovalFixture.authority()
   const run = <A, E>(effect: Effect.Effect<A, E, Database.Service>) => Effect.runPromise(effect.pipe(
     Effect.provide(Layer.mergeAll(WorkAuthorityFixture.database(path.join(root, "file.sqlite")),

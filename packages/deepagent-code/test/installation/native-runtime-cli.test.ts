@@ -8,6 +8,8 @@ import { createServer, request } from "node:http"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { NativeInstallationSchema } from "../../src/installation/native-installation.schema"
+import { buildWorkFileHelper } from "../../script/build-work-file-helper"
+import { ownedSecretBuild } from "../fixture/owned-secret-build"
 
 const repository = path.resolve(import.meta.dir, "../../../..")
 const host = path.join(repository, "packages/deepagent-code")
@@ -19,6 +21,7 @@ test("signed compiled actual CLI uses Root catalog and native factory through th
   const pair = generateKeyPairSync("ed25519")
   const pin = pair.publicKey.export({ type: "spki", format: "pem" }).toString()
   const fixture = path.join(import.meta.dir, "fixture/native-runtime-cli-command.ts")
+  const helper = await buildWorkFileHelper({ os: process.platform, arch: process.arch, destination: root })
   const files = Bun.spawnSync(
     [
       "git",
@@ -30,6 +33,10 @@ test("signed compiled actual CLI uses Root catalog and native factory through th
       "packages/llm/src",
       "packages/deepagent-code/src",
       "packages/deepagent-code/script/build.ts",
+      "packages/deepagent-code/script/build-work-file-helper.ts",
+      "packages/work-file-helper/src",
+      "packages/work-file-helper/Cargo.toml",
+      "packages/work-file-helper/Cargo.lock",
       "packages/core/package.json",
       "packages/llm/package.json",
       "packages/deepagent-code/package.json",
@@ -41,22 +48,34 @@ test("signed compiled actual CLI uses Root catalog and native factory through th
     .stdout.toString()
     .trim()
     .split("\n")
+  const sourceComponents = await Promise.all(
+    [
+      ...new Set([...files, path.relative(repository, fixture), "packages/deepagent-code/test/fixture/owned-secret-build.ts"]),
+    ]
+      .toSorted()
+      .map(async (entry) => {
+        const bytes = await fs.readFile(path.join(repository, entry))
+        return new NativeInstallationSchema.Component({ path: entry, bytes: bytes.byteLength, sha256: hash(bytes) })
+      }),
+  )
   const components = new NativeInstallationSchema.Components({
     schemaVersion: "dac.native-components.v1",
     target: `${process.platform}-${process.arch}`,
     sourceCommit: Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repository }).stdout.toString().trim(),
     sourceTree: Bun.spawnSync(["git", "rev-parse", "HEAD^{tree}"], { cwd: repository }).stdout.toString().trim(),
-    components: await Promise.all(
-      [...new Set([...files, path.relative(repository, fixture)])].toSorted().map(async (entry) => {
-        const bytes = await fs.readFile(path.join(repository, entry))
-        return new NativeInstallationSchema.Component({ path: entry, bytes: bytes.byteLength, sha256: hash(bytes) })
-      }),
+    components: [...sourceComponents, new NativeInstallationSchema.Component(helper)].toSorted((a, b) =>
+      a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
     ),
   })
   const componentsText = CanonicalJson.stringify(components)
   const parserWorker = await fs.realpath(path.join(host, "node_modules/@opentui/core/parser.worker.js"))
   const build = await Bun.build({
-    entrypoints: [path.join(host, "src/index.ts"), parserWorker, path.join(host, "src/cli/tui/worker.ts")],
+    entrypoints: [
+      path.join(host, "src/index.ts"),
+      parserWorker,
+      path.join(host, "src/cli/tui/worker.ts"),
+      path.join(host, "src/location-index/typescript-index.worker.ts"),
+    ],
     tsconfig: path.join(host, "tsconfig.json"),
     conditions: ["node"],
     target: "bun",
@@ -65,6 +84,7 @@ test("signed compiled actual CLI uses Root catalog and native factory through th
     external: ["node-gyp"],
     plugins: [
       createSolidTransformPlugin(),
+      ownedSecretBuild,
       {
         name: "signed-test-debug-command",
         setup(builder) {
@@ -82,6 +102,7 @@ test("signed compiled actual CLI uses Root catalog and native factory through th
       DEEPAGENT_CODE_NATIVE_RUNTIME_PUBLIC_KEY: JSON.stringify(pin),
       DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST: JSON.stringify(componentsText),
       DEEPAGENT_CODE_WORKER_PATH: JSON.stringify("./src/cli/tui/worker.ts"),
+      DEEPAGENT_CODE_INDEX_WORKER_PATH: JSON.stringify("./src/location-index/typescript-index.worker.ts"),
       OTUI_TREE_SITTER_WORKER_PATH: JSON.stringify(`/$bunfs/root/${path.relative(host, parserWorker)}`),
     },
   })
@@ -92,7 +113,7 @@ test("signed compiled actual CLI uses Root catalog and native factory through th
   console.info("NATIVE_CLI_EVIDENCE", root)
   const changedDuringBuild = (
     await Promise.all(
-      components.components.map(async (component) =>
+      sourceComponents.map(async (component) =>
         hash(await fs.readFile(path.join(repository, component.path))) === component.sha256
           ? undefined
           : component.path,
@@ -104,6 +125,7 @@ test("signed compiled actual CLI uses Root catalog and native factory through th
     JSON.stringify({ checked: components.components.length, changedDuringBuild }),
   )
   expect(changedDuringBuild).toEqual([])
+  expect(hash(await fs.readFile(path.join(root, path.basename(helper.path))))).toBe(helper.sha256)
   expect(build.success).toBe(true)
   const bytes = await fs.readFile(executable)
   const payload = new NativeInstallationSchema.Payload({

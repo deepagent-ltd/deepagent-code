@@ -7,6 +7,7 @@ import { createIMClient, type IMClient } from "@/utils/im-client"
 import { createComposerDrafts } from "@/components/im/composer-draft"
 import { imSummaryOwner } from "@/components/im/summary-owner"
 import { dict } from "@/i18n/en"
+import { clickIMAction } from "./fixture/im-actions"
 
 const runtime = vi.hoisted(() => ({ client: undefined as IMClient | undefined, namespace: "" }))
 vi.mock("@/utils/im-client", async (original) => ({
@@ -30,6 +31,11 @@ vi.mock("@/context/server", async (original) => ({
 vi.mock("@/components/im/capabilities", () => ({ fetchIMCapabilities: async () => ({}) }))
 vi.mock("@deepagent-code/ui/context/dialog", () => ({ useDialog: () => ({ show: vi.fn() }) }))
 vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
+vi.mock("@/context/settings", () => ({
+  useSettings: () => ({ notifications: { agent: () => true }, sounds: { agentEnabled: () => true } }),
+}))
+vi.mock("@/context/server-sync", () => ({ useServerSync: () => ({ data: { config: {} } }) }))
+vi.mock("@/context/models", () => ({ useModels: () => ({ list: () => [], visible: () => false }) }))
 vi.mock("@/components/im/group-chat-panel", () => ({
   GroupChatPanel: (props: { groupID: string; drafts: ReturnType<typeof createComposerDrafts> }) => (
     <textarea
@@ -113,16 +119,20 @@ it.each(["credentials", "identity", "service"])(
     fireEvent.input(alice, { target: { value: "Alice private text" } })
     fireEvent.click(screen.getByRole("button", { name: dict["common.goBack"] }))
     setAccount("bob")
-    if (mode === "identity") fireEvent.click(screen.getByRole("button", { name: dict["im.transport.refresh"] }))
+    if (mode === "identity") await clickIMAction(dict["im.transport.refresh"])
+    fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.settings"] }))
     await screen.findByText("bob")
+    fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.messages"] }))
     fireEvent.click(await screen.findByRole("button", { name: /Same conversation/ }))
     const bob = await screen.findByRole("textbox", { name: "Private conversation draft" })
     expect((bob as HTMLTextAreaElement).value).toBe("")
     fireEvent.input(bob, { target: { value: "Bob private text" } })
     fireEvent.click(screen.getByRole("button", { name: dict["common.goBack"] }))
     setAccount("alice")
-    if (mode === "identity") fireEvent.click(screen.getByRole("button", { name: dict["im.transport.refresh"] }))
+    if (mode === "identity") await clickIMAction(dict["im.transport.refresh"])
+    fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.settings"] }))
     await screen.findByText("alice")
+    fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.messages"] }))
     fireEvent.click(await screen.findByRole("button", { name: /Same conversation/ }))
     expect(
       ((await screen.findByRole("textbox", { name: "Private conversation draft" })) as HTMLTextAreaElement).value,
@@ -196,12 +206,15 @@ it("restores selected conversation on each same-account panel reopen without los
     target: { value: "Preserved exact draft" },
   })
   const originalComposer = screen.getByRole("textbox", { name: "Private conversation draft" })
+  fireEvent.click(screen.getByRole("button", { name: dict["common.goBack"] }))
   fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.contacts"] }))
-  expect(originalComposer.isConnected).toBe(true)
+  expect(originalComposer.isConnected).toBe(false)
   expect(screen.queryByRole("textbox", { name: "Private conversation draft" })).toBeNull()
+  fireEvent.click(screen.getByRole("button", { name: dict["im.workspace.messages"] }))
   fireEvent.click(screen.getByRole("button", { name: /Selected beta/ }))
-  expect(screen.getByRole("textbox", { name: "Private conversation draft" })).toBe(originalComposer)
-  expect((originalComposer as HTMLTextAreaElement).value).toBe("Preserved exact draft")
+  const returnedComposer = await screen.findByRole("textbox", { name: "Private conversation draft" })
+  expect(returnedComposer).not.toBe(originalComposer)
+  expect((returnedComposer as HTMLTextAreaElement).value).toBe("Preserved exact draft")
   for (const pass of [1, 2]) {
     setOpen(false)
     expect(screen.queryByRole("textbox", { name: "Private conversation draft" })).toBeNull()

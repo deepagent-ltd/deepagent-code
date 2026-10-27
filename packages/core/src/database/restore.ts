@@ -8,6 +8,7 @@ import { Database as BunDatabase } from "#sqlite-native"
 import { Backup, type BackupManifest } from "./backup"
 import { BackupVerify } from "./backup-verify"
 import { sha256File } from "./file-sha256"
+import { DurablePublish } from "./durable-publish"
 import { Database } from "./database"
 import { DatabaseMigrationLease } from "./migration-lease"
 
@@ -126,21 +127,28 @@ const installFile = (source: string, target: string) =>
       },
       catch: () => new RestoreError({ code: "install_failed", detail: `cannot fsync ${tmp}` }),
     })
-    yield* Effect.tryPromise({
-      try: () => fs.rename(tmp, target),
-      catch: () => new RestoreError({ code: "install_failed", detail: `cannot rename ${tmp} -> ${target}` }),
-    })
-    yield* Effect.tryPromise({
-      try: async () => {
-        const handle = await fs.open(dir, "r")
-        try {
-          await handle.sync()
-        } finally {
-          await handle.close()
-        }
-      },
-      catch: () => new RestoreError({ code: "install_failed", detail: `cannot fsync dir ${dir}` }),
-    })
+    if (process.platform === "win32") {
+      yield* DurablePublish.windows(tmp, target, true).pipe(
+        Effect.mapError((error) => new RestoreError({ code: "install_failed", detail: error.detail })),
+      )
+    }
+    if (process.platform !== "win32") {
+      yield* Effect.tryPromise({
+        try: () => fs.rename(tmp, target),
+        catch: () => new RestoreError({ code: "install_failed", detail: `cannot rename ${tmp} -> ${target}` }),
+      })
+      yield* Effect.tryPromise({
+        try: async () => {
+          const handle = await fs.open(dir, "r")
+          try {
+            await handle.sync()
+          } finally {
+            await handle.close()
+          }
+        },
+        catch: () => new RestoreError({ code: "install_failed", detail: `cannot fsync dir ${dir}` }),
+      })
+    }
   })
 
 /** Bitwise read-only verification of the installed backup (integrity + FK + registry-set equality). */
@@ -154,7 +162,8 @@ const verifyInstalled = (dbPath: string, manifest: BackupManifest) =>
         new RestoreError({ code: "reopen_verify_failed", detail: `cannot reopen installed database: ${dbPath}` }),
       )
     try {
-      const quick = (reload.query("PRAGMA integrity_check").get() as { integrity_check: string } | undefined)?.integrity_check
+      const quick = (reload.query("PRAGMA integrity_check").get() as { integrity_check: string } | undefined)
+        ?.integrity_check
       if (quick !== "ok")
         return yield* Effect.fail(
           new RestoreError({ code: "reopen_verify_failed", detail: `integrity_check returned ${String(quick)}` }),
@@ -162,11 +171,14 @@ const verifyInstalled = (dbPath: string, manifest: BackupManifest) =>
       const orphans = reload.query("PRAGMA foreign_key_check").all() as Record<string, unknown>[]
       if (orphans.length > 0)
         return yield* Effect.fail(
-          new RestoreError({ code: "reopen_verify_failed", detail: `${orphans.length} orphaned foreign-key reference(s)` }),
+          new RestoreError({
+            code: "reopen_verify_failed",
+            detail: `${orphans.length} orphaned foreign-key reference(s)`,
+          }),
         )
-      const applied = (
-        reload.query("SELECT id FROM migration ORDER BY id").all() as { id: string }[]
-      ).map((row) => row.id).sort()
+      const applied = (reload.query("SELECT id FROM migration ORDER BY id").all() as { id: string }[])
+        .map((row) => row.id)
+        .sort()
       const expected = [...manifest.source.appliedMigrationIds].sort()
       if (applied.length !== expected.length || applied.some((id, i) => id !== expected[i]))
         return yield* Effect.fail(
@@ -209,7 +221,9 @@ const restoreVerifiedOwned = Effect.fn("Restore.restoreVerifiedOwned")(function*
 
   const backupPath = path.resolve(options.backup.backup.filePath)
   if (!(yield* exists(backupPath)))
-    return yield* Effect.fail(new RestoreError({ code: "backup_invalid", detail: `backup file missing: ${backupPath}` }))
+    return yield* Effect.fail(
+      new RestoreError({ code: "backup_invalid", detail: `backup file missing: ${backupPath}` }),
+    )
 
   // 2. Quarantine: COPY the live DB + WAL + SHM into a unique incident set (never overwrite/delete it).
   const incidentDir = yield* makeIncidentDir(quarantineRoot)
@@ -218,8 +232,7 @@ const restoreVerifiedOwned = Effect.fn("Restore.restoreVerifiedOwned")(function*
     if (yield* exists(part)) {
       yield* Effect.tryPromise({
         try: () => fs.copyFile(part, path.join(incidentDir, path.basename(part))),
-        catch: () =>
-          new RestoreError({ code: "quarantine_failed", detail: `cannot quarantine-copy ${part}` }),
+        catch: () => new RestoreError({ code: "quarantine_failed", detail: `cannot quarantine-copy ${part}` }),
       })
     }
   }
@@ -285,7 +298,8 @@ const restoreVerifiedOwned = Effect.fn("Restore.restoreVerifiedOwned")(function*
   const manifestPath = `${dbPath}.restore-manifest.json`
   yield* Effect.tryPromise({
     try: async () => {
-      const handle = await fs.open(manifestPath, "w")
+      const target = process.platform === "win32" ? `${manifestPath}.tmp-${restoreId}` : manifestPath
+      const handle = await (process.platform === "win32" ? fs.open(target, "wx", 0o600) : fs.open(target, "w"))
       try {
         await handle.writeFile(JSON.stringify(manifest, null, 2))
         await handle.sync()
@@ -295,6 +309,12 @@ const restoreVerifiedOwned = Effect.fn("Restore.restoreVerifiedOwned")(function*
     },
     catch: () => new RestoreError({ code: "install_failed", detail: `cannot write restore manifest: ${manifestPath}` }),
   })
+
+  if (process.platform === "win32") {
+    yield* DurablePublish.windows(`${manifestPath}.tmp-${restoreId}`, manifestPath, true).pipe(
+      Effect.mapError((error) => new RestoreError({ code: "install_failed", detail: error.detail })),
+    )
+  }
 
   if (!result.restored) return yield* Effect.fail(result.error)
 

@@ -12,6 +12,12 @@ const root = process.env.DAC_BROWSER_TEST_ROOT!
 app.setPath("userData", path.join(root, "electron-user"))
 app.setPath("sessionData", path.join(root, "electron-session"))
 app.commandLine.appendSwitch("disable-background-networking")
+// A shown window outside the pointer's screen area keeps ambient cursor events
+// from invalidating this qualifier's real native source during awaited checks.
+app.on("browser-window-created", (_event, window) => {
+  window.on("show", () => window.setPosition(-10_000, -10_000))
+  window.setPosition(-10_000, -10_000)
+})
 app.on("window-all-closed", () => {})
 
 async function main() {

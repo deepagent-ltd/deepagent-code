@@ -40,6 +40,7 @@ import { withStatics } from "./schema"
 import { Identifier } from "./util/identifier"
 import { Wildcard } from "./util/wildcard"
 import { PermissionSchema } from "./permission/schema"
+import { PermissionPolicy } from "./permission/policy"
 import { PermissionSaved } from "./permission/saved"
 import { PermissionSavedEpochTable } from "./permission/sql"
 import { CanonicalJson } from "./util/canonical-json"
@@ -179,17 +180,7 @@ export class CapacityError extends Schema.TaggedErrorClass<CapacityError>()("Per
 
 export type Error = DeniedError | RejectedError | CorrectedError | CapacityError
 
-export function evaluate(action: string, resource: string, ...rulesets: Ruleset[]): Rule {
-  return (
-    rulesets
-      .flat()
-      .findLast((rule) => Wildcard.match(action, rule.action) && Wildcard.match(resource, rule.resource)) ?? {
-      action,
-      resource: "*",
-      effect: "ask",
-    }
-  )
-}
+export const evaluate = PermissionPolicy.evaluate
 
 export function merge(...rulesets: Ruleset[]): Ruleset {
   return rulesets.flat()

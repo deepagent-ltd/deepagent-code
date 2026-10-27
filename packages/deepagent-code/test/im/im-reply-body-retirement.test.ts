@@ -17,6 +17,7 @@ import { IMBroadcasterLive, IMBroadcasterService } from "@deepagent-code/core/im
 import { IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { ReplyBodyRetirement } from "@deepagent-code/core/im/reply-body-retirement"
 import { ReplyBodyRetirementModel } from "@deepagent-code/core/im/reply-body-retirement.model"
+import { KernelDelivery } from "@deepagent-code/core/im/kernel-delivery"
 import { IMReplyOutbox } from "@/im/im-reply-outbox"
 import { ReplyBodyFixture } from "../../../core/test/fixture/im-reply-body-retirement"
 
@@ -32,12 +33,29 @@ const isolated = async (body: (filename: string) => Promise<void>) => {
 }
 const services = (filename: string) =>
   Layer.mergeAll(Layer.provideMerge(IMRepositoryLive, Database.layerFromPath(filename)), IMBroadcasterLive)
+const sessionLayer = (database: ReturnType<typeof Database.layerFromPath>) => {
+  const events = EventV2.layer.pipe(Layer.provide(database))
+  return SessionV2.layer.pipe(
+    Layer.provide(SessionExecution.noopLayer),
+    Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
+    Layer.provide(SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))),
+    Layer.provide(events),
+    Layer.provide(database),
+    Layer.provide(
+      ProjectV2.layer.pipe(
+        Layer.provide(database),
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(Git.defaultLayer),
+      ),
+    ),
+  )
+}
 const append = (s: Effect.Success<ReturnType<typeof ReplyBodyFixture.make>>) => ({
   id: s.id,
-  sessionID: "ses_im_reply_history",
+  sessionID: s.sessionID,
   groupID: s.group.id,
   agentID: "auto",
-  triggerMessageID: "msg_reply_input",
+  triggerMessageID: s.inputID,
   replyMessageID: "msg_reply_final",
   replyText: ReplyBodyFixture.reply,
   now: Date.now(),
@@ -81,7 +99,7 @@ test("local-only reply is explicit persistent defer, exact append never changes 
   isolated(async (filename) => {
     const original = await Effect.runPromise(
       Effect.gen(function* () {
-        const s = yield* ReplyBodyFixture.make({ append: false })
+        const s = yield* ReplyBodyFixture.make({ append: false, bindingWorkspaceID: "wrk_reply_host_local" })
         const input = append(s)
         yield* IMReplyOutbox.appendReply(s.db, input)
         const item = yield* IMReplyOutbox.claimDueReply(s.db, { ownerToken: "first", now: Date.now() })
@@ -197,7 +215,7 @@ test("Host retired exact append is noop and direct delivery rejects before origi
 
 test("cold actual Session collector resolves retired closure before any independent final-body read", () =>
   isolated(async (filename) => {
-    await Effect.runPromise(
+    const sessionID = await Effect.runPromise(
       Effect.gen(function* () {
         const s = yield* ReplyBodyFixture.make({ append: false })
         yield* IMReplyOutbox.appendReply(s.db, append(s))
@@ -208,26 +226,12 @@ test("cold actual Session collector resolves retired closure before any independ
         const original = yield* ReplyBodyRetirement.read(s.db, s.id)
         yield* s.retire(original.record.transport!.binding.expiresAt)
         yield* s.db.run(
-          sql`UPDATE session SET metadata=${JSON.stringify({ im: { groupID: s.group.id, agent: "auto" } })} WHERE id='ses_im_reply_history'`,
+          sql`UPDATE session SET metadata=${JSON.stringify({ im: { groupID: s.group.id, agent: "auto" } })} WHERE id=${s.sessionID}`,
         )
+        return s.sessionID
       }).pipe(Effect.provide(services(filename)), Effect.scoped),
     )
     const database = Database.layerFromPath(filename)
-    const events = EventV2.layer.pipe(Layer.provide(database))
-    const sessions = SessionV2.layer.pipe(
-      Layer.provide(SessionExecution.noopLayer),
-      Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
-      Layer.provide(SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))),
-      Layer.provide(events),
-      Layer.provide(database),
-      Layer.provide(
-        ProjectV2.layer.pipe(
-          Layer.provide(database),
-          Layer.provide(FSUtil.defaultLayer),
-          Layer.provide(Git.defaultLayer),
-        ),
-      ),
-    )
     await Effect.runPromise(
       Effect.gen(function* () {
         const db = (yield* Database.Service).db
@@ -241,14 +245,123 @@ test("cold actual Session collector resolves retired closure before any independ
             return actual.message(input)
           },
         }
-        expect(yield* IMReplyOutbox.collectSessionReply({ db, v2Session: observed }, "ses_im_reply_history")).toBe(
-          false,
-        )
+        expect(yield* IMReplyOutbox.collectSessionReply({ db, v2Session: observed }, sessionID)).toBe(false)
         expect(calls.final).toBe(0)
         expect((yield* ReplyBodyRetirement.read(db, "imo_reply_history")).body).toEqual(original.body)
         expect(yield* ReplyBodyRetirement.currentMeter(db)).toEqual(original.meter)
         yield* ReplyBodyFixture.fullMeter(db)
-      }).pipe(Effect.provide(Layer.mergeAll(database, sessions)), Effect.scoped),
+        yield* db.run(sql`UPDATE im_reply_body SET record_hash=${"0".repeat(64)} WHERE outbox_id='imo_reply_history'`)
+        expect(
+          Exit.isFailure(yield* Effect.exit(IMReplyOutbox.collectSessionReply({ db, v2Session: observed }, sessionID))),
+        ).toBe(true)
+        expect(calls.final).toBe(0)
+      }).pipe(Effect.provide(Layer.mergeAll(database, sessionLayer(database))), Effect.scoped),
+    )
+  }))
+
+test("cold collector preserves a genuinely ACKed retired split without matching another final or malformed part", () =>
+  isolated(async (filename) => {
+    const database = Database.layerFromPath(filename)
+    const original = await Effect.runPromise(
+      Effect.gen(function* () {
+        const s = yield* ReplyBodyFixture.make({ append: false, finalText: "x".repeat(60_001) })
+        const session = yield* SessionV2.Service
+        expect(yield* IMReplyOutbox.collectSessionReply({ db: s.db, v2Session: session }, s.sessionID)).toBe(true)
+        const rows = yield* s.db.all<{
+          id: string
+          reply_message_id: string
+          delivery_message_id: string
+          reply_text: string
+          agent_id: string
+        }>(
+          sql`SELECT id,reply_message_id,delivery_message_id,reply_text,agent_id FROM im_reply_outbox WHERE session_id=${s.sessionID} ORDER BY reply_message_id`,
+        )
+        expect(rows.map((row) => row.reply_message_id)).toEqual([
+          "msg_reply_final_impart_00000000",
+          "msg_reply_final_impart_00000001",
+        ])
+        const item = yield* IMReplyOutbox.claimDueReply(s.db, { ownerToken: "split-original", now: Date.now() })
+        const part = rows.find((row) => row.id === item?.id)
+        if (!item || !part) return yield* Effect.die("The original split delivery was not claimed")
+        yield* s.repo.bindKernelConversation({ groupID: s.group.id, kernelConvID: "k:1:bob" })
+        const message = yield* KernelDelivery.withCreation(
+          s.authority,
+          s.group.id,
+          s.repo.createMessage({
+            id: part.delivery_message_id,
+            groupID: s.group.id,
+            senderID: part.agent_id,
+            senderType: "agent",
+            type: "text",
+            content: part.reply_text,
+            mentions: [],
+            metadata: { type: "agent_run", sessionID: s.sessionID, status: "success" },
+          }),
+        )
+        yield* s.acknowledge(message.id)
+        expect(yield* IMReplyOutbox.markDelivered(s.db, { item, ownerToken: "split-original" })).toBe(true)
+        const expiry = (yield* ReplyBodyRetirement.read(s.db, part.id)).record.transport?.binding.expiresAt
+        if (expiry === undefined) return yield* Effect.die("The split has no original ACK expiry")
+        expect(yield* s.retire(expiry)).toEqual([s.group.id])
+        expect((yield* ReplyBodyRetirement.read(s.db, part.id)).record.bodyState).toBe("retired")
+        expect(
+          (yield* ReplyBodyRetirement.read(s.db, rows.find((row) => row.id !== part.id)!.id)).record.bodyState,
+        ).toBe("live")
+        yield* ReplyBodyFixture.fullMeter(s.db)
+        return {
+          sessionID: s.sessionID,
+          part,
+          outboxes: yield* s.db.all(sql`SELECT * FROM im_reply_outbox ORDER BY id`),
+          bodies: yield* s.db.all(sql`SELECT * FROM im_reply_body ORDER BY outbox_id`),
+          meter: yield* ReplyBodyRetirement.currentMeter(s.db),
+        }
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(Layer.provideMerge(IMRepositoryLive, database), IMBroadcasterLive, sessionLayer(database)),
+        ),
+        Effect.scoped,
+      ),
+    )
+    const reopened = Database.layerFromPath(filename)
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const actual = yield* SessionV2.Service
+        const calls = { final: 0 }
+        const observed = {
+          ...actual,
+          message: (input: Parameters<typeof actual.message>[0]) => {
+            calls.final++
+            return actual.message(input)
+          },
+        }
+        expect(yield* IMReplyOutbox.collectSessionReply({ db, v2Session: observed }, original.sessionID)).toBe(false)
+        expect(calls.final).toBe(0)
+        for (const changed of [
+          "msg_reply_finalx_impart_00000000",
+          "msg_reply_final_impart_0000000",
+          "msg_reply_final_impart_00000000x",
+        ]) {
+          yield* db.run(sql`UPDATE im_reply_outbox SET reply_message_id=${changed} WHERE id=${original.part.id}`)
+          const result = yield* IMReplyOutbox.collectSessionReply({ db, v2Session: observed }, original.sessionID).pipe(
+            Effect.exit,
+            Effect.ensuring(
+              db
+                .run(
+                  sql`UPDATE im_reply_outbox SET reply_message_id=${original.part.reply_message_id} WHERE id=${original.part.id}`,
+                )
+                .pipe(Effect.orDie),
+            ),
+          )
+          expect(calls.final).toBeGreaterThan(0)
+          expect(Exit.isSuccess(result) ? result.value : false).toBe(false)
+          calls.final = 0
+        }
+        expect(yield* db.all(sql`SELECT * FROM im_reply_outbox ORDER BY id`)).toEqual(original.outboxes)
+        expect(yield* db.all(sql`SELECT * FROM im_reply_body ORDER BY outbox_id`)).toEqual(original.bodies)
+        expect(yield* ReplyBodyRetirement.currentMeter(db)).toEqual(original.meter)
+        yield* ReplyBodyFixture.fullMeter(db)
+      }).pipe(Effect.provide(Layer.mergeAll(reopened, sessionLayer(reopened))), Effect.scoped),
     )
   }))
 
@@ -283,15 +396,29 @@ test("legacy unbound denial is retained without blocking the next legitimate rea
 
 test("original settled Activity guard rejects a rewritten final pointer and collector identity remains unchanged", () =>
   isolated(async (filename) => {
-    await Effect.runPromise(Effect.gen(function* () {
-      const s = yield* ReplyBodyFixture.make({ append: false })
-      yield* IMReplyOutbox.appendReply(s.db, append(s))
-      const original = yield* ReplyBodyRetirement.read(s.db, s.id)
-      // The original physical settlement guard is real and remains enabled.
-      expect(Exit.isFailure(yield* Effect.exit(s.db.run("UPDATE session_activity SET final_message_id='replacement-final' WHERE activity_id='activity_reply'")))).toBe(true)
-      expect(yield* IMReplyOutbox.appendReply(s.db, append(s))).toBe(false)
-      expect((yield* s.db.get<{count:number}>("SELECT count(*) count FROM im_reply_outbox"))?.count).toBe(1)
-      expect((yield* ReplyBodyRetirement.read(s.db, s.id)).body).toEqual(original.body)
-      expect(yield* ReplyBodyRetirement.currentMeter(s.db)).toEqual(original.meter)
-    }).pipe(Effect.provide(services(filename)), Effect.scoped))
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const s = yield* ReplyBodyFixture.make({ append: false })
+        yield* IMReplyOutbox.appendReply(s.db, append(s))
+        const original = yield* ReplyBodyRetirement.read(s.db, s.id)
+        // The original physical settlement guard is real and remains enabled.
+        const activity = yield* s.db.get<{ activity_id: string }>(
+          sql`SELECT activity_id FROM session_activity WHERE session_id=${s.sessionID} AND state='settled' AND final_message_id='msg_reply_final'`,
+        )
+        expect(activity).toBeDefined()
+        expect(
+          Exit.isFailure(
+            yield* Effect.exit(
+              s.db.run(
+                sql`UPDATE session_activity SET final_message_id='replacement-final' WHERE activity_id=${activity!.activity_id}`,
+              ),
+            ),
+          ),
+        ).toBe(true)
+        expect(yield* IMReplyOutbox.appendReply(s.db, append(s))).toBe(false)
+        expect((yield* s.db.get<{ count: number }>("SELECT count(*) count FROM im_reply_outbox"))?.count).toBe(1)
+        expect((yield* ReplyBodyRetirement.read(s.db, s.id)).body).toEqual(original.body)
+        expect(yield* ReplyBodyRetirement.currentMeter(s.db)).toEqual(original.meter)
+      }).pipe(Effect.provide(services(filename)), Effect.scoped),
+    )
   }))

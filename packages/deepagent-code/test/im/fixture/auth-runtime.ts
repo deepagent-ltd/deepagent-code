@@ -19,6 +19,9 @@ const outcome = async (body: Promise<unknown>) =>
     (value) => ({ value }),
     (error: unknown) => ({
       error: typeof error === "object" && error !== null && "code" in error ? error.code : "UNEXPECTED",
+      ...(error instanceof Error && "code" in error && error.code === "MODULE_NOT_FOUND"
+        ? { missingModule: error.message.slice(0, 1024) }
+        : {}),
     }),
   )
 const result = await (async () => {
@@ -229,24 +232,27 @@ const result = await (async () => {
     }
     return { refused, recovered: await AuthRuntime.verify(input.password, input.verifier) }
   }
-  if (process.argv[2] === "operator") {
+  if (process.argv[2] === "operator" || process.argv[2] === "prepare-credentials") {
     const { Effect, Layer } = await import("effect")
     const { command } = await import("../../../src/cli/cmd/operator")
     const { Database } = await import("@deepagent-code/core/database/database")
     const { LocationIdentity } = await import("@deepagent-code/core/context-federation/identity")
     const { FSUtil } = await import("@deepagent-code/core/fs-util")
     const { ServerAuth } = await import("../../../src/server/auth")
+    const credentials = await import("./operator-credentials")
     assert(input.action && input.operationID)
     const database = Database.defaultLayer
     return await outcome(
       Effect.runPromise(
-        command({
-          action: input.action,
-          operationID: input.operationID,
-          policyPath: input.policyPath,
-          expectedRevision: input.expectedRevision,
-          previousCredentialPath: input.previousCredentialPath,
-        }).pipe(
+        (process.argv[2] === "prepare-credentials"
+          ? credentials.prepare(input.operationID).pipe(Effect.provide(credentials.layer.pipe(Layer.provide(database))))
+          : command({
+              action: input.action,
+              operationID: input.operationID,
+              policyPath: input.policyPath,
+              expectedRevision: input.expectedRevision,
+              previousCredentialPath: input.previousCredentialPath,
+            })).pipe(
           Effect.provide(LocationIdentity.layer.pipe(Layer.provide(database), Layer.provide(FSUtil.defaultLayer))),
           Effect.provide(database),
           Effect.provide(ServerAuth.Config.defaultLayer),
@@ -276,7 +282,7 @@ const result = await (async () => {
       cors: ["http://127.0.0.1:45123"],
     })
     const auth = `Basic ${Buffer.from(`${process.env.DEEPAGENT_CODE_SERVER_USERNAME}:${process.env.DEEPAGENT_CODE_SERVER_PASSWORD}`, "utf8").toString("base64")}`
-    async function request(authorization = auth, origin?: string, pathname = "/api/v1/im/tasks/capability") {
+    async function request(authorization = auth, origin?: string, pathname = "/api/v1/event-validation/rules") {
       const response = await fetch(new URL(pathname, listener.url), {
         headers: {
           authorization,

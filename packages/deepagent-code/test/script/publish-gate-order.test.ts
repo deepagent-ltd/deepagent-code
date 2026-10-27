@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 
-test("RI-51 gate precedes every release asset upload", async () => {
+test("distribution integrity gate precedes every release asset upload", async () => {
   const repository = path.resolve(import.meta.dir, "../../../..")
   const workflow = await Bun.file(path.join(repository, ".github/workflows/publish.yml")).text()
-  const gate = workflow.indexOf("      - name: RI-51 authoritative ledger release gate")
+  const gate = workflow.indexOf("      - name: Verify distribution integrity and archive qualification status")
   expect(gate).toBeGreaterThan(0)
   expect(workflow.slice(0, gate)).not.toContain("bun script/upload-release-asset.ts")
   expect(workflow.slice(gate)).toContain("      - name: Upload CLI release assets")
@@ -17,7 +17,9 @@ test("RI-51 gate precedes every release asset upload", async () => {
     "DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: ${{ runner.temp }}/owner-authorization.json",
   )
   expect(build).toContain("name: deepagent-code-cli")
-  expect(build).toContain("packages/deepagent-code/dist/deepagent-code-darwin*.zip")
+  expect(build).toContain("name: deepagent-code-cli-darwin-${{ matrix.arch }}")
+  expect(build).toContain('zip -r -FS "../../$(basename "$dir").zip" .')
+  expect(build).toContain("path: packages/deepagent-code/dist/deepagent-code-darwin*")
   expect(build).toContain("packages/deepagent-code/dist/deepagent-code-linux*.tar.gz")
   const signing = workflow.slice(workflow.indexOf("  sign-cli-windows:"), workflow.indexOf("  build-electron:"))
   expect(signing).toContain("name: deepagent-code-cli-signed-windows-archives")
@@ -36,13 +38,16 @@ test("release gate receives real packaged and reviewed evidence before byte-boun
   const probe = workflow.indexOf("      - name: Probe frozen packaged runtime")
   const qualification = workflow.indexOf("      - name: Download reviewed G0-G8 qualification")
   const stage = workflow.indexOf("      - name: Stage and verify final release archives")
-  const gate = workflow.indexOf("      - name: RI-51 authoritative ledger release gate")
+  const gate = workflow.indexOf("      - name: Verify distribution integrity and archive qualification status")
+  const sourceChecks = workflow.indexOf("      - name: Verify existing checks for this exact main source")
   const upload = workflow.indexOf("      - name: Upload CLI release assets")
   const readback = workflow.indexOf("      - name: Read back final release asset bytes")
   const publish = workflow.indexOf("      - run: ./script/publish.ts")
   expect(probe).toBeGreaterThan(0)
   expect(probe).toBeLessThan(qualification)
   expect(qualification).toBeLessThan(stage)
+  expect(qualification).toBeLessThan(sourceChecks)
+  expect(sourceChecks).toBeLessThan(stage)
   expect(stage).toBeLessThan(gate)
   expect(gate).toBeLessThan(upload)
   expect(upload).toBeLessThan(readback)
@@ -54,6 +59,15 @@ test("release gate receives real packaged and reviewed evidence before byte-boun
   expect(workflow.slice(gate, upload)).toContain("--evidence")
   expect(workflow.slice(gate, upload)).toContain("--asset-manifest")
   expect(workflow.slice(gate, upload)).toContain("--qualification-dir")
+  expect(workflow.slice(gate, upload)).toContain('if [[ -n "$QUALIFICATION_RUN_ID" ]]')
+  expect(workflow.slice(gate, upload)).toContain("elif [[ \"$RELEASE_REF\" == 'refs/heads/main' ]]")
+  expect(workflow.slice(gate, upload)).toContain(
+    '--standard-distribution --source-checks "$RUNNER_TEMP/ri51-source-checks.json"',
+  )
+  expect(workflow.slice(gate, upload)).toContain("Non-main release requires an explicit reviewed qualification run")
+  expect(workflow.slice(sourceChecks, stage)).toContain("inputs.qualification_run_id == ''")
+  expect(workflow.slice(sourceChecks, stage)).toContain("RELEASE_SOURCE_COMMIT: ${{ github.sha }}")
+  expect(workflow.slice(sourceChecks, stage)).toContain("bun script/verify-release-checks.ts")
   expect(workflow).toContain("qualification_run_id:")
   expect(workflow).toContain("  actions: read")
   expect(workflow.slice(qualification, stage)).toContain("GH_TOKEN: ${{ github.token }}")
@@ -106,7 +120,7 @@ test("each release upload rechecks the frozen tag and draft identity", async () 
 test("post-gate assets use the frozen release ID instead of resolving the tag during upload", async () => {
   const repository = path.resolve(import.meta.dir, "../../../..")
   const workflow = await Bun.file(path.join(repository, ".github/workflows/publish.yml")).text()
-  const gate = workflow.indexOf("      - name: RI-51 authoritative ledger release gate")
+  const gate = workflow.indexOf("      - name: Verify distribution integrity and archive qualification status")
   const publish = workflow.indexOf("      - run: ./script/publish.ts")
   expect(workflow.slice(gate, publish)).not.toContain("gh release upload")
   expect(workflow.slice(gate, publish)).toContain("bun script/upload-release-asset.ts")
@@ -134,15 +148,18 @@ test("release workflow builds and publishes one frozen candidate", async () => {
   expect(version.indexOf("await prepareReleaseFiles(")).toBeLessThan(version.indexOf("gh release create"))
   expect(version.indexOf("ensureReleaseCandidateRef(")).toBeLessThan(version.indexOf("gh release create"))
   expect(version.indexOf('Script.channel !== "beta"')).toBeLessThan(version.indexOf("gh release create"))
-  expect(workflow).toContain("DEEPAGENT_CODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta')")
+  expect(workflow).toContain("run: bun script/resolve-publish-version.ts")
+  expect(workflow).toContain("DAC_PUBLISH_REF: ${{ github.ref }}")
+  expect(workflow).toContain("DEEPAGENT_CODE_CHANNEL: ${{ steps.version-input.outputs.channel }}")
   expect(version).not.toContain('else if (Script.channel === "beta")')
-  expect(version).toContain('if (!release.isDraft) throw new Error("release candidate is already published")')
+  expect(version).toContain("if (!existingRelease.isDraft || existingRelease.publishedAt !== null)")
+  expect(version).toContain('throw new Error("release candidate is already published")')
   expect(version).toContain("await assertReleaseCandidate({")
   expect(workflow).toContain("DEEPAGENT_CODE_CHANNEL: ${{ needs.version.outputs.channel }}")
   expect(workflow).toContain("DEEPAGENT_CODE_CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}")
   expect(publish).toContain("await assertReleaseDraftFromEnv(")
   expect(workflow.indexOf("Build SDK from frozen release candidate")).toBeLessThan(
-    workflow.indexOf("RI-51 authoritative ledger release gate"),
+    workflow.indexOf("Verify distribution integrity and archive qualification status"),
   )
   expect(workflow).toContain("./packages/sdk/js/script/build.ts")
   expect(workflow).toContain("bun packages/sdk/js/script/verify-build.ts")

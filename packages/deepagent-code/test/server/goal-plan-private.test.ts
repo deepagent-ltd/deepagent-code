@@ -21,7 +21,12 @@ for (const mode of [
       JSON.stringify({ permission: { "*": mode === "allow" ? "allow" : "ask" }, mcp: {}, lsp: false }),
     )
     const output = Bun.file(path.join(directory, "output.log"))
-    const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "fixture/goal-plan-private.ts")], {
+    const child = Bun.spawn([
+      process.execPath,
+      "--preload",
+      path.resolve(import.meta.dir, "../fixture/cli-secret-store.ts"),
+      path.resolve(import.meta.dir, "fixture/goal-plan-private.ts"),
+    ], {
       cwd: path.join(directory, "project"),
       stdout: output,
       stderr: output,
@@ -36,6 +41,9 @@ for (const mode of [
         DEEPAGENT_CODE_DB: path.join(directory, "data/dac.db"),
         DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1",
         DEEPAGENT_CODE_DISABLE_LSP_DOWNLOAD: "1",
+        // This fixture owns private plan edits and permissions, not the autonomous tick driver.
+        DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "false",
+        DEEPAGENT_CODE_V4_GOAL_TICK_EVENT_DRIVEN: "false",
         DEEPAGENT_CODE_TEST_HOME: path.join(directory, "home"),
         DAC_GOAL_PLAN_FIXTURE_ROOT: directory,
         DAC_GOAL_PLAN_FIXTURE_MODE: mode,
@@ -59,6 +67,12 @@ for (const mode of [
       const snapshot = result.find((entry: { kind: string }) => entry.kind === "final-snapshot").data
       expect(snapshot.data.inputs).toEqual(snapshot.before.inputs)
       expect(snapshot.data.events).toEqual(snapshot.before.events)
+      expect(snapshot.before.providers).toEqual([])
+      expect(snapshot.data.providers).toEqual([])
+      expect(snapshot.before.permits).toEqual([])
+      expect(snapshot.data.permits).toEqual([])
+      expect(snapshot.before.goalInFlight).toBe(false)
+      expect(snapshot.data.goalInFlight).toBe(false)
       const evidence = process.env.DAC_GOAL_PLAN_EVIDENCE
       if (evidence) {
         await fs.mkdir(evidence, { recursive: true })

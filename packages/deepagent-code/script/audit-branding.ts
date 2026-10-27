@@ -71,8 +71,6 @@ const LINE_EXEMPTIONS: Record<string, Record<string, string[]>> = {
   "README.zh.md": { opencode: ["基于"] },
   // opencode foundation notes in the design overview (diagram + attribution)
   "design/README.md": { opencode: ["opencode"] },
-  // MIT attribution lines in the in-app About panel
-  "packages/app/src/components/settings-v2/about.tsx": { opencode: ["opencode"] },
   // Upstream opencode-ecosystem fork URLs (tree-sitter wasm/queries hosted by
   // the upstream org; no deepagent-ltd mirror exists, rewriting would break the
   // runtime download)
@@ -104,6 +102,31 @@ const LINE_EXEMPTIONS: Record<string, Record<string, string[]>> = {
 // Keep the complete line and word binding so a reviewed path cannot hide new
 // residue elsewhere, or extra brand tokens appended to the approved context.
 const EXACT_LINE_EXEMPTIONS: Record<string, Record<string, string[]>> = {
+  // The About panel distinguishes DAC's product links from its upstream MIT
+  // attribution. Keep the complete legal copy and the tests of that boundary.
+  "packages/app/src/components/settings-v2/about.tsx": {
+    opencode: ['<Link href="https://github.com/anomalyco/opencode">OpenCode</Link>'],
+    anomalyco: ['<Link href="https://github.com/anomalyco/opencode">OpenCode</Link>'],
+  },
+  "packages/app/src/i18n/en.ts": {
+    opencode: [
+      '"Derived from OpenCode under MIT. DeepAgent Code is distributed under AGPL-3.0-or-later; see the complete notices below.",',
+    ],
+  },
+  "packages/app/src/i18n/zh.ts": {
+    opencode: ['"基于 MIT 许可的 OpenCode 派生。DeepAgent Code 以 AGPL-3.0-or-later 发布，完整归因见下方声明。",'],
+  },
+  "packages/app/src/i18n/zht.ts": {
+    opencode: ['"基於 MIT 授權的 OpenCode 衍生。DeepAgent Code 以 AGPL-3.0-or-later 發布，完整歸屬聲明見下方。",'],
+  },
+  "packages/app/test/components/settings-content.test.tsx": {
+    opencode: [
+      'it("uses authoritative license bytes and distinguishes product links from OpenCode attribution", async () => {',
+      'fireEvent.click(screen.getByRole("link", { name: "OpenCode" }))',
+      'expect(wiring.openLink).toHaveBeenLastCalledWith("https://github.com/anomalyco/opencode")',
+    ],
+    anomalyco: ['expect(wiring.openLink).toHaveBeenLastCalledWith("https://github.com/anomalyco/opencode")'],
+  },
   ".github/public-source-policy.json": {
     opencode: [
       '"review_scope": "Public product and developer documentation may evolve independently of OpenCode text. Newly added document paths require review. Internal plans, acceptance records and private backend exports remain private.",',
