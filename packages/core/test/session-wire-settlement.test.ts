@@ -98,7 +98,7 @@ test("fileDB canonical settlement replaces pending wire time/usage while preserv
         const settled = yield* readAssistant(turn.id)
         expect(settled).toMatchObject({ time: { created: turn.created, completed: turn.completed },
           tokens: turn.tokens, cost: turn.cost, finish: turn.finish, providerID: "deepseek", modelID: "deepseek-flash",
-          parentID: "msg_wire_settlement_user", path: { cwd: root.replaceAll("\\", "/"), root: root.replaceAll("\\", "/") },
+          parentID: "msg_wire_settlement_user", path: { cwd: root, root: root.replaceAll("\\", "/") },
           structured: { hostOnly: turn.id }, providerAttemptID: `host-receipt-${turn.id}` })
         expect(settled.error).toBeUndefined()
         expect(settled.variant).toBeUndefined()

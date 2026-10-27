@@ -53,7 +53,7 @@ describe("V3.1 DeepAgent Code workspace", () => {
     expect(home.ensureProject("projA").publicLink).toBe(paths.publicLink)
   })
 
-  test("rejects a dot-rewritten public target whose internal symlink changes OS resolution", () => {
+  test("rejects a dot-rewritten public target under the host's actual symlink resolution", () => {
     const paths = home.ensureProject("projA")
     if (!existsSync(paths.publicLink)) return
     const outside = path.join(root, "outside")
@@ -62,7 +62,9 @@ describe("V3.1 DeepAgent Code workspace", () => {
     symlinkSync(path.join(outside, "deeper"), path.join(root, "x"), "dir")
     unlinkSync(paths.publicLink)
     symlinkSync(["..", "..", "x", "..", "public"].join(path.sep), paths.publicLink, "dir")
-    expect(realpathSync(paths.publicLink)).toBe(realpathSync(path.join(outside, "public")))
+    // Windows resolves the dot segments before traversing x; POSIX traverses x first.
+    // Both must reject the same stored non-exact target instead of normalizing it into authority.
+    expect(realpathSync(paths.publicLink)).toBe(realpathSync(path.join(process.platform === "win32" ? root : outside, "public")))
     expect(() => home.ensureProject("projA")).toThrow("ProjectStore.InvalidPublicLink")
   })
 

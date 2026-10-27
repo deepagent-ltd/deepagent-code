@@ -54,7 +54,7 @@ const verifier = Layer.effect(WorkAuthority.Verifier, Effect.gen(function* () {
 // fixtures, never claims of Native/external LLM execution; this module starts no runner/provider.
 export async function isolated(body: (f: { run: <A,E>(effect: Effect.Effect<A,E,Services>) => Promise<A>; filename: string; directory: string }) => Promise<void>) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-event-work-dag-")))
-  const directory = path.join(root, "project").replaceAll("\\", "/")
+  const directory = path.join(root, "project")
   await fs.mkdir(directory)
   const filename = path.join(root, "authority.sqlite")
   const database = WorkAuthorityFixture.database(filename)

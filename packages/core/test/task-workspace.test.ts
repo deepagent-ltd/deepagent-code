@@ -3,7 +3,6 @@ import { afterAll, describe, expect } from "bun:test"
 import { and, count, eq } from "drizzle-orm"
 import { Context, Effect, Exit, Layer } from "effect"
 import fs from "fs/promises"
-import { realpathSync } from "node:fs"
 import path from "path"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Database } from "@deepagent-code/core/database/database"
@@ -180,7 +179,7 @@ describe("Core V2 TaskWorkspace", () => {
       expect(receipt.branch).toBe(derived.branch)
       // The receipt records the canonical (git-registered) spelling of the derived directory.
       expect(receipt.directory).toBe(
-        path.join(realpathSync(path.dirname(derived.directory)), path.basename(derived.directory)),
+        yield* Effect.promise(() => fs.realpath(derived.directory)),
       )
       expect(receipt.parentBranch).toBe("main")
       expect(receipt.derivation).toContain("deepagent-code/task-")
