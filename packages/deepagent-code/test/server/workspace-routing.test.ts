@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
 import { sanitizeLocalDirectory } from "../../src/server/routes/instance/httpapi/middleware/workspace-routing"
 import {
   isLocalWorkspaceRoute,
@@ -124,8 +125,8 @@ describe("workspaceProxyURL", () => {
 
 describe("sanitizeLocalDirectory (SEC-F4/F6 hardening)", () => {
   test("keeps clean absolute paths normalized", () => {
-    expect(sanitizeLocalDirectory("/Users/me/projects/app")).toBe("/Users/me/projects/app")
-    expect(sanitizeLocalDirectory("/a/../b")).toBe("/b")
+    expect(sanitizeLocalDirectory("/Users/me/projects/app")).toBe(path.join(path.sep, "Users", "me", "projects", "app"))
+    expect(sanitizeLocalDirectory("/a/../b")).toBe(path.join(path.sep, "b"))
   })
   test("rejects relative traversal and NUL by falling back to cwd", () => {
     expect(sanitizeLocalDirectory("../../etc")).toBe(process.cwd())
