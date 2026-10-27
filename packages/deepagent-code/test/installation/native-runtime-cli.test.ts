@@ -182,7 +182,7 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
     ),
   })
   const componentsText = CanonicalJson.stringify(components)
-  const parserWorker = await fs.realpath(path.join(host, "node_modules/@opentui/core/parser.worker.js"))
+  const parserWorker = await fs.realpath(Bun.resolveSync("@opentui/core/parser.worker", host))
   const build = await Bun.build({
     entrypoints: [
       path.join(host, "src/index.ts"),

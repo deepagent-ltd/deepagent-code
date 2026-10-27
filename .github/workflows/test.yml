@@ -277,7 +277,8 @@ jobs:
               if [[ "$DAC_TEST_SUITE" == 'desktop' ]]; then
                 # test:ci includes ./src; invoking it would also select every other Desktop test.
                 mkdir -p "$dac_test_directory/.artifacts/unit"
-                dac_test_command=(bun --cwd "$dac_test_directory" test "./$DAC_TEST_FILE" --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml)
+                cd "$dac_test_directory"
+                dac_test_command=(bun test "./$DAC_TEST_FILE" --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml)
               else
                 dac_test_command+=("./$DAC_TEST_FILE")
               fi
