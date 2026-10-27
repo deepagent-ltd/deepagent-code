@@ -26,7 +26,9 @@ const makeWindow = async () => {
 }
 
 async function main() {
+  stage("app-ready:waiting")
   await app.whenReady()
+  stage("app-ready")
   const runtimeGate = scenario === "pin"
   if (runtimeGate) {
     const require = createRequire(import.meta.url)
@@ -44,6 +46,7 @@ async function main() {
     }
     stage("runtime-gate-rejected")
   }
+  stage("native:loading")
   const qa = createRequire(import.meta.url)(path.join(root, "ime-qa.node")) as {
     invoke(handle: Buffer, kind: number): void; foreign(enabled: boolean): void
     subclass(handle: Buffer): void; restoreClass(handle: Buffer): void
@@ -52,17 +55,24 @@ async function main() {
   qa.cleanup(path.join(root, `${scenario}-cleanup.json`))
   const native = createRequire(import.meta.url)(path.join(root, "managed-browser-input-darwin.node")) as {
     observe(handle: Buffer, callback: () => void): Lease }
+  stage("window:creating")
   const window = await makeWindow()
+  stage("window:empty-source-rejection")
   assert.throws(() => native.observe(window.getNativeWindowHandle(), () => {}), /MANAGED_BROWSER_INPUT_CLIENT_ABI/)
+  stage("blank:loading")
   await window.loadURL("about:blank")
+  stage("blank:observing")
   const blank = native.observe(window.getNativeWindowHandle(), () => {})
   assert.equal(blank.healthy(), true)
+  stage("document:loading")
   await window.loadURL("data:text/html,<input><div style='height:2000px'>Private source</div>")
+  stage("document:prior-source-retired")
   assert.equal(blank.healthy(), false)
   blank.release()
   stage("initial-boundary")
   await window.webContents.executeJavaScript("document.querySelector('input').focus()")
   const callbacks: number[] = []
+  stage("document:observing")
   const lease = native.observe(window.getNativeWindowHandle(), (...args: unknown[]) => callbacks.push(args.length))
   assert.equal(lease.healthy(), true)
   if (scenario.startsWith("foreign")) {
@@ -97,6 +107,7 @@ async function main() {
     process.exit(0)
     return
   }
+  stage("cdp:starting")
   window.webContents.debugger.attach("1.3")
   const cdp: { method: string; callbacks: number }[] = []
   for (const [method, parameters] of [
@@ -111,11 +122,14 @@ async function main() {
     await window.webContents.debugger.sendCommand(method, parameters); await delay()
     cdp.push({ method, callbacks: callbacks.length })
   }
+  stage("cdp:complete")
   assert.equal(callbacks.length, 0)
   await window.webContents.executeJavaScript("document.querySelector('input').focus()")
+  stage("second-window:creating")
   const other = await makeWindow()
   await other.loadURL("data:text/html,<input>")
   const otherCalls: number[] = []
+  stage("second-window:observing")
   const second = native.observe(other.getNativeWindowHandle(), (...args: unknown[]) => otherCalls.push(args.length))
   qa.invoke(other.getNativeWindowHandle(), 0); await delay()
   assert.equal(callbacks.length, 0); assert.deepEqual(otherCalls, [0])

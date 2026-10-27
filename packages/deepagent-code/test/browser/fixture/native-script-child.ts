@@ -60,13 +60,28 @@ try {
   const original = (await execute({ type: "tabs.list" })).result.tabs[0]!
   const navigated = await execute({ type: "navigate", tabID: original.tabID, generation: original.generation,
     url: control.origin + "/script-page" })
-  const tab = navigated.result.tabs[0]!
-  const snapshot = () => execute({ type: "snapshot", tabID: tab.tabID, generation: tab.generation })
+  let tab = navigated.result.tabs[0]!
+  const snapshot = async (afterNavigation = false) => {
+    if (!afterNavigation) return execute({ type: "snapshot", tabID: tab.tabID, generation: tab.generation })
+    // Refresh only post-navigation readonly observation. Never replay navigation
+    // or an approved script, and keep one original action budget across attempts.
+    const deadline = Date.now() + 10_000
+    while (true) {
+      const listed = await Effect.runPromise(host.execute(active, { ...action({ type: "tabs.list" }), deadline }, current))
+      const latest = listed.result.tabs.find((value) => value.tabID === tab.tabID)
+      if (!latest) throw new Error("Navigated fixture tab is unavailable")
+      tab = latest
+      const observed = await Effect.runPromise(host.execute(active,
+        { ...action({ type: "snapshot", tabID: tab.tabID, generation: tab.generation }), deadline }, current).pipe(Effect.exit))
+      if (Exit.isSuccess(observed)) return observed.value
+      if (code(observed) !== "BROWSER_STALE_TARGET" || Date.now() >= deadline) return Effect.runPromise(observed)
+    }
+  }
   const command = (page: BrowserSchema.Result, source: string, argsJSON: string): BrowserSchema.Command => ({
     type: "evaluate", tabID: tab.tabID, generation: tab.generation, frameID: page.frameID!,
     observationRevision: page.observationRevision!, scriptHash: Hash.sha256(source), source, argsJSON,
   })
-  const observed = (await snapshot()).result
+  const observed = (await snapshot(true)).result
   const wrongSource = await rejected(command(observed, programs.read + "\nreturn 2;", args))
   const wrongArgs = await rejected(command(observed, programs.read, JSON.stringify({ label: "other" })))
   const copiedDescriptor = code(await Effect.runPromise(Effect.exit(host.execute({ ...active, scriptGrants: [] },

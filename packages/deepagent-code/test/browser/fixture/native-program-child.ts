@@ -168,10 +168,26 @@ try {
   const page = async (url: string) => {
     tab = (await execute({ type: "navigate", tabID: tab.tabID, generation: tab.generation, url: control.origin + url }))
       .result.tabs[0]!
-    return (await execute({ type: "snapshot", tabID: tab.tabID, generation: tab.generation })).result
+    return snapshot(true)
   }
-  const snapshot = () =>
-    execute({ type: "snapshot", tabID: tab.tabID, generation: tab.generation }).then((value) => value.result)
+  const snapshot = async (afterNavigation = false): Promise<BrowserSchema.Result> => {
+    if (!afterNavigation)
+      return execute({ type: "snapshot", tabID: tab.tabID, generation: tab.generation }).then((value) => value.result)
+    // loadURL can settle before the native document source finishes changing.
+    // Reobserve only this readonly boundary with fresh action IDs and one deadline.
+    const deadline = Date.now() + 10_000
+    while (true) {
+      const listed = await Effect.runPromise(host.execute(active, { ...action({ type: "tabs.list" }), deadline }, current))
+      const latest = listed.result.tabs.find((value) => value.tabID === tab.tabID)
+      if (!latest) throw new Error("Navigated fixture tab is unavailable")
+      tab = latest
+      const observed = await Effect.runPromise(host.execute(active,
+        { ...action({ type: "snapshot", tabID: tab.tabID, generation: tab.generation }), deadline }, current).pipe(Effect.exit))
+      if (Exit.isSuccess(observed)) return observed.value.result
+      if (code(observed) !== "BROWSER_STALE_TARGET" || Date.now() >= deadline)
+        return (await Effect.runPromise(observed)).result
+    }
+  }
   const command = (
     observed: BrowserSchema.Result,
     source = sources.normal,
