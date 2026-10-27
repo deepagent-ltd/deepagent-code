@@ -29,6 +29,7 @@ export async function build(input: { directory: string; nodeEntry: string }) {
   const relative = path.relative(repository, directory)
   if (relative && !relative.startsWith("..") && !path.isAbsolute(relative))
     assert.equal(Bun.spawnSync(["git", "check-ignore", "--quiet", relative], { cwd: repository }).exitCode, 0)
+  const toolchain = await captureToolchain()
   const environmentFile = path.join(directory, `.native-cohort-environment-${crypto.randomUUID()}`)
   await fs.writeFile(environmentFile, "", { flag: "wx", mode: 0o600 })
   const publisher = await prepareTestNativePublisher({
@@ -38,9 +39,9 @@ export async function build(input: { directory: string; nodeEntry: string }) {
   const privateInput = path.join(root, ".private-build-input.json")
   try {
     await fs.writeFile(privateInput, JSON.stringify({ root, nodeEntry: input.nodeEntry,
-      privateKeyFile: publisher.privateKeyFile, publicKeyFile: publisher.publicKeyFile }), { flag: "wx", mode: 0o600 })
+      privateKeyFile: publisher.privateKeyFile, publicKeyFile: publisher.publicKeyFile, toolchain }), { flag: "wx", mode: 0o600 })
     const built = await execute([process.execPath, fileURLToPath(import.meta.url), privateInput], root,
-      { ...environment(root), DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY: publisher.publicKeyFile }, "build", 230_000)
+      { ...environment(root, toolchain.rustupHome), DEEPAGENT_CODE_RELEASE_NATIVE_PUBLIC_KEY: publisher.publicKeyFile }, "build", 230_000)
     assert.equal(built.code, 0, `Native cohort build failed: ${JSON.stringify(built)}`)
   } catch (error) {
     console.error("WINDOWS_NATIVE_COHORT_BUILD_FAILURE", JSON.stringify({ root, phases: await phases(root) }))
@@ -54,7 +55,7 @@ export async function build(input: { directory: string; nodeEntry: string }) {
     module: path.join(root, "main", "chunks", "node.js"),
     async run(mode = "probe") {
       const metadata = await Bun.file(path.join(root, "cohort.json")).json() as { runtime: string }
-      return execute([metadata.runtime, path.join(root, "main", "main.js"), mode], root, environment(root), "runtime", 60_000)
+      return execute([metadata.runtime, path.join(root, "main", "main.js"), mode], root, environment(root, toolchain.rustupHome), "runtime", 60_000)
     },
     async dispose() {
       await fs.rm(root, { recursive: true, force: true })
@@ -62,7 +63,30 @@ export async function build(input: { directory: string; nodeEntry: string }) {
   }
 }
 
-async function assemble(input: { root: string; nodeEntry: string; privateKeyFile: string; publicKeyFile: string }) {
+/** Query the usable runner toolchain before replacing its profile environment.
+ * These commands neither install Rust nor change its default configuration. */
+export async function captureToolchain() {
+  const query = (command: string[], env = process.env) => {
+    const result = Bun.spawnSync(command, { cwd: path.join(repository, "packages/work-file-helper"), env,
+      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 15_000 })
+    assert.equal(result.exitCode, 0, `Original toolchain query failed (${command.join(" ")}): ${result.stderr.toString().slice(-2048)}`)
+    return result.stdout.toString().trim()
+  }
+  const rustupHome = await fs.realpath(query(["rustup", "show", "home"]))
+  assert(path.isAbsolute(rustupHome))
+  const env = { ...process.env, RUSTUP_HOME: rustupHome }
+  const cargo = await fs.realpath(query(["rustup", "which", "cargo"], env))
+  const rustc = await fs.realpath(query(["rustup", "which", "rustc"], env))
+  const cargoVersion = query([cargo, "--version"], env)
+  const rustcVersion = query([rustc, "--version"], env)
+  assert.equal(query(["cargo", "--version"], env), cargoVersion)
+  assert.equal(query(["rustc", "--version"], env), rustcVersion)
+  return { rustupHome, cargo, rustc, cargoVersion, rustcVersion,
+    activeToolchain: query(["rustup", "show", "active-toolchain"], env) }
+}
+
+async function assemble(input: { root: string; nodeEntry: string; privateKeyFile: string; publicKeyFile: string;
+  toolchain: Awaited<ReturnType<typeof captureToolchain>> }) {
   const chunks = path.join(input.root, "main", "chunks")
   await fs.mkdir(chunks, { recursive: true })
   await fs.writeFile(path.join(path.dirname(chunks), "package.json"), JSON.stringify({ type: "module" }), { flag: "wx" })
@@ -117,7 +141,7 @@ async function assemble(input: { root: string; nodeEntry: string; privateKeyFile
   await withWindowsNativePublisherHost(nodeModule, async (host) => {
     const issued = await execute([host, path.join(repository, "packages/deepagent-code/script/sign-native-node.ts"),
       "--module", nodeModule, "--runtime", runtime, "--key", input.privateKeyFile,
-      "--release", "owned-native-mcp-probe"], input.root, environment(input.root), "publisher", 60_000)
+      "--release", "owned-native-mcp-probe"], input.root, environment(input.root, input.toolchain.rustupHome), "publisher", 60_000)
     assert.equal(issued.code, 0, `Physical Node publisher failed: ${JSON.stringify(issued)}`)
   })
   for (const entry of [mainEntry, sidecarEntry]) {
@@ -133,12 +157,12 @@ async function assemble(input: { root: string; nodeEntry: string; privateKeyFile
     componentsHash: digest(Buffer.from(text)), nodeSha256: digest(await fs.readFile(nodeModule)),
     bootstrapSha256: bootstrap.sha256, preloaderSha256: receipt.sha256,
     signerHash: digest(createPublicKey(await fs.readFile(input.publicKeyFile)).export({ type: "spki", format: "der" })),
-    productionOwnerMaterial: false,
+    productionOwnerMaterial: false, toolchain: input.toolchain,
   }))
   await phase(input.root, "physical-cohort-sealed")
 }
 
-function environment(root: string) {
+function environment(root: string, rustupHome: string) {
   return {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) =>
       !/^(?:DEEPAGENT_|DAC_|XDG_|BUN_OPTIONS$|NODE_OPTIONS$|ELECTRON_RUN_AS_NODE$)/i.test(name))),
@@ -147,7 +171,8 @@ function environment(root: string) {
     TMPDIR: path.join(root, "tmp"), TMP: path.join(root, "tmp"), TEMP: path.join(root, "tmp"),
     XDG_DATA_HOME: path.join(root, "data"), XDG_CONFIG_HOME: path.join(root, "config"),
     XDG_CACHE_HOME: path.join(root, "cache"), XDG_STATE_HOME: path.join(root, "state"),
-    CARGO_HOME: path.join(root, "cargo-cache"), BUN_RUNTIME_TRANSPILER_CACHE_PATH: path.join(root, "bun-cache"),
+    RUSTUP_HOME: rustupHome, CARGO_HOME: path.join(root, "cargo-cache"),
+    BUN_RUNTIME_TRANSPILER_CACHE_PATH: path.join(root, "bun-cache"),
     DEEPAGENT_CODE_TEST_HOME: root, DEEPAGENT_CODE_HOME: path.join(root, "data"),
     DAC_NATIVE_NODE_COHORT_ROOT: root,
   }
