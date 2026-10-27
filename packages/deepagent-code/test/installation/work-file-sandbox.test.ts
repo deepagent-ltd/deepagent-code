@@ -6,7 +6,7 @@ import { spawn } from "node:child_process"
 import net from "node:net"
 import { sandboxProfile } from "../../src/installation/work-file-helper"
 
-const mac = process.platform === "darwin" ? test : test.skip
+const mac = test.skipIf(process.platform !== "darwin")
 const helper = process.env.DAC_WORK_FILE_HELPER_BINARY
 
 mac("actual host policy denies network, private reads and installation writes; moved-parent publication is refused by the OS", async () => {
@@ -71,7 +71,7 @@ mac("actual host policy denies network, private reads and installation writes; m
   }
 }, 15_000)
 
-mac.skipIf(!helper)("actual native helper uses the host-generated read sandbox and cannot prepare a write", async () => {
+test.skipIf(process.platform !== "darwin" || !helper)("actual native helper uses the host-generated read sandbox and cannot prepare a write", async () => {
   if (!helper) throw new Error("private helper fixture not configured")
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-work-read-sandbox-")))
   const root = path.join(base, "root")
@@ -110,7 +110,7 @@ mac.skipIf(!helper)("actual native helper uses the host-generated read sandbox a
   } finally { await fs.rm(base, { recursive: true, force: true }) }
 }, 15_000)
 
-mac.skipIf(!helper)("actual host file-only write policy publishes and cleans through one native owner", async () => {
+test.skipIf(process.platform !== "darwin" || !helper)("actual host file-only write policy publishes and cleans through one native owner", async () => {
   if (!helper) throw new Error("private helper fixture not configured")
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-work-write-policy-")))
   const root = path.join(base, "root")

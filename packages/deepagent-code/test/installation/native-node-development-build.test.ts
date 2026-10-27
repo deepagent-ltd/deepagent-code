@@ -19,6 +19,8 @@ test("ordinary Node development build needs no Cargo or publisher and removes st
     "auth-password-worker.node.js.map",
     "node.js",
     "node.js.map",
+    "typescript-index.worker.js",
+    "typescript-index.worker.js.map",
   ]
   expect(required.every((file) => result.outputs.includes(file))).toBe(true)
   expect(result.outputs.every((file) => required.includes(file) || file.endsWith(".wasm"))).toBe(true)

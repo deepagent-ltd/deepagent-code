@@ -2,7 +2,6 @@ export * as GoalPlanRebaseAccess from "./goal-plan-rebase-access"
 
 import { Effect, Redacted } from "effect"
 import type { HttpServerRequest } from "effect/unstable/http"
-import { Server } from "@/server/server"
 import { ServerAuth } from "@/server/auth"
 import { CorsConfig } from "@/server/cors"
 import { GoalControl } from "@deepagent-code/core/deepagent/goal-control"
@@ -82,9 +81,12 @@ function authenticateRequest(
 }
 
 export const current = (access: Access, placement?: Placement) =>
-  Effect.sync(() => {
+  Effect.gen(function* () {
     const local = localAccesses.get(access)
-    if (local)
+    if (local) {
+      // Server assembles handlers that import this adapter. Read listener state only
+      // when checking a live local access, after that module graph has initialized.
+      const { Server } = yield* Effect.promise(() => import("@/server/server"))
       return local.active() &&
         (!local.mutation || Server.privateGoalWritesAvailable()) &&
         (!placement ||
@@ -94,6 +96,7 @@ export const current = (access: Access, placement?: Placement) =>
             placement.workspaceID === undefined))
         ? true
         : undefined
+    }
     return accesses.get(access)
   }).pipe(
     Effect.flatMap((saved) =>
@@ -216,6 +219,7 @@ export async function installTuiBridge() {
                   })
                 : GoalPlanRebaseSchema.Target
         const request = Schema.decodeUnknownSync(schema, { onExcessProperty: "error" })(value.request)
+        const { Server } = await import("@/server/server")
         if (
           !state.active ||
           controller.signal.aborted ||
