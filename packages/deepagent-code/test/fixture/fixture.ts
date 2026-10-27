@@ -44,6 +44,9 @@ export async function reloadTestInstance(input: { directory: string }) {
 }
 
 export async function disposeAllInstances() {
+  const { builtAppRuntimeRoot } = await import("../../src/effect/app-runtime")
+  // Effect-owned InstanceStores close with their scopes; cleanup must not boot a second root.
+  if (!builtAppRuntimeRoot()) return
   await InstanceRuntime.disposeAllInstances()
 }
 
