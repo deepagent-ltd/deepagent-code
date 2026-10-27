@@ -514,7 +514,7 @@ describe("instance HttpApi", () => {
       expect(refsResponse.status).toBe(200)
       const decoded = Schema.decodeUnknownSync(Vcs.Refs)(yield* refsResponse.json)
       expect(decoded.directory).toBe(dir)
-      expect(decoded.repositoryRoot).toBe(dir)
+      expect(decoded.repositoryRoot).toBe(dir.replaceAll("\\", "/"))
       expect(Array.isArray(decoded.items)).toBe(true)
       const base = decoded.items[0]?.ref
       if (!base) throw new Error("The real Git fixture has no local comparison branch")
