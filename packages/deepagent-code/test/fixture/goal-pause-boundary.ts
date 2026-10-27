@@ -237,6 +237,15 @@ try {
   stage("runtime-ready")
   listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
   stage("listener-ready")
+  if (phase === "crash-after-cas" || phase === "cold-after-cas") {
+    // Readiness records only physical child identity. Goal admission and replay wait for the
+    // parent to install the original business watchdogs and close this private start channel.
+    const marker = path.join(root, `startup-${phase}-${process.pid}.json`)
+    await Bun.write(marker + ".tmp", JSON.stringify({ phase, pid: process.pid }))
+    await fs.rename(marker + ".tmp", marker)
+    if ((await Bun.stdin.text()) !== "GO\n") throw new Error("Goal pause fixture did not receive its private start command")
+    stage("business-started")
+  }
   if (phase === "crash-after-cas") {
     const first = await setup("pause-real-cas-crash")
     const ready = Promise.withResolvers<void>()
