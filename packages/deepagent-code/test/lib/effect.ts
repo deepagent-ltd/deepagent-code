@@ -144,8 +144,17 @@ const liveEnv = Layer.mergeAll(TestConsole.layer, privateSettings)
 
 export const it = make<never, never>(testEnv, liveEnv)
 
-export const testEffect = <R, E>(layer: Layer.Layer<R, E>) =>
-  make<R, E>(Layer.provideMerge(layer, testEnv), Layer.provideMerge(layer, liveEnv))
+export const testEffect = <R, E, R2 = never, E2 = never>(
+  layer: Layer.Layer<R, E>,
+  privateStorage?: Layer.Layer<R2, E2>,
+) => {
+  // A compiled Native fixture supplies its original private storage instead of
+  // evaluating the source-only absent-settings fixture alongside it.
+  return make(
+    Layer.provideMerge(layer, privateStorage ? Layer.mergeAll(TestConsole.layer, TestClock.layer(), privateStorage) : testEnv),
+    Layer.provideMerge(layer, privateStorage ? Layer.mergeAll(TestConsole.layer, privateStorage) : liveEnv),
+  )
+}
 
 // Variant of `testEffect` that builds the test layer through the shared
 // test-owned memoMap so services like Bus/Session resolve to the same
