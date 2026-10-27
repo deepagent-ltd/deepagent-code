@@ -169,7 +169,7 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
       .toSorted()
       .map(async (entry) => {
         const bytes = await fs.readFile(path.join(repository, entry))
-        return new NativeInstallationSchema.Component({ path: entry, bytes: bytes.byteLength, sha256: hash(bytes) })
+        return new NativeInstallationSchema.Component({ path: entry.replaceAll("\\", "/"), bytes: bytes.byteLength, sha256: hash(bytes) })
       }),
   )
   const components = new NativeInstallationSchema.Components({
