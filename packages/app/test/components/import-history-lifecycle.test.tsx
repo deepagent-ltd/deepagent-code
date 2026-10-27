@@ -11,6 +11,7 @@ import type { Window } from "happy-dom"
 import { ImportSection } from "@/components/settings-v2/import-history"
 import { dict } from "@/i18n/en"
 import { publishImportFixturePacket } from "./fixture/import-control"
+import { importFixtureEnvironment } from "./fixture/import-environment"
 
 const [server, setServer] = createStore({
   key: "private-a",
@@ -45,23 +46,10 @@ async function processFor(root: string, count: number) {
   const packageDirectory = path.resolve(process.cwd(), "../deepagent-code")
   const child = spawn(
     "bun",
-    [path.join(packageDirectory, "test/fixture/import-history-lifecycle-server.ts"), root, String(count)],
+    ["--preload", path.resolve("test/components/fixture/import-startup.ts"), path.join(packageDirectory, "test/fixture/import-history-lifecycle-server.ts"), root, String(count)],
     {
       cwd: packageDirectory,
-      env: {
-        PATH: process.env.PATH,
-        HOME: path.join(root, "home"),
-        TMPDIR: root,
-        XDG_DATA_HOME: path.join(root, "data"),
-        XDG_CONFIG_HOME: path.join(root, "config"),
-        XDG_CACHE_HOME: path.join(root, "cache"),
-        XDG_STATE_HOME: path.join(root, "state"),
-        DEEPAGENT_CODE_HOME: path.join(root, "data"),
-        DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
-        DEEPAGENT_CODE_DB: path.join(root, "live.db"),
-        DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1",
-        DEEPAGENT_IM_AGENT_RESPONDER: "off",
-      },
+      env: importFixtureEnvironment(root),
       stdio: ["ignore", "pipe", "pipe"],
     },
   )
@@ -89,6 +77,7 @@ async function processFor(root: string, count: number) {
       resultFiles: (await fs.readdir(root))
         .filter((name) => name.endsWith(".json"))
         .map((name) => path.join(root, name)),
+      startup: await fs.readFile(path.join(root, "startup.jsonl"), "utf8").catch(() => null),
       stdout,
       stderr,
     })

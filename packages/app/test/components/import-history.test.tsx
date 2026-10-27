@@ -13,6 +13,7 @@ import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
 import { ImportSection } from "@/components/settings-v2/import-history"
 import { dict } from "@/i18n/en"
 import { publishImportFixturePacket } from "./fixture/import-control"
+import { importFixtureEnvironment } from "./fixture/import-environment"
 
 const transport = vi.hoisted(() => ({
   capabilities: vi.fn(),
@@ -243,24 +244,9 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
   const hostPackage = path.resolve(process.cwd(), "../deepagent-code")
   const progress = { phase: "startup", startedAt: Date.now(), failed: false, deadlineExpired: false,
     spawnError: undefined as string | undefined }
-  const child = spawn("bun", [path.join(hostPackage, "test/fixture/import-gui-job-server.ts"), root], {
+  const child = spawn("bun", ["--preload", path.resolve("test/components/fixture/import-startup.ts"), path.join(hostPackage, "test/fixture/import-gui-job-server.ts"), root], {
     cwd: hostPackage,
-    env: {
-      PATH: process.env.PATH,
-      HOME: path.join(root, "home"),
-      TMPDIR: root,
-      TEMP: root,
-      TMP: root,
-      XDG_DATA_HOME: path.join(root, "data"),
-      XDG_CONFIG_HOME: path.join(root, "config"),
-      XDG_CACHE_HOME: path.join(root, "cache"),
-      XDG_STATE_HOME: path.join(root, "state"),
-      DEEPAGENT_CODE_HOME: path.join(root, "data"),
-      DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
-      DEEPAGENT_CODE_DB: path.join(root, "live.db"),
-      DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1",
-      DEEPAGENT_IM_AGENT_RESPONDER: "off",
-    },
+    env: importFixtureEnvironment(root),
     stdio: ["ignore", "pipe", "pipe"],
   })
   let output = ""
