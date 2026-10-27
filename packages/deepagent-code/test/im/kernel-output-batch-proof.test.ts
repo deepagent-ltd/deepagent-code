@@ -1,5 +1,5 @@
-import { afterAll, expect, test } from "bun:test"
-import { Effect, Layer, Option, Schema, SubscriptionRef } from "effect"
+import { afterAll, beforeAll, expect, test } from "bun:test"
+import { Context, Effect, Exit, Layer, Option, Schema, Scope, SubscriptionRef } from "effect"
 import { sql } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
@@ -14,6 +14,12 @@ import path from "node:path"
 import { tmpdir } from "node:os"
 
 const control = { mode: "fresh", phase: "seed", online: true, capability: true, batchCalls: 0, scalarCalls: 0, inspectCalls: 0, sdkFailure: "" }
+const cases = ["long-flight", "mixed", "late-consume", "consumed", "consumer", "ttl", "current", "source", "revision", "post-revision", "order", "duplicate", "missing", "extra", "clock", "ordinals", "complete", "foreign", "unsupported"]
+const selected = process.env.DEEPAGENT_CODE_TEST_OUTPUT_BATCH_CASES?.split(",") ?? cases
+if (!selected.length || selected.some(mode => !cases.includes(mode)) || new Set(selected).size !== selected.length) throw new Error("BATCH_CASE_SELECTION_REJECTED")
+const full = selected.length === cases.length && selected.every((mode, index) => mode === cases[index])
+if ((process.env.CI || process.env.GITHUB_ACTIONS) && !full) throw new Error("BATCH_CASE_SELECTION_REJECTED")
+const summaries: { mode: string; outcome: string; business: number; batch: number; scalar: number; inspect: number }[] = []
 const selector = Schema.Union([
   Schema.Struct({ visible: Schema.Struct({ projectionKey: KernelReaderSchema.Hash, projectionRevision: KernelReaderSchema.Positive }) }),
   Schema.Struct({ pending: Schema.Struct({ conversationType: Schema.Literals([1, 2]), targetId: KernelReaderSchema.text(512) }) }),
@@ -58,21 +64,11 @@ const config = { appkey: `private-output-batch-${native.server.port}`, navigator
 const client = Layer.provideMerge(KernelClient.layer, KernelSdk.liveFromConfig(config))
 const directory = await fs.mkdtemp(path.join(tmpdir(), "dac-output-batch-proof-"))
 
-afterAll(async () => {
-  native.server.stop(true)
-  await fs.rm(directory, { recursive: true, force: true })
-})
+const scope = Scope.makeUnsafe()
+const shared: { context?: Context.Context<KernelClient.Service | KernelSdk.Service> } = {}
 
-function cut(projectionKey: string, projectionRevision: string, serverNow: number) {
-  return { version: 2, scopeKey: "a".repeat(64), projectionKey, projectionRevision,
-    throughOrdinal: "1", targetAdmittedOrdinal: "1", readOrdinal: "0", liveUnread: "1", storedUnread: "1", complete: false, serverNow }
-}
-
-test("one authenticated batch preserves two visible or mixed output across long native flight, and rejects stale/current/codec boundaries before effects", async () => {
-  const cases = ["long-flight", "mixed", "late-consume", "consumed", "consumer", "ttl", "current", "source", "revision", "post-revision", "order", "duplicate", "missing", "extra", "clock", "ordinals", "complete", "foreign", "unsupported"]
-  const selected = process.env.DEEPAGENT_CODE_TEST_OUTPUT_BATCH_CASES?.split(",") ?? cases
-  if (!selected.length || selected.some(mode => !cases.includes(mode)) || new Set(selected).size !== selected.length) throw new Error("BATCH_CASE_SELECTION_REJECTED")
-  const summaries: { mode: string; outcome: string; business: number; batch: number; scalar: number; inspect: number }[] = []
+beforeAll(async () => {
+  shared.context = await Effect.runPromise(Layer.buildWithScope(client, scope))
   await Effect.runPromise(Effect.gen(function* () {
     const connection = yield* KernelClient.Service
     const sdk = yield* KernelSdk.Service
@@ -82,7 +78,40 @@ test("one authenticated batch preserves two visible or mixed output across long 
       if (round === 499) return yield* Effect.die("ACTUAL_BATCH_SDK_NOT_CONNECTED")
       yield* Effect.sleep("10 millis")
     }
-    for (const mode of selected) {
+  }).pipe(Effect.provide(shared.context)))
+}, 60000)
+
+afterAll(async () => {
+  try {
+    await Effect.runPromise(Scope.close(scope, Exit.void))
+  } finally {
+    native.server.stop(true)
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+  expect(summaries).toHaveLength(selected.length)
+  expect(summaries.map((summary) => summary.mode)).toEqual(selected)
+  expect(new Set(summaries.map((summary) => summary.mode)).size).toBe(selected.length)
+  if (full) {
+    expect(summaries).toHaveLength(19)
+    expect(summaries.map((summary) => summary.mode)).toEqual(cases)
+    expect(new Set(summaries.map((summary) => summary.mode)).size).toBe(19)
+  }
+  console.log(JSON.stringify({ tag: "BATCH_CASE_COUNTS", coverage: full ? "full" : "partial", expected: cases.length,
+    verified: summaries.length, unique: new Set(summaries.map((summary) => summary.mode)).size, cases: summaries }))
+}, 60000)
+
+function cut(projectionKey: string, projectionRevision: string, serverNow: number) {
+  return { version: 2, scopeKey: "a".repeat(64), projectionKey, projectionRevision,
+    throughOrdinal: "1", targetAdmittedOrdinal: "1", readOrdinal: "0", liveUnread: "1", storedUnread: "1", complete: false, serverNow }
+}
+
+// Plain tests stay serial because the original SDK connection is shared.
+for (const mode of selected) test(`one authenticated batch preserves two visible or mixed output across long native flight, and rejects stale/current/codec boundaries before effects [${mode}]`, async () => {
+  const context = shared.context
+  if (!context) throw new Error("ACTUAL_BATCH_SDK_CONTEXT_MISSING")
+  await Effect.runPromise(Effect.gen(function* () {
+    const sdk = yield* KernelSdk.Service
+    const connection = yield* KernelClient.Service
       control.mode = mode
       control.phase = "seed"
       control.online = true
@@ -176,10 +205,7 @@ test("one authenticated batch preserves two visible or mixed output across long 
         expect((yield* db.get<{ count: number }>(sql`SELECT count(*) count FROM session_v2_provider_turn_receipt`))!.count).toBe(0)
         summaries.push({ mode, outcome: result._tag, business: count, batch: control.batchCalls, scalar: control.scalarCalls, inspect: control.inspectCalls })
       }).pipe(Effect.provide(Layer.mergeAll(database, repository)), Effect.scoped)
-    }
-  }).pipe(Effect.provide(client), Effect.scoped))
-  expect(summaries).toHaveLength(selected.length)
-  console.log(JSON.stringify({ tag: "BATCH_CASE_COUNTS", cases: summaries }))
+  }).pipe(Effect.provide(context), Effect.scoped))
 }, 60000)
 
 test("Core batch schemas independently reject duplicate selectors, excess fields, count and byte-text bounds, and reusable pending booleans", () => {
