@@ -4,7 +4,11 @@ import { Script } from "@deepagent-code/script"
 import { $ } from "bun"
 import { assertReleaseCandidate } from "./assert-release-candidate"
 import { prepareReleaseFiles } from "./prepare-release-files"
-import { ensureReleaseCandidateRef } from "./release-candidate-ref"
+import {
+  ensureReleaseCandidateRef,
+  ensureReleaseDraftTarget,
+  releaseCandidateReplacement,
+} from "./release-candidate-ref"
 import type { CandidateRelease } from "./release-candidate-ref"
 
 if (
@@ -44,16 +48,7 @@ if (!Script.preview) {
     sourceRef: process.env.GITHUB_REF,
     sourceCommit: sourceSha,
     release: initialRelease,
-    // One recovery of the failed, never-published v2.0.4 candidate authorized
-    // by its owner. Other versions and later ref generations keep the strict gate.
-    replacement:
-      Script.version === "2.0.4" && initialRelease?.databaseId === 412460632
-        ? {
-            candidate: "8b86573580109b42b0d724d60817a181de0cf34f",
-            tag: "8b86573580109b42b0d724d60817a181de0cf34f",
-            releaseID: 412460632,
-          }
-        : undefined,
+    replacement: releaseCandidateReplacement(Script.version, initialRelease),
     confirmReplacement: readRelease,
   })
   // A draft GitHub release does not create its Git tag.
@@ -70,10 +65,18 @@ if (!Script.preview) {
       throw new Error("release candidate is already published")
     if (initialRelease && existingRelease.databaseId !== initialRelease.databaseId)
       throw new Error("release draft ID changed during preparation")
-    if (initialRelease && candidateSha !== initialRelease.targetCommitish && initialRelease.databaseId === 412460632) {
-      if (existingRelease.assets.length) throw new Error("release draft gained assets during replacement")
-      await $`gh release edit v${Script.version} --target ${candidateSha} --notes-file ${notesFile} --repo ${process.env.GH_REPO}`
-    }
+    if (!initialRelease && existingRelease.targetCommitish !== candidateSha)
+      throw new Error("release draft appeared during preparation")
+    await ensureReleaseDraftTarget({
+      version: Script.version,
+      commit: candidateSha,
+      initialRelease: initialRelease ?? existingRelease,
+      release: existingRelease,
+      update: async () => {
+        await $`gh release edit v${Script.version} --target ${candidateSha} --notes-file ${notesFile} --repo ${process.env.GH_REPO}`
+      },
+      confirm: readRelease,
+    })
   } else {
     if (initialRelease) throw new Error("release draft disappeared during preparation")
     await $`gh release create v${Script.version} -d --target ${candidateSha} --title "v${Script.version}" --notes-file ${notesFile} --repo ${process.env.GH_REPO}`

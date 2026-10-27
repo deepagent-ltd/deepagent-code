@@ -7,6 +7,76 @@ export type CandidateRelease = {
   targetCommitish: string
 }
 
+export function releaseCandidateReplacement(version: string, release?: CandidateRelease) {
+  // Each entry authorizes only one observed, never-published candidate generation.
+  const replacement =
+    version === "2.0.4"
+      ? {
+          candidate: "8b86573580109b42b0d724d60817a181de0cf34f",
+          tag: "8b86573580109b42b0d724d60817a181de0cf34f",
+          releaseID: 412460632,
+        }
+      : version === "2.0.5"
+        ? {
+            candidate: "acc5c804339540defa793fc16a397e2fe329b85a",
+            tag: "acc5c804339540defa793fc16a397e2fe329b85a",
+            releaseID: 422617422,
+          }
+        : undefined
+  if (!replacement || release?.databaseId !== replacement.releaseID || release.tagName !== `v${version}`) return
+  return replacement
+}
+
+export async function ensureReleaseDraftTarget(input: {
+  version: string
+  commit: string
+  initialRelease: CandidateRelease
+  release: CandidateRelease
+  update: () => Promise<unknown>
+  confirm: () => Promise<CandidateRelease | undefined>
+}) {
+  if (
+    !/^[a-f0-9]{40}$/.test(input.commit) ||
+    ![input.initialRelease, input.release].every(
+      (release) =>
+        release.databaseId === input.initialRelease.databaseId &&
+        release.tagName === `v${input.version}` &&
+        release.isDraft &&
+        release.publishedAt === null,
+    )
+  )
+    throw new Error("release target replacement requires the authorized empty draft")
+  // A retry after the target edit must not overwrite notes or reject existing build assets.
+  if (input.release.targetCommitish === input.commit) return
+  const replacement = releaseCandidateReplacement(input.version, input.initialRelease)
+  if (
+    !replacement ||
+    input.initialRelease.targetCommitish !== replacement.candidate ||
+    ![input.initialRelease, input.release].every(
+      (release) =>
+        release.databaseId === replacement.releaseID &&
+        release.tagName === `v${input.version}` &&
+        release.isDraft &&
+        release.publishedAt === null &&
+        release.assets.length === 0 &&
+        release.targetCommitish === replacement.candidate,
+    )
+  )
+    throw new Error("release target replacement requires the authorized empty draft")
+  await input.update()
+  const confirmed = await input.confirm()
+  if (
+    !confirmed ||
+    confirmed.databaseId !== replacement.releaseID ||
+    confirmed.tagName !== `v${input.version}` ||
+    !confirmed.isDraft ||
+    confirmed.publishedAt !== null ||
+    confirmed.assets.length !== 0 ||
+    confirmed.targetCommitish !== input.commit
+  )
+    throw new Error("release draft changed during target replacement")
+}
+
 export async function ensureReleaseCandidateRef(input: {
   repository: string
   version: string

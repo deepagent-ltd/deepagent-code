@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { ensureReleaseDraftTarget, releaseCandidateReplacement } from "./release-candidate-ref"
 
 const environment = {
   ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))),
@@ -69,7 +70,14 @@ type Recovery = {
   replacement: { candidate: string; tag: string; releaseID: number }
 }
 
-function admit(root: string, baseCommit: string, commit: string, recovery?: Recovery, confirmed?: Release) {
+function admit(
+  root: string,
+  baseCommit: string,
+  commit: string,
+  recovery?: Recovery,
+  confirmed?: Release,
+  version = "2.0.4",
+) {
   return Bun.spawnSync(
     [
       process.execPath,
@@ -78,7 +86,7 @@ function admit(root: string, baseCommit: string, commit: string, recovery?: Reco
     import { ensureReleaseCandidateRef } from ${JSON.stringify(path.join(import.meta.dir, "release-candidate-ref.ts"))};
     try {
       console.log(await ensureReleaseCandidateRef({
-        ...${JSON.stringify({ repository: root, version: "2.0.4", baseCommit, commit, ...recovery })},
+        ...${JSON.stringify({ repository: root, version, baseCommit, commit, ...recovery })},
         ${recovery ? `confirmReplacement: async () => (${JSON.stringify(confirmed ?? recovery.release)}),` : ""}
       }));
     } catch (error) {
@@ -155,28 +163,29 @@ test("release job Git configuration preserves the requested deepagent-ai source 
 async function recoveryRepository(
   run: (root: string, input: Recovery, candidate: string) => Promise<void>,
   annotated = false,
+  version = "2.0.4",
 ) {
   await repository(async (root, base) => {
-    const previous = await prepare(root, "2.0.4\n")
-    git(root, ["push", "--quiet", "origin", `${previous}:refs/heads/release-candidates/v2.0.4`])
+    const previous = await prepare(root, `${version}\n`)
+    git(root, ["push", "--quiet", "origin", `${previous}:refs/heads/release-candidates/v${version}`])
     git(
       root,
       annotated
-        ? ["tag", "--annotate", "v2.0.4", "--message", "test: prepared draft", previous]
-        : ["tag", "v2.0.4", previous],
+        ? ["tag", "--annotate", `v${version}`, "--message", "test: prepared draft", previous]
+        : ["tag", `v${version}`, previous],
     )
-    const tag = git(root, ["rev-parse", "refs/tags/v2.0.4"])
-    git(root, ["push", "--quiet", "origin", "refs/tags/v2.0.4"])
+    const tag = git(root, ["rev-parse", `refs/tags/v${version}`])
+    git(root, ["push", "--quiet", "origin", `refs/tags/v${version}`])
     git(root, ["checkout", "--quiet", "--detach", base])
     await Bun.write(path.join(root, "repair"), "published source repair\n")
     git(root, ["add", "repair"])
     git(root, ["commit", "--quiet", "-m", "fix(release): repair source"])
     const source = git(root, ["rev-parse", "HEAD"])
     git(root, ["push", "--quiet", "origin", `${source}:refs/heads/main`])
-    const candidate = await prepare(root, "2.0.4\n")
+    const candidate = await prepare(root, `${version}\n`)
     const release = {
-      databaseId: 412460632,
-      tagName: "v2.0.4",
+      databaseId: version === "2.0.5" ? 422617422 : 412460632,
+      tagName: `v${version}`,
       isDraft: true,
       publishedAt: null,
       assets: [],
@@ -195,13 +204,13 @@ async function recoveryRepository(
   })
 }
 
-function refs(root: string) {
+function refs(root: string, version = "2.0.4") {
   return git(root, [
     "ls-remote",
     "origin",
-    "refs/heads/release-candidates/v2.0.4",
-    "refs/tags/v2.0.4",
-    "refs/tags/v2.0.4^{}",
+    `refs/heads/release-candidates/v${version}`,
+    `refs/tags/v${version}`,
+    `refs/tags/v${version}^{}`,
   ]).split("\n")
 }
 
@@ -363,4 +372,172 @@ test("candidate recovery refuses an old candidate whose parent is outside the ne
     expect(admit(root, unrelated, candidate, { ...input, sourceCommit: unrelated }).exitCode).toBe(1)
     expect(refs(root)).toEqual(original)
   })
+})
+
+const draft205: Release = {
+  databaseId: 422617422,
+  tagName: "v2.0.5",
+  isDraft: true,
+  publishedAt: null,
+  assets: [],
+  targetCommitish: "acc5c804339540defa793fc16a397e2fe329b85a",
+}
+
+test("release recovery authorization pins the observed 2.0.5 generation and preserves the 2.0.4 authorization", () => {
+  expect(releaseCandidateReplacement("2.0.5", draft205)).toEqual({
+    candidate: draft205.targetCommitish,
+    tag: draft205.targetCommitish,
+    releaseID: draft205.databaseId,
+  })
+  expect(releaseCandidateReplacement("2.0.5", { ...draft205, databaseId: draft205.databaseId + 1 })).toBeUndefined()
+  expect(releaseCandidateReplacement("2.0.5", { ...draft205, tagName: "v2.0.6" })).toBeUndefined()
+  expect(releaseCandidateReplacement("2.0.6", { ...draft205, tagName: "v2.0.6" })).toBeUndefined()
+  expect(releaseCandidateReplacement("2.0.5")).toBeUndefined()
+  expect(releaseCandidateReplacement("2.0.4", { ...draft205, databaseId: 412460632, tagName: "v2.0.4" })).toEqual({
+    candidate: "8b86573580109b42b0d724d60817a181de0cf34f",
+    tag: "8b86573580109b42b0d724d60817a181de0cf34f",
+    releaseID: 412460632,
+  })
+})
+
+test("2.0.5 recovery atomically pairs refs and reuses prepared bytes after the refs move", async () => {
+  await recoveryRepository(
+    async (root, input, candidate) => {
+      const rejected = admit(root, input.sourceCommit, candidate, undefined, undefined, "2.0.5")
+      expect(rejected.exitCode).toBe(1)
+      expect(rejected.stderr.toString()).toContain("release candidate ref drifted from prepared source")
+      expect(admit(root, input.sourceCommit, candidate, input, undefined, "2.0.5").exitCode).toBe(0)
+      expect(refs(root, "2.0.5")).toEqual([
+        `${candidate}\trefs/heads/release-candidates/v2.0.5`,
+        `${candidate}\trefs/tags/v2.0.5`,
+      ])
+      git(root, ["checkout", "--quiet", "--detach", input.sourceCommit])
+      const retry = await prepare(root, "2.0.5\n", "2026-10-14T01:00:00Z")
+      expect(retry).not.toBe(candidate)
+      const reused = admit(root, input.sourceCommit, retry, input, undefined, "2.0.5")
+      expect(reused.exitCode).toBe(0)
+      expect(reused.stdout.toString().trim()).toBe(candidate)
+      expect(refs(root, "2.0.5")).toEqual([
+        `${candidate}\trefs/heads/release-candidates/v2.0.5`,
+        `${candidate}\trefs/tags/v2.0.5`,
+      ])
+    },
+    false,
+    "2.0.5",
+  )
+})
+
+test("2.0.5 draft recovery updates the original empty draft and verifies the target response", async () => {
+  const commit = "d".repeat(40)
+  const calls: string[] = []
+  await ensureReleaseDraftTarget({
+    version: "2.0.5",
+    commit,
+    initialRelease: draft205,
+    release: draft205,
+    update: async () => {
+      calls.push("edit")
+    },
+    confirm: async () => {
+      calls.push("confirm")
+      return { ...draft205, targetCommitish: commit }
+    },
+  })
+  expect(calls).toEqual(["edit", "confirm"])
+})
+
+test("draft retry after a completed target edit preserves notes and existing build assets without another edit", async () => {
+  const commit = "d".repeat(40)
+  const release = { ...draft205, targetCommitish: commit, assets: [{ id: 1 }] }
+  for (const initialRelease of [draft205, release]) {
+    const calls: string[] = []
+    await ensureReleaseDraftTarget({
+      version: "2.0.5",
+      commit,
+      initialRelease,
+      release,
+      update: async () => {
+        calls.push("edit")
+      },
+      confirm: async () => {
+        calls.push("confirm")
+        return release
+      },
+    })
+    expect(calls).toEqual([])
+  }
+})
+
+test("draft target recovery refuses changed identities, publication, assets and later generations before editing", async () => {
+  for (const release of [
+    { ...draft205, databaseId: draft205.databaseId + 1 },
+    { ...draft205, tagName: "v2.0.6" },
+    { ...draft205, isDraft: false },
+    { ...draft205, publishedAt: "2026-10-27T00:00:00Z" },
+    { ...draft205, assets: [{ id: 1 }] },
+    { ...draft205, targetCommitish: "e".repeat(40) },
+  ]) {
+    for (const facts of [
+      { initialRelease: release, release: draft205 },
+      { initialRelease: draft205, release },
+    ]) {
+      const calls: string[] = []
+      await expect(
+        ensureReleaseDraftTarget({
+          version: "2.0.5",
+          commit: "d".repeat(40),
+          ...facts,
+          update: async () => {
+            calls.push("edit")
+          },
+          confirm: async () => {
+            calls.push("confirm")
+            return draft205
+          },
+        }),
+      ).rejects.toThrow("release target replacement requires the authorized empty draft")
+      expect(calls).toEqual([])
+    }
+  }
+})
+
+test("draft recovery refuses a failed edit and verifies identity, assets and target after an acknowledged edit", async () => {
+  const calls: string[] = []
+  await expect(
+    ensureReleaseDraftTarget({
+      version: "2.0.5",
+      commit: "d".repeat(40),
+      initialRelease: draft205,
+      release: draft205,
+      update: async () => {
+        calls.push("edit")
+        throw new Error("edit failed")
+      },
+      confirm: async () => {
+        calls.push("confirm")
+        return draft205
+      },
+    }),
+  ).rejects.toThrow("edit failed")
+  expect(calls).toEqual(["edit"])
+  for (const confirmed of [
+    undefined,
+    draft205,
+    { ...draft205, targetCommitish: "d".repeat(40), databaseId: draft205.databaseId + 1 },
+    { ...draft205, targetCommitish: "d".repeat(40), tagName: "v2.0.6" },
+    { ...draft205, targetCommitish: "d".repeat(40), isDraft: false },
+    { ...draft205, targetCommitish: "d".repeat(40), publishedAt: "2026-10-27T00:00:00Z" },
+    { ...draft205, targetCommitish: "d".repeat(40), assets: [{ id: 1 }] },
+  ]) {
+    await expect(
+      ensureReleaseDraftTarget({
+        version: "2.0.5",
+        commit: "d".repeat(40),
+        initialRelease: draft205,
+        release: draft205,
+        update: async () => {},
+        confirm: async () => confirmed,
+      }),
+    ).rejects.toThrow("release draft changed during target replacement")
+  }
 })
