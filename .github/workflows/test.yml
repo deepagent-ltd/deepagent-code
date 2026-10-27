@@ -25,11 +25,15 @@ on:
         description: Package-relative file for a manual diagnostic; desktop and app require a file; main pushes run every file
         type: string
         default: ""
+      test_name:
+        description: Optional Bun case-name pattern within a manual core, cli or desktop file; main pushes run every case
+        type: string
+        default: ""
 
 concurrency:
   # Keep every run on dev so cancelled checks do not pollute the default branch
   # commit history. PRs and other branches still share a group and cancel stale runs.
-  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.suite || 'all' }}-${{ inputs.shard || 'all' }}-${{ inputs.test_file || 'all-files' }}
+  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.suite || 'all' }}-${{ inputs.shard || 'all' }}-${{ inputs.test_file || 'all-files' }}-${{ inputs.test_name || 'all-cases' }}
   cancel-in-progress: true
 
 permissions:
@@ -57,10 +61,12 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: |
           bun -e 'const suite=process.env.DAC_UNIT_SUITE; const shard=process.env.DAC_UNIT_SHARD; const file=process.env.DAC_UNIT_TEST_FILE; if (shard !== "all" && (!/^[1-8]$/.test(shard ?? "") || Number(shard) > (suite === "common" ? 1 : suite === "core" ? 4 : suite === "cli" ? 8 : 0))) throw new Error("Select a specific suite and one of its valid shards, or choose all shards"); if (["desktop","app"].includes(suite ?? "") && !file) throw new Error("A desktop or app diagnostic requires a test file"); if (file && (!["core","cli","desktop","app"].includes(suite ?? "") || shard !== "all" || !/^(?:test|src)\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.test\.tsx?$/.test(file) || !file.startsWith(suite === "desktop" ? "src/" : suite === "app" ? "test/components/" : "test/") || file.split("/").includes(".."))) throw new Error("A file diagnostic requires core, cli, desktop or app, all shards, and a package-relative test file")'
+          bun -e 'const name=process.env.DAC_UNIT_TEST_NAME; if (name && (!process.env.DAC_UNIT_TEST_FILE || process.env.DAC_UNIT_SHARD !== "all" || !["core","cli","desktop"].includes(process.env.DAC_UNIT_SUITE ?? "") || name.length > 256 || /[\x00-\x1f\x7f]/.test(name))) throw new Error("A Bun case diagnostic requires a file, all shards, and a bounded case pattern"); if (name) new RegExp(name)'
         env:
           DAC_UNIT_SUITE: ${{ inputs.suite || 'all' }}
           DAC_UNIT_SHARD: ${{ inputs.shard || 'all' }}
           DAC_UNIT_TEST_FILE: ${{ inputs.test_file || '' }}
+          DAC_UNIT_TEST_NAME: ${{ inputs.test_name || '' }}
 
       - name: Verify public documents and complete history
         run: bun script/check-public-source-boundary.ts --history
@@ -254,6 +260,9 @@ jobs:
             echo 'A desktop or app diagnostic requires a test file' >&2
             exit 1
           fi
+          if [[ -n "$DAC_TEST_NAME" ]]; then
+            bun -e 'const name=process.env.DAC_TEST_NAME; if (!name || !process.env.DAC_TEST_FILE || !["core","cli","desktop"].includes(process.env.DAC_TEST_SUITE ?? "") || name.length > 256 || /[\x00-\x1f\x7f]/.test(name)) throw new Error("Invalid Bun case diagnostic"); new RegExp(name)'
+          fi
           if [[ "$DAC_TEST_SUITE" == 'common' ]]; then
             dac_test_command=(bun run test:ci --filter='!@deepagent-code/core' --filter='!deepagent-code' --continue=always --log-order=stream --log-prefix=task)
             # The Windows App and Electron fixtures each need their original cold-start budget.
@@ -294,6 +303,9 @@ jobs:
               dac_test_command+=("--shard=$DAC_TEST_SHARD/$DAC_TEST_SHARDS")
             fi
           fi
+          if [[ -n "$DAC_TEST_NAME" ]]; then
+            dac_test_command+=(--test-name-pattern "$DAC_TEST_NAME")
+          fi
           if [[ "$RUNNER_OS" == 'Linux' ]]; then
             xvfb-run -a --server-args='-screen 0 1920x1080x24' "${dac_test_command[@]}"
           else
@@ -304,6 +316,7 @@ jobs:
           DAC_TEST_SHARD: ${{ matrix.shard }}
           DAC_TEST_SHARDS: ${{ matrix.suite == 'cli' && 8 || 4 }}
           DAC_TEST_FILE: ${{ inputs.test_file || '' }}
+          DAC_TEST_NAME: ${{ inputs.test_name || '' }}
           DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
       - name: Run HttpApi exerciser gates
