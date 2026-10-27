@@ -72,8 +72,14 @@ async function main() {
   stage("initial-boundary")
   await window.webContents.executeJavaScript("document.querySelector('input').focus()")
   const callbacks: number[] = []
+  const sourceCallbacks: { ordinal: number; at: number; wallAt: number }[] = []
   stage("document:observing")
-  const lease = native.observe(window.getNativeWindowHandle(), (...args: unknown[]) => callbacks.push(args.length))
+  const lease = native.observe(window.getNativeWindowHandle(), (...args: unknown[]) => {
+    const count = callbacks.push(args.length)
+    if (process.env.DAC_MANAGED_BROWSER_INPUT_DIAGNOSTICS === "1" && sourceCallbacks.length < 32)
+      sourceCallbacks.push({ ordinal: count, at: performance.now(), wallAt: Date.now() })
+    return count
+  })
   assert.equal(lease.healthy(), true)
   if (scenario.startsWith("foreign")) {
     window.webContents.debugger.attach("1.3")
@@ -109,7 +115,7 @@ async function main() {
   }
   stage("cdp:starting")
   window.webContents.debugger.attach("1.3")
-  const cdp: { method: string; callbacks: number }[] = []
+  const cdp: { method: string; callbacks: number; at: number; wallAt: number }[] = []
   for (const [method, parameters] of [
     ["Input.insertText", { text: "owned中文" }],
     ["Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", text: "a", windowsVirtualKeyCode: 65 }],
@@ -120,7 +126,12 @@ async function main() {
     ["Input.dispatchMouseEvent", { type: "mouseWheel", x: 100, y: 100, deltaX: 0, deltaY: 120 }],
   ] as const) {
     await window.webContents.debugger.sendCommand(method, parameters); await delay()
-    cdp.push({ method, callbacks: callbacks.length })
+    cdp.push({ method, callbacks: callbacks.length, at: performance.now(), wallAt: Date.now() })
+    if (process.env.DAC_MANAGED_BROWSER_INPUT_DIAGNOSTICS === "1") {
+      try {
+        writeFileSync(path.join(root, `${scenario}-source.json`), JSON.stringify({ cdp, callbacks: sourceCallbacks }), { mode: 0o600 })
+      } catch {}
+    }
   }
   stage("cdp:complete")
   assert.equal(callbacks.length, 0)

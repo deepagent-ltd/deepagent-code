@@ -140,13 +140,17 @@ static bool collectClients(NSView *view, HookSlot *hooks, NSMutableArray<NSView 
   for (NSView *child in view.subviews) if (!collectClients(child, hooks, clients, depth + 1, nodes, failure)) return false;
   return true;
 }
-static bool sourceRejected(const std::shared_ptr<Watch>& watch, const char *reason, long clients = -1) {
+static bool diagnosticRecord() {
   const char *diagnostics = std::getenv("DAC_MANAGED_BROWSER_INPUT_DIAGNOSTICS");
-  if (diagnostics && std::strcmp(diagnostics, "1") == 0 && !watch->diagnosed.exchange(true)) {
+  if (!diagnostics || std::strcmp(diagnostics, "1") != 0) return false;
+  static std::atomic<unsigned> reported{0};
+  return reported.fetch_add(1) < 128;
+}
+static bool sourceRejected(const std::shared_ptr<Watch>& watch, const char *reason, long clients = -1) {
+  if (!watch->diagnosed.load() && diagnosticRecord() && !watch->diagnosed.exchange(true)) {
     // Fixed categories and bounded counts only; -1 means the tree was not collected.
     // Never emit a view address or input payload.
-    static std::atomic<unsigned> reported{0};
-    if (reported.fetch_add(1) < 128) std::fprintf(stderr,
+    std::fprintf(stderr,
       "MANAGED_BROWSER_INPUT_DIAGNOSTIC {\"at\":%lld,\"reason\":\"%s\",\"expectedClients\":%zu,\"actualClients\":%ld}\n",
       (long long)(NSDate.date.timeIntervalSince1970 * 1000), reason, watch->clients.size(), clients);
   }
@@ -174,7 +178,7 @@ static bool currentWindow(const std::shared_ptr<Watch>& watch) {
   }
   return true;
 }
-static void signalWatch(const std::shared_ptr<Watch>& watch) {
+static void signalWatch(const std::shared_ptr<Watch>& watch, const char *origin, long type = -1) {
   if (watch->closed || !NSThread.isMainThread) return;
   napi_handle_scope scope;
   if (napi_open_handle_scope(watch->env, &scope) != napi_ok) { releaseWatch(watch); return; }
@@ -183,6 +187,9 @@ static void signalWatch(const std::shared_ptr<Watch>& watch) {
   if (status == napi_ok) status = napi_get_global(watch->env, &global);
   // Never inspect or copy the platform input arguments into the JS boundary.
   if (status == napi_ok) status = napi_call_function(watch->env, global, callback, 0, nullptr, &result);
+  if (status == napi_ok && diagnosticRecord()) std::fprintf(stderr,
+    "MANAGED_BROWSER_INPUT_CALLBACK {\"at\":%lld,\"origin\":\"%s\",\"type\":%ld}\n",
+    (long long)(NSDate.date.timeIntervalSince1970 * 1000), origin, type);
   bool promise = false;
   if (status == napi_ok && napi_is_promise(watch->env, result, &promise) == napi_ok && promise) releaseWatch(watch);
   if (status != napi_ok) {
@@ -204,9 +211,9 @@ static void platformSource(NSView *view, HookSlot *hooks, bool lifecycle) {
     if (!known && view.window != watch->window) continue;
     if (lifecycle || !known || !currentWindow(watch)) {
       if (lifecycle || !known) sourceRejected(watch, lifecycle ? "client_view_moved" : "client_unobserved");
-      watch->invalid = true; signalWatch(watch); releaseWatch(watch); continue;
+      watch->invalid = true; signalWatch(watch, "client_retirement"); releaseWatch(watch); continue;
     }
-    signalWatch(watch);
+    signalWatch(watch, "cocoa_input");
   }
 }
 static void insertText(id self, SEL selector, id text, NSRange replacement) {
@@ -322,7 +329,7 @@ static napi_value observe(napi_env env, napi_callback_info info) {
   watch->monitor = [NSEvent addLocalMonitorForEventsMatchingMask:mask handler:^NSEvent *(NSEvent *event) {
     auto held = pointer->shared_from_this();
     if (!currentWindow(held)) { releaseWatch(held); return event; }
-    if (event.window == held->window) signalWatch(held);
+    if (event.window == held->window) signalWatch(held, "platform_event", event.type);
     return event;
   }];
   watch->closing = [NSNotificationCenter.defaultCenter addObserverForName:NSWindowWillCloseNotification
