@@ -165,7 +165,7 @@ describe("V2OwnerDevMint.ensureDevOwnerAuthorization", () => {
         )
       })
     const results = await Promise.all([run(), run()])
-    expect(results.map((result) => result.code)).toEqual([0, 0])
+    expect(results.map((result) => result.code), JSON.stringify(results)).toEqual([0, 0])
     for (const result of results) {
       // The real cross-process migration lease may report contention. Accept
       // only its exact owned DB path; every other warning or error still fails.

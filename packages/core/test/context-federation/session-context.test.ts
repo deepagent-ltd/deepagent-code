@@ -280,6 +280,11 @@ describe("durable activity and context selection", () => {
 
 describe("provider attempt safety", () => {
   test("exact validation retries at the same millisecond reuse one row after file DB reopen", async () => {
+    const started = performance.now()
+    const trace = (phase: string) => console.error(JSON.stringify({
+      test: "context-validation-retry", phase, elapsedMs: Math.round(performance.now() - started),
+    }))
+    trace("start")
     const directory = await mkdtemp(path.join(os.tmpdir(), "dac-context-validation-retry-"))
     const filename = path.join(directory, "authority.sqlite")
     const harness = makeHarness(defaultLimits, "required", filename)
@@ -297,22 +302,27 @@ describe("provider attempt safety", () => {
     try {
       const committed = await harness.run(
         Effect.gen(function* () {
+          trace("first-layer-ready")
           yield* seed()
+          trace("seeded")
           const context = yield* SessionContext.Service
           const activity = yield* context.openActivity({ sessionId, triggerInputId: triggerId, now: 10 })
           const selection = yield* context.commitSelection(
             selectionInput(activity.activityId, harness.codec, [triggerId]),
           )
+          trace("selection-committed")
           const input = { ...validation, selectionId: selection.selectionId }
           const first = yield* context.appendValidation(input)
           const repeats = yield* Effect.all([context.appendValidation(input), context.appendValidation(input)], {
             concurrency: "unbounded",
           })
+          trace("validation-retries-complete")
           expect(repeats).toEqual([first, first])
           expect(yield* (yield* Database.Service).db.select().from(SessionContextValidationTable).all()).toHaveLength(1)
           return { input, first }
         }),
       )
+      trace("first-layer-closed")
       await makeHarness(
         defaultLimits,
         "required",
@@ -320,12 +330,15 @@ describe("provider attempt safety", () => {
         `provider-owner-reopen-${randomBytes(8).toString("hex")}`,
       ).run(
         Effect.gen(function* () {
+          trace("reopen-layer-ready")
           expect(yield* (yield* SessionContext.Service).appendValidation(committed.input)).toBe(committed.first)
           expect(yield* (yield* Database.Service).db.select().from(SessionContextValidationTable).all()).toHaveLength(1)
         }),
       )
+      trace("reopen-layer-closed")
     } finally {
       await rm(directory, { recursive: true, force: true })
+      trace("cleanup-complete")
     }
   })
 
