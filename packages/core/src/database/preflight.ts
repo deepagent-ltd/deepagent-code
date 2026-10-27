@@ -120,7 +120,11 @@ export type PreflightResult =
 
 export interface PreflightProbes {
   stat: (filename: string) => Promise<{ size: number; mode: number } | null>
-  readHeader: (filename: string) => Promise<{ headerValid: boolean; pageSize: number } | null>
+  readHeader: (filename: string) => Promise<{
+    headerValid: boolean
+    pageSize: number
+    journalMode?: "wal" | "delete" | null
+  } | null>
   readJournalMode: (filename: string) => Promise<{ journalMode: string | null; pageCount: number } | null>
   readJournalRows: (filename: string) => Promise<JournalRow[] | null>
   readCapabilities: (filename: string) => Promise<CapabilityRow[] | null>
@@ -177,19 +181,21 @@ const probesForReadOnly = (closed?: { filename: string; assertCurrent: () => Pro
     async readHeader(filename) {
       const stat = await fs.stat(filename).catch(() => null)
       if (!stat || stat.size === 0) return null
-      // Read only the magic + page-size bytes. Node's fs.readFile rejects files
+      // Read only the magic, page size and journal-mode bytes. Node's fs.readFile rejects files
       // larger than 2 GiB (ERR_FS_FILE_TOO_LARGE), which made the desktop
       // node-sidecar preflight flag a >2 GiB store as "not a SQLite database".
       const handle = await fs.open(filename, "r").catch(() => null)
       if (!handle) return { headerValid: false, pageSize: 0 }
       try {
-        const buffer = Buffer.alloc(18)
-        const { bytesRead } = await handle.read(buffer, 0, 18, 0)
+        const buffer = Buffer.alloc(20)
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
         if (bytesRead < 16) return { headerValid: false, pageSize: 0 }
         const headerValid = buffer.subarray(0, 16).equals(HEADER_MAGIC_BYTES)
         const raw = buffer[16]! | (buffer[17]! << 8)
         const pageSize = raw === 1 ? 65536 : raw
-        return { headerValid, pageSize }
+        const journalMode = buffer[18] === 2 && buffer[19] === 2 ? "wal"
+          : buffer[18] === 1 && buffer[19] === 1 ? "delete" : null
+        return { headerValid, pageSize, journalMode }
       } catch {
         return { headerValid: false, pageSize: 0 }
       } finally {
@@ -296,18 +302,20 @@ const defaultProbes = probesForReadOnly()
 const gatherObservations = async (
   options: PreflightOptions,
   probes: PreflightProbes,
+  inspect = true,
 ): Promise<PreflightObservations> => {
   const stat = await probes.stat(options.filename)
   const exists = stat !== null
   const size = stat?.size ?? 0
   const mode = stat?.mode ?? null
   const readStat = exists && size > 0
+  const readDatabase = readStat && inspect
   const header = readStat ? await probes.readHeader(options.filename) : null
-  const journalMode = readStat ? await probes.readJournalMode(options.filename) : null
-  const journalRows = readStat ? (await probes.readJournalRows(options.filename)) ?? [] : []
-  const capabilities = readStat ? (await probes.readCapabilities(options.filename)) ?? [] : []
-  const upgradeRuns = readStat ? (await probes.readUpgradeRuns(options.filename)) ?? [] : []
-  const migrationReceipts = readStat ? (await probes.readMigrationReceipts?.(options.filename)) ?? [] : []
+  const journalMode = readDatabase ? await probes.readJournalMode(options.filename) : null
+  const journalRows = readDatabase ? (await probes.readJournalRows(options.filename)) ?? [] : []
+  const capabilities = readDatabase ? (await probes.readCapabilities(options.filename)) ?? [] : []
+  const upgradeRuns = readDatabase ? (await probes.readUpgradeRuns(options.filename)) ?? [] : []
+  const migrationReceipts = readDatabase ? (await probes.readMigrationReceipts?.(options.filename)) ?? [] : []
   const walShm = await probes.walShm(options.filename)
   const freeSpaceBytes = await probes.freeSpace(options.filename)
   const localFilesystem = await probes.localFilesystem(options.filename)
@@ -321,7 +329,7 @@ const gatherObservations = async (
     sqliteHeaderValid: header?.headerValid ?? false,
     pageSize: header?.pageSize ?? null,
     pageCount: journalMode?.pageCount ?? null,
-    journalMode: journalMode?.journalMode ?? null,
+    journalMode: journalMode?.journalMode ?? header?.journalMode ?? null,
     dbReadable: readStat ? journalMode !== null : true,
     journalRows,
     capabilities,
@@ -546,20 +554,17 @@ export const withReadOnlyPreflight = async <A,>(
   unavailable: (result: PreflightResult) => Promise<A> | A,
   probes?: PreflightProbes,
 ): Promise<A> => {
-  const observations = await gatherObservations(options, probes ?? defaultProbes)
+  // Even SQLITE_OPEN_READONLY can create WAL/SHM in a writable directory. Select the
+  // fenced closed-file path before opening SQLite, while live WAL keeps ordinary RO.
+  const observations = await gatherObservations(options, probes ?? defaultProbes, probes !== undefined)
   const original = analyzePreflight(options, observations)
-  if (
-    probes ||
-    observations.dbReadable ||
-    !observations.exists ||
-    observations.size === 0 ||
-    !observations.sqliteHeaderValid ||
-    !observations.localFilesystem ||
-    observations.walExists ||
-    observations.shmExists ||
-    observations.activeProcess
-  )
-    return use(original, options.filename)
+  if (probes || !observations.exists || observations.size === 0) return use(original, options.filename)
+  if (!observations.sqliteHeaderValid || !observations.localFilesystem) return unavailable(original)
+  if (observations.walExists || observations.shmExists || observations.journalMode === "delete") {
+    return use(analyzePreflight(options, await gatherObservations(options, defaultProbes)), options.filename)
+  }
+  if (observations.journalMode !== "wal") return unavailable(original)
+  if (observations.activeProcess) return unavailable(original)
   const before = await closedFileStamp(options.filename).catch(() => undefined)
   if (!before) return unavailable(original)
   const obtained = await Effect.runPromise(

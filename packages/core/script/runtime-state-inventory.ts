@@ -45,6 +45,7 @@ export type RuntimeStateVerdict =
   | "safe_scoped"
   | "safe_bounded"
   | "release_forbidden"
+  | "test_only"
   | "review_required"
 
 export type RuntimeStateAudit = {
@@ -90,6 +91,7 @@ export async function runtimeStateInventory(repository: string): Promise<readonl
     )
   )
     .flat()
+    .map((file) => file.replaceAll("\\", "/"))
     .filter(
       (file) =>
         !file.split("/").includes("node_modules") &&
@@ -114,7 +116,8 @@ export async function runtimeStateInventory(repository: string): Promise<readonl
     .sort((left, right) => left.key.localeCompare(right.key))
 }
 
-export function runtimeStateCandidates(file: string, source: string): readonly RuntimeStateCandidate[] {
+export function runtimeStateCandidates(filename: string, source: string): readonly RuntimeStateCandidate[] {
+  const file = filename.replaceAll("\\", "/")
   // Declaration files cannot instantiate runtime state; dependency internals have their own owners.
   if (file.endsWith(".d.ts") || file.split("/").includes("node_modules")) return []
   const sourceFile = createSourceFile(
@@ -1909,7 +1912,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
           ],
         ],
         [
-          "packages/deepagent-code/src/session/revert.ts:closure@52:75.files",
+          "packages/deepagent-code/src/session/revert.ts:closure@55:106.files",
           [
             "revert-invocation",
             "single-call",
@@ -3148,14 +3151,14 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
       [
         // The knowledge seed is constructed once per storage-runtime invocation.
         [
-          "packages/core/src/agent-gateway.ts:createStorageRuntime@528:540.seed",
+          "packages/core/src/agent-gateway.ts:createStorageRuntime@529:541.seed",
           [
-            "createStorageRuntime-invocation",
-            "single-call",
-            "call-stack",
-            "return",
-            "ephemeral-runtime",
-            "instance-scoped",
+            "original storage runtime",
+            "captured canonical storage root",
+            "one seeded flag and at most one active seed promise",
+            "active promise finally clears; runtime owner exit releases closure",
+            "coordination-only; durable seeded knowledge remains in original store",
+            "original runtime or V1 compatibility storage owner",
             "safe_scoped",
           ],
         ],
@@ -3307,7 +3310,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
           ],
         ],
         [
-          "packages/core/src/flag/runtime-features.ts:createRuntimeFeatureRegistry@112:116.features",
+          "packages/core/src/flag/runtime-features.ts:createRuntimeFeatureRegistry@110:114.features",
           [
             "createRuntimeFeatureRegistry-invocation",
             "per-registry",
@@ -5023,7 +5026,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     (
       [
         [
-          "packages/core/src/agent-gateway.ts:closure@1124:1132.durable",
+          "packages/core/src/agent-gateway.ts:closure@1132:1140.durable",
           [
             "DeepAgent-learning-job-build",
             "per-queued-job",
@@ -5035,7 +5038,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
           ],
         ],
         [
-          "packages/core/src/agent-gateway.ts:closure@3580:3582.storage",
+          "packages/core/src/agent-gateway.ts:closure@3605:3607.storage",
           [
             "DeepAgent-runtime-instance",
             "per-runtime-layer",
@@ -5889,7 +5892,7 @@ const reviewedCoreWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/core/src/permission.ts:closure@269:279.actionPermits",
+        "packages/core/src/permission.ts:closure@261:271.actionPermits",
         [
           "PermissionV2.original-Location",
           "original-ActionPermit/AppAction/FileActions",
@@ -6319,7 +6322,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/im/kernel/client.ts:closure@127:132.liveHandles",
+        "packages/deepagent-code/src/im/kernel/client.ts:closure@129:134.liveHandles",
         [
           "KernelClient.original-SDK-event-scope",
           "original-SDK-live-event-object",
@@ -6331,7 +6334,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/im/kernel/reader.ts:closure@27:38.livePrepared",
+        "packages/deepagent-code/src/im/kernel/reader.ts:closure@63:75.livePrepared",
         [
           "KernelReader.original-runtime",
           "original-live-handle/native-reader-cut",
@@ -6343,7 +6346,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/im/kernel/reader.ts:closure@27:45.retirementObserved",
+        "packages/deepagent-code/src/im/kernel/reader.ts:closure@63:89.retirementObserved",
         [
           "KernelReader.original-runtime",
           "original-live-handle/native-reader-cut",
@@ -6355,7 +6358,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/im/kernel/sync.ts:closure@71:81.engines",
+        "packages/deepagent-code/src/im/kernel/sync.ts:closure@108:118.engines",
         [
           "KernelSync.original-reader-registry",
           "original-IMReaderRegistry.Entry",
@@ -6583,7 +6586,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/installation/windows-work-factory.ts:closure@244:246.active",
+        "packages/deepagent-code/src/installation/windows-work-factory.ts:closure@249:251.active",
         [
           "NativeWindowsWorkFactory.original-capture-scope",
           "original-native-workspace-or-image-registry-object",
@@ -6595,7 +6598,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/installation/windows-work-factory.ts:closure@39:168.workspaces",
+        "packages/deepagent-code/src/installation/windows-work-factory.ts:closure@39:173.workspaces",
         [
           "NativeWindowsWorkFactory.original-capture-scope",
           "original-native-workspace-or-image-registry-object",
@@ -6607,7 +6610,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/installation/windows-work-factory.ts:closure@39:124.eventRuntimes",
+        "packages/deepagent-code/src/installation/windows-work-factory.ts:closure@39:129.eventRuntimes",
         [
           "NativeWindowsWorkFactory.original-capture-scope",
           "original-Native-Event-Git-runtime-lease",
@@ -6619,7 +6622,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/installation/windows-work-factory.ts:closure@39:125.eventRepositories",
+        "packages/deepagent-code/src/installation/windows-work-factory.ts:closure@39:130.eventRepositories",
         [
           "NativeWindowsWorkFactory.original-capture-scope",
           "original-Native-Event-Git-repository-lease",
@@ -6631,7 +6634,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/installation/windows-work-factory.ts:closure@39:126.eventDirectories",
+        "packages/deepagent-code/src/installation/windows-work-factory.ts:closure@39:131.eventDirectories",
         [
           "NativeWindowsWorkFactory.original-capture-scope",
           "original-Native-Event-directory-lease",
@@ -6643,7 +6646,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/installation/windows-work-factory.ts:closure@39:146.collectors",
+        "packages/deepagent-code/src/installation/windows-work-factory.ts:closure@39:151.collectors",
         [
           "NativeWindowsWorkFactory.original-capture-scope",
           "original-Native-known-command-cleanup-lease",
@@ -6859,7 +6862,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/mcp/index.ts:closure@485:503.localTransports",
+        "packages/deepagent-code/src/mcp/index.ts:closure@486:504.localTransports",
         [
           "MCP.original-InstanceState/client-scope",
           "original-Transport-or-State",
@@ -6871,7 +6874,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/mcp/index.ts:closure@485:801.appResourcesByState",
+        "packages/deepagent-code/src/mcp/index.ts:closure@486:823.appResourcesByState",
         [
           "MCP.original-InstanceState/client-scope",
           "original-Transport-or-State",
@@ -6943,7 +6946,7 @@ const reviewedHostWitnesses: Readonly<Record<string, RuntimeStateAudit>> = Objec
         ],
       ],
       [
-        "packages/deepagent-code/src/server/server.ts:serverLayer@437:450.tlsRequests",
+        "packages/deepagent-code/src/server/server.ts:serverLayer@446:459.tlsRequests",
         [
           "Server.original-TLS-request-owner",
           "original-server-request-object",
@@ -7767,7 +7770,7 @@ const reviewedFiniteLifetimes: Readonly<Record<string, RuntimeStateAudit>> = Obj
         ],
       ],
       [
-        "packages/core/src/session/projector.ts:closure@677:682.liveWireParts",
+        "packages/core/src/session/projector.ts:closure@678:683.liveWireParts",
         [
           "SessionProjector original Event subscription Scope",
           "original Session/message/fragment identity",
@@ -8223,7 +8226,7 @@ const reviewedFiniteLifetimes: Readonly<Record<string, RuntimeStateAudit>> = Obj
         ],
       ],
       [
-        "packages/deepagent-code/src/mcp/auth-scope.ts:closure@76:84.runtime",
+        "packages/deepagent-code/src/mcp/auth-scope.ts:closure@81:90.runtime",
         [
           "original opaque MCP Instance auth scope",
           "exact InstanceRef/name/config digest/incarnation",
@@ -8235,7 +8238,7 @@ const reviewedFiniteLifetimes: Readonly<Record<string, RuntimeStateAudit>> = Obj
         ],
       ],
       [
-        "packages/deepagent-code/src/mcp/index.ts:closure@1303:1305.collisions",
+        "packages/deepagent-code/src/mcp/index.ts:closure@1328:1330.collisions",
         [
           "one current MCP tools enumeration invocation",
           "canonical names for current configured connected servers",
@@ -8379,7 +8382,7 @@ const reviewedFiniteLifetimes: Readonly<Record<string, RuntimeStateAudit>> = Obj
         ],
       ],
       [
-        "packages/deepagent-code/src/mcp/oauth-provider.ts:McpOAuthProvider.writes@37",
+        "packages/deepagent-code/src/mcp/oauth-provider.ts:McpOAuthProvider.writes@41",
         [
           "one original OAuth provider/flow object",
           "exact Promise from original async journal save",
@@ -8391,7 +8394,7 @@ const reviewedFiniteLifetimes: Readonly<Record<string, RuntimeStateAudit>> = Obj
         ],
       ],
       [
-        "packages/deepagent-code/src/mcp/secret-migration.ts:closure@89:95.previews",
+        "packages/deepagent-code/src/mcp/secret-migration.ts:closure@91:98.previews",
         [
           "original secret-migration Instance preview Scope",
           "random original previewID with exact source/current fingerprint",
@@ -8403,7 +8406,7 @@ const reviewedFiniteLifetimes: Readonly<Record<string, RuntimeStateAudit>> = Obj
         ],
       ],
       [
-        "packages/deepagent-code/src/mcp/secret-migration.ts:closure@89:99.bindingPreviews",
+        "packages/deepagent-code/src/mcp/secret-migration.ts:closure@91:102.bindingPreviews",
         [
           "original secret-migration Instance preview Scope",
           "random original previewID with exact source/current fingerprint",
@@ -8725,7 +8728,7 @@ const reviewedHostOriginalLifetimes: Readonly<Record<string, RuntimeStateAudit>>
         ],
       ],
       [
-        "packages/deepagent-code/src/im/kernel/reader.ts:closure@27:41.liveCuts",
+        "packages/deepagent-code/src/im/kernel/reader.ts:closure@63:78.liveCuts",
         [
           "original KernelReader connection/receiver incarnation",
           "projectionKey original opaque live-cut object",
@@ -8737,7 +8740,7 @@ const reviewedHostOriginalLifetimes: Readonly<Record<string, RuntimeStateAudit>>
         ],
       ],
       [
-        "packages/deepagent-code/src/im/kernel/reader.ts:closure@27:94.watchedGroups",
+        "packages/deepagent-code/src/im/kernel/reader.ts:closure@63:163.watchedGroups",
         [
           "original authenticated WebSocket output owner",
           "groupID with reference count of accepted original sockets",
@@ -8749,7 +8752,7 @@ const reviewedHostOriginalLifetimes: Readonly<Record<string, RuntimeStateAudit>>
         ],
       ],
       [
-        "packages/deepagent-code/src/im/kernel/reader.ts:closure@27:96.maintenance",
+        "packages/deepagent-code/src/im/kernel/reader.ts:closure@63:165.maintenance",
         [
           "original KernelReader sender maintenance logger",
           "typed SenderCleanupError.code literals",
@@ -8809,7 +8812,7 @@ const reviewedHostOriginalLifetimes: Readonly<Record<string, RuntimeStateAudit>>
         ],
       ],
       [
-        "packages/deepagent-code/src/session/goal-plan-rebase-access.ts:closure@127:143.requests",
+        "packages/deepagent-code/src/session/goal-plan-rebase-access.ts:closure@130:146.requests",
         [
           "actual TUI worker parentPort private bootstrap",
           "one worker bootstrap/current original directory/OS principal; controller per original accepted request",
@@ -8821,7 +8824,7 @@ const reviewedHostOriginalLifetimes: Readonly<Record<string, RuntimeStateAudit>>
         ],
       ],
       [
-        "packages/deepagent-code/src/session/goal-plan-rebase-access.ts:closure@165:199.controller",
+        "packages/deepagent-code/src/session/goal-plan-rebase-access.ts:closure@168:202.controller",
         [
           "actual TUI worker parentPort private bootstrap",
           "one worker bootstrap/current original directory/OS principal; controller per original accepted request",
@@ -8845,7 +8848,7 @@ const reviewedHostOriginalLifetimes: Readonly<Record<string, RuntimeStateAudit>>
         ],
       ],
       [
-        "packages/deepagent-code/src/session/goal-tick-execution.ts:closure@43:46.entries",
+        "packages/deepagent-code/src/session/goal-tick-execution.ts:closure@48:51.entries",
         [
           "original GoalTickExecution Root Layer Scope",
           "original opaque Frame/current durable tick permit",
@@ -9023,7 +9026,7 @@ const reviewedHostClosureLifetimes: Readonly<Record<string, RuntimeStateAudit>> 
         ],
       ],
       [
-        "packages/deepagent-code/src/im/kernel/sync.ts:closure@126:161.continuations",
+        "packages/deepagent-code/src/im/kernel/sync.ts:closure@178:213.continuations",
         [
           "actual IM fixedEngine captured in one original ReaderRegistry Entry",
           "messageID bound raw requestHash + original sourceHash and original pending/ready/unknown completion",
@@ -9077,8 +9080,403 @@ const reviewedHostClosureLifetimes: Readonly<Record<string, RuntimeStateAudit>> 
   ]),
 )
 
+// v2.0.5 source review: these are the actual new owners, separate from line-only reanchors.
+// Scope/weak-key cleanup and native current checks remain independent of durable authority.
+const reviewedRelease205: Readonly<Record<string, RuntimeStateAudit>> = Object.fromEntries(
+  ([
+    ["packages/app/src/components/im/navigation-state.ts:communications",
+      "renderer window communications drafts", "exact UI scope/account/connection including credential identity",
+      "window-lifetime drafts including retained unknown commands; no hard capacity cap",
+      "window exit GC; publish and retire check original owner", "UI drafts only; no socket or durable command ledger",
+      "renderer communications UI", "safe_scoped"],
+    ["packages/app/src/components/settings-keybinds.tsx:SettingsPage",
+      "Solid module component loader", "one lazy SettingsPage export", "one loader per module",
+      "framework render owner and module exit", "component code only; no mutable business authority",
+      "settings UI", "safe_bounded"],
+    ["packages/app/src/components/shared-browser-create.tsx:requests",
+      "original SharedBrowserPlatform bridge", "weak bridge identity and original scope/directory/session",
+      "at most 64 request entries per bridge", "bridge GC; component cleanup invalidates async publication",
+      "original retry UI bytes only; current checked after every await", "renderer shared-browser create UI", "safe_bounded"],
+    ["packages/app/src/context/global-sync/event-reducer.ts:questionWritesByStore",
+      "original Solid global-sync store", "weak Store identity and Session/request revision", "store-lifetime revision observations; no hard per-store cap",
+      "weak store GC", "revision snapshot reconciles UI; durable question facts remain authority",
+      "global-sync event reducer", "safe_scoped"],
+    ["packages/app/src/pages/session/task-progress.tsx:taskSummaries",
+      "retained task-summary UI source", "weak client identity plus scope/directory/Session",
+      "live retained UI sources; request deadline 10 seconds", "last release aborts lifetime, clears interval, removes listener and deletes source",
+      "query projection only; Task durable receipts remain authority", "Session task-progress UI", "safe_scoped"],
+    ["packages/core/src/config/plugin/provider.ts:closure@21:22.disabledVariants",
+      "ConfigProviderPlugin catalog transform", "provider/model in one captured config", "finite config entries and model variants",
+      "synchronous transform returns", "derived configuration only", "production Catalog transform", "safe_scoped"],
+    ["packages/core/src/im/reply-reconciliation.ts:run@43:51.rangeCounts",
+      "one ReplyReconciliation.run effect", "original final-message body digest", "one paged reconcile request and its original collector checks",
+      "effect settlement releases closure", "SQL delivery/outbox receipts remain authoritative", "original IM reconciliation request", "safe_scoped"],
+    ["packages/deepagent-code/src/im/device-transport.ts:diagnostics",
+      "IMDeviceTransport error object", "weak original failure identity", "one diagnostic per live error",
+      "weak-key GC", "redacted transport diagnostics only", "IM device HTTP failure", "safe_bounded"],
+    ["packages/deepagent-code/src/im/device-transport.ts:make@138:143.cached",
+      "one IMDeviceTransport instance", "realm/requestHash/device JKT", "at most 4 challenges; expiry and supported clock skew checked",
+      "capacity clear and transport-owner GC", "challenge cache; every request still signs its own proof", "current device transport", "safe_bounded"],
+    ["packages/deepagent-code/src/im/device-transport.ts:make@138:144.pending",
+      "one IMDeviceTransport instance", "identical concurrent kernel-http challenge", "actual in-flight challenge calls in this transport",
+      "actual promise finally deletes original key", "single-flight only; no reusable request proof", "current device transport", "safe_scoped"],
+    ["packages/deepagent-code/src/im/facade.ts:closure@290:381.inspections",
+      "one bound IM credential engine Scope", "realm/user/conversation inspection", "pending inspections in this engine; completed results never retained",
+      "worker ensuring deletes; forkIn engine Scope interrupts on close", "conversation query only; generation current checked around result", "current credential engine", "safe_scoped"],
+    ["packages/deepagent-code/src/im/kernel/exchange.ts:rateLimits",
+      "original device transport", "weak device identity and current realm", "one wait timestamp per live device; capped to MAX_SAFE_INTEGER",
+      "wait expiry ceases blocking; weak-key GC", "retry scheduling only; no nonce or authority result", "communication HTTP calls", "safe_bounded"],
+    ["packages/deepagent-code/src/im/kernel/reader.ts:closure@63:109.cuts",
+      "one IM reader Scope", "exact version/scope/projection/revision", "in-flight cuts through original request gate; no completed proof reuse",
+      "worker ensuring deletes before completion; engine Scope closes worker", "single-flight only; native current and durable reader remain authority", "current original reader", "safe_scoped"],
+    ["packages/deepagent-code/src/installation/local-authority.ts:installationReads",
+      "one scoped Windows installation read", "weak opaque original read token", "active original installation scopes",
+      "Effect.ensuring deletes token; original native hold is scoped", "membership only; original.current revalidates installation", "original Windows installation read", "safe_scoped"],
+    ["packages/deepagent-code/src/installation/native-installation.ts:componentInventory",
+      "package component manifest", "one immutable embedded components document", "one frozen decoded value",
+      "process exit", "static package bytes; live installation handles still checked separately", "NativeInstallation manifest reader", "safe_bounded"],
+    ["packages/deepagent-code/src/installation/windows-native-bootstrap.ts:owners",
+      "original preloaded native Port", "weak original Port identity", "one reference count and retirement flag per live Port",
+      "scope release decrements; last release closes and permanently retires Port; weak-key GC",
+      "coordination only; verified native installation and current capture remain authority", "original scoped Windows bootstrap", "safe_scoped"],
+    ["packages/deepagent-code/src/config/config.ts:globalConfigGenerations",
+      "process global-config CAS domain coordinator", "canonical Global.Path.config realpath; Windows case normalized",
+      "process-lifetime canonical domains; symlink retarget retains historical epochs; no hard capacity cap",
+      "process exit; per-layer eviction would permit generation ABA", "coordination epoch only; original file observation/CAS remains authority",
+      "original Config.layer builds; never Session/provider request keys", "safe_scoped"],
+    ["packages/deepagent-code/src/location-index/typescript-index.ts:capacity",
+      "process semantic-index scheduler", "all original Location compiler jobs", "one semaphore permit including termination",
+      "withPermits releases after scoped worker finalizer", "resource admission only; no code graph authority", "TypeScriptIndex.build", "safe_bounded"],
+    ["packages/deepagent-code/src/location-index/typescript-index.ts:live",
+      "process semantic-index scheduler", "original Worker identity", "at most one Worker under capacity permit",
+      "worker exit deletes; acquireRelease terminates and awaits actual exit", "diagnostic active count only", "TypeScriptIndex.build", "safe_bounded"],
+    ["packages/deepagent-code/src/location-index/typescript-index.ts:start@62:64.worker",
+      "one TypeScriptIndex.build scope", "original random request ID and worker", "one worker per held process permit",
+      "acquireRelease terminate plus await exited; error path terminates", "isolated compiler result; response identity checked", "original scoped index job", "safe_scoped"],
+    ["packages/deepagent-code/src/mcp/windows-storage.ts:closure@34:39.journals",
+      "original Windows MCP storage root Scope", "original native journal lease close callback", "native bridge admits at most 64 journals",
+      "journal close deletes; root finalizer closes every retained journal", "retained native journal custody; original current checked for access", "original Windows MCP storage root", "safe_scoped"],
+    ["packages/deepagent-code/src/session/goal-tick-execution.ts:closure@48:52.quiescent",
+      "one GoalTickExecution control call", "weak opaque original quiescence witness", "currently joined original pause transactions",
+      "acquireUseRelease deletes witness after settlePause", "SQL pause boundary and original owner joins remain authority", "post-commit original Goal control", "safe_scoped"],
+    ["packages/deepagent-code/src/session/message-v2.ts:hydrate@367:371.canonicalByMessage",
+      "one message hydrate effect", "original requested message IDs", "finite rows passed to this hydration request",
+      "effect settlement releases closure", "derived SQL canonical sequence projection only", "original Session message reader", "safe_scoped"],
+  ] as const).map(([key, owner, keyScope, bound, finalizer, durability, reachability, verdict]) => [
+    key,
+    { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+  ]),
+)
+
+// Browser/Desktop owners reviewed against the exact v2.0.5 production and fixture import graph.
+// Test-only rows stay in the denominator and never inherit a production-safe verdict.
+const reviewedBrowser205: Readonly<Record<string, RuntimeStateAudit>> = Object.fromEntries(
+  ([
+    // packages/core/src/browser/shared-file-exchange.ts:30-33, packages/core/src/browser/shared-file-exchange.ts:48-71, packages/core/src/browser/shared-file-exchange.ts:132-176, packages/deepagent-code/src/browser/file-exchange.ts:752-760
+    ["packages/core/src/browser/shared-file-exchange.ts:captures",
+      "original shared file preview Capture owner", "weak opaque Capture bound to actual db/native preview/resource/lease/request",
+      "weak keys; product BrowserFiles strong preview custody additionally capped64 shared+legacy", "capture key GC after caller retires it; used flag prevents re-consumption; every effect rechecks native/current lease",
+      "ephemeral original custody only; grant/artifact SQL is durable and cannot reconstruct native handle", "production SharedBrowserFileExchange.preview/confirm/approve via installed BrowserFileCapability",
+      "safe_scoped"],
+    // packages/core/src/browser/shared-user-input.ts:28, packages/core/src/browser/shared-user-input.ts:40-65, packages/core/src/browser/shared-user-input.ts:74-96
+    ["packages/core/src/browser/shared-user-input.ts:origins",
+      "original SharedBrowserUserInput.withOrigin acquireUseRelease", "opaque handle bound to cloned original input stamp and actual Main incarnation",
+      "weak keys; exactly one witness per concurrently executing original withOrigin body", "acquireUseRelease release deletes original handle on success/failure/interruption",
+      "ephemeral provenance guard; admitted origin/selection/receipt facts remain durable SQL and are separately validated", "original installed browser host -> Session admission commit; no serialized object can mint weak key",
+      "safe_scoped"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:330-350, packages/deepagent-code/src/browser/file-exchange.ts:577-603
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:225.previews",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "opaque original native Preview -> version1 control or version2 resource/lease binding",
+      "weak keys; original preview custody64; active helper/transfer admission8; per-transfer files<=4; no enumeration or DTO reconstruction", "weak key GC; layer finalizer sets live=false and joins original active transfers/observations; original physical custody is retained when stop is unknown",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_scoped"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:330-350, packages/deepagent-code/src/browser/file-exchange.ts:577-603
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:229.approvals",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "opaque Approval -> exact original Preview and commandHash/confirmation",
+      "weak keys; original preview custody64; active helper/transfer admission8; per-transfer files<=4; no enumeration or DTO reconstruction", "weak key GC; layer finalizer sets live=false and joins original active transfers/observations; original physical custody is retained when stop is unknown",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_scoped"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:425-430, packages/deepagent-code/src/browser/file-exchange.ts:688-692, packages/core/src/browser/file-exchange.ts:130-150, packages/core/src/browser/file-exchange.ts:365-395, packages/core/src/browser/shared-capacity.ts:37-49
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:231.grants",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "grantID -> exact original accepted grant digest",
+      "only after original preview approval and durable grant admission; per-control grants64 and original shared/legacy DB reservation ceilings; no TTL/eviction authority", "scope exit invalidates live guard; layer closure GC; grant records never recreate original weak approvals",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_scoped"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:330-350, packages/deepagent-code/src/browser/file-exchange.ts:577-603
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:232.transfers",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "opaque original Transfer -> native processes/leaves/current guard",
+      "weak keys; original preview custody64; active helper/transfer admission8; per-transfer files<=4; no enumeration or DTO reconstruction", "weak key GC; layer finalizer sets live=false and joins original active transfers/observations; original physical custody is retained when stop is unknown",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_scoped"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:330-350, packages/deepagent-code/src/browser/file-exchange.ts:577-603
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:233.observations",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "opaque original Observation -> exact native publication",
+      "weak keys; original preview custody64; active helper/transfer admission8; per-transfer files<=4; no enumeration or DTO reconstruction", "weak key GC; layer finalizer sets live=false and joins original active transfers/observations; original physical custody is retained when stop is unknown",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_scoped"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:330-350, packages/deepagent-code/src/browser/file-exchange.ts:577-603
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:234.released",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "opaque original Released -> original cleaned artifact IDs",
+      "weak keys; original preview custody64; active helper/transfer admission8; per-transfer files<=4; no enumeration or DTO reconstruction", "weak key GC; layer finalizer sets live=false and joins original active transfers/observations; original physical custody is retained when stop is unknown",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_scoped"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:270-300, packages/deepagent-code/src/browser/file-exchange.ts:330-350
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:235.active",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "strong original helper/FD custody; active",
+      "opening+active<8 before any observation/transfer allocation; leaves<=4; unknown actual exits retain capacity", "observe finally closes original process; exits release observation reservation; transfer closes FD/helpers; retire only known stopped/fileClosed; layer finalizer joins both",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_bounded"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:579-600, packages/deepagent-code/src/browser/file-exchange.ts:624-629, packages/deepagent-code/src/browser/file-exchange.ts:708-715, packages/core/src/browser/file-exchange.ts:365-395
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:236.cleanupReceipts",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "version+original actionID -> original cleaned artifacts and Released confirmation",
+      "actual cleanup receipts only; bounded by original durable artifact/metadata reservation capacity; no fabricated release for unknown", "finishAction persists exact original released proof then deletes receipt; layer closure GC; original unknown stages keep reservations",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_scoped"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:270-300, packages/deepagent-code/src/browser/file-exchange.ts:330-350
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:237.observing",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "strong original helper/FD custody; observing",
+      "opening+active<8 before any observation/transfer allocation; leaves<=4; unknown actual exits retain capacity", "observe finally closes original process; exits release observation reservation; transfer closes FD/helpers; retire only known stopped/fileClosed; layer finalizer joins both",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_bounded"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:752-760, packages/deepagent-code/src/browser/file-exchange.ts:782-810, packages/deepagent-code/src/browser/file-exchange.ts:833-839, packages/deepagent-code/src/browser/file-exchange.ts:860-864
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:724.captures",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "random previewID -> original version1/version2 Capture",
+      "captures+sharedCaptures+previewing<64 before await; rejected on capacity, not evicted", "successful approval/cancellation deletes exact capture; layer live=false on close and closure GC; unknown no grant reconstruction",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_bounded"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:752-760, packages/deepagent-code/src/browser/file-exchange.ts:782-810, packages/deepagent-code/src/browser/file-exchange.ts:833-839, packages/deepagent-code/src/browser/file-exchange.ts:860-864
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:725.sharedCaptures",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "random previewID -> original version1/version2 Capture",
+      "captures+sharedCaptures+previewing<64 before await; rejected on capacity, not evicted", "successful approval/cancellation deletes exact capture; layer live=false on close and closure GC; unknown no grant reconstruction",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_bounded"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:766-799, packages/deepagent-code/src/browser/file-exchange.ts:847-870
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:726.operations",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "version+control/resourceID+requestID with exact scopeHash/commandHash -> original Deferred outcome",
+      "combined operations+sharedOperations<MAX_CONTROLS256*MAX_GRANTS_PER_CONTROL64 before original slot publication", "original onExit completes Deferred; retained exact retries die with layer closure; no replacement after ambiguous original operation",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_bounded"],
+    // packages/deepagent-code/src/browser/file-exchange.ts:217-255, packages/deepagent-code/src/browser/file-exchange.ts:719-729, packages/deepagent-code/src/session/v2-runner-frame.ts:304-312, packages/deepagent-code/src/browser/file-exchange.ts:766-799, packages/deepagent-code/src/browser/file-exchange.ts:847-870
+    ["packages/deepagent-code/src/browser/file-exchange.ts:closure@217:727.sharedOperations",
+      "original Database/BrowserHost BrowserFiles Effect layer scope", "version+control/resourceID+requestID with exact scopeHash/commandHash -> original Deferred outcome",
+      "combined operations+sharedOperations<MAX_CONTROLS256*MAX_GRANTS_PER_CONTROL64 before original slot publication", "original onExit completes Deferred; retained exact retries die with layer closure; no replacement after ambiguous original operation",
+      "RAM original capability/custody only; real native current guards and durable grant/artifact records remain separate", "same production BrowserFiles layer object shared by HTTP API and Location tools; installed assets and consent stay lazy",
+      "safe_bounded"],
+    // packages/deepagent-code/src/browser/file-leaf-bridge.ts:21-32, packages/deepagent-code/src/browser/file-leaf-bridge.ts:62-86, packages/deepagent-code/src/browser/native-host.ts:480-497
+    ["packages/deepagent-code/src/browser/file-leaf-bridge.ts:make@21:24.completed",
+      "one original BrowserFileLeafBridge.make action/transfer invocation", "artifactID -> original opaque native Observation",
+      "only artifactIDs in input.files; original transfer files<=4; busy gate serializes before async current check", "returned leaf/complete closure GC at original action/RPC completion; complete joins native cleanup; unknown keeps physical custody in owning layer",
+      "RAM publication cross-check only; canonical ToolEffect settles durable action before refund", "original native-host private leaf protocol with installed FileCapability, not caller-supplied JSON observer",
+      "safe_scoped"],
+    // packages/deepagent-code/src/browser/native-host.ts:63-73, packages/deepagent-code/src/browser/native-host.ts:187-190, packages/deepagent-code/src/browser/native-host.ts:446, packages/deepagent-code/src/browser/native-host.ts:530-539
+    ["packages/deepagent-code/src/browser/native-host.ts:connect@63:69.credentialRevocations",
+      "actual utility-process original Main MessagePort and bootstrap incarnation", "private current-credential generation revocation callback",
+      "single connectShared->connectTui retire callback; no public registration API", "credential mismatch invokes retire; port closure invalidates host; callback closure GC with original connection",
+      "ephemeral exact private channel state; SQL/HTTP descriptors do not reinstall authority; native Main retains actual physical cleanup", "private utility bootstrap/connect/connectShared/connectTui production path only",
+      "safe_scoped"],
+    // packages/deepagent-code/src/browser/native-host.ts:74, packages/deepagent-code/src/browser/native-host.ts:94-100, packages/deepagent-code/src/browser/native-host.ts:143-147, packages/deepagent-code/src/browser/native-host.ts:194-201
+    ["packages/deepagent-code/src/browser/native-host.ts:connect@63:74.controls",
+      "actual utility-process original Main MessagePort and bootstrap incarnation", "controlID -> immutable descriptor/resource/credential binding and original cancel cache",
+      "MAX_CONTROLS256 before set/create; entries retained for original host lifetime", "port.close marks inactive and clears controls; actual Main view cleanup remains independent",
+      "ephemeral exact private channel state; SQL/HTTP descriptors do not reinstall authority; native Main retains actual physical cleanup", "private utility bootstrap/connect/connectShared/connectTui production path only",
+      "safe_bounded"],
+    // packages/deepagent-code/src/browser/native-host.ts:75-77, packages/deepagent-code/src/browser/native-host.ts:143-173, packages/deepagent-code/src/browser/native-host.ts:175-183
+    ["packages/deepagent-code/src/browser/native-host.ts:connect@63:75.pending",
+      "actual utility-process original Main MessagePort and bootstrap incarnation", "original RPC id/action/current/file callback",
+      "noncancel cap MAX_WAITING16+MAX_ACTIVE_CONTROLS4+4 before publication; cached cancel <=one per admitted control256", "response clears exact timer+entry; timeout/interruption removes waiter and exposes unknown; port close resolves/clears all",
+      "ephemeral exact private channel state; SQL/HTTP descriptors do not reinstall authority; native Main retains actual physical cleanup", "private utility bootstrap/connect/connectShared/connectTui production path only",
+      "safe_scoped"],
+    // packages/deepagent-code/src/browser/native-host.ts:265-270, packages/deepagent-code/src/browser/native-host.ts:325-365
+    // No fixed aggregate bound is claimed for reducing RPC concurrency. This is a scoped waiter lifetime classification, not performance/capacity qualification.
+    ["packages/deepagent-code/src/browser/native-host.ts:connectShared@265:268.pending",
+      "actual utility-process original Main MessagePort and bootstrap incarnation", "original shared RPC id/resource/lease/action and private callbacks",
+      "nonreducing cap20 before publication; reducing cleanup/status RPCs deliberately bypass aggregate cap but each owns original10s/deadline timer and Effect finalizer", "exact response/timeout/interruption deletes entry; port.close resolves/clears waiters; Main custody never released solely by timeout",
+      "ephemeral exact private channel state; SQL/HTTP descriptors do not reinstall authority; native Main retains actual physical cleanup", "private utility bootstrap/connect/connectShared/connectTui production path only",
+      "safe_scoped"],
+    // packages/deepagent-code/src/browser/native-host.ts:513-539, packages/deepagent-code/src/browser/native-host.ts:586-632
+    ["packages/deepagent-code/src/browser/native-host.ts:connectTui@505:513.streams",
+      "actual utility-process original Main MessagePort and bootstrap incarnation", "attachID -> exact generation/streamID and one callback queue",
+      "MAX_PENDING16+MAX_ACTIVE8 before set; Stream callback buffer1 sliding", "Effect.addFinalizer deletes exact original stream and disconnects; port.close/credential revoke retires all; takeUntil retired",
+      "ephemeral exact private channel state; SQL/HTTP descriptors do not reinstall authority; native Main retains actual physical cleanup", "private utility bootstrap/connect/connectShared/connectTui production path only",
+      "safe_bounded"],
+    // packages/deepagent-code/src/browser/native-host.ts:521, packages/deepagent-code/src/browser/native-host.ts:556-573
+    ["packages/deepagent-code/src/browser/native-host.ts:connectTui@505:521.waiting",
+      "actual utility-process original Main MessagePort and bootstrap incarnation", "original source/attachID -> live RPC count",
+      "MAX_PER_SOURCE4 plus MAX_WAITING32 total before increment", "Effect.ensuring decrements and deletes source at0 on success/failure/interruption",
+      "ephemeral exact private channel state; SQL/HTTP descriptors do not reinstall authority; native Main retains actual physical cleanup", "private utility bootstrap/connect/connectShared/connectTui production path only",
+      "safe_bounded"],
+    // packages/deepagent-code/src/cli/tui/browser-owner-bridge.ts:10-36, packages/deepagent-code/src/cli/tui/browser-owner-bridge.ts:120-141, packages/deepagent-code/src/cli/tui/browser-owner-bridge.ts:228-252, packages/deepagent-code/src/cli/cmd/attach.ts:82-102
+    ["packages/deepagent-code/src/cli/tui/browser-owner-bridge.ts:createBrowserOwnerBridge@10:25.client",
+      "one actual interactive TUI attach BrowserOwnerBridge", "one SDK client bound to validated credential-free loopback URL",
+      "one per attach bridge", "attach finally calls close; active/retained streams aborted and secrets cleared",
+      "RAM secret/immutable sealed-retry witness only; original Desktop approval and Main port still required", "production attach.ts creates only for interactive stdin TTY and closes in finally",
+      "safe_scoped"],
+    // packages/deepagent-code/src/cli/tui/browser-owner-bridge.ts:10-36, packages/deepagent-code/src/cli/tui/browser-owner-bridge.ts:120-141, packages/deepagent-code/src/cli/tui/browser-owner-bridge.ts:228-252, packages/deepagent-code/src/cli/cmd/attach.ts:82-102
+    ["packages/deepagent-code/src/cli/tui/browser-owner-bridge.ts:createBrowserOwnerBridge@10:34.retained",
+      "one actual interactive TUI attach BrowserOwnerBridge", "attachID -> exact original pair secret/view/stream",
+      "MAX_ACTIVE8 before new pair entry; only original sealed retries retained", "close aborts every stream, clears each secret, clears retained map and active entry",
+      "RAM secret/immutable sealed-retry witness only; original Desktop approval and Main port still required", "production attach.ts creates only for interactive stdin TTY and closes in finally",
+      "safe_scoped"],
+    // packages/deepagent-code/src/cli/tui/browser-owner-bridge.ts:10-36, packages/deepagent-code/src/cli/tui/browser-owner-bridge.ts:120-141, packages/deepagent-code/src/cli/tui/browser-owner-bridge.ts:228-252, packages/deepagent-code/src/cli/cmd/attach.ts:82-102
+    ["packages/deepagent-code/src/cli/tui/browser-owner-bridge.ts:createBrowserOwnerBridge@10:36.listeners",
+      "one actual interactive TUI attach BrowserOwnerBridge", "original local view observer callbacks",
+      "32 listeners maximum", "returned unsubscribe deletes callback; bridge close clears set",
+      "RAM secret/immutable sealed-retry witness only; original Desktop approval and Main port still required", "production attach.ts creates only for interactive stdin TTY and closes in finally",
+      "safe_scoped"],
+    // packages/desktop/src/main/fixture/managed-browser-files-main.ts:23, packages/desktop/src/main/fixture/managed-browser-files-main.ts:186-204, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/managed-browser-files-main.ts:contextEvents",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; contextEvents",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/managed-browser-files-main.ts:14, packages/desktop/src/main/fixture/managed-browser-files-main.ts:186-204, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/managed-browser-files-main.ts:driverStages",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; driverStages",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/managed-browser-input-windows-qualification.ts:54, packages/desktop/src/main/fixture/managed-browser-input-windows-qualification.ts:243-272, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/managed-browser-input-windows-qualification.ts:result",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; result",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/managed-browser-input-windows-qualification.ts:48, packages/desktop/src/main/fixture/managed-browser-input-windows-qualification.ts:243-272, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/managed-browser-input-windows-qualification.ts:state",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; state",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/managed-browser-program.ts:9, packages/desktop/src/main/fixture/managed-browser-program.ts:131-170, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/managed-browser-program.ts:stages",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; stages",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser-file-manager.ts:26, packages/desktop/src/main/fixture/shared-browser-file-manager.ts:316-331, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser-file-manager.ts:facts",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; facts",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser-file-manager.ts:25, packages/desktop/src/main/fixture/shared-browser-file-manager.ts:316-331, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser-file-manager.ts:trace",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; trace",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser-file-observer.ts:3, packages/desktop/src/main/fixture/shared-browser-file-observer.ts:3-6, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser-file-observer.ts:fileStages",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; fileStages",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser-file-transport.ts:41, packages/desktop/src/main/fixture/shared-browser-file-transport.ts:421-434, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser-file-transport.ts:commandErrors",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; commandErrors",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser-file-transport.ts:33, packages/desktop/src/main/fixture/shared-browser-file-transport.ts:421-434, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser-file-transport.ts:facts",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; facts",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser-file-transport.ts:44, packages/desktop/src/main/fixture/shared-browser-file-transport.ts:421-434, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser-file-transport.ts:gates",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; gates",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser-file-transport.ts:42, packages/desktop/src/main/fixture/shared-browser-file-transport.ts:421-434, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser-file-transport.ts:requests",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; requests",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser-file-transport.ts:30, packages/desktop/src/main/fixture/shared-browser-file-transport.ts:421-434, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser-file-transport.ts:state",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; state",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser-file-transport.ts:43, packages/desktop/src/main/fixture/shared-browser-file-transport.ts:421-434, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser-file-transport.ts:trace",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; trace",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser-file-transport.ts:40, packages/desktop/src/main/fixture/shared-browser-file-transport.ts:421-434, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser-file-transport.ts:uploadParts",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; uploadParts",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser-ipc.ts:26, packages/desktop/src/main/fixture/shared-browser-ipc.ts:431-444, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser-ipc.ts:stage",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; stage",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser.ts:37, packages/desktop/src/main/fixture/shared-browser.ts:2013-2043, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser.ts:frameEvidence",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; frameEvidence",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser.ts:35, packages/desktop/src/main/fixture/shared-browser.ts:2013-2043, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser.ts:stage",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; stage",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/fixture/shared-browser.ts:36, packages/desktop/src/main/fixture/shared-browser.ts:2013-2043, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
+    ["packages/desktop/src/main/fixture/shared-browser.ts:trace",
+      "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; trace",
+      "finite scripted test/qualification run; diagnostic arrays live only in child (some have explicit256/1024 caps); no production admission claim", "fixture finally/child exit destroys owned windows and closes owned servers; process exit releases diagnostic RAM",
+      "test evidence only; never product Native/Work authority", "test_only: fixed production Rollup entry bootstrap.ts/sidecar.ts has no fixture import; Desktop tsconfig excludes src/main/fixture; imports/build paths occur only in tests or fixture graph",
+      "test_only"],
+    // packages/desktop/src/main/shared-browser-compute.ts:7, packages/desktop/src/main/shared-browser-compute.ts:31-42, packages/desktop/src/main/shared-browser-compute.ts:57-88, packages/desktop/src/main/shared-browser-compute.ts:94
+    ["packages/desktop/src/main/shared-browser-compute.ts:active",
+      "actual Main approved source computation per resource", "resourceKey -> original worker started observation",
+      "map<=4 before reservation; projection<=1MiB; isolated worker V8/WASM/result and original deadline bounds", "result Promise finally clears timer/deletes exact slot after worker exit; cancellation terminates original worker",
+      "diagnostic ephemeral worker entry only, never grants script permission", "production shared browser manager approved evaluate/program current guards",
+      "safe_bounded"],
+    // packages/desktop/src/main/shared-browser-tui.ts:31-58, packages/desktop/src/main/shared-browser-tui.ts:99-123, packages/desktop/src/main/shared-browser-tui.ts:162-164, packages/desktop/src/main/shared-browser-tui.ts:230-244, packages/desktop/src/main/managed-browser.ts:200-216, packages/desktop/src/main/managed-browser.ts:1576
+    ["packages/desktop/src/main/shared-browser-tui.ts:registry",
+      "single actual Electron Main SharedBrowserTuiRegistry", "one singleton -> original hosts, source entries, listeners, stream generations",
+      "one registry/process; entries<=MAX_ACTIONS4096; pending16 active8; waiting32/per-source4; listener64; hosts only live original utility incarnations", "hostLost deletes host and retires its sources; entry retirement clears pending timer and unsealed stamps; dispose unsubscribes/retire/clears; process exit ends singleton",
+      "ephemeral original Main owner-source/stamps; no raw secret/text stored in retained sealed retry; cold reopen cannot recreate source", "original Main shared-browser-ipc and managed-browser utility installers",
+      "safe_scoped"],
+    // packages/desktop/src/main/shared-browser.ts:112-132, packages/desktop/src/main/shared-browser.ts:511-626, packages/desktop/src/main/shared-browser.ts:847, packages/desktop/src/main/shared-browser.ts:950, packages/desktop/src/main/shared-browser.ts:1247, packages/desktop/src/main/shared-browser.ts:1532-1535, packages/desktop/src/main/managed-browser.ts:200-207
+    ["packages/desktop/src/main/shared-browser.ts:manager",
+      "single actual Electron Main SharedBrowserManager", "one manager/Main incarnation containing original pages/leases/hosts/source stamps",
+      "one singleton/process; controls256 activephysical4; tabs bounded; seen/stamps<=4096; waiting16; hosts keyed live actual utility incarnation", "resource close fences lease/action/compute/files and joins original physical cleanup; hostLost revokes leases but intentionally preserves user pages; process exit releases singleton",
+      "ephemeral actual Main page custody/source stamps; serialized SQL metadata alone cannot restore authority", "original Main IPC/utility transport singleton; separate from test-created managers",
+      "safe_scoped"],
+    // packages/desktop/src/main/windows.ts:138-141, packages/desktop/src/main/windows.ts:174-176
+    ["packages/desktop/src/main/windows.ts:mainWindows",
+      "actual Main-created BrowserWindow lifetime", "weak original BrowserWindow membership",
+      "WeakSet only; one entry per real createMainWindow result, no enumerable retained IDs", "GC releases destroyed windows; isMainWindow also requires !isDestroyed immediately",
+      "RAM window identity guard only; caller DTOs do not mint real windows", "actual production Main createMainWindow / shared browser IPC sender guards",
+      "safe_scoped"],
+    // packages/tui/src/component/dialog-shared-browser.tsx:25-62, packages/tui/src/component/dialog-shared-browser.tsx:64-81
+    ["packages/tui/src/component/dialog-shared-browser.tsx:controls",
+      "TUI SDK client lifetime and exact directory/workspace/session dialog state", "weak SDK client -> state map keyed directory/workspace/session",
+      "max64 cached state entries/client; underlying resource list follows server capacity; no new cache entry beyond64", "component cleanup marks disposed and unregisters terminal observer; retained exact retry UI state dies with weak SDK client GC",
+      "UI request/retry projection only; every response current() checks owner/client/directory/workspace/session; never authority", "production TUI DialogSharedBrowser",
+      "safe_bounded"],
+  ] as const).map(([key, owner, keyScope, bound, finalizer, durability, reachability, verdict]) => [
+    key,
+    { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+  ]),
+)
+
 function audit(key: string, classification: RuntimeStateClassification): RuntimeStateAudit {
   const review =
+    reviewedBrowser205[key] ??
+    reviewedRelease205[key] ??
     reviewed[key] ??
     reviewedCoreWitnesses[key] ??
     reviewedHostWitnesses[key] ??

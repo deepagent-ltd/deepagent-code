@@ -63,9 +63,10 @@ test("normally closed WAL is physically readonly, fenced and byte-preserving", a
     options(filename),
     async (result, uri) => {
       expect(result.ok).toBe(true)
-      const immutable = uri.includes("immutable=1")
-      if (!immutable) expect(uri).toBe(filename)
-      expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(immutable)
+      expect(uri).toContain("immutable=1")
+      expect(await exists(filename + "-wal")).toBe(false)
+      expect(await exists(filename + "-shm")).toBe(false)
+      expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(true)
       const db = openImmutableReadOnly(filename)
       try {
         expect(db.query("SELECT count(*) AS n FROM migration").get()).toEqual({
@@ -84,7 +85,7 @@ test("normally closed WAL is physically readonly, fenced and byte-preserving", a
         }).pipe(Effect.provide(layer({ filename: uri, readonly: true, disableWAL: true })), Effect.scoped),
       )
       expect(inventoryReader).toEqual({ rows: [{ n: 1 }], writeFailed: true })
-      expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(immutable)
+      expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(true)
       return result
     },
     (result) => result,
@@ -120,9 +121,35 @@ test("closed runtime lock contention keeps current owner and refuses immutable f
     expect(result.issues.some((issue) => issue.code === "another_process_active")).toBe(true)
     const meta = await Bun.file(path.join(lock.dir, "meta.json")).json()
     expect(meta.token).toBe(lock.token)
+    expect(await exists(filename + "-wal")).toBe(false)
+    expect(await exists(filename + "-shm")).toBe(false)
   } finally {
     await Effect.runPromise(lock.release)
   }
+})
+
+test("closed WAL with a second hard link refuses inspection without creating sidecars or acquiring a lease", async () => {
+  const filename = await fixture("hardlinked")
+  await fs.link(filename, filename + ".alias")
+  const hash = await sha(filename)
+  const calls = { use: 0, unavailable: 0 }
+  const result = await DatabasePreflight.withReadOnlyPreflight(
+    options(filename),
+    (result) => {
+      calls.use++
+      return result
+    },
+    (result) => {
+      calls.unavailable++
+      return result
+    },
+  )
+  expect(result.ok).toBe(false)
+  expect(calls).toEqual({ use: 0, unavailable: 1 })
+  expect(await sha(filename)).toBe(hash)
+  expect(await exists(filename + "-wal")).toBe(false)
+  expect(await exists(filename + "-shm")).toBe(false)
+  expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(false)
 })
 
 test("active WAL remains ordinary RO and includes committed WAL, never immutable", async () => {
@@ -159,7 +186,7 @@ test("incompatible capability survives closed immutable inspection", async () =>
   expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(false)
 })
 
-test("immutable fallback fences a changed stamp while ordinary RO preserves its original result, without repeating callback", async () => {
+test("closed immutable inspection fences a changed stamp without repeating callback", async () => {
   const filename = await fixture("changed")
   const calls = { use: 0, unavailable: 0, immutable: false }
   const result = await DatabasePreflight.withReadOnlyPreflight(
@@ -177,9 +204,7 @@ test("immutable fallback fences a changed stamp while ordinary RO preserves its 
       return result
     },
   )
-  // Ordinary RO uses SQLite's read transactions. The immutable fallback alone
-  // needs the retained owner lease and post-callback file stamp fence.
-  expect(result.ok).toBe(!calls.immutable)
-  expect(calls).toEqual({ use: 1, unavailable: calls.immutable ? 1 : 0, immutable: calls.immutable })
+  expect(result.ok).toBe(false)
+  expect(calls).toEqual({ use: 1, unavailable: 1, immutable: true })
   expect(await DatabaseMigrationLease.processLockActive(filename + ".runtime.lock")).toBe(false)
 })

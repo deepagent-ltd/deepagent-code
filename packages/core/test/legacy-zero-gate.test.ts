@@ -184,7 +184,7 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
   const inventory = realInventory
   const bridgeSites = selectionBridgeSites()
 
-  test("frozen counters match the C0-01 report (red oracle, never hidden)", async () => {
+  test("frozen counters match the reviewed v2.0.5 caller denominator", async () => {
     const counters = await currentTreeCounts(inventory)
     expect(counters.legacyDims).toBe(0)
     expect(counters.doubleWrite).toBe(0)
@@ -201,16 +201,20 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     // entry (-7 v2 dims) and the merged W-b/K-04/M-b/C-P2-08 waves added read-only surfaces
     // (shell scan/arity, migration orchestrator + md-export endpoints, provider config
     // provenance, task admission/reclamation) — v2 220->213, read-only 2176->2204.
-    expect(counters.v2Dims).toBe(213)
+    // v2.0.5 re-audit: 26 added routes and 6 retired entries against 842924ed;
+    // the old V2/adapter assertions already drifted at that freeze. Every new route below
+    // retains verified handler/authority evidence; legacy, double-write and unknown stay zero.
+    expect(inventory.totals.entries).toBe(546)
+    expect(counters.v2Dims).toBe(211)
     // V2.0.2 caller expansion: 2 proxy chat adapters plus 3 tenant mutations (+35 dims);
     // 15 learning/catalog/admin-query/bundle and other routes are read-only (+105 dims).
     // X-10c proxy audit adds one EventV2 ledger query (+7 read-only); the checked V2 bridge
     // publisher retains its existing V2 event dimension after its evidence anchor is updated.
     // v2.0.3 original-owner HTTP adapters and injected Panel ports are individually reviewed.
-    expect(counters.adapterDims).toBe(642)
+    expect(counters.adapterDims).toBe(686)
     // B2 facade portal re-pin (fb93a563, 2026-10-05): the 9 IM facade endpoints are thin
     // HTTP adapters classified read_only on all seven dimensions — read-only 2351→2414.
-    expect(counters.readOnlyDims).toBe(2827)
+    expect(counters.readOnlyDims).toBe(2925)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -222,6 +226,35 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     expect(counters.adapterDims).toBe(inventory.totals.byVerdict.adapter)
     expect(counters.readOnlyDims).toBe(inventory.totals.byVerdict.read_only)
     expect(counters.unclassifiedDims).toBe(inventory.totals.byVerdict.unclassified)
+  })
+
+  test("v2.0.5 routes retain their reviewed authority dimensions and static proof", () => {
+    const added = {
+      adapter: [
+        "browser.sharedApproveOrigin", "browser.sharedClose", "browser.sharedCreate",
+        "browser.sharedFilesApprove", "browser.sharedTakeover", "browser.tuiDetach",
+        "browser.tuiOwner", "browser.tuiPair", "browser.tuiReserve", "browser.tuiSeal",
+      ],
+      read_only: [
+        "browser.sharedFilesList", "browser.sharedFilesPreview", "browser.sharedFilesStatus",
+        "browser.sharedGet", "browser.sharedList", "im.dacReplyReconcile", "im.deviceInfo",
+        "im.entitlement", "im.migrate", "im.migrationPending", "im.migrationStatus", "im.plans",
+        "instance.vcsRefs", "instance.vcsSummary", "session.contextUsage", "session.taskSummary",
+      ],
+    } as const
+    for (const [verdict, names] of Object.entries(added)) {
+      for (const name of names) {
+        const entry = inventory.entries.find((item) => item.entry.id === `http.instance.${name}`)
+        expect(entry?.roles).toHaveLength(DIMENSIONS.length)
+        expect(entry?.roles.every((role) => role.verdict === verdict)).toBe(true)
+        expect(entry?.roles.every((role) => role.evidence.length > 0)).toBe(true)
+      }
+    }
+    expect(inventory.entries.filter((item) => [
+      "http.instance.im.getRemoteTaskLocator", "http.instance.im.getTaskResult",
+      "http.instance.im.getTaskStatus", "http.instance.im.lookupRemoteTaskResult",
+      "http.instance.im.lookupRemoteTaskStatus", "im.agent-execution",
+    ].includes(item.entry.id))).toEqual([])
   })
 
   test("selection-bridge usages are ZERO after C3-08 (v2-none fallback removed)", () => {
@@ -254,7 +287,7 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     const counters = await currentTreeCounts(inventory)
     expect(counters.legacyDims).toBe(0)
     expect(counters.doubleWrite).toBe(0)
-    expect(counters.adapterDims).toBe(642)
+    expect(counters.adapterDims).toBe(686)
   })
 })
 
@@ -318,11 +351,11 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     const snapshot = buildSnapshot(inventory, bridgeSites)
     expect(snapshot.counters.legacyDims).toBe(0)
     expect(snapshot.counters.doubleWrite).toBe(0)
-    expect(snapshot.counters.adapterDims).toBe(642)
+    expect(snapshot.counters.adapterDims).toBe(686)
     // v2w-j4 (2026-09-19): +2 v2 dims (github.agent-execution admission/execution).
     // V2.0.1 merge-wave re-pin (2026-09-23): w-c removed desktop.wsl-sidecar (-7 v2 dims);
     // merged W-b/K-04/M-b/C-P2-08 waves added read-only surfaces — v2 220->213, read-only ->2204.
-    expect(snapshot.counters.v2Dims).toBe(213)
+    expect(snapshot.counters.v2Dims).toBe(211)
     // 2026-09-08 step 5c 重钉:同批漂移(402→401)。v2f-d (2026-09-18): entries net-zero
     // (deleted reply-sink/progress-stream faces replaced by durable admission + reply outbox).
     // v2f-i (2026-09-18): the dead core agent-orchestrator entry is deleted (404→403, roles −7).
@@ -331,10 +364,9 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     // X-10c proxy audit contributes one read-only entry and seven classified roles.
     // B2 facade portal re-pin (fb93a563, 2026-10-05): +9 IM facade entries (434→443),
     // +63 roles (3038→3101), all read_only.
-    // v2.0.3 reviewed current tree: exact original owners, runtime-only graph and physical Node root.
-    expect(snapshot.entries).toBe(526)
-    // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
-    expect(snapshot.roles).toBe(3682)
+    // v2.0.5 adds 26 reviewed routes and retires 6 obsolete entries, each with 7 dimensions.
+    expect(snapshot.entries).toBe(546)
+    expect(snapshot.roles).toBe(3822)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 
