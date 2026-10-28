@@ -112,7 +112,22 @@ export async function build(input: {
       plugins: [{ name: "owned-native-cli-business-entry", setup(builder) {
         builder.onLoad({ filter: /[/\\]src[/\\]index\.ts$/ }, (args) => {
           if (path.resolve(args.path) !== index) return undefined
-          return { contents: `await import(${JSON.stringify(businessEntry)})\n`, loader: "ts" }
+          return { contents: `try {
+  await import(${JSON.stringify(businessEntry)})
+} catch (error) {
+  try {
+    const observedTag = error instanceof Error ? error.name : undefined
+    const observedCode = error && typeof error === "object" && "code" in error ? error.code : undefined
+    const tag = typeof observedTag === "string" && /^[A-Za-z][A-Za-z0-9_.]{0,63}$/.test(observedTag) ? observedTag : "unknown"
+    const code = typeof observedCode === "string" && /^[A-Z][A-Z0-9_]{0,127}$/.test(observedCode) ? observedCode : "UNCLASSIFIED"
+    const message = new TextDecoder().decode(Buffer.from(error instanceof Error ? error.message
+      : typeof error === "string" ? error : "Non-Error rejection").subarray(0, 2048), { stream: true })
+    console.error(JSON.stringify({ stage: "owned-native-business-import", tag, code, message }))
+  } finally {
+    throw error
+  }
+}
+`, loader: "ts" }
         })
       } }, ...(input.plugins ?? [])],
     })

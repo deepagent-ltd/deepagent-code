@@ -12,6 +12,7 @@ type Port = Readonly<{
   closePreloadedNode(capture: object, child: object): void
   close(capture: object): void
 }>
+type NativeOperation = "addon-load" | "current" | "preloaded" | "compiled-cli" | "prepare-runtime" | "launch" | "poll" | "close-child" | "close-capture" | "bootstrap-import" | "install-compiled-entry" | "business-import"
 
 // Only the native child receipt can open the business entry. The parent passes
 // no argv, environment, executable path or filesystem identity to Native.
@@ -32,9 +33,9 @@ async function main() {
   if (!nativeCall("current", () => native.current(native.capture))) throw new Error("WINDOWS_CLI_NATIVE_CURRENT_REJECTED")
   if (nativeCall("preloaded", () => native.preloaded(native.capture))) {
     if (!nativeCall("compiled-cli", () => native.compiledCli(native.capture))) throw new Error("WINDOWS_CLI_RECEIPT_PURPOSE_REJECTED")
-    const { NativeWindowsBootstrap } = await import("./installation/windows-native-bootstrap")
-    await NativeWindowsBootstrap.installCompiledEntry()
-    await import("./index")
+    const { NativeWindowsBootstrap } = await nativeCallAsync("bootstrap-import", () => import("./installation/windows-native-bootstrap"))
+    await nativeCallAsync("install-compiled-entry", () => NativeWindowsBootstrap.installCompiledEntry())
+    await nativeCallAsync("business-import", () => import("./index"))
     return
   }
   nativeCall("prepare-runtime", () => native.prepareCliWorkRuntime(native.capture))
@@ -80,19 +81,31 @@ async function main() {
   }
 }
 
-function nativeCall<Value>(operation: "addon-load" | "current" | "preloaded" | "compiled-cli" | "prepare-runtime" | "launch" | "poll" | "close-child" | "close-capture", run: () => Value): Value {
+function nativeCall<Value>(operation: NativeOperation, run: () => Value): Value {
   try {
     return run()
   } catch (error) {
-    try {
-      const observedTag = error instanceof Error ? error.name : undefined
-      const observedCode = error && typeof error === "object" && "code" in error ? error.code : undefined
-      const tag = typeof observedTag === "string" && /^[A-Za-z][A-Za-z0-9_.]{0,63}$/.test(observedTag) ? observedTag : "unknown"
-      const code = typeof observedCode === "string" && /^WINDOWS_[A-Z_]{1,96}$/.test(observedCode) ? observedCode : "UNCLASSIFIED"
-      console.error(JSON.stringify({ stage: "windows-cli-native", operation, tag, code }))
-    } finally {
-      throw error
-    }
+    return nativeFailure(operation, error)
+  }
+}
+
+async function nativeCallAsync<Value>(operation: NativeOperation, run: () => Promise<Value>): Promise<Value> {
+  try {
+    return await run()
+  } catch (error) {
+    return nativeFailure(operation, error)
+  }
+}
+
+function nativeFailure(operation: NativeOperation, error: unknown): never {
+  try {
+    const observedTag = error instanceof Error ? error.name : undefined
+    const observedCode = error && typeof error === "object" && "code" in error ? error.code : undefined
+    const tag = typeof observedTag === "string" && /^[A-Za-z][A-Za-z0-9_.]{0,63}$/.test(observedTag) ? observedTag : "unknown"
+    const code = typeof observedCode === "string" && /^WINDOWS_[A-Z_]{1,96}$/.test(observedCode) ? observedCode : "UNCLASSIFIED"
+    console.error(JSON.stringify({ stage: "windows-cli-native", operation, tag, code }))
+  } finally {
+    throw error
   }
 }
 
