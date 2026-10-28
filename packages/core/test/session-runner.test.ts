@@ -157,7 +157,25 @@ import { tmpRoot, tmpRootShared } from "./fixture/tmpdir"
 
 // The isolated unknown-outcome process oracle reopens this file across two Bun processes.
 // Normal runner tests keep their existing per-test in-memory authority.
-const database = Database.layerFromPath(process.env.DEEPAGENT_TEST_RUNNER_EFFECT_DB ?? ":memory:")
+const unknownProcessStarted = performance.now()
+const unknownProcessPhases = new Set<string>()
+const traceUnknownProcess = (phase: string) => {
+  if (!process.env.DEEPAGENT_TEST_RUNNER_EFFECT_DB || unknownProcessPhases.has(phase)) return
+  // Layer.tap also observes memoized lookups; record the first acquisition milestone only.
+  unknownProcessPhases.add(phase)
+  console.error(JSON.stringify({ test: "runner-unknown-process", phase,
+    recovering: process.env.DEEPAGENT_TEST_RUNNER_EFFECT_PHASE === "recover",
+    elapsedMs: Math.round(performance.now() - unknownProcessStarted) }))
+}
+const database = process.env.DEEPAGENT_TEST_RUNNER_EFFECT_DB
+  ? Layer.unwrap(Effect.gen(function* () {
+      traceUnknownProcess("database-layer-open")
+      yield* Effect.addFinalizer(() => Effect.sync(() => traceUnknownProcess("database-layer-closed")))
+      return Database.layerFromPath(process.env.DEEPAGENT_TEST_RUNNER_EFFECT_DB!).pipe(
+        Layer.tap(() => Effect.sync(() => traceUnknownProcess("database-layer-ready"))),
+      )
+    }))
+  : Database.layerFromPath(":memory:")
 // Real builtin tools resolve the Location on disk; keep the ordinary runner
 // fixture self-contained instead of requiring a host-level /project directory.
 const testDirectory = process.env.DEEPAGENT_TEST_RUNNER_DIRECTORY ?? tmpRoot()
