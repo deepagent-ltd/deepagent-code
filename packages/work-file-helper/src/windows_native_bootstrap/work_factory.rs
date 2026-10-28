@@ -40,6 +40,7 @@ pub struct WorkFactory { receipt: LockedPath, inventory: LockedPath, stamps: [St
     event_git: std::sync::OnceLock<std::sync::Arc<super::event_git::Git>>, data_path: std::path::PathBuf, data_root: LockedPath, windows_environment: Vec<u16>, supervisor_environment: Vec<u16>, profiles: Vec<(String, String, LockedPath)>, description: String }
 struct Original<'a> { image: &'a FirstLoad, proof: &'a Evidence, imports: RefCell<Vec<loader::WorkSystemImage>> }
 impl OriginalAuthority for Original<'_> {
+    fn system_machine(&self) -> Option<fn(&File)->io::Result<()>> { Some(loader::require_machine) }
     fn current(&self) -> io::Result<()> { self.image.current()?; self.proof.current()?; for image in self.imports.borrow().iter(){image.current()?;} Ok(()) }
     fn system_images(&self) -> io::Result<Vec<image_factory::Description>> {
         self.current()?;
