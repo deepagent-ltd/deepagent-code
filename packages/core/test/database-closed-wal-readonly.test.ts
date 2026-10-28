@@ -118,7 +118,30 @@ test("closed runtime lock contention keeps current owner and refuses immutable f
     )
     expect(result.ok).toBe(false)
     if (result.ok) throw new Error("refusal required")
-    expect(result.issues.some((issue) => issue.code === "another_process_active")).toBe(true)
+    expect(result.issues.map((issue) => issue.code)).toEqual(["another_process_active"])
+    expect(result.observations.dbReadable).toBe(false)
+    expect(result.observations.dbInspectionDeferred).toBe("active_owner")
+    const unreadable = DatabasePreflight.analyzePreflight(options(filename), {
+      ...result.observations,
+      dbInspectionDeferred: undefined,
+    })
+    expect(unreadable.ok).toBe(false)
+    if (unreadable.ok) throw new Error("open failure required")
+    expect(unreadable.issues.some((issue) => issue.code === "db_open_failed")).toBe(true)
+    const incompatible = DatabasePreflight.analyzePreflight(options(filename), {
+      ...result.observations,
+      capabilities: [{ capability: "future", minimum_reader_protocol: 999, minimum_writer_protocol: 999 }],
+    })
+    expect(incompatible.ok).toBe(false)
+    if (incompatible.ok) throw new Error("compatibility refusal required")
+    expect(incompatible.issues.some((issue) => issue.code === "incompatible_binary")).toBe(true)
+    const badHeader = DatabasePreflight.analyzePreflight(options(filename), {
+      ...result.observations,
+      sqliteHeaderValid: false,
+    })
+    expect(badHeader.ok).toBe(false)
+    if (badHeader.ok) throw new Error("header refusal required")
+    expect(badHeader.issues.some((issue) => issue.code === "not_a_sqlite_database")).toBe(true)
     const meta = await Bun.file(path.join(lock.dir, "meta.json")).json()
     expect(meta.token).toBe(lock.token)
     expect(await exists(filename + "-wal")).toBe(false)

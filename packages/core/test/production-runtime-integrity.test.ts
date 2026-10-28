@@ -607,7 +607,9 @@ describe("production runtime integrity", () => {
     // Qualification children remain visible in the denominator without claiming production
     // lifecycle safety. Their fixed Rollup entry and tsconfig boundary is reviewed separately.
     const testOnly = candidates.filter((candidate) => candidate.verdict === "test_only")
-    expect(testOnly).toHaveLength(19)
+    expect(testOnly).toHaveLength(20)
+    expect(testOnly.filter((candidate) => candidate.key === "packages/desktop/src/main/fixture/managed-browser-input-probe.ts:progress"))
+      .toHaveLength(1)
     expect(testOnly.every((candidate) =>
       candidate.file.startsWith("packages/desktop/src/main/fixture/") &&
       candidate.reachability.startsWith("test_only:") &&

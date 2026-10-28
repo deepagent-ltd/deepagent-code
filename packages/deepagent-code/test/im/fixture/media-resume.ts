@@ -2,6 +2,7 @@ export * as MediaResumeFixture from "./media-resume"
 
 import { expect } from "bun:test"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
 import { KernelLiveFirstSeenFixture } from "./kernel-live-first-seen"
@@ -15,7 +16,7 @@ export async function make(
 ) {
   const denied = mode === "denied"
   const negative = mode === "no-origin" || mode === "changed-request" ? mode : undefined
-  const root = await fs.mkdtemp("/tmp/dac-im-resume-caller-")
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dac-im-resume-caller-"))
   const bytes = Buffer.alloc(262144 * (profile === "checkpoint" ? 1 : 2) + 17, 77)
   const checksum = createHash("sha256").update(bytes).digest("hex")
   await fs.writeFile(path.join(root, "source.bin"), bytes, { flag: "wx", mode: 0o600 })
@@ -181,7 +182,7 @@ export async function make(
     const stderr = await new Response(child.stderr).text()
     await Bun.write(path.join(root, `${mode}-stderr.log`), stderr)
     if (status !== 0) {
-      const log = `/tmp/dac-im-checkpoint-host-child-${mode}-${randomUUID()}.log`
+      const log = path.join(os.tmpdir(), `dac-im-checkpoint-host-child-${mode}-${randomUUID()}.log`)
       await fs.writeFile(log, stderr, { mode: 0o600, flag: "wx" })
       throw new Error(`Private Host fixture failed (${log}): ${stderr.slice(-1000)}`)
     }

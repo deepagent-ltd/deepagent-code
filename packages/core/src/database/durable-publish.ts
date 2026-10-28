@@ -18,11 +18,13 @@ export class PublishError extends Data.TaggedError("DurablePublish.PublishError"
 // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew#caching-behavior
 const script = `$ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
-[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
-[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
+[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
 try {
   if($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage'){throw 'unsupported_language_mode'}
-  $inputValue=[Console]::In.ReadToEnd() | ConvertFrom-Json
+  Import-Module -Name ($PSHOME+'/Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+  $inputText=[Console]::In.ReadToEnd()
+  $inputValue=ConvertFrom-Json -InputObject $inputText
   if($inputValue.protocol -ne 1 -or $inputValue.nonce -notmatch '^[0-9a-f-]{36}$' -or $inputValue.replace -isnot [bool]){throw 'invalid_request'}
   Add-Type -TypeDefinition @'
 using System;

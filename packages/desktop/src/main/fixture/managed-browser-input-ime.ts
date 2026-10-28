@@ -26,7 +26,9 @@ const makeWindow = async () => {
 }
 
 async function main() {
+  stage("app-ready:waiting")
   await app.whenReady()
+  stage("app-ready")
   const runtimeGate = scenario === "pin"
   if (runtimeGate) {
     const require = createRequire(import.meta.url)
@@ -44,6 +46,7 @@ async function main() {
     }
     stage("runtime-gate-rejected")
   }
+  stage("native:loading")
   const qa = createRequire(import.meta.url)(path.join(root, "ime-qa.node")) as {
     invoke(handle: Buffer, kind: number): void; foreign(enabled: boolean): void
     subclass(handle: Buffer): void; restoreClass(handle: Buffer): void
@@ -52,18 +55,31 @@ async function main() {
   qa.cleanup(path.join(root, `${scenario}-cleanup.json`))
   const native = createRequire(import.meta.url)(path.join(root, "managed-browser-input-darwin.node")) as {
     observe(handle: Buffer, callback: () => void): Lease }
+  stage("window:creating")
   const window = await makeWindow()
+  stage("window:empty-source-rejection")
   assert.throws(() => native.observe(window.getNativeWindowHandle(), () => {}), /MANAGED_BROWSER_INPUT_CLIENT_ABI/)
+  stage("blank:loading")
   await window.loadURL("about:blank")
+  stage("blank:observing")
   const blank = native.observe(window.getNativeWindowHandle(), () => {})
   assert.equal(blank.healthy(), true)
+  stage("document:loading")
   await window.loadURL("data:text/html,<input><div style='height:2000px'>Private source</div>")
+  stage("document:prior-source-retired")
   assert.equal(blank.healthy(), false)
   blank.release()
   stage("initial-boundary")
   await window.webContents.executeJavaScript("document.querySelector('input').focus()")
   const callbacks: number[] = []
-  const lease = native.observe(window.getNativeWindowHandle(), (...args: unknown[]) => callbacks.push(args.length))
+  const sourceCallbacks: { ordinal: number; at: number; wallAt: number }[] = []
+  stage("document:observing")
+  const lease = native.observe(window.getNativeWindowHandle(), (...args: unknown[]) => {
+    const count = callbacks.push(args.length)
+    if (process.env.DAC_MANAGED_BROWSER_INPUT_DIAGNOSTICS === "1" && sourceCallbacks.length < 32)
+      sourceCallbacks.push({ ordinal: count, at: performance.now(), wallAt: Date.now() })
+    return count
+  })
   assert.equal(lease.healthy(), true)
   if (scenario.startsWith("foreign")) {
     window.webContents.debugger.attach("1.3")
@@ -97,8 +113,9 @@ async function main() {
     process.exit(0)
     return
   }
+  stage("cdp:starting")
   window.webContents.debugger.attach("1.3")
-  const cdp: { method: string; callbacks: number }[] = []
+  const cdp: { method: string; callbacks: number; at: number; wallAt: number }[] = []
   for (const [method, parameters] of [
     ["Input.insertText", { text: "owned中文" }],
     ["Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", text: "a", windowsVirtualKeyCode: 65 }],
@@ -109,13 +126,21 @@ async function main() {
     ["Input.dispatchMouseEvent", { type: "mouseWheel", x: 100, y: 100, deltaX: 0, deltaY: 120 }],
   ] as const) {
     await window.webContents.debugger.sendCommand(method, parameters); await delay()
-    cdp.push({ method, callbacks: callbacks.length })
+    cdp.push({ method, callbacks: callbacks.length, at: performance.now(), wallAt: Date.now() })
+    if (process.env.DAC_MANAGED_BROWSER_INPUT_DIAGNOSTICS === "1") {
+      try {
+        writeFileSync(path.join(root, `${scenario}-source.json`), JSON.stringify({ cdp, callbacks: sourceCallbacks }), { mode: 0o600 })
+      } catch {}
+    }
   }
+  stage("cdp:complete")
   assert.equal(callbacks.length, 0)
   await window.webContents.executeJavaScript("document.querySelector('input').focus()")
+  stage("second-window:creating")
   const other = await makeWindow()
   await other.loadURL("data:text/html,<input>")
   const otherCalls: number[] = []
+  stage("second-window:observing")
   const second = native.observe(other.getNativeWindowHandle(), (...args: unknown[]) => otherCalls.push(args.length))
   qa.invoke(other.getNativeWindowHandle(), 0); await delay()
   assert.equal(callbacks.length, 0); assert.deepEqual(otherCalls, [0])

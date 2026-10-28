@@ -338,22 +338,39 @@ const result = await (async () => {
   if (process.argv[2] === "owned") {
     const { Effect } = await import("effect")
     const { OwnedValidation } = await import("../../../src/deepagent/owned-validation")
+    const request = {
+      cwd: process.cwd(),
+      profile: process.platform === "linux" ? ("posix-process-group-v1" as const) : ("darwin-single-process-v1" as const),
+      command: {
+        id: "node-fixed-path",
+        source: "user" as const,
+        transport: "argv" as const,
+        executable: "printf",
+        args: ["native-node-owned"],
+        display: "printf",
+      },
+    }
+    if (process.platform !== "darwin") {
+      const refused = await outcome(Effect.runPromise(OwnedValidation.prepare({
+        ...request, profile: "darwin-single-process-v1",
+      }).pipe(Effect.scoped)))
+      assert.deepEqual(refused, { error: "PROFILE_UNAVAILABLE" })
+      assert.deepEqual(OwnedValidation.inspectCustody(), { limit: OwnedValidation.VALIDATION_CUSTODY_LIMIT, live: 0, quarantine: 0 })
+      if (process.platform !== "linux") return { error: "PROFILE_UNAVAILABLE", dispatched: false }
+    }
     return await Effect.runPromise(
       Effect.gen(function* () {
-        const handle = yield* OwnedValidation.prepare({
-          cwd: process.cwd(),
-          profile: "darwin-single-process-v1",
-          command: {
-            id: "node-fixed-path",
-            source: "user",
-            transport: "argv",
-            executable: "printf",
-            args: ["native-node-owned"],
-            display: "printf",
-          },
-        })
+        const handle = yield* OwnedValidation.prepare(request)
         const receipt = yield* OwnedValidation.run(handle)
         const observed = OwnedValidation.inspect(receipt)!
+        if (process.platform === "linux") {
+          assert.equal(observed.state, "unknown")
+          assert.equal(observed.outcome, null)
+          return { state: observed.state, outcome: observed.outcome, output: observed.stdout.text,
+            containment: observed.containment, stopProof: observed.stopProof, reason: observed.reason,
+            exitCode: observed.exitCode, quarantined: OwnedValidation.inspectCustody().quarantine,
+            unsupportedProfile: "PROFILE_UNAVAILABLE" }
+        }
         assert.equal(observed.outcome, "passed")
         return { state: observed.state, outcome: observed.outcome, output: observed.stdout.text }
       }).pipe(Effect.scoped),

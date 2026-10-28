@@ -9323,6 +9323,12 @@ const reviewedBrowser205: Readonly<Record<string, RuntimeStateAudit>> = Object.f
       "32 listeners maximum", "returned unsubscribe deletes callback; bridge close clears set",
       "RAM secret/immutable sealed-retry witness only; original Desktop approval and Main port still required", "production attach.ts creates only for interactive stdin TTY and closes in finally",
       "safe_scoped"],
+    // packages/desktop/src/main/fixture/managed-browser-input-probe.ts:10-19; managed-browser-input-probe.test.ts builds only this private child entry.
+    ["packages/desktop/src/main/fixture/managed-browser-input-probe.ts:progress",
+      "explicit isolated Electron input-probe test child", "one private fixture process and its owned temporary root",
+      "one fixed phase record and prior-phase scalar; original 15s child / 20s case deadlines", "fixture finally destroys its owned window; app exit or parent watchdog releases all diagnostic state",
+      "test evidence only; never product Native/Work authority", "test_only: production bootstrap/sidecar import closure excludes fixture; Desktop tsconfig excludes src/main/fixture",
+      "test_only"],
     // packages/desktop/src/main/fixture/managed-browser-files-main.ts:23, packages/desktop/src/main/fixture/managed-browser-files-main.ts:186-204, packages/desktop/electron.vite.config.ts:61-66, packages/desktop/tsconfig.json:21-22
     ["packages/desktop/src/main/fixture/managed-browser-files-main.ts:contextEvents",
       "explicit isolated Electron test/qualification child", "one fixture process and its owned test root; contextEvents",

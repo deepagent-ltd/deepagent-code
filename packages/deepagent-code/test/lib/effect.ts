@@ -8,6 +8,7 @@ import { makeMemoMap } from "@deepagent-code/core/effect/memo-map"
 import type { Config } from "@/config/config"
 import { TestInstance, withTmpdirInstance } from "../fixture/fixture"
 import { InstanceStore } from "@/project/instance-store"
+import { EmptySettingsFixture } from "../fixture/empty-settings"
 
 type Body<A, E, R> = Effect.Effect<A, E, R> | (() => Effect.Effect<A, E, R>)
 type InstanceOptions<E, R> = {
@@ -130,16 +131,30 @@ const make = <R, E>(testLayer: Layer.Layer<R, E>, liveLayer: Layer.Layer<R, E>, 
   return { effect, live, instance }
 }
 
+// Source-only Windows tests may observe the explicitly absent private settings leaves.
+// The existing fixture refuses every existing leaf, private write and storage preparation;
+// actual Native/DACL settings tests must still supply their own original storage owner.
+const privateSettings = process.platform === "win32" ? EmptySettingsFixture.layer : Layer.empty
+
 // Test environment with TestClock and TestConsole
-const testEnv = Layer.mergeAll(TestConsole.layer, TestClock.layer())
+const testEnv = Layer.mergeAll(TestConsole.layer, TestClock.layer(), privateSettings)
 
 // Live environment - uses real clock, but keeps TestConsole for output capture
-const liveEnv = TestConsole.layer
+const liveEnv = Layer.mergeAll(TestConsole.layer, privateSettings)
 
 export const it = make<never, never>(testEnv, liveEnv)
 
-export const testEffect = <R, E>(layer: Layer.Layer<R, E>) =>
-  make<R, E>(Layer.provideMerge(layer, testEnv), Layer.provideMerge(layer, liveEnv))
+export const testEffect = <R, E, R2 = never, E2 = never>(
+  layer: Layer.Layer<R, E>,
+  privateStorage?: Layer.Layer<R2, E2>,
+) => {
+  // A compiled Native fixture supplies its original private storage instead of
+  // evaluating the source-only absent-settings fixture alongside it.
+  return make(
+    Layer.provideMerge(layer, privateStorage ? Layer.mergeAll(TestConsole.layer, TestClock.layer(), privateStorage) : testEnv),
+    Layer.provideMerge(layer, privateStorage ? Layer.mergeAll(TestConsole.layer, privateStorage) : liveEnv),
+  )
+}
 
 // Variant of `testEffect` that builds the test layer through the shared
 // test-owned memoMap so services like Bus/Session resolve to the same

@@ -1,10 +1,11 @@
 import { GlobalRuntimeFixture } from "../server/fixture/global-runtime"
 import { NodeHttpServer } from "@effect/platform-node"
 import { Context, Layer, Option } from "effect"
-import { HttpRouter } from "effect/unstable/http"
+import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { createServer } from "node:http"
 import { Database } from "@deepagent-code/core/database/database"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
@@ -29,7 +30,13 @@ export function importServer(filename: string, password?: string) {
     ),
     { disableListenLog: true, disableLogger: true },
   ).pipe(
-    Layer.provideMerge(NodeHttpServer.layerTest),
+    // Published fixture URLs must be usable by the SDK and browser clients.
+    Layer.provideMerge(HttpServer.layerTestClient.pipe(
+      Layer.provide(Layer.fresh(FetchHttpClient.layer).pipe(
+        Layer.provide(Layer.succeed(FetchHttpClient.RequestInit)({ keepalive: false })),
+      )),
+      Layer.provideMerge(NodeHttpServer.layer(createServer, { port: 0, host: "127.0.0.1" })),
+    )),
     Layer.provideMerge(Database.layerFromPath(filename)),
     Layer.provide(Layer.mock(Auth.Service)({})),
     Layer.provide(GlobalRuntimeFixture.layer),

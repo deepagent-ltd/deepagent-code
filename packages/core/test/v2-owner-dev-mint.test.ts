@@ -5,7 +5,7 @@ import "./fixture/install-version"
 import { describe, expect, test } from "bun:test"
 import { spawn } from "node:child_process"
 import { sql } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { Database } from "../src/database/database"
@@ -16,7 +16,7 @@ import { V2OwnerAuthorizationTable } from "../src/session/runner/v2-owner-author
 import { V2OwnerDevMint } from "../src/session/runner/v2-owner-dev-mint"
 import { V2ProviderTurn } from "../src/session/runner/v2-provider-turn"
 import { EffectFlock } from "../src/util/effect-flock"
-import { tmpdir } from "node:os"
+import { hostname, tmpdir } from "node:os"
 
 const freshEnv = () => {
   delete process.env.DEEPAGENT_CODE_V2_OWNER_CAMPAIGN
@@ -27,13 +27,20 @@ const flockLayer = (state: string) =>
 
 describe("V2OwnerDevMint.ensureDevOwnerAuthorization", () => {
   test("forced dev mint seeds one verifiable row and is idempotent", async () => {
+    const started = performance.now()
+    const trace = (phase: string) => console.info(JSON.stringify({
+      test: "owner-dev-mint-idempotent", phase, elapsedMs: Math.round(performance.now() - started),
+    }))
+    trace("start")
     freshEnv()
     process.env.DEEPAGENT_CODE_V2_OWNER_DEV_MINT = "1"
     const stateDir = mkdtempSync(join(tmpdir(), "dev-mint-"))
     const { first, rows } = await Effect.runPromise(
       Effect.gen(function* () {
         const service = yield* Database.Service
+        trace("memory-database-ready")
         const first = yield* V2OwnerDevMint.ensureDevOwnerAuthorization(service.db, stateDir)
+        trace("memory-mint-complete")
         const rows = yield* service.db
           .select()
           .from(V2OwnerAuthorizationTable)
@@ -43,6 +50,7 @@ describe("V2OwnerDevMint.ensureDevOwnerAuthorization", () => {
         return { first, rows }
       }).pipe(Effect.provide(Database.layerFromPath(":memory:")), Effect.provide(flockLayer(stateDir))),
     )
+    trace("memory-scope-closed")
     expect(first.minted).toBe(true)
     expect((first as { campaignID: string }).campaignID).toMatch(/^v2-owner-dev-[0-9a-f]{12}$/)
     const pair = JSON.parse(readFileSync(join(stateDir, "v2-owner-dev", "keypair.json"), "utf8")) as {
@@ -66,6 +74,7 @@ describe("V2OwnerDevMint.ensureDevOwnerAuthorization", () => {
         signatureDigest: rows!.signature_digest,
       }),
     )
+    trace("signature-check-complete")
     expect(verified).toBeTrue()
 
     // second call on a FRESH connection to a FILE db (same store): already_present fast path —
@@ -73,7 +82,9 @@ describe("V2OwnerDevMint.ensureDevOwnerAuthorization", () => {
     const dbFile = join(stateDir, "dev-mint.sqlite")
     const runOnFile = Effect.gen(function* () {
       const service = yield* Database.Service
+      trace("file-database-ready")
       const second = yield* V2OwnerDevMint.ensureDevOwnerAuthorization(service.db, stateDir)
+      trace("file-mint-complete")
       const count = yield* service.db
         .select({ authorization_id: V2OwnerAuthorizationTable.authorization_id })
         .from(V2OwnerAuthorizationTable)
@@ -85,12 +96,15 @@ describe("V2OwnerDevMint.ensureDevOwnerAuthorization", () => {
       return { second, count }
     })
     // seed the file db once (first mint), then reopen and re-run (idempotency)
+    trace("file-seed-start")
     await Effect.runPromise(
       runOnFile.pipe(Effect.provide(Database.layerFromPath(dbFile)), Effect.provide(flockLayer(stateDir))),
     )
+    trace("file-seed-scope-closed")
     const { second, count } = await Effect.runPromise(
       runOnFile.pipe(Effect.provide(Database.layerFromPath(dbFile)), Effect.provide(flockLayer(stateDir))),
     )
+    trace("file-reopen-scope-closed")
     expect(second.minted).toBeTrue()
     expect(count).toBe(1)
     delete process.env.DEEPAGENT_CODE_V2_OWNER_DEV_MINT
@@ -148,7 +162,7 @@ describe("V2OwnerDevMint.ensureDevOwnerAuthorization", () => {
     )
     const worker = join(import.meta.dir, "fixture", "v2-owner-dev-mint-worker.ts")
     const run = () =>
-      new Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }>((resolve) => {
+      new Promise<{ readonly pid: number | undefined; readonly code: number; readonly stdout: string; readonly stderr: string }>((resolve) => {
         const child = spawn(process.execPath, [worker, JSON.stringify({ database, state: stateDir })], {
           cwd: join(import.meta.dir, ".."),
         })
@@ -158,20 +172,30 @@ describe("V2OwnerDevMint.ensureDevOwnerAuthorization", () => {
         child.stderr.on("data", (data) => stderr.push(Buffer.from(data)))
         child.on("close", (code) =>
           resolve({
+            pid: child.pid,
             code: code ?? 1,
             stdout: Buffer.concat(stdout).toString(),
             stderr: Buffer.concat(stderr).toString(),
           }),
         )
       })
+    const startedAt = Date.now()
     const results = await Promise.all([run(), run()])
-    expect(results.map((result) => result.code)).toEqual([0, 0])
+    const closedAt = Date.now()
+    expect(results.map((result) => result.code), JSON.stringify(results)).toEqual([0, 0])
     for (const result of results) {
-      // The real cross-process migration lease may report contention. Accept
-      // only its exact owned DB path; every other warning or error still fails.
+      // Both original contention paths must belong to these actual workers.
+      // A preflight record identifies its holder; every other stderr line fails.
       expect(result.stderr.split("\n").filter(Boolean).every((line) =>
-        line === `[db-runtime-lock] waiting for ${database}.runtime.lock (held by another process)`)).toBe(true)
+        ownedContention(line, { database, pids: results.map((worker) => worker.pid), hostname: hostname(), startedAt, closedAt })),
+        Buffer.from(result.stderr).subarray(0, 16_384).toString("utf8")).toBe(true)
     }
+    console.info(JSON.stringify({ test: "owner-dev-mint-workers", phase: "contention-checked",
+      workerPIDs: results.map((result) => result.pid), hostname: hostname(), startedAt, closedAt,
+      preflight: results.flatMap((result) => result.stderr.split("\n")
+        .filter((line) => line.startsWith("[preflight] database runtime lock held: "))
+        .map((line) => JSON.parse(line.slice("[preflight] database runtime lock held: ".length)))),
+    }))
     expect(results.map((result) => JSON.parse(result.stdout).minted)).toEqual([true, true])
 
     const pair = JSON.parse(readFileSync(join(stateDir, "v2-owner-dev", "keypair.json"), "utf8")) as {
@@ -201,3 +225,23 @@ describe("V2OwnerDevMint.ensureDevOwnerAuthorization", () => {
     ).toBeTrue()
   })
 })
+
+function ownedContention(line: string, owner: {
+  database: string; pids: readonly (number | undefined)[]; hostname: string; startedAt: number; closedAt: number
+}) {
+  if (line === `[db-runtime-lock] waiting for ${owner.database}.runtime.lock (held by another process)`) return true
+  const prefix = "[preflight] database runtime lock held: "
+  if (!line.startsWith(prefix)) return false
+  const text = line.slice(prefix.length)
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({
+    token: Schema.String, pid: Schema.Int, hostname: Schema.String, createdAt: Schema.String,
+  })))(text)
+  if (Option.isNone(decoded)) return false
+  const value = decoded.value
+  const createdAt = Date.parse(value.createdAt)
+  return JSON.stringify(value) === text &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.token) &&
+    value.pid > 0 && owner.pids.includes(value.pid) && value.hostname === owner.hostname &&
+    Number.isFinite(createdAt) && createdAt >= owner.startedAt && createdAt <= owner.closedAt &&
+    new Date(createdAt).toISOString() === value.createdAt
+}

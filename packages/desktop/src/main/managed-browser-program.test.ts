@@ -49,6 +49,7 @@ test.skipIf(process.platform !== "darwin")("actual approved readonly planner mut
       XDG_CACHE_HOME: root,
       DAC_BROWSER_TEST_ROOT: root,
       DAC_BROWSER_CHILD: child.outputs[0]!.path,
+      DAC_MANAGED_BROWSER_INPUT_DIAGNOSTICS: "1",
     },
     stdout: "pipe",
     stderr: "pipe",

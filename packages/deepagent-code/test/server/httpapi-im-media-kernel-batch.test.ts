@@ -1,6 +1,6 @@
 import { expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
-import { ConfigProvider, Context, Effect, Layer, Schema, SubscriptionRef } from "effect"
+import { ConfigProvider, Context, Effect, Layer, Option, Schema, SubscriptionRef } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { createServer } from "node:http"
@@ -56,6 +56,30 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
   const chunks: number[] = []
   const outbound = { count: 0 }
   const engines: IMKernelSync.Interface[] = []
+  const progress = { phase: "boundary:start", startedAt: Date.now() }
+  const writeProgress = () => fs.writeFile(path.join(root, "progress-safe.json"), JSON.stringify({
+    phase: progress.phase, elapsedMs: Date.now() - progress.startedAt,
+    events: events.reduce<Record<string, number>>((counts, event) => {
+      const key = `${event.operation}:${event.phase}`
+      counts[key] = (counts[key] ?? 0) + 1
+      return counts
+    }, {}),
+    effectFacts: effectFacts.reduce<Record<string, number>>((counts, fact) => {
+      const key = `${fact.stage}:${fact.operation}:${fact.phase}`
+      counts[key] = (counts[key] ?? 0) + 1
+      return counts
+    }, {}),
+    fileCounts: fileTrace.counts, outboundPublishes: outbound.count, objects: objects.size, chunks: chunks.length,
+  }))
+  const phase = (value: string) => Effect.promise(() => {
+    progress.phase = value
+    return writeProgress()
+  })
+  const observation = setInterval(() => { void writeProgress().catch(() => {}) }, 1000)
+  observation.unref()
+  yield* Effect.addFinalizer(() => Effect.sync(() => clearInterval(observation)))
+  yield* Effect.addFinalizer(() => phase("scope:closed"))
+  yield* phase("native:starting")
   const native = yield* IMDeviceRuntimeFixture.make({ directory: path.join(root, "platform"), uuid: "receiver",
     certificate: { ca: yield* Effect.promise(() => Bun.file(certificatePath).text()), keyPath: path.join(root, "tls", "ca-key.pem"), certificatePath },
     protectedPath: (pathname) => pathname.startsWith("/navigator/"),
@@ -117,6 +141,7 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
         return new Response(JSON.stringify(object.metadata), { headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } })
     },
   })
+  yield* phase("native:started")
   yield* IMDeviceRuntimeFixture.profile(native.url)
   yield* Effect.addFinalizer(() => Effect.sync(() => native.server.stop(true)))
   const buildEngine: IMFacade.EngineBuilder = (config, options) => {
@@ -165,12 +190,14 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
       if (originalEnv.upload !== undefined) process.env.DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED = originalEnv.upload
     }))
   }
+  yield* phase("listener:starting")
   const normal = diagnostic ? yield* MediaEffectListener.start({ port: 0, buildEngine: observeEngine(MediaEffectTrace.builder((fact) => { effectFacts.push(fact); if (fact.phase === "final") throw new Error("QA diagnostic failure") })), env: {
     DEEPAGENT_IM_KERNEL_MEDIA_PROFILE: "mysql-protected-media-v1",
   }, deviceStore: native.deviceLayer }).pipe(Effect.provide(native.httpLayer)) : undefined
   const context = diagnostic ? Context.empty() : yield* Layer.build(Layer.mergeAll(instance, Project.defaultLayer, Session.defaultLayer, workspace, Database.defaultLayer, serving).pipe(
     Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_SERVER_PASSWORD: "private-http-media" }))),
   ))
+  yield* phase("listener:started")
   const address = node.address()
   if (!normal && (!address || typeof address === "string")) return yield* Effect.die(new Error("Private HTTP listener unavailable"))
   const baseURL = normal?.url ?? `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`
@@ -182,12 +209,21 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
       url.searchParams.set("directory", directory)
       const headers = new Headers(input.headers)
       headers.set("authorization", "Basic " + Buffer.from("deepagent-code:private-http-media").toString("base64"))
+      const operation = route.endsWith("/attachments") ? "upload" : route.endsWith("/messages") ? "send" : route.endsWith("/direct") ? "direct" : "metadata"
+      progress.phase = `http:${operation}:request`
+      await writeProgress()
       const response = await fetch(url, { ...input, headers, signal: AbortSignal.timeout(15000) })
+      progress.phase = `http:${operation}:headers`
+      await writeProgress()
       const body = await response.json()
+      progress.phase = `http:${operation}:body`
+      await writeProgress()
       return { status: response.status, body }
     })
+    yield* phase("kernel:connecting")
     expect(engines).toHaveLength(1)
     yield* pollWithTimeout(SubscriptionRef.get(engines[0]!.state).pipe(Effect.map((state) => state === "connected" ? true : undefined)), "Original SDK did not finish its authenticated connection before the single create", "3 seconds")
+    yield* phase("kernel:connected")
     const group = yield* request("/api/v1/im/facade/direct", post({ name: "Sender" }))
     if (group.status !== 200) console.info("owned-media-group-refusal", JSON.stringify(group))
     expect(group.status).toBe(200)
@@ -220,6 +256,7 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
         await fs.writeFile(output, file.bytes)
         return { path: output, filename: file.filename, bytes: file.bytes.length, sha256: createHash("sha256").update(file.bytes).digest("hex"), mime: file.mime }
       }))
+      yield* phase("sdk:once-send")
       const result = yield* Effect.promise(() => MediaSdkOnce.run({ peers: { A: { url: baseURL, directory, authorizationFile: path.join(root, "A", "auth.txt") } }, groups: { A: { id: group.body.id } }, files }, root))
       expect(result.safe.terminal).toBe("success")
       expect(result.safe.status).toBe(200)
@@ -231,6 +268,8 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
       expect(effectFacts.filter((fact) => fact.stage === "sdk-effect" && fact.operation === "chunk" && fact.phase === "returned")).toHaveLength(42)
       expect(fileTrace.counts["read:start"]).toBe(fileTrace.counts["read:settled"])
       expect(fileTrace.counts["close:start"]).toBe(fileTrace.counts["close:settled"])
+      yield* phase("handler:complete")
+      yield* Effect.addFinalizer(() => phase("scope:closing"))
       return
     }
     const frames: string[] = []
@@ -239,16 +278,20 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
       yield* Effect.addFinalizer(() => Effect.sync(() => global.abort()))
       const eventURL = new URL(GlobalPaths.event, baseURL)
       eventURL.searchParams.set("directory", directory)
+      yield* phase("sse:connecting")
       const response = yield* Effect.promise(() => fetch(eventURL, { headers: { authorization: "Basic " + Buffer.from("deepagent-code:private-http-media").toString("base64") }, signal: global.signal }))
       expect(response.status).toBe(200)
       expect(response.headers.get("content-type")).toContain("text/event-stream")
       const reader = response.body!.getReader()
+      yield* phase("sse:first-event")
       expect(new TextDecoder().decode((yield* Effect.promise(() => reader.read())).value)).toContain("server.connected")
+      yield* phase("sse:connected")
       yield* Effect.addFinalizer(() => Effect.promise(() => reader.cancel().catch(() => {})))
       const url = new URL(`/ws/im/group/${group.body.id}`, baseURL)
       url.protocol = "ws:"
       url.searchParams.set("directory", directory)
       url.searchParams.set("auth_token", Buffer.from("deepagent-code:private-http-media").toString("base64"))
+      yield* phase("websocket:connecting")
       const socket = new WebSocket(url)
       socket.addEventListener("message", (event) => frames.push(String(event.data)))
       yield* Effect.addFinalizer(() => Effect.sync(() => socket.close()))
@@ -257,6 +300,7 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
         socket.addEventListener("error", () => reject(new Error("Private original group socket failed")), { once: true })
       }))
       expect(socket.readyState).toBe(WebSocket.OPEN)
+      yield* phase("websocket:connected")
     }
     const parent = AttachmentStorage.deriveStoragePath({ dataDir: Global.Path.data, workspaceID: group.body.workspaceID, attachmentID: "ima_cleanup" })
     if (parent.ok) yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(parent.baseDir, { recursive: true, force: true })))
@@ -299,6 +343,8 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
       }
       expect(frames.some((frame) => frame.includes("reader_changed"))).toBe(true)
     }
+    yield* phase("handler:complete")
+    yield* Effect.addFinalizer(() => phase("scope:closing"))
   }).pipe(Effect.provide(context), Effect.ensuring(Effect.promise(() => Bun.write(path.join(root, "handler-safe.json"), JSON.stringify({ scope: "controlled actual HTTP handler only; no Go/UI/provider", concurrent, diagnostic, events, effectFacts, fileCounts: fileTrace.counts, fileFacts: fileTrace.facts, outboundPublishes: outbound.count, objects: objects.size, chunkSizes: chunks }, null, 2))).pipe(Effect.asVoid)))
 })
 
@@ -312,9 +358,40 @@ const run = (concurrent: boolean, diagnostic = false) => Effect.gen(function* ()
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(API_KEY|ACCESS_TOKEN|SECRET|PASSWORD|CREDENTIAL|DEEPAGENT_|DAC_IM_MEDIA_BATCH_)/.test(key)))
   const child = Bun.spawn([process.execPath, "test", "--preload", path.resolve(import.meta.dir, "../fixture/cli-secret-store.ts"), import.meta.path, "--test-name-pattern", pattern, "--timeout", "30000"], { cwd: process.cwd(), stdout: log.fd, stderr: log.fd,
     env: { ...inherited, NODE_EXTRA_CA_CERTS: tls.certificatePath, DAC_IM_MEDIA_BATCH_CHILD: "1", DAC_IM_MEDIA_BATCH_ROOT: root } })
+  const startedAt = Date.now()
+  const diagnose = async (reason: "deadline-observation" | "failed-exit") => {
+    const file = Bun.file(path.join(root, "progress-safe.json"))
+    const progress = await file.exists() && file.size <= 32768 ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Struct({
+      phase: Schema.Literals(["boundary:start", "native:starting", "native:started", "listener:starting", "listener:started", "kernel:connecting", "kernel:connected",
+        "http:upload:request", "http:upload:headers", "http:upload:body", "http:send:request", "http:send:headers", "http:send:body",
+        "http:direct:request", "http:direct:headers", "http:direct:body", "http:metadata:request", "http:metadata:headers", "http:metadata:body",
+        "sdk:once-send", "sse:connecting", "sse:first-event", "sse:connected", "websocket:connecting", "websocket:connected", "handler:complete", "scope:closing", "scope:closed"]),
+      elapsedMs: Schema.Number,
+      events: Schema.Record(Schema.String.check(Schema.isPattern(/^(begin|chunk|finalize):Effect-(start|returned|error)$/)), Schema.Number),
+      effectFacts: Schema.Record(Schema.String.check(Schema.isPattern(/^(sdk-effect:(capabilities|begin|chunk|finalize)|reader-effect:(foreground|background)):(start|returned|error|final)$/)), Schema.Number),
+      fileCounts: Schema.Record(Schema.String.check(Schema.isPattern(/^(realpath|lstat|open|stat|read|close):(start|settled|error)$/)), Schema.Number),
+      outboundPublishes: Schema.Number, objects: Schema.Number, chunks: Schema.Number,
+    }))(await file.json().catch(() => undefined))) : undefined
+    const sdkFile = Bun.file(path.join(root, "cli-safe.json"))
+    const sdk = await sdkFile.exists() && sdkFile.size <= 32768 ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Struct({
+      sendCalls: Schema.Number, terminal: Schema.optional(Schema.Literals(["started", "success", "typed-error", "unsettled-transport"])), status: Schema.optional(Schema.Number),
+      facts: Schema.Array(Schema.Struct({ stage: Schema.Literals(["http", "upload"]), status: Schema.Number, at: Schema.Number,
+        index: Schema.optional(Schema.Number), expectedBytes: Schema.optional(Schema.Number), success: Schema.optional(Schema.Boolean),
+        upload: Schema.optional(Schema.Boolean), send: Schema.optional(Schema.Boolean) })),
+    }))(await sdkFile.json().catch(() => undefined))) : undefined
+    // Only these fixture-owned fields leave the child. Raw logs can contain auth
+    // headers or tokens and remain private even when the original test times out.
+    console.info("owned-media-batch-diagnostic", JSON.stringify({ reason, concurrent, diagnostic, elapsedMs: Date.now() - startedAt,
+      exitCode: child.exitCode, exitSignal: child.signalCode, progress: progress ?? { unavailable: true }, sdk }))
+  }
+  const observation = setTimeout(() => { void diagnose("deadline-observation").catch(() => {}) }, 35000)
+  observation.unref()
+  yield* Effect.addFinalizer(() => Effect.sync(() => clearTimeout(observation)))
   yield* Effect.addFinalizer(() => Effect.promise(async () => { if (child.exitCode === null) child.kill("SIGTERM"); await child.exited }))
   const exit = yield* Effect.promise(() => child.exited)
+  clearTimeout(observation)
   if (exit !== 0) {
+    yield* Effect.promise(() => diagnose("failed-exit"))
     const evidence = path.join(os.tmpdir(), `dac-im-media-kernel-batch-${diagnostic ? "qa" : concurrent ? "concurrent" : "ordinary"}-child.log`)
     yield* Effect.promise(() => fs.copyFile(path.join(root, "child.log"), evidence))
     return yield* Effect.die(new Error(`Owned media batch child failed; original diagnostics: ${evidence}`))

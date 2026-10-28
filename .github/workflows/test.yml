@@ -5,11 +5,35 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Unit platform for a manual diagnostic run; main pushes test every platform
+        type: choice
+        default: all
+        options: [all, linux, windows, macos]
+      suite:
+        description: Unit suite for a manual diagnostic run; main pushes test every suite
+        type: choice
+        default: all
+        options: [all, common, core, cli, desktop, app]
+      shard:
+        description: Unit shard (common 1, core 1-4, cli 1-8); main pushes test every shard
+        type: choice
+        default: all
+        options: [all, "1", "2", "3", "4", "5", "6", "7", "8"]
+      test_file:
+        description: Package-relative file for a manual diagnostic; desktop and app require a file; main pushes run every file
+        type: string
+        default: ""
+      test_name:
+        description: Optional Bun case-name pattern within a manual core, cli or desktop file; main pushes run every case
+        type: string
+        default: ""
 
 concurrency:
   # Keep every run on dev so cancelled checks do not pollute the default branch
   # commit history. PRs and other branches still share a group and cancel stale runs.
-  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}
+  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.suite || 'all' }}-${{ inputs.shard || 'all' }}-${{ inputs.test_file || 'all-files' }}-${{ inputs.test_name || 'all-cases' }}
   cancel-in-progress: true
 
 permissions:
@@ -32,6 +56,17 @@ jobs:
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+
+      - name: Validate the manual unit selection
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          bun -e 'const suite=process.env.DAC_UNIT_SUITE; const shard=process.env.DAC_UNIT_SHARD; const file=process.env.DAC_UNIT_TEST_FILE; if (shard !== "all" && (!/^[1-8]$/.test(shard ?? "") || Number(shard) > (suite === "common" ? 1 : suite === "core" ? 4 : suite === "cli" ? 8 : 0))) throw new Error("Select a specific suite and one of its valid shards, or choose all shards"); if (["desktop","app"].includes(suite ?? "") && !file) throw new Error("A desktop or app diagnostic requires a test file"); if (file && (!["core","cli","desktop","app"].includes(suite ?? "") || shard !== "all" || !/^(?:test|src)\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.test\.tsx?$/.test(file) || !file.startsWith(suite === "desktop" ? "src/" : suite === "app" ? "test/components/" : "test/") || file.split("/").includes(".."))) throw new Error("A file diagnostic requires core, cli, desktop or app, all shards, and a package-relative test file")'
+          bun -e 'const name=process.env.DAC_UNIT_TEST_NAME; if (name && (!process.env.DAC_UNIT_TEST_FILE || process.env.DAC_UNIT_SHARD !== "all" || !["core","cli","desktop"].includes(process.env.DAC_UNIT_SUITE ?? "") || name.length > 256 || /[\x00-\x1f\x7f]/.test(name))) throw new Error("A Bun case diagnostic requires a file, all shards, and a bounded case pattern"); if (name) new RegExp(name)'
+        env:
+          DAC_UNIT_SUITE: ${{ inputs.suite || 'all' }}
+          DAC_UNIT_SHARD: ${{ inputs.shard || 'all' }}
+          DAC_UNIT_TEST_FILE: ${{ inputs.test_file || '' }}
+          DAC_UNIT_TEST_NAME: ${{ inputs.test_name || '' }}
 
       - name: Verify public documents and complete history
         run: bun script/check-public-source-boundary.ts --history
@@ -85,20 +120,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        settings:
-          - name: linux
-            host: ubuntu-24.04
-            timeout: 60
-          - name: windows
-            host: windows-2025
-            timeout: 60
-          - name: macos
-            host: macos-14
-            timeout: 120
+        settings: >-
+          ${{ fromJSON(
+            inputs.platform == 'linux' && '[{"name":"linux","host":"ubuntu-24.04","timeout":60}]' ||
+            inputs.platform == 'windows' && '[{"name":"windows","host":"windows-2025","timeout":60}]' ||
+            inputs.platform == 'macos' && '[{"name":"macos","host":"macos-14","timeout":120}]' ||
+            '[{"name":"linux","host":"ubuntu-24.04","timeout":60},{"name":"windows","host":"windows-2025","timeout":60},{"name":"macos","host":"macos-14","timeout":120}]'
+          ) }}
         # Fresh isolated databases deliberately exercise the full migration chain.
         # Partition the two large packages by file while running every other package once.
-        suite: [common, core, cli]
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        suite: >-
+          ${{ fromJSON(
+            inputs.suite == 'common' && '["common"]' ||
+            inputs.suite == 'core' && '["core"]' ||
+            inputs.suite == 'cli' && '["cli"]' ||
+            inputs.suite == 'desktop' && '["desktop"]' ||
+            inputs.suite == 'app' && '["app"]' || '["common","core","cli"]'
+          ) }}
+        shard: ${{ fromJSON(inputs.test_file && '[1]' || inputs.shard && inputs.shard != 'all' && format('[{0}]', inputs.shard) || '[1,2,3,4,5,6,7,8]') }}
         exclude:
           - suite: common
             shard: 2
@@ -217,17 +256,55 @@ jobs:
       - name: Run unit tests
         timeout-minutes: ${{ matrix.settings.timeout }}
         run: |
+          if [[ ( "$DAC_TEST_SUITE" == 'desktop' || "$DAC_TEST_SUITE" == 'app' ) && -z "$DAC_TEST_FILE" ]]; then
+            echo 'A desktop or app diagnostic requires a test file' >&2
+            exit 1
+          fi
+          if [[ -n "$DAC_TEST_NAME" ]]; then
+            bun -e 'const name=process.env.DAC_TEST_NAME; if (!name || !process.env.DAC_TEST_FILE || !["core","cli","desktop"].includes(process.env.DAC_TEST_SUITE ?? "") || name.length > 256 || /[\x00-\x1f\x7f]/.test(name)) throw new Error("Invalid Bun case diagnostic"); new RegExp(name)'
+          fi
           if [[ "$DAC_TEST_SUITE" == 'common' ]]; then
-            dac_test_command=(bun run test:ci --filter='!@deepagent-code/core' --filter='!deepagent-code' --log-order=stream --log-prefix=task)
+            dac_test_command=(bun run test:ci --filter='!@deepagent-code/core' --filter='!deepagent-code' --continue=always --log-order=stream --log-prefix=task)
+            # The Windows App and Electron fixtures each need their original cold-start budget.
+            # Run every package while keeping their heavy child processes from competing here.
+            if [[ "$RUNNER_OS" == 'Windows' ]]; then
+              dac_test_command+=(--concurrency=1)
+            fi
           else
             if [[ "$DAC_TEST_SUITE" == 'core' ]]; then
               dac_test_directory='packages/core'
+            elif [[ "$DAC_TEST_SUITE" == 'desktop' ]]; then
+              dac_test_directory='packages/desktop'
+            elif [[ "$DAC_TEST_SUITE" == 'app' ]]; then
+              bun turbo build --filter='@deepagent-code/app^...'
+              dac_test_directory='packages/app'
             else
               bun turbo build --filter='deepagent-code^...'
               dac_test_directory='packages/deepagent-code'
             fi
             # Keep shard flags on the package test command, away from dependency compilers.
-            dac_test_command=(bun run --cwd "$dac_test_directory" test:ci "--shard=$DAC_TEST_SHARD/$DAC_TEST_SHARDS")
+            dac_test_command=(bun run --cwd "$dac_test_directory" test:ci)
+            if [[ -n "$DAC_TEST_FILE" ]]; then
+              bun -e 'const file=process.env.DAC_TEST_FILE; const prefix=process.env.DAC_TEST_SUITE === "desktop" ? "src/" : process.env.DAC_TEST_SUITE === "app" ? "test/components/" : "test/"; if (!file || !/^(?:test|src)\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.test\.tsx?$/.test(file) || !file.startsWith(prefix) || file.split("/").includes("..")) throw new Error("Invalid diagnostic test file")'
+              git ls-files --error-unmatch "$dac_test_directory/$DAC_TEST_FILE"
+              if [[ "$DAC_TEST_SUITE" == 'desktop' ]]; then
+                # test:ci includes ./src; invoking it would also select every other Desktop test.
+                mkdir -p "$dac_test_directory/.artifacts/unit"
+                cd "$dac_test_directory"
+                dac_test_command=(bun test "./$DAC_TEST_FILE" --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml)
+              elif [[ "$DAC_TEST_SUITE" == 'app' ]]; then
+                mkdir -p "$dac_test_directory/.artifacts/unit"
+                cd "$dac_test_directory"
+                dac_test_command=(bun run test:components "./$DAC_TEST_FILE" --reporter=default --reporter=junit --outputFile=.artifacts/unit/junit.xml)
+              else
+                dac_test_command+=("./$DAC_TEST_FILE")
+              fi
+            else
+              dac_test_command+=("--shard=$DAC_TEST_SHARD/$DAC_TEST_SHARDS")
+            fi
+          fi
+          if [[ -n "$DAC_TEST_NAME" ]]; then
+            dac_test_command+=(--test-name-pattern "$DAC_TEST_NAME")
           fi
           if [[ "$RUNNER_OS" == 'Linux' ]]; then
             xvfb-run -a --server-args='-screen 0 1920x1080x24' "${dac_test_command[@]}"
@@ -238,6 +315,8 @@ jobs:
           DAC_TEST_SUITE: ${{ matrix.suite }}
           DAC_TEST_SHARD: ${{ matrix.shard }}
           DAC_TEST_SHARDS: ${{ matrix.suite == 'cli' && 8 || 4 }}
+          DAC_TEST_FILE: ${{ inputs.test_file || '' }}
+          DAC_TEST_NAME: ${{ inputs.test_name || '' }}
           DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
       - name: Run HttpApi exerciser gates
@@ -269,6 +348,7 @@ jobs:
 
   desktop-smoke:
     name: desktop-smoke (macos)
+    if: github.event_name != 'workflow_dispatch' || ((inputs.platform == '' || inputs.platform == 'all') && (inputs.suite == '' || inputs.suite == 'all') && (inputs.shard == '' || inputs.shard == 'all'))
     # The prevent-sleep smoke drives the real packaged main bundle through Playwright and asserts
     # against pmset, so it needs a macOS runner with a window server; keep it out of the unit matrix.
     runs-on: macos-14
@@ -301,6 +381,7 @@ jobs:
 
   e2e:
     name: e2e (${{ matrix.settings.name }})
+    if: github.event_name != 'workflow_dispatch' || ((inputs.platform == '' || inputs.platform == 'all') && (inputs.suite == '' || inputs.suite == 'all') && (inputs.shard == '' || inputs.shard == 'all'))
     strategy:
       fail-fast: false
       matrix:

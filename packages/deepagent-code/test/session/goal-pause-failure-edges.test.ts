@@ -3,7 +3,8 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-test("Goal pause preserves actual interrupted native writes and refuses recovery at real logical reservation capacity", async () => {
+// The original containment fixture deliberately qualifies macOS and rejects other hosts.
+test.skipIf(process.platform !== "darwin")("macOS Goal pause preserves actual interrupted native writes and refuses recovery at real logical reservation capacity", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-goal-pause-edges-")))
   await Promise.all(
     ["home", "tmp", "config", "data", "cache", "state", "project"].map((name) => fs.mkdir(path.join(root, name))),

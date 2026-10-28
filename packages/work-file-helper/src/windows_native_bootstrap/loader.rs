@@ -1,7 +1,7 @@
 use crate::{no_follow::{self, LockedPath}, protocol::Identity};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{ffi::{c_void, OsString}, fs::File, io::{self, Read}, mem::size_of,
+use std::{ffi::{c_void, OsString}, fs::File, io::{self, Read, Seek, SeekFrom}, mem::size_of,
     os::windows::{ffi::OsStringExt, io::AsRawHandle}, path::PathBuf, ptr};
 use windows_sys::Win32::{Foundation::{CloseHandle, LocalFree, HANDLE, INVALID_HANDLE_VALUE},
     Security::{ACCESS_ALLOWED_ACE, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION,
@@ -34,8 +34,12 @@ pub struct WorkSystemImage { image: Image }
 impl WorkSystemImage {
     pub fn description(&self)->(&std::path::Path,&ImageDescription){(&self.image.observed,&self.image.description)}
     pub fn current(&self)->io::Result<()>{
-        self.image.path.current()?;require_machine(&self.image.path.file)?;
-        if module_path(self.image.module.0)?!=self.image.observed || no_follow::stamp(&self.image.path.file)?!=self.image.stamp{return Err(io::ErrorKind::PermissionDenied.into());}Ok(())
+        current_checked("system","work-import-lease",self.image.path.current())?;
+        current_checked("system","work-import-machine",require_machine(&self.image.path.file))?;
+        if current_changed("system","work-import-mapped-path",||Ok(module_path(self.image.module.0)?!=self.image.observed))? ||
+            current_changed("system","work-import-stamp",||Ok(current_stamp("system",no_follow::stamp(&self.image.path.file)?,&self.image.stamp)!=self.image.stamp))? {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }Ok(())
     }
 }
 pub struct FirstLoad { images: Vec<Image>, system: LockedPath, description: Description }
@@ -195,23 +199,92 @@ impl FirstLoad {
             .map(|image| &image.path.file).ok_or_else(|| io::ErrorKind::PermissionDenied.into())
     }
     pub fn current(&self) -> io::Result<()> {
-        self.system.current()?;
-        require_machine(&self.system.file)?;
+        current_checked("system", "system-lease", self.system.current())?;
+        current_checked("system", "system-machine", require_machine(&self.system.file))?;
         for image in &self.images {
-            image.path.current()?;
-            let name = module_path(image.module.0)?;
+            let role = if image.description.identity == self.description.bootstrap.identity { "bootstrap" }
+                else if image.description.identity == self.description.host.identity { "runtime" }
+                else if image.description.system { "system" } else { "module" };
+            current_checked(role, "image-lease", image.path.current())?;
+            let name = current_checked(role, "mapped-path", module_path(image.module.0))?;
             // The original no-follow ancestor handles still deny WRITE/DELETE.
             // Match the actual mapped image to that held namespace rather than
             // acquiring a second copy of its entire immutable directory chain.
-            if name != image.observed || no_follow::stamp(&image.path.file)? != image.stamp ||
-                no_follow::identity(&image.path.file)? != image.description.identity {
+            if current_changed(role, "mapped-path", || Ok(name != image.observed))?
+                || current_changed(role, "stamp", || {
+                    let actual = no_follow::stamp(&image.path.file)?;
+                    if current_stamp_valid(image, &actual) { return Ok(false); }
+                    current_stamp(role, actual, &image.stamp);
+                    Ok(true)
+                })?
+                || current_changed(role, "identity", || Ok(no_follow::identity(&image.path.file)? != image.description.identity))? {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
-            if image.description.system { require_machine(&image.path.file)?; }
-            if !image.description.system { require_trusted(&image.path.file)?; }
+            if image.description.system { current_checked(role, "image-machine", require_machine(&image.path.file))?; }
+            if !image.description.system { current_checked(role, "private-trust", require_trusted(&image.path.file))?; }
         }
         Ok(())
     }
+}
+
+fn current_diagnostic(role: &'static str, stage: &'static str, field: &'static str, error: &io::Error) {
+    eprintln!("dac-native-first-load-current:{role}:{stage}:{field}:{:?}:{:?}", error.kind(), error.raw_os_error());
+}
+fn current_checked<Value>(role: &'static str, stage: &'static str, result: io::Result<Value>) -> io::Result<Value> {
+    result.inspect_err(|error| current_diagnostic(role, stage, "none", error))
+}
+fn current_changed(role: &'static str, stage: &'static str, read: impl FnOnce() -> io::Result<bool>) -> io::Result<bool> {
+    let changed = current_checked(role, stage, read())?;
+    if changed { current_diagnostic(role, stage, "none", &io::ErrorKind::PermissionDenied.into()); }
+    Ok(changed)
+}
+fn current_stamp(role: &'static str, actual: String, expected: &str) -> String {
+    if actual != expected {
+        // The identity's Debug text can contain colons. Split only the seven
+        // numeric suffix fields; diagnostics never emit either stamp's values.
+        let left = actual.rsplitn(8, ':').collect::<Vec<_>>();
+        let right = expected.rsplitn(8, ':').collect::<Vec<_>>();
+        if left.len() == 8 && right.len() == 8 {
+            for (index, field) in ["links", "size-low", "size-high", "attrs", "change", "write", "creation", "identity"].into_iter().enumerate() {
+                if left[index] != right[index] { current_diagnostic(role, "stamp", field, &io::ErrorKind::PermissionDenied.into()); }
+            }
+        }
+    }
+    actual
+}
+fn current_stamp_valid(image: &Image, actual: &str) -> bool {
+    if actual == image.stamp { return true; }
+    // A System32 ChangeTime-only update must preserve the original held bytes
+    // and machine policy. The captured stamp and description remain immutable.
+    image.description.system && current_only_change(actual, &image.stamp)
+        && current_content_same(image, actual).unwrap_or(false)
+        && require_machine(&image.path.file).is_ok()
+        && no_follow::stamp(&image.path.file).is_ok_and(|stamp| stamp == actual)
+}
+fn current_only_change(actual: &str, expected: &str) -> bool {
+    let left = actual.rsplitn(8, ':').collect::<Vec<_>>();
+    let right = expected.rsplitn(8, ':').collect::<Vec<_>>();
+    left.len() == 8 && right.len() == 8 && left[4] != right[4]
+        && (0..8).all(|index| index == 4 || left[index] == right[index])
+}
+fn current_content_same(image: &Image, observed_stamp: &str) -> io::Result<bool> {
+    if image.description.bytes == 0 || image.description.bytes > 268_435_456 || no_follow::stamp(&image.path.file)? != observed_stamp {
+        return Err(io::ErrorKind::WouldBlock.into());
+    }
+    let mut reader = image.path.file.try_clone()?;
+    let position = reader.stream_position()?;
+    let mut hash = Sha256::new();
+    // Duplicate handles share a cursor. Restore it even if seek/read fails;
+    // a failed probe stays unknown and never changes the original rejection.
+    let read = (|| {
+        reader.seek(SeekFrom::Start(0))?;
+        io::copy(&mut (&mut reader).take(image.description.bytes + 1), &mut hash)
+    })();
+    let restored = reader.seek(SeekFrom::Start(position));
+    let bytes = read?;
+    restored?;
+    if no_follow::stamp(&image.path.file)? != observed_stamp { return Err(io::ErrorKind::WouldBlock.into()); }
+    Ok(bytes == image.description.bytes && format!("{:x}", hash.finalize()) == image.description.sha256)
 }
 
 struct Snapshot(HANDLE);

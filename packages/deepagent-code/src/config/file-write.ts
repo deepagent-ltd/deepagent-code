@@ -337,6 +337,7 @@ const WINDOWS_ACL_SCRIPT = `
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 try {
+  Import-Module -Name ($PSHOME+'/Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
   $source = Get-Acl -LiteralPath $env:DAC_CONFIG_ACL_SOURCE
   Set-Acl -LiteralPath $env:DAC_CONFIG_ACL_TARGET -AclObject $source
   $target = Get-Acl -LiteralPath $env:DAC_CONFIG_ACL_TARGET

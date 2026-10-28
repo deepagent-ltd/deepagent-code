@@ -2,9 +2,18 @@ import { app, BrowserWindow } from "electron"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { inspect } from "node:util"
+import { writeFileSync } from "node:fs"
 
 const root = process.env.DAC_BROWSER_INPUT_PROBE_ROOT
 if (!root) throw new Error("Private input probe root is required")
+const started = performance.now()
+const progress = { phase: "module-loaded", elapsedMs: 0, beforeCleanup: undefined as string | undefined }
+const stage = (phase: string) => {
+  progress.phase = phase
+  progress.elapsedMs = Math.round(performance.now() - started)
+  writeFileSync(path.join(root, "phase.json"), JSON.stringify(progress), { mode: 0o600 })
+}
+stage("module-loaded")
 app.setPath("userData", path.join(root, "profile"))
 app.commandLine.appendSwitch("disable-background-networking")
 app.on("window-all-closed", () => {})
@@ -16,7 +25,9 @@ type Hook = { commandID?: string; hook: string; phase: Phase; rawCalling: boolea
   mismatches: string[]; duplicate: boolean }
 
 async function main() {
+  stage("awaiting-app-ready")
   await app.whenReady()
+  stage("creating-owned-window")
   const window = new BrowserWindow({ show: false, width: 800, height: 600, webPreferences: {
     sandbox: true, contextIsolation: true, nodeIntegration: false, partition: "input-probe-private" } })
   const contents = window.webContents
@@ -75,8 +86,11 @@ async function main() {
       expected: { type: "mouseWheel", x: 80, y: 250, deltaX: 0, deltaY: 120 } },
   ]
   try {
+    stage("loading-owned-data-page")
     await contents.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(page))
+    stage("attaching-debugger")
     contents.debugger.attach("1.3")
+    stage("enabling-page")
     await contents.debugger.sendCommand("Page.enable")
     const raw = contents.debugger.sendCommand.bind(contents.debugger)
     const dispatch = async (packet: Packet) => {
@@ -96,6 +110,8 @@ async function main() {
       state.packet = undefined; state.phase = "between_commands"
     }
     for (const packet of packets) {
+      // Keep diagnostic I/O outside dispatch's original raw-call/Promise boundary.
+      stage(`dispatch:${packet.id}`)
       await dispatch(packet)
       if (!state.asynchronous) continue
       result.stoppedAt = packet.id
@@ -103,24 +119,34 @@ async function main() {
       // Only release the exact input already held; no new click/fill/scroll is
       // issued after the first asynchronous native hook invalidates the design.
       const release = packet.id === "key-down" ? packets[1] : packet.id === "mouse-down" ? packets[5] : undefined
-      if (release) await dispatch({ ...release, id: "cleanup-" + release.id })
+      if (release) { stage(`cleanup:${release.id}`); await dispatch({ ...release, id: "cleanup-" + release.id }) }
       break
     }
+    stage("reading-owned-page")
     result.page = await contents.executeJavaScript("({value:field.value,counts:window.counts,scrollTop:document.getElementById('scroll').scrollTop})")
     result.continuityProven = !state.asynchronous && result.untested.length === 0
     result.synchronousTicketEligible = result.continuityProven && events.length > 0 && events.every((event) =>
       event.rawCalling && event.matches && !event.duplicate)
   } finally {
+    progress.beforeCleanup = progress.phase
+    stage("destroying-owned-window")
     if (contents.debugger.isAttached()) contents.debugger.detach()
     const destroyed = new Promise<void>((resolve) => contents.once("destroyed", resolve))
     window.destroy()
     await destroyed
     result.destroyed = contents.isDestroyed()
+    stage("writing-result")
     await fs.writeFile(path.join(root!, "result.json"), JSON.stringify(result, null, 2), { mode: 0o600 })
+    stage("completed")
   }
 }
 
 main().then(() => app.exit(0), async (error: unknown) => {
-  await fs.writeFile(path.join(root!, "failure.json"), JSON.stringify({ code: error instanceof Error ? error.name : "unknown" }), { mode: 0o600 })
+  const safe = (value: string) => value.replaceAll(root, "<owned-probe>").replace(/data:[^\s]+/g, "<owned-data-url>")
+  await fs.writeFile(path.join(root!, "failure.json"), JSON.stringify({ code: error instanceof Error ? error.name : "unknown",
+    phase: progress.phase, beforeCleanup: progress.beforeCleanup, elapsedMs: Math.round(performance.now() - started),
+    message: error instanceof Error ? safe(error.message).slice(0, 512) : undefined,
+    stack: error instanceof Error ? safe(error.stack ?? "").split("\n").slice(0, 9).join("\n").slice(0, 4096) : undefined,
+  }), { mode: 0o600 })
   app.exit(1)
 })

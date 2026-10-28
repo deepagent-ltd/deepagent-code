@@ -61,11 +61,43 @@ async function createFixture() {
 async function runFixture(fixture: { root: string; entrypoint: string }, scenario: string) {
     const child = Bun.spawn([managedBrowserInputFixtureExecutable,
       fixture.entrypoint, fixture.root, scenario], { cwd: fixture.root,
-      env: { PATH: process.env.PATH, HOME: fixture.root, TMPDIR: fixture.root }, stdout: "pipe", stderr: "pipe" })
-    const timer = setTimeout(() => child.kill("SIGKILL"), 20_000)
+      env: { PATH: process.env.PATH, HOME: fixture.root, TMPDIR: fixture.root, DAC_MANAGED_BROWSER_INPUT_DIAGNOSTICS: "1" }, stdout: "pipe", stderr: "pipe" })
+    const startedAt = Date.now()
+    const deadline = { expired: false }
+    const timer = setTimeout(() => { deadline.expired = true; child.kill("SIGKILL") }, 20_000)
     const result = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
     clearTimeout(timer)
     await Bun.write(path.join(fixture.root, `${scenario}-process.log`), result[1] + result[2])
     console.log("MANAGED_BROWSER_INPUT_IME_EVIDENCE", fixture.root, scenario)
+    if (result[0] !== 0) {
+      const failureFile = Bun.file(path.join(fixture.root, `${scenario}-failure.json`))
+      const failure: unknown = await failureFile.exists() && failureFile.size <= 32768 ? await failureFile.json().catch(() => null) : null
+      const bounded = (value: unknown, limit: number) => typeof value === "string"
+        ? value.replaceAll(fixture.root, "<owned-root>").replace(/data:[^\s"'<>]+/g, "data:<redacted>").slice(0, limit) : undefined
+      const error = failure && typeof failure === "object" ? failure as Record<string, unknown> : undefined
+      const stagesFile = Bun.file(path.join(fixture.root, "stages.log"))
+      const stages = await stagesFile.exists() ? (await stagesFile.text()).slice(-4096).split("\n").filter((line) => /^[a-z0-9:-]{1,80}$/.test(line)).slice(-24) : []
+      const sourceFile = Bun.file(path.join(fixture.root, `${scenario}-source.json`))
+      const source: unknown = await sourceFile.exists() && sourceFile.size <= 16_384 ? await sourceFile.json().catch(() => null) : null
+      const observation = source && typeof source === "object" ? source as Record<string, unknown> : undefined
+      const timing = (value: Record<string, unknown>) => typeof value.at === "number" && Number.isFinite(value.at) &&
+        typeof value.wallAt === "number" && Number.isFinite(value.wallAt)
+      const cdp = Array.isArray(observation?.cdp) ? observation.cdp.slice(-7).flatMap((entry: unknown) => {
+        if (!entry || typeof entry !== "object") return []
+        const value = entry as Record<string, unknown>
+        return ["Input.insertText", "Input.dispatchKeyEvent", "Input.dispatchMouseEvent"].includes(String(value.method)) &&
+          Number.isInteger(value.callbacks) && Number(value.callbacks) >= 0 && Number(value.callbacks) <= 32 && timing(value)
+          ? [{ method: value.method, callbacks: value.callbacks, at: value.at, wallAt: value.wallAt }] : []
+      }) : []
+      const callbacks = Array.isArray(observation?.callbacks) ? observation.callbacks.slice(-32).flatMap((entry: unknown) => {
+        if (!entry || typeof entry !== "object") return []
+        const value = entry as Record<string, unknown>
+        return Number.isInteger(value.ordinal) && Number(value.ordinal) > 0 && Number(value.ordinal) <= 32 && timing(value)
+          ? [{ ordinal: value.ordinal, at: value.at, wallAt: value.wallAt }] : []
+      }) : []
+      console.error("MANAGED_BROWSER_INPUT_IME_FAILURE", JSON.stringify({ scenario, code: result[0], exitSignal: child.signalCode,
+        deadlineExpired: deadline.expired, elapsedMs: Date.now() - startedAt, stages, cdp, callbacks,
+        failure: error ? { name: bounded(error.name, 80), message: bounded(error.message, 512), stack: bounded(error.stack, 4096) } : null }))
+    }
     expect({ code: result[0], output: result[0] ? result[1] + result[2] : null }).toEqual({ code: 0, output: null })
 }

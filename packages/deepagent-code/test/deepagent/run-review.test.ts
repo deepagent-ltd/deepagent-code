@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
@@ -109,8 +109,9 @@ describe("A7 reviewer projection", () => {
   })
 
   test("lists run ids most-recent-first", async () => {
-    writeRun("run_a", { "x.json": {} })
-    writeRun("run_b", { "x.json": {} })
+    // Creation can share one filesystem timestamp; this scenario requires distinct recency.
+    utimesSync(writeRun("run_a", { "x.json": {} }), 1, 1)
+    utimesSync(writeRun("run_b", { "x.json": {} }), 2, 2)
     const ids = await listRunIds(runsDir)
     expect(ids).toEqual(["run_b", "run_a"])
   })

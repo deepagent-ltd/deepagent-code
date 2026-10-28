@@ -11,6 +11,7 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
+import { mkdtemp, rm } from "node:fs/promises"
 import path from "node:path"
 import { buildInventory } from "../script/caller-inventory/build"
 import { rootRepoPath } from "../script/caller-inventory/ast"
@@ -382,9 +383,14 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
   })
 
   test("the snapshot digest binds evidence-anchor CONTENT: a content-only edit under identical file:line anchors flips it", async () => {
-    await using tmp = await tmpdir()
+    // Evidence anchors are repo-relative; a system temp directory can be on another Windows drive.
+    await using tmp = {
+      path: await mkdtemp(path.join(rootRepoPath(), ".legacy-zero-anchor-")),
+      async [Symbol.asyncDispose]() { await rm(this.path, { recursive: true, force: true }) },
+    }
     const anchor = path.join(tmp.path, "anchor.ts")
     const repoFile = path.relative(rootRepoPath(), anchor)
+    expect(path.isAbsolute(repoFile)).toBe(false)
     const anchorEntry = (): ClassifiedEntry => ({
       entry: { id: "fixture.anchor", surface: "composition", kind: "fixture", name: "fixture.anchor", repoFile, line: 1 },
       handlers: [],

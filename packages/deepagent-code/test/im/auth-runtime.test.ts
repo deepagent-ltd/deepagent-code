@@ -3,7 +3,8 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createRequire } from "node:module"
-import { Database } from "bun:sqlite"
+import { Database, constants } from "bun:sqlite"
+import { pathToFileURL } from "node:url"
 import { WorkAuthorityPolicy } from "@deepagent-code/core/session/work-authority-policy"
 import { AuthRuntime } from "../../src/im/auth-runtime"
 import { ownedSecretBuild } from "../fixture/owned-secret-build"
@@ -313,9 +314,12 @@ test("actual Node refuses retired enrollment and verifies Core-prepared operator
   const enroll = { action: "enroll", operationID: "node-enroll", policyPath }
   const refused = await operator(enroll)
   expect(refused).toEqual({ error: "LOCAL_TASK_EXECUTION_UNAVAILABLE" })
-  const rejected = new Database(`file:${filename}?immutable=1`, { readonly: true })
+  expect((await fs.stat(filename)).isFile()).toBe(true)
+  const rejected = new Database(`${pathToFileURL(filename).href}?immutable=1`,
+    constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI)
   try {
     expect(rejected.query("SELECT count(*) count FROM local_operator_authority").get()).toEqual({ count: 0 })
+    expect(() => rejected.run("CREATE TABLE forbidden_observer_write (id INTEGER)")).toThrow(/readonly|read-only/i)
   } finally {
     rejected.close()
   }
@@ -385,8 +389,10 @@ test("actual Node refuses retired enrollment and verifies Core-prepared operator
       () => false,
     ),
   ).toBe(false)
-  const database = new Database(`file:${filename}?immutable=1`, { readonly: true })
+  const database = new Database(`${pathToFileURL(filename).href}?immutable=1`,
+    constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI)
   try {
+    expect(() => database.run("CREATE TABLE forbidden_observer_write (id INTEGER)")).toThrow(/readonly|read-only/i)
     expect(database.query("SELECT revision,credential_generation,state FROM local_operator_authority").get()).toEqual({
       revision: 3,
       credential_generation: 3,
@@ -434,8 +440,14 @@ test("actual Node crypto FIPS failure is typed, does not leak inputs and release
   })
 })
 
-test("actual Node OwnedValidation resolves its executable from the fixed PATH and executes its native profile", async () => {
-  expect((await run("owned", {})).result).toEqual({ state: "exited", outcome: "passed", output: "native-node-owned" })
+test("actual Node OwnedValidation resolves its executable from the fixed PATH and preserves native containment", async () => {
+  expect((await run("owned", {})).result).toEqual(process.platform === "darwin"
+    ? { state: "exited", outcome: "passed", output: "native-node-owned" }
+    : process.platform === "linux"
+      ? { state: "unknown", outcome: null, output: "native-node-owned", containment: "posix-group",
+          stopProof: "unconfirmed", reason: "containment_unconfirmed", exitCode: 0, quarantined: 1,
+          unsupportedProfile: "PROFILE_UNAVAILABLE" }
+      : { error: "PROFILE_UNAVAILABLE", dispatched: false })
 })
 
 test("actual Electron utility uses the bounded WASM worker for unsupported native Argon2", async () => {

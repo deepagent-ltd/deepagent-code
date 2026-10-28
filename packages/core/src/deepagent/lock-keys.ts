@@ -11,11 +11,13 @@ export const claimFileResource = (key: string) => `file:${key}`
 export const filePathsOverlap = (left: string, right: string): boolean => {
   if (left === right) return true
   if (!path.isAbsolute(left) || !path.isAbsolute(right)) return false
-  const contains = (root: string, candidate: string) => {
-    const relative = path.relative(root, candidate)
-    return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
-  }
-  return contains(left, right) || contains(right, left)
+  const relative = path.relative(left, right)
+  if (relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) return true
+  // Windows root-only and UNC paths can resolve asymmetrically through the current drive.
+  if (path.sep !== "\\" || (left[1] === ":" && right[1] === ":" && left[0].toLowerCase() === right[0].toLowerCase()))
+    return relative.split(path.sep).every((part) => part === "..")
+  const reverse = path.relative(right, left)
+  return reverse !== "" && reverse !== ".." && !reverse.startsWith(`..${path.sep}`) && !path.isAbsolute(reverse)
 }
 
 /** Code-graph symbols are already qualified by repo-relative file and symbol path. */

@@ -28,6 +28,7 @@ import { HEADER as FenceHeader } from "../../src/server/shared/fence"
 import { resetDatabase } from "../fixture/db"
 import { tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { SourceEmptySettingsRoot } from "../fixture/source-empty-settings-root"
 
 // Flip the experimental workspaces flag so EventV2.run actually writes to
 // EventSequenceTable (the source of truth the fence middleware reads). Reset
@@ -141,15 +142,12 @@ describe("instance HttpApi", () => {
           sessions: true,
           pty: true,
           workspaces: true,
-          // §H3 / V4.1 — the event-driven capability flags are advertised; most stay default OFF (operator
-          // opt-in per the staged rollout), while v4MultiAgentRuntime is PROMOTED ON (the §N event-driven
-          // goal-tick chain is the live driver; daemon audit GO). This test builds RuntimeFlags from empty
-          // env, so the capability endpoint reports the production defaults. (v4EventDrivenIm was removed
-          // with the V2 IM durable-only migration — no such field on the wire anymore.)
+          // Empty-env RuntimeFlags advertise the shipped defaults: agent push,
+          // multi-agent runtime and IM file uploads are ON; threads remain opt-in.
           v4AgentPushEnabled: true,
           v4MultiAgentRuntime: true,
           v4ThreadEnabled: false,
-          v4FileUploadEnabled: false,
+          v4FileUploadEnabled: true,
         },
       })
     }),
@@ -360,9 +358,10 @@ describe("instance HttpApi", () => {
   it.live("rejects malformed permission and question request ids", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
+      const handler = yield* SourceEmptySettingsRoot.webHandler()
       const request = (path: string, init?: RequestInit) =>
         Effect.promise(() =>
-          HttpApiApp.webHandler().handler(
+          handler.handler(
             new Request(`http://localhost${path}`, {
               ...init,
               headers: { "x-deepagent-code-directory": dir, "content-type": "application/json", ...init?.headers },
@@ -394,9 +393,10 @@ describe("instance HttpApi", () => {
   it.live("returns typed not found bodies for missing permission and question requests", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
+      const handler = yield* SourceEmptySettingsRoot.webHandler()
       const request = (path: string, init?: RequestInit) =>
         Effect.promise(() =>
-          HttpApiApp.webHandler().handler(
+          handler.handler(
             new Request(`http://localhost${path}`, {
               ...init,
               headers: { "x-deepagent-code-directory": dir, "content-type": "application/json", ...init?.headers },
@@ -447,8 +447,9 @@ describe("instance HttpApi", () => {
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
       const projectID = ProjectV2.ID.make("project_missing")
+      const handler = yield* SourceEmptySettingsRoot.webHandler()
       const response = yield* Effect.promise(() =>
-        HttpApiApp.webHandler().handler(
+        handler.handler(
           new Request(`http://localhost/project/${projectID}`, {
             method: "PATCH",
             headers: { "x-deepagent-code-directory": dir, "content-type": "application/json" },
@@ -513,7 +514,7 @@ describe("instance HttpApi", () => {
       expect(refsResponse.status).toBe(200)
       const decoded = Schema.decodeUnknownSync(Vcs.Refs)(yield* refsResponse.json)
       expect(decoded.directory).toBe(dir)
-      expect(decoded.repositoryRoot).toBe(dir)
+      expect(decoded.repositoryRoot).toBe(dir.replaceAll("\\", "/"))
       expect(Array.isArray(decoded.items)).toBe(true)
       const base = decoded.items[0]?.ref
       if (!base) throw new Error("The real Git fixture has no local comparison branch")

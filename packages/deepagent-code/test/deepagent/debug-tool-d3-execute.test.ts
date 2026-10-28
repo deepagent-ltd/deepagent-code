@@ -43,14 +43,24 @@ let originalPath: string | undefined
 
 beforeAll(async () => {
   fakeBinDir = await tmpRootSharedAsync()
-  // A fake `python3` that ignores `-m debugpy.adapter` and just runs the fake DAP
-  // adapter over stdio (cross-platform: the runner has no real debugpy).
-  const script = `#!/usr/bin/env node
+  // Windows needs an actual executable; both launchers run the same DAP fixture
+  // while ignoring the original `-m debugpy.adapter` arguments.
+  const pyPath = path.join(fakeBinDir, process.platform === "win32" ? "python3.exe" : "python3")
+  if (process.platform === "win32") {
+    const built = await Bun.build({
+      entrypoints: [fakeAdapterPath],
+      target: "bun",
+      compile: { outfile: pyPath, autoloadDotenv: false, autoloadBunfig: false, execArgv: ["--"] },
+    })
+    expect(built.success, built.logs.map((item) => item.message).join("\n")).toBe(true)
+  }
+  if (process.platform !== "win32") {
+    const script = `#!/usr/bin/env node
 require(${JSON.stringify(fakeAdapterPath)})
 `
-  const pyPath = path.join(fakeBinDir, "python3")
-  await fs.writeFile(pyPath, script, { mode: 0o755 })
-  await fs.chmod(pyPath, 0o755)
+    await fs.writeFile(pyPath, script, { mode: 0o755 })
+    await fs.chmod(pyPath, 0o755)
+  }
   originalPath = process.env.PATH
   process.env.PATH = `${fakeBinDir}${path.delimiter}${originalPath ?? ""}`
 })

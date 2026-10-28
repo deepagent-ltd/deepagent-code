@@ -21,11 +21,36 @@ for (const scenario of ["merge", "occupied", "failure", "interrupt"]) {
         DAC_STARTUP_ROOT: root, DAC_STARTUP_SCENARIO: scenario },
       stdout: "pipe", stderr: "pipe",
     })
-    const deadline = setTimeout(() => child.kill(), 10000)
+    const timeout = { fired: false }
+    const deadline = setTimeout(() => { timeout.fired = true; child.kill() }, 10000)
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
     clearTimeout(deadline)
     await fs.writeFile(path.join(root, "process.log"), stdout + stderr, { mode: 0o600 })
     console.log("DESKTOP_STARTUP_EVIDENCE", scenario, root)
+    if (code !== 0) {
+      const receipts = await Promise.all(["entry.json", "safe.json", "terminal.json", "uncaught.json", "effect-failure.json", "startup-stages.jsonl"].map(async (name) => {
+        const file = Bun.file(path.join(root, name))
+        if (!await file.exists()) return { name, state: "missing" }
+        if (file.size > 16_384) return { name, state: "oversized", bytes: file.size }
+        const text = await file.text().catch(() => null)
+        if (text === null) return { name, state: "unreadable" }
+        const parsed: unknown = name.endsWith(".jsonl")
+          ? await Promise.all(text.trim().split("\n").slice(-24).map((line) => Promise.resolve().then(() => JSON.parse(line)).catch(() => null)))
+          : await file.json().catch(() => null)
+        const bounded = (value: unknown, limit: number) => typeof value === "string"
+          ? value.replaceAll(root, "<owned-root>").replaceAll(root.replaceAll("\\", "/"), "<owned-root>").slice(0, limit) : undefined
+        if (name.endsWith(".jsonl")) return { name, state: "present", stages: Array.isArray(parsed) ? parsed.slice(-24).flatMap((value: unknown) =>
+          value && typeof value === "object" && "phase" in value && typeof value.phase === "string" && /^[a-z0-9:-]{1,80}$/.test(value.phase) && "at" in value && typeof value.at === "number" && Number.isFinite(value.at)
+            ? [{ phase: value.phase, at: value.at }] : []) : [] }
+        if (!parsed || typeof parsed !== "object") return { name, state: "invalid" }
+        const value = parsed as Record<string, unknown>
+        if (name === "entry.json") return { name, state: "present", ready: value.ready === true, sessionMatchesExpected: typeof value.session === "string" && value.session === value.expected }
+        if (name === "safe.json") return { name, state: "present", facts: Object.fromEntries(["ready", "migrationComplete", "readyBeforeMigration", "protectedData", "merge", "repeatedPaths", "lateRefused"].map((key) => [key, value[key] === true])) }
+        if (name === "terminal.json") return { name, state: "present", gateTerminated: value.gateTerminated === true, ready: value.ready === true, fiberSettled: value.fiberSettled === true, scenario: value.scenario === scenario ? scenario : "mismatch" }
+        return { name, state: "present", origin: bounded(value.origin, 80), nameOfError: bounded(value.name, 80), message: bounded(value.message, 512), stack: bounded(value.stack, 4096), cause: bounded(value.cause, 4096) }
+      }))
+      console.error("DESKTOP_STARTUP_FAILURE", JSON.stringify({ scenario, code, exitSignal: child.signalCode, deadlineExpired: timeout.fired, receipts }))
+    }
     expect({ code, error: code ? stdout + stderr : null }).toEqual({ code: 0, error: null })
     const entry = await Bun.file(path.join(root, "entry.json")).json()
     expect(entry.ready).toBe(false)

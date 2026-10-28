@@ -81,43 +81,56 @@ impl Publisher {
         Self::open_fixed(original, module, runtime, true)
     }
     fn open_fixed(original: &FirstLoad, module: &Path, runtime: &Path, compiled_cli: bool) -> io::Result<Self> {
-        original.current()?;
+        publisher_phase("open-original",original.current())?;
         let artifact_name = if compiled_cli { "deepagent-code.exe" } else { "node.js" };
         if module.as_os_str().len() > 2048 || runtime.as_os_str().len() > 2048 ||
             module.file_name().and_then(|name| name.to_str()) != Some(artifact_name) ||
             (compiled_cli && runtime != module) ||
             (!compiled_cli && !matches!(runtime.file_name().and_then(|name| name.to_str()).map(str::to_ascii_lowercase).as_deref(), Some("node.exe" | "electron.exe" | "deepagent code.exe" | "deepagent code dev.exe" | "deepagent code beta.exe"))) {
-            return Err(io::ErrorKind::InvalidInput.into());
+            return publisher_phase("open-input",Err(io::ErrorKind::InvalidInput.into()));
         }
-        let artifact = LockedPath::open(module, false, false)?;
-        let fixed = LockedPath::open(&original.bootstrap_path()?.parent().ok_or(io::ErrorKind::Unsupported)?.join(artifact_name), false, false)?;
-        if no_follow::identity(&artifact.file)? != no_follow::identity(&fixed.file)? { return Err(io::ErrorKind::PermissionDenied.into()); }
-        let runtime = LockedPath::open(runtime, false, true)?;
-        if compiled_cli && no_follow::identity(&runtime.file)? != no_follow::identity(&artifact.file)? {
-            return Err(io::ErrorKind::PermissionDenied.into());
+        let artifact = publisher_phase("open-artifact-lease",LockedPath::open(module, false, false))?;
+        let fixed = publisher_phase("open-fixed-lease",LockedPath::open(&publisher_phase("open-bootstrap-path",original.bootstrap_path())?
+            .parent().ok_or(io::ErrorKind::Unsupported)?.join(artifact_name), false, false))?;
+        if publisher_phase("open-artifact-identity",no_follow::identity(&artifact.file))? != publisher_phase("open-fixed-identity",no_follow::identity(&fixed.file))? {
+            return publisher_phase("open-artifact-match",Err(io::ErrorKind::PermissionDenied.into()));
         }
-        let mut header = [0u8; 64]; let mut image = runtime.file.try_clone()?; image.read_exact(&mut header)?;
-        if &header[..2] != b"MZ" { return Err(io::ErrorKind::InvalidData.into()); }
+        let runtime = publisher_phase("open-runtime-lease",LockedPath::open(runtime, false, true))?;
+        if compiled_cli && publisher_phase("open-runtime-identity",no_follow::identity(&runtime.file))? != publisher_phase("open-cli-identity",no_follow::identity(&artifact.file))? {
+            return publisher_phase("open-cli-match",Err(io::ErrorKind::PermissionDenied.into()));
+        }
+        let mut header = [0u8; 64]; let mut image = publisher_phase("open-runtime-reader",runtime.file.try_clone())?;
+        publisher_phase("open-runtime-header",image.read_exact(&mut header))?;
+        if &header[..2] != b"MZ" { return publisher_phase("open-runtime-mz",Err(io::ErrorKind::InvalidData.into())); }
         let offset = u32::from_le_bytes(header[60..64].try_into().map_err(io::Error::other)?) as u64;
-        if offset > runtime.file.metadata()?.len().saturating_sub(24) { return Err(io::ErrorKind::InvalidData.into()); }
-        image.seek(SeekFrom::Start(offset))?; let mut signature = [0u8; 6]; image.read_exact(&mut signature)?;
-        if &signature[..4] != b"PE\0\0" || u16::from_le_bytes([signature[4], signature[5]]) != if cfg!(target_arch="aarch64") { 0xaa64 } else { 0x8664 } {
-            return Err(io::ErrorKind::InvalidData.into());
+        if offset > publisher_phase("open-runtime-metadata",runtime.file.metadata())?.len().saturating_sub(24) {
+            return publisher_phase("open-runtime-pe-bound",Err(io::ErrorKind::InvalidData.into()));
         }
-        let stamps = [no_follow::stamp(&artifact.file)?, no_follow::stamp(&runtime.file)?];
+        publisher_phase("open-runtime-pe-seek",image.seek(SeekFrom::Start(offset)))?;
+        let mut signature = [0u8; 6]; publisher_phase("open-runtime-pe-read",image.read_exact(&mut signature))?;
+        if &signature[..4] != b"PE\0\0" || u16::from_le_bytes([signature[4], signature[5]]) != if cfg!(target_arch="aarch64") { 0xaa64 } else { 0x8664 } {
+            return publisher_phase("open-runtime-pe-match",Err(io::ErrorKind::InvalidData.into()));
+        }
+        let stamps = [publisher_phase("open-artifact-stamp",no_follow::stamp(&artifact.file))?, publisher_phase("open-runtime-stamp",no_follow::stamp(&runtime.file))?];
         let description = serde_json::to_string(&Description { version: 1,
             purpose: if compiled_cli { "offline-cli-publisher" } else { "offline-node-publisher" },
-            artifact: fingerprint(&artifact)?, runtime: fingerprint(&runtime)? })?;
+            artifact: publisher_phase("open-artifact-fingerprint",fingerprint(&artifact))?,
+            runtime: publisher_phase("open-runtime-fingerprint",fingerprint(&runtime))? })?;
         let result = Self { artifact, runtime, stamps, description, created: Instant::now() };
-        result.current(original)?;
+        publisher_phase("open-current",result.current(original))?;
         Ok(result)
     }
     pub fn current(&self, original: &FirstLoad) -> io::Result<()> {
-        original.current()?;
-        if self.created.elapsed() > Duration::from_secs(30) { return Err(io::ErrorKind::TimedOut.into()); }
-        for (file, stamp) in [&self.artifact, &self.runtime].iter().zip(&self.stamps) {
-            file.current()?; loader::require_trusted(&file.file)?;
-            if no_follow::stamp(&file.file)? != *stamp { return Err(io::ErrorKind::PermissionDenied.into()); }
+        publisher_phase("current-original",original.current())?;
+        if self.created.elapsed() > Duration::from_secs(30) { return publisher_phase("current-age",Err(io::ErrorKind::TimedOut.into())); }
+        for (index,(file, stamp)) in [&self.artifact, &self.runtime].iter().zip(&self.stamps).enumerate() {
+            let role = if index == 0 { "artifact" } else { "runtime" };
+            publisher_checked(role,"lease",file.current())?;
+            publisher_checked(role,"trust",loader::require_trusted(&file.file))?;
+            let actual = publisher_checked(role,"stamp-read",no_follow::stamp(&file.file))?;
+            if publisher_stamp(role,&actual,stamp) {
+                return publisher_checked(role,"stamp-match",Err(io::ErrorKind::PermissionDenied.into()));
+            }
         }
         Ok(())
     }
@@ -223,18 +236,41 @@ fn grant_fixed_runtime_rx(image: &LockedPath) -> io::Result<()> {
     Ok(())
 }
 fn fingerprint(image: &LockedPath) -> io::Result<Fingerprint> {
-    image.current()?; loader::require_trusted(&image.file)?;
-    let length = image.file.metadata()?.len();
-    if length == 0 || length > LIMIT { return Err(io::ErrorKind::InvalidInput.into()); }
-    let mut file = image.file.try_clone()?; file.seek(SeekFrom::Start(0))?;
+    publisher_phase("fingerprint-lease",image.current())?;
+    publisher_phase("fingerprint-trust",loader::require_trusted(&image.file))?;
+    let length = publisher_phase("fingerprint-metadata",image.file.metadata())?.len();
+    if length == 0 || length > LIMIT { return publisher_phase("fingerprint-bound",Err(io::ErrorKind::InvalidInput.into())); }
+    let mut file = publisher_phase("fingerprint-reader",image.file.try_clone())?;
+    publisher_phase("fingerprint-seek",file.seek(SeekFrom::Start(0)))?;
     let mut hash = Sha256::new(); let mut buffer = [0u8; 65_536]; let mut bytes = 0u64;
     loop {
-        let read = file.read(&mut buffer)?;
+        let read = publisher_phase("fingerprint-read",file.read(&mut buffer))?;
         if read == 0 { break; }
         bytes += read as u64;
-        if bytes > length { return Err(io::ErrorKind::InvalidData.into()); }
+        if bytes > length { return publisher_phase("fingerprint-excess",Err(io::ErrorKind::InvalidData.into())); }
         hash.update(&buffer[..read]);
     }
-    if bytes != length { return Err(io::ErrorKind::InvalidData.into()); }
+    if bytes != length { return publisher_phase("fingerprint-size",Err(io::ErrorKind::InvalidData.into())); }
     Ok(Fingerprint { bytes, sha256: format!("{:x}", hash.finalize()) })
+}
+fn publisher_phase<A>(stage: &'static str, value: io::Result<A>) -> io::Result<A> {
+    value.inspect_err(|error|eprintln!("WINDOWS_PUBLISHER_FAILURE phase={stage} kind={:?} os={}",error.kind(),error.raw_os_error().unwrap_or(0)))
+}
+fn publisher_checked<A>(role: &'static str, stage: &'static str, value: io::Result<A>) -> io::Result<A> {
+    value.inspect_err(|error|publisher_diagnostic(role,stage,"none",error))
+}
+fn publisher_diagnostic(role: &'static str, stage: &'static str, field: &'static str, error: &io::Error) {
+    eprintln!("WINDOWS_PUBLISHER_CURRENT role={role} stage={stage} field={field} kind={:?} os={}",error.kind(),error.raw_os_error().unwrap_or(0));
+}
+fn publisher_stamp(role: &'static str, actual: &str, expected: &str) -> bool {
+    if actual != expected {
+        let left = actual.rsplitn(8, ':').collect::<Vec<_>>();
+        let right = expected.rsplitn(8, ':').collect::<Vec<_>>();
+        if left.len() == 8 && right.len() == 8 {
+            for (index,field) in ["links","size-low","size-high","attrs","change","write","creation","identity"].into_iter().enumerate() {
+                if left[index] != right[index] { publisher_diagnostic(role,"stamp-match",field,&io::ErrorKind::PermissionDenied.into()); }
+            }
+        }
+    }
+    actual != expected
 }

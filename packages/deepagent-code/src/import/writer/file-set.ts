@@ -14,6 +14,7 @@ import { writeSkillControlled } from "./skill"
 import type { ParsedSource } from "../ir"
 import type { ImportTarget } from "../target"
 import type { ImportFileControl } from "../types"
+import type { Lease } from "./windows-file-set"
 
 const Manifest = Schema.Struct({
   version: Schema.Literal(1),
@@ -64,7 +65,8 @@ const destination = (target: ImportTarget, result: ImportJobSchema.FileSetResult
 }
 
 /** Observe exact opened regular files, including governance version files. Never truncate a root. */
-async function tree(root: string, checkpoint: () => Promise<void>, sync = false) {
+async function tree(root: string, checkpoint: () => Promise<void>, sync = false, windows?: Lease) {
+  if (windows) return windows.tree(root, checkpoint, sync)
   const files: Manifest["files"][number][] = []
   const directories: string[] = []
   const count = { entries: 0, bytes: 0 }
@@ -162,7 +164,8 @@ async function tree(root: string, checkpoint: () => Promise<void>, sync = false)
 }
 
 /** Every new ancestor must survive restart as well as the final published directory. */
-async function prepareDirectory(root: string, ref: string) {
+async function prepareDirectory(root: string, ref: string, windows?: Lease) {
+  if (windows) return windows.prepare(root, ref)
   if (!relative(ref)) throw new Error("IMPORT_FILE_TARGET_INVALID: invalid private directory path")
   const original = await fs.lstat(root)
   if (
@@ -245,8 +248,13 @@ async function readManifest(target: ImportTarget, jobID: string, batchID: string
   }
 }
 
-async function verify(target: ImportTarget, manifest: Manifest, root = destination(target, manifest.result)) {
-  const actual = await tree(root, async () => {})
+async function verify(
+  target: ImportTarget,
+  manifest: Manifest,
+  root = destination(target, manifest.result),
+  windows?: Lease,
+) {
+  const actual = await tree(root, async () => {}, false, windows)
   if (
     CanonicalJson.stringify({
       identity: manifest.identity,
@@ -262,12 +270,16 @@ export async function verifyReceipts(
   jobID: string,
   sourceDigest: string,
   results: readonly ImportJobSchema.FileSetResult[],
+  borrowed?: Lease,
 ) {
+  if (results.length === 0) return
+  await using owned = borrowed ? undefined : await openWindows(target)
+  const windows = borrowed ?? owned
   for (const result of results) {
     const manifest = await readManifest(target, jobID, result.sourceId, sourceDigest)
     if (CanonicalJson.stringify(manifest.result) !== CanonicalJson.stringify(result))
       throw new Error("IMPORT_FILE_RECEIPT_CHANGED: receipt differs from its manifest")
-    await verify(target, manifest)
+    await verify(target, manifest, undefined, windows)
   }
 }
 
@@ -279,19 +291,22 @@ export async function reconcile(
   sourceDigest: string,
   manifestHash: string,
   database: Parameters<Parameters<typeof ImportJob.withDestinationFence>[1]>[0],
+  borrowed?: Lease,
 ) {
+  await using owned = borrowed ? undefined : await openWindows(target)
+  const windows = borrowed ?? owned
   const manifest = await readManifest(target, jobID, batchID, sourceDigest)
   if (manifest.result.manifestHash !== manifestHash)
     throw new Error("IMPORT_FILE_MANIFEST_CHANGED: manifest differs from the control-frozen batch")
   const published = await fs.lstat(destination(target, manifest.result)).catch(absent)
   const staged = await fs.lstat(path.join(stagePath(target, batchID), "payload")).catch(absent)
   if (!published && staged) {
-    await verify(target, manifest, path.join(stagePath(target, batchID), "payload"))
+    await verify(target, manifest, path.join(stagePath(target, batchID), "payload"), windows)
     return false
   }
   if (!published || staged)
     throw new Error("IMPORT_FILE_PUBLICATION_UNKNOWN: neither an exact staged nor published tree is provable")
-  await verify(target, manifest)
+  await verify(target, manifest, undefined, windows)
   return record(database, manifest)
 }
 
@@ -352,12 +367,13 @@ export async function run(input: {
       skill,
     })),
   ]
+  await using windows = plans.length > 0 ? await openWindows(input.target, true) : undefined
   for (const plan of plans) {
     await input.control.checkpoint()
     const batchID = `file_${Hash.sha256(CanonicalJson.stringify([input.jobID, plan.scope, plan.area, plan.ref]))}`
     await input.control.beforeBatch(batchID)
     const stage = stagePath(input.target, batchID)
-    await prepareDirectory(path.dirname(input.target.dataRoot), `file-batches/${batchID}`)
+    await prepareDirectory(path.dirname(input.target.dataRoot), `file-batches/${batchID}`, windows)
     const summary =
       plan.scope === "memory"
         ? await stageAndReviewMemoriesControlled(plan.items, path.join(stage, "build"), input.control.checkpoint)
@@ -375,7 +391,7 @@ export async function run(input: {
       path.join(stage, "build", plan.scope === "memory" ? plan.ref : `skills/${plan.skill.name}`),
       path.join(stage, "payload"),
     )
-    const observed = await tree(path.join(stage, "payload"), input.control.checkpoint, true)
+    const observed = await tree(path.join(stage, "payload"), input.control.checkpoint, true, windows)
     const result = Schema.decodeUnknownSync(ImportJobSchema.FileSetResult)({
       kind: "file_set.v1",
       phase: "published",
@@ -412,11 +428,14 @@ export async function run(input: {
     } finally {
       await file.close()
     }
-    const stageFD = await fs.open(stage, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-    try {
-      await stageFD.sync()
-    } finally {
-      await stageFD.close()
+    if (windows) await windows.sync(stage)
+    if (!windows) {
+      const stageFD = await fs.open(stage, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+      try {
+        await stageFD.sync()
+      } finally {
+        await stageFD.close()
+      }
     }
     const publicationID = await input.control.preparedBatch(batchID, manifest.result.manifestHash)
     if (publicationID !== `${batchID}:${manifest.result.manifestHash}`)
@@ -426,9 +445,34 @@ export async function run(input: {
     await prepareDirectory(
       plan.area === "data" ? input.target.dataRoot : input.target.configDir,
       plan.ref.split("/").slice(0, -1).join("/"),
+      windows,
     )
     if (await fs.lstat(target).catch(absent))
       throw new Error("IMPORT_FILE_TARGET_EXISTS: private destination is not absent")
+    if (windows) {
+      const published = { value: false }
+      try {
+        await verify(input.target, manifest, path.join(stage, "payload"), windows)
+        await Effect.runPromise(
+          ImportJob.withDestinationFence(input.target.dbPath, (database) =>
+            input.control.publish(publicationID, async () => {
+              published.value = true
+              await windows.publish(path.join(stage, "payload"), target, observed)
+              record(database, manifest)
+            }),
+          ),
+        )
+      } catch (error) {
+        if (published.value)
+          throw new Error(
+            "IMPORT_FILE_PUBLICATION_UNKNOWN: retain original tree and manifest for explicit reconciliation",
+            { cause: error },
+          )
+        throw error
+      }
+      await input.control.afterBatch()
+      continue
+    }
     const parent = await fs.open(
       path.dirname(target),
       constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
@@ -494,4 +538,10 @@ export async function run(input: {
     }
     await input.control.afterBatch()
   }
+}
+
+export async function openWindows(target: ImportTarget, prepare = false) {
+  if (process.platform !== "win32") return
+  const { WindowsFileSet } = await import("./windows-file-set")
+  return WindowsFileSet.open(path.dirname(target.dataRoot), prepare)
 }

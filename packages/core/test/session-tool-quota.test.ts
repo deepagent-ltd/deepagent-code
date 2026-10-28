@@ -190,31 +190,45 @@ test("knowledge concurrency preserves the ten reservations and missing Sessions 
 })
 
 test("domain Session capacity and UTF-8 reference bounds fail before a new quota fact", async () => {
+  const started = performance.now()
+  const trace = (phase: string) => console.error(JSON.stringify({
+    test: "quota-capacity", phase, elapsedMs: Math.round(performance.now() - started),
+  }))
+  trace("start")
   const directory = tmpRoot()
   const store = new DurableKnowledgeStore(path.join(directory, "knowledge"))
   const tool = DomainPackLoadTool.makeDomainPackLoadTool({ store: () => store })
   const doc = seed(store, "capacity")
   const fresh = seed(store, "new")
+  trace("layer-open-start")
   await Effect.runPromise(
     Effect.gen(function* () {
+      trace("layer-ready")
       yield* seedQuotaSession(sessionID, directory)
       yield* load(tool, doc.id, "first")
+      trace("first-load-complete")
       const db = (yield* Database.Service).db
       // Existing ledger facts are fixture input committed by the original event publisher, including
       // its synchronization index. No synthetic loaded body or successful tool result is created.
       const events = yield* EventV2.Service
       const definition = EventV2.definitions().find((item) => item.type === "session.domain_pack.loaded")!
-      yield* Effect.forEach(
-        Array.from({ length: 4095 }, (_, index) => index),
-        (index) =>
-          events.publish(definition, {
-            sessionID,
-            assistantMessageID: `msg_retained_${index}`,
-            toolCallID: `held_${index}`,
-            ref: `doc:retained_${index}`,
-          }),
-        { discard: true },
-      )
+      trace("capacity-seed-start")
+      // Commit fixture history once; every fact still runs the original publisher and sync index.
+      yield* db.transaction(
+        () => Effect.forEach(
+          Array.from({ length: 4095 }, (_, index) => index),
+          (index) =>
+            events.publish(definition, {
+              sessionID,
+              assistantMessageID: `msg_retained_${index}`,
+              toolCallID: `held_${index}`,
+              ref: `doc:retained_${index}`,
+            }),
+          { discard: true },
+        ),
+        { behavior: "immediate" },
+      ).pipe(Effect.orDie)
+      trace("capacity-seed-complete")
       const full = yield* load(tool, fresh.id, "full", "next").pipe(Effect.result)
       expect(full._tag).toBe("Failure")
       if (full._tag === "Failure") expect(full.failure.message).toContain("capacity exhausted")
@@ -228,8 +242,10 @@ test("domain Session capacity and UTF-8 reference bounds fail before a new quota
           .get()
           .pipe(Effect.orDie))?.value,
       ).toBe(4096)
+      trace("body-done")
     }).pipe(Effect.provide(quotaLayer(path.join(directory, "quota.sqlite"))), Effect.scoped),
   )
+  trace("scope-closed")
 }, 20_000)
 
 test("knowledge staging failure retains its reservation across restart and exact retry cannot repeat the effect", async () => {
@@ -277,13 +293,20 @@ test("knowledge staging failure retains its reservation across restart and exact
 })
 
 test("original snapshot export/import preserves quota facts and conflicting or tampered imports roll back", async () => {
+  const started = performance.now()
+  const trace = (phase: string) => console.error(JSON.stringify({
+    test: "quota-snapshot", phase, elapsedMs: Math.round(performance.now() - started),
+  }))
+  trace("start")
   const directory = tmpRoot()
   const store = new DurableKnowledgeStore(path.join(directory, "knowledge"))
   const docs = ["a", "b", "c"].map((key) => seed(store, key))
   const domain = DomainPackLoadTool.makeDomainPackLoadTool({ store: () => store })
   const knowledge = KnowledgeProposeTool.makeKnowledgeProposeTool({ globalStore: () => store })
+  trace("source-layer-open-start")
   const bundle = await Effect.runPromise(
     Effect.gen(function* () {
+      trace("source-layer-ready")
       yield* seedQuotaSession(sessionID, directory)
       yield* load(domain, docs[0]!.id, "load_a")
       yield* load(domain, docs[1]!.id, "load_b")
@@ -292,6 +315,7 @@ test("original snapshot export/import preserves quota facts and conflicting or t
         (id) => propose(knowledge, id),
         { discard: true },
       )
+      trace("source-quota-facts-complete")
       const db = (yield* Database.Service).db
       const events = yield* EventV2.Service
       const seq = (yield* db
@@ -308,18 +332,26 @@ test("original snapshot export/import preserves quota facts and conflicting or t
         schemaVersion: 1,
       })
       expect(Schema.decodeUnknownSync(EventV2.SnapshotManifest)(snapshot.body).tables.quota_event).toBe(12)
-      return yield* events.exportSnapshotBundle!({ snapshotID: snapshot.snapshotID })
+      trace("source-export-start")
+      const exported = yield* events.exportSnapshotBundle!({ snapshotID: snapshot.snapshotID })
+      trace("source-body-done")
+      return exported
     }).pipe(Effect.provide(quotaLayer(path.join(directory, "source.sqlite"))), Effect.scoped),
   )
+  trace("source-scope-closed")
   const proposed = store.listByStatus("candidate").map((ref) => store.documentStore.get(ref.id))
+  trace("import-layer-open-start")
   await Effect.runPromise(
     Effect.gen(function* () {
+      trace("import-layer-ready")
       yield* seedQuotaSession(sessionID, directory)
       const events = yield* EventV2.Service
       const malformed = JSON.parse(bundle)
       malformed.snapshot.aggregateID = "ses_foreign_quota"
       expect((yield* events.importSnapshotBundle!(JSON.stringify(malformed)).pipe(Effect.exit))._tag).toBe("Failure")
+      trace("import-malformed-refused")
       yield* events.importSnapshotBundle!(bundle)
+      trace("import-bundle-complete")
       const db = (yield* Database.Service).db
       expect(
         (yield* db
@@ -333,10 +365,14 @@ test("original snapshot export/import preserves quota facts and conflicting or t
       expect((yield* load(domain, docs[2]!.id, "import_full").pipe(Effect.result))._tag).toBe("Failure")
       expect((yield* propose(knowledge, "import_full").pipe(Effect.result))._tag).toBe("Failure")
       expect(store.listByStatus("candidate").map((ref) => store.documentStore.get(ref.id))).toEqual(proposed)
+      trace("import-body-done")
     }).pipe(Effect.provide(quotaLayer(path.join(directory, "import.sqlite"))), Effect.scoped),
   )
+  trace("import-scope-closed")
+  trace("conflict-layer-open-start")
   await Effect.runPromise(
     Effect.gen(function* () {
+      trace("conflict-layer-ready")
       yield* seedQuotaSession(sessionID, directory)
       const parsed = JSON.parse(bundle) as EventV2.SnapshotBundle
       const row = parsed.rows.find((item) => item.tableName === "quota_event")!
@@ -376,6 +412,8 @@ test("original snapshot export/import preserves quota facts and conflicting or t
       expect(
         (yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie))?.title,
       ).toBe("untouched original")
+      trace("conflict-body-done")
     }).pipe(Effect.provide(quotaLayer(path.join(directory, "conflict.sqlite"))), Effect.scoped),
   )
+  trace("conflict-scope-closed")
 })

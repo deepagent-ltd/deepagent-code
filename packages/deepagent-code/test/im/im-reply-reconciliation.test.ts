@@ -446,16 +446,45 @@ describe("original final reply receipt reconciliation", () => {
         expect(yield* f.db.select().from(IMKernelDeliveryTable).all()).toEqual(receiptBefore)
         yield* ReplyBodyFixture.fullMeter(f.db)
         const paged = yield* seed("y".repeat(60000 * 32 + 1))
-        const page = yield* paged.reconcile()
-        expect(page).toMatchObject({ totalParts: 33, confirmedParts: 32, state: "partial", hasMore: true })
-        expect(page.parts).toHaveLength(32)
-        expect(yield* paged.reconcile(page.nextCursor!)).toMatchObject({
-          state: "confirmed_acceptance",
-          totalParts: 33,
-          confirmedParts: 33,
-          hasMore: false,
-        })
-        expect(yield* Effect.exit(f.reconcile(page.nextCursor!))).toMatchObject({ _tag: "Failure" })
+        const pages = [yield* paged.reconcile()]
+        const indices: number[] = []
+        // A page also yields after its original four-second work budget. Follow
+        // that cursor instead of assuming every machine settles 32 remote RPCs.
+        for (const index of Array.from({ length: 33 }, (_, index) => index)) {
+          const page = pages[index]!
+          expect(page.totalParts).toBe(33)
+          expect(page.parts.length).toBeGreaterThan(0)
+          expect(page.parts.length).toBeLessThanOrEqual(32)
+          expect(page.parts.map((part) => part.index)).toEqual(
+            Array.from({ length: page.parts.length }, (_, offset) => indices.length + offset),
+          )
+          indices.push(...page.parts.map((part) => part.index))
+          expect(page.confirmedParts).toBe(indices.length)
+          if (!page.hasMore) {
+            expect(page).toMatchObject({ state: "confirmed_acceptance", confirmedParts: 33, nextCursor: null })
+            break
+          }
+          expect(page.state).toBe("partial")
+          expect(page.nextCursor).not.toBeNull()
+          expect(page.nextCursor).not.toBe(pages[index - 1]?.nextCursor)
+          expect(index).toBeLessThan(32)
+          pages.push(yield* paged.reconcile(page.nextCursor!))
+        }
+        expect(indices).toEqual(Array.from({ length: 33 }, (_, index) => index))
+        // Already-confirmed parts need no remote receipt RPC. This fast path
+        // retains the strict page-size oracle independently of network timing.
+        const confirmedQueries = queries.length
+        const confirmed = yield* paged.reconcile()
+        expect(confirmed).toMatchObject({ totalParts: 33, confirmedParts: 33, hasMore: true })
+        expect(confirmed.parts).toHaveLength(32)
+        expect(confirmed.parts.map((part) => part.index)).toEqual(Array.from({ length: 32 }, (_, index) => index))
+        expect(confirmed.parts.every((part) => part.outcome === "already_confirmed")).toBe(true)
+        const confirmedTail = yield* paged.reconcile(confirmed.nextCursor!)
+        expect(confirmedTail).toMatchObject({ state: "confirmed_acceptance", confirmedParts: 33, hasMore: false, nextCursor: null })
+        expect(confirmedTail.parts).toHaveLength(1)
+        expect(confirmedTail.parts[0]).toMatchObject({ index: 32, outcome: "already_confirmed" })
+        expect(queries.length).toBe(confirmedQueries)
+        expect(yield* Effect.exit(f.reconcile(pages[0]!.nextCursor!))).toMatchObject({ _tag: "Failure" })
         const guarded = yield* seed("z".repeat(60001))
         const beforeGuard = queries.length
         const tail = guarded.rows[1]

@@ -8,6 +8,7 @@ import { InstancePaths } from "../../src/server/routes/instance/httpapi/groups/i
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { resetDatabase } from "../fixture/db"
 import { testEffect } from "../lib/effect"
+import { SourceEmptySettingsRoot } from "../fixture/source-empty-settings-root"
 
 const testStateLayer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -62,14 +63,13 @@ describe("HttpApi CORS", () => {
 
   it.live("adds CORS headers to unauthorized responses", () =>
     Effect.gen(function* () {
-      const handler = HttpRouter.toWebHandler(
+      const handler = yield* SourceEmptySettingsRoot.webHandler(
         HttpApiApp.createRoutes().pipe(
           Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_SERVER_PASSWORD: "secret" }))),
         ),
-        { disableLogger: true },
-      ).handler
+      )
       const response = yield* Effect.promise(() =>
-        handler(
+        handler.handler(
           new Request(new URL("/global/config", "http://localhost"), {
             headers: { origin: "https://ai.deepagent.ltd" },
           }),
@@ -85,14 +85,13 @@ describe("HttpApi CORS", () => {
 
   it.live("uses custom CORS origins passed to the server", () =>
     Effect.gen(function* () {
-      const handler = HttpRouter.toWebHandler(
+      const handler = yield* SourceEmptySettingsRoot.webHandler(
         HttpApiApp.createRoutes({ cors: ["https://custom.example"] }).pipe(
           Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_SERVER_PASSWORD: "secret" }))),
         ),
-        { disableLogger: true },
-      ).handler
+      )
       const response = yield* Effect.promise(() =>
-        handler(
+        handler.handler(
           new Request(new URL(InstancePaths.path, "http://localhost"), {
             method: "OPTIONS",
             headers: {
@@ -110,7 +109,7 @@ describe("HttpApi CORS", () => {
       expect(response.headers.get("access-control-allow-headers")).toBe("authorization")
 
       const rejected = yield* Effect.promise(() =>
-        handler(
+        handler.handler(
           new Request(new URL(InstancePaths.path, "http://localhost"), {
             method: "OPTIONS",
             headers: {

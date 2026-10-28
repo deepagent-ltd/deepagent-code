@@ -11,20 +11,18 @@ import { createDeepAgentCodeClient } from "@deepagent-code/sdk/client"
 import { GoalPlanClient } from "@deepagent-code/core/deepagent/goal-plan-client"
 import { GoalPlanEditDialog } from "@/components/deepagent/goal-plan-edit-dialog"
 import { dict } from "@/i18n/en"
+import { createBrowserGoalPlanStoreFixture } from "./fixture/browser-goal-plan-store"
 
 const fixture = vi.hoisted(() => ({
   directory: "",
+  browser: undefined as Awaited<ReturnType<typeof createBrowserGoalPlanStoreFixture>> | undefined,
   pending: new Set<Promise<unknown>>(),
   hold: undefined as undefined | (() => Promise<void>),
 }))
-vi.mock("@/utils/goal-plan-draft", async () => {
-  const sibling = "../../../tui/src/util/goal-plan-draft"
-  const { createGoalPlanDraftStore } = (await import(/* @vite-ignore */ sibling)) as {
-    createGoalPlanDraftStore(directory: string): GoalPlanClient.Store
-  }
+vi.mock("@/utils/goal-plan-draft", () => {
   return {
     createGoalPlanDraftStore: () => {
-      const store = createGoalPlanDraftStore(fixture.directory)
+      const store = fixture.browser!.createStore()
       return {
         ...store,
         put: (...args: Parameters<typeof store.put>) => {
@@ -43,7 +41,7 @@ vi.mock("@/utils/goal-plan-draft", async () => {
 })
 vi.mock("@/context/language", () => ({ useLanguage: () => ({ t: (key: keyof typeof dict) => dict[key] }) }))
 vi.mock("@/context/server", () => ({ useServer: () => ({ current: { http: { username: "fixture-operator" } } }) }))
-// Keep the actual editor, SDK, HTTP and disk store; dialog portal/focus is exercised in Chrome.
+// Keep the actual editor, SDK, HTTP and Chromium IndexedDB store; dialog portal/focus is exercised separately.
 vi.mock("@deepagent-code/ui/v2/dialog-v2", () => ({
   Dialog: (props: { children: JSX.Element }) => <div>{props.children}</div>,
   DialogFooter: (props: { children: JSX.Element }) => <footer>{props.children}</footer>,
@@ -147,11 +145,14 @@ const scopes: (() => Promise<void>)[] = []
 beforeEach(async () => {
   fixture.hold = undefined
   fixture.directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-goal-plan-dom-"))
+  fixture.browser = await createBrowserGoalPlanStoreFixture(fixture.directory)
 })
 afterEach(async () => {
   cleanup()
   await Promise.allSettled([...fixture.pending])
   for (const close of scopes.splice(0)) await close()
+  await fixture.browser?.close()
+  fixture.browser = undefined
   await fs.rm(fixture.directory, { recursive: true, force: true })
 })
 async function setup(mode: "normal" | "lost" | "approval" | "conflict" = "normal") {
@@ -193,7 +194,7 @@ async function setup(mode: "normal" | "lost" | "approval" | "conflict" = "normal
     }
     persisted.push(
       GoalPlanClient.records(
-        JSON.parse(await fs.readFile(path.join(fixture.directory, "goal-plan-v1/records.json"), "utf8")),
+        await fixture.browser!.records(),
       ),
     )
     const action = url.pathname.endsWith("/begin")
@@ -313,8 +314,8 @@ it("closing during permission wait retains pending command; partial result requi
   expect(posts(f)).toHaveLength(2)
   f.state.release!()
   await waitFor(async () => {
-    const values = JSON.parse(await fs.readFile(path.join(fixture.directory, "goal-plan-v1/records.json"), "utf8"))
-    expect(values[0].response.current.state).toBe("mirror_pending")
+    const values = await fixture.browser!.records()
+    expect(values[0]?.response?.current.state).toBe("mirror_pending")
   })
   f.open()
   await screen.findByText("Some document changes still need confirmation")
@@ -347,9 +348,9 @@ it("unmount while durable dispatch record is queued prevents the unissued POST",
   release()
   await Promise.allSettled([...fixture.pending])
   await waitFor(async () => {
-    const values = JSON.parse(await fs.readFile(path.join(fixture.directory, "goal-plan-v1/records.json"), "utf8"))
-    expect(values[0].phase).toBe("draft")
-    expect(values[0].command.action).toBe("begin")
+    const values = await fixture.browser!.records()
+    expect(values[0]?.phase).toBe("draft")
+    expect(values[0]?.command?.action).toBe("begin")
   })
   expect(posts(f)).toHaveLength(0)
 })

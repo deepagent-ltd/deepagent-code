@@ -1304,7 +1304,8 @@ export const layer = Layer.effect(
             const stat = statSync(path.join(dir, name), { bigint: true })
             // A watched child owns content changes. Its parent only needs to notice when
             // that directory is deleted or replaced and its existing watcher becomes stale.
-            if (stat.isDirectory() && targets.has(path.join(dir, name))) return `${stat.dev}:${stat.ino}`
+            // A removed directory can reuse its inode; creation time identifies its new watcher generation.
+            if (stat.isDirectory() && targets.has(path.join(dir, name))) return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`
             return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`
           } catch {
             return undefined

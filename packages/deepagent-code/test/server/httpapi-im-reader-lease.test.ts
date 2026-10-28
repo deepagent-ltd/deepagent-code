@@ -186,8 +186,26 @@ it.live("personal DAC pending admission rejects tampered mapping, foreign owner,
     sdk.conversation(1, "uuid-newpeer").allowed = true
     sdk.publish(1, "uuid-newpeer", "REVOKED_VISIBLE_BODY")
     yield* waitBody(directory, direct.id, "REVOKED_VISIBLE_BODY")
+    const reader = sdk.observed.lease.get(directory)!.reader
+    const previous = sdk.stallChanges()
+    const syncing = yield* Effect.forkChild(reader.sync)
+    yield* Effect.addFinalizer(() => Effect.sync(previous.release))
+    yield* Effect.promise(() => withTimeout(previous.started, 5000, "Original reader changes response did not reach its barrier"))
     sdk.revoke(1, "uuid-newpeer")
-    yield* sdk.observed.lease.get(directory)!.reader.sync
+    const revoked = sdk.stallChanges()
+    yield* Effect.addFinalizer(() => Effect.sync(revoked.release))
+    const joining = yield* Effect.forkChild(reader.sync)
+    yield* Effect.yieldNow
+    previous.release()
+    yield* Fiber.join(syncing)
+    yield* Fiber.join(joining)
+    // A joined pass may have captured its changes before revoke. Only the
+    // original durable projection acknowledges the later revision.
+    revoked.release()
+    yield* pollWithTimeout(reader.sync.pipe(
+      Effect.andThen(db.select().from(IMKernelReaderProjectionTable).where(where).get()),
+      Effect.map((projection) => projection?.visibility === "revoked" ? true : undefined),
+    ), "Original reader did not publish the revoked projection", "8 seconds")
     expect((yield* db.select().from(IMKernelReaderProjectionTable).where(where).get())?.visibility).toBe("revoked")
     expect((yield* request(directory, url)).status).not.toBe(200)
     expect((yield* db.get<{ count: number }>(sql`SELECT count(*) count FROM session_input`))?.count).toBe(0)

@@ -26,6 +26,7 @@ export const make = (options?: { version?: 1 | 2; userID?: string }) => {
   const stalled: { key?: string; started: () => void; release: () => void; pending?: Promise<void> } = { started: () => {}, release: () => {} }
   const stalledMark: { key?: string; started: () => void; release: () => void; pending?: Promise<void> } = { started: () => {}, release: () => {} }
   const connection: { next?: { subscribed: () => void; state: Promise<number> } } = {}
+  const changes: { next?: { started: () => void; pending: Promise<void> } } = {}
   const conversation = (type: 1 | 2, target: string, name = target) => {
     const key = hash(`${type}:${target}`)
     const existing = conversations.get(key)
@@ -74,7 +75,14 @@ export const make = (options?: { version?: 1 | 2; userID?: string }) => {
         const latest = item.messages.at(-1)
         return { ...identity, visibility: "visible", conversationType: item.type, targetId: item.target, admittedOrdinal: String(item.messages.length), readOrdinal: String(item.read), liveUnread: String(item.messages.filter((message) => !message.isSend && Number(message.sequence) > item.read).length), storedUnread: String(item.messages.filter((message) => !message.isSend && Number(message.sequence) > item.read).length), nextExpiryAt: Math.min(...item.messages.map((message) => message.expiresAt)), latestMessageId: latest?.messageId ?? "", latestSequence: latest?.sequence ?? "", latestMessageTime: latest?.messageTime ?? 0 }
       })
-      return Promise.resolve({ version, scopeKey, after: input.after, upper: String(observed.cursor), scanCursor: String(observed.cursor), scanProjectionKey: items.at(-1)?.projectionKey ?? "", pageToken: "", windowComplete: true, caughtUp: true, serverNow: Date.now(), items })
+      const response = { version, scopeKey, after: input.after, upper: String(observed.cursor), scanCursor: String(observed.cursor), scanProjectionKey: items.at(-1)?.projectionKey ?? "", pageToken: "", windowComplete: true, caughtUp: true, serverNow: Date.now(), items }
+      const delayed = changes.next
+      changes.next = undefined
+      if (!delayed) return Promise.resolve(response)
+      // Capture the original response before publishing the barrier. A later
+      // fixture revision must not silently replace this in-flight observation.
+      delayed.started()
+      return delayed.pending.then(() => response)
     }),
     getDeliveryMessages: (input) => native("getDeliveryMessages", () => {
       const item = requireProjection(input)
@@ -155,6 +163,12 @@ export const make = (options?: { version?: 1 | 2; userID?: string }) => {
     const state = new Promise<number>((resolve) => { control.release = resolve })
     connection.next = { subscribed: control.subscribed, state }
     return { subscribed, release: control.release }
+  }, stallChanges: () => {
+    const control = { started: () => {}, release: () => {} }
+    const started = new Promise<void>((resolve) => { control.started = resolve })
+    const pending = new Promise<void>((resolve) => { control.release = resolve })
+    changes.next = { started: control.started, pending }
+    return { started, release: control.release }
   }, revoke: (type: 1 | 2, target: string) => { const item = conversation(type, target); item.allowed = false; changed(item) }, stall: (projectionKey: string) => {
     stalled.key = projectionKey
     const started = new Promise<void>((resolve) => { stalled.started = resolve })

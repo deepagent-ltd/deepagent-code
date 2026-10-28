@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest"
+import { beforeAll, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library"
 import userEvent from "@testing-library/user-event"
 import { createStore } from "solid-js/store"
@@ -11,6 +11,48 @@ import type { Window } from "happy-dom"
 import { ImportSection } from "@/components/settings-v2/import-history"
 import { dict } from "@/i18n/en"
 import { publishImportFixturePacket } from "./fixture/import-control"
+import { importFixtureEnvironment } from "./fixture/import-environment"
+import { waitForImportFixtureReady } from "./fixture/import-readiness"
+import { buildImportFixture } from "./fixture/import-build"
+
+const prepared = { entry: "" }
+beforeAll(async () => {
+  if (process.platform === "win32") prepared.entry = await buildImportFixture("import-history-lifecycle-server.ts")
+}, 120_000)
+
+async function backupState(root: string, jobID: string) {
+  const state = { selected: false, complete: false, directory: false,
+    tempDB: false, finalDB: false, tempManifest: false, finalManifest: false }
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(jobID)) return state
+  state.selected = true
+  try {
+    const owned = await fs.realpath(root)
+    // importFixtureEnvironment fixes dataRoot to root/data; prepareImportTarget
+    // uses this job's backup directory and the fixed "before-import" basename.
+    const relative = path.join("data", "imports", jobID, "backup")
+    const current = await fs.realpath(path.join(owned, relative))
+    if (path.relative(owned, current) !== relative) return state
+    const directory = await fs.opendir(current)
+    state.directory = true
+    try {
+      for (let count = 0; count < 16; count++) {
+        const entry = await directory.read()
+        if (!entry) {
+          state.complete = true
+          return state
+        }
+        if (!entry.isFile() || entry.isSymbolicLink()) continue
+        if (/^\.before-import\.tmp-[a-z0-9]*$/.test(entry.name)) state.tempDB = true
+        if (entry.name === "before-import.db") state.finalDB = true
+        if (/^\.before-import\.tmp-[a-z0-9]*\.manifest\.json$/.test(entry.name)) state.tempManifest = true
+        if (entry.name === "before-import.db.manifest.json") state.finalManifest = true
+      }
+    } finally {
+      await directory.close()
+    }
+  } catch {}
+  return state
+}
 
 const [server, setServer] = createStore({
   key: "private-a",
@@ -43,28 +85,46 @@ vi.mock("@deepagent-code/ui/context/i18n", () => ({ useI18n: () => ({ t: (key: s
 async function processFor(root: string, count: number) {
   await fs.mkdir(path.join(root, "home"), { recursive: true })
   const packageDirectory = path.resolve(process.cwd(), "../deepagent-code")
+  const startedAt = Date.now()
   const child = spawn(
     "bun",
-    [path.join(packageDirectory, "test/fixture/import-history-lifecycle-server.ts"), root, String(count)],
+    ["--preload", path.resolve("test/components/fixture/import-startup.ts"), prepared.entry || path.join(packageDirectory, "test/fixture/import-history-lifecycle-server.ts"), root, String(count)],
     {
       cwd: packageDirectory,
-      env: {
-        PATH: process.env.PATH,
-        HOME: path.join(root, "home"),
-        TMPDIR: root,
-        XDG_DATA_HOME: path.join(root, "data"),
-        XDG_CONFIG_HOME: path.join(root, "config"),
-        XDG_CACHE_HOME: path.join(root, "cache"),
-        XDG_STATE_HOME: path.join(root, "state"),
-        DEEPAGENT_CODE_HOME: path.join(root, "data"),
-        DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
-        DEEPAGENT_CODE_DB: path.join(root, "live.db"),
-        DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1",
-        DEEPAGENT_IM_AGENT_RESPONDER: "off",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
+      env: importFixtureEnvironment(root),
+      stdio: [process.platform === "win32" ? "pipe" : "ignore", "pipe", "pipe"],
     },
   )
+  const observations: {
+    phase: string
+    at: number
+    elapsedMs: number
+    pid?: number
+    status?: number
+    state?: string
+    hasTarget?: boolean
+    hasSourceDigest?: boolean
+    count?: number
+    committedBatches?: number
+    activeBatch?: "prepare" | "other" | "none"
+    deadlineAt?: number
+    code?: number | null
+  }[] = []
+  const observed = {
+    jobID: "",
+    backup: undefined as ReturnType<typeof backupState> | undefined,
+    terminalError: "",
+    errorOutput: "",
+  }
+  const observe = (
+    phase: string,
+    facts: Omit<(typeof observations)[number], "phase" | "at" | "elapsedMs" | "pid"> = {},
+  ) => {
+    if (observations.length < 128)
+      observations.push({ phase, at: Date.now(), elapsedMs: Date.now() - startedAt, pid: child.pid, ...facts })
+  }
+  const timeout = { fired: false }
+  observe("spawn", { deadlineAt: startedAt + 60_000 })
   let stdout = ""
   let stderr = ""
   let spawnError: string | undefined
@@ -73,11 +133,25 @@ async function processFor(root: string, count: number) {
   })
   child.stderr?.on("data", (value: Buffer) => {
     stderr = (stderr + value.toString()).slice(-65536)
+    observed.errorOutput = (observed.errorOutput + value.toString()).slice(-8192)
+    const lines = observed.errorOutput.split(/\r?\n/)
+    observed.errorOutput = lines.pop() ?? ""
+    for (const line of lines) {
+      if (!line.startsWith("IMPORT_LIFECYCLE_TERMINAL_ERROR ") || line.length > 4096) continue
+      observed.terminalError = line
+      console.error(line)
+    }
   })
+  child.stdin?.on("error", () => {})
   child.once("error", (error) => {
     spawnError = error.message
   })
-  const exited = new Promise<number | null>((resolve) => child.once("close", resolve))
+  const exited = new Promise<number | null>((resolve) =>
+    child.once("close", (code) => {
+      observe("child-close", { code })
+      resolve(code)
+    }),
+  )
   const diagnostic = async () =>
     JSON.stringify({
       root,
@@ -85,35 +159,36 @@ async function processFor(root: string, count: number) {
       exitCode: child.exitCode,
       signal: child.signalCode,
       spawnError,
+      deadlineExpired: timeout.fired,
+      observations,
+      terminalError: observed.terminalError,
+      backup: await (observed.backup ??= backupState(root, observed.jobID)),
       readyPath: path.join(root, "ready.json"),
       resultFiles: (await fs.readdir(root))
         .filter((name) => name.endsWith(".json"))
         .map((name) => path.join(root, name)),
+      startup: await fs.readFile(path.join(root, "startup.jsonl"), "utf8").catch(() => null),
       stdout,
       stderr,
     })
-  const deadline = setTimeout(() => child.kill("SIGTERM"), 60_000)
-  const ready = await waitFor(
-    async () => {
-      if (child.exitCode !== null || child.signalCode !== null || spawnError)
-        throw new Error(`Private import fixture ended: ${await diagnostic()}`)
-      return JSON.parse(await fs.readFile(path.join(root, "ready.json"), "utf8")) as {
-        url: string
-        sourcePath: string
-        count: number
-        packetSourcePath: string
-        packetCount: number
-      }
-    },
-    { timeout: 15_000 },
-  ).catch(async (error: unknown) => {
+  const deadline = setTimeout(() => {
+    timeout.fired = true
+    observe("child-deadline-fired", { deadlineAt: startedAt + 60_000 })
+    child.kill("SIGTERM")
+  }, 60_000)
+  const ready = (await waitForImportFixtureReady({
+    root,
+    startedAt,
+    ended: () => child.exitCode !== null || child.signalCode !== null || spawnError !== undefined,
+  }).catch(async (error: unknown) => {
     clearTimeout(deadline)
     child.kill("SIGTERM")
     const force = setTimeout(() => child.kill("SIGKILL"), 2000)
     await exited
     clearTimeout(force)
     throw new Error(`Private import fixture not ready: ${String(error)}\n${await diagnostic()}`, { cause: error })
-  })
+  })) as { url: string; sourcePath: string; count: number; packetSourcePath: string; packetCount: number }
+  observe("ready-observed")
   const calls: { method: string; path: string }[] = []
   const transport = {
     gate: undefined as Promise<void> | undefined,
@@ -129,6 +204,7 @@ async function processFor(root: string, count: number) {
         const incoming = request instanceof Request ? request : new Request(request)
         const route = new URL(incoming.url).pathname
         calls.push({ method: incoming.method, path: route })
+        if (incoming.method === "POST" && route === "/global/import/jobs") observe("create-post-start")
         const response = await fetch(request).catch((error: unknown) => {
           transport.error = String(error)
           throw error
@@ -138,9 +214,19 @@ async function processFor(root: string, count: number) {
           transport.received = { status: response.status, body: text }
           const body: unknown = JSON.parse(text)
           transport.accepted = body as ImportJobInfo
+          observed.jobID = transport.accepted.id
+          observe("original-create-ack", {
+            status: response.status,
+            state: transport.accepted.state,
+            hasTarget: Boolean(transport.accepted.target),
+            hasSourceDigest: Boolean(transport.accepted.sourceDigest),
+            committedBatches: transport.accepted.committedBatches,
+            activeBatch: transport.accepted.activeBatchID === "prepare" ? "prepare" : transport.accepted.activeBatchID ? "other" : "none",
+          })
           // Only packet delivery is held. The original authenticated route already
           // admitted the job and its original worker continues independently.
           await transport.gate
+          observe("create-response-delivered")
           // HappyDOM cannot tee this socket-backed response with clone(). Preserve
           // the original bytes/status/headers while delaying their delivery.
           return new Response(text, {
@@ -157,14 +243,19 @@ async function processFor(root: string, count: number) {
   return {
     root,
     ready,
+    deadlineAt: startedAt + 60_000,
     client,
     calls,
     transport,
     diagnostic,
+    observe,
     posts: () => calls.filter((call) => call.method === "POST" && call.path === "/global/import/jobs").length,
     async close() {
       clearTimeout(deadline)
-      if (child.exitCode === null) child.kill("SIGTERM")
+      if (child.exitCode === null) {
+        if (process.platform === "win32") child.stdin?.end("STOP\n")
+        else child.kill("SIGTERM")
+      }
       const force = setTimeout(() => child.kill("SIGKILL"), 2000)
       const code = await exited
       clearTimeout(force)
@@ -194,13 +285,16 @@ async function chooseSource(sourcePath: string) {
   fireEvent.click(screen.getByRole("checkbox", { name: "Skills" }))
   fireEvent.click(screen.getByRole("button", { name: "Import" }))
 }
-async function diagnostics(jobID: string) {
-  const button = await screen.findByRole("button", { name: dict["settings.import.job.details"] })
+async function diagnostics(jobID: string, deadlineAt: number) {
+  const button = await screen.findByRole("button", { name: dict["settings.import.job.details"] }, {
+    timeout: Math.max(1, deadlineAt - Date.now()),
+  })
   if (button.getAttribute("aria-expanded") !== "true") fireEvent.click(button)
   await waitFor(() =>
     expect(
       (screen.getByRole("textbox", { name: dict["settings.import.job.diagnosticText"] }) as HTMLTextAreaElement).value,
     ).toContain(`Job: ${jobID}`),
+    { timeout: Math.max(1, deadlineAt - Date.now()) },
   )
 }
 
@@ -236,6 +330,8 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
     expect(screen.getByRole("checkbox", { name: "Memory" }).hasAttribute("disabled")).toBe(true)
     progress.phase = "partial committed boundary"
     await publishImportFixturePacket(path.join(a.root, "monitor.json"), { jobID: first.id })
+    a.observe("monitor-published")
+    a.observe("first-commit-wait-start", { deadlineAt: Date.now() + 15_000 })
     // A real immutable destination receipt opens this test boundary. No job row,
     // target lock or executor is modified to create a partial state.
     const committed = await waitFor(
@@ -247,6 +343,7 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
         },
       { timeout: 15_000 },
     )
+    a.observe("first-commit-observed", { count: committed.count })
     expect(committed.jobID).toBe(first.id)
     expect(committed.count).toBeGreaterThan(0)
     setOwner("scope", "private-a-new-owner")
@@ -274,7 +371,7 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
     fireEvent.click(screen.getByRole("button", { name: dict["settings.import.job.refreshOne"] }))
     await screen.findByText(new RegExp(dict["settings.import.job.stopped"]))
     expect(screen.getByText(dict["settings.import.job.partial"])).toBeTruthy()
-    await diagnostics(first.id)
+    await diagnostics(first.id, Math.min(progress.startedAt + 60_000, a.deadlineAt))
     await publishImportFixturePacket(path.join(a.root, "inspect.json"), { jobID: first.id, name: "partial-proof" })
     const partial = await waitFor(
       async () =>
@@ -336,6 +433,7 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
         view.unmount()
       }
       surface.happyDOM.setURL(a.ready.url)
+      const copyDeadline = Date.now() + 15_000
       await waitFor(
         async () => {
           const current = await a.client.global.importGet({ jobID: accepted.id })
@@ -359,7 +457,7 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
       setOwner({ scope: "private-a", url: a.ready.url, client: a.client })
       a.transport.gate = undefined
       view = render(() => <ImportSection />)
-      await diagnostics(accepted.id)
+      await diagnostics(accepted.id, Math.min(progress.startedAt + 60_000, a.deadlineAt, copyDeadline))
       expect(a.posts()).toBe(beforePosts + 1)
       expect(screen.getByText(dict["settings.import.job.copyComplete"])).toBeTruthy()
       view.unmount()

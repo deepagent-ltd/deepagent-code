@@ -13,17 +13,19 @@ use windows_sys::Win32::{Foundation::{CloseHandle, HANDLE},
 pub struct Description { pub path: std::path::PathBuf, pub identity: Identity, pub sha256: String, pub bytes: u64 }
 struct Section(HANDLE);
 impl Drop for Section { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
-pub struct Image { path: LockedPath, section: Section, description: Description, stamp: String, imports: Vec<String>, git_links: Option<(u32,fn(&File)->io::Result<()>)> }
+pub struct Image { path: LockedPath, section: Section, description: Description, stamp: String, imports: Vec<String>, git_links: Option<(u32,fn(&File)->io::Result<()>)>,
+    original_system: bool, system_machine: Option<fn(&File)->io::Result<()>> }
 pub struct Factory { supervisor: Image, payload: Image, closure: Vec<Image>, closure_hash: String }
 pub struct Suspended<'a> { image: &'a Image, process: PROCESS_INFORMATION }
 
 impl Image {
     pub fn open(expected: Description) -> io::Result<Self> {
-        Self::open_image(expected, false, None)
+        Self::open_image(expected, false, None, None)
     }
-    pub(crate) fn open_original_system(expected: Description) -> io::Result<Self> { Self::open_image(expected, true, None) }
-    pub(crate) fn open_original_git(expected: Description, machine:fn(&File)->io::Result<()>) -> io::Result<Self> { Self::open_image(expected, false, Some(machine)) }
-    fn open_image(expected: Description, original_system: bool, original_git: Option<fn(&File)->io::Result<()>>) -> io::Result<Self> {
+    pub(crate) fn open_original_system(expected: Description) -> io::Result<Self> { Self::open_image(expected, true, None, None) }
+    pub(crate) fn open_original_git(expected: Description, machine:fn(&File)->io::Result<()>) -> io::Result<Self> { Self::open_image(expected, false, Some(machine), None) }
+    fn open_image(expected: Description, original_system: bool, original_git: Option<fn(&File)->io::Result<()>>,
+        system_machine: Option<fn(&File)->io::Result<()>>) -> io::Result<Self> {
         if expected.bytes == 0 || expected.bytes > 268_435_456 || expected.sha256.len() != 64 ||
             !expected.sha256.bytes().all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value)) {
             return Err(io::ErrorKind::InvalidInput.into());
@@ -55,7 +57,8 @@ impl Image {
             PAGE_READONLY | SEC_IMAGE, 0, 0, ptr::null()) });
         if section.0 == 0 { return Err(io::Error::last_os_error()); }
         if no_follow::stamp(&path.file)? != stamp { return Err(io::ErrorKind::PermissionDenied.into()); }
-        let result = Self { path, section, description: expected, stamp, imports, git_links };
+        let result = Self { path, section, description: expected, stamp, imports, git_links, original_system,
+            system_machine: if original_system { system_machine } else { None } };
         result.current()?;
         Ok(result)
     }
@@ -63,12 +66,18 @@ impl Image {
     pub(crate) fn file(&self) -> &File { &self.path.file }
     pub(crate) fn required_imports(&self) -> &[String] { &self.imports }
     pub fn current(&self) -> io::Result<()> {
-        self.path.current()?;
+        self.current_role(if self.original_system { "system-library" } else { "private-image" })
+    }
+    fn current_role(&self, role: &'static str) -> io::Result<()> {
+        image_checked(role,"lease",self.path.current())?;
         if let Some((links,machine))=self.git_links {
-            machine(&self.path.file)?;
-            if image_links(&self.path.file)?!=links{return Err(io::ErrorKind::PermissionDenied.into());}
+            image_checked(role,"git-machine",machine(&self.path.file))?;
+            if image_changed(role,"git-links-match",image_checked(role,"git-links-read",image_links(&self.path.file))?!=links){return Err(io::ErrorKind::PermissionDenied.into());}
         }
-        if self.section.0 == 0 || no_follow::stamp(&self.path.file)? != self.stamp { return Err(io::ErrorKind::PermissionDenied.into()); }
+        if image_changed(role,"section",self.section.0 == 0) ||
+            image_changed(role,"stamp-match",image_stamp_changed(self,role,image_checked(role,"stamp-read",no_follow::stamp(&self.path.file))?)) {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
         Ok(())
     }
     pub fn verify_process(&self, process: HANDLE) -> io::Result<()> {
@@ -116,12 +125,87 @@ impl Image {
     }
 }
 
+fn image_diagnostic(role: &'static str, stage: &'static str, field: &'static str, error: &io::Error) {
+    eprintln!("WINDOWS_IMAGE_CURRENT role={role} stage={stage} field={field} kind={:?} os={}",error.kind(),error.raw_os_error().unwrap_or(0));
+}
+fn image_checked<A>(role: &'static str, stage: &'static str, value: io::Result<A>) -> io::Result<A> {
+    value.inspect_err(|error|image_diagnostic(role,stage,"none",error))
+}
+fn image_changed(role: &'static str, stage: &'static str, changed: bool) -> bool {
+    if changed { image_diagnostic(role,stage,"none",&io::ErrorKind::PermissionDenied.into()); }
+    changed
+}
+fn image_stamp_changed(image: &Image, role: &'static str, actual: String) -> bool {
+    if image_stamp_valid(image,&actual) { return false; }
+    image_stamp(image,role,actual) != image.stamp
+}
+fn image_stamp_valid(image: &Image, actual: &str) -> bool {
+    if actual == image.stamp { return true; }
+    if !image.original_system || image.git_links.is_some() { return false; }
+    let Some(machine) = image.system_machine else { return false; };
+    let left = actual.rsplitn(8, ':').collect::<Vec<_>>();
+    let right = image.stamp.rsplitn(8, ':').collect::<Vec<_>>();
+    // Only an original system image can re-prove a metadata-only update with
+    // its held bytes and sealed policy. Captured descriptions stay immutable.
+    left.len() == 8 && right.len() == 8 && left[4] != right[4]
+        && (0..8).all(|index|index == 4 || left[index] == right[index])
+        && image_content_same(image,actual).unwrap_or(false)
+        && machine(&image.path.file).is_ok()
+        && no_follow::stamp(&image.path.file).is_ok_and(|stamp|stamp == actual)
+}
+fn image_stamp(image: &Image, role: &'static str, actual: String) -> String {
+    if actual != image.stamp {
+        let left = actual.rsplitn(8, ':').collect::<Vec<_>>();
+        let right = image.stamp.rsplitn(8, ':').collect::<Vec<_>>();
+        if left.len() == 8 && right.len() == 8 {
+            for (index,field) in ["links","size-low","size-high","attrs","change","write","creation","identity"].into_iter().enumerate() {
+                if left[index] != right[index] { image_diagnostic(role,"stamp-match",field,&io::ErrorKind::PermissionDenied.into()); }
+            }
+            if image.original_system && left[4] != right[4] && (0..8).all(|index|index == 4 || left[index] == right[index]) {
+                let content = image_content_same(image,&actual);
+                let machine = image.system_machine.map(|policy|policy(&image.path.file));
+                let stable = no_follow::stamp(&image.path.file).is_ok_and(|stamp|stamp == actual);
+                let content = match (stable,content) { (true,Ok(true)) => "true", (true,Ok(false)) => "false", _ => "unknown" };
+                let machine = match (stable,machine) {
+                    (true,Some(Ok(()))) => "true",
+                    (true,Some(Err(error))) if error.kind() == io::ErrorKind::PermissionDenied && error.raw_os_error().is_none() => "false",
+                    _ => "unknown",
+                };
+                let name = image.description.path.file_name().and_then(|name|name.to_str())
+                    .filter(|name|!name.is_empty() && name.len() <= 128 && name.bytes().all(|byte|byte.is_ascii_alphanumeric() || b"._-".contains(&byte)))
+                    .unwrap_or("system-image");
+                eprintln!("WINDOWS_IMAGE_CHANGE_ONLY role={role} image={name} content_same={content} machine_trusted={machine}");
+            }
+        }
+    }
+    actual
+}
+fn image_content_same(image: &Image, observed: &str) -> io::Result<bool> {
+    if image.description.bytes == 0 || image.description.bytes > 268_435_456 || no_follow::stamp(&image.path.file)? != observed {
+        return Err(io::ErrorKind::WouldBlock.into());
+    }
+    let mut reader = image.path.file.try_clone()?;
+    let position = reader.stream_position()?;
+    let mut hash = Sha256::new();
+    let read = (|| {
+        reader.seek(SeekFrom::Start(0))?;
+        io::copy(&mut (&mut reader).take(image.description.bytes + 1),&mut hash)
+    })();
+    let restored = reader.seek(SeekFrom::Start(position));
+    let bytes = read?;
+    restored?;
+    if no_follow::stamp(&image.path.file)? != observed { return Err(io::ErrorKind::WouldBlock.into()); }
+    Ok(bytes == image.description.bytes && format!("{:x}",hash.finalize()) == image.description.sha256)
+}
+
 /// Implemented only by the fixed in-process first-loader owner. A public
 /// descriptor constructor cannot obtain its original token or OS resolution.
 pub(crate) trait OriginalAuthority {
     fn current(&self) -> io::Result<()>;
     fn system_images(&self) -> io::Result<Vec<Description>>;
     fn resolve_system_import(&self, name: &str) -> io::Result<Identity>;
+    // Reuse a fixed owner's policy only for refused-image diagnostics.
+    fn system_machine(&self) -> Option<fn(&File)->io::Result<()>> { None }
 }
 
 impl Factory {
@@ -161,7 +245,7 @@ impl Factory {
         let payload = Image::open(payload)?;
         let resolved = supervisor.imports.iter().chain(payload.imports.iter())
             .map(|name| authority.resolve_system_import(name)).collect::<io::Result<Vec<_>>>()?;
-        let closure = authority.system_images()?.into_iter().map(|image| Image::open_image(image, true, None)).collect::<io::Result<Vec<_>>>()?;
+        let closure = authority.system_images()?.into_iter().map(|image| Image::open_image(image, true, None, authority.system_machine())).collect::<io::Result<Vec<_>>>()?;
         if closure.is_empty() || closure.len() > 128 || supervisor.description.identity == payload.description.identity ||
             std::iter::once(&supervisor).chain(std::iter::once(&payload)).chain(closure.iter())
                 .try_fold(0u64, |bytes, image| bytes.checked_add(image.description.bytes).ok_or(io::ErrorKind::InvalidData))? > 536_870_912 {
@@ -184,7 +268,9 @@ impl Factory {
     pub(crate) fn libraries(&self) -> &[Image] { &self.closure }
     pub fn closure_hash(&self) -> &str { &self.closure_hash }
     pub fn current(&self) -> io::Result<()> {
-        for image in std::iter::once(&self.supervisor).chain(std::iter::once(&self.payload)).chain(self.closure.iter()) { image.current()?; }
+        for (index,image) in std::iter::once(&self.supervisor).chain(std::iter::once(&self.payload)).chain(self.closure.iter()).enumerate() {
+            image.current_role(if index == 0 { "supervisor" } else if index == 1 { "payload" } else { "system-library" })?;
+        }
         Ok(())
     }
     pub fn supervisor_suspended(&self, argv: &[String]) -> io::Result<Suspended<'_>> { self.current()?; self.supervisor.suspended(argv) }

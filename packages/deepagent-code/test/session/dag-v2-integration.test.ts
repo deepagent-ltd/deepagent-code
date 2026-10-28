@@ -26,9 +26,19 @@ import { V4PRCollaboration } from "@/session/v4-pr-collaboration"
 
 const git = async (args: string[], cwd: string) => {
   const process = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" })
-  const [stdout, code] = await Promise.all([new Response(process.stdout).text(), process.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} failed in ${cwd}`)
-  return stdout.trim()
+  console.error(JSON.stringify({ fixture: "dag-v2-git", phase: "start", args, cwd }))
+  try {
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited,
+    ])
+    console.error(JSON.stringify({ fixture: "dag-v2-git", phase: "exit", args, code,
+      stdoutBytes: Buffer.byteLength(stdout), stderrBytes: Buffer.byteLength(stderr) }))
+    if (code !== 0) throw new Error(`git ${args.join(" ")} failed in ${cwd}: ${stderr.slice(0, 4096)}`)
+    return stdout.trim()
+  } finally {
+    if (process.exitCode === null) process.kill("SIGKILL")
+    await process.exited
+  }
 }
 
 const fakeSessions = (options: { parallel?: boolean; familyRoot?: string } = {}) => {

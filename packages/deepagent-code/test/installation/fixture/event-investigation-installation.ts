@@ -1,5 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import { spawn } from "node:child_process"
 import { createHash, generateKeyPairSync, sign } from "node:crypto"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
@@ -15,9 +16,9 @@ export async function certificate(directory: string) {
   await fs.mkdir(directory, { recursive: true, mode: 0o700 })
   const certificatePath = path.join(directory, "ca.pem")
   const keyPath = path.join(directory, "ca-key.pem")
-  const generated = Bun.spawnSync(
+  const generated = spawn(
+    "openssl",
     [
-      "openssl",
       "req",
       "-x509",
       "-newkey",
@@ -34,9 +35,24 @@ export async function certificate(directory: string) {
       "-addext",
       "subjectAltName=IP:127.0.0.1",
     ],
-    { stdout: "ignore", stderr: "pipe" },
+    { stdio: ["ignore", "pipe", "pipe"] },
   )
-  if (generated.exitCode !== 0) throw new Error("Private fixture certificate creation failed")
+  const output = { stderr: "", error: undefined as string | undefined }
+  generated.stdout?.on("data", () => {})
+  generated.stderr?.on("data", (chunk: Buffer) => { output.stderr = (output.stderr + chunk.toString()).slice(-4096) })
+  generated.once("error", (error: NodeJS.ErrnoException) => { output.error = error.code ?? "spawn-error" })
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+    generated.once("close", (code, signal) => resolve({ code, signal })))
+  try {
+    const result = await closed
+    if (output.error || result.code !== 0 || result.signal)
+      throw new Error(`Private fixture certificate creation failed: ${JSON.stringify({
+        phase: "openssl-close", ...result, error: output.error, stderr: output.stderr,
+      })}`)
+  } finally {
+    if (generated.exitCode === null && generated.signalCode === null) generated.kill("SIGKILL")
+    await closed
+  }
   await fs.chmod(keyPath, 0o600)
   return { ca: await fs.readFile(certificatePath, "utf8"), keyPath, certificatePath }
 }
